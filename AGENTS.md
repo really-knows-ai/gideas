@@ -1,0 +1,192 @@
+# AGENTS.md
+
+## Project
+
+This repository contains the technical specification for **Foundry Flow** — a governed workflow runtime on Kubernetes that orchestrates work through adversarial cycles of creation, validation, review, and refinement.
+
+The spec is being rewritten from scratch. Legacy material (earlier spec drafts, foundational papers, CRDs) lives in `legacy/` and serves as read-only source material. The new spec lives at the repository root.
+
+## Goal
+
+Produce a clean, coherent, GitHub-style specification that:
+
+- Has a clear reading order: Concepts → Flow → Node → Reference
+- Uses consistent terminology throughout (defined in the glossary)
+- Eliminates duplication — one source of truth per concept
+- Is informed by the foundational theory in `legacy/papers/` but implements the details from the legacy specs
+- Is **v1** — the complete spec with no v1/v2 split
+- Keeps **Governance Flow** (Governor Operator) out of scope — it's a pattern built on the platform, not a platform primitive
+
+## Spec Structure
+
+```
+/
+├── AGENTS.md
+├── README.md                    # Entry point, navigation (write last)
+│
+├── 01-concepts/                 # Helicopter view — read first
+│   ├── 00-overview.md           # ✅ COMPLETE
+│   ├── 01-architecture.md       # Six-plane architecture, design principles
+│   ├── 02-data-model.md         # Workitems, Artefacts, Laws, Feedback (detail)
+│   └── 03-governance.md         # Law tiers, precedent, the legal metaphor (detail)
+│
+├── 02-flow/                     # The Platform — assumes nodes exist
+│   ├── 00-overview.md
+│   ├── 01-operator.md
+│   ├── 02-workitem.md
+│   ├── 03-nodes-external.md
+│   ├── 04-system-services.md
+│   ├── 05-configuration.md
+│   ├── 06-cross-flow.md
+│   └── 07-operations.md
+│
+├── 03-node/                     # Building Nodes — the developer perspective
+│   ├── 00-overview.md
+│   ├── 01-sidecar.md
+│   ├── 02-sdk-core.md
+│   ├── 03-sdk-artefacts.md
+│   ├── 04-sdk-legal.md
+│   ├── 05-sdk-feedback.md
+│   ├── 06-sdk-workitems.md
+│   ├── 07-sdk-telemetry.md
+│   ├── 08-configuration.md
+│   └── 09-patterns.md
+│
+├── 04-reference/                # Quick lookup
+│   ├── crds.md
+│   ├── grpc-api.md
+│   ├── error-catalog.md
+│   └── glossary.md
+│
+└── legacy/                      # Source material (read-only reference)
+    ├── papers/                  # Foundational theory (5 files)
+    ├── flow_spec/               # Legacy Flow runtime spec (~35 files)
+    ├── node_spec/               # Legacy Node runtime spec (~18 files)
+    ├── governance_spec/         # Legacy governance spec (~11 files)
+    ├── crds/                    # Legacy CRD YAML definitions
+    ├── PolymorphicLaw.md        # Polymorphic law envelope paper
+    └── PROGRESS.md              # Original session notes
+```
+
+### Reading Order
+
+1. **Concepts** — What Foundry Flow is and why it exists
+2. **Flow** — The platform (audience: operators and admins)
+3. **Node** — Building nodes (audience: developers)
+4. **Reference** — Look things up
+
+## Current Status
+
+| Document | Status |
+|----------|--------|
+| `01-concepts/00-overview.md` | Complete |
+| Everything else | Not started |
+
+`README.md` should be written last, once the spec is complete.
+
+## Writing Principles
+
+### Define things on their own terms
+
+Affirmative, confident, direct. Never define a system by what it isn't. The reader has no baggage to unpack — do not assume they are bringing preconceptions that need correcting.
+
+Bad: "Unlike traditional CI/CD pipelines, Foundry Flow doesn't just run tasks sequentially."
+Good: "Foundry Flow orchestrates work through adversarial cycles of creation, validation, review, and refinement."
+
+### No planning voice in finished documents
+
+Do not write "these are the eight nouns" or "four axioms underpin the system." Let the content present itself. The document structure should be invisible — readers absorb the concepts, not your outline.
+
+### No meta-commentary
+
+Do not narrate the document's structure to the reader. "In this section we will..." and "the following table summarises..." are planning artifacts that should not survive into the finished text.
+
+### Show, don't scaffold
+
+Use diagrams (Mermaid), tables, and examples where they clarify. But they should feel like natural parts of the explanation, not bolted-on visual aids announced by a sentence.
+
+### Cross-link aggressively
+
+Every concept that has a detail page should link to it on first mention in each document. Use relative markdown links.
+
+## Key Decisions
+
+These decisions have been made and must be preserved across all documents.
+
+### Forge reads laws only
+
+Forge queries the Library for context seeding but does not write laws. It reads all tiers to seed its generation context. Law writing belongs to downstream nodes (Appraise, Refine, Assay).
+
+### Sort stamps approval
+
+Sort is a gate that evaluates state and routes. Its logic:
+1. Unresolved feedback on governed artefacts → route to **Refine**
+2. Deadlocked feedback → route to **Assay**
+3. Missing required inspection stamps → route to **Appraise**
+4. All feedback resolved, all inspections present → stamp **approval** and **Done**
+
+Sort is the only node that stamps approval.
+
+### Roles are defined by the exit contract, granted by the Flow
+
+The exit contract is the source of truth for what roles exist. The Flow grants nodes permission to stamp as specific roles. "Role" is used narrowly throughout — it means "the capacity in which a node stamps a passport."
+
+### Exit contracts are per governed artefact
+
+Each artefact's contract specifies required stamps (role + type), or simply that the artefact must be present. Different artefacts can have different requirements.
+
+### Two stamp types: inspection and approval
+
+Stamps are either **inspection** ("I have checked this") or **approval** ("I consider this valid"). The exit contract specifies both the role AND the type required for each artefact.
+
+### Friction is systemic heat
+
+Workitems generate friction everywhere they touch — nodes, laws, rework loops, reviewers. The Friction Ledger tracks it and tags it to source (laws, nodes, topology paths) for aggregation and querying. Friction is defined affirmatively as a measurable signal, not defended against the accusation of being "just governance overhead."
+
+### Laws and the Library stay high-level in concepts
+
+The key concept: laws can be subjective, objective, or both. The Library stores them with equal indifference and leaves interpretation to the nodes. Technical details (MIME types, polymorphic envelope, CRDs, Codification Services) belong in later documents (`02-flow/04-system-services.md`, `04-reference/crds.md`).
+
+### The Foundry Cycle is the canonical arrangement
+
+Described directly as the standard topology. Not presented as "an applied pattern" or "one possible configuration."
+
+### Governance Flow is out of scope
+
+The Governor Operator and its lifecycle are a pattern built on the platform. They are not part of the core spec.
+
+### This is v1
+
+Complete spec, no v1/v2 split.
+
+### Four foundational axioms
+
+1. **Assume Unreliability** — All agents are fallible. Trust intent, verify execution.
+2. **Make Work Auditable** — Every action becomes an immutable, traceable record.
+3. **Make the Cost Visible** — Friction is a first-class, quantifiable signal.
+4. **Quality is Fixed, Cost is Variable** — The standard is non-negotiable; the system measures the cost of achieving it.
+
+"Roles are Institutions, Not Individuals" was considered and removed — the concept was valid but overloaded the term "role" and is not relevant to the core spec.
+
+## Using Legacy Material
+
+The `legacy/` directory contains the raw source material:
+
+- **`legacy/papers/`** — Five foundational papers. These provide the conceptual "why." Read them to understand the philosophy, but do not copy their prose or structure. The new spec must stand on its own.
+- **`legacy/flow_spec/`** — The Flow runtime spec (~35 files). Dense, comprehensive, sometimes contradictory. This is the primary source for `02-flow/`.
+- **`legacy/node_spec/`** — The Node runtime spec (~18 files, including sidecar and SDK). Primary source for `03-node/`.
+- **`legacy/governance_spec/`** — Governor/Federation spec (~11 files). Mostly out of scope (Governance Flow), but contains useful detail on law tiers and precedent for `01-concepts/03-governance.md`.
+- **`legacy/crds/`** — CRD YAML definitions. Source for `04-reference/crds.md`.
+- **`legacy/PolymorphicLaw.md`** — The polymorphic law envelope concept. Relevant to `02-flow/04-system-services.md` (Librarian).
+- **`legacy/PROGRESS.md`** — Session notes from the rewrite process. Contains decisions and clarifications, some of which are superseded by this file.
+
+When the legacy material and this file disagree, **this file wins**. In particular, `PROGRESS.md`'s law authority table is stale — it incorrectly lists Forge as writing Tier 1 laws.
+
+## Workflow
+
+1. Read this file fully before starting any work.
+2. Read the status table in this file to find files to understand the tone, depth, and style of completed documents.
+3. Identify the next document to write by asking the user.
+4. Read the relevant legacy source files.
+5. Draft the document following the writing principles.
+6. Update the status table in this file when a document is complete.
