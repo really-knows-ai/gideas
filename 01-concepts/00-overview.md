@@ -10,6 +10,20 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 ---
 
+## Foundational Principles
+
+Four axioms underpin the system.
+
+**Assume Unreliability.** All agents -- human or AI -- are fallible. The framework provides a safety harness. Trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots.
+
+**Make Work Auditable.** Every action, decision, and review becomes an immutable, traceable record. Invisible trust-based processes are replaced with verifiable proof. If it happened, there is a record.
+
+**Make the Cost Visible.** Friction is a first-class, quantifiable signal exposing the real-time cost of bad systems -- whether the actors are human, AI, or both. The Friction Ledger transforms abstract complaints about bureaucracy into actionable data.
+
+**Quality is Fixed, Cost is Variable.** Work cannot leave a Flow until its artefacts carry the required stamps. The standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system -- the laws, the topology, the nodes -- needs to change, not the standard.
+
+---
+
 ## Core Concepts
 
 These are the nouns. The vocabulary a reader needs before anything else.
@@ -22,13 +36,13 @@ These are the nouns. The vocabulary a reader needs before anything else.
 
 **Artefact** -- A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model -- anything the Flow produces.
 
-**Passport** -- The verification record attached to an artefact. A passport tracks which roles have stamped this artefact and for which version. If the artefact changes, existing stamps no longer apply.
+**Passport** -- The verification record attached to an artefact. A passport tracks which roles have stamped this artefact and for which version.
 
 **Stamp** -- A mark left on a passport by a node. Two types:
 - **Inspection** -- "I have checked this." Records that the node examined this version.
 - **Approval** -- "I consider this valid." Certifies the artefact meets governance requirements from this role's perspective. Requires law citations.
 
-Stamps are role-based and version-specific. The role represents the institutional function; the specific node instance is recorded only for audit.
+Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validator", "Reviewer"). Roles are defined by the exit contract and granted to nodes by the Flow. Stamps are version-specific: if the artefact changes, the stamp no longer applies.
 
 **Feedback** -- Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
@@ -53,9 +67,10 @@ The cycle forces unreliable agents to produce artefacts that are provably compli
 **Sort** is the central routing hub. Its logic is deliberately simple:
 1. Is there unresolved feedback? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
-3. Have all required nodes been visited with no outstanding issues? **Done**.
+3. Has the artefact been reviewed? If missing required inspection stamps, route to **Appraise**.
+4. All feedback resolved, all inspection stamps present? Stamp **approval** and **Done**.
 
-Sort is a gate. It evaluates state and routes.
+Sort is a gate. It evaluates state, routes when work is incomplete, and stamps approval when the passport carries the required inspection stamps and all feedback is resolved.
 
 **Refine** addresses feedback. It reads the consolidated (potentially contradictory) feedback, produces a new artefact version, and must resolve every item -- marking each as *actioned* or *wont-fix*. A *wont-fix* requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. Can write Tier 1 Findings.
 
@@ -139,7 +154,7 @@ The system verifies that work was done correctly. Deterministically.
 ### Passports and Stamps
 
 As a Workitem moves through the cycle, nodes stamp the artefact's passport. Each stamp records:
-- The **role** that stamped (the institutional function, recorded for accountability).
+- The **role** the node stamped as (the capacity granted to it by the Flow).
 - The **type**: inspection or approval.
 - The **content hash** of the artefact at stamp time.
 - A **cryptographic signature** and certificate chain.
@@ -148,7 +163,7 @@ Inspection stamps record that a node examined the artefact. Approval stamps cert
 
 ### Terminal Contracts
 
-At the border of a Flow, artefacts must pass a terminal contract. The contract checks the passport: does it carry approval stamps from all required roles for the current version of the artefact? If any required stamp is missing or stale, the artefact cannot exit.
+The exit contract is defined per governed artefact. For each artefact the Flow produces, the contract specifies what the passport must carry: a set of required stamps (each with a role and type), or simply that the artefact must be present. A code artefact might require approval stamps from "Validator" and "Security Auditor". A log artefact might only need to exist. The Flow grants nodes permission to stamp as the required roles. At the border, the terminal contract checks each artefact's passport against its requirements. If any requirement is unsatisfied, the Workitem cannot exit.
 
 ```mermaid
 sequenceDiagram
@@ -163,13 +178,16 @@ sequenceDiagram
     F->>W: artefact created
     W->>Q: assigned
     Q->>W: inspection stamp (Validator)
-    W->>A: assigned
+    W->>S: assigned
+    S->>S: missing inspection stamps
+    S->>A: route to Appraise
     A->>W: inspection stamp (Reviewer)
     W->>S: assigned
-    S->>W: approval stamp (QA Gate)
+    S->>S: all inspections present, no unresolved feedback
+    S->>W: approval stamp (Sort)
     W->>T: complete
-    T->>T: check passport: Validator? Reviewer? QA Gate?
-    T-->>W: all required stamps present -- exit approved
+    T->>T: check passport against exit contract
+    T-->>W: all requirements met -- exit approved
 ```
 
 An artefact that exits a Flow carries cryptographic proof of every check it passed and every role that signed off. Quality is proved.
@@ -206,19 +224,3 @@ flowchart LR
 ```
 
 This gives organisations a quantifiable, real-time signal for dysfunction. "Bureaucracy" and "technical debt" stop being complaints and become data.
-
----
-
-## Foundational Principles
-
-Five axioms underpin the system.
-
-**Assume Unreliability.** All agents -- human or AI -- are fallible. The framework provides a safety harness. Trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots.
-
-**Make Work Auditable.** Every action, decision, and review becomes an immutable, traceable record. Invisible trust-based processes are replaced with verifiable proof. If it happened, there is a record.
-
-**Make the Cost Visible.** Friction is a first-class, quantifiable signal exposing the real-time cost of bad systems -- whether the actors are human, AI, or both. The Friction Ledger transforms abstract complaints about bureaucracy into actionable data.
-
-**Quality is Fixed, Cost is Variable.** Work cannot leave a Flow until its artefacts carry the required stamps. The standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system -- the laws, the topology, the nodes -- needs to change, not the standard.
-
-**Roles are Institutions, Not Individuals.** Terms like "reviewer" or "validator" refer to functional authorities, not heroes. In production, these are teams, rotations, or committees that advertise queues, maintain SLOs, and persist even when individuals change.
