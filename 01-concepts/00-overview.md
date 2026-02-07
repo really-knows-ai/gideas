@@ -190,17 +190,9 @@ An artefact that exits a Flow carries cryptographic proof of every check it pass
 
 ## Friction
 
-Friction is the measurable heat in the system. It is a property of how work flows -- systemic, structural, and indifferent to cause.
+Friction is systemic heat. As Workitems move through a Flow, they generate friction everywhere they touch -- bumping into nodes, bouncing off laws, looping through rework cycles, waiting on reviewers, escalating to the judiciary. Every interaction has a cost, and the system tracks it.
 
-As Workitems move through a Flow, friction accumulates from rework loops, enforcement actions, thrashing, timeouts, escalations, and bouncing between nodes. A Workitem that flows smoothly generates low friction. One that thrashes generates high friction.
-
-The Friction Ledger captures where and why heat builds up. The cause could be anything:
-- A contradictory law creating rework loops.
-- Broken node logic causing repeated failures.
-- A badly designed topology routing work in circles.
-- A slow human reviewer creating bottlenecks.
-
-Some friction is attributable to specific laws -- which lets you identify *toxic laws* (high friction, heavy resistance) versus *foundational laws* (high usage, zero friction). But that is one lens on friction data. Friction is systemic heat. Governance is just one source.
+The Friction Ledger captures where and why heat builds up. A Workitem that flows smoothly generates low friction. One that thrashes -- looping between Refine and Sort, escalating to Assay, timing out on a human reviewer -- generates high friction. The ledger records the source: which nodes, which laws, which topology paths.
 
 ```mermaid
 flowchart LR
@@ -217,4 +209,4 @@ flowchart LR
     end
 ```
 
-This gives organisations a quantifiable, real-time signal for dysfunction. "Bureaucracy" and "technical debt" stop being complaints and become data.
+This gives organisations a quantifiable, real-time signal for dysfunction. Friction data is tagged to its source -- laws, nodes, topology paths -- so it can be aggregated and queried. Which laws generate the most heat? Which nodes are bottlenecks? Where in the topology do Workitems thrash? "Bureaucracy" and "technical debt" stop being complaints and become data.
