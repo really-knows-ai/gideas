@@ -12,8 +12,6 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 ## Foundational Principles
 
-Four axioms underpin the system.
-
 **Assume Unreliability.** All agents -- human or AI -- are fallible. The framework provides a safety harness. Trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots.
 
 **Make Work Auditable.** Every action, decision, and review becomes an immutable, traceable record. Invisible trust-based processes are replaced with verifiable proof. If it happened, there is a record.
@@ -25,8 +23,6 @@ Four axioms underpin the system.
 ---
 
 ## Core Concepts
-
-These are the nouns. The vocabulary a reader needs before anything else.
 
 **Flow** -- A self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
@@ -52,9 +48,7 @@ Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validat
 
 ## The Foundry Cycle
 
-The Foundry Cycle is an applied pattern -- a recommended arrangement of specific node types in a given order. It is the canonical way to use the runtime.
-
-The cycle forces unreliable agents to produce artefacts that are provably compliant with a body of governance. It does this through an adversarial loop of creation, validation, review, and refinement.
+The Foundry Cycle is the canonical arrangement of node types in a governed workflow. It drives unreliable agents to produce artefacts that are provably compliant with a body of governance, through an adversarial loop of creation, validation, review, and refinement.
 
 ### Node Types
 
