@@ -10,11 +10,12 @@ Foundry Flow maps governance concepts onto a legal and constitutional structure.
 
 | Branch | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
-| **Legislature** | Makes law | Flow Operator (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
-| **Judiciary** | Interprets and resolves conflict | [Assay](./00-overview.md) node |
+| **Common Law** | Establishes norms through practice | Nodes ([Appraise](./00-overview.md), [Refine](./00-overview.md), [Assay](./00-overview.md)) — Tier 1 [Findings](./02-data-model.md#law-tiers) |
+| **Judiciary** | Resolves disputes, codifies precedent | [Assay](./00-overview.md) node — Tier 2 [Rulings](./02-data-model.md#law-tiers) |
+| **Legislature** | Enacts statute through ratified process | Flow Operator (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
 | **Executive** | Enforces compliance | [Sort](./00-overview.md) node, [Terminal Contract](./02-data-model.md#terminal-contracts), [Sidecar](../03-node/01-sidecar.md) |
 
-The judiciary does not make law in the legislative sense — it resolves disputes and mints [Tier 2 Rulings](./02-data-model.md#law-tiers) as binding precedent. The legislature does not adjudicate — it enacts policy through ratified process. The executive does not interpret — it enforces the rules as written. These separations are structural, not aspirational.
+Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./02-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough citation weight, [Assay](./00-overview.md) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation. These boundaries are constitutional — each branch has authority the others cannot exercise.
 
 ---
 
@@ -70,6 +71,8 @@ flowchart LR
 ```
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
+
+Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: ephemeral, specialised containers that translate a verdict's intent into the appropriate format. A Tier 1 Finding that started as `text/markdown` — "poetry must not reference processed meats" — can be codified into `application/smt-lib` when promoted to a Tier 2 Ruling, making it deterministically enforceable. What started as a vibe becomes physics.
 
 ### Decay and Retirement
 
