@@ -1,0 +1,293 @@
+# Governance
+
+A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./02-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is not bolted onto the runtime — it is the runtime's constitutional structure. How [laws](./02-data-model.md#laws) are made, how conflicts are resolved, how precedent accumulates, and how the system scales from a single standalone Flow to a federated organisation — these are the governance processes that give the [data model](./02-data-model.md) its teeth.
+
+---
+
+## The Legal Metaphor
+
+Foundry Flow maps governance concepts onto a legal and constitutional structure. This is not decorative — the metaphor is load-bearing. Each branch of government has a clear institutional counterpart.
+
+| Branch | Function | Institutional Counterpart |
+|--------|----------|--------------------------|
+| **Legislature** | Makes law | Flow Operator (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
+| **Judiciary** | Interprets and resolves conflict | [Assay](./00-overview.md) node |
+| **Executive** | Enforces compliance | [Sort](./00-overview.md) node, [Terminal Contract](./02-data-model.md#terminal-contracts), [Sidecar](../03-node/01-sidecar.md) |
+
+The judiciary does not make law in the legislative sense — it resolves disputes and mints [Tier 2 Rulings](./02-data-model.md#law-tiers) as binding precedent. The legislature does not adjudicate — it enacts policy through ratified process. The executive does not interpret — it enforces the rules as written. These separations are structural, not aspirational.
+
+---
+
+## Standalone Governance
+
+A standalone Flow (no [Governor](#the-governor)) manages its own governance through three mechanisms.
+
+### Organic Discovery (Tiers 1–2)
+
+Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it calls `RecordFinding()` and a Tier 1 Finding is born. Findings are ephemeral. They carry a default TTL of 30 days and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
+
+Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and creates a ReviewHearing Workitem, routed to the [Assay](./00-overview.md) node.
+
+Assay evaluates the Finding's history and renders a binary verdict:
+
+| Verdict | Effect |
+|---------|--------|
+| **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a 90-day TTL |
+| **Sustain** | Finding's TTL is reset. It continues as Tier 1. |
+
+A Finding that is neither cited enough to trigger promotion nor cited at all will expire at its TTL and vanish. Governance hardens organically: rules that matter survive; rules that don't, disappear.
+
+### Administered Policy (Tier 3)
+
+Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./02-data-model.md#laws) applied by an administrator — typically via Helm manifests or GitOps. They have no automatic decay.
+
+The [Librarian](../02-flow/04-system-services.md) indexes externally applied Law CRDs and makes them available for queries and conflict detection. A law is not active until indexing is complete — conflict detection is a hard prerequisite, not a lazy background task.
+
+### Judicial Review (Assay)
+
+The [Assay](./00-overview.md) node is the judiciary. It is invoked in two circumstances:
+
+1. **Feedback deadlock.** When a [feedback](./02-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `disputed` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — and renders a verdict. The verdict resolves the dispute and can mint a Tier 2 Ruling as binding precedent.
+
+2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a [binary verdict](#decay-and-retirement) — Status Quo or Promote — whose consequences depend on the hearing's trigger and the law's current tier.
+
+Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the only path forward is compliance.
+
+---
+
+## Precedent
+
+Precedent is the mechanism by which governance hardens over time. A Tier 1 Finding is soft — it decays, it can be ignored at the cost of friction. A Tier 2 Ruling is binding — it was forged in adversarial review, and its authority derives from the judicial process that produced it.
+
+### Promotion
+
+The promotion path runs upward through the tiers:
+
+```mermaid
+flowchart LR
+    T1["Tier 1\nFinding"] -->|citation threshold\n+ Assay verdict| T2["Tier 2\nRuling"]
+    T2 -->|citation threshold\n+ Assay proposal\n+ HITL ratification| T3["Tier 3\nLocal Statute"]
+```
+
+Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
+
+### Decay and Retirement
+
+Laws below Tier 3 decay if uncited. When a law's TTL expires, the Librarian creates a ReviewHearing Workitem rather than deleting the law silently. Assay evaluates the case and renders a binary verdict:
+
+- **Status Quo** — accept the natural outcome. For an expired Tier 1 Finding, this means deletion. For an expired Tier 2 Ruling, this means demotion to Tier 1 (with a fresh TTL). For a citation-threshold hearing, the law stays at its current tier with a reset TTL.
+- **Promote** — elevate the law. A Tier 1 Finding is minted as a Tier 2 Ruling. A Tier 2 Ruling is proposed as a Tier 3 Statute (subject to HITL ratification).
+
+No law dies silently. Every expiry is a hearing. Every hearing produces either a renewed mandate or a deliberate retirement.
+
+Retired laws are deleted as CRDs. The full history — creation, citations, conflicts, retirement — is preserved in the audit log.
+
+### Conflict Resolution During Work
+
+When nodes cite conflicting laws during Workitem processing — not at integration time, but during the adversarial loop — resolution depends on the tiers involved:
+
+| Conflict | Resolution |
+|----------|------------|
+| **Cross-tier** (any combination) | Supremacy decides immediately. Higher tier wins. |
+| **Tier 1–2 vs Tier 1–2** | Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired. |
+| **Tier 3 vs Tier 3** | Assay drafts a *proposal* for a consolidated Tier 3 statute. HITL approves or rejects. |
+| **Tier 4 or Tier 5 involvement** | Assay files an *appeal* to the [Governor](#the-governor) via the Librarian gRPC channel. |
+
+### Assay's Authority Ceiling
+
+Assay's power is constitutionally bounded:
+
+| Tier range | Authority | Action |
+|------------|-----------|--------|
+| Tier 1–2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings. |
+| Tier 3 | **Propose** | Drafts a proposal. HITL approves or rejects. |
+| Tier 4–5 | **Appeal** | Files an appeal to the Governor. Cannot directly modify. |
+
+When a human rejects Assay's Tier 3 proposal, the conflicting statutes remain active. Assay issues a one-time Tier 2 Ruling to resolve the immediate Workitem dispute. Every future Workitem that hits the same conflict generates another Assay invocation, another Tier 2 Ruling, and more [friction](./00-overview.md#friction). The system does not force the humans' hand. It measures the cost of the decision until someone acts.
+
+---
+
+## The Governor
+
+The Governor is a dedicated [Flow Operator](../02-flow/01-operator.md) that runs in its own Kubernetes namespace (`governance-flow`). It serves three constitutionally distinct functions.
+
+### State Root Certificate Authority
+
+The Governor holds the self-signed Root CA keypair for the State trust hierarchy. It issues intermediate CA certificates to each Sibling Flow's Operator, establishing a hub-and-spoke trust model:
+
+```
+State Governor (Root CA)
+  ├─ Flow A Operator (Intermediate CA)
+  │   ├─ Forge Node (Leaf)
+  │   └─ Quench Node (Leaf)
+  ├─ Flow B Operator (Intermediate CA)
+  │   ├─ Deploy Node (Leaf)
+  │   └─ Monitor Node (Leaf)
+  └─ Flow C Operator (Intermediate CA)
+      └─ Optimize Node (Leaf)
+```
+
+Sibling Flows share a common trust root. A [stamp](./02-data-model.md#passports-and-stamps) produced by any node in any sibling is cryptographically verifiable by tracing the certificate chain back to the State Root — without direct peer relationships between the siblings. This eliminates N-squared scaling: adding a new sibling requires a single certificate exchange with the Governor, not reconfiguration of every existing Flow.
+
+Sibling Operators bootstrap trust through the **Annexation Protocol**: a Certificate Signing Request handshake that anchors the Sibling's intermediate CA to the State Root. Details of the Annexation Protocol, key management providers, and certificate lifecycle are covered in [Flow Operator](../02-flow/01-operator.md).
+
+### Legislator (Tier 4 Authority)
+
+The Governor runs the **Governance Flow** — a Flow whose governed [artefacts](./02-data-model.md#artefacts) are laws. It is subject to the same [Foundry Cycle](./00-overview.md#the-foundry-cycle) as any other Flow: Forge drafts legislation, Quench validates formal constraints, Appraise reviews for consistency with existing law, Sort gates the process, Refine addresses feedback, and Assay resolves disputes.
+
+The legislative process follows the standard cycle with one critical addition: a HITL gate at Sort. No Tier 4 State Constitution law is enacted without human ratification. The ratified law is minted as a Law CRD and published to all Sibling Flows.
+
+The Governor holds exclusive write authority for Tier 4 laws. Sibling Flows consume them as read-only.
+
+### Diplomat (Federation Gateway)
+
+The Governor maintains persistent gRPC connections to upstream Federal authorities. It pulls Tier 5 Federal Accord packages on a configurable schedule, verifies signatures, and integrates them into the State Library. If two Federal authorities publish conflicting laws, the Governor rejects the sync and emits an alert — manual resolution is required.
+
+After syncing, the Governor publishes a State Library snapshot containing all Tier 4 State Constitution laws and Tier 5 Federal Accords. Sibling Flows' [Librarians](../02-flow/04-system-services.md) consume this snapshot to stay current with higher-tier governance.
+
+---
+
+## The Governance Flow
+
+The Governance Flow is a Flow. It uses the same runtime, the same CRDs, the same node types. Its distinguishing feature is its subject matter: its Workitems are petitions for legislative action, and its governed artefacts are law drafts that, when approved, become binding Tier 4 State Constitution laws.
+
+### Inputs
+
+Petitions arrive from three sources:
+
+| Source | Petition Type | Example |
+|--------|--------------|---------|
+| Sibling Flow (Assay appeal) | Conflict resolution | "Tier 4 law X conflicts with operational needs — request amendment or clarification" |
+| Sibling Flow (promotion) | Cross-Flow pattern with State-wide relevance | "Pattern P observed across multiple Flows — propose as Tier 4 State Constitution" |
+| Human administrator | Policy change | "All Flows must enforce code coverage thresholds" |
+
+### Processing
+
+The petition enters the standard Foundry Cycle. Forge drafts the law. Quench validates formal constraints against existing Tier 4 laws. Appraise reviews for consistency, unintended consequences, and conflicts with existing governance. Sort gates — and at the Sort gate, a human legislative authority reviews and ratifies.
+
+The output is a new or amended Tier 4 Law CRD, published to all Sibling Flows via the State Library snapshot.
+
+### Self-Governance
+
+The Governance Flow is itself governed. Its own Tier 3 statutes define how legislation is drafted, what quorum is required for ratification, and what review standards apply. This is recursive but finite — the Governance Flow's internal laws are administered by the Governor's operator, not produced by another Governance Flow.
+
+---
+
+## Law Integration Protocol
+
+When higher-tier laws are pushed to a Sibling Flow — via Librarian-to-Librarian gRPC — the receiving [Librarian](../02-flow/04-system-services.md) runs a two-stage conflict check before integration.
+
+### Stage 1: Semantic Search
+
+The Librarian queries its sqlite-vec index for all existing laws above a configurable similarity threshold. This finds laws that are *semantically related* to the incoming law — potential conflicts, overlaps, or redundancies.
+
+### Stage 2: LLM Conflict Evaluation
+
+Each candidate from the semantic search is evaluated by an LLM for actual contradiction. Semantic similarity does not always mean conflict. Two laws about code style may be related but compatible. The LLM determines whether there is a genuine contradiction.
+
+### Resolution by Tier
+
+If a conflict is confirmed, resolution depends on the tier of the conflicting local law:
+
+| Conflicting Local Law | Resolution |
+|-----------------------|------------|
+| **Tier 1 or Tier 2** | Immediate retirement. The lower-tier law is replaced by the incoming higher-tier law. No human intervention. The CRD is deleted; history is preserved in the audit log. |
+| **Tier 3** | Integration paused. HITL notification. Supremacy is not optional — the local statute *must* change — but the Flow can request a **grace period**. |
+
+### Grace Period
+
+The grace period is a formalised exemption. It acknowledges that organisations need time to adapt — the same way a team might need runway to upgrade a dependency when architecture mandates a new version. Foundry Flow makes this formal and trackable.
+
+During the grace period:
+- The **old Tier 3 law remains enforced** in the Flow's Library
+- The **incoming higher-tier law is queued but not active**
+- The exemption has a **deadline** and is fully auditable
+
+When the grace period expires:
+- The incoming law is **integrated automatically**
+- The conflicting Tier 3 law is **retired** (CRD deleted, audit log retained)
+- If the Flow has not adapted, its work **starts failing governance checks** — Workitems cannot exit if they violate the now-active higher-tier law
+
+There is no escalation. There is no punishment. The [terminal contract](./02-data-model.md#terminal-contracts) enforces compliance organically. [Friction](./00-overview.md#friction) spikes, and the data tells the story.
+
+---
+
+## Escalation Across Boundaries
+
+Escalation is the mechanism by which conflicts that exceed a Flow's judicial authority reach the institutions that can resolve them.
+
+### Flow to Governor
+
+When a Sibling Flow's [Assay](./00-overview.md) node encounters a conflict involving Tier 4 or Tier 5 laws, it files an **appeal** — a cross-Flow message via the Librarian gRPC channel — to the Governor.
+
+- **Tier 4 conflict:** The Governor can repeal or amend its own Tier 4 laws to resolve the issue. The amendment enters the Governance Flow's Foundry Cycle and, if ratified, propagates to all sibling Flows.
+- **Tier 5 conflict:** The Governor escalates the appeal to the relevant Federal authority.
+
+### Governor to Federation
+
+Federal authorities operate their own Governance Flows — full Foundry Cycle deployments whose governed artefacts are Tier 5 Federal Accords. When a Governor appeals a Tier 5 conflict, the Federal authority deliberates and produces one of two outcomes:
+
+| Outcome | Effect |
+|---------|--------|
+| **Global amendment** | The Federal authority ratifies an update to the Tier 5 package. The amendment propagates to all subscribing Governors. |
+| **Exemption** | The Federal authority issues a time-boxed risk acceptance. The exemption carries a mandatory expiry. On expiry, the law integrates automatically and the exemption lapses. |
+
+### The Escalation Chain
+
+```mermaid
+flowchart TD
+    Node["Node\n(discovers conflict)"] --> Assay["Assay\n(local judiciary)"]
+    Assay -->|"Tier 1-2:\nresolve directly"| Library["Flow Library"]
+    Assay -->|"Tier 3:\npropose"| HITL["HITL\n(human ratification)"]
+    HITL --> Library
+    Assay -->|"Tier 4-5:\nappeal"| Governor["Governor\n(State authority)"]
+    Governor -->|"Tier 4:\namend"| GovFlow["Governance Flow\n(Foundry Cycle)"]
+    GovFlow --> Propagate["Propagate to\nall Siblings"]
+    Governor -->|"Tier 5:\nescalate"| Federal["Federal Authority"]
+    Federal --> FedPropagate["Propagate to\nall Governors"]
+```
+
+Each level of the chain has bounded authority. No institution can exceed its constitutional ceiling. Nodes raise issues. Assay adjudicates within its tier. The Governor legislates within the State. The Federation legislates across States. The escalation path is a routing protocol, not a request for permission — it sends the conflict to the institution with the authority to resolve it.
+
+---
+
+## Supremacy
+
+Higher tier always wins. No upward override. A Tier 3 Local Statute cannot override a Tier 4 State Constitution law, regardless of when either was created. A Tier 4 law cannot override a Tier 5 Federal Accord. This is absolute — the same way a city by-law cannot override state or federal law.
+
+Supremacy governs both integration-time conflicts (handled by the [law integration protocol](#law-integration-protocol)) and runtime conflicts (handled by the [judiciary](#judicial-review-assay)). The resolution mechanism differs, but the principle is invariant: the higher tier prevails.
+
+---
+
+## Standalone vs Federated
+
+| Capability | Standalone Flow | Federated Flow (under Governor) |
+|------------|----------------|--------------------------------|
+| **Law tiers** | Tiers 1, 2, 3 | Tiers 1, 2, 3, 4, 5 |
+| **Tier 3 authority** | Administrator (CRDs via GitOps) | Administrator or local legislative cycle |
+| **Tier 4–5** | Do not exist | Published by Governor / Federation |
+| **Trust root** | Flow Operator (self-signed) | State Root CA (Governor) |
+| **Cross-Flow stamps** | Invalid — chain of custody resets at boundary | Valid if certificate chain traces to shared State Root |
+| **Escalation ceiling** | Assay resolves Tier 1–2, proposes Tier 3, no higher | Assay appeals to Governor for Tier 4–5 |
+
+A standalone Flow is fully self-contained. It can be deployed, operated, and governed without any external dependency. Federation adds higher-tier governance and cross-Flow trust, but the core governance model — organic discovery, judicial review, administered policy — is identical in both configurations.
+
+---
+
+## Treaties
+
+[Treaties](../02-flow/06-cross-flow.md) enable collaboration between Flows that do not share a Governor — typically across organisational boundaries. Where Federation provides implicit trust through a shared Root CA, a Treaty provides explicit trust through a bilateral agreement with unidirectional execution. Two-way exchange requires two separate Treaties.
+
+The governance implication is **naturalisation**: when a [Workitem](./02-data-model.md#workitems) crosses a Treaty boundary, foreign [stamps](./02-data-model.md#passports-and-stamps) are preserved for audit but carry no local authority. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. The structural details and the full export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
+
+---
+
+## Friction as Governance Signal
+
+The [Friction Ledger](./00-overview.md#friction) is governance's economic conscience. It separates **compliance** (citing a law as a guardrail — zero friction) from **resistance** (fighting a law's enforcement — escalating friction).
+
+Friction accumulates exponentially. A law cited for context seeding generates zero friction — it is doing its job. A law that blocks an artefact generates friction that compounds on each repeat conflict. Judicial hearings and unplanned human escalations amplify the signal further. The result is a heatmap of **toxic laws** (high resistance, exponential penalties) versus **foundational laws** (high usage, zero friction).
+
+The Friction Ledger is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. "Bureaucracy" and "technical debt" stop being complaints and become data.
+
+Friction data feeds back into the governance process. Laws that generate disproportionate friction surface for review. Patterns of constitutional resistance point to laws that need amendment, consolidation, or repeal. The system shames its own constitution into improvement.

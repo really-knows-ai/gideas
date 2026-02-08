@@ -81,6 +81,8 @@ Produce a clean, coherent, GitHub-style specification that:
 |----------|--------|
 | `01-concepts/00-overview.md` | Complete |
 | `01-concepts/01-architecture.md` | Complete |
+| `01-concepts/02-data-model.md` | Complete |
+| `01-concepts/03-governance.md` | Complete |
 | Everything else | Not started |
 
 `README.md` should be written last, once the spec is complete.
