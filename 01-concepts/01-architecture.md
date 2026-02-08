@@ -37,7 +37,7 @@ graph TD
 
     subgraph data["Data Plane"]
         direction LR
-        Nodes ~~~ Archivist ~~~ Artefacts ~~~ Feedback
+        Nodes ~~~ Archivist
     end
 
     mgmt --> ctrl
@@ -67,9 +67,9 @@ The Control Plane makes routing decisions but never executes work. It reads stat
 
 ### Data Plane
 
-Where work happens. The Data Plane contains the [Nodes](./00-overview.md) that execute logic, the [Archivist](../02-flow/04-system-services.md) that stores artefact content, and the artefacts and feedback records themselves.
+Where work happens. The Data Plane contains the [Nodes](./00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./02-data-model.md#passports-and-stamps), [feedback](./02-data-model.md#feedback), and raw content bytes.
 
-Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. Large outputs are stored in the Archivist as content-addressed blobs; metadata and references travel with the Workitem CRD.
+Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries slim artefact references (kind and latest version hash); the full version history, stamps, and feedback live in the Archivist.
 
 Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to Kubernetes NetworkPolicies or service mesh configurations.
 
@@ -117,7 +117,7 @@ Each concern in the system maps to exactly one plane. When a Node executes work,
 |---------|-------|---------|
 | Work execution | Data | Node pods |
 | Routing decisions | Control | Flow Operator |
-| Artefact storage | Data | Archivist |
+| Artefact lifecycle | Data | Archivist |
 | Law lifecycle | Governance | Librarian |
 | Citation tracking | Governance | Citation Processor |
 | Dispute resolution | Governance | Assay Node |
@@ -158,19 +158,20 @@ Infrastructure state (the machinery) persists. Session state (the work) does not
 
 Workitems are immutable residents of their namespace. They do not move between Flows — they are copied. The export-import protocol creates a new Workitem in the receiving Flow with its own lifecycle, its own chain of custody, and its own governance. The original Workitem remains in its home Flow, completed.
 
-Artefact content lives in the Archivist as content-addressed blobs. Artefact metadata — hashes, version numbers, passport stamps — travels with the Workitem CRD. Large content is stored once and referenced by hash; it is never duplicated within a Flow.
+Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only a slim artefact reference — kind and `latestVersion` hash — enough for routing and terminal contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's SQLite database, queryable through the [SDK](../03-node/02-sdk-core.md).
 
 ### Hybrid Persistence
 
-State is split across three storage layers, each chosen for its access pattern.
+State is split across four storage layers, each chosen for its access pattern.
 
 | Layer | Technology | Data | Access Pattern |
 |-------|------------|------|----------------|
 | State | etcd (CRDs) | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
-| Query | SQLite (sqlite-vec) | Embeddings, citation ledger, friction ledger | Analytical, vector similarity search |
-| Blobs | PVC (Archivist) | Artefact content (bytes) | Content-addressed read/write |
+| Governance Query | SQLite (sqlite-vec) — Librarian | Embeddings, citation ledger, friction ledger | Analytical, vector similarity search |
+| Artefact Provenance | SQLite — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
+| Blobs | PVC or cloud object storage — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-etcd provides the watch-driven consistency the Operator needs for state transitions. SQLite provides the query capabilities the Librarian and Flow Monitor need for embeddings, citation tracking, and friction aggregation. The Archivist's PVC (or pluggable cloud backend) stores raw artefact bytes where they are cheap and durable.
+etcd provides the watch-driven consistency the Operator needs for state transitions. The Librarian's SQLite provides the query capabilities needed for embeddings, citation tracking, and friction aggregation. The Archivist's SQLite stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's blob store (PVC or pluggable cloud backend) stores raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 

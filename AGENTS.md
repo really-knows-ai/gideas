@@ -146,6 +146,23 @@ Stamps are either **inspection** ("I have checked this") or **approval** ("I con
 
 Workitems generate friction everywhere they touch — nodes, laws, rework loops, reviewers. The Friction Ledger tracks it and tags it to source (laws, nodes, topology paths) for aggregation and querying. Friction is defined affirmatively as a measurable signal, not defended against the accusation of being "just governance overhead."
 
+### Archivist is the artefact lifecycle service
+
+The Archivist manages all artefact-related data beyond raw content bytes. Its storage is split into two layers:
+
+- **SQLite database** — artefact version history, passport stamps, and feedback. This is the single queryable layer for all artefact provenance.
+- **Blob store** (PVC or cloud object storage) — raw artefact content bytes, keyed by content hash.
+
+**Feedback lives in the Archivist, not on the Workitem CRD.** Feedback is scoped to Workitem ID + artefact kind, and each feedback item is tagged with the artefact version hash it pertains to. All feedback is preserved across versions.
+
+**Passports and stamps live in the Archivist's SQLite**, not as JSON sidecar files in the blob store.
+
+**The Workitem CRD carries a slim artefact reference**: kind and `latestVersion` hash only. The full version history, stamps, and feedback live in the Archivist. This keeps the CRD well within etcd's 1.5MB limit regardless of feedback depth or version count.
+
+**The SDK exposes an Artefact object** — `workitem.getArtefact("haiku")` — with methods like `getLatestVersion()`, `getVersion(hash)`, `getFeedback()`, `hasUnresolvedFeedback()`, `getPassport()`. All queries are routed through the Sidecar to the Archivist; nodes never interact with the Archivist directly.
+
+**Sort uses the SDK** to check feedback state, the same as any other node. `artefact.hasUnresolvedFeedback()` is the interface for routing decisions.
+
 ### Laws and the Library stay high-level in concepts
 
 The key concept: laws can be subjective, objective, or both. The Library stores them with equal indifference and leaves interpretation to the nodes. Technical details (MIME types, polymorphic envelope, CRDs, Codification Services) belong in later documents (`02-flow/04-system-services.md`, `04-reference/crds.md`).

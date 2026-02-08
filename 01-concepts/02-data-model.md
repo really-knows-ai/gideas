@@ -1,6 +1,6 @@
 # Data Model
 
-A [Flow](./00-overview.md) has four primary data objects: Workitems, Artefacts, Feedback, and Laws. The [conceptual overview](./00-overview.md) introduced them at a glance. The [architecture](./01-architecture.md) placed them on planes. What follows is the detail — structure, lifecycle, relationships, and the rules that govern mutation.
+A [Flow](./00-overview.md) has four primary data objects: Workitems, Artefacts, Feedback, and Laws. Each has its own structure, lifecycle, relationships, and mutation rules.
 
 ---
 
@@ -22,8 +22,7 @@ A Workitem's structure splits into `spec` and `status`.
 | `status.state` | Operator | System-managed | Computed from assignment lifecycle |
 | `status.currentAssignee` | Operator | System-managed | The node currently processing this Workitem |
 | `status.previousAssignee` | Operator | System-managed | The node that last processed this Workitem |
-| `status.artefacts[]` | [Sidecar](../03-node/01-sidecar.md) | Append-only | Artefact references, updated via `StoreArtefact` |
-| `status.feedback[]` | Sidecar | Append/Update | Feedback items, updated via feedback operations |
+| `status.artefacts[]` | [Sidecar](../03-node/01-sidecar.md) | Append-only | Slim artefact references (kind + `latestVersion` hash) |
 | `status.routingInstruction` | Sidecar | Overwrite | Set when the node returns a result |
 | `status.guestbook` | Sidecar | Increment-only | Per-node visit counters |
 
@@ -157,31 +156,25 @@ Entry contracts work similarly: the FoundryFlow CRD can specify which WorkitemTy
 
 ## Artefacts
 
-An [artefact](./00-overview.md) is a governed output — a document, a code file, a data model, anything the Flow produces. Artefact content is stored as content-addressed bytes in the [Archivist](../02-flow/04-system-services.md). Artefact metadata — hashes, version history, references — travels with the Workitem CRD.
+An [artefact](./00-overview.md) is a governed output — a document, a code file, a data model, anything the Flow produces. The [Archivist](../02-flow/04-system-services.md) is the single source of truth for all artefact data: version history, [passport stamps](#passports-and-stamps), and [feedback](#feedback) live in the Archivist's SQLite database, while raw content bytes are stored in a content-addressed blob store (PVC or cloud object storage).
 
-The split is deliberate. Metadata is small and watch-driven (etcd). Content is large and read/write (Archivist). The Workitem CRD stays under etcd's 1.5MB limit while artefacts themselves can be arbitrarily large.
+The Workitem CRD carries only a slim artefact reference — kind and `latestVersion` hash — enough for the Operator to know what exists without carrying the full history. This keeps the CRD well within etcd's 1.5MB limit regardless of version count, feedback depth, or stamp accumulation.
+
+The [SDK](../03-node/02-sdk-core.md) exposes an Artefact object that provides access to all artefact data through the [Sidecar](../03-node/01-sidecar.md): `workitem.getArtefact("haiku")` returns an object with methods like `getLatestVersion()`, `getVersion(hash)`, `getFeedback()`, `hasUnresolvedFeedback()`, `getPassport()`. Nodes never interact with the Archivist directly.
 
 ### Content Addressing and Versioning
 
 Every artefact version is identified by its SHA256 content hash. When a node stores content, the [Sidecar](../03-node/01-sidecar.md) computes the hash and the [Archivist](../02-flow/04-system-services.md) persists the bytes. If the content is identical to an existing version, no new version is created — the hash matches and the store is a no-op.
 
-The Workitem CRD tracks the version history as an `ArtefactRef`:
+The Workitem CRD tracks each artefact as a slim reference:
 
 ```yaml
 artefacts:
   - kind: "petition-draft"
-    name: "petition_draft.md"
     latestVersion: "sha256:def456..."
-    versions:
-      - hash: "sha256:abc123..."
-        createdAt: "2026-01-04T14:20:00Z"
-        createdByNode: "forge-node"
-      - hash: "sha256:def456..."
-        createdAt: "2026-01-04T14:45:00Z"
-        createdByNode: "refine-node"
 ```
 
-`latestVersion` always points to the current content hash. The `versions` array provides an append-only audit trail of who created which version and when.
+`latestVersion` always points to the current content hash. The full version history — every prior hash, who created it, and when — is stored in the Archivist's SQLite database and queryable through the [SDK](../03-node/02-sdk-core.md).
 
 ### Artefact Isolation
 
@@ -230,19 +223,24 @@ Validation is role-based, not identity-based. The specific node that stamped is 
 
 ### Passports and Stamps
 
-Every artefact version has a passport — a collection of [stamps](./00-overview.md) stored alongside its content in the [Archivist](../02-flow/04-system-services.md) as `<hash>.passport.json`. Content and provenance travel together.
+Every artefact version has a passport — a collection of [stamps](./00-overview.md) stored in the [Archivist's](../02-flow/04-system-services.md) SQLite database alongside the version's metadata. Stamps, version history, and feedback share a single queryable layer; raw content bytes live separately in the blob store.
 
 ```mermaid
 graph LR
-    subgraph Archivist["Archivist Storage"]
+    subgraph Archivist["Archivist"]
         direction TB
-        V1["&lt;hash_v1&gt; (content)"]
-        P1["&lt;hash_v1&gt;.passport.json"]
-        V2["&lt;hash_v2&gt; (content)"]
-        P2["&lt;hash_v2&gt;.passport.json"]
+        subgraph SQLite["SQLite Database"]
+            Versions["Version History"]
+            Stamps["Passport Stamps"]
+            FB["Feedback"]
+        end
+        subgraph Blobs["Blob Store"]
+            V1["&lt;hash_v1&gt; (content)"]
+            V2["&lt;hash_v2&gt; (content)"]
+        end
     end
-    WI["Workitem CRD"] -->|"latestVersion: hash_v2"| V2
-    P2 -->|stamps| Roles["role: linter<br/>role: security-reviewer"]
+    WI["Workitem CRD"] -->|"latestVersion: hash_v2"| Blobs
+    Stamps -->|"role: linter\nrole: security-reviewer"| Versions
 ```
 
 The passport is a **role-centric map**. Role is the unique key. If two different nodes stamp the same artefact as the same role, the second stamp overwrites the first (Last-Write-Wins). Governance cares that the role was satisfied, not which specific node satisfied it. Overwritten stamps are not preserved in the passport — the full stamp history is reconstructable from the telemetry audit log.
@@ -285,6 +283,8 @@ Stamps are cryptographically bound to the artefact's content through the `hash` 
 ## Feedback
 
 [Feedback](./00-overview.md) is threaded, artefact-scoped, and adversarial by design. It is not a comment thread. It is a structured protocol that forces every disagreement into the open and demands justification for every refusal.
+
+Feedback lives in the [Archivist's](../02-flow/04-system-services.md) SQLite database, scoped to Workitem ID and artefact kind. Each feedback item is tagged with the artefact version hash it was raised against. All feedback is preserved across versions — when new content is stored, existing feedback remains queryable and relevant. Nodes access feedback through the [SDK](../03-node/02-sdk-core.md) Artefact object (`artefact.getFeedback()`, `artefact.hasUnresolvedFeedback()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
 ### Structure
 
