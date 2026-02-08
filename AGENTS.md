@@ -15,7 +15,7 @@ Produce a clean, coherent, GitHub-style specification that:
 - Eliminates duplication — one source of truth per concept
 - Is informed by the foundational theory in `legacy/papers/` but implements the details from the legacy specs
 - Is **v1** — the complete spec with no v1/v2 split
-- Keeps **Governance Flow** (Governor Operator) out of scope — it's a pattern built on the platform, not a platform primitive
+- Includes the **Governance Flow** (Governor Operator) as a first-class part of the spec
 
 ## Spec Structure
 
@@ -80,6 +80,7 @@ Produce a clean, coherent, GitHub-style specification that:
 | Document | Status |
 |----------|--------|
 | `01-concepts/00-overview.md` | Complete |
+| `01-concepts/01-architecture.md` | Complete |
 | Everything else | Not started |
 
 `README.md` should be written last, once the spec is complete.
@@ -127,17 +128,17 @@ Sort is a gate that evaluates state and routes. Its logic:
 
 Sort is the only node that stamps approval.
 
-### Roles are defined by the exit contract, granted by the Flow
+### Roles are defined by the terminal contract, granted by the Flow
 
-The exit contract is the source of truth for what roles exist. The Flow grants nodes permission to stamp as specific roles. "Role" is used narrowly throughout — it means "the capacity in which a node stamps a passport."
+The terminal contract is the source of truth for what roles exist. The Flow grants nodes permission to stamp as specific roles. "Role" is used narrowly throughout — it means "the capacity in which a node stamps a passport."
 
-### Exit contracts are per governed artefact
+### Terminal contracts are per governed artefact
 
 Each artefact's contract specifies required stamps (role + type), or simply that the artefact must be present. Different artefacts can have different requirements.
 
 ### Two stamp types: inspection and approval
 
-Stamps are either **inspection** ("I have checked this") or **approval** ("I consider this valid"). The exit contract specifies both the role AND the type required for each artefact.
+Stamps are either **inspection** ("I have checked this") or **approval** ("I consider this valid"). The terminal contract specifies both the role AND the type required for each artefact.
 
 ### Friction is systemic heat
 
@@ -151,9 +152,45 @@ The key concept: laws can be subjective, objective, or both. The Library stores 
 
 Described directly as the standard topology. Not presented as "an applied pattern" or "one possible configuration."
 
-### Governance Flow is out of scope
+### Governance Flow is in scope
 
-The Governor Operator and its lifecycle are a pattern built on the platform. They are not part of the core spec.
+The Governor Operator and its lifecycle are a first-class part of the spec. The `legacy/governance_spec/` directory is a primary source alongside `legacy/flow_spec/` and `legacy/node_spec/`.
+
+### Five-tier law hierarchy
+
+Laws are organised into five tiers of jurisdiction. Higher tier always wins (supremacy is absolute, no upward override):
+
+| Tier | Name | Scope | Authority |
+|------|------|-------|-----------|
+| 1 | Finding | Single Flow | Nodes (Appraise, Refine, Assay) |
+| 2 | Ruling | Single Flow | Assay Node |
+| 3 | Local Statute | Single Flow | Flow Operator (human-administered or local legislative cycle) |
+| 4 | State Constitution | All Flows in a Governor instance | Governor (State Governance Flow) |
+| 5 | Federal Accord | All instances in the network | Federation |
+
+For standalone Flows (no Governor), Tier 3 laws are CRDs applied by an admin. Tiers 4 and 5 do not exist. Under a Governor, the Governance Flow is itself a Flow whose governed artefacts are laws — subject to the same Foundry Cycle as any other Flow.
+
+The full design rationale is in `legacy/Tier5.md`.
+
+### Law integration protocol
+
+When higher-tier laws are pushed to a city Flow (via Librarian-to-Librarian gRPC), the receiving Librarian runs a two-stage conflict check: semantic search (sqlite-vec, configurable similarity threshold) followed by LLM evaluation of actual contradiction. Resolution depends on the tier of the conflicting local law:
+
+- **Tier 1-2 conflicts:** Immediate retirement of the local law. No human intervention.
+- **Tier 3 conflicts:** Integration paused, HITL notification. The local statute *must* change (supremacy is not optional), but the city can request a **grace period**. During the grace period the old Tier 3 law remains enforced and the incoming law is queued. On expiry the incoming law integrates automatically and the Tier 3 law is retired — if the city hasn't adapted, their work fails governance checks organically.
+
+Retired laws are deleted as CRDs. The full history is preserved in the audit log.
+
+### Escalation paths and Assay's authority ceiling
+
+Runtime conflicts (discovered during Workitem processing, not at integration time) are resolved based on the tiers involved:
+
+- **Cross-tier conflict:** Supremacy decides immediately. Higher tier wins.
+- **Tier 1-2 vs Tier 1-2:** Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws.
+- **Tier 3 vs Tier 3:** Assay drafts a *proposal* for a consolidated Tier 3 law. HITL approves or rejects. On rejection, the conflict persists — Assay issues a one-time Tier 2 Ruling for the immediate case, and friction accumulates until the humans act.
+- **Tier 4 or Tier 5 involvement:** Assay files an **appeal** to the Governor via the Librarian gRPC channel. The Governor can repeal or amend Tier 4 laws; Tier 5 appeals are escalated to the relevant Federal authority.
+
+Assay can **resolve** at Tier 1-2, **propose** at Tier 3, and **appeal** at Tier 4-5. It cannot directly modify laws above its judicial tier.
 
 ### This is v1
 
@@ -175,10 +212,11 @@ The `legacy/` directory contains the raw source material:
 - **`legacy/papers/`** — Five foundational papers. These provide the conceptual "why." Read them to understand the philosophy, but do not copy their prose or structure. The new spec must stand on its own.
 - **`legacy/flow_spec/`** — The Flow runtime spec (~35 files). Dense, comprehensive, sometimes contradictory. This is the primary source for `02-flow/`.
 - **`legacy/node_spec/`** — The Node runtime spec (~18 files, including sidecar and SDK). Primary source for `03-node/`.
-- **`legacy/governance_spec/`** — Governor/Federation spec (~11 files). Mostly out of scope (Governance Flow), but contains useful detail on law tiers and precedent for `01-concepts/03-governance.md`.
+- **`legacy/governance_spec/`** — Governor/Federation spec (~11 files). Primary source for the Governance Flow, law tiers, and precedent.
 - **`legacy/crds/`** — CRD YAML definitions. Source for `04-reference/crds.md`.
 - **`legacy/PolymorphicLaw.md`** — The polymorphic law envelope concept. Relevant to `02-flow/04-system-services.md` (Librarian).
 - **`legacy/PROGRESS.md`** — Session notes from the rewrite process. Contains decisions and clarifications, some of which are superseded by this file.
+- **`legacy/Tier5.md`** — Working reference for the 5-tier law hierarchy, integration protocol, escalation paths, and treaty model. Not legacy — this is an active design document that informed the key decisions in this file.
 
 When the legacy material and this file disagree, **this file wins**. In particular, `PROGRESS.md`'s law authority table is stale — it incorrectly lists Forge as writing Tier 1 laws.
 
@@ -189,4 +227,5 @@ When the legacy material and this file disagree, **this file wins**. In particul
 3. Identify the next document to write by asking the user.
 4. Read the relevant legacy source files.
 5. Draft the document following the writing principles.
-6. Update the status table in this file when a document is complete.
+6. **Review all completed spec documents** for consistency with the new material and technical feasibility. Consistency and technical feasibility are non-negotiable — every mechanism described must be implementable, and no two documents should contradict each other. Flag and fix any issues before considering the document complete.
+7. Update the status table in this file when a document is complete.

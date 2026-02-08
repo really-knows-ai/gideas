@@ -91,15 +91,21 @@ The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [la
 
 The [Assay Node](./00-overview.md) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
 
+Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from the Flow's own legislative authority. Tiers 4 and 5 arrive from the [Governance Flow](./03-governance.md), synchronised into each Flow's Library as organisational and federal policy. The Library stores all tiers with equal indifference; nodes query and interpret them the same way regardless of origin.
+
 Laws are discovered, not just configured. Constitutional resistance is measurable. Judicial review is built in.
 
 ### Federation Plane
 
 Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace and cannot be moved. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border.
 
-[Treaties](../02-flow/06-cross-flow.md) govern which foreign Flows a receiving Flow will accept work from. A Treaty is a unilateral import permit: the receiver pins the foreign Flow's CA certificate and whitelists specific node identities that may sign export bundles. Trust is asymmetric — A trusting B does not imply B trusts A.
+Two trust models govern cross-flow relationships:
 
-Foreign stamps are preserved for audit but carry no local authority. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. Details of the export-import protocol and trust model are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
+**Federated trust** operates through the [Governance Flow](./03-governance.md). The Governor acts as the State Root Certificate Authority, issuing intermediate CA certificates to each Sibling Flow's Operator. All Flows in the organisation share a common trust root, and any stamp from any sibling is cryptographically verifiable by tracing the certificate chain to the State Root. The Governor also publishes Tier 4 State Constitution laws and synchronises Tier 5 Federal Accords, ensuring all sibling Flows operate under consistent higher-tier governance.
+
+**Treaty-based trust** enables collaboration between Flows that do not share a Governor — typically across organisational boundaries. A [Treaty](../02-flow/06-cross-flow.md) is a bilateral agreement between two Flows that permits Workitem export in one direction. The agreement is bilateral (both Flows consent to the terms), but the resulting trust is unidirectional — a treaty allowing Flow A to export to Flow B does not allow Flow B to export to Flow A. Two-way exchange requires two separate treaties. The receiving Flow pins the foreign Flow's CA certificate and whitelists specific node identities that may sign export bundles.
+
+In both models, foreign stamps are preserved for audit but carry no local authority. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. Details of the export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
 
 ---
 
@@ -119,6 +125,7 @@ Each concern in the system maps to exactly one plane. When a Node executes work,
 | Cryptographic stamps | Security | Sidecar |
 | Telemetry and audit | Control | Flow Monitor |
 | Cross-flow transfer | Federation | Export / Import |
+| Tier 4/5 law authority | Federation | Governor |
 | Configuration and deployment | Management | Helm, CRDs |
 
 ---
@@ -167,7 +174,9 @@ etcd provides the watch-driven consistency the Operator needs for state transiti
 
 ### Zero-Trust Security
 
-Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers requests using its ServiceAccount token (or, in federated deployments, its mTLS certificate issued by the Flow Operator acting as an Intermediate CA).
+Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers requests using its ServiceAccount token (or, in federated deployments, its mTLS certificate).
+
+In federated deployments, the trust chain is hierarchical: the [Governor](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mTLS certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
 
 Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. The terminal contract checks stamps by validating the cryptographic chain — not by trusting the network path the Workitem travelled.
 

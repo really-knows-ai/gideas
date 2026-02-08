@@ -38,7 +38,7 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 - **Inspection** -- "I have checked this." Records that the node examined this version.
 - **Approval** -- "I consider this valid." Certifies the artefact meets governance requirements from this role's perspective. Requires law citations.
 
-Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validator", "Reviewer"). Roles are defined by the exit contract and granted to nodes by the Flow. Stamps are version-specific: if the artefact changes, the stamp no longer applies.
+Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validator", "Reviewer"). Roles are defined by the terminal contract and granted to nodes by the Flow. Stamps are version-specific: if the artefact changes, the stamp no longer applies.
 
 **Feedback** -- Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
@@ -132,12 +132,23 @@ Laws are tiered by authority and lifecycle:
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes (Appraise, Refine, Assay) | Ephemeral. Decays if uncited, promoted if heavily used. |
 | 2 | **Ruling** | Assay Node | Binding precedent. Minted when disputes are resolved. |
-| 3 | Statute | Governance Flow | Organisational policy. Covered in [Governance Concepts](./03-governance.md). |
-| 4 | Federal | Federal authority | Cross-organisation. Covered in [Governance Concepts](./03-governance.md). |
+| 3 | **Local Statute** | Flow Operator | Local policy. Human-administered or via local legislative cycle. |
+| 4 | **State Constitution** | [Governance Flow](./03-governance.md) | Organisational policy. Applies to all Flows in the Governor's instance. |
+| 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
 Tier 1 Findings are the raw material. They emerge from work -- a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it can be promoted to a Tier 2 Ruling through the Assay Node.
 
 The system naturally hardens soft rules into strict ones. A vague Tier 1 Finding -- "this feels wrong" -- that keeps causing friction can be codified into a deterministic Tier 2 Ruling that is mathematically enforceable. What starts as a subjective vibe becomes objective physics.
+
+### The Governance Flow
+
+Tiers 1 and 2 emerge from within a Flow. Tier 3 is the Flow's own legislative authority. Tiers 4 and 5 arrive from above.
+
+A standalone Flow (no Governor) manages its own Tier 3 Local Statutes as CRDs applied by an administrator. Tiers 4 and 5 do not exist in this configuration.
+
+Under a Governor, the [Governance Flow](./03-governance.md) is a dedicated Flow whose governed artefacts are the laws themselves. It produces Tier 4 State Constitution laws through the same Foundry Cycle (Forge, Quench, Appraise, Sort, Refine, Assay) as any other Flow, and synchronises Tier 5 Federal Accords from upstream authorities. Sibling Flows receive these laws via their Librarians, ensuring every Flow in the organisation operates under a consistent body of higher-tier governance.
+
+The Governor also serves as the **State Root Certificate Authority**. It issues intermediate CA certificates to each Sibling Flow's Operator, establishing a shared trust hierarchy. Any stamp produced by any node in any sibling Flow is cryptographically verifiable by tracing the certificate chain back to the State Root.
 
 ---
 
@@ -157,7 +168,7 @@ Inspection stamps record that a node examined the artefact. Approval stamps cert
 
 ### Terminal Contracts
 
-The exit contract is defined per governed artefact. For each artefact the Flow produces, the contract specifies what the passport must carry: a set of required stamps (each with a role and type), or simply that the artefact must be present. A code artefact might require approval stamps from "Validator" and "Security Auditor". A log artefact might only need to exist. The Flow grants nodes permission to stamp as the required roles. At the border, the terminal contract checks each artefact's passport against its requirements. If any requirement is unsatisfied, the Workitem cannot exit.
+The terminal contract is defined per governed artefact. For each artefact the Flow produces, the contract specifies what the passport must carry: a set of required stamps (each with a role and type), or simply that the artefact must be present. A code artefact might require approval stamps from "Validator" and "Security Auditor". A log artefact might only need to exist. The Flow grants nodes permission to stamp as the required roles. At the border, the terminal contract checks each artefact's passport against its requirements. If any requirement is unsatisfied, the Workitem cannot exit.
 
 ```mermaid
 sequenceDiagram
@@ -180,7 +191,7 @@ sequenceDiagram
     S->>S: all inspections present, no unresolved feedback
     S->>W: approval stamp (Sort)
     W->>T: complete
-    T->>T: check passport against exit contract
+    T->>T: check passport against terminal contract
     T-->>W: all requirements met -- exit approved
 ```
 
