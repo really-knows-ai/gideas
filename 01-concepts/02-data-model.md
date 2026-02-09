@@ -1,7 +1,5 @@
 # Data Model
 
-A [Flow](./00-overview.md) has four primary data objects: Workitems, Artefacts, Feedback, and Laws. Each has its own structure, lifecycle, relationships, and mutation rules.
-
 ---
 
 ## Workitems
@@ -34,7 +32,7 @@ A WorkitemType defines the shape of a Workitem's `spec` fields as a JSON Schema.
 
 ```yaml
 apiVersion: flow.gideas.io/v1
-kind: WorkItemType
+kind: WorkitemType
 metadata:
   name: petition-v1
 spec:
@@ -281,7 +279,7 @@ Stamps are cryptographically bound to the artefact's content through the `hash` 
 
 ## Feedback
 
-[Feedback](./00-overview.md) is threaded, artefact-scoped, and adversarial by design. It is not a comment thread. It is a structured protocol that forces every disagreement into the open and demands justification for every refusal.
+[Feedback](./00-overview.md) is threaded, artefact-scoped, and adversarial by design. A structured protocol forces every disagreement into the open and demands justification for every refusal.
 
 Feedback lives in the [Archivist's](../02-flow/04-system-services.md) SQLite database, scoped to Workitem ID and artefact kind. Each feedback item is tagged with the artefact version hash it was raised against. All feedback is preserved across versions — when new content is stored, existing feedback remains queryable and relevant. Nodes access feedback through the [SDK](../03-node/02-sdk-core.md) Artefact object (`artefact.getFeedback()`, `artefact.hasUnresolvedFeedback()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
@@ -324,10 +322,15 @@ stateDiagram-v2
 
     actioned --> pending : RejectFix()
 
+    wont_fix --> disputed : Reviewer disputes\nrefusal
+    wont_fix --> resolved : Reviewer accepts\nrefusal
+
     disputed --> rejected : Assay verdict\n(linkedRuling set)
     disputed --> resolved : Assay verdict\n(in favour of refiner)
 
     rejected --> resolved : ResolveFeedback()\n(forced compliance)
+
+    resolved --> [*]
 ```
 
 | State | Description |
@@ -341,7 +344,9 @@ stateDiagram-v2
 
 The cycle between `pending` and `actioned` is the normal adversarial loop. Appraise raises an issue. Refine fixes it and marks it `actioned`. On the next review pass, Appraise either accepts the fix (the item stays `actioned`) or calls `RejectFix()`, which pushes it back to `pending` with a new history entry explaining why the fix was insufficient.
 
-From [Sort's](./00-overview.md) perspective, only `pending` and `disputed` feedback is unresolved. Feedback in any other state — `actioned`, `wont-fix`, `resolved` — does not block the Workitem. Sort checks for unresolved feedback *after* all required inspection stamps are present; if none remains, it stamps approval.
+From [Sort's](./00-overview.md) perspective, only `pending` and `disputed` feedback is unresolved. Feedback in any other state — `actioned`, `wont-fix`, `resolved` — does not block the Workitem.
+
+In the [canonical arrangement](./00-overview.md), Sort evaluates the Workitem's governance state and routes accordingly — unresolved feedback on governed artefacts typically routes toward refinement, deadlocked feedback toward judicial review, and missing inspection stamps toward the node configured to provide them. When all inspections are present and all feedback is resolved, Sort stamps approval. Sort is the only node that stamps approval, but its routing logic is user-defined — teams implement it with the [SDK](../03-node/02-sdk-core.md) to match their Flow's topology.
 
 ### Forced-Choice Justification
 
@@ -358,7 +363,7 @@ There is no third option. A node cannot silently dismiss feedback. Every refusal
 
 Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `disputed` and routes the Workitem to [Assay](./00-overview.md).
 
-The check is semantic, not mechanical. It asks: "Are we arguing in circles about *this specific point*?" A Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
+The threshold applies per feedback item, not per Workitem. A Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
 ### Contempt Guard
 

@@ -8,7 +8,7 @@ A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./
 
 Foundry Flow maps governance concepts onto a legal and constitutional structure. This is not decorative — the metaphor is load-bearing. Each branch of government has a clear institutional counterpart.
 
-| Branch | Function | Institutional Counterpart |
+| Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
 | **Common Law** | Establishes norms through practice | Nodes ([Appraise](./00-overview.md), [Refine](./00-overview.md), [Assay](./00-overview.md)) — Tier 1 [Findings](./02-data-model.md#law-tiers) |
 | **Judiciary** | Resolves disputes, codifies precedent | [Assay](./00-overview.md) node — Tier 2 [Rulings](./02-data-model.md#law-tiers) |
@@ -130,7 +130,7 @@ The Governor is a dedicated [Flow Operator](../02-flow/01-operator.md) that runs
 The Governor holds the self-signed Root CA keypair for the State trust hierarchy. It issues intermediate CA certificates to each Sibling Flow's Operator, establishing a hub-and-spoke trust model:
 
 ```
-State Governor (Root CA)
+Governor (Root CA)
   ├─ Flow A Operator (Intermediate CA)
   │   ├─ Forge Node (Leaf)
   │   └─ Quench Node (Leaf)
@@ -262,14 +262,6 @@ flowchart TD
 ```
 
 Each level of the chain has bounded authority. No institution can exceed its constitutional ceiling. Nodes raise issues. Assay adjudicates within its tier. The Governor legislates within the State. The Federation legislates across States. The escalation path is a routing protocol, not a request for permission — it sends the conflict to the institution with the authority to resolve it.
-
----
-
-## Supremacy
-
-Higher tier always wins. No upward override. A Tier 3 Local Statute cannot override a Tier 4 State Constitution law, regardless of when either was created. A Tier 4 law cannot override a Tier 5 Federal Accord. This is absolute — the same way a city by-law cannot override state or federal law.
-
-Supremacy governs both integration-time conflicts (handled by the [law integration protocol](#law-integration-protocol)) and runtime conflicts (handled by the [judiciary](#judicial-review-assay)). The resolution mechanism differs, but the principle is invariant: the higher tier prevails.
 
 ---
 

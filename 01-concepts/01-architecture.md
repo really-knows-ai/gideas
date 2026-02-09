@@ -2,7 +2,7 @@
 
 A [Flow](./00-overview.md) is a self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary. The namespace is the sovereignty line — nothing enters or leaves without crossing a guarded border.
 
-The internal structure separates into six planes, each owning a distinct concern. Four of them — Management, Control, Data, and Security — are standard infrastructure. The fifth, the Governance Plane, is what makes Foundry Flow a governed runtime. The sixth, the Federation Plane, extends trust across Flow boundaries.
+The internal structure separates into six planes, each owning a distinct concern: Management, Control, Data, Security, Governance, and Federation.
 
 ---
 
@@ -17,12 +17,12 @@ graph TD
 
     subgraph ctrl["Control Plane"]
         direction LR
-        Operator[Flow Operator] ~~~ Monitor[Flow Monitor] ~~~ Thrash[Thrash Guard]
+        Operator[Flow Operator] ~~~ Monitor[Flow Monitor]
     end
 
     subgraph gov["Governance Plane"]
         direction LR
-        Librarian ~~~ Citations[Citation Processor] ~~~ Assay[Assay Node]
+        Librarian ~~~ Assay[Assay Node]
     end
 
     subgraph fed["Federation Plane"]
@@ -32,7 +32,7 @@ graph TD
 
     subgraph sec["Security Plane"]
         direction LR
-        Sidecar ~~~ Tokens[ServiceAccount Tokens] ~~~ mTLS[mTLS Certificates] ~~~ Stamps[Passport Stamps]
+        Sidecar ~~~ Tokens[ServiceAccount Tokens] ~~~ mTLS[mTLS Certificates]
     end
 
     subgraph data["Data Plane"]
@@ -59,7 +59,7 @@ A Flow is deployed as a single Helm release. One release creates one namespace, 
 
 ### Control Plane
 
-Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](./00-overview.md), and enforces the terminal contract at the exit boundary.
+Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](./00-overview.md), and validates the terminal contract at the exit boundary.
 
 The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports. The Thrash Guard detects Workitems stuck in rework loops and fails them before they consume unbounded resources.
 
@@ -85,7 +85,7 @@ Network reachability does not imply authorization. A pod that can reach a servic
 
 ### Governance Plane
 
-The legal lifecycle. Standard workflow systems provide the four planes above. The Governance Plane is what makes Foundry Flow a governed runtime.
+The legal lifecycle. The Governance Plane manages the discovery, enforcement, and evolution of [law](./00-overview.md) within the Flow.
 
 The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./00-overview.md) — storing, embedding, and serving laws to Nodes that query for applicable governance. The Citation Processor tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md).
 
@@ -181,4 +181,4 @@ In federated deployments, the trust chain is hierarchical: the [Governor](./03-g
 
 Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. The terminal contract checks stamps by validating the cryptographic chain — not by trusting the network path the Workitem travelled.
 
-The Security Plane's presence in the Data Plane is the Sidecar. Its presence in the Governance Plane is the signed stamp. Its presence in the Control Plane is the authenticated API call. Security is not a layer — it is a material that runs through every plane.
+The Security Plane's presence in the Data Plane is the Sidecar. Its presence in the Governance Plane is the signed stamp. Its presence in the Control Plane is the authenticated API call. Security is a material that runs through every plane.
