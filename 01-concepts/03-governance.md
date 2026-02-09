@@ -302,6 +302,6 @@ The [Friction Ledger](./00-overview.md#friction) is governance's economic consci
 
 Friction accumulates exponentially. A law cited for context seeding generates zero friction — it is doing its job. A law that blocks an artefact generates friction that compounds on each repeat conflict. Judicial hearings and unplanned human escalations amplify the signal further. The result is a heatmap of **toxic laws** (high resistance, exponential penalties) versus **foundational laws** (high usage, zero friction).
 
-The Friction Ledger is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. "Bureaucracy" and "technical debt" stop being complaints and become data.
+The Friction Ledger is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
 
 Friction data feeds back into the governance process. Laws that generate disproportionate friction surface for review. Patterns of constitutional resistance point to laws that need amendment, consolidation, or repeal. The system shames its own constitution into improvement.

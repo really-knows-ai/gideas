@@ -2,7 +2,7 @@
 
 ## What is Foundry Flow?
 
-Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work through structured cycles of creation, validation, review, and refinement -- producing artefacts that carry cryptographic proof of every check they passed.
+Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work through adversarial cycles of creation, validation, review, and refinement -- producing artefacts that carry cryptographic proof of every check they passed.
 
 The core premise is simple: all agents are fallible. Human reviewers miss things. AI models hallucinate. Compilers have edge cases. Foundry Flow replaces invisible trust with auditable proof. Every action is recorded, every decision is traceable, and every output carries a verifiable record of the governance it survived.
 
@@ -10,11 +10,11 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 ---
 
-## Foundational Principles
+## Foundational Axioms
 
 **Assume Unreliability.** All agents -- human or AI -- are fallible. The framework provides a safety harness. Trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots.
 
-**Make Work Auditable.** Every action, decision, and review becomes an immutable, traceable record. Invisible trust-based processes are replaced with verifiable proof. If it happened, there is a record.
+**Make Work Auditable.** Every action, decision, and review becomes an immutable, traceable record. If it happened, there is a record.
 
 **Make the Cost Visible.** Friction is a first-class, quantifiable signal exposing the real-time cost of bad systems -- whether the actors are human, AI, or both. The Friction Ledger transforms abstract complaints about bureaucracy into actionable data.
 
@@ -26,11 +26,11 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 **Flow** -- A self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
-**Workitem** -- The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact kind and tagged to specific versions.
+**[Workitem](./02-data-model.md#workitems)** -- The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact kind and tagged to specific versions.
 
 **Node** -- A stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
 
-**Artefact** -- A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model -- anything the Flow produces.
+**[Artefact](./02-data-model.md#artefacts)** -- A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model -- anything the Flow produces.
 
 **Passport** -- The collection of [stamps](#stamp) on an artefact version. A passport tracks which `(role, type)` requirements have been satisfied for a specific content hash.
 
@@ -40,9 +40,9 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validator", "Reviewer") -- and a **type** (inspection or approval). The combination of role and type is the stamp's identity. Roles are defined by the terminal contract and granted to nodes by the Flow. Stamps are version-specific: if the artefact changes, the stamp no longer applies.
 
-**Feedback** -- Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
+**[Feedback](./02-data-model.md#feedback)** -- Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
-**Law** -- A governance rule with a textual **goal** -- what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
+**[Law](./02-data-model.md#laws)** -- A governance rule with a textual **goal** -- what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
 
 ---
 
@@ -52,7 +52,7 @@ The Foundry Cycle is the canonical arrangement of node types in a governed workf
 
 ### Node Types
 
-**Forge** creates the initial artefact. Before generation, it queries the Library for applicable laws and seeds them into its context. This eliminates the "blind node" problem -- the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
+**Forge** creates the initial artefact. Before generation, it queries the Library for applicable laws and seeds them into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
 
 **Quench** performs deterministic validation. It runs objective checks -- compilers, solvers, structural validators -- to catch fundamentally broken work before it reaches the more expensive review stage. Quench is optional and may be skipped for creative or ideation work.
 
@@ -61,7 +61,7 @@ The Foundry Cycle is the canonical arrangement of node types in a governed workf
 **Sort** is the central routing hub. Its logic is deliberately simple:
 1. Is there unresolved feedback? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
-3. Has the artefact been reviewed? If missing required inspection stamps, route to **Appraise**.
+3. Missing required inspection stamps? Route to **Appraise**.
 4. All feedback resolved, all inspection stamps present? Stamp **approval** and **Done**.
 
 Sort is a gate. It evaluates state, routes when work is incomplete, and stamps approval when the passport carries the required inspection stamps and all feedback is resolved.
