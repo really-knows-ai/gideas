@@ -217,13 +217,13 @@ spec:
 
 An artefact is **valid** if and only if its passport contains a stamp matching every entry in `requiredStamps` — the correct role *and* the correct type. An artefact is **present** if it exists, regardless of stamps.
 
-The terminal contract specifies both the role and the type required for each artefact. Inspection stamps record that a role examined the artefact. Approval stamps certify it meets governance requirements and require law citations. Both are independently required — an inspection stamp from "linter" does not satisfy a requirement for an approval stamp from "linter", and vice versa.
+The GovernedArtefact CRD specifies both the role and the type required for each stamp. Inspection stamps record that a role examined the artefact. Approval stamps certify the artefact meets governance requirements from that role's perspective. Both are independently required — an inspection stamp from "linter" does not satisfy a requirement for an approval stamp from "linter", and vice versa.
 
 Validation is role-based, not identity-based. The specific node that stamped is recorded for audit, but governance checks verify that the required role *and* type are present. This enables horizontal scaling (multiple node replicas with the same role stamp interchangeably) and cross-Flow trust (a stamp from a node in another Flow is valid if it carries the right role and its certificate chain traces back to a shared trust root).
 
 ### Passports and Stamps
 
-Every artefact version has a passport — a collection of [stamps](./00-overview.md) stored in the [Archivist's](../02-flow/04-system-services.md) SQLite database alongside the version's metadata. Stamps, version history, and feedback share a single queryable layer; raw content bytes live separately in the blob store.
+Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) SQLite database, scoped to Workitem ID and artefact kind — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../03-node/02-sdk-core.md) Artefact object (`artefact.getPassport()`, `artefact.getStamps()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
 ```mermaid
 graph LR
@@ -231,7 +231,7 @@ graph LR
         direction TB
         subgraph SQLite["SQLite Database"]
             Versions["Version History"]
-            Stamps["Passport Stamps"]
+            Stamps["Stamps"]
             FB["Feedback"]
         end
         subgraph Blobs["Blob Store"]
@@ -240,34 +240,33 @@ graph LR
         end
     end
     WI["Workitem CRD"] -->|"latestVersion: hash_v2"| Blobs
-    Stamps -->|"role: linter\nrole: security-reviewer"| Versions
+    Stamps -->|"tagged to version hash"| Versions
+    FB -->|"tagged to version hash"| Versions
 ```
 
-The passport is a **role-centric map**. Role is the unique key. If two different nodes stamp the same artefact as the same role, the second stamp overwrites the first (Last-Write-Wins). Governance cares that the role was satisfied, not which specific node satisfied it. Overwritten stamps are not preserved in the passport — the full stamp history is reconstructable from the telemetry audit log.
+A stamp is uniquely keyed by `(role, type)` — the combination of the role being asserted and whether it is an inspection or approval. If two different nodes stamp the same artefact version as the same role and type, the second stamp overwrites the first (Last-Write-Wins). Governance cares that the `(role, type)` requirement was satisfied, not which specific node satisfied it. A single role can hold both an inspection stamp and an approval stamp simultaneously — these are independent assertions. Overwritten stamps are not preserved in the passport — the full stamp history is reconstructable from the telemetry audit log.
 
 **Stamp types:**
 
-| Type | Purpose | Law Citations |
-|------|---------|---------------|
-| **Inspection** | Records that a node examined this artefact version | Not required |
-| **Approval** | Certifies the artefact meets governance requirements from this role's perspective | Required |
+| Type | Purpose |
+|------|---------|
+| **Inspection** | Records that a node examined this artefact version |
+| **Approval** | Certifies the artefact meets governance requirements from this role's perspective |
 
 **Stamp fields:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `role` | string | Primary key — the role being asserted |
-| `type` | enum | `inspection` or `approval` |
+| `role` | string | The role being asserted |
+| `type` | enum | `inspection` or `approval` — together with `role`, forms the composite key |
 | `node` | string | Node name (for audit) |
 | `timestamp` | datetime | When the stamp was created |
 | `hash` | string | Content hash of the artefact at stamp time |
 | `signature` | bytes | RSA signature over `hash\|\|type\|\|role\|\|timestamp` |
 | `certificateChain` | []string | PEM-encoded certificates: `[node_cert, operator_cert, state_root]` |
-| `laws` | []LawCitation | Law citations (required for `approval` type) |
+| `laws` | []LawCitation | Laws cited during the assessment that produced this stamp |
 
-Stamps are cryptographically bound to the artefact's content through the `hash` field. The signature covers the hash along with the stamp's identity fields, making it independently verifiable by tracing the certificate chain back to the Flow's trust root (or, in federated deployments, to the State Root CA).
-
-**Version binding:** Stamps always target the latest version at the time of stamping. When new content is stored (producing a new hash), the old passport remains with the old version. The new version starts with an empty passport. All prior stamps are invalidated — governance starts over for the new content. This is not a penalty; it is an invariant. A stamp certifies specific bytes. Different bytes require new certification.
+Stamps are cryptographically bound to the artefact's content through the `hash` field. The signature covers the hash along with the stamp's identity fields, making it independently verifiable by tracing the certificate chain back to the Flow's trust root (or, in federated deployments, to the State Root CA). A stamp certifies specific bytes. Different bytes require new certification.
 
 **Capability enforcement:** The Sidecar enforces capabilities before allowing stamp operations:
 
@@ -375,76 +374,24 @@ Feedback messages are capped at 1024 characters. For detailed analysis that exce
 
 ## Laws
 
-A [law](./00-overview.md) is a typed container. The [Librarian](../02-flow/04-system-services.md) stores Python scripts next to SMT-LIB equations next to prose style guides, with the same indifference a filesystem shows to all file types. The content is a blob of bytes. The label is a MIME type. Execution is eye of the beholder — nodes query for laws they can interpret and consume them through their own lens.
+A [law](./00-overview.md) is a governance rule with a clear **goal** — a plain-language statement of what it enforces, stops, or ensures. The goal is the law's identity. Everything else about a law — its representations, its tier, its lifecycle — exists in service of that goal.
 
-### The Polymorphic Envelope
+### Representations
 
-The Law CRD is a generic container:
+A law can have multiple **representations**: different ways of expressing the same goal. A prose description, a formal logic constraint, an executable validator — these are all projections of the same intent. The [Librarian](../02-flow/04-system-services.md) stores them all as part of a single law object. Nodes query for representations they can interpret: a review node reads prose, a validation node runs formal logic. Different nodes consume different representations of the same rule through their own lens.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `spec.type` | string | MIME type of the content |
-| `spec.content` | string | The law itself — prose, formal logic, executable code, anything |
-| `spec.tier` | int | Authority tier (1-5) |
-| `spec.appliesTo` | string | Artefact kind this law governs |
+Representations are not independent rules. They must all enforce the same goal. A prose representation that says "poetry must not reference processed meats" and a formal logic representation that checks for the string "sausage" are two faces of the same law. Adding, removing, or modifying any representation produces a new version of the law (identified by its content hash). The full version history is preserved.
 
-The MIME type determines which nodes can consume the law. Nodes query the [Librarian](../02-flow/04-system-services.md) for laws matching the artefact they are working on, filtered by content types they understand:
-
-| MIME Type | Content | Consumed By |
-|-----------|---------|-------------|
-| `text/markdown` | Subjective rules — prose descriptions, style guides, tone requirements | [Appraise](./00-overview.md) nodes (injected into LLM prompts) |
-| `application/smt-lib` | Deterministic constraints — formal logic solvable by an SMT engine | [Quench](./00-overview.md) nodes (fed to Z3 or similar solver) |
-| `application/python` | Executable validation — Python functions that return pass/fail | Quench nodes (executed in a sandbox) |
-
-The design is infinitely extensible. Any MIME type is valid. If an organisation needs laws defined as musical scores, they upload laws with `type: audio/midi` and deploy a node that queries for `audio/midi` and knows how to interpret it. The system imposes no fixed vocabulary of law types.
-
-A single governance rule can exist simultaneously as prose and as formal logic. An [Appraise](./00-overview.md) node reads the prose and applies judgement. A [Quench](./00-overview.md) node reads the formal logic and runs a solver. Both are consuming the same rule through different lenses. The [Library](../02-flow/04-system-services.md) is one body of law; execution is interpretation.
-
-### Law Groups
-
-Laws can be linked by a shared `spec.group` identifier (format: `lg-XXXX`). A group ties together the **spirit** (prose description) and the **letter** (formal logic) of the same governance rule:
-
-```yaml
-# Spirit — consumed by Appraise (LLM prompt injection)
-apiVersion: flow.gideas.io/v1
-kind: Law
-metadata:
-  name: l-002-no-sausage-text
-spec:
-  tier: 2
-  type: "text/markdown"
-  content: "Poetry must not reference processed meats."
-  group: "lg-7729"
-  appliesTo: "poetry"
-
----
-
-# Letter — consumed by Quench (SMT solver)
-apiVersion: flow.gideas.io/v1
-kind: Law
-metadata:
-  name: l-002-no-sausage-code
-spec:
-  tier: 2
-  type: "application/smt-lib"
-  content: |
-    (assert (not (str.contains artefact "sausage")))
-  group: "lg-7729"
-  appliesTo: "poetry"
-```
-
-Laws in the same group share a lifecycle. Repealing one repeals all laws with the matching group ID. Querying by group returns all representations of the rule.
-
-This is how governance hardens. A vague Tier 1 Finding — "this feels wrong" — starts as `text/markdown`. When it causes enough [friction](./00-overview.md) to trigger judicial review, [Assay](./00-overview.md) can codify it: the spirit stays as context for subjective review, and a new letter is minted as `application/smt-lib` for deterministic enforcement. What started as a vibe becomes physics. Both representations live in the same group, governed by the same lifecycle.
+Governance hardens through representations. A Tier 1 Finding starts as prose — a reviewer noticed a pattern and articulated it. If the Finding proves durable enough to be promoted to a Tier 2 Ruling, [Codification Services](../02-flow/04-system-services.md) can translate the goal into formal logic, adding a deterministic representation alongside the original prose. The goal stays the same; enforceability increases.
 
 ### Law Tiers
 
-The [overview](./00-overview.md) introduced the five law tiers. Here is how they work in practice — their scope, authority boundaries, and decay behaviour:
+Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
 | 1 | **Finding** | Single Flow | Nodes ([Appraise](./00-overview.md), [Refine](./00-overview.md), [Assay](./00-overview.md)) | Ephemeral. Default TTL of 30 days. Decays if uncited, promoted to Tier 2 if heavily used. |
-| 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Default TTL of 90 days. Requires a formal review hearing before retirement. |
+| 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Default TTL of 90 days. Requires a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Operator (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governor instance | [Governance Flow](./03-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
@@ -453,7 +400,7 @@ Supremacy is absolute — higher tier always wins, with no upward override. A Ti
 
 Tier 1 Findings are the raw material of governance. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. Findings that prove useful (cited frequently across Workitems) accumulate citation data tracked by the [Citation Processor](../02-flow/04-system-services.md), which can trigger promotion to Tier 2. Findings that go uncited expire at their TTL.
 
-Tier 2 Rulings are binding precedent. They are minted when Assay resolves a dispute, consolidating the arguments into a durable law. Rulings have longer TTLs than Findings and require a formal review hearing before retirement.
+Tier 2 Rulings are binding precedent. They are minted when Assay resolves a dispute, consolidating the arguments into a durable law. Rulings have longer TTLs than Findings and require a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement.
 
 Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows (no Governor), these are CRDs applied by an administrator. Under a Governor, the local legislative cycle can also produce them.
 
@@ -463,17 +410,6 @@ The full integration protocol — how higher-tier laws are pushed to Flows, how 
 
 ### Scoping
 
-The `spec.appliesTo` field scopes a law to a specific artefact kind. When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws, the results are filtered by the artefact the node is working on.
+Each law specifies which artefact kind it governs. When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws, the results are filtered by the artefact the node is working on and by the representation types the node can interpret.
 
-The Operator auto-syncs key spec fields to `metadata.labels` for Kubernetes-native filtering:
-
-| Label | Source | Purpose |
-|-------|--------|---------|
-| `flow.gideas.io/tier` | `spec.tier` | Filter by law tier |
-| `flow.gideas.io/applies-to` | `spec.appliesTo` | Filter by target artefact kind |
-| `flow.gideas.io/group` | `spec.group` | Find related laws in the same group |
-| `flow.gideas.io/type` | `spec.type` (sanitised) | Filter by content type |
-
-MIME types are sanitised for label compatibility: `application/smt-lib` becomes `application.smt-lib`.
-
-The [Librarian's](../02-flow/04-system-services.md) embedding pipeline, citation tracking, and law lifecycle state machine are covered in [System Services](../02-flow/04-system-services.md). [Codification Services](../02-flow/04-system-services.md) — the translation layer that converts natural language verdicts into formal logic — are also detailed there.
+The Librarian's embedding pipeline, citation tracking, and law lifecycle state machine are covered in [System Services](../02-flow/04-system-services.md). The CRD structure is defined in the [CRD Reference](../04-reference/crds.md).

@@ -26,23 +26,23 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 **Flow** -- A self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
-**Workitem** -- The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, version history, and passport stamps live in the Archivist alongside the artefact content.
+**Workitem** -- The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact kind and tagged to specific versions.
 
 **Node** -- A stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
 
 **Artefact** -- A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model -- anything the Flow produces.
 
-**Passport** -- The verification record attached to an artefact. A passport tracks which roles have stamped this artefact and for which version.
+**Passport** -- The collection of [stamps](#stamp) on an artefact version. A passport tracks which `(role, type)` requirements have been satisfied for a specific content hash.
 
 **Stamp** -- A mark left on a passport by a node. Two types:
 - **Inspection** -- "I have checked this." Records that the node examined this version.
-- **Approval** -- "I consider this valid." Certifies the artefact meets governance requirements from this role's perspective. Requires law citations.
+- **Approval** -- "I consider this valid." Certifies the artefact meets governance requirements from this role's perspective.
 
-Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validator", "Reviewer"). Roles are defined by the terminal contract and granted to nodes by the Flow. Stamps are version-specific: if the artefact changes, the stamp no longer applies.
+Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validator", "Reviewer") -- and a **type** (inspection or approval). The combination of role and type is the stamp's identity. Roles are defined by the terminal contract and granted to nodes by the Flow. Stamps are version-specific: if the artefact changes, the stamp no longer applies.
 
 **Feedback** -- Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
-**Law** -- A governance rule in the Flow's Library. Laws can hold prose, formal logic, executable code, or anything else. The Library stores them all with equal indifference.
+**Law** -- A governance rule with a textual **goal** -- what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
 
 ---
 
@@ -120,9 +120,9 @@ Forge reads laws for context seeding. Quench and Sort are read-only consumers. A
 
 A Flow's Library is its collective body of law -- its constitution. Every law the Flow has ever discovered, enacted, or inherited lives here.
 
-Laws can be subjective, objective, or both. A subjective law might be a prose description: "the tone should feel welcoming." An objective law might be a formal constraint: "the output must contain exactly three sections." Both are first-class citizens. The Library stores them with equal indifference -- it cares only that a law exists, and leaves interpretation to the nodes that consume it.
+Each law has a **goal** -- a plain-language statement of what it enforces, stops, or ensures -- and one or more **representations**: prose, formal logic, executable code, or any other format. The Library stores all representations as part of a single law object with equal indifference. It cares only that a law exists and has a goal; interpretation belongs to the nodes that consume it.
 
-Nodes query the Library for laws that apply to the artefact they are working on and interpret them through their own lens. A review node reads prose and applies judgement. A validation node reads formal logic and runs a solver. The same rule can exist in both forms, and different nodes will each use the version they understand. The Library is one body of law; execution is eye of the beholder.
+Nodes query the Library for laws that apply to the artefact they are working on and request representations they can interpret. A review node reads prose and applies judgement. A validation node reads formal logic and runs a solver. Different nodes consume different representations of the same law through their own lens. The Library is one body of law; execution is eye of the beholder.
 
 ### Law Tiers
 
@@ -138,7 +138,7 @@ Laws are tiered by authority and lifecycle:
 
 Tier 1 Findings are the raw material. They emerge from work -- a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it can be promoted to a Tier 2 Ruling through the Assay Node.
 
-The system naturally hardens soft rules into strict ones. A vague Tier 1 Finding -- "this feels wrong" -- that keeps causing friction can be codified into a deterministic Tier 2 Ruling that is mathematically enforceable. What starts as a subjective vibe becomes objective physics.
+The system naturally hardens soft rules into strict ones. A vague Tier 1 Finding -- "this feels wrong" -- starts as a prose representation. When promoted to a Tier 2 Ruling, it can gain a formal logic representation through [Codification Services](../02-flow/04-system-services.md), making it deterministically enforceable. The goal stays the same; enforceability increases.
 
 ### The Governance Flow
 
@@ -164,7 +164,7 @@ As a Workitem moves through the cycle, nodes stamp the artefact's passport. Each
 - The **content hash** of the artefact at stamp time.
 - A **cryptographic signature** and certificate chain.
 
-Inspection stamps record that a node examined the artefact. Approval stamps certify it meets requirements -- and must cite the specific laws that were satisfied. If the artefact content changes after a stamp, the hash no longer matches and the stamp is invalidated. Governance starts over for the new version.
+Inspection stamps record that a node examined the artefact. Approval stamps certify it meets governance requirements. If the artefact content changes after a stamp, the hash no longer matches and the stamp is invalidated. Governance starts over for the new version.
 
 ### Terminal Contracts
 

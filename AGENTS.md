@@ -165,7 +165,37 @@ The Archivist manages all artefact-related data beyond raw content bytes. Its st
 
 ### Laws and the Library stay high-level in concepts
 
-The key concept: laws can be subjective, objective, or both. The Library stores them with equal indifference and leaves interpretation to the nodes. Technical details (MIME types, polymorphic envelope, CRDs, Codification Services) belong in later documents (`02-flow/04-system-services.md`, `04-reference/crds.md`).
+The key concept: a law has a textual **goal** (what it enforces/stops/ensures) and one or more **representations** (prose, formal logic, executable code, etc.). The Library stores all representations with equal indifference and leaves interpretation to the nodes. Technical details (MIME types, CRD structure, Kubernetes labels, Codification Services, Librarian embedding pipeline) belong in later documents (`02-flow/04-system-services.md`, `04-reference/crds.md`).
+
+### Laws are single objects with multiple representations
+
+A law is one object, not a group of linked objects. Each law has:
+
+- A **goal** — plain-language statement of what the law enforces, stops, or ensures. This is the law's identity.
+- One or more **representations** — different ways of expressing the same goal (prose, formal logic, executable, etc.). Representations must all enforce the same goal.
+- A **tier** (1–5) and lifecycle metadata.
+
+Whole-law versioning: any mutation to any part of the law (goal, representations, metadata) produces a new version identified by content hash. Representations are not independently versioned.
+
+Governance hardening means a law gains new representations over time. A prose-only Tier 1 Finding can gain a formal logic representation when promoted to a Tier 2 Ruling via Codification Services, making it deterministically enforceable. The goal stays the same; enforceability increases.
+
+This replaces the earlier "Law Groups" design where separate Law CRDs were linked by a shared group identifier.
+
+### Review hearing verdict schema
+
+Review hearings use tier-specific verdicts. There are three hearing types:
+
+**Citation-threshold hearing** (Tier 1 Finding is heavily cited):
+- **Promote** — Finding is minted as a Tier 2 Ruling
+- **Retain** — Finding's TTL is reset, stays at Tier 1
+
+**Tier 1 TTL-expiry hearing:**
+- **Retire** — Finding is deleted (history preserved in audit log)
+- **Promote** — Finding is minted as a Tier 2 Ruling
+
+**Tier 2 TTL-expiry hearing:**
+- **Demote** — Ruling drops to Tier 1 Finding (fresh TTL, citation history does not carry over)
+- **Promote** — Assay petitions for Tier 3 Statute (HITL ratification required)
 
 ### The Foundry Cycle is the canonical arrangement
 

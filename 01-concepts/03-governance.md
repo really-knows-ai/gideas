@@ -29,14 +29,14 @@ Laws emerge from work. When a node encounters a situation that warrants a rule �
 
 Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and creates a ReviewHearing Workitem, routed to the [Assay](./00-overview.md) node.
 
-Assay evaluates the Finding's history and renders a binary verdict:
+Assay evaluates the Finding's history and renders a verdict:
 
 | Verdict | Effect |
 |---------|--------|
 | **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a 90-day TTL |
-| **Sustain** | Finding's TTL is reset. It continues as Tier 1. |
+| **Retain** | Finding's TTL is reset. It continues as Tier 1. |
 
-A Finding that is neither cited enough to trigger promotion nor cited at all will expire at its TTL and vanish. Governance hardens organically: rules that matter survive; rules that don't, disappear.
+A Finding that is neither cited enough to trigger promotion nor cited at all will expire at its TTL and enter a [TTL-expiry hearing](#decay-and-retirement). Governance hardens organically: rules that matter survive; rules that don't, disappear.
 
 ### Administered Policy (Tier 3)
 
@@ -50,7 +50,7 @@ The [Assay](./00-overview.md) node is the judiciary. It is invoked in two circum
 
 1. **Feedback deadlock.** When a [feedback](./02-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `disputed` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — and renders a verdict. The verdict resolves the dispute and can mint a Tier 2 Ruling as binding precedent.
 
-2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a [binary verdict](#decay-and-retirement) — Status Quo or Promote — whose consequences depend on the hearing's trigger and the law's current tier.
+2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a verdict. Citation-threshold hearings use [Promote / Retain](#organic-discovery-tiers-12). TTL-expiry hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2.
 
 Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the only path forward is compliance.
 
@@ -72,14 +72,25 @@ flowchart LR
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
 
-Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: ephemeral, specialised containers that translate a verdict's intent into the appropriate format. A Tier 1 Finding that started as `text/markdown` — "poetry must not reference processed meats" — can be codified into `application/smt-lib` when promoted to a Tier 2 Ruling, making it deterministically enforceable. What started as a vibe becomes physics.
+Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: ephemeral, specialised containers that translate a verdict's intent into the appropriate format. A Tier 1 Finding that started as a prose representation — "poetry must not reference processed meats" — can gain a formal logic representation when promoted to a Tier 2 Ruling, making it deterministically enforceable. The goal stays the same; enforceability increases.
 
 ### Decay and Retirement
 
-Laws below Tier 3 decay if uncited. When a law's TTL expires, the Librarian creates a ReviewHearing Workitem rather than deleting the law silently. Assay evaluates the case and renders a binary verdict:
+Laws below Tier 3 decay if uncited. When a law's TTL expires, the Librarian creates a ReviewHearing Workitem rather than deleting the law silently. Assay evaluates the case and renders a tier-specific verdict:
 
-- **Status Quo** — accept the natural outcome. For an expired Tier 1 Finding, this means deletion. For an expired Tier 2 Ruling, this means demotion to Tier 1 (with a fresh TTL). For a citation-threshold hearing, the law stays at its current tier with a reset TTL.
-- **Promote** — elevate the law. A Tier 1 Finding is minted as a Tier 2 Ruling. A Tier 2 Ruling is proposed as a Tier 3 Statute (subject to HITL ratification).
+**Tier 1 Finding — TTL expiry:**
+
+| Verdict | Effect |
+|---------|--------|
+| **Retire** | Finding is deleted. History preserved in the audit log. |
+| **Promote** | Finding is minted as a Tier 2 Ruling (90-day TTL). |
+
+**Tier 2 Ruling — TTL expiry:**
+
+| Verdict | Effect |
+|---------|--------|
+| **Demote** | Ruling drops to Tier 1 Finding (fresh 30-day TTL). Citation history does not carry over. |
+| **Promote** | Assay petitions for Tier 3 Statute (HITL ratification required). |
 
 No law dies silently. Every expiry is a hearing. Every hearing produces either a renewed mandate or a deliberate retirement.
 
