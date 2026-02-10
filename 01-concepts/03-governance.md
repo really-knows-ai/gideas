@@ -40,7 +40,7 @@ A Finding that is neither cited enough to trigger promotion nor cited at all wil
 
 ### Administered Policy (Tier 3)
 
-Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./02-data-model.md#laws) applied by an administrator — typically via Helm manifests or GitOps. They have no automatic decay.
+Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./02-data-model.md#laws) applied by an administrator — typically via declarative configuration or GitOps. They have no automatic decay.
 
 The [Librarian](../02-flow/04-system-services.md) indexes externally applied Law CRDs and makes them available for queries and conflict detection. A law is not active until indexing is complete — conflict detection is a hard prerequisite, not a lazy background task.
 
@@ -105,8 +105,8 @@ When nodes cite conflicting laws during Workitem processing — not at integrati
 | **Tier 1 vs Tier 2** (cross-tier) | Assay deliberates. Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but Assay still adjudicates. Assay mints a new Tier 2 Ruling consolidating the surviving position. Originals retired. |
 | **Same tier** (Tier 1 vs Tier 1, or Tier 2 vs Tier 2) | Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired. |
 | **Tier 1–2 vs Tier 3** | The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, Assay petitions HITL with a proposed clarification or amendment. |
-| **Tier 3 vs Tier 3** | Assay drafts a *proposal* for a consolidated Tier 3 statute. HITL approves or rejects. On rejection, Assay issues a one-time Tier 2 Ruling for the immediate case. |
-| **Tier 4 or Tier 5 involvement** | Assay files an *appeal* to the [Governance Flow](#the-governance-flow) via the Librarian gRPC channel. |
+| **Tier 3 vs Tier 3** | Assay drafts a *proposal* for a consolidated Tier 3 statute and petitions HITL. On rejection, the conflict persists. |
+| **Tier 4 or Tier 5 involvement** | Assay files an *appeal* to the [Governance Flow](#the-governance-flow) via the Librarian. |
 
 ### Assay's Authority Ceiling
 
@@ -118,7 +118,7 @@ Assay's power is constitutionally bounded:
 | Tier 3 | **Propose** | Drafts a proposal. HITL approves or rejects. |
 | Tier 4–5 | **Appeal** | Files an appeal to the Governance Flow. Cannot directly modify. |
 
-When a human rejects Assay's Tier 3 proposal, the conflicting statutes remain active. Assay issues a one-time Tier 2 Ruling to resolve the immediate Workitem dispute. Every future Workitem that hits the same conflict generates another Assay invocation, another Tier 2 Ruling, and more [friction](./00-overview.md#friction). The system does not force the humans' hand. It measures the cost of the decision until someone acts.
+When a human rejects Assay's Tier 3 proposal, the conflicting statutes remain active. Every future Workitem that hits the same conflict generates another Assay invocation, another HITL escalation, and more [friction](./00-overview.md#friction). The system does not force the humans' hand. It measures the cost of the decision until someone acts.
 
 ---
 
@@ -156,7 +156,7 @@ The Governance Flow holds exclusive write authority for Tier 4 laws. Sibling Flo
 
 ### Diplomat (Federation Gateway)
 
-The Governance Flow maintains persistent gRPC connections to upstream Federal authorities. It pulls Tier 5 Federal Accord packages on a configurable schedule, verifies signatures, and integrates them into the State Library. If two Federal authorities publish conflicting laws, the Governance Flow rejects the sync and emits an alert — manual resolution is required.
+The Governance Flow maintains persistent connections to upstream Federal authorities. It pulls Tier 5 Federal Accord packages on a configurable schedule, verifies signatures, and integrates them into the State Library. If two Federal authorities publish conflicting laws, the Governance Flow rejects the sync and emits an alert — manual resolution is required.
 
 After syncing, the Governance Flow publishes a State Library snapshot containing all Tier 4 State Constitution laws and Tier 5 Federal Accords. Sibling Flows' [Librarians](../02-flow/04-system-services.md) consume this snapshot to stay current with higher-tier governance.
 
@@ -190,7 +190,7 @@ The Governance Flow is itself governed. Its own Tier 3 statutes define how legis
 
 ## Law Integration Protocol
 
-When higher-tier laws are pushed to a Sibling Flow — via Librarian-to-Librarian gRPC — the receiving [Librarian](../02-flow/04-system-services.md) runs a two-stage conflict check before integration.
+When higher-tier laws are pushed to a Sibling Flow — via Librarian-to-Librarian replication — the receiving [Librarian](../02-flow/04-system-services.md) runs a two-stage conflict check before integration.
 
 ### Stage 1: Semantic Search
 
@@ -235,7 +235,7 @@ Escalation is the mechanism by which conflicts that exceed a Flow's judicial aut
 
 ### Flow to Governance Flow
 
-When a Sibling Flow's [Assay](./00-overview.md) node encounters a conflict involving Tier 4 or Tier 5 laws, it files an **appeal** — a cross-Flow message via the Librarian gRPC channel — to the Governance Flow.
+When a Sibling Flow's [Assay](./00-overview.md) node encounters a conflict involving Tier 4 or Tier 5 laws, it files an **appeal** — a cross-Flow message via the Librarian — to the Governance Flow.
 
 - **Tier 4 conflict:** The Governance Flow can repeal or amend its own Tier 4 laws to resolve the issue. The amendment enters the Governance Flow's Foundry Cycle and, if ratified, propagates to all sibling Flows.
 - **Tier 5 conflict:** The Governance Flow escalates the appeal to the relevant Federal authority.
@@ -293,10 +293,8 @@ The governance implication is **naturalisation**: when a [Workitem](./02-data-mo
 
 ## Friction as Governance Signal
 
-The [Friction Ledger](./00-overview.md#friction) is governance's economic conscience. It separates **compliance** (citing a law as a guardrail — zero friction) from **resistance** (fighting a law's enforcement — escalating friction).
+The [Friction Ledger](./00-overview.md#friction) is governance's economic conscience. Nodes emit friction events through the [SDK](../03-node/07-sdk-telemetry.md), choosing both the magnitude and the aggregation operation — logarithmic, additive, or multiplicative. By default, every node emits a base friction cost for each Workitem that passes through it. Additional friction accumulates with further interactions — feedback conflicts, rework cycles, complexity penalties. A node caught in an argument loop can emit multiplicative friction that compounds on each iteration. The friction signal reflects the real cost of the governance each Workitem encountered.
 
-Friction accumulates exponentially. A law cited for context seeding generates zero friction — it is doing its job. A law that blocks an artefact generates friction that compounds on each repeat conflict. Judicial hearings and unplanned human escalations amplify the signal further. The result is a heatmap of **toxic laws** (high resistance, exponential penalties) versus **foundational laws** (high usage, zero friction).
-
-The Friction Ledger is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
+Friction data is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
 
 Friction data feeds back into the governance process. Laws that generate disproportionate friction surface for review. Patterns of constitutional resistance point to laws that need amendment, consolidation, or repeal. The system surfaces the cost of its own governance, creating pressure toward improvement.

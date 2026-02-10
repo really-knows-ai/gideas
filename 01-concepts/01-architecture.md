@@ -12,7 +12,7 @@ The internal structure separates into distinct planes, each owning a single conc
 flowchart TD
     subgraph mgmt["Management Plane"]
         direction LR
-        Helm ~~~ CRDs ~~~ Prometheus ~~~ Grafana
+        Deployment ~~~ CRDs ~~~ Metrics ~~~ Dashboards
     end
 
     subgraph ctrl["Control Plane"]
@@ -32,7 +32,7 @@ flowchart TD
 
     subgraph sec["Security Plane"]
         direction LR
-        Sidecar ~~~ Tokens[ServiceAccount Tokens] ~~~ mTLS[mTLS Certificates]
+        Sidecar ~~~ Tokens[Identity Tokens] ~~~ mTLS[Mutual TLS]
     end
 
     subgraph data["Data Plane"]
@@ -53,13 +53,13 @@ flowchart TD
 
 ### Management Plane
 
-Configuration, lifecycle, and observability. This is the standard Kubernetes operational surface — Helm charts for deployment, CRDs for declarative state, Prometheus and Grafana for monitoring, retention policies for housekeeping.
+Configuration, lifecycle, and observability. CRDs provide declarative state, a metrics pipeline provides monitoring and dashboards, and retention policies handle housekeeping.
 
-A Flow is deployed as a single Helm release. One release creates one namespace, installs the CRDs, deploys the [Flow Operator](../02-flow/01-operator.md) and [system services](../02-flow/04-system-services.md), and applies the singleton `FoundryFlow` configuration resource. Everything the Flow needs ships together, avoiding partial deployment states.
+A Flow is deployed as a single unit. One deployment creates one namespace, installs the CRDs, deploys the [Flow Operator](../02-flow/01-operator.md) and [system services](../02-flow/04-system-services.md), and applies the singleton `FoundryFlow` configuration resource. Everything the Flow needs ships together, avoiding partial deployment states.
 
 ### Control Plane
 
-Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the terminal contract at the exit boundary. The [Thrash Guard](./02-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold before it consumes unbounded resources.
+Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./02-data-model.md#workitems) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the terminal contract at the exit boundary. The [Thrash Guard](./02-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold before it consumes unbounded resources.
 
 The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
 
@@ -126,7 +126,7 @@ Each concern in the system maps to exactly one plane. When a Node executes work,
 | Telemetry and audit | Control | Flow Monitor |
 | Cross-flow transfer | Federation | Export / Import |
 | Tier 4/5 law authority | Federation | Governance Flow |
-| Configuration and deployment | Management | Helm, CRDs |
+| Configuration and deployment | Management | CRDs, deployment tooling |
 
 ---
 
@@ -134,7 +134,7 @@ Each concern in the system maps to exactly one plane. When a Node executes work,
 
 ### One Namespace, One Flow
 
-A Flow occupies exactly one Kubernetes namespace. The namespace is the isolation boundary — all CRDs, services, secrets, and storage are scoped to it. This is a singleton pattern: one Helm release creates one namespace creates one Flow. There is no sharing of namespace resources between Flows and no multi-tenant namespace.
+A Flow occupies exactly one Kubernetes namespace. The namespace is the isolation boundary — all CRDs, services, secrets, and storage are scoped to it. This is a singleton pattern: one deployment creates one namespace creates one Flow. There is no sharing of namespace resources between Flows and no multi-tenant namespace.
 
 The namespace boundary also defines data sovereignty. Workitems, artefacts, and laws belong to their Flow. Cross-flow collaboration happens through the Federation Plane's export-import protocol, never through shared state.
 
@@ -158,27 +158,27 @@ Infrastructure state (the machinery) persists. Session state (the work) does not
 
 Workitems are immutable residents of their namespace. They do not move between Flows — they are copied. The export-import protocol creates a new Workitem in the receiving Flow with its own lifecycle, its own chain of custody, and its own governance. The original Workitem remains in its home Flow, completed.
 
-Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and terminal contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's SQLite database, queryable through the [SDK](../03-node/02-sdk-core.md).
+Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and terminal contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's database, queryable through the [SDK](../03-node/02-sdk-core.md).
 
 ### Hybrid Persistence
 
 State is split across storage layers, each chosen for its access pattern.
 
-| Layer | Technology | Data | Access Pattern |
-|-------|------------|------|----------------|
-| State | etcd (CRDs) | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
-| Governance Query | SQLite — Librarian | Embeddings, citation ledger | Analytical, vector similarity search |
-| Telemetry | Prometheus — Flow Monitor | Friction Ledger, workitem lifecycle metrics, node health | Time-series queries, alerting |
-| Artefact Provenance | SQLite — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
-| Blobs | PVC or cloud object storage — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
+| Layer | Storage | Data | Access Pattern |
+|-------|---------|------|----------------|
+| State | CRDs | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
+| Governance Query | Embedded database — Librarian | Embeddings, citation ledger | Analytical, vector similarity search |
+| Telemetry | Metrics pipeline — Flow Monitor | Friction Ledger, workitem lifecycle metrics, node health | Time-series queries, alerting |
+| Artefact Provenance | Embedded database — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
+| Blobs | Content-addressed store — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-etcd provides the watch-driven consistency the Operator needs for state transitions. The Librarian's SQLite provides the query capabilities needed for embeddings and citation tracking. The Flow Monitor aggregates friction reports from nodes into Prometheus metrics exposed at `/metrics`, and emits audit events to stdout as structured JSON for log aggregation — the Friction Ledger is a conceptual view over this time-series data, queryable through Prometheus and surfaced in Grafana dashboards. The Archivist's SQLite stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's blob store (PVC or pluggable cloud backend) stores raw content bytes where they are cheap and durable.
+CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for embeddings and citation tracking. The Flow Monitor aggregates friction reports from nodes into time-series metrics and emits audit events to stdout as structured JSON for log aggregation — the Friction Ledger is a conceptual view over this data, queryable through dashboards. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 
-Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers requests using its ServiceAccount token (or, in federated deployments, its mTLS certificate).
+Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers identity on the Node's behalf using platform-native credentials and, in federated deployments, mutual TLS certificates.
 
-In federated deployments, the trust chain is hierarchical: the [Governance Flow](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mTLS certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
+In federated deployments, the trust chain is hierarchical: the [Governance Flow](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mutual TLS certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
 
 Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. The terminal contract checks stamps by validating the cryptographic chain — not by trusting the network path the Workitem travelled.
 

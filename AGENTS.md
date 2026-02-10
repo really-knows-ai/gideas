@@ -237,7 +237,7 @@ The full design rationale is in `legacy/Tier5.md`.
 
 ### Law integration protocol
 
-When higher-tier laws are pushed to a city Flow (via Librarian-to-Librarian gRPC), the receiving Librarian runs a two-stage conflict check: semantic search (vector similarity, configurable threshold) followed by LLM evaluation of actual contradiction. Resolution depends on the tier of the conflicting local law:
+When higher-tier laws are pushed to a city Flow (via Librarian-to-Librarian replication), the receiving Librarian runs a two-stage conflict check: semantic search (vector similarity, configurable threshold) followed by LLM evaluation of actual contradiction. Resolution depends on the tier of the conflicting local law:
 
 - **Tier 1-2 conflicts:** Immediate retirement of the local law. No human intervention.
 - **Tier 3 conflicts:** Integration paused, HITL notification. The local statute *must* change (supremacy is not optional), but the city can request a **grace period**. During the grace period the old Tier 3 law remains enforced and the incoming law is queued. On expiry the incoming law integrates automatically and the Tier 3 law is retired — if the city hasn't adapted, their work fails governance checks organically.
@@ -251,8 +251,8 @@ Runtime conflicts (discovered during Workitem processing, not at integration tim
 - **Cross-tier conflict (Tier 1 vs Tier 2):** Assay resolves. Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but Assay still deliberates. Assay mints a new Tier 2 Ruling consolidating the surviving position. Originals retired.
 - **Same-tier conflict (Tier 1 vs Tier 1, or Tier 2 vs Tier 2):** Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired.
 - **Tier 1-2 vs Tier 3:** The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, Assay petitions HITL with a proposed clarification or amendment.
-- **Tier 3 vs Tier 3:** Assay drafts a *proposal* for a consolidated Tier 3 law. HITL approves or rejects. On rejection, the conflict persists — Assay issues a one-time Tier 2 Ruling for the immediate case, and friction accumulates until the humans act.
-- **Tier 4 or Tier 5 involvement:** Assay files an **appeal** to the Governance Flow via the Librarian gRPC channel. The Governance Flow can repeal or amend Tier 4 laws; Tier 5 appeals are escalated to the relevant Federal authority.
+- **Tier 3 vs Tier 3:** Assay drafts a *proposal* for a consolidated Tier 3 law and petitions HITL. On rejection, the conflict persists — every future Workitem that hits the same conflict generates another HITL escalation and more friction until the humans act.
+- **Tier 4 or Tier 5 involvement:** Assay files an **appeal** to the Governance Flow via the Librarian. The Governance Flow can repeal or amend Tier 4 laws; Tier 5 appeals are escalated to the relevant Federal authority.
 
 Assay can **resolve** at Tier 2 (minting Rulings), **propose** at Tier 3, and **appeal** at Tier 4-5. It does not write Tier 1 Findings. It cannot directly modify laws above its judicial tier.
 

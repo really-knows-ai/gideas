@@ -57,7 +57,7 @@ Stamps are write-once per artefact version. Once a stamp has been applied to a s
 
 The Foundry Cycle is the reference arrangement of node types in a governed workflow. Real deployments adapt it to their context — the node types are a vocabulary, and the topology is shaped by what the work requires. The pattern drives unreliable agents to produce artefacts that are provably compliant with a body of governance, through an adversarial loop of creation, validation, review, and refinement.
 
-The standard library includes configurable reference implementations for each node type as Docker containers. Flow Architects can extend them (e.g., `FROM gideas/sort-node`), adapt them, or implement completely custom nodes.
+The standard library includes configurable reference implementations for each node type as container images. Flow Architects can extend them, adapt them, or implement completely custom nodes.
 
 ### Node Types
 
