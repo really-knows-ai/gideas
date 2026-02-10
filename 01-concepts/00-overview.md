@@ -26,7 +26,7 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 **Flow** -- A self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
-**[Workitem](./02-data-model.md#workitems)** -- The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact kind and tagged to specific versions.
+**[Workitem](./02-data-model.md#workitems)** -- The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
 
 **Node** -- A stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
 

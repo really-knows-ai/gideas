@@ -69,7 +69,7 @@ The Control Plane makes routing decisions but never executes work. It reads stat
 
 Where work happens. The Data Plane contains the [Nodes](./00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./02-data-model.md#passports-and-stamps), [feedback](./02-data-model.md#feedback), and raw content bytes.
 
-Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries slim artefact references (kind and latest version hash); the full version history, stamps, and feedback live in the Archivist.
+Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
 
 Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to Kubernetes NetworkPolicies or service mesh configurations.
 
@@ -158,7 +158,7 @@ Infrastructure state (the machinery) persists. Session state (the work) does not
 
 Workitems are immutable residents of their namespace. They do not move between Flows — they are copied. The export-import protocol creates a new Workitem in the receiving Flow with its own lifecycle, its own chain of custody, and its own governance. The original Workitem remains in its home Flow, completed.
 
-Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only a slim artefact reference — kind and `latestVersion` hash — enough for routing and terminal contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's SQLite database, queryable through the [SDK](../03-node/02-sdk-core.md).
+Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and terminal contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's SQLite database, queryable through the [SDK](../03-node/02-sdk-core.md).
 
 ### Hybrid Persistence
 

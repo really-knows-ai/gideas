@@ -20,9 +20,9 @@ A Workitem's structure splits into `spec` and `status`.
 | `status.state` | Operator | System-managed | Computed from assignment lifecycle |
 | `status.currentAssignee` | Operator | System-managed | The node currently processing this Workitem |
 | `status.previousAssignee` | Operator | System-managed | The node that last processed this Workitem |
-| `status.artefacts[]` | [Sidecar](../03-node/01-sidecar.md) | Append-only | Slim artefact references (kind + `latestVersion` hash) |
+| `status.artefacts[]` | [Sidecar](../03-node/01-sidecar.md) | Append-only | Artefact references (`id` + `kind`) |
 | `status.routingInstruction` | Sidecar | Overwrite | Set when the node returns a result |
-| `status.guestbook` | Sidecar | Increment-only | Per-node visit counters |
+| `status.guestbook` | Operator | Increment-only | Per-node visit counters |
 
 The `currentAssignee` field is a scalar, not a list. A Workitem is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Flow is a relay race: one baton, one runner.
 
@@ -120,7 +120,7 @@ Each contract has a name and a list of artefact requirements. An artefact requir
 
 | State | Validation |
 |-------|------------|
-| `present` | The artefact exists (has a `latestVersion`). Stamps are not checked. |
+| `present` | The artefact exists (has at least one version in the Archivist). Stamps are not checked. |
 | `valid` | The artefact exists **and** its passport carries every stamp listed in the GovernedArtefact's `requiredStamps`. |
 
 The validation model is strictly binary. A terminal contract asks "is it present?" or "is it valid?" — it never specifies a subset of stamps. Governance defines what "valid" means (the GovernedArtefact CRD). The terminal contract just checks whether that definition is satisfied. This prevents shadow governance — validity requirements defined in routing topology rather than in governance declarations.
@@ -154,23 +154,25 @@ Entry contracts work similarly: the FoundryFlow CRD can specify which WorkitemTy
 
 An [artefact](./00-overview.md) is a governed output — a document, a code file, a data model, anything the Flow produces. The [Archivist](../02-flow/04-system-services.md) is the single source of truth for all artefact data: version history, [passport stamps](#passports-and-stamps), and [feedback](#feedback) live in the Archivist's SQLite database, while raw content bytes are stored in a content-addressed blob store (PVC or cloud object storage).
 
-The Workitem CRD carries only a slim artefact reference — kind and `latestVersion` hash — enough for the Operator to know what exists without carrying the full history. This keeps the CRD well within etcd's 1.5MB limit regardless of version count, feedback depth, or stamp accumulation.
+The Workitem CRD carries only artefact references — an `id` and `kind` for each artefact — enough for the Operator to know what exists and for the Archivist to locate the full record. Version history, stamps, and feedback live exclusively in the Archivist, keeping the CRD well within etcd's 1.5MB limit regardless of version count, feedback depth, or stamp accumulation.
 
-The [SDK](../03-node/02-sdk-core.md) exposes an Artefact object that provides access to all artefact data through the [Sidecar](../03-node/01-sidecar.md): `workitem.getArtefact("haiku")` returns an object with methods like `getLatestVersion()`, `getVersion(hash)`, `getFeedback()`, `hasUnresolvedFeedback()`, `getPassport()`. Nodes never interact with the Archivist directly.
+The [SDK](../03-node/02-sdk-core.md) exposes an Artefact object that provides access to all artefact data through the [Sidecar](../03-node/01-sidecar.md). Nodes query artefacts by ID or by kind, and the SDK routes all requests to the Archivist. Nodes never interact with the Archivist directly.
 
 ### Content Addressing and Versioning
 
 Every artefact version is identified by its SHA256 content hash. When a node stores content, the [Sidecar](../03-node/01-sidecar.md) computes the hash and the [Archivist](../02-flow/04-system-services.md) persists the bytes. If the content is identical to an existing version, no new version is created — the hash matches and the store is a no-op.
 
-The Workitem CRD tracks each artefact as a slim reference:
+The Workitem CRD tracks each artefact as a reference:
 
 ```yaml
 artefacts:
-  - kind: "petition-draft"
-    latestVersion: "sha256:def456..."
+  - id: "art-001"
+    kind: "petition-draft"
+  - id: "art-002"
+    kind: "audit-log"
 ```
 
-`latestVersion` always points to the current content hash. The full version history — every prior hash, who created it, and when — is stored in the Archivist's SQLite database and queryable through the [SDK](../03-node/02-sdk-core.md).
+The `id` uniquely identifies the artefact within the Workitem and is the key the Archivist uses to locate the full record. Multiple artefacts of the same kind are supported — each with its own `id`. The full version history — every prior hash, who created it, and when — is stored in the Archivist's SQLite database and queryable through the [SDK](../03-node/02-sdk-core.md).
 
 ### Artefact Isolation
 
@@ -178,7 +180,7 @@ Artefacts are strictly isolated per-Workitem. Every byte of content belongs to e
 
 | Layer | Enforcement |
 |-------|-------------|
-| Storage layout | Physical path: `<workitem_id>/<kind>/<name>/<hash>` — the Workitem ID is the root |
+| Storage layout | Physical path: `<workitem_id>/<artefact_id>/<hash>` — the Workitem ID is the root |
 | SDK | No `targetWorkitemID` parameter exists — the SDK auto-injects the current Workitem context |
 | Sidecar | Context is bound to the leased Workitem — requests for unowned IDs are rejected |
 
@@ -215,7 +217,7 @@ Validation is stamp-based, not identity-based. The specific node that applied a 
 
 ### Passports and Stamps
 
-Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) SQLite database, scoped to Workitem ID and artefact kind — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../03-node/02-sdk-core.md) Artefact object (`artefact.getPassport()`, `artefact.getStamps()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
+Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) SQLite database, scoped to Workitem ID and artefact `id` — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../03-node/02-sdk-core.md) Artefact object (`artefact.getPassport()`, `artefact.getStamps()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
 ```mermaid
 graph LR
@@ -231,7 +233,7 @@ graph LR
             V2["&lt;hash_v2&gt; (content)"]
         end
     end
-    WI["Workitem CRD"] -->|"latestVersion: hash_v2"| Blobs
+    WI["Workitem CRD"] -->|"id + kind"| SQLite
     Stamps -->|"tagged to version hash"| Versions
     FB -->|"tagged to version hash"| Versions
 ```
@@ -266,7 +268,7 @@ Stamps are cryptographically bound to the artefact's content through the `hash` 
 
 [Feedback](./00-overview.md) is threaded, artefact-scoped, and adversarial by design. A structured protocol forces every disagreement into the open and demands justification for every refusal.
 
-Feedback lives in the [Archivist's](../02-flow/04-system-services.md) SQLite database, scoped to Workitem ID and artefact kind. Each feedback item is tagged with the artefact version hash it was raised against. All feedback is preserved across versions — when new content is stored, existing feedback remains queryable and relevant. Nodes access feedback through the [SDK](../03-node/02-sdk-core.md) Artefact object (`artefact.getFeedback()`, `artefact.hasUnresolvedFeedback()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
+Feedback lives in the [Archivist's](../02-flow/04-system-services.md) SQLite database, scoped to Workitem ID and artefact `id`. Each feedback item is tagged with the artefact version hash it was raised against. All feedback is preserved across versions — when new content is stored, existing feedback remains queryable and relevant. Nodes access feedback through the [SDK](../03-node/02-sdk-core.md) Artefact object (`artefact.getFeedback()`, `artefact.hasUnresolvedFeedback()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
 ### Structure
 

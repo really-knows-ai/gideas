@@ -160,13 +160,13 @@ The Archivist manages all artefact-related data beyond raw content bytes. Its st
 - **SQLite database** — artefact version history, passport stamps, and feedback. This is the single queryable layer for all artefact provenance.
 - **Blob store** (PVC or cloud object storage) — raw artefact content bytes, keyed by content hash.
 
-**Feedback lives in the Archivist, not on the Workitem CRD.** Feedback is scoped to Workitem ID + artefact kind, and each feedback item is tagged with the artefact version hash it pertains to. All feedback is preserved across versions.
+**Feedback lives in the Archivist, not on the Workitem CRD.** Feedback is scoped to Workitem ID + artefact `id`, and each feedback item is tagged with the artefact version hash it pertains to. All feedback is preserved across versions.
 
 **Passports and stamps live in the Archivist's SQLite**, not as JSON sidecar files in the blob store.
 
-**The Workitem CRD carries a slim artefact reference**: kind and `latestVersion` hash only. The full version history, stamps, and feedback live in the Archivist. This keeps the CRD well within etcd's 1.5MB limit regardless of feedback depth or version count.
+**The Workitem CRD carries artefact references**: `id` and `kind` only. Each artefact has a unique `id` within the Workitem, and multiple artefacts of the same `kind` are supported. The full version history, stamps, and feedback live in the Archivist, keyed by artefact `id`. This keeps the CRD well within etcd's 1.5MB limit regardless of feedback depth or version count.
 
-**The SDK exposes an Artefact object** — `workitem.getArtefact("haiku")` — with methods like `getLatestVersion()`, `getVersion(hash)`, `getFeedback()`, `hasUnresolvedFeedback()`, `getPassport()`. All queries are routed through the Sidecar to the Archivist; nodes never interact with the Archivist directly.
+**The SDK exposes an Artefact object** with methods for querying versions, feedback, and stamps. All queries are routed through the Sidecar to the Archivist; nodes never interact with the Archivist directly.
 
 **Sort uses the SDK** to check feedback state, the same as any other node. `artefact.hasUnresolvedFeedback()` is the interface for routing decisions.
 
