@@ -25,7 +25,7 @@ A standalone Flow (no [Governor](#the-governor)) manages its own governance thro
 
 ### Organic Discovery (Tiers 1–2)
 
-Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it calls `RecordFinding()` and a Tier 1 Finding is born. Findings are ephemeral. They carry a default TTL of 30 days and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
+Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../03-node/02-sdk-core.md). Findings are ephemeral. They carry a default TTL of 30 days and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
 
 Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and creates a ReviewHearing Workitem, routed to the [Assay](./00-overview.md) node.
 
