@@ -9,7 +9,7 @@ The internal structure separates into distinct planes, each owning a single conc
 ## Architectural Planes
 
 ```mermaid
-graph TD
+flowchart TD
     subgraph mgmt["Management Plane"]
         direction LR
         Helm ~~~ CRDs ~~~ Prometheus ~~~ Grafana
@@ -59,7 +59,7 @@ A Flow is deployed as a single Helm release. One release creates one namespace, 
 
 ### Control Plane
 
-Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](./00-overview.md), and validates the terminal contract at the exit boundary. The Thrash Guard is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem that exceeds the configured threshold before it consumes unbounded resources.
+Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the terminal contract at the exit boundary. The Thrash Guard is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem that exceeds the configured threshold before it consumes unbounded resources.
 
 The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
 
@@ -67,7 +67,7 @@ The Control Plane makes routing decisions but never executes work. It reads stat
 
 ### Data Plane
 
-Where work happens. The Data Plane contains the [Nodes](./00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./02-data-model.md#passports-and-stamps), [feedback](./02-data-model.md#feedback), and raw content bytes.
+Where work happens. The Data Plane contains the [Nodes](../03-node/00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./02-data-model.md#passports-and-stamps), [feedback](./02-data-model.md#feedback), and raw content bytes.
 
 Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
 
@@ -101,9 +101,9 @@ Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs t
 
 Cross-flow relationships are governed by distinct trust models:
 
-**Federated trust** operates through the [Governance Flow](./03-governance.md). The Governor acts as the State Root Certificate Authority, issuing intermediate CA certificates to each Sibling Flow's Operator. All Flows in the organisation share a common trust root, and any stamp from any sibling is cryptographically verifiable by tracing the certificate chain to the State Root. The Governor also publishes Tier 4 State Constitution laws and synchronises Tier 5 Federal Accords, ensuring all sibling Flows operate under consistent higher-tier governance.
+**Federated trust** operates through the [Governance Flow](./03-governance.md). The Governance Flow acts as the State Root Certificate Authority, issuing intermediate CA certificates to each Sibling Flow's Operator. All Flows in the organisation share a common trust root, and any stamp from any sibling is cryptographically verifiable by tracing the certificate chain to the State Root. The Governance Flow also publishes Tier 4 State Constitution laws and synchronises Tier 5 Federal Accords, ensuring all sibling Flows operate under consistent higher-tier governance.
 
-**Treaty-based trust** enables collaboration between Flows that do not share a Governor — typically across organisational boundaries. A [Treaty](../02-flow/06-cross-flow.md) is a bilateral agreement between two Flows that permits Workitem export in one direction. The agreement is bilateral (both Flows consent to the terms), but the resulting trust is unidirectional — a treaty allowing Flow A to export to Flow B does not allow Flow B to export to Flow A. Two-way exchange requires two separate treaties. The receiving Flow pins the foreign Flow's CA certificate and whitelists specific node identities that may sign export bundles.
+**Treaty-based trust** enables collaboration between Flows that do not share a Governance Flow — typically across organisational boundaries. A [Treaty](../02-flow/06-cross-flow.md) is a bilateral agreement between two Flows that permits Workitem export in one direction. The agreement is bilateral (both Flows consent to the terms), but the resulting trust is unidirectional — a treaty allowing Flow A to export to Flow B does not allow Flow B to export to Flow A. Two-way exchange requires two separate treaties. The receiving Flow pins the foreign Flow's CA certificate and whitelists specific node identities that may sign export bundles.
 
 In both models, foreign stamps are preserved for audit but carry no local authority. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. Details of the export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
 
@@ -125,7 +125,7 @@ Each concern in the system maps to exactly one plane. When a Node executes work,
 | Cryptographic stamps | Security | Sidecar |
 | Telemetry and audit | Control | Flow Monitor |
 | Cross-flow transfer | Federation | Export / Import |
-| Tier 4/5 law authority | Federation | Governor |
+| Tier 4/5 law authority | Federation | Governance Flow |
 | Configuration and deployment | Management | Helm, CRDs |
 
 ---
@@ -167,7 +167,7 @@ State is split across storage layers, each chosen for its access pattern.
 | Layer | Technology | Data | Access Pattern |
 |-------|------------|------|----------------|
 | State | etcd (CRDs) | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
-| Governance Query | SQLite — Librarian | Embeddings, citation ledger, friction ledger | Analytical, vector similarity search |
+| Governance Query | SQLite — Librarian | Embeddings, citation ledger, Friction Ledger | Analytical, vector similarity search |
 | Artefact Provenance | SQLite — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | PVC or cloud object storage — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
@@ -177,7 +177,7 @@ etcd provides the watch-driven consistency the Operator needs for state transiti
 
 Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers requests using its ServiceAccount token (or, in federated deployments, its mTLS certificate).
 
-In federated deployments, the trust chain is hierarchical: the [Governor](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mTLS certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
+In federated deployments, the trust chain is hierarchical: the [Governance Flow](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mTLS certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
 
 Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. The terminal contract checks stamps by validating the cryptographic chain — not by trusting the network path the Workitem travelled.
 
