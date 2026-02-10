@@ -194,7 +194,7 @@ When higher-tier laws are pushed to a Sibling Flow — via Librarian-to-Libraria
 
 ### Stage 1: Semantic Search
 
-The Librarian queries its sqlite-vec index for all existing laws above a configurable similarity threshold. This finds laws that are *semantically related* to the incoming law — potential conflicts, overlaps, or redundancies.
+The Librarian queries its semantic index for all existing laws above a configurable similarity threshold. This finds laws that are *semantically related* to the incoming law — potential conflicts, overlaps, or redundancies.
 
 ### Stage 2: LLM Conflict Evaluation
 

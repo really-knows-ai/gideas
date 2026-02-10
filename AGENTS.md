@@ -135,6 +135,8 @@ Sort is a gate that evaluates state and routes. Its logic:
 
 Sort is the only node that stamps approval in the reference arrangement. Approval stamping is a right that can be assigned to any node by the Flow Architect. The reference arrangement makes strong recommendations but does not force the Flow Architect's hand.
 
+The routing targets above (Refine, Assay, Appraise) reflect the reference arrangement. Sort discovers routing targets by reading the Flow configuration — it looks at the missing stamp's role and routes to the node configured to provide it. A node granted `READ:flow` or `READ:topology` capability can query the topology to discover role-to-node mappings at runtime.
+
 ### Roles are defined by the terminal contract, granted by the Flow
 
 The terminal contract is the source of truth for what roles exist. The Flow grants nodes permission to stamp as specific roles. "Role" is used narrowly throughout — it means "the capacity in which a node stamps a passport."
@@ -235,7 +237,7 @@ The full design rationale is in `legacy/Tier5.md`.
 
 ### Law integration protocol
 
-When higher-tier laws are pushed to a city Flow (via Librarian-to-Librarian gRPC), the receiving Librarian runs a two-stage conflict check: semantic search (sqlite-vec, configurable similarity threshold) followed by LLM evaluation of actual contradiction. Resolution depends on the tier of the conflicting local law:
+When higher-tier laws are pushed to a city Flow (via Librarian-to-Librarian gRPC), the receiving Librarian runs a two-stage conflict check: semantic search (vector similarity, configurable threshold) followed by LLM evaluation of actual contradiction. Resolution depends on the tier of the conflicting local law:
 
 - **Tier 1-2 conflicts:** Immediate retirement of the local law. No human intervention.
 - **Tier 3 conflicts:** Integration paused, HITL notification. The local statute *must* change (supremacy is not optional), but the city can request a **grace period**. During the grace period the old Tier 3 law remains enforced and the incoming law is queued. On expiry the incoming law integrates automatically and the Tier 3 law is retired — if the city hasn't adapted, their work fails governance checks organically.

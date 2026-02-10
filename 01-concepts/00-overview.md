@@ -67,7 +67,7 @@ The standard library includes configurable reference implementations for each no
 
 1. Is there unresolved feedback? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
-3. Missing required stamps? Route to the node configured to provide them.
+3. Missing required stamps? Route to the node configured to provide them (Appraise, in the reference arrangement).
 4. All feedback resolved, all required stamps present? Stamp **approval** and **Done**.
 
 Sort is a gate. It evaluates state, consults the Flow config for routing targets, and stamps approval when the passport is complete and all feedback is resolved.

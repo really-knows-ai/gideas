@@ -167,7 +167,7 @@ State is split across four storage layers, each chosen for its access pattern.
 | Layer | Technology | Data | Access Pattern |
 |-------|------------|------|----------------|
 | State | etcd (CRDs) | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
-| Governance Query | SQLite (sqlite-vec) — Librarian | Embeddings, citation ledger, friction ledger | Analytical, vector similarity search |
+| Governance Query | SQLite — Librarian | Embeddings, citation ledger, friction ledger | Analytical, vector similarity search |
 | Artefact Provenance | SQLite — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | PVC or cloud object storage — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
