@@ -32,7 +32,7 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 **[Artefact](./02-data-model.md#artefacts)** — A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model — anything the Flow produces.
 
-**Passport** — The collection of [stamps](#stamps) on an artefact version. A passport tracks which stamp requirements have been satisfied for a specific content hash.
+**[Passport](./02-data-model.md#passports-and-stamps)** — The collection of [stamps](#stamps) on an artefact version. A passport tracks which stamp requirements have been satisfied for a specific content hash.
 
 ### Stamps
 
