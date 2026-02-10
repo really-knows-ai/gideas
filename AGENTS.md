@@ -170,6 +170,10 @@ The Archivist manages all artefact-related data beyond raw content bytes. Its st
 
 **Sort uses the SDK** to check feedback state, the same as any other node. `artefact.hasUnresolvedFeedback()` is the interface for routing decisions.
 
+### Concepts documents are technology-agnostic
+
+The `01-concepts/` documents describe architecture, data model, and governance in terms of roles and responsibilities — not products. They say "embedded database", "content-addressed store", "metrics pipeline", and "deployment tooling" rather than naming SQLite, PVC, Prometheus, Helm, gRPC, or Docker. Technology choices are firm decisions (recorded in this file and throughout the key decisions below), but they belong in `02-flow/`, `03-node/`, and `04-reference/` where the audience is operators and developers making implementation decisions. The concepts audience needs to understand *what* each component does and *why* — not *which product* does it.
+
 ### Laws and the Library stay high-level in concepts
 
 The key concept: a law has a textual **goal** (what it enforces/stops/ensures) and one or more **representations** (prose, formal logic, executable code, etc.). The Library stores all representations with equal indifference and leaves interpretation to the nodes. Technical details (MIME types, CRD structure, Kubernetes labels, Codification Services, Librarian embedding pipeline) belong in later documents (`02-flow/04-system-services.md`, `04-reference/crds.md`).
