@@ -15,7 +15,7 @@ Produce a clean, coherent, GitHub-style specification that:
 - Eliminates duplication — one source of truth per concept
 - Is informed by the foundational theory in `legacy/papers/` but implements the details from the legacy specs
 - Is **v1** — the complete spec with no v1/v2 split
-- Includes the **Governance Flow** (Governor Operator) as a first-class part of the spec
+- Includes the **Governance Flow** as a first-class part of the spec
 
 ## Spec Structure
 
@@ -217,7 +217,7 @@ Assay is a standard component of every Flow, not a swappable reference implement
 
 ### Governance Flow is in scope
 
-The Governor Operator and its lifecycle are a first-class part of the spec. The `legacy/governance_spec/` directory is a primary source alongside `legacy/flow_spec/` and `legacy/node_spec/`.
+The Governance Flow and its lifecycle are a first-class part of the spec. The `legacy/governance_spec/` directory is a primary source alongside `legacy/flow_spec/` and `legacy/node_spec/`.
 
 ### Five-tier law hierarchy
 
@@ -228,10 +228,10 @@ Laws are organised into five tiers of jurisdiction. Higher tier always wins (sup
 | 1 | Finding | Single Flow | Nodes (any with `WRITE:law/finding` capability; Appraise and Refine in the reference arrangement) |
 | 2 | Ruling | Single Flow | Assay Node |
 | 3 | Local Statute | Single Flow | Flow Operator (human-administered or local legislative cycle) |
-| 4 | State Constitution | All Flows in a Governor instance | Governor (State Governance Flow) |
+| 4 | State Constitution | All Flows in a Governance Flow instance | Governance Flow |
 | 5 | Federal Accord | All instances in the network | Federation |
 
-For standalone Flows (no Governor), Tier 3 laws are CRDs applied by an admin. Tiers 4 and 5 do not exist. Under a Governor, the Governance Flow is itself a Flow whose governed artefacts are laws — subject to the same Foundry Cycle as any other Flow.
+For standalone Flows (no Governance Flow), Tier 3 laws are CRDs applied by an admin. Tiers 4 and 5 do not exist. Under a Governance Flow, the Governance Flow is itself a Flow whose governed artefacts are laws — subject to the same Foundry Cycle as any other Flow.
 
 The full design rationale is in `legacy/Tier5.md`.
 
@@ -246,12 +246,13 @@ Retired laws are deleted as CRDs. The full history is preserved in the audit log
 
 ### Escalation paths and Assay's authority ceiling
 
-Runtime conflicts (discovered during Workitem processing, not at integration time) are resolved based on the tiers involved:
+Runtime conflicts (discovered during Workitem processing, not at integration time) always go to Assay for judicial review. Supremacy heavily informs Assay's decision but does not bypass the judicial process — Assay deliberates on every conflict. Resolution depends on the tiers involved:
 
-- **Cross-tier conflict:** Supremacy decides immediately. Higher tier wins.
-- **Tier 1-2 vs Tier 1-2:** Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws.
+- **Cross-tier conflict (Tier 1 vs Tier 2):** Assay resolves. Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but Assay still deliberates. Assay mints a new Tier 2 Ruling consolidating the surviving position. Originals retired.
+- **Same-tier conflict (Tier 1 vs Tier 1, or Tier 2 vs Tier 2):** Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired.
+- **Tier 1-2 vs Tier 3:** The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, Assay petitions HITL with a proposed clarification or amendment.
 - **Tier 3 vs Tier 3:** Assay drafts a *proposal* for a consolidated Tier 3 law. HITL approves or rejects. On rejection, the conflict persists — Assay issues a one-time Tier 2 Ruling for the immediate case, and friction accumulates until the humans act.
-- **Tier 4 or Tier 5 involvement:** Assay files an **appeal** to the Governor via the Librarian gRPC channel. The Governor can repeal or amend Tier 4 laws; Tier 5 appeals are escalated to the relevant Federal authority.
+- **Tier 4 or Tier 5 involvement:** Assay files an **appeal** to the Governance Flow via the Librarian gRPC channel. The Governance Flow can repeal or amend Tier 4 laws; Tier 5 appeals are escalated to the relevant Federal authority.
 
 Assay can **resolve** at Tier 2 (minting Rulings), **propose** at Tier 3, and **appeal** at Tier 4-5. It does not write Tier 1 Findings. It cannot directly modify laws above its judicial tier.
 
@@ -277,7 +278,7 @@ The `legacy/` directory contains the raw source material:
 - **`legacy/papers/`** — Five foundational papers. These provide the conceptual "why." Read them to understand the philosophy, but do not copy their prose or structure. The new spec must stand on its own.
 - **`legacy/flow_spec/`** — The Flow runtime spec (~35 files). Dense, comprehensive, sometimes contradictory. This is the primary source for `02-flow/`.
 - **`legacy/node_spec/`** — The Node runtime spec (~18 files, including sidecar and SDK). Primary source for `03-node/`.
-- **`legacy/governance_spec/`** — Governor/Federation spec (~11 files). Primary source for the Governance Flow, law tiers, and precedent.
+- **`legacy/governance_spec/`** — Governance Flow/Federation spec (~11 files). Primary source for the Governance Flow, law tiers, and precedent.
 - **`legacy/crds/`** — CRD YAML definitions. Source for `04-reference/crds.md`.
 - **`legacy/PolymorphicLaw.md`** — The polymorphic law envelope concept. Relevant to `02-flow/04-system-services.md` (Librarian).
 - **`legacy/PROGRESS.md`** — Session notes from the rewrite process. Contains decisions and clarifications, some of which are superseded by this file.
