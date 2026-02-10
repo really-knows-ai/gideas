@@ -10,7 +10,7 @@ Each branch of government has a clear institutional counterpart in the runtime.
 
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
-| **Common Law** | Establishes norms through practice | Nodes ([Appraise](./00-overview.md), [Refine](./00-overview.md), [Assay](./00-overview.md)) — Tier 1 [Findings](./02-data-model.md#law-tiers) |
+| **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/finding` capability ([Appraise](./00-overview.md), [Refine](./00-overview.md) in the reference arrangement) — Tier 1 [Findings](./02-data-model.md#law-tiers) |
 | **Judiciary** | Resolves disputes, codifies precedent | [Assay](./00-overview.md) node — Tier 2 [Rulings](./02-data-model.md#law-tiers) |
 | **Legislature** | Enacts statute through ratified process | Flow Operator (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
 | **Executive** | Enforces compliance | [Sort](./00-overview.md) node, [Terminal Contract](./02-data-model.md#terminal-contracts), [Sidecar](../03-node/01-sidecar.md) |
@@ -114,7 +114,7 @@ Assay's power is constitutionally bounded:
 
 | Tier range | Authority | Action |
 |------------|-----------|--------|
-| Tier 1–2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings. |
+| Tier 2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings. |
 | Tier 3 | **Propose** | Drafts a proposal. HITL approves or rejects. |
 | Tier 4–5 | **Appeal** | Files an appeal to the Governor. Cannot directly modify. |
 
@@ -254,7 +254,7 @@ Federal authorities operate their own Governance Flows — full Foundry Cycle de
 ```mermaid
 flowchart TD
     Node["Node<br/>(discovers conflict)"] --> Assay["Assay<br/>(local judiciary)"]
-    Assay -->|"Tier 1-2:<br/>resolve directly"| Library["Flow Library"]
+    Assay -->|"Tier 2:<br/>resolve directly"| Library["Flow Library"]
     Assay -->|"Tier 3:<br/>propose"| HITL["HITL<br/>(human ratification)"]
     HITL --> Library
     Assay -->|"Tier 4-5:<br/>appeal"| Governor["Governor<br/>(State authority)"]
@@ -277,7 +277,7 @@ Each level of the chain has bounded authority. No institution can exceed its con
 | **Tier 4–5** | Do not exist | Published by Governor / Federation |
 | **Trust root** | Flow Operator (self-signed) | State Root CA (Governor) |
 | **Cross-Flow stamps** | Invalid — chain of custody resets at boundary | Valid if certificate chain traces to shared State Root |
-| **Escalation ceiling** | Assay resolves Tier 1–2, proposes Tier 3, no higher | Assay appeals to Governor for Tier 4–5 |
+| **Escalation ceiling** | Assay resolves at Tier 2, proposes Tier 3, no higher | Assay appeals to Governor for Tier 4–5 |
 
 A standalone Flow is fully self-contained. It can be deployed, operated, and governed without any external dependency. Federation adds higher-tier governance and cross-Flow trust, but the core governance model — organic discovery, judicial review, administered policy — is identical in both configurations.
 

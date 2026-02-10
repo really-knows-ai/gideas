@@ -65,7 +65,7 @@ The standard library includes configurable reference implementations for each no
 
 **Quench** performs deterministic validation. It runs objective checks -- compilers, solvers, structural validators -- to catch fundamentally broken work before it reaches the more expensive review stage. A topology with no deterministic checks to run can omit Quench entirely.
 
-**Appraise** conducts subjective review. It orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against applicable laws. Appraise intentionally preserves contradictions in its feedback -- resolving them is Refine's job. Can write Tier 1 Findings.
+**Appraise** conducts subjective review. It orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against applicable laws. Appraise intentionally preserves contradictions in its feedback -- resolving them is Refine's job. In the reference arrangement, Appraise has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
 **Sort** is the central routing hub. It reads the Flow configuration to know which nodes can provide which stamps, then applies deliberately simple logic:
 
@@ -76,9 +76,9 @@ The standard library includes configurable reference implementations for each no
 
 Sort is a gate. It evaluates state, consults the Flow config for routing targets, and stamps approval when the passport is complete and all feedback is resolved.
 
-**Refine** addresses feedback. It reads the consolidated (potentially contradictory) feedback, produces a new artefact version, and must resolve every item -- marking each as *actioned* or *wont-fix*. A *wont-fix* requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. Can write Tier 1 Findings.
+**Refine** addresses feedback. It reads the consolidated (potentially contradictory) feedback, produces a new artefact version, and must resolve every item -- marking each as *actioned* or *wont-fix*. A *wont-fix* requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
-**Assay** is the judiciary. It is invoked only when feedback deadlocks -- when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute. It can write Tier 1 Findings and Tier 2 Rulings (binding precedent).
+**Assay** is the judiciary. It is invoked only when feedback deadlocks -- when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute by minting Tier 2 Rulings (binding precedent) -- the ceiling of its judicial authority. For conflicts involving higher tiers, Assay petitions the Flow Architect (Tier 3) or the [Governor](./03-governance.md) (Tiers 4-5).
 
 Unlike the other node types, Assay is a standard component of every Flow -- a runtime component rather than a reference implementation. Every Flow includes a built-in Assay node. It cannot be omitted or replaced.
 
@@ -119,10 +119,10 @@ flowchart TD
 
     Appraise -.->|writes Tier 1| Library
     Refine -.->|writes Tier 1| Library
-    Assay -.->|writes Tier 1 + 2| Library
+    Assay -.->|writes Tier 2| Library
 ```
 
-Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns). Assay alone can mint Tier 2 Rulings (binding precedent).
+Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) -- any node granted the `WRITE:law/finding` capability can do the same. Assay alone mints Tier 2 Rulings (binding precedent); it does not write Tier 1 Findings.
 
 ---
 

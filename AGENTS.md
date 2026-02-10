@@ -225,7 +225,7 @@ Laws are organised into five tiers of jurisdiction. Higher tier always wins (sup
 
 | Tier | Name | Scope | Authority |
 |------|------|-------|-----------|
-| 1 | Finding | Single Flow | Nodes (Appraise, Refine, Assay) |
+| 1 | Finding | Single Flow | Nodes (any with `WRITE:law/finding` capability; Appraise and Refine in the reference arrangement) |
 | 2 | Ruling | Single Flow | Assay Node |
 | 3 | Local Statute | Single Flow | Flow Operator (human-administered or local legislative cycle) |
 | 4 | State Constitution | All Flows in a Governor instance | Governor (State Governance Flow) |
@@ -253,7 +253,7 @@ Runtime conflicts (discovered during Workitem processing, not at integration tim
 - **Tier 3 vs Tier 3:** Assay drafts a *proposal* for a consolidated Tier 3 law. HITL approves or rejects. On rejection, the conflict persists — Assay issues a one-time Tier 2 Ruling for the immediate case, and friction accumulates until the humans act.
 - **Tier 4 or Tier 5 involvement:** Assay files an **appeal** to the Governor via the Librarian gRPC channel. The Governor can repeal or amend Tier 4 laws; Tier 5 appeals are escalated to the relevant Federal authority.
 
-Assay can **resolve** at Tier 1-2, **propose** at Tier 3, and **appeal** at Tier 4-5. It cannot directly modify laws above its judicial tier.
+Assay can **resolve** at Tier 2 (minting Rulings), **propose** at Tier 3, and **appeal** at Tier 4-5. It does not write Tier 1 Findings. It cannot directly modify laws above its judicial tier.
 
 ### Workitem context — reserved keys
 

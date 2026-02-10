@@ -384,6 +384,10 @@ Any other state change returns `CONTEMPT_VIOLATION`. The ruling is not a suggest
 
 Feedback messages are capped at 1024 characters. For detailed analysis that exceeds this limit, nodes use the Store & Link pattern: store the full analysis as an artefact (`StoreArtefact()`), then reference it in the feedback message. The artefact carries the detail; the feedback carries the pointer.
 
+### Friction
+
+Nodes emit [friction](./00-overview.md#friction) through the [SDK](../03-node/07-sdk-telemetry.md) at any point during execution. What a node reports -- and whether it reports at all -- is a decision made by the node implementor. The feedback lifecycle described here is a natural source of friction signals, but the [Friction Ledger](./00-overview.md#friction) records only what nodes choose to emit.
+
 ---
 
 ## Laws
@@ -404,7 +408,7 @@ Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
-| 1 | **Finding** | Single Flow | Nodes ([Appraise](./00-overview.md), [Refine](./00-overview.md), [Assay](./00-overview.md)) | Ephemeral. Default TTL of 30 days. Decays if uncited, promoted to Tier 2 if heavily used. |
+| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./00-overview.md) and [Refine](./00-overview.md) in the reference arrangement) | Ephemeral. Default TTL of 30 days. Decays if uncited, promoted to Tier 2 if heavily used. |
 | 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Default TTL of 90 days. Requires a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Operator (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governor instance | [Governance Flow](./03-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
