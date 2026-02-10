@@ -133,7 +133,7 @@ Sort is a gate that evaluates state and routes. Its logic:
 3. Missing required inspection stamps → route to **Appraise**
 4. All feedback resolved, all inspections present → stamp **approval** and **Done**
 
-Sort is the only node that stamps approval.
+Sort is the only node that stamps approval in the reference arrangement. Approval stamping is a right that can be assigned to any node by the Flow Architect. The reference arrangement makes strong recommendations but does not force the Flow Architect's hand.
 
 ### Roles are defined by the terminal contract, granted by the Flow
 
@@ -205,9 +205,13 @@ Review hearings use tier-specific verdicts. There are three hearing types:
 - **Demote** — Ruling drops to Tier 1 Finding (fresh TTL, citation history does not carry over)
 - **Promote** — Assay petitions for Tier 3 Statute (HITL ratification required)
 
-### The Foundry Cycle is the canonical arrangement
+### The Foundry Cycle is a reference arrangement
 
-Described directly as the standard topology. Not presented as "an applied pattern" or "one possible configuration."
+The Foundry Cycle is the reference arrangement — the standard pattern demonstrating how combining deterministic and non-deterministic checks (contextually relevant to the artefact) produces consistent, verifiable outcomes. Flow Architects are expected to adapt it to their context. The standard library provides configurable reference implementations for each node type (Forge, Quench, Appraise, Sort, Refine) as Docker containers. Flow Architects can extend them (e.g., `FROM gideas/sort-node`), adapt them, or implement completely custom nodes.
+
+### Assay is a standard Flow component
+
+Assay is a standard component of every Flow, not a swappable reference implementation. It is built into the runtime as a Flow component. Despite being routable as a node (Workitems can be sent to it for judicial review), it is always present — Flow Architects do not choose whether to include it. Full detail in `02-flow/`.
 
 ### Governance Flow is in scope
 

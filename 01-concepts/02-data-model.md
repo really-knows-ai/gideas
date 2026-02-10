@@ -365,7 +365,7 @@ When the feedback history depth on a single item exceeds the configured `maxFeed
 
 From [Sort's](./00-overview.md) perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont-fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont-fix` still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
 
-In the [reference arrangement](./00-overview.md), Sort reads the Flow configuration to determine which nodes provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. When all required stamps are present and all feedback is resolved, Sort stamps approval. Sort is the only node that stamps approval.
+In the [reference arrangement](./00-overview.md), Sort reads the Flow configuration to determine which nodes provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. When all required stamps are present and all feedback is resolved, Sort stamps approval. In the reference arrangement Sort is the only node that stamps approval, but approval stamping is a right that the Flow can assign to any node.
 
 ### Forced-Choice Justification
 

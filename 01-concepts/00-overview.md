@@ -53,6 +53,8 @@ Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validat
 
 The Foundry Cycle is the reference arrangement of node types in a governed workflow. Real deployments adapt it to their context -- the node types are a vocabulary, and the topology is shaped by what the work requires. The pattern drives unreliable agents to produce artefacts that are provably compliant with a body of governance, through an adversarial loop of creation, validation, review, and refinement.
 
+The standard library includes configurable reference implementations for each node type as Docker containers. Flow Architects can extend them (e.g., `FROM gideas/sort-node`), adapt them, or implement completely custom nodes.
+
 ### Node Types
 
 **Forge** creates the initial artefact. Before generation, it queries the Library for applicable laws and seeds them into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
@@ -73,6 +75,8 @@ Sort is a gate. It evaluates state, consults the Flow config for routing targets
 **Refine** addresses feedback. It reads the consolidated (potentially contradictory) feedback, produces a new artefact version, and must resolve every item -- marking each as *actioned* or *wont-fix*. A *wont-fix* requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. Can write Tier 1 Findings.
 
 **Assay** is the judiciary. It is invoked only when feedback deadlocks -- when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute. It can write Tier 1 Findings and Tier 2 Rulings (binding precedent).
+
+Unlike the other node types, Assay is a standard component of every Flow -- a runtime component rather than a reference implementation. Every Flow includes a built-in Assay node. It cannot be omitted or replaced.
 
 ### Cycle Flow
 
