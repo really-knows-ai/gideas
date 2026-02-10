@@ -32,9 +32,12 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 **[Artefact](./02-data-model.md#artefacts)** -- A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model -- anything the Flow produces.
 
-**Passport** -- The collection of [stamps](#stamp) on an artefact version. A passport tracks which `(role, type)` requirements have been satisfied for a specific content hash.
+**Passport** -- The collection of [stamps](#stamps-and-roles) on an artefact version. A passport tracks which `(role, type)` requirements have been satisfied for a specific content hash.
 
-**Stamp** -- A mark left on a passport by a node. Two types:
+### Stamps and Roles
+
+A **stamp** is a mark left on a passport by a node. Two types:
+
 - **Inspection** -- "I have checked this." Records that the node examined this version.
 - **Approval** -- "I consider this valid." Certifies the artefact meets governance requirements from this role's perspective.
 
@@ -59,6 +62,7 @@ The Foundry Cycle is the canonical arrangement of node types in a governed workf
 **Appraise** conducts subjective review. It orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against applicable laws. Appraise intentionally preserves contradictions in its feedback -- resolving them is Refine's job. Can write Tier 1 Findings.
 
 **Sort** is the central routing hub. It reads the Flow configuration to know which nodes can stamp which roles, then applies deliberately simple logic:
+
 1. Is there unresolved feedback? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
 3. Missing required stamps? Route to the node configured to provide them.
@@ -159,6 +163,7 @@ The system verifies that work was done correctly. Deterministically.
 ### Passports and Stamps
 
 As a Workitem moves through the cycle, nodes stamp the artefact's passport. Each stamp records:
+
 - The **role** the node stamped as (the capacity granted to it by the Flow).
 - The **type**: inspection or approval.
 - The **content hash** of the artefact at stamp time.

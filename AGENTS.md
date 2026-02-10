@@ -19,7 +19,7 @@ Produce a clean, coherent, GitHub-style specification that:
 
 ## Spec Structure
 
-```
+```text
 /
 ├── AGENTS.md
 ├── README.md                    # Entry point, navigation (write last)
@@ -123,6 +123,7 @@ Forge queries the Library for context seeding but does not write laws. It reads 
 ### Sort stamps approval
 
 Sort is a gate that evaluates state and routes. Its logic:
+
 1. Unresolved feedback on governed artefacts → route to **Refine**
 2. Deadlocked feedback → route to **Assay**
 3. Missing required inspection stamps → route to **Appraise**
@@ -186,14 +187,17 @@ This replaces the earlier "Law Groups" design where separate Law CRDs were linke
 Review hearings use tier-specific verdicts. There are three hearing types:
 
 **Citation-threshold hearing** (Tier 1 Finding is heavily cited):
+
 - **Promote** — Finding is minted as a Tier 2 Ruling
 - **Retain** — Finding's TTL is reset, stays at Tier 1
 
 **Tier 1 TTL-expiry hearing:**
+
 - **Retire** — Finding is deleted (history preserved in audit log)
 - **Promote** — Finding is minted as a Tier 2 Ruling
 
 **Tier 2 TTL-expiry hearing:**
+
 - **Demote** — Ruling drops to Tier 1 Finding (fresh TTL, citation history does not carry over)
 - **Promote** — Assay petitions for Tier 3 Statute (HITL ratification required)
 

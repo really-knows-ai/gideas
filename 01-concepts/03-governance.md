@@ -129,7 +129,7 @@ The Governor is a dedicated [Flow Operator](../02-flow/01-operator.md) that runs
 
 The Governor holds the self-signed Root CA keypair for the State trust hierarchy. It issues intermediate CA certificates to each Sibling Flow's Operator, establishing a hub-and-spoke trust model:
 
-```
+```text
 Governor (Root CA)
   ├─ Flow A Operator (Intermediate CA)
   │   ├─ Forge Node (Leaf)
@@ -213,11 +213,13 @@ If a conflict is confirmed, resolution depends on the tier of the conflicting lo
 The grace period is a formalised exemption. It acknowledges that organisations need time to adapt — the same way a team might need runway to upgrade a dependency when architecture mandates a new version. Foundry Flow makes this formal and trackable.
 
 During the grace period:
+
 - The **old Tier 3 law remains enforced** in the Flow's Library
 - The **incoming higher-tier law is queued but not active**
 - The exemption has a **deadline** and is fully auditable
 
 When the grace period expires:
+
 - The incoming law is **integrated automatically**
 - The conflicting Tier 3 law is **retired** (CRD deleted, audit log retained)
 - If the Flow has not adapted, its work **starts failing governance checks** — Workitems cannot exit if they violate the now-active higher-tier law
