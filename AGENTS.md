@@ -130,24 +130,24 @@ Sort is a gate that evaluates state and routes. Its logic:
 
 1. Unresolved feedback on governed artefacts → route to **Refine**
 2. Deadlocked feedback → route to **Assay**
-3. Missing required inspection stamps → route to **Appraise**
-4. All feedback resolved, all inspections present → stamp **approval** and **Done**
+3. Missing required stamps → route to the node configured to provide them (**Appraise**, in the reference arrangement)
+4. All feedback resolved, all required stamps present → apply the **approval** stamp and **Done**
 
-Sort is the only node that stamps approval in the reference arrangement. Approval stamping is a right that can be assigned to any node by the Flow Architect. The reference arrangement makes strong recommendations but does not force the Flow Architect's hand.
+Sort is the only node that applies the "approval" stamp in the reference arrangement. Any stamp can be granted to any node by the Flow Architect. The reference arrangement makes strong recommendations but does not force the Flow Architect's hand.
 
-The routing targets above (Refine, Assay, Appraise) reflect the reference arrangement. Sort discovers routing targets by reading the Flow configuration — it looks at the missing stamp's role and routes to the node configured to provide it. A node granted `READ:flow` or `READ:topology` capability can query the topology to discover role-to-node mappings at runtime.
+The routing targets above (Refine, Assay, Appraise) reflect the reference arrangement. Sort discovers routing targets by reading the Flow configuration — it looks at the missing stamp and routes to the node configured to provide it. A node granted `READ:flow` or `READ:topology` capability can query the topology to discover stamp-to-node mappings at runtime.
 
-### Roles are defined by the terminal contract, granted by the Flow
+### Stamps are named governance checkpoints
 
-The terminal contract is the source of truth for what roles exist. The Flow grants nodes permission to stamp as specific roles. "Role" is used narrowly throughout — it means "the capacity in which a node stamps a passport."
+A stamp is a named governance checkpoint on an artefact's passport. The GovernedArtefact CRD defines which stamp names are required (e.g. "linter", "security-review", "approval"). The FoundryNode CRD (managed by the Flow Operator) grants nodes permission to apply specific named stamps to specific artefact kinds via the `STAMP:artefact/<kind>/<stamp-name>` capability.
+
+The system treats all stamps identically — it attaches no special semantics to any stamp name. "Approval", "linter", "security-review" are naming conventions chosen by the Flow Architect. The reference arrangement uses an "approval" stamp applied by Sort as the final gate, but this is convention, not system behaviour.
+
+Stamps are write-once per artefact version. Once a stamp has been applied to a specific content hash, a second node attempting to apply the same stamp name to the same version receives an error. If two different nodes need to sign off independently, define two different stamps.
 
 ### Terminal contracts are per governed artefact
 
-Each artefact's contract specifies required stamps (role + type), or simply that the artefact must be present. Different artefacts can have different requirements.
-
-### Two stamp types: inspection and approval
-
-Stamps are either **inspection** ("I have checked this") or **approval** ("I consider this valid"). The terminal contract specifies both the role AND the type required for each artefact.
+Each artefact's contract specifies required stamp names, or simply that the artefact must be present. Different artefacts can have different requirements.
 
 ### Friction is systemic heat
 
@@ -269,8 +269,6 @@ Complete spec, no v1/v2 split.
 2. **Make Work Auditable** — Every action becomes an immutable, traceable record.
 3. **Make the Cost Visible** — Friction is a first-class, quantifiable signal.
 4. **Quality is Fixed, Cost is Variable** — The standard is non-negotiable; the system measures the cost of achieving it.
-
-"Roles are Institutions, Not Individuals" was considered and removed — the concept was valid but overloaded the term "role" and is not relevant to the core spec.
 
 ## Using Legacy Material
 

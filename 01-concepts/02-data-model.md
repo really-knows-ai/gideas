@@ -123,7 +123,7 @@ Each contract has a name and a list of artefact requirements. An artefact requir
 | State | Validation |
 |-------|------------|
 | `present` | The artefact exists (has a `latestVersion`). Stamps are not checked. |
-| `valid` | The artefact exists **and** its passport carries stamps satisfying every entry in the GovernedArtefact's `requiredStamps` (matching both role and type). |
+| `valid` | The artefact exists **and** its passport carries every stamp listed in the GovernedArtefact's `requiredStamps`. |
 
 The validation model is strictly binary. A terminal contract asks "is it present?" or "is it valid?" — it never specifies a subset of stamps. Governance defines what "valid" means (the GovernedArtefact CRD). The terminal contract just checks whether that definition is satisfied. This prevents shadow governance — validity requirements defined in routing topology rather than in governance declarations.
 
@@ -194,7 +194,7 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 
 ### Governed Artefacts
 
-A GovernedArtefact CRD defines the validity requirements for an artefact kind. It specifies the [stamps](#passports-and-stamps) the artefact must carry — each requirement names a role and a stamp type:
+A GovernedArtefact CRD defines the validity requirements for an artefact kind. It specifies the named [stamps](#passports-and-stamps) the artefact must carry:
 
 ```yaml
 apiVersion: flow.gideas.io/v1
@@ -203,21 +203,17 @@ metadata:
   name: petition-draft
 spec:
   requiredStamps:
-    - role: "linter"
-      type: "inspection"
-    - role: "security-reviewer"
-      type: "inspection"
-    - role: "legal-reviewer"
-      type: "inspection"
-    - role: "sort"
-      type: "approval"
+    - "linter"
+    - "security-review"
+    - "legal-review"
+    - "approval"
 ```
 
-An artefact is **valid** if and only if its passport contains a stamp matching every entry in `requiredStamps` — the correct role *and* the correct type. An artefact is **present** if it exists, regardless of stamps.
+An artefact is **valid** if and only if its passport contains a stamp for every name listed in `requiredStamps`, each bound to the current content hash. An artefact is **present** if it exists, regardless of stamps.
 
-The GovernedArtefact CRD specifies both the role and the type required for each stamp. Inspection stamps record that a role examined the artefact. Approval stamps certify the artefact meets governance requirements from that role's perspective. Both are independently required — an inspection stamp from "linter" does not satisfy a requirement for an approval stamp from "linter", and vice versa.
+The GovernedArtefact CRD defines what stamps are required — the demand side. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (managed by the [Flow Operator](../02-flow/01-operator.md)) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
-Validation is role-based, not identity-based. The specific node that stamped is recorded for audit, but governance checks verify that the required role *and* type are present. This enables horizontal scaling (multiple node replicas with the same role stamp interchangeably) and cross-Flow trust (a stamp from a node in another Flow is valid if it carries the right role and its certificate chain traces back to a shared trust root).
+Validation is stamp-based, not identity-based. The specific node that applied a stamp is recorded for audit, but governance checks verify that the required stamp names are present. This enables horizontal scaling — multiple nodes can be authorised to apply the same stamp (though only one can apply it per artefact version, since stamps are write-once) — and cross-Flow trust (a stamp from a node in another Flow is valid if its certificate chain traces back to a shared trust root).
 
 ### Passports and Stamps
 
@@ -242,21 +238,13 @@ graph LR
     FB -->|"tagged to version hash"| Versions
 ```
 
-A stamp is uniquely keyed by `(role, type)` — the combination of the role being asserted and whether it is an inspection or approval. If two different nodes stamp the same artefact version as the same role and type, the second stamp overwrites the first (Last-Write-Wins). Governance cares that the `(role, type)` requirement was satisfied, not which specific node satisfied it. A single role can hold both an inspection stamp and an approval stamp simultaneously — these are independent assertions. Overwritten stamps are not preserved in the passport — the full stamp history is reconstructable from the telemetry audit log.
-
-**Stamp types:**
-
-| Type | Purpose |
-|------|---------|
-| **Inspection** | Records that a node examined this artefact version |
-| **Approval** | Certifies the artefact meets governance requirements from this role's perspective |
+A stamp is uniquely keyed by its **name** — the governance checkpoint it represents. Stamps are write-once per artefact version: once a named stamp has been applied to a specific content hash, a second node attempting to apply the same stamp name to the same version receives an error. If two different nodes need to sign off independently, the Flow Architect defines two different stamps.
 
 **Stamp fields:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `role` | string | The role being asserted |
-| `type` | enum | `inspection` or `approval` — together with `role`, forms the composite key |
+| `name` | string | The governance checkpoint being satisfied (e.g. "linter", "security-review", "approval") |
 | `node` | string | Node name (for audit) |
 | `timestamp` | datetime | When the stamp was created |
 | `hash` | string | Content hash of the artefact at stamp time |
@@ -266,12 +254,11 @@ A stamp is uniquely keyed by `(role, type)` — the combination of the role bein
 
 Stamps are cryptographically bound to the artefact's content through the `hash` field. The signature covers the hash along with the stamp's identity fields, making it independently verifiable by tracing the certificate chain back to the Flow's trust root (or, in federated deployments, to the State Root CA). A stamp certifies specific bytes. Different bytes require new certification.
 
-**Capability enforcement:** The Sidecar enforces capabilities before allowing stamp operations:
+**Capability enforcement:** The [Sidecar](../03-node/01-sidecar.md) enforces capabilities before allowing stamp and artefact operations:
 
 | Capability | Required For |
 |------------|-------------|
-| `INSPECT:artefact/<kind>` | Inspection stamps |
-| `APPROVE:artefact/<kind>` | Approval stamps |
+| `STAMP:artefact/<kind>/<stamp-name>` | Applying a named stamp |
 | `READ:artefact/<kind>` | Fetching artefact content |
 | `WRITE:artefact/<kind>` | Storing artefact content |
 
@@ -308,7 +295,7 @@ Severity signals urgency, not authority:
 | `HIGH` | Functional or security concern — must be addressed |
 | `CRITICAL` | Blocking issue, potential data loss |
 
-Each feedback event in the history records who acted, in what role, what action they took, and what they said. The history is append-only — it is the investigative record of the debate.
+Each feedback event in the history records who acted, what action they took, and what they said. The history is append-only — it is the investigative record of the debate.
 
 ### Feedback Lifecycle
 
@@ -365,7 +352,7 @@ When the feedback history depth on a single item exceeds the configured `maxFeed
 
 From [Sort's](./00-overview.md) perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont-fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont-fix` still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
 
-In the [reference arrangement](./00-overview.md), Sort reads the Flow configuration to determine which nodes provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. When all required stamps are present and all feedback is resolved, Sort stamps approval. In the reference arrangement Sort is the only node that stamps approval, but approval stamping is a right that the Flow can assign to any node.
+In the [reference arrangement](./00-overview.md), Sort reads the Flow configuration to determine which nodes can provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. When all required stamps are present and all feedback is resolved, Sort applies the "approval" stamp. In the reference arrangement Sort is the only node that applies the "approval" stamp, but any stamp can be granted to any node by the Flow Architect.
 
 ### Forced-Choice Justification
 

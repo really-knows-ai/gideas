@@ -32,16 +32,20 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 **[Artefact](./02-data-model.md#artefacts)** -- A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model -- anything the Flow produces.
 
-**Passport** -- The collection of [stamps](#stamps-and-roles) on an artefact version. A passport tracks which `(role, type)` requirements have been satisfied for a specific content hash.
+**Passport** -- The collection of [stamps](#stamps) on an artefact version. A passport tracks which stamp requirements have been satisfied for a specific content hash.
 
-### Stamps and Roles
+### Stamps
 
-A **stamp** is a mark left on a passport by a node. Two types:
+A **stamp** is a named governance checkpoint on an artefact's passport. Each stamp records:
 
-- **Inspection** -- "I have checked this." Records that the node examined this version.
-- **Approval** -- "I consider this valid." Certifies the artefact meets governance requirements from this role's perspective.
+- The **stamp name** -- which checkpoint this satisfies (e.g. "linter", "security-review", "approval").
+- The **node** that applied it (for audit).
+- The **content hash** of the artefact at stamp time.
+- A **cryptographic signature** and certificate chain.
 
-Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validator", "Reviewer") -- and a **type** (inspection or approval). The combination of role and type is the stamp's identity. Roles are defined by the terminal contract and granted to nodes by the Flow. Stamps are version-specific: if the artefact changes, the stamp no longer applies.
+Stamp names are defined by the GovernedArtefact CRD -- the artefact declares which stamps it requires. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
+
+Stamps are write-once per artefact version. Once a stamp has been applied to a specific content hash, it cannot be overwritten. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
 
 **[Feedback](./02-data-model.md#feedback)** -- Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
@@ -63,7 +67,7 @@ The standard library includes configurable reference implementations for each no
 
 **Appraise** conducts subjective review. It orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against applicable laws. Appraise intentionally preserves contradictions in its feedback -- resolving them is Refine's job. Can write Tier 1 Findings.
 
-**Sort** is the central routing hub. It reads the Flow configuration to know which nodes can stamp which roles, then applies deliberately simple logic:
+**Sort** is the central routing hub. It reads the Flow configuration to know which nodes can provide which stamps, then applies deliberately simple logic:
 
 1. Is there unresolved feedback? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
@@ -168,16 +172,15 @@ The system verifies that work was done correctly. Deterministically.
 
 As a Workitem moves through the cycle, nodes stamp the artefact's passport. Each stamp records:
 
-- The **role** the node stamped as (the capacity granted to it by the Flow).
-- The **type**: inspection or approval.
+- The **stamp name** -- which governance checkpoint this satisfies.
 - The **content hash** of the artefact at stamp time.
 - A **cryptographic signature** and certificate chain.
 
-Inspection stamps record that a node examined the artefact. Approval stamps certify it meets governance requirements. If the artefact content changes after a stamp, the hash no longer matches and the stamp is invalidated. Governance starts over for the new version.
+If the artefact content changes after a stamp, the hash no longer matches and the stamp applies only to the old version. Governance starts over for the new content.
 
 ### Terminal Contracts
 
-The terminal contract is defined per governed artefact. For each artefact the Flow produces, the contract specifies what the passport must carry: a set of required stamps (each with a role and type), or simply that the artefact must be present. A code artefact might require approval stamps from "Validator" and "Security Auditor". A log artefact might only need to exist. The Flow grants nodes permission to stamp as the required roles. At the border, the terminal contract checks each artefact's passport against its requirements. If any requirement is unsatisfied, the Workitem cannot exit.
+The terminal contract is defined per governed artefact. For each artefact the Flow produces, the contract specifies what the passport must carry: a set of required stamp names, or simply that the artefact must be present. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the terminal contract checks each artefact's passport against its requirements. If any requirement is unsatisfied, the Workitem cannot exit.
 
 ```mermaid
 sequenceDiagram
@@ -191,20 +194,20 @@ sequenceDiagram
     W->>F: assigned
     F->>W: artefact created
     W->>Q: assigned
-    Q->>W: inspection stamp (Validator)
+    Q->>W: stamp (linter)
     W->>S: assigned
-    S->>S: missing inspection stamps
+    S->>S: missing stamps
     S->>A: route to Appraise
-    A->>W: inspection stamp (Reviewer)
+    A->>W: stamp (security-review)
     W->>S: assigned
-    S->>S: all inspections present, no unresolved feedback
-    S->>W: approval stamp (Sort)
+    S->>S: all stamps present, no unresolved feedback
+    S->>W: stamp (approval)
     W->>T: complete
     T->>T: check passport against terminal contract
     T-->>W: all requirements met -- exit approved
 ```
 
-An artefact that exits a Flow carries cryptographic proof of every check it passed and every role that signed off. Quality is proved.
+An artefact that exits a Flow carries cryptographic proof of every governance checkpoint it passed. Quality is proved.
 
 ---
 
