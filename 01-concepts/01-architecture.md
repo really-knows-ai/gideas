@@ -2,7 +2,7 @@
 
 A [Flow](./00-overview.md) is a self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary. The namespace is the sovereignty line — nothing enters or leaves without crossing a guarded border.
 
-The internal structure separates into six planes, each owning a distinct concern: Management, Control, Data, Security, Governance, and Federation.
+The internal structure separates into six planes, each owning a distinct concern.
 
 ---
 

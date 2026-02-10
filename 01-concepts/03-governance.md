@@ -1,12 +1,12 @@
 # Governance
 
-A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./02-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is not bolted onto the runtime — it is the runtime's constitutional structure.
+A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./02-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is the runtime's constitutional structure.
 
 ---
 
 ## The Legal Metaphor
 
-Foundry Flow maps governance concepts onto a legal and constitutional structure. Each branch of government has a clear institutional counterpart.
+Each branch of government has a clear institutional counterpart in the runtime.
 
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
@@ -225,7 +225,7 @@ When the grace period expires:
 - The conflicting Tier 3 law is **retired** (CRD deleted, audit log retained)
 - If the Flow has not adapted, its work **starts failing governance checks** — Workitems cannot exit if they violate the now-active higher-tier law
 
-There is no escalation. There is no punishment. The [terminal contract](./02-data-model.md#terminal-contracts) enforces compliance organically. [Friction](./00-overview.md#friction) spikes, and the data tells the story.
+The [terminal contract](./02-data-model.md#terminal-contracts) enforces compliance organically. [Friction](./00-overview.md#friction) spikes, and the data tells the story.
 
 ---
 

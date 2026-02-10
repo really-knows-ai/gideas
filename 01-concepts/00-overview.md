@@ -4,7 +4,7 @@
 
 Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work through adversarial cycles of creation, validation, review, and refinement -- producing artefacts that carry cryptographic proof of every check they passed.
 
-The core premise is simple: all agents are fallible. Human reviewers miss things. AI models hallucinate. Compilers have edge cases. Foundry Flow replaces invisible trust with auditable proof. Every action is recorded, every decision is traceable, and every output carries a verifiable record of the governance it survived.
+The core premise is simple: all agents are fallible. Human reviewers miss things. AI models hallucinate. Compilers have edge cases. Foundry Flow produces auditable proof for every action, decision, and review. Every action is recorded, every decision is traceable, and every output carries a verifiable record of the governance it survived.
 
 The system uses a legal and constitutional metaphor throughout its design. Governance rules are called *laws*. Disputes go to a *judiciary*. Precedent accumulates. This is a structural choice -- the metaphor maps cleanly onto the problem of governing unreliable agents at scale.
 

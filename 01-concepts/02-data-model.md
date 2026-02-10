@@ -425,5 +425,3 @@ The full integration protocol — how higher-tier laws are pushed to Flows, how 
 ### Scoping
 
 Each law specifies which artefact kind it governs. When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws, the results are filtered by the artefact the node is working on and by the representation types the node can interpret.
-
-The Librarian's embedding pipeline, citation tracking, and law lifecycle state machine are covered in [System Services](../02-flow/04-system-services.md). The CRD structure is defined in the [CRD Reference](../04-reference/crds.md).
