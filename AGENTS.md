@@ -108,6 +108,10 @@ Do not narrate the document's structure to the reader. "In this section we will.
 
 Use diagrams (Mermaid), tables, and examples where they clarify. But they should feel like natural parts of the explanation, not bolted-on visual aids announced by a sentence.
 
+### Mermaid line breaks
+
+In `flowchart` and `sequenceDiagram` blocks, use `<br/>` for line breaks in node labels and edge labels. Do **not** use `\n` — it renders as literal text in these diagram types. (`stateDiagram-v2` handles `\n` natively and is the exception.)
+
 ### Cross-link aggressively
 
 Every concept that has a detail page should link to it on first mention in each document. Use relative markdown links.

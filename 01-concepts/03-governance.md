@@ -66,8 +66,8 @@ The promotion path runs upward through the tiers:
 
 ```mermaid
 flowchart LR
-    T1["Tier 1\nFinding"] -->|citation threshold\n+ Assay verdict| T2["Tier 2\nRuling"]
-    T2 -->|citation threshold\n+ Assay proposal\n+ HITL ratification| T3["Tier 3\nLocal Statute"]
+    T1["Tier 1<br/>Finding"] -->|"citation threshold<br/>+ Assay verdict"| T2["Tier 2<br/>Ruling"]
+    T2 -->|"citation threshold<br/>+ Assay proposal<br/>+ HITL ratification"| T3["Tier 3<br/>Local Statute"]
 ```
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
@@ -252,15 +252,15 @@ Federal authorities operate their own Governance Flows — full Foundry Cycle de
 
 ```mermaid
 flowchart TD
-    Node["Node\n(discovers conflict)"] --> Assay["Assay\n(local judiciary)"]
-    Assay -->|"Tier 1-2:\nresolve directly"| Library["Flow Library"]
-    Assay -->|"Tier 3:\npropose"| HITL["HITL\n(human ratification)"]
+    Node["Node<br/>(discovers conflict)"] --> Assay["Assay<br/>(local judiciary)"]
+    Assay -->|"Tier 1-2:<br/>resolve directly"| Library["Flow Library"]
+    Assay -->|"Tier 3:<br/>propose"| HITL["HITL<br/>(human ratification)"]
     HITL --> Library
-    Assay -->|"Tier 4-5:\nappeal"| Governor["Governor\n(State authority)"]
-    Governor -->|"Tier 4:\namend"| GovFlow["Governance Flow\n(Foundry Cycle)"]
-    GovFlow --> Propagate["Propagate to\nall Siblings"]
-    Governor -->|"Tier 5:\nescalate"| Federal["Federal Authority"]
-    Federal --> FedPropagate["Propagate to\nall Governors"]
+    Assay -->|"Tier 4-5:<br/>appeal"| Governor["Governor<br/>(State authority)"]
+    Governor -->|"Tier 4:<br/>amend"| GovFlow["Governance Flow<br/>(Foundry Cycle)"]
+    GovFlow --> Propagate["Propagate to<br/>all Siblings"]
+    Governor -->|"Tier 5:<br/>escalate"| Federal["Federal Authority"]
+    Federal --> FedPropagate["Propagate to<br/>all Governors"]
 ```
 
 Each level of the chain has bounded authority. No institution can exceed its constitutional ceiling. Nodes raise issues. Assay adjudicates within its tier. The Governor legislates within the State. The Federation legislates across States. The escalation path is a routing protocol, not a request for permission — it sends the conflict to the institution with the authority to resolve it.
