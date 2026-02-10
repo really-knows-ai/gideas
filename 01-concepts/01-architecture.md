@@ -75,7 +75,7 @@ Nodes have direct, uninhibited network access to external services. Network secu
 
 ### Security Plane
 
-Identity, authentication, and cryptographic trust. The Security Plane cross-cuts all other planes — it is not a layer that sits beside them but a concern that runs through each of them.
+Identity, authentication, and cryptographic trust. The Security Plane cross-cuts all other planes — a concern that runs through each of them, present wherever identity, authentication, or trust is exercised.
 
 Its primary agent is the [Sidecar](../03-node/01-sidecar.md), injected into every Node pod. The Sidecar holds all credentials; the Node container itself is credential-free. Every authenticated request between a Node and the Flow's services passes through the Sidecar, which brokers identity on the Node's behalf.
 
@@ -142,7 +142,7 @@ The namespace boundary also defines data sovereignty. Workitems, artefacts, and 
 
 A Workitem is assigned to exactly one Node at a time. The `currentAssignee` field on the Workitem is a scalar, not a list — atomic ownership prevents race conditions in state transitions. The Operator's routing loop is linear: read state, pick a target, assign, wait for completion, repeat.
 
-The Flow is a relay race, not a scrum. One baton, one runner.
+The Flow is a relay race. One baton, one runner.
 
 When parallel execution is needed within a single step (querying multiple reviewers, running multiple validators), the Node handles it internally. A "fat node" can orchestrate concurrent work within its execution boundary — from the Flow's perspective, it is still one assignment.
 

@@ -80,7 +80,7 @@ Sort is a gate. It evaluates state, consults the Flow config for routing targets
 
 **Assay** is the judiciary. It is invoked only when feedback deadlocks -- when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute by minting Tier 2 Rulings (binding precedent) -- the ceiling of its judicial authority. For conflicts involving higher tiers, Assay petitions the Flow Architect (Tier 3) or the [Governor](./03-governance.md) (Tiers 4-5).
 
-Unlike the other node types, Assay is a standard component of every Flow -- a runtime component rather than a reference implementation. Every Flow includes a built-in Assay node. It cannot be omitted or replaced.
+Assay is a standard component of every Flow -- a runtime component, always present. Every Flow includes a built-in Assay node. It cannot be omitted or replaced.
 
 ### Cycle Flow
 
@@ -142,7 +142,7 @@ Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Source | Lifecycle |
 |------|------|--------|-----------|
-| 1 | **Finding** | Nodes (Appraise, Refine, Assay) | Ephemeral. Decays if uncited, promoted if heavily used. |
+| 1 | **Finding** | Nodes (Appraise, Refine in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
 | 2 | **Ruling** | Assay Node | Binding precedent. Minted when disputes are resolved. |
 | 3 | **Local Statute** | Flow Operator | Local policy. Human-administered or via local legislative cycle. |
 | 4 | **State Constitution** | [Governance Flow](./03-governance.md) | Organisational policy. Applies to all Flows in the Governor's instance. |

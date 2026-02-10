@@ -107,8 +107,6 @@ The guestbook is a map of node names to visit counts. Each time a Workitem is as
 
 Its purpose is thrash detection. When the sum of all guestbook entries exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_DETECTED`. This catches infrastructure-level loops — a Workitem bouncing endlessly between nodes regardless of the reason.
 
-Thrash detection (guestbook) and fatigue detection ([feedback](#feedback) history depth) are separate mechanisms with different signals:
-
 | Detection | Signal | Source | Response |
 |-----------|--------|--------|----------|
 | Thrash | Total visits across all nodes | Guestbook | Fail workitem |
