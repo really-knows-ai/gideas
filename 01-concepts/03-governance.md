@@ -1,12 +1,12 @@
 # Governance
 
-A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./02-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is not bolted onto the runtime — it is the runtime's constitutional structure. How [laws](./02-data-model.md#laws) are made, how conflicts are resolved, how precedent accumulates, and how the system scales from a single standalone Flow to a federated organisation — these are the governance processes that give the [data model](./02-data-model.md) its teeth.
+A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./02-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is not bolted onto the runtime — it is the runtime's constitutional structure.
 
 ---
 
 ## The Legal Metaphor
 
-Foundry Flow maps governance concepts onto a legal and constitutional structure. This is not decorative — the metaphor is load-bearing. Each branch of government has a clear institutional counterpart.
+Foundry Flow maps governance concepts onto a legal and constitutional structure. Each branch of government has a clear institutional counterpart.
 
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|

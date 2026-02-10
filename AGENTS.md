@@ -249,6 +249,10 @@ Runtime conflicts (discovered during Workitem processing, not at integration tim
 
 Assay can **resolve** at Tier 1-2, **propose** at Tier 3, and **appeal** at Tier 4-5. It cannot directly modify laws above its judicial tier.
 
+### Workitem context — reserved keys
+
+The Workitem `context` map reserves keys starting with an underscore (`_`) for system use. The `01-concepts/02-data-model.md` document states this convention but does not enumerate the reserved keys. `03-node/06-sdk-workitems.md` must define which system keys exist, what they contain, and when they are set.
+
 ### This is v1
 
 Complete spec, no v1/v2 split.

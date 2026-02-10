@@ -51,13 +51,13 @@ Stamps carry a **role** -- the capacity in which the node stamped (e.g. "Validat
 
 ## The Foundry Cycle
 
-The Foundry Cycle is the canonical arrangement of node types in a governed workflow. It drives unreliable agents to produce artefacts that are provably compliant with a body of governance, through an adversarial loop of creation, validation, review, and refinement.
+The Foundry Cycle is the reference arrangement of node types in a governed workflow. Real deployments adapt it to their context -- the node types are a vocabulary, and the topology is shaped by what the work requires. The pattern drives unreliable agents to produce artefacts that are provably compliant with a body of governance, through an adversarial loop of creation, validation, review, and refinement.
 
 ### Node Types
 
 **Forge** creates the initial artefact. Before generation, it queries the Library for applicable laws and seeds them into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
 
-**Quench** performs deterministic validation. It runs objective checks -- compilers, solvers, structural validators -- to catch fundamentally broken work before it reaches the more expensive review stage. Quench is optional and may be skipped for creative or ideation work.
+**Quench** performs deterministic validation. It runs objective checks -- compilers, solvers, structural validators -- to catch fundamentally broken work before it reaches the more expensive review stage. A topology with no deterministic checks to run can omit Quench entirely.
 
 **Appraise** conducts subjective review. It orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against applicable laws. Appraise intentionally preserves contradictions in its feedback -- resolving them is Refine's job. Can write Tier 1 Findings.
 
@@ -92,7 +92,7 @@ flowchart LR
     Assay --> Sort
 ```
 
-Refine always routes back through Quench -- deterministic validation runs again on the revised artefact. Assay routes back through Sort, which re-evaluates the state after the ruling.
+In the reference arrangement, Refine routes back through Quench -- deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort. Assay routes back through Sort, which re-evaluates the state after the ruling.
 
 ### Law Authority
 
