@@ -28,7 +28,7 @@ The system uses a legal and constitutional metaphor throughout its design. Gover
 
 **[Workitem](./02-data-model.md#workitems)** -- The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
 
-**Node** -- A stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
+**[Node](../03-node/00-overview.md)** -- A stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
 
 **[Artefact](./02-data-model.md#artefacts)** -- A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model -- anything the Flow produces.
 

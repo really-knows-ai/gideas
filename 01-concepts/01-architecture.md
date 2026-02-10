@@ -6,7 +6,7 @@ The internal structure separates into distinct planes, each owning a single conc
 
 ---
 
-## The Six Planes
+## Architectural Planes
 
 ```mermaid
 graph TD
