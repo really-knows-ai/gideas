@@ -314,39 +314,58 @@ Each feedback event in the history records who acted, in what role, what action 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending : AddFeedback()
+    [*] --> new : AddFeedback()
 
-    pending --> actioned : ResolveFeedback()
-    pending --> wont_fix : UpdateFeedbackState()\nwith Justification
-    pending --> disputed : UpdateFeedbackState()\nor fatigue threshold
+    new --> actioned : ResolveFeedback()
+    new --> wont_fix : RefuseFeedback()\nwith Justification
 
-    actioned --> pending : RejectFix()
+    actioned --> resolved : AcceptFix()
+    actioned --> rejected : RejectFix()
 
-    wont_fix --> disputed : Reviewer disputes\nrefusal
-    wont_fix --> resolved : Reviewer accepts\nrefusal
+    wont_fix --> resolved : AcceptRefusal()
+    wont_fix --> rejected : RejectRefusal()
+    wont_fix --> deadlocked : Sort detects\nexcessive depth
 
-    disputed --> rejected : Assay verdict\n(linkedRuling set)
-    disputed --> resolved : Assay verdict\n(in favour of refiner)
+    rejected --> actioned : ResolveFeedback()
+    rejected --> deadlocked : Sort detects\nexcessive depth
 
-    rejected --> resolved : ResolveFeedback()\n(forced compliance)
+    deadlocked --> wont_fix : Assay verdict\n(favours Refine;\nlinkedRuling set)
+    deadlocked --> rejected : Assay verdict\n(favours Appraise;\nlinkedRuling set)
 
     resolved --> [*]
 ```
 
 | State | Description |
 |-------|-------------|
-| **pending** | Issue raised, not yet addressed |
-| **actioned** | Refine node addressed it (fix applied) |
-| **wont-fix** | Refine node refused with structured justification |
-| **disputed** | Escalated to Assay — history depth exceeded threshold, or explicitly escalated |
-| **rejected** | Assay ruled against the refiner — a judicial mandate with a `linkedRuling` |
-| **resolved** | Closed — either Assay ruled in favour of the refiner, or the refiner complied with a rejection |
+| **new** | Feedback raised, not yet addressed |
+| **actioned** | Refine addressed the issue (fix applied) |
+| **wont-fix** | Refine refused with structured justification |
+| **rejected** | Reviewer rejected the fix or refusal |
+| **deadlocked** | Sort detected excessive feedback depth — escalated to Assay |
+| **resolved** | Closed — final state |
 
-The cycle between `pending` and `actioned` is the normal adversarial loop. Appraise raises an issue. Refine fixes it and marks it `actioned`. On the next review pass, Appraise either accepts the fix (the item stays `actioned`) or calls `RejectFix()`, which pushes it back to `pending` with a new history entry explaining why the fix was insufficient.
+| From | To | Actor | Trigger |
+|------|----|-------|---------|
+| — | **new** | System | `AddFeedback()` |
+| new | actioned | Refine | `ResolveFeedback()` — applies a fix |
+| new | wont-fix | Refine | `RefuseFeedback()` — with structured justification |
+| actioned | resolved | Appraise | `AcceptFix()` — fix is adequate |
+| actioned | rejected | Appraise | `RejectFix()` — fix is inadequate |
+| wont-fix | resolved | Appraise | `AcceptRefusal()` — refusal is justified |
+| wont-fix | rejected | Appraise | `RejectRefusal()` — refusal is unjustified |
+| wont-fix | deadlocked | Sort | Feedback depth exceeds `maxFeedbackDepth` |
+| rejected | actioned | Refine | `ResolveFeedback()` — complies with rejection |
+| rejected | deadlocked | Sort | Feedback depth exceeds `maxFeedbackDepth` |
+| deadlocked | wont-fix | Assay | Verdict favours Refine — `linkedRuling` set, cites Tier 2 Ruling |
+| deadlocked | rejected | Assay | Verdict favours Appraise — `linkedRuling` set, cites Tier 2 Ruling |
 
-From [Sort's](./00-overview.md) perspective, only `pending` and `disputed` feedback is unresolved. Feedback in any other state — `actioned`, `wont-fix`, `resolved` — does not block the Workitem.
+Refine makes the first move: fix the issue (`actioned`) or refuse it (`wont-fix`). Appraise reviews the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to Refine for compliance.
 
-In the [canonical arrangement](./00-overview.md), Sort evaluates the Workitem's governance state and routes accordingly — unresolved feedback on governed artefacts typically routes toward refinement, deadlocked feedback toward judicial review, and missing inspection stamps toward the node configured to provide them. When all inspections are present and all feedback is resolved, Sort stamps approval. Sort is the only node that stamps approval, but its routing logic is user-defined — teams implement it with the [SDK](../03-node/02-sdk-core.md) to match their Flow's topology.
+When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, Sort transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
+
+From [Sort's](./00-overview.md) perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont-fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont-fix` still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
+
+In the [canonical arrangement](./00-overview.md), Sort reads the Flow configuration to determine which nodes provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. When all required stamps are present and all feedback is resolved, Sort stamps approval. Sort is the only node that stamps approval.
 
 ### Forced-Choice Justification
 
@@ -361,15 +380,18 @@ There is no third option. A node cannot silently dismiss feedback. Every refusal
 
 ### Fatigue Detection and Escalation
 
-Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `disputed` and routes the Workitem to [Assay](./00-overview.md).
+Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `deadlocked` and routes the Workitem to [Assay](./00-overview.md).
 
 The threshold applies per feedback item, not per Workitem. A Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
 ### Contempt Guard
 
-Once Assay renders a verdict and sets a `linkedRuling` on a feedback item, that item is under judicial mandate. The [Sidecar](../03-node/01-sidecar.md) enforces finality: the only valid transition from `rejected` is to `resolved` via `ResolveFeedback()`. Any other state change — including `wont-fix` — returns `CONTEMPT_VIOLATION`. The ruling is not a suggestion. The only path forward is compliance.
+Once Assay renders a verdict and sets a `linkedRuling` on a feedback item, that item is under judicial mandate. The [Sidecar](../03-node/01-sidecar.md) enforces finality in both directions:
 
-This is the enforcement mechanism that gives Assay's rulings teeth. Without the Contempt Guard, a node could endlessly refuse judicial mandates. With it, rulings are terminal.
+- A `wont-fix` with a `linkedRuling` (Assay agreed with Refine) cannot be moved to `rejected` by Appraise. The only valid transition is to `resolved` via `AcceptRefusal()`.
+- A `rejected` with a `linkedRuling` (Assay agreed with Appraise) cannot be moved to `wont-fix` or `deadlocked`. The only valid transition is to `actioned` via `ResolveFeedback()`, followed by acceptance to `resolved`.
+
+Any other state change returns `CONTEMPT_VIOLATION`. The ruling is not a suggestion. The losing side must accept the verdict.
 
 ### Message Limits
 

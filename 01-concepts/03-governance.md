@@ -48,11 +48,11 @@ The [Librarian](../02-flow/04-system-services.md) indexes externally applied Law
 
 The [Assay](./00-overview.md) node is the judiciary. It is invoked in two circumstances:
 
-1. **Feedback deadlock.** When a [feedback](./02-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `disputed` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — and renders a verdict. The verdict resolves the dispute and can mint a Tier 2 Ruling as binding precedent.
+1. **Feedback deadlock.** When a [feedback](./02-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
 
 2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a verdict. Citation-threshold hearings use [Promote / Retain](#organic-discovery-tiers-12). TTL-expiry hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2.
 
-Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the only path forward is compliance.
+Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — the Sidecar blocks any transition that contradicts the ruling.
 
 ---
 
@@ -102,7 +102,7 @@ When nodes cite conflicting laws during Workitem processing — not at integrati
 
 | Conflict | Resolution |
 |----------|------------|
-| **Cross-tier** (any combination) | Supremacy decides immediately. Higher tier wins. |
+| **Cross-tier** (any combination) | Supremacy decides the outcome. Assay retires both conflicting laws and mints a new Tier 2 Ruling that consolidates the higher-tier law's intent. |
 | **Tier 1–2 vs Tier 1–2** | Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired. |
 | **Tier 3 vs Tier 3** | Assay drafts a *proposal* for a consolidated Tier 3 statute. HITL approves or rejects. |
 | **Tier 4 or Tier 5 involvement** | Assay files an *appeal* to the [Governor](#the-governor) via the Librarian gRPC channel. |
