@@ -4,7 +4,7 @@
 
 Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work through adversarial cycles of creation, validation, review, and refinement -- producing artefacts that carry cryptographic proof of every check they passed.
 
-The core premise is simple: all agents are fallible. Human reviewers miss things. AI models hallucinate. Compilers have edge cases. Foundry Flow produces auditable proof for every action, decision, and review. Every action is recorded, every decision is traceable, and every output carries a verifiable record of the governance it survived.
+The core premise is simple: all agents are fallible. Human reviewers miss things. AI models hallucinate. Compilers have edge cases. Every action is recorded, every decision is traceable, and every output carries a verifiable record of the governance it survived.
 
 The system uses a legal and constitutional metaphor throughout its design. Governance rules are called *laws*. Disputes go to a *judiciary*. Precedent accumulates. This is a structural choice -- the metaphor maps cleanly onto the problem of governing unreliable agents at scale.
 
@@ -150,7 +150,7 @@ Laws are tiered by authority and lifecycle:
 
 Tier 1 Findings are the raw material. They emerge from work -- a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it can be promoted to a Tier 2 Ruling through the Assay Node.
 
-The system naturally hardens soft rules into strict ones. A vague Tier 1 Finding -- "this feels wrong" -- starts as a prose representation. When promoted to a Tier 2 Ruling, it can gain a formal logic representation through [Codification Services](../02-flow/04-system-services.md), making it deterministically enforceable. The goal stays the same; enforceability increases.
+The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./02-data-model.md#representations) — formal logic, executable validators — through [Codification Services](../02-flow/04-system-services.md). Authority increases through the tier system; enforceability increases through representation.
 
 ### The Governance Flow
 

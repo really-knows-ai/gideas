@@ -2,7 +2,7 @@
 
 A [Flow](./00-overview.md) is a self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary. The namespace is the sovereignty line — nothing enters or leaves without crossing a guarded border.
 
-The internal structure separates into six planes, each owning a distinct concern.
+The internal structure separates into distinct planes, each owning a single concern.
 
 ---
 
@@ -59,9 +59,9 @@ A Flow is deployed as a single Helm release. One release creates one namespace, 
 
 ### Control Plane
 
-Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](./00-overview.md), and validates the terminal contract at the exit boundary.
+Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](./00-overview.md), and validates the terminal contract at the exit boundary. The Thrash Guard is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem that exceeds the configured threshold before it consumes unbounded resources.
 
-The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports. The Thrash Guard detects Workitems stuck in rework loops and fails them before they consume unbounded resources.
+The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
 
 The Control Plane makes routing decisions but never executes work. It reads state and moves Workitems; Nodes do the rest.
 
@@ -87,7 +87,7 @@ Network reachability does not imply authorization. A pod that can reach a servic
 
 The legal lifecycle. The Governance Plane manages the discovery, enforcement, and evolution of [law](./00-overview.md) within the Flow.
 
-The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./00-overview.md) — storing, embedding, and serving laws to Nodes that query for applicable governance. The Citation Processor tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md).
+The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./00-overview.md) — storing, embedding, and serving laws to Nodes that query for applicable governance. The [Citation Processor](../02-flow/04-system-services.md) tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md).
 
 The [Assay Node](./00-overview.md) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
 
@@ -99,7 +99,7 @@ Laws are discovered, not just configured. Constitutional resistance is measurabl
 
 Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace and cannot be moved. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border.
 
-Two trust models govern cross-flow relationships:
+Cross-flow relationships are governed by distinct trust models:
 
 **Federated trust** operates through the [Governance Flow](./03-governance.md). The Governor acts as the State Root Certificate Authority, issuing intermediate CA certificates to each Sibling Flow's Operator. All Flows in the organisation share a common trust root, and any stamp from any sibling is cryptographically verifiable by tracing the certificate chain to the State Root. The Governor also publishes Tier 4 State Constitution laws and synchronises Tier 5 Federal Accords, ensuring all sibling Flows operate under consistent higher-tier governance.
 
@@ -162,7 +162,7 @@ Artefact content lives in the Archivist as content-addressed blobs. The Workitem
 
 ### Hybrid Persistence
 
-State is split across four storage layers, each chosen for its access pattern.
+State is split across storage layers, each chosen for its access pattern.
 
 | Layer | Technology | Data | Access Pattern |
 |-------|------------|------|----------------|

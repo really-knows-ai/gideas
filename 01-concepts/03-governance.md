@@ -21,7 +21,7 @@ Law hardens through these branches in sequence. Nodes observe patterns during wo
 
 ## Standalone Governance
 
-A standalone Flow (no [Governor](#the-governor)) manages its own governance through three mechanisms.
+A standalone Flow (no [Governor](#the-governor)) manages its own governance through complementary mechanisms.
 
 ### Organic Discovery (Tiers 1–2)
 
@@ -46,7 +46,7 @@ The [Librarian](../02-flow/04-system-services.md) indexes externally applied Law
 
 ### Judicial Review (Assay)
 
-The [Assay](./00-overview.md) node is the judiciary. It is invoked in two circumstances:
+The [Assay](./00-overview.md) node is the judiciary. It is invoked when governance reaches an impasse:
 
 1. **Feedback deadlock.** When a [feedback](./02-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
 
@@ -72,7 +72,7 @@ flowchart LR
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
 
-Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: ephemeral, specialised containers that translate a verdict's intent into the appropriate format. A Tier 1 Finding that started as a prose representation — "poetry must not reference processed meats" — can gain a formal logic representation when promoted to a Tier 2 Ruling, making it deterministically enforceable. The goal stays the same; enforceability increases.
+Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: ephemeral, specialised containers that translate a verdict's intent into the appropriate format. When promoted, a Finding can gain new [representations](./02-data-model.md#representations) — formal logic alongside the original prose — increasing enforceability without changing its goal.
 
 ### Decay and Retirement
 
@@ -102,8 +102,8 @@ When nodes cite conflicting laws during Workitem processing — not at integrati
 
 | Conflict | Resolution |
 |----------|------------|
-| **Tier 1–2 vs Tier 1–2** (cross-tier) | Supremacy informs the outcome. Assay mints a new Tier 2 Ruling. Originals retired. |
-| **Tier 1–2 vs Tier 1–2** (same tier) | Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired. |
+| **Tier 1 vs Tier 2** (or vice versa) | Supremacy informs the outcome. Assay mints a new Tier 2 Ruling. Originals retired. |
+| **Same tier** (Tier 1 vs Tier 1, or Tier 2 vs Tier 2) | Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired. |
 | **Tier 1–2 vs Tier 3** | The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, Assay petitions HITL with a proposed clarification or amendment. |
 | **Tier 3 vs Tier 3** | Assay drafts a *proposal* for a consolidated Tier 3 statute. HITL approves or rejects. |
 | **Tier 4 or Tier 5 involvement** | Assay files an *appeal* to the [Governor](#the-governor) via the Librarian gRPC channel. |
@@ -124,7 +124,7 @@ When a human rejects Assay's Tier 3 proposal, the conflicting statutes remain ac
 
 ## The Governor
 
-The Governor is a dedicated [Flow Operator](../02-flow/01-operator.md) that runs in its own Kubernetes namespace (`governance-flow`). It serves three constitutionally distinct functions.
+The Governor is a dedicated [Flow Operator](../02-flow/01-operator.md) that runs in its own Kubernetes namespace (`governance-flow`). It serves constitutionally distinct functions.
 
 ### State Root Certificate Authority
 
@@ -168,7 +168,7 @@ The Governance Flow is a Flow. It uses the same runtime, the same CRDs, the same
 
 ### Inputs
 
-Petitions arrive from three sources:
+Petitions arrive from multiple sources:
 
 | Source | Petition Type | Example |
 |--------|--------------|---------|
@@ -299,4 +299,4 @@ Friction accumulates exponentially. A law cited for context seeding generates ze
 
 The Friction Ledger is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
 
-Friction data feeds back into the governance process. Laws that generate disproportionate friction surface for review. Patterns of constitutional resistance point to laws that need amendment, consolidation, or repeal. The system shames its own constitution into improvement.
+Friction data feeds back into the governance process. Laws that generate disproportionate friction surface for review. Patterns of constitutional resistance point to laws that need amendment, consolidation, or repeal. The system surfaces the cost of its own governance, creating pressure toward improvement.
