@@ -59,7 +59,7 @@ A Flow is deployed as a single Helm release. One release creates one namespace, 
 
 ### Control Plane
 
-Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the terminal contract at the exit boundary. The Thrash Guard is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem that exceeds the configured threshold before it consumes unbounded resources.
+Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./00-overview.md) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the terminal contract at the exit boundary. The [Thrash Guard](./02-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold before it consumes unbounded resources.
 
 The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
 
@@ -167,11 +167,12 @@ State is split across storage layers, each chosen for its access pattern.
 | Layer | Technology | Data | Access Pattern |
 |-------|------------|------|----------------|
 | State | etcd (CRDs) | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
-| Governance Query | SQLite — Librarian | Embeddings, citation ledger, Friction Ledger | Analytical, vector similarity search |
+| Governance Query | SQLite — Librarian | Embeddings, citation ledger | Analytical, vector similarity search |
+| Telemetry | Prometheus — Flow Monitor | Friction Ledger, workitem lifecycle metrics, node health | Time-series queries, alerting |
 | Artefact Provenance | SQLite — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | PVC or cloud object storage — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-etcd provides the watch-driven consistency the Operator needs for state transitions. The Librarian's SQLite provides the query capabilities needed for embeddings, citation tracking, and friction aggregation. The Archivist's SQLite stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's blob store (PVC or pluggable cloud backend) stores raw content bytes where they are cheap and durable.
+etcd provides the watch-driven consistency the Operator needs for state transitions. The Librarian's SQLite provides the query capabilities needed for embeddings and citation tracking. The Flow Monitor aggregates friction reports from nodes into Prometheus metrics exposed at `/metrics`, and emits audit events to stdout as structured JSON for log aggregation — the Friction Ledger is a conceptual view over this time-series data, queryable through Prometheus and surfaced in Grafana dashboards. The Archivist's SQLite stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's blob store (PVC or pluggable cloud backend) stores raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 

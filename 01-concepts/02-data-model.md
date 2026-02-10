@@ -22,7 +22,7 @@ A Workitem's structure splits into `spec` and `status`.
 | `status.previousAssignee` | Operator | System-managed | The node that last processed this Workitem |
 | `status.artefacts[]` | [Sidecar](../03-node/01-sidecar.md) | Append-only | Artefact references (`id` + `kind`) |
 | `status.routingInstruction` | Sidecar | Overwrite | Set when the node returns a result |
-| `status.guestbook` | Operator | Increment-only | Per-node visit counters |
+| `status.thrashGuard` | Operator | Increment-only | Per-node visit counters |
 
 The `currentAssignee` field is a scalar, not a list. A Workitem is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Flow is a relay race: one baton, one runner.
 
@@ -85,7 +85,7 @@ State transitions have guard conditions:
 | Running | Pending | `route()` | Node returns routing instruction; target node exists; no thrash detected |
 | Running | Completed | `complete()` | Node returns `Complete()`; terminal contract satisfied |
 | Running | Failed | `timeout()` | `lastActivityAt` exceeds configured timeout |
-| Running | Failed | `thrash()` | Total guestbook visits exceed `maxVisits` |
+| Running | Failed | `thrash()` | Total Thrash Guard visits exceed `maxVisits` |
 | Running | Failed | `error()` | Node returns explicit failure, handler panic, or validation error |
 | Pending | Failed | `fail()` | No available nodes for extended period, or system error |
 
@@ -101,15 +101,15 @@ When a node finishes processing, it returns a routing instruction that tells the
 | `route_to` | Route directly to a specific node by name |
 | `complete` | Signal terminal completion — triggers terminal contract validation |
 
-### Guestbook
+### Thrash Guard
 
-The guestbook is a map of node names to visit counts. Each time a Workitem is assigned to a node, that node's counter increments. The guestbook is hidden from nodes — it is infrastructure, not semantic context.
+The Thrash Guard is a map of node names to visit counts on each Workitem. Each time a Workitem is assigned to a node, that node's counter increments. The Thrash Guard is hidden from nodes — it is infrastructure, not semantic context.
 
-Its purpose is thrash detection. When the sum of all guestbook entries exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_DETECTED`. This catches infrastructure-level loops — a Workitem bouncing endlessly between nodes regardless of the reason.
+When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_DETECTED`. This catches infrastructure-level loops — a Workitem bouncing endlessly between nodes regardless of the reason.
 
 | Detection | Signal | Source | Response |
 |-----------|--------|--------|----------|
-| Thrash | Total visits across all nodes | Guestbook | Fail workitem |
+| Thrash | Total visits across all nodes | Thrash Guard | Fail workitem |
 | Fatigue | History depth on a single feedback item | Feedback | Escalate to [Assay](./00-overview.md) |
 
 ### Terminal Contracts
@@ -261,6 +261,8 @@ Stamps are cryptographically bound to the artefact's content through the `hash` 
 | `STAMP:artefact/<kind>/<stamp-name>` | Applying a named stamp |
 | `READ:artefact/<kind>` | Fetching artefact content |
 | `WRITE:artefact/<kind>` | Storing artefact content |
+| `READ:flow` | Reading Flow configuration (terminal contracts, topology) |
+| `READ:topology` | Querying stamp-to-node mappings at runtime |
 
 ---
 
@@ -385,7 +387,7 @@ Feedback messages are capped at 1024 characters. For detailed analysis that exce
 
 ### Friction
 
-Nodes emit [friction](./00-overview.md#friction) through the [SDK](../03-node/07-sdk-telemetry.md) at any point during execution. What a node reports -- and whether it reports at all -- is a decision made by the node implementor. The feedback lifecycle described here is a natural source of friction signals, but the [Friction Ledger](./00-overview.md#friction) records only what nodes choose to emit.
+Nodes emit [friction](./00-overview.md#friction) through the [SDK](../03-node/07-sdk-telemetry.md) at any point during execution. What a node reports — and whether it reports at all — is a decision made by the node implementor. The feedback lifecycle described here is a natural source of friction signals, but the [Friction Ledger](./00-overview.md#friction) records only what nodes choose to emit.
 
 ---
 

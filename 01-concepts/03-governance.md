@@ -27,7 +27,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../03-node/02-sdk-core.md). Findings are ephemeral. They carry a default TTL of 30 days and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
 
-Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a ReviewHearing Workitem, routed to the [Assay](./00-overview.md) node.
+Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a ReviewHearing Workitem, routed to the [Assay](./00-overview.md) node.
 
 Assay evaluates the Finding's history and renders a verdict:
 
@@ -76,7 +76,7 @@ Promotion is also where governance can harden in *form*, not just authority. Ass
 
 ### Decay and Retirement
 
-Laws below Tier 3 decay if uncited. When a law's TTL expires, the Librarian triggers creation of a ReviewHearing Workitem rather than deleting the law silently. Assay evaluates the case and renders a tier-specific verdict:
+Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Librarian](../02-flow/04-system-services.md) triggers creation of a ReviewHearing Workitem rather than letting the law expire silently. Assay evaluates the case — using citation history from the [Citation Processor](../02-flow/04-system-services.md) as evidence — and renders a tier-specific verdict:
 
 **Tier 1 Finding — TTL expiry:**
 
