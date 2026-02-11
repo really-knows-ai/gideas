@@ -1,108 +1,185 @@
-# Plan: `02-flow/01-operator.md`
+# Flow Operator
 
-Status: planning only. Spec drafting has not started.
+The Flow Operator is the control-plane authority for a Flow. It reconciles configuration, drives Workitem assignment and routing, enforces terminal completion rules, and emits lifecycle audit signals. Concepts and data semantics are defined in [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md); this document defines operator behaviour.
 
-## Purpose
+Operator semantics in this document align with [Flow Runtime Overview](./00-overview.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
 
-Define the Flow Operator as the control-plane authority for reconciliation, assignment, routing, and terminal validation, including trust bootstrapping responsibilities in federated deployments.
+## Role and Boundaries
 
-## Audience
+The Operator owns control-plane state transitions and policy enforcement:
 
-- Flow operators and platform administrators
-- Runtime implementers maintaining controller behaviour
-- Flow architects who need predictable routing and completion semantics
+- Reconciles Flow and Node configuration into an executable runtime graph.
+- Assigns Workitems to nodes and advances lifecycle state.
+- Validates routing instructions before state transition.
+- Enforces terminal completion against bound contracts.
+- Applies timeout and thrash guards.
+- Emits operator-originated metrics, traces, and audit events.
 
-## Inputs
+The Operator does not execute node business logic and does not own artefact provenance storage. Provenance is owned by [Archivist](./04-system-services.md), and node-facing API enforcement is mediated by [Sidecar](../03-node/01-sidecar.md).
 
-Primary source material:
+## Reconciliation Surfaces
 
-- `legacy/flow_spec/01_operator_overview.md`
-- `legacy/flow_spec/01a_routing_guards.md`
-- `legacy/flow_spec/01b_operator_reconciliation.md`
-- `legacy/flow_spec/01b_timeout_and_thrash.md`
-- `legacy/flow_spec/01c_assignment_flow.md`
-- `legacy/flow_spec/05_data_model_processes.md`
-- `legacy/flow_spec/03_identity_and_federation.md`
-- `legacy/governance_spec/01_certificate_authority.md`
+The Operator reconciles three state surfaces continuously:
 
-Normative constraints:
+- **FoundryFlow**: topology, contracts, policy limits, and cross-flow policy.
+- **FoundryNode**: node capability envelope, routing outputs, timeout budget, and terminal binding.
+- **Workitem**: lifecycle progression through assignment, routing, and terminal transition.
 
-- `AGENTS.md` key decisions
-- `01-concepts/01-architecture.md`
-- `01-concepts/02-data-model.md`
-- `01-concepts/03-governance.md`
-- `02-flow/00-overview.md`
+```mermaid
+flowchart TD
+    FF["FoundryFlow<br/>topology contracts policy"] --> OP["Operator reconcile loop"]
+    FN["FoundryNode<br/>capabilities outputs terminal"] --> OP
+    WI["Workitems<br/>pending running terminal"] --> OP
 
-## Proposed Outline
+    OP --> RT["Runtime graph and guards"]
+    OP --> AS["Assignments and transitions"]
+    OP --> AU["Audit and telemetry"]
+```
 
-1. **Operator Role and Boundaries**
-   - control-plane scope, non-responsibilities, and ownership lines
-2. **Reconciliation Surfaces**
-   - `FoundryFlow` singleton config reconciliation
-   - `FoundryNode` reconciliation to workloads/services/policies
-3. **Assignment Lifecycle**
-   - Workitem queueing, node selection, assignment handoff, and completion reporting
-4. **Routing and Guard Evaluation**
-   - routing instruction handling (`route_to_output`, `route_to`, `complete`)
-   - guard ordering: target validity, timeout, thrash, terminal constraints
-5. **Terminal Contract Enforcement**
-   - terminal-node-only `complete()`
-   - bound-contract lookup and per-kind stamp requirement checks
-   - completion failure behaviour and error reporting
-6. **Failure Handling and Recovery Semantics**
-   - retry model, node unavailability, timeout transitions, thrash termination
-7. **Trust and Identity Responsibilities**
-   - local certificate authority role
-   - sibling annexation handshake and intermediate CA issuance path
-8. **Telemetry and Audit Emissions**
-   - operator-originated lifecycle events and required metrics/traces
-9. **Operator Invariants Checklist**
-   - explicit behaviour guarantees referenced by other `02-flow` docs
+Reconciliation is declarative and convergent. The Operator rejects invalid configuration rather than applying partial behaviour.
 
-## Decisions That Must Be Explicit in `01-operator`
+## Assignment Lifecycle
 
-- Terminal status is configuration-bound (`terminal` contract reference), not inferred from empty outputs.
-- Only terminal nodes may call `complete()`; non-terminal calls fail.
-- Terminal contract validation is performed by the Operator.
-- Contract checks are per artefact kind and apply to all artefacts of that kind.
-- Thrash Guard enforcement uses total visit count across all nodes.
-- Sort routing targets for missing stamps are discovered from Flow configuration, not hardcoded by node role.
+Assignment is deterministic and single-owner per Workitem.
 
-## Diagrams Planned for `01-operator`
+1. Select routable `Pending` Workitem.
+2. Resolve eligible target node from routing context and current configuration.
+3. Transition Workitem to `Running` with current assignee set.
+4. Wait for Sidecar-mediated assignment outcome.
+5. Evaluate outcome guards and apply next transition.
 
-1. Reconciliation loop diagram (`FoundryFlow`, `FoundryNode`, `Workitem` watchers)
-2. Assignment and routing sequence (Operator <-> Sidecar/Node)
-3. `complete()` validation sequence with terminal contract checks
+The Operator preserves scalar assignment semantics: one Workitem, one active assignee, one outcome per assignment cycle.
 
-Mermaid rule reminder: in `flowchart` and `sequenceDiagram`, use `<br/>` for line breaks.
+Node selection policy can vary by deployment (capacity, readiness, fairness strategy), but resulting transitions must preserve deterministic state invariants.
 
-## Cross-Links to Add on First Mention
+## Routing and Guard Evaluation
 
-- `../01-concepts/01-architecture.md`
-- `../01-concepts/02-data-model.md`
-- `../01-concepts/03-governance.md`
-- `./00-overview.md`
-- `./02-workitem.md`
-- `./04-system-services.md`
-- `./05-configuration.md`
-- `./06-cross-flow.md`
-- `../03-node/01-sidecar.md`
-- `../04-reference/crds.md`
-- `../04-reference/error-catalog.md`
+Every node outcome is interpreted as one of three instructions:
 
-## Explicit "Do Not Say" List for `01-operator`
+- `route_to_output`
+- `route_to`
+- `complete`
 
-- Do not define terminal nodes by `outputs: []` inference.
-- Do not state or imply Sidecar performs terminal contract validation.
-- Do not hardcode missing-stamp routing to fixed node names.
-- Do not describe feedback, passports, or version history as Workitem-owned data.
-- Do not use v1/v2 split framing.
+Guard evaluation order is fixed:
 
-## Acceptance Criteria for `01-operator` Completion
+1. Instruction shape validity.
+2. Routing target or terminal eligibility validity.
+3. Timeout and thrash guard compliance.
+4. Lifecycle transition application.
 
-- Fully aligned with `PLAN.md` guardrails and AGENTS key decisions.
-- No contradictions with any `01-concepts` document or `02-flow/00-overview.md`.
-- Routing guard order and failure transitions are deterministic and implementable.
-- Reconciliation ownership is explicit and non-overlapping.
-- Terminal contract validation behaviour is unambiguous, including error paths.
-- Trust/annexation responsibilities are stated at operator level without leaking into unrelated docs.
+Routing-specific rules:
+
+- `route_to_output` resolves output name on the current node configuration.
+- `route_to` resolves direct node identity in Flow topology.
+- Unresolvable targets are rejected with structured errors.
+
+Completion-specific rules:
+
+- `complete` is accepted only from a terminal node bound to a named terminal contract.
+- Non-terminal completion attempts are rejected.
+
+Sort behaviour for missing stamps is configuration-driven. The Operator does not hardcode stamp-provider node names; it evaluates configured topology and capability grants.
+
+```mermaid
+sequenceDiagram
+    participant OP as Operator
+    participant WI as Workitem
+    participant SC as Sidecar
+    participant ND as Node
+
+    OP->>WI: assign to node
+    OP->>SC: lease assignment context
+    SC->>ND: invoke assignment handler
+    ND-->>SC: routing instruction
+    SC-->>OP: instruction + allowed writes
+    OP->>OP: evaluate guards in order
+    OP->>WI: apply next transition
+```
+
+## Terminal Contract Enforcement
+
+Terminal completion is Operator-enforced and configuration-bound.
+
+- Terminal status is explicit by node contract binding in configuration.
+- Terminal status is not inferred from empty outputs.
+- Contract selection is fixed by binding; node does not choose at runtime.
+- Operator validates contract requirements against current artefact state.
+
+Validation semantics:
+
+- Requirements are per artefact kind.
+- Stamp requirements are per kind as required stamp-name lists.
+- Empty list means presence-only for that kind.
+- Empty contract means no artefact requirements.
+- If multiple artefacts of a required kind exist, all must satisfy that kind's requirements.
+
+On validation failure, completion is rejected and the Workitem remains non-terminal.
+
+```mermaid
+sequenceDiagram
+    participant ND as Node
+    participant SC as Sidecar
+    participant OP as Operator
+    participant AR as Archivist
+
+    ND->>SC: complete()
+    SC-->>OP: completion instruction
+    OP->>OP: verify terminal binding
+    OP->>AR: query artefact state for bound contract
+    AR-->>OP: kinds and stamps
+    OP->>OP: evaluate per-kind rules
+    OP-->>SC: accept or reject completion
+```
+
+When completion also triggers export, export eligibility is filtered by terminal contract kind entries. Empty contract completion exports metadata only.
+
+## Failure Handling and Recovery
+
+Operator failure behaviour is deterministic and explicit.
+
+- **Timeout**: assignment exceeds node timeout budget -> fail assignment path.
+- **Thrash**: aggregate visit count exceeds configured maximum -> transition Workitem to `Failed`.
+- **Invalid route**: unresolvable or invalid instruction -> reject transition and apply failure policy.
+- **Node unavailability**: no eligible node or repeated assignment failure -> retry according to policy, then fail when budget is exhausted.
+
+Thrash and governance deadlock are separate mechanisms. Thrash is infrastructure loop failure; governance deadlock routes to [Assay](./03-nodes-external.md) through Sort logic.
+
+Recovery policy can tune retry budgets and backoff strategy, but it cannot violate lifecycle invariants or terminal enforcement rules.
+
+## Trust and Identity Responsibilities
+
+The Operator is the trust anchor manager for its Flow execution boundary.
+
+- In standalone topology, Operator manages local trust-chain issuance for runtime participants.
+- Under a Governance Flow, Operator participates in annexation and receives intermediate authority anchored to the shared State Root.
+- Operator rotates and applies runtime trust material according to policy windows.
+
+Trust lifecycle details, treaty boundaries, and cross-flow authority semantics are defined in [Cross-Flow Collaboration](./06-cross-flow.md).
+
+## Telemetry and Audit Emissions
+
+Operator emits mandatory control-plane observability signals:
+
+- Assignment lifecycle metrics (queue depth, assignment latency, completion latency).
+- Routing and guard outcome counters (valid route, invalid route, timeout, thrash, rejected completion).
+- Traces across assignment and transition stages.
+- Audit events for state transitions, guard rejections, and completion decisions.
+
+Signal schema and aggregation surfaces are defined by [System Services](./04-system-services.md) and runtime operations in [Operations](./07-operations.md).
+
+## Operator Invariants
+
+All Flow deployments preserve these Operator invariants:
+
+1. Operator is the authoritative engine for Workitem lifecycle transitions.
+2. Configuration reconciliation is convergent and rejects invalid partial states.
+3. Assignment remains single-assignee per Workitem.
+4. Routing transition occurs only after deterministic guard evaluation.
+5. Missing-stamp routing remains configuration-discovered, not hardcoded by node name.
+6. Terminal completion is terminal-node-only and bound-contract validated by Operator.
+7. Contract checks are per artefact kind and apply to all artefacts of required kinds.
+8. Thrash enforcement uses aggregate visit count across all node assignments.
+9. Trust issuance and annexation participation remain Operator responsibilities at control-plane boundary.
+10. Operator-originated audit and telemetry emissions are mandatory runtime outputs.
+
+Field-level definitions are in [CRD Reference](../04-reference/crds.md). Runtime error mappings are in [Error Catalog](../04-reference/error-catalog.md).

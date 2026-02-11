@@ -1,133 +1,245 @@
-# Plan: `02-flow/04-system-services.md`
+# System Services
 
-Status: planning only. Spec drafting has not started.
+System services provide the runtime substrate for law lifecycle, artefact lifecycle, governance signals, and operational resilience. This document defines service responsibilities and inter-service contracts for the Flow layer. Field-level schemas are specified in [CRD Reference](../04-reference/crds.md), and API-level wire contracts are specified in [gRPC API](../04-reference/grpc-api.md).
 
-## Purpose
+This service model aligns with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), [Governance](../01-concepts/03-governance.md), [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
 
-Define the runtime system services that power Flow behaviour, with clear ownership boundaries, data contracts, and governance lifecycle responsibilities.
+## Service Landscape and Boundaries
 
-## Audience
+Each service owns one primary concern:
 
-- Platform operators and administrators
-- Runtime/service implementers
-- Flow architects who need predictable platform behaviour
+- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and TTL-expiry hearing triggers.
+- **Citation Processor**: citation ledger, citation analytics, and citation-threshold hearing triggers.
+- **Archivist**: artefact lifecycle and provenance beyond Workitem references.
+- **Flow Monitor**: telemetry aggregation, audit stream integration, and friction signal surfacing.
+- **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
 
-## Inputs
+No service duplicates another service's source of truth.
 
-Primary source material:
+```mermaid
+flowchart TD
+    OP["Operator"] --> LB["Librarian"]
+    OP --> CP["Citation Processor"]
+    OP --> AR["Archivist"]
 
-- `legacy/flow_spec/02_system_services_overview.md`
-- `legacy/flow_spec/02a_librarian.md`
-- `legacy/flow_spec/02b_law_search.md`
-- `legacy/flow_spec/02c_archivist.md`
-- `legacy/flow_spec/02e_backup_service.md`
-- `legacy/flow_spec/07_living_law_mechanisms.md`
-- `legacy/flow_spec/04_flow_monitor.md`
-- `legacy/Tier5.md`
+    SC["Sidecar"] --> LB
+    SC --> CP
+    SC --> AR
 
-Normative constraints:
+    LB --> FM["Flow Monitor"]
+    CP --> FM
+    AR --> FM
+    OP --> FM
 
-- `AGENTS.md` key decisions
-- `01-concepts/01-architecture.md`
-- `01-concepts/02-data-model.md`
-- `01-concepts/03-governance.md`
-- `02-flow/00-overview.md`
-- `02-flow/01-operator.md`
-- `02-flow/02-workitem.md`
-- `02-flow/03-nodes-external.md`
+    LB <-->|"law sync and appeals"| XFL["Cross-flow Librarian"]
+```
 
-## Proposed Outline
+## Librarian
 
-1. **Service Landscape and Planes**
-   - service list, runtime role, and non-overlapping responsibility boundaries
-2. **Librarian (Law Lifecycle Service)**
-   - law storage, representation handling, retrieval responsibilities
-   - integration checks and escalation hooks for higher-tier law changes
-3. **Law Search Surface**
-   - query responsibilities, consistency expectations, and scaling model
-4. **Archivist (Artefact Lifecycle Service)**
-   - SQLite provenance model (versions, passports, feedback)
-   - blob-store content model keyed by content hash
-   - read/write/query boundaries via Sidecar and SDK
-5. **Flow Monitor and Friction Ledger Surface**
-   - telemetry ingestion, audit stream, friction attribution and aggregation
-6. **Citation and Hearing Lifecycle Integration**
-   - citation accumulation and citation-threshold hearing triggers (Citation Processor)
-   - TTL-expiry and near-expiry hearing triggers (Librarian)
-   - verdict application contracts and Assay evidence query path to Citation Processor
-7. **Backup and Recovery Service Boundaries**
-   - what is backed up by platform services vs infrastructure operators
-8. **Inter-Service Contracts**
-   - call paths and data dependencies among Operator, Sidecar, Librarian, Archivist, and monitor
-9. **Failure and Degradation Modes**
-   - service unavailability behaviour and required fail-safe semantics
-10. **System Service Invariants Checklist**
-   - guarantees consumed by configuration, operations, and reference docs
+The Librarian is the law lifecycle service for a Flow.
 
-## Decisions That Must Be Explicit in `04-system-services`
+### Law Model
 
-- Archivist is authoritative for artefact provenance beyond raw bytes.
-- Workitem CRD stores artefact references only (`id`, `kind`); feedback and stamps are Archivist-owned.
-- Archivist storage split is normative:
-  - SQLite for version history, feedback, passport stamps
-  - blob store for content bytes by content hash
-- Laws are single objects with one goal and multiple representations; whole-law versioning applies.
-- Law representations are equivalent expressions of one goal, not linked sibling law objects.
-- Hearing verdict schemas are tier-specific and must match AGENTS decisions.
-- Hearing trigger ownership is split by condition:
-  - citation threshold crossings trigger hearings from the Citation Processor
-  - Tier 1 and Tier 2 TTL-expiry paths trigger hearings from the Librarian
-- Hearings are a cross-component lifecycle (Librarian, Citation Processor, Assay, Operator), not a standalone hearing service.
-- In both hearing paths, Assay queries the Citation Processor for supporting evidence.
-- Friction is a first-class operational signal with source attribution.
-- Tiered law integration protocol and escalation paths (including Tier 3 grace period behaviour) are preserved.
+- A law is one object with one textual goal and one-or-more representations.
+- Representations express the same goal in different forms (prose, formal logic, executable forms, and others).
+- Any mutation to goal, representations, or lifecycle metadata creates a new whole-law version identified by content hash.
+- Representations are not independently versioned laws and are not linked sibling-law objects.
 
-## Diagrams Planned for `04-system-services`
+### Retrieval and Serving
 
-1. Service interaction map across control/governance/data planes
-2. Archivist data model split (SQLite provenance vs blob bytes)
-3. Law lifecycle path (citation/TTL trigger -> hearing -> verdict -> law lifecycle update)
+- Nodes and system actors query laws by scope and applicability.
+- Retrieval is representation-aware, allowing consumers to request forms they can interpret.
+- Tier is part of legal authority, but retrieval remains one law body with one identity model.
 
-Mermaid rule reminder: in `flowchart` and `sequenceDiagram`, use `<br/>` for line breaks.
+### Integration and Conflict Checks
 
-## Cross-Links to Add on First Mention
+When higher-tier laws arrive from cross-flow replication, the Librarian performs a two-stage conflict protocol:
 
-- `../01-concepts/01-architecture.md`
-- `../01-concepts/02-data-model.md`
-- `../01-concepts/03-governance.md`
-- `./00-overview.md`
-- `./01-operator.md`
-- `./02-workitem.md`
-- `./03-nodes-external.md`
-- `./05-configuration.md`
-- `./06-cross-flow.md`
-- `./07-operations.md`
-- `../03-node/01-sidecar.md`
-- `../03-node/02-sdk-core.md`
-- `../03-node/03-sdk-artefacts.md`
-- `../03-node/04-sdk-legal.md`
-- `../03-node/05-sdk-feedback.md`
-- `../03-node/07-sdk-telemetry.md`
-- `../04-reference/crds.md`
-- `../04-reference/grpc-api.md`
-- `../04-reference/error-catalog.md`
+1. Semantic search for candidate contradictions.
+2. Contradiction evaluation of candidates.
 
-## Explicit "Do Not Say" List for `04-system-services`
+Integration outcomes follow tiered supremacy semantics:
 
-- Do not treat laws as grouped linked CRDs.
-- Do not store passports as blob-sidecar JSON files.
-- Do not place feedback on Workitem status.
-- Do not present Forge as a law-writing actor.
-- Do not frame friction as optional or secondary telemetry.
-- Do not imply a standalone hearing service owns both trigger paths and adjudication.
-- Do not use v1/v2 split framing.
+- Conflicting local Tier 1-2 laws retire immediately.
+- Conflicting local Tier 3 laws enter HITL-controlled grace period flow when requested.
+- On grace expiry, incoming law integrates automatically and conflicting Tier 3 law retires.
 
-## Acceptance Criteria for `04-system-services` Completion
+### TTL-Expiry Hearing Triggers
 
-- Fully aligned with `PLAN.md` guardrails and AGENTS key decisions.
-- No contradictions with `01-concepts/02-data-model.md` or `01-concepts/03-governance.md`.
-- Service ownership boundaries are explicit and non-overlapping.
-- Data contracts between services are implementation-feasible and testable.
-- Law lifecycle and hearing semantics are unambiguous.
-- Trigger ownership is explicit and aligned with concepts (`Citation Processor` for citation threshold, `Librarian` for TTL-expiry paths).
-- Archivist model is consistent with all Workitem and SDK-facing behaviour.
+Librarian owns hearing trigger emission for law TTL-expiry paths:
+
+- Tier 1 nearing/at expiry -> create ReviewHearing Workitem for Assay.
+- Tier 2 nearing/at expiry -> create ReviewHearing Workitem for Assay.
+
+Librarian does not adjudicate hearings.
+
+## Citation Processor
+
+The Citation Processor owns citation evidence and threshold-triggered governance review.
+
+### Citation Ledger
+
+- Records citations by law, node, work context, and outcome metadata.
+- Supports aggregation for promotion, decay analysis, and governance cost analysis.
+- Preserves evidence required for judicial review and audit.
+
+### Citation-Threshold Hearing Triggers
+
+Citation Processor owns trigger emission when Tier 1 findings cross configured citation thresholds:
+
+- Threshold crossing -> create ReviewHearing Workitem routed to Assay.
+
+### Assay Evidence Path
+
+During hearings and deadlock adjudication, Assay queries Citation Processor for supporting citation evidence. Evidence retrieval is mandatory for hearing-quality deliberation and audit traceability.
+
+## Archivist
+
+The Archivist is the artefact lifecycle service and authoritative provenance store.
+
+### Storage Split
+
+Archivist storage is normatively split into two layers:
+
+- **SQLite**: artefact version history, passport stamps, and feedback.
+- **Blob store**: raw artefact bytes keyed by content hash.
+
+```mermaid
+flowchart LR
+    WI["Workitem CRD<br/>artefact id + kind"] --> SQ["Archivist SQLite<br/>versions stamps feedback"]
+    SQ --> BL["Blob store<br/>content by hash"]
+    SC["Sidecar + SDK"] --> SQ
+    SC --> BL
+```
+
+### Workitem Boundary
+
+- Workitem CRDs carry artefact references only: `id` and `kind`.
+- Feedback does not live on Workitem status.
+- Passports and stamps do not live on Workitem status.
+- Artefact version history does not live on Workitem status.
+
+### Access Contract
+
+- Nodes never call Archivist directly.
+- SDK calls are mediated by the [Sidecar](../03-node/01-sidecar.md).
+- Query and write operations enforce capability boundaries configured in FoundryNode.
+
+## Flow Monitor and Friction Surface
+
+Flow Monitor aggregates runtime observability signals:
+
+- Metrics from Operator, Sidecars, nodes, and services.
+- Traces for assignment, routing, service calls, and completion paths.
+- Audit event stream for governance-relevant state transitions.
+
+Friction is a first-class signal:
+
+- Friction events are source-tagged (law, node, topology path, and workflow context).
+- Aggregation supports operational and governance analysis.
+- Friction is not optional instrumentation; it is a mandatory runtime output surface.
+
+## Hearing Lifecycle as Cross-Component Protocol
+
+Hearings are implemented as a protocol across services and runtime actors, not as a standalone hearing service.
+
+Trigger ownership is split by condition:
+
+- Citation threshold trigger -> Citation Processor.
+- TTL-expiry trigger -> Librarian.
+
+Execution and adjudication path:
+
+1. Triggering service creates a ReviewHearing Workitem.
+2. Operator routes hearing Workitem to Assay.
+3. Assay retrieves citation evidence from Citation Processor and legal context from Librarian.
+4. Assay issues tier-appropriate verdict.
+5. Operator and Librarian apply resulting law lifecycle actions.
+
+```mermaid
+sequenceDiagram
+    participant TR as Trigger Service
+    participant OP as Operator
+    participant AS as Assay
+    participant CP as Citation Processor
+    participant LB as Librarian
+
+    TR->>OP: create ReviewHearing Workitem
+    OP->>AS: assign hearing
+    AS->>CP: query citation evidence
+    CP-->>AS: citation record set
+    AS->>LB: query law context
+    LB-->>AS: law versions and tiers
+    AS-->>OP: verdict
+    OP->>LB: apply lifecycle action
+```
+
+Verdict schema is tier-specific:
+
+- **Citation-threshold hearing (Tier 1):** `Promote` or `Retain`.
+- **Tier 1 TTL-expiry hearing:** `Retire` or `Promote`.
+- **Tier 2 TTL-expiry hearing:** `Demote` or `Promote` (petition for Tier 3 ratification).
+
+## Backup and Recovery Boundaries
+
+Service backup scope is explicit:
+
+- Librarian embedded stores and indexes: service-owned backup process.
+- Citation Processor ledger store: service-owned backup process.
+- Archivist SQLite provenance store: service-owned backup process.
+- Archivist blob store: service-owned backup and restore process consistent with storage backend.
+
+Infrastructure-owned scope remains external to services:
+
+- Kubernetes etcd backup/restore (including Workitem and configuration CRDs) is cluster-admin responsibility.
+
+Recovery ordering must preserve referential integrity:
+
+1. Restore control-plane CRDs (infrastructure domain).
+2. Restore Librarian and Citation Processor stores.
+3. Restore Archivist SQLite provenance.
+4. Restore Archivist blob content.
+5. Reconcile and verify provenance references and governance continuity.
+
+Detailed runbooks are specified in [Operations](./07-operations.md).
+
+## Inter-Service Contracts
+
+Core call paths are stable:
+
+- Operator <-> Librarian: law lifecycle events, hearing workitem creation coordination.
+- Operator <-> Archivist: completion validation queries and artefact presence checks.
+- Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
+- Sidecar <-> Librarian: law retrieval and citation submission paths.
+- Assay <-> Citation Processor: hearing evidence queries.
+- Services -> Flow Monitor: metrics, traces, and audit events.
+
+Contract failures must return structured errors aligned with [Error Catalog](../04-reference/error-catalog.md).
+
+## Failure and Degradation Semantics
+
+Service outages degrade behaviour predictably:
+
+- Archivist unavailable: artefact mutation and provenance queries fail closed; Workitems cannot progress through affected steps.
+- Librarian unavailable: law retrieval and law lifecycle actions fail closed.
+- Citation Processor unavailable: hearing evidence retrieval and threshold-trigger automation are blocked; explicit operational intervention is required.
+- Flow Monitor unavailable: processing continues, but observability coverage degrades and alerting is raised.
+
+Fail-open behaviour is prohibited for governance integrity paths.
+
+## Service Invariants
+
+All deployments preserve these service invariants:
+
+1. Archivist is the source of truth for artefact provenance beyond raw bytes.
+2. Workitem CRD stores artefact references only (`id`, `kind`).
+3. Laws are single objects with one goal and multiple representations under whole-law versioning.
+4. Citation threshold hearing triggers are emitted by Citation Processor.
+5. TTL-expiry hearing triggers are emitted by Librarian.
+6. Assay evidence retrieval includes Citation Processor data.
+7. Hearing adjudication remains an Assay responsibility, not a service-local shortcut.
+8. Friction is first-class and queryable by source attribution.
+9. Backup ownership boundaries are explicit between services and cluster administration.
+10. Cross-flow law integration preserves tiered supremacy, grace-period semantics, and audit continuity.
+
+Node-facing implications of these services are detailed in [SDK Core](../03-node/02-sdk-core.md), [SDK Artefacts](../03-node/03-sdk-artefacts.md), [SDK Legal](../03-node/04-sdk-legal.md), [SDK Feedback](../03-node/05-sdk-feedback.md), and [SDK Telemetry](../03-node/07-sdk-telemetry.md).

@@ -84,7 +84,7 @@ Produce a clean, coherent, GitHub-style specification that:
 | `01-concepts/01-architecture.md` | Complete |
 | `01-concepts/02-data-model.md` | Complete |
 | `01-concepts/03-governance.md` | Complete |
-| `02-flow/*` | Planning scaffolds complete (plan-only), drafting not started |
+| `02-flow/*` | Drafted (first pass complete; consistency pass complete) |
 | Everything else | Not started |
 
 `README.md` should be written last, once the spec is complete.

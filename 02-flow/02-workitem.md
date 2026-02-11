@@ -1,119 +1,183 @@
-# Plan: `02-flow/02-workitem.md`
+# Workitems
 
-Status: planning only. Spec drafting has not started.
+Workitems are the Flow control-plane contract for work execution. They carry assignment state, routing outcomes, and artefact references while work moves through the runtime. Conceptual definitions are in [Conceptual Overview](../01-concepts/00-overview.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md); this document specifies operational behaviour in the Flow layer.
 
-## Purpose
+Workitem semantics in this document align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md). Node-facing SDK usage is detailed in [SDK Core](../03-node/02-sdk-core.md) and [SDK Workitems](../03-node/06-sdk-workitems.md).
 
-Define the Workitem runtime contract for the Flow layer: ownership, lifecycle, routing instructions, and terminal interaction boundaries between the Operator, Sidecar, Nodes, and Archivist.
+## Runtime Role
 
-## Audience
+A Workitem is the unit of orchestration state, not the unit of provenance storage.
 
-- Flow operators and platform administrators
-- Runtime implementers maintaining control-plane behaviour
-- Node/Sidecar implementers who rely on Workitem semantics
+- It anchors assignment lifecycle in the control plane.
+- It carries node routing instructions between assignments.
+- It references governed artefacts by stable in-Workitem identity.
+- It does not store artefact version history, stamps, or feedback bodies.
 
-## Inputs
+The Workitem state machine is single-assignee: one Workitem is assigned to exactly one node at a time.
 
-Primary source material:
+## Ownership and Mutability Boundaries
 
-- `legacy/flow_spec/06_data_model_work.md`
-- `legacy/flow_spec/06a_data_model_feedback.md`
-- `legacy/flow_spec/05_data_model_processes.md`
-- `legacy/flow_spec/01c_assignment_flow.md`
-- `legacy/flow_spec/01a_routing_guards.md`
-- `legacy/flow_spec/02c_archivist.md`
+Workitem mutability is partitioned by actor. Ownership is strict and non-overlapping.
 
-Normative constraints:
+| Surface | Owner | Mutability | Purpose |
+|---|---|---|---|
+| `spec` | Operator at creation | Immutable | Declares work intent and input contract |
+| lifecycle state | Operator | Managed transitions | `Pending`, `Running`, terminal states |
+| assignment fields | Operator | Managed transitions | Current and previous assignee tracking |
+| routing instruction | Sidecar on node return | Overwrite per assignment | Next action requested by node |
+| artefact references | Sidecar on node write | Append/update by `id` | `id` and `kind` references only |
+| thrash counters | Operator | Increment-only | Loop budget enforcement |
 
-- `AGENTS.md` key decisions
-- `01-concepts/00-overview.md`
-- `01-concepts/02-data-model.md`
-- `01-concepts/03-governance.md`
-- `02-flow/00-overview.md`
-- `02-flow/01-operator.md`
+Nodes do not mutate Workitem state directly. All node-originated state changes are mediated by the [Sidecar](../03-node/01-sidecar.md) and validated by runtime policy.
 
-## Proposed Outline
+## Lifecycle States and Transitions
 
-1. **Workitem Role in Runtime State**
-   - Workitem as control-plane state anchor
-   - what the Workitem is and is not responsible for
-2. **Ownership and Mutability Boundaries**
-   - immutable `spec`
-   - Operator-owned assignment/lifecycle fields
-   - Sidecar-owned routing and artefact reference writes
-3. **Lifecycle States and Transitions**
-   - `Pending`, `Running`, `Completed`, `Failed`
-   - transition guards and failure paths
-4. **Routing Instruction Contract**
-   - `route_to_output`, `route_to`, `complete`
-   - validation requirements and rejection behaviour
-5. **Thrash Guard vs Feedback Deadlock**
-   - infrastructure loop detection (visit budget)
-   - governance deadlock escalation (feedback depth via Archivist state)
-6. **Artefact Reference Model**
-   - Workitem stores artefact references only (`id`, `kind`)
-   - version/stamp/feedback provenance lives in Archivist
-7. **Terminal Contract Interaction**
-   - `complete()` only from terminal nodes
-   - per-kind requirement checks and all-of-kind semantics
-   - completion behaviour when requirements are unsatisfied
-8. **Context and Reserved Keys**
-   - underscore-prefix system key reservation
-   - pointer to Node SDK doc for reserved key enumeration
-9. **Retention and Finalization Semantics**
-   - terminal state persistence window
-   - handoff to operational cleanup policy
-10. **Workitem Invariants Checklist**
-   - guarantees required by Operator, Sidecar, and SDK docs
+Workitem lifecycle uses deterministic control-plane states:
 
-## Decisions That Must Be Explicit in `02-workitem`
+- `Pending`: waiting for assignment.
+- `Running`: currently assigned to a node.
+- `Completed`: terminal success after contract validation.
+- `Failed`: terminal failure due to runtime guard or processing error.
 
-- Feedback does not live on Workitem status; feedback is persisted in Archivist.
-- Passports/stamps and version history do not live on Workitem status; they are Archivist-owned.
-- `currentAssignee` is scalar: one Workitem, one assigned node at a time.
-- Thrash Guard enforcement uses total visits across all nodes, with per-node counters for diagnostics.
-- Terminal requirements are per artefact kind; if multiple artefacts of a required kind exist, all must satisfy that kind's requirements.
-- A contract with no artefact entries imposes no artefact requirements.
-- Export filtering is based on terminal contract kind entries (empty contract exports metadata only).
-- Workitem `context` keys starting with `_` are reserved for system use.
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Running : assign
+    Running --> Pending : route
+    Running --> Completed : complete + contract valid
+    Running --> Failed : timeout / thrash / invalid route / node failure
+    Pending --> Failed : unrecoverable scheduling failure
+    Completed --> [*]
+    Failed --> [*]
+```
 
-## Diagrams Planned for `02-workitem`
+Transition guards are fixed:
 
-1. Workitem lifecycle state diagram with guard-triggered transitions
-2. Data ownership diagram (Workitem vs Archivist)
-3. Completion validation sequence (`complete()` through Operator contract checks)
+- `Pending -> Running` requires a valid target node and assignment lease.
+- `Running -> Pending` requires a valid non-terminal routing instruction.
+- `Running -> Completed` requires terminal-node `complete()` and successful contract validation.
+- Any guard violation or runtime failure transitions to `Failed` when recovery budget is exhausted.
 
-Mermaid rule reminder: in `flowchart` and `sequenceDiagram`, use `<br/>` for line breaks.
+## Routing Instruction Contract
 
-## Cross-Links to Add on First Mention
+Each assignment ends with exactly one routing instruction.
 
-- `../01-concepts/00-overview.md`
-- `../01-concepts/02-data-model.md`
-- `../01-concepts/03-governance.md`
-- `./00-overview.md`
-- `./01-operator.md`
-- `./04-system-services.md`
-- `./05-configuration.md`
-- `./06-cross-flow.md`
-- `../03-node/01-sidecar.md`
-- `../03-node/02-sdk-core.md`
-- `../03-node/06-sdk-workitems.md`
-- `../04-reference/crds.md`
-- `../04-reference/error-catalog.md`
+- `route_to_output`: route by named output configured on the current node.
+- `route_to`: route directly to a specific node.
+- `complete`: request terminal completion.
 
-## Explicit "Do Not Say" List for `02-workitem`
+Instruction validity checks:
 
-- Do not place feedback, stamps, or version history on Workitem status.
-- Do not model artefact identity as `kind + name` instead of stable per-Workitem `id`.
-- Do not describe stamp requirements as role-based `requiredRoles` semantics.
-- Do not imply concurrent multi-node assignment for a single Workitem.
-- Do not use v1/v2 split framing.
+- Output and direct targets must resolve in current configuration.
+- `complete` is valid only from terminal nodes.
+- Invalid instructions are rejected with structured errors and do not advance completion.
 
-## Acceptance Criteria for `02-workitem` Completion
+Routing semantics are runtime-level control behaviour; schema-level instruction fields are defined in [CRD Reference](../04-reference/crds.md). Error mappings are defined in [Error Catalog](../04-reference/error-catalog.md).
 
-- Fully aligned with `PLAN.md` guardrails and AGENTS key decisions.
-- No contradictions with `01-concepts/02-data-model.md` or `02-flow/01-operator.md`.
-- Field ownership and mutability are explicit and non-overlapping.
-- Lifecycle transitions, guard conditions, and failure reasons are deterministic.
-- Workitem vs Archivist responsibility split is unambiguous.
-- Terminal interaction and export implications are clearly specified.
+## Thrash Guard and Feedback Deadlock
+
+Thrash and deadlock are distinct mechanisms with different sources and outcomes.
+
+- **Thrash Guard** is infrastructure loop control on Workitem assignment history.
+  - Enforcement key: total visits across all nodes.
+  - Diagnostic signal: per-node counters.
+  - Outcome: Workitem fails when aggregate visit budget is exceeded.
+
+- **Feedback deadlock** is governance dispute detection on artefact feedback history.
+  - Source of truth: Archivist feedback records via SDK queries.
+  - Enforcement actor: Sort routing logic under configured deadlock threshold policy.
+  - Outcome: Workitem routes to Assay for adjudication.
+
+Thrash failure and governance deadlock escalation are never treated as equivalent transitions.
+
+## Artefact Reference Model
+
+Workitems carry artefact references only.
+
+- Each reference contains `id` and `kind`.
+- `id` is unique within the Workitem.
+- Multiple artefacts of the same `kind` are supported through distinct `id` values.
+
+Provenance ownership is external to the Workitem:
+
+- version history -> Archivist
+- stamps/passports -> Archivist
+- feedback -> Archivist
+
+```mermaid
+flowchart LR
+    WI["Workitem CRD<br/>assignment + artefact refs"] --> ARDB["Archivist SQLite<br/>versions stamps feedback"]
+    ARDB --> BL["Blob store<br/>content bytes by hash"]
+```
+
+This split keeps Workitem objects bounded and watch-efficient while preserving complete governance history.
+
+## Terminal Completion Interaction
+
+Terminal completion is a Workitem state transition controlled by configuration and Operator validation.
+
+- Only terminal nodes may emit `complete()`.
+- Terminal binding is fixed in node configuration.
+- The node does not choose a contract at runtime.
+- Operator validates the bound terminal contract against current artefact state.
+
+Contract evaluation rules:
+
+- Requirements are keyed by artefact kind.
+- Required stamp lists are name-based governance checkpoints.
+- Empty stamp list means presence-only for that kind.
+- Empty contract means no artefact requirements.
+- If multiple artefacts of a required kind exist, all must satisfy the requirement.
+
+If validation fails, completion is rejected and the Workitem remains non-terminal.
+
+```mermaid
+sequenceDiagram
+    participant ND as Node
+    participant SC as Sidecar
+    participant OP as Operator
+    participant AR as Archivist
+
+    ND->>SC: complete()
+    SC-->>OP: completion instruction
+    OP->>OP: confirm node is terminal
+    OP->>AR: query artefact state for bound contract
+    AR-->>OP: kinds stamps feedback state
+    OP->>OP: evaluate per-kind requirements
+    OP-->>SC: accept or reject completion
+```
+
+When completion triggers cross-flow export, only artefact kinds listed in the selected terminal contract are export-eligible. Empty contract completion exports metadata only.
+
+## Context and Reserved Keys
+
+Workitem context supports application-specific key/value metadata and system-internal metadata.
+
+- Keys prefixed with `_` are reserved for system use.
+- User-defined keys must not use `_` prefix.
+- Reserved key names and lifecycle semantics are specified in [SDK Workitems](../03-node/06-sdk-workitems.md).
+
+## Retention and Finalisation
+
+`Completed` and `Failed` are terminal states. Terminal Workitems are retained according to configured retention policy and then cleaned up by operational policy.
+
+- Retention duration is configuration-driven.
+- Cleanup sequencing must preserve required audit and provenance visibility.
+- Operational procedures are defined in [Operations](./07-operations.md).
+
+## Workitem Invariants
+
+All Flow runtimes preserve these Workitem invariants:
+
+1. `spec` is immutable after creation.
+2. A Workitem has one current assignee at a time.
+3. Node mutations are Sidecar-mediated; nodes do not write Workitem state directly.
+4. Routing advances only on valid, resolvable instructions.
+5. Thrash enforcement uses aggregate visit count across all nodes.
+6. Feedback deadlock decisions are based on Archivist-backed feedback state.
+7. Artefact references live on Workitem; provenance does not.
+8. Terminal completion is terminal-node-only and Operator-validated.
+9. Terminal contract checks are per kind and apply to all artefacts of required kinds.
+10. Cross-flow export scope follows terminal contract kind entries.
+
+These invariants are consumed by [Flow Operator](./01-operator.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), and [Configuration Semantics](./05-configuration.md).
