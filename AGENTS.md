@@ -261,6 +261,15 @@ When higher-tier laws are pushed to a Sibling Flow (via Librarian-to-Librarian r
 
 Retired laws are deleted as CRDs. The full history is preserved in the audit log.
 
+### Cross-flow stamp authority is topology-dependent
+
+Cross-flow stamps are always cryptographically verifiable when the certificate chain validates. Local governance authority depends on topology:
+
+- **Sibling Flows (shared State Root):** Imported stamps are immediately authoritative after chain verification and can satisfy local stamp requirements when names match.
+- **Treaty/non-sibling crossings:** Imported stamps are preserved for provenance and audit but do not satisfy local stamp requirements. Local authority begins with naturalisation and any local checks the receiving Flow requires.
+
+Sibling Flows do not require Treaties for cross-flow exchange. Treaties are for Flows that do not share a Governance Flow trust root.
+
 ### Escalation paths and Assay's authority ceiling
 
 Runtime conflicts (discovered during Workitem processing, not at integration time) always go to Assay for judicial review. Supremacy heavily informs Assay's decision but does not bypass the judicial process — Assay deliberates on every conflict. Resolution depends on the tiers involved:

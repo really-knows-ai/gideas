@@ -276,7 +276,7 @@ Nodes raise issues. Assay adjudicates within its tier. The Governance Flow legis
 | **Tier 3 authority** | Administrator (declarative configuration) | Administrator or local legislative cycle |
 | **Tier 4–5** | Do not exist | Published by Governance Flow / Federation |
 | **Trust root** | Flow Operator (self-signed) | State Root CA (Governance Flow) |
-| **Cross-Flow stamps** | Invalid — chain of custody resets at boundary | Valid if certificate chain traces to shared State Root |
+| **Cross-Flow stamps** | Treaty crossings preserve provenance; local authority starts at naturalisation | Sibling crossings are authoritative after shared-root chain verification; Treaty crossings still naturalise |
 | **Escalation ceiling** | Assay resolves at Tier 2, proposes Tier 3, no higher | Assay appeals to Governance Flow for Tier 4–5 |
 
 A standalone Flow is fully self-contained. It can be deployed, operated, and governed without any external dependency. Federation adds higher-tier governance and cross-Flow trust, but the core governance model — organic discovery, judicial review, administered policy — is identical in both configurations.
@@ -287,7 +287,7 @@ A standalone Flow is fully self-contained. It can be deployed, operated, and gov
 
 [Treaties](../02-flow/06-cross-flow.md) enable collaboration between Flows that do not share a Governance Flow — typically across organisational boundaries. Where Federation provides implicit trust through a shared Root CA, a Treaty provides explicit trust through a bilateral agreement with unidirectional execution. Two-way exchange requires two separate Treaties.
 
-The governance implication is **naturalisation**: when a [Workitem](./02-data-model.md#workitems) crosses a Treaty boundary, foreign [stamps](./02-data-model.md#passports-and-stamps) are preserved for audit but carry no local authority. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. The structural details and the full export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
+The governance implication at Treaty boundaries is **naturalisation**: when a [Workitem](./02-data-model.md#workitems) crosses between non-sibling Flows, foreign [stamps](./02-data-model.md#passports-and-stamps) are preserved for audit but do not satisfy local stamp requirements. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. Sibling Flows do not require Treaties; under shared-root verification, sibling stamps can satisfy local requirements immediately when names match. The structural details and the full export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
 
 ---
 
