@@ -84,6 +84,7 @@ Produce a clean, coherent, GitHub-style specification that:
 | `01-concepts/01-architecture.md` | Complete |
 | `01-concepts/02-data-model.md` | Complete |
 | `01-concepts/03-governance.md` | Complete |
+| `02-flow/*` | Planning scaffolds complete (plan-only), drafting not started |
 | Everything else | Not started |
 
 `README.md` should be written last, once the spec is complete.
@@ -116,6 +117,10 @@ In `flowchart` and `sequenceDiagram` blocks, use `<br/>` for line breaks in node
 ### Cross-link aggressively
 
 Every concept that has a detail page should link to it on first mention in each document. Use relative markdown links.
+
+### British spelling
+
+Use British spelling consistently across the spec prose (`artefact`, `naturalisation`, `organisation`, `behaviour`, etc.). Use US spelling only for literal external identifiers (for example API fields or quoted source material).
 
 ## Key Decisions
 
