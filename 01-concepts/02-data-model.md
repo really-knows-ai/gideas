@@ -409,8 +409,8 @@ Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
-| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./00-overview.md) and [Refine](./00-overview.md) in the reference arrangement) | Ephemeral. Default TTL of 30 days. Decays if uncited, promoted to Tier 2 if heavily used. |
-| 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Default TTL of 90 days. Requires a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement. |
+| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./00-overview.md) and [Refine](./00-overview.md) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
+| 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./03-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |

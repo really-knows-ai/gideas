@@ -25,7 +25,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 ### Organic Discovery (Tiers 1–2)
 
-Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../03-node/02-sdk-core.md). Findings are ephemeral. They carry a default TTL of 30 days and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
+Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../03-node/02-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
 
 Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a ReviewHearing Workitem, routed to the [Assay](./00-overview.md) node.
 
@@ -33,7 +33,7 @@ Assay evaluates the Finding's history and renders a verdict:
 
 | Verdict | Effect |
 |---------|--------|
-| **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a 90-day TTL |
+| **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a configurable TTL |
 | **Retain** | Finding's TTL is reset. It continues as Tier 1. |
 
 A Finding that is neither cited enough to trigger promotion nor cited at all will expire at its TTL and enter a [TTL-expiry hearing](#decay-and-retirement). Governance hardens organically: rules that matter survive; rules that don't, disappear.
@@ -83,13 +83,13 @@ Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Lib
 | Verdict | Effect |
 |---------|--------|
 | **Retire** | Finding is deleted. History preserved in the audit log. |
-| **Promote** | Finding is minted as a Tier 2 Ruling (90-day TTL). |
+| **Promote** | Finding is minted as a Tier 2 Ruling. |
 
 **Tier 2 Ruling — TTL expiry:**
 
 | Verdict | Effect |
 |---------|--------|
-| **Demote** | Ruling drops to Tier 1 Finding (fresh 30-day TTL). Citation history does not carry over. |
+| **Demote** | Ruling drops to Tier 1 Finding (fresh TTL). Citation history does not carry over. |
 | **Promote** | Assay petitions for Tier 3 Statute (HITL ratification required). |
 
 Every hearing produces either a renewed mandate or a deliberate retirement.
@@ -196,7 +196,7 @@ When higher-tier laws are pushed to a Sibling Flow — via Librarian-to-Libraria
 
 The Librarian queries its semantic index for all existing laws above a configurable similarity threshold. This finds laws that are *semantically related* to the incoming law — potential conflicts, overlaps, or redundancies.
 
-### Stage 2: LLM Conflict Evaluation
+### Stage 2: Conflict Evaluation
 
 Each candidate from the semantic search is evaluated by an LLM for actual contradiction. Semantic similarity does not always mean conflict. Two laws about code style may be related but compatible. The LLM determines whether there is a genuine contradiction.
 
