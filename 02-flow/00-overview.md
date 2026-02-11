@@ -93,10 +93,12 @@ Law and stamp behaviour in runtime is fixed by invariant:
 - Laws are single objects with one goal and one-or-more representations; any mutation creates a new whole-law version.
 - Stamp names are named governance checkpoints chosen by the Flow Architect; the platform attaches no built-in semantics to names.
 - Sort is a gate in the reference arrangement with fixed decision order:
-  1. unresolved feedback routes to Refine;
+  1. unresolved non-deadlocked feedback routes to Refine;
   2. deadlocked feedback routes to Assay;
   3. missing required stamps route to the node configured to provide each missing stamp;
   4. all feedback resolved and required stamps present allows Sort to apply `approval` and complete the reference path.
+
+Deadlocked feedback is unresolved by state, so reference implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
 - `approval` is a reference-arrangement convention, not a privileged system stamp.
 - Assay authority is bounded: resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
 

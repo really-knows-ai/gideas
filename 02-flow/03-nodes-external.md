@@ -83,8 +83,8 @@ Responsibility labels are descriptive. Runtime semantics are configuration- and 
 ```mermaid
 flowchart LR
     FG["Forge"] --> QN["Quench"] --> ST["Sort"] --> AP["Appraise"] --> ST2["Sort"]
-    ST -->|"unresolved"| RF["Refine"]
-    ST2 -->|"unresolved"| RF
+    ST -->|"unresolved (not deadlocked)"| RF["Refine"]
+    ST2 -->|"unresolved (not deadlocked)"| RF
     RF --> QN
     ST -->|"deadlock"| AS["Assay"]
     ST2 -->|"deadlock"| AS
@@ -94,10 +94,12 @@ flowchart LR
 
 Sort is the gate node in the reference arrangement. Its decision order is fixed:
 
-1. Any unresolved feedback on governed artefacts -> route to Refine.
+1. Any unresolved non-deadlocked feedback on governed artefacts -> route to Refine.
 2. Any deadlocked feedback -> route to Assay.
 3. Missing required stamps -> route to the node configured to provide each missing stamp.
 4. All feedback resolved and all required stamps present -> apply `approval` and complete the reference path.
+
+Deadlocked feedback is unresolved by state, so reference implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
 
 Sort discovers missing-stamp providers from Flow configuration and capability grants. It does not hardcode provider node names.
 
@@ -105,7 +107,7 @@ Sort discovers missing-stamp providers from Flow configuration and capability gr
 
 ```mermaid
 flowchart TD
-    S["Sort evaluates artefact state"] --> U{Unresolved feedback}
+    S["Sort evaluates artefact state"] --> U{Unresolved non-deadlocked feedback}
     U -->|yes| R1["Route to Refine"]
     U -->|no| D{Deadlocked feedback}
     D -->|yes| A1["Route to Assay"]

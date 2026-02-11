@@ -67,7 +67,7 @@ The standard library includes configurable reference implementations for each no
 
 **Sort** is the central routing hub. Granted the `READ:flow` capability, it reads the Flow configuration to discover which nodes can provide which stamps, then applies deliberately simple logic:
 
-1. Is there unresolved feedback? Route to **Refine**.
+1. Is there unresolved feedback that is not deadlocked? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
 3. Missing required stamps? Route to the node configured to provide them (Appraise, in the reference arrangement).
 4. All feedback resolved, all required stamps present? Stamp **approval** and **Done**.
@@ -88,7 +88,7 @@ flowchart LR
     Forge --> Quench
     Quench --> Sort
 
-    Sort -->|unresolved feedback| Refine
+    Sort -->|unresolved (not deadlocked)| Refine
     Sort -->|needs review| Appraise
     Sort -->|deadlock| Assay
     Sort -->|all clear| Done(( ))
