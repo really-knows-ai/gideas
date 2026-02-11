@@ -56,13 +56,14 @@ The Librarian is the law lifecycle service for a Flow.
 When higher-tier laws arrive from cross-flow replication, the Librarian performs a two-stage conflict protocol:
 
 1. Semantic search for candidate contradictions.
-2. Contradiction evaluation of candidates.
+2. LLM contradiction evaluation of candidates to determine actual contradiction.
 
 Integration outcomes follow tiered supremacy semantics:
 
 - Conflicting local Tier 1-2 laws retire immediately.
 - Conflicting local Tier 3 laws enter HITL-controlled grace period flow when requested.
 - On grace expiry, incoming law integrates automatically and conflicting Tier 3 law retires.
+- If the LLM evaluator is unavailable or returns an indeterminate result, incoming higher-tier laws remain queued and inactive until evaluation succeeds.
 
 ### TTL-Expiry Hearing Triggers
 
@@ -223,6 +224,7 @@ Service outages degrade behaviour predictably:
 
 - Archivist unavailable: artefact mutation and provenance queries fail closed; Workitems cannot progress through affected steps.
 - Librarian unavailable: law retrieval and law lifecycle actions fail closed.
+- LLM contradiction evaluator unavailable: higher-tier law activation pauses in queued state; integration retries with backoff and raises operational alerts.
 - Citation Processor unavailable: hearing evidence retrieval and threshold-trigger automation are blocked; explicit operational intervention is required.
 - Flow Monitor unavailable: processing continues, but observability coverage degrades and alerting is raised.
 

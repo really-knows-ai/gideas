@@ -103,7 +103,7 @@ Higher-tier law integration occurs through Librarian-to-Librarian replication.
 Integration performs two stages before activation:
 
 1. Semantic search for potentially conflicting local laws.
-2. Contradiction evaluation for true conflict determination.
+2. LLM contradiction evaluation for true conflict determination.
 
 Tier-dependent conflict outcomes:
 
@@ -111,6 +111,7 @@ Tier-dependent conflict outcomes:
 - Conflicting local Tier 3 laws trigger HITL intervention with optional grace period.
 - During grace period, old Tier 3 law remains active and incoming higher-tier law is queued.
 - At grace expiry, integration proceeds automatically and conflicting Tier 3 law retires.
+- If LLM contradiction evaluation is unavailable or indeterminate, incoming higher-tier law remains queued and cannot activate.
 
 Retired laws are removed from active CRD state while preserving full history in audit records.
 
@@ -149,6 +150,7 @@ Cross-flow operations fail and recover through explicit policies:
 - Partial import failure: receiving Flow rejects activation and records structured failure.
 - Validation failure: package is quarantined or rejected according to policy.
 - Destination unavailability: retries with backoff until retry budget exhaustion.
+- LLM contradiction evaluator unavailability: law integration retries with backoff while keeping incoming law inactive in queued state.
 
 Every stage must produce auditable events with correlation identifiers spanning export, transfer, and import.
 
@@ -164,7 +166,7 @@ All cross-flow deployments preserve these invariants:
 6. Treaty trust edges are directed; bidirectional exchange requires two treaties.
 7. Terminal contract kind entries constrain export scope.
 8. Empty terminal contracts export metadata only.
-9. Higher-tier law integration uses semantic search plus contradiction evaluation.
+9. Higher-tier law integration uses semantic search plus LLM contradiction evaluation.
 10. Tier 3 integration conflicts support grace-period semantics before forced integration.
 11. Runtime law conflicts route through Assay judicial process.
 12. Cross-flow events are audit-visible and retry-safe.
