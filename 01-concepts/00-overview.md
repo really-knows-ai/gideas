@@ -61,11 +61,11 @@ The standard library includes configurable reference implementations for each no
 
 ### Node Types
 
-**Forge** creates the initial artefact. Before generation, it queries the Library for applicable laws and seeds them into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
+**Forge** creates the initial artefact. Before generation, it reads the Flow's constitution — the full body of applicable law, filtered by artefact kind — and seeds it into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
 
-**Quench** performs deterministic validation. It runs objective checks — compilers, solvers, structural validators — to catch fundamentally broken work before it reaches the more expensive review stage. A topology with no deterministic checks to run can omit Quench entirely.
+**Quench** performs deterministic validation. It queries the constitution for executable representations of applicable laws — formal logic, constraint schemas, compiled checks — and runs them against the artefact to catch fundamentally broken work before it reaches the more expensive review stage. A topology with no deterministic checks to run can omit Quench entirely.
 
-**Appraise** conducts subjective review. It orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against applicable laws. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise has the `WRITE:law/finding` capability and can record Tier 1 Findings.
+**Appraise** conducts subjective review. It reads the Flow's constitution for the applicable artefact kind and orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against it. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
 **Sort** is the central routing hub. Granted the `READ:flow` or `READ:topology` capability, it reads the Flow configuration to discover which nodes can provide which stamps, then applies deliberately simple logic:
 
@@ -76,7 +76,7 @@ The standard library includes configurable reference implementations for each no
 
 Sort is a gate. It evaluates state, consults the Flow config for routing targets, and stamps approval when the passport is complete and all feedback is resolved.
 
-**Refine** addresses feedback. It reads the consolidated (potentially contradictory) feedback, produces a new artefact version, and must resolve every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine has the `WRITE:law/finding` capability and can record Tier 1 Findings.
+**Refine** addresses feedback. It reads the Flow's constitution for the applicable artefact kind, reviews the consolidated (potentially contradictory) feedback, produces a new artefact version, and must address every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
 **Assay** is the judiciary. It is invoked only when feedback deadlocks — when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute by minting Tier 2 Rulings (binding precedent) — the ceiling of its judicial authority. For conflicts involving higher tiers, Assay petitions the Flow Architect (Tier 3) or the [Governance Flow](./03-governance.md) (Tiers 4-5).
 
@@ -170,13 +170,7 @@ The system verifies that work was done correctly. Deterministically.
 
 ### Passports and Stamps
 
-As a Workitem moves through the cycle, nodes stamp the artefact's passport. Each stamp records:
-
-- The **stamp name** — which governance checkpoint this satisfies.
-- The **content hash** of the artefact at stamp time.
-- A **cryptographic signature** and certificate chain.
-
-If the artefact content changes after a stamp, the hash no longer matches and the stamp applies only to the old version. Governance starts over for the new content.
+As a Workitem moves through the cycle, nodes apply [stamps](#stamps) to the artefact's passport. Each stamp binds a governance checkpoint to a specific content hash with a cryptographic signature, making it independently verifiable. If the artefact content changes, existing stamps remain with the old version — governance starts over for the new content.
 
 ### Terminal Contracts
 

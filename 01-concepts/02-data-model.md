@@ -114,9 +114,9 @@ When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails
 
 ### Terminal Contracts
 
-A terminal contract defines what a Workitem must carry to exit the Flow. Terminal contracts are declared on the [FoundryFlow](../04-reference/crds.md) CRD, not on the Workitem itself.
+A terminal contract defines what a Workitem must carry to exit the Flow. Terminal contracts are declared on the [FoundryFlow](../04-reference/crds.md) CRD. Each contract has a name and a list of per-artefact requirements — different artefacts can have different requirements. Terminal nodes are bound to a specific contract by name in their configuration; only terminal nodes can call `complete()`, and the Operator validates the Workitem against the bound contract when they do.
 
-Each contract has a name and a list of artefact requirements. An artefact requirement references a [GovernedArtefact](#governed-artefacts) by kind and specifies a required state:
+An artefact requirement references a [GovernedArtefact](#governed-artefacts) by kind and specifies a required state:
 
 | State | Validation |
 |-------|------------|
@@ -189,7 +189,7 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 | Pattern | Storage | Use Case |
 |---------|---------|----------|
 | Container image | Baked into the node container at build time | Immutable templates, versioned with code |
-| ConfigMap | Mounted to the node via Kubernetes volume | Environment-specific, managed by GitOps |
+| Configuration mount | Mounted to the node via volume | Environment-specific, managed by deployment tooling |
 | Injection | Entry node calls `StoreArtefact()` to copy into the Workitem | Creates a unique, governed copy |
 
 ### Governed Artefacts

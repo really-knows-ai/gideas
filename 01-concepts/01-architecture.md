@@ -53,7 +53,7 @@ flowchart TD
 
 ### Management Plane
 
-Configuration, lifecycle, and observability. CRDs provide declarative state, a metrics pipeline provides monitoring and dashboards, and retention policies handle housekeeping.
+Configuration, lifecycle, and observability. Configuration resources define the Flow's desired state, a metrics pipeline provides monitoring and dashboards, and retention policies handle housekeeping.
 
 A Flow is deployed as a single unit. One deployment creates one namespace, installs the CRDs, deploys the [Flow Operator](../02-flow/01-operator.md) and [system services](../02-flow/04-system-services.md), and applies the singleton `FoundryFlow` configuration resource. Everything the Flow needs ships together, avoiding partial deployment states.
 
@@ -79,15 +79,15 @@ Identity, authentication, and cryptographic trust. The Security Plane cross-cuts
 
 Its primary agent is the [Sidecar](../03-node/01-sidecar.md), injected into every Node pod. The Sidecar holds all credentials; the Node container itself is credential-free. Every authenticated request between a Node and the Flow's services passes through the Sidecar, which brokers identity on the Node's behalf.
 
-[Passport stamps](./00-overview.md) are the Security Plane's output. When a Node stamps an artefact, the Sidecar computes the content hash, signs it with the Node's private key, and attaches the full certificate chain. The stamp is cryptographically bound to the artefact's content — if the content changes, the stamp is invalidated. Terminal contract verification traces each stamp's certificate chain back to the Flow's trust root.
+[Passport stamps](./02-data-model.md#passports-and-stamps) are the Security Plane's output. When a Node stamps an artefact, the Sidecar computes the content hash, signs it with the Node's private key, and attaches the full certificate chain. The stamp is cryptographically bound to the artefact's content — if the content changes, the stamp is invalidated. Terminal contract verification traces each stamp's certificate chain back to the Flow's trust root.
 
 Network reachability does not imply authorization. A pod that can reach a service still requires valid credentials to use it.
 
 ### Governance Plane
 
-The legal lifecycle. The Governance Plane manages the discovery, enforcement, and evolution of [law](./00-overview.md) within the Flow.
+The legal lifecycle. The Governance Plane manages the discovery, enforcement, and evolution of [law](./02-data-model.md#laws) within the Flow.
 
-The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./00-overview.md) — storing, embedding, and serving laws to Nodes that query for applicable governance. The [Citation Processor](../02-flow/04-system-services.md) tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md).
+The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./02-data-model.md#laws) — storing, embedding, and serving laws to Nodes that query for applicable governance. The [Citation Processor](../02-flow/04-system-services.md) tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md#friction).
 
 The [Assay Node](./00-overview.md) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
 
@@ -156,7 +156,7 @@ Infrastructure state (the machinery) persists. Session state (the work) does not
 
 ### Data Gravity
 
-Workitems are immutable residents of their namespace. They do not move between Flows — they are copied. The export-import protocol creates a new Workitem in the receiving Flow with its own lifecycle, its own chain of custody, and its own governance. The original Workitem remains in its home Flow, completed.
+Workitems are immutable residents of their namespace. They do not move between Flows — they are copied. The [export-import protocol](../02-flow/06-cross-flow.md) creates a new Workitem in the receiving Flow with its own lifecycle, its own chain of custody, and its own governance. The original Workitem remains in its home Flow, completed.
 
 Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and terminal contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's database, queryable through the [SDK](../03-node/02-sdk-core.md).
 
@@ -167,12 +167,13 @@ State is split across storage layers, each chosen for its access pattern.
 | Layer | Storage | Data | Access Pattern |
 |-------|---------|------|----------------|
 | State | CRDs | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
-| Governance Query | Embedded database — Librarian | Embeddings, citation ledger | Analytical, vector similarity search |
+| Governance Query | Embedded database — Librarian | Embeddings | Analytical, vector similarity search |
+| Citation Tracking | Embedded database — Citation Processor | Citation ledger | Analytical, aggregation queries |
 | Telemetry | Metrics pipeline — Flow Monitor | Friction Ledger, workitem lifecycle metrics, node health | Time-series queries, alerting |
 | Artefact Provenance | Embedded database — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | Content-addressed store — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for embeddings and citation tracking. The Flow Monitor aggregates friction reports from nodes into time-series metrics and emits audit events to stdout as structured JSON for log aggregation — the Friction Ledger is a conceptual view over this data, queryable through dashboards. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
+CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Citation Processor maintains its own embedded database for the citation ledger — tracking how often laws are cited and by which nodes. The Flow Monitor aggregates friction reports from nodes into time-series metrics and emits audit events to stdout as structured JSON for log aggregation — the Friction Ledger is a conceptual view over this data, queryable through dashboards. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 

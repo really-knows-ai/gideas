@@ -65,7 +65,8 @@ Produce a clean, coherent, GitHub-style specification that:
     ├── governance_spec/         # Legacy governance spec (~11 files)
     ├── crds/                    # Legacy CRD YAML definitions
     ├── PolymorphicLaw.md        # Polymorphic law envelope paper
-    └── PROGRESS.md              # Original session notes
+    ├── PROGRESS.md              # Original session notes
+    └── Tier5.md                 # 5-tier law hierarchy design rationale
 ```
 
 ### Reading Order
@@ -148,6 +149,12 @@ Stamps are write-once per artefact version. Once a stamp has been applied to a s
 ### Terminal contracts are per governed artefact
 
 Each artefact's contract specifies required stamp names, or simply that the artefact must be present. Different artefacts can have different requirements.
+
+### Terminal nodes and the complete() contract
+
+The FoundryFlow CRD defines named terminal contracts. The FoundryNode CRD marks a node as terminal by referencing a contract by name (e.g., `terminal: "approved"`). Only terminal nodes can call `complete()` — non-terminal nodes calling `complete()` receive an error. When a terminal node calls `complete()`, the Operator validates the Workitem against the referenced terminal contract. The node does not choose which contract to validate — the binding is fixed in configuration.
+
+In the reference arrangement, Sort is the only terminal node.
 
 ### Friction is systemic heat
 
@@ -241,10 +248,10 @@ The full design rationale is in `legacy/Tier5.md`.
 
 ### Law integration protocol
 
-When higher-tier laws are pushed to a city Flow (via Librarian-to-Librarian replication), the receiving Librarian runs a two-stage conflict check: semantic search (vector similarity, configurable threshold) followed by LLM evaluation of actual contradiction. Resolution depends on the tier of the conflicting local law:
+When higher-tier laws are pushed to a Sibling Flow (via Librarian-to-Librarian replication), the receiving Librarian runs a two-stage conflict check: semantic search (vector similarity, configurable threshold) followed by LLM evaluation of actual contradiction. Resolution depends on the tier of the conflicting local law:
 
 - **Tier 1-2 conflicts:** Immediate retirement of the local law. No human intervention.
-- **Tier 3 conflicts:** Integration paused, HITL notification. The local statute *must* change (supremacy is not optional), but the city can request a **grace period**. During the grace period the old Tier 3 law remains enforced and the incoming law is queued. On expiry the incoming law integrates automatically and the Tier 3 law is retired — if the city hasn't adapted, their work fails governance checks organically.
+- **Tier 3 conflicts:** Integration paused, HITL notification. The local statute *must* change (supremacy is not optional), but the Sibling Flow can request a **grace period**. During the grace period the old Tier 3 law remains enforced and the incoming law is queued. On expiry the incoming law integrates automatically and the Tier 3 law is retired — if the Sibling Flow hasn't adapted, their work fails governance checks organically.
 
 Retired laws are deleted as CRDs. The full history is preserved in the audit log.
 

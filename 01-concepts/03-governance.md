@@ -105,7 +105,7 @@ When nodes cite conflicting laws during Workitem processing — not at integrati
 | **Tier 1 vs Tier 2** (cross-tier) | Assay deliberates. Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but Assay still adjudicates. Assay mints a new Tier 2 Ruling consolidating the surviving position. Originals retired. |
 | **Same tier** (Tier 1 vs Tier 1, or Tier 2 vs Tier 2) | Assay resolves and drafts a new Tier 2 Ruling consolidating the conflicting laws. Originals retired. |
 | **Tier 1–2 vs Tier 3** | The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, Assay petitions HITL with a proposed clarification or amendment. |
-| **Tier 3 vs Tier 3** | Assay drafts a *proposal* for a consolidated Tier 3 statute and petitions HITL. On rejection, the conflict persists. |
+| **Tier 3 vs Tier 3** | Assay drafts a *proposal* for a consolidated Tier 3 statute and petitions HITL. On rejection, the conflict persists — every future Workitem that encounters the same conflict generates another HITL escalation and more friction until the humans act. |
 | **Tier 4 or Tier 5 involvement** | Assay files an *appeal* to the [Governance Flow](#the-governance-flow) via the Librarian. |
 
 ### Assay's Authority Ceiling
