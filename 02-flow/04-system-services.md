@@ -103,14 +103,14 @@ The Archivist is the artefact lifecycle service and authoritative provenance sto
 Archivist storage is normatively split into two layers:
 
 - **SQLite**: artefact version history, passport stamps, and feedback.
-- **Blob store**: raw artefact bytes keyed by content hash.
+- **Blob store**: raw artefact bytes keyed by content hash, typically on fast PVC-backed storage and optionally on cloud object storage.
 
 ```mermaid
 flowchart LR
-    WI["Workitem CRD<br/>artefact id + kind"] --> SQ["Archivist SQLite<br/>versions stamps feedback"]
-    SQ --> BL["Blob store<br/>content by hash"]
-    SC["Sidecar + SDK"] --> SQ
-    SC --> BL
+    WI["Workitem CRD<br/>artefact id + kind"] --> ARS["Archivist service"]
+    SC["Sidecar + SDK"] --> ARS
+    ARS --> SQ["Archivist SQLite<br/>versions stamps feedback"]
+    ARS --> BL["Blob store (PVC/object)<br/>content by hash"]
 ```
 
 ### Workitem Boundary
@@ -188,7 +188,7 @@ Service backup scope is explicit:
 - Librarian embedded stores and indexes: service-owned backup process.
 - Citation Processor ledger store: service-owned backup process.
 - Archivist SQLite provenance store: service-owned backup process.
-- Archivist blob store: service-owned backup and restore process consistent with storage backend.
+- Archivist blob store (PVC-backed or object storage): service-owned backup and restore process consistent with storage backend.
 
 Infrastructure-owned scope remains external to services:
 

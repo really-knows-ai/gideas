@@ -107,7 +107,7 @@ Provenance ownership is external to the Workitem:
 ```mermaid
 flowchart LR
     WI["Workitem CRD<br/>assignment + artefact refs"] --> ARDB["Archivist SQLite<br/>versions stamps feedback"]
-    ARDB --> BL["Blob store<br/>content bytes by hash"]
+    ARDB --> BL["Blob store (PVC/object)<br/>content bytes by hash"]
 ```
 
 This split keeps Workitem objects bounded and watch-efficient while preserving complete governance history.

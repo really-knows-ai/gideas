@@ -120,7 +120,7 @@ The runtime splits control-plane state from provenance state:
 
 - Workitem CRD stores assignment state and artefact references (`id`, `kind`).
 - Archivist stores artefact version history, passport stamps, and feedback in SQLite.
-- Archivist stores raw artefact content bytes in a blob store keyed by content hash.
+- Archivist stores raw artefact content bytes in a blob store (typically fast PVC-backed storage, optionally cloud object storage) keyed by content hash.
 - Nodes access artefact and governance state through Sidecar and SDK surfaces; nodes do not call system services directly.
 
 This split keeps Workitems small and watchable while retaining full provenance depth.
