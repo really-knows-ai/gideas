@@ -347,7 +347,7 @@ stateDiagram-v2
 | deadlocked | Won't Fix | Assay | Verdict favours Refine — `linkedRuling` set, cites Tier 2 Ruling |
 | deadlocked | rejected | Assay | Verdict favours Appraise — `linkedRuling` set, cites Tier 2 Ruling |
 
-Refine makes the first move: fix the issue (`actioned`) or refuse it (Won't Fix). Appraise reviews the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to Refine for compliance.
+Refine makes the first move: fix the issue (`actioned`) or refuse it (Won't Fix). Appraise reviews the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to Refine for compliance — re-refusal is not permitted. If Refine's subsequent fix is again rejected, the cycle continues until either Appraise accepts or Sort detects fatigue and escalates to Assay.
 
 When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, Sort transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
 
