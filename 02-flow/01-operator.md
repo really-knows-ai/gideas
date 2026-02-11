@@ -78,7 +78,7 @@ Completion-specific rules:
 - `complete` is accepted only from a terminal node bound to a named terminal contract.
 - Non-terminal completion attempts are rejected.
 
-Sort behaviour for missing stamps is configuration-driven. The Operator does not hardcode stamp-provider node names; it evaluates configured topology and capability grants.
+Sort behaviour for missing stamps is configuration-driven. Sort discovers missing-stamp provider targets from Flow configuration and capability grants. The Operator validates route legality and guard compliance before transition application.
 
 ```mermaid
 sequenceDiagram
