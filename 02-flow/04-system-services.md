@@ -210,7 +210,8 @@ Core call paths are stable:
 - Operator <-> Librarian: law lifecycle events, hearing workitem creation coordination.
 - Operator <-> Archivist: completion validation queries and artefact presence checks.
 - Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
-- Sidecar <-> Librarian: law retrieval and citation submission paths.
+- Sidecar <-> Librarian: law retrieval and legal-context queries.
+- Sidecar <-> Citation Processor: citation submission and citation evidence query paths.
 - Assay <-> Citation Processor: hearing evidence queries.
 - Services -> Flow Monitor: metrics, traces, and audit events.
 
