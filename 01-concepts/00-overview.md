@@ -65,7 +65,7 @@ The standard library includes configurable reference implementations for each no
 
 **Appraise** conducts subjective review. It reads the Flow's constitution for the applicable artefact kind and orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against it. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
-**Sort** is the central routing hub. Granted the `READ:flow` or `READ:topology` capability, it reads the Flow configuration to discover which nodes can provide which stamps, then applies deliberately simple logic:
+**Sort** is the central routing hub. Granted the `READ:flow` capability, it reads the Flow configuration to discover which nodes can provide which stamps, then applies deliberately simple logic:
 
 1. Is there unresolved feedback? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.

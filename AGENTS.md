@@ -136,7 +136,7 @@ Sort is a gate that evaluates state and routes. Its logic:
 
 Sort is the only node that applies the "approval" stamp in the reference arrangement. Any stamp can be granted to any node by the Flow Architect. The reference arrangement makes strong recommendations but does not force the Flow Architect's hand.
 
-The routing targets above (Refine, Assay, Appraise) reflect the reference arrangement. Sort discovers routing targets by reading the Flow configuration — it looks at the missing stamp and routes to the node configured to provide it. A node granted `READ:flow` or `READ:topology` capability can query the topology to discover stamp-to-node mappings at runtime.
+The routing targets above (Refine, Assay, Appraise) reflect the reference arrangement. Sort discovers routing targets by reading the Flow configuration — it looks at the missing stamp and routes to the node configured to provide it. A node granted `READ:flow` capability can query the topology to discover stamp-to-node mappings at runtime.
 
 ### Stamps are named governance checkpoints
 
@@ -181,7 +181,7 @@ The Archivist manages all artefact-related data beyond raw content bytes. Its st
 
 The `01-concepts/` documents describe architecture, data model, and governance in terms of roles and responsibilities — not products. They say "embedded database", "content-addressed store", "metrics pipeline", and "deployment tooling" rather than naming SQLite, PVC, Prometheus, Helm, gRPC, or Docker. Technology choices are firm decisions (recorded in this file and throughout the key decisions below), but they belong in `02-flow/`, `03-node/`, and `04-reference/` where the audience is operators and developers making implementation decisions. The concepts audience needs to understand *what* each component does and *why* — not *which product* does it.
 
-**Exception: Kubernetes platform vocabulary.** "Kubernetes", "CRD", "namespace", and related Kubernetes-native concepts are accepted as foundational domain vocabulary in concepts documents. The spec is explicitly Kubernetes-native — these terms define the platform, not incidental implementation choices. Product names (SQLite, Prometheus, Helm, gRPC, Docker) and methodology names (GitOps) remain excluded from concepts.
+**Exception: Kubernetes platform vocabulary.** "Kubernetes", "CRD", "namespace", "cluster", and related Kubernetes-native concepts are accepted as foundational domain vocabulary in concepts documents. The spec is explicitly Kubernetes-native — these terms define the platform, not incidental implementation choices. Product names (SQLite, Prometheus, Helm, gRPC, Docker) and methodology names (GitOps) remain excluded from concepts.
 
 ### Laws and the Library stay high-level in concepts
 

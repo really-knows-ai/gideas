@@ -156,7 +156,7 @@ The Governance Flow holds exclusive write authority for Tier 4 laws. Sibling Flo
 
 ### Diplomat (Federation Gateway)
 
-The Governance Flow maintains persistent connections to upstream Federal authorities. It pulls Tier 5 Federal Accord packages on a configurable schedule, verifies signatures, and integrates them into the State Library. If two Federal authorities publish conflicting laws, the Governance Flow rejects the sync and emits an alert — manual resolution is required.
+The Governance Flow maintains persistent connections to upstream Federal authorities. It pulls Tier 5 Federal Accord packages on a configurable schedule, verifies signatures, and integrates them into the State Library. If two Federal authorities publish conflicting laws, the conflict is flagged for manual resolution, and the Governance Flow halts integration of the conflicting package until the contradiction is resolved at the Federal level.
 
 After syncing, the Governance Flow publishes a State Library snapshot containing all Tier 4 State Constitution laws and Tier 5 Federal Accords. Sibling Flows' [Librarians](../02-flow/04-system-services.md) consume this snapshot to stay current with higher-tier governance.
 
@@ -184,7 +184,7 @@ The output is a new or amended Tier 4 Law CRD, published to all Sibling Flows vi
 
 #### Self-Governance
 
-The Governance Flow is itself governed. Its own Tier 3 statutes define how legislation is drafted, what quorum is required for ratification, and what review standards apply. This is recursive but finite — the Governance Flow's internal laws are administered by its own operator, not produced by another Governance Flow.
+The Governance Flow is itself governed. Its own Tier 3 statutes define how legislation is drafted, what quorum is required for ratification, and what review standards apply. This is recursive but finite — the Governance Flow's internal laws are administered by its own Flow Architect, not produced by another Governance Flow.
 
 ---
 

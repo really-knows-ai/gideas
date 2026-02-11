@@ -262,7 +262,6 @@ Stamps are cryptographically bound to the artefact's content through the `hash` 
 | `READ:artefact/<kind>` | Fetching artefact content |
 | `WRITE:artefact/<kind>` | Storing artefact content |
 | `READ:flow` | Reading Flow configuration (terminal contracts, topology) |
-| `READ:topology` | Querying stamp-to-node mappings at runtime |
 
 ---
 
