@@ -55,7 +55,7 @@ flowchart TD
 
 Configuration, lifecycle, and observability. Configuration resources define the Flow's desired state, a metrics pipeline provides monitoring and dashboards, and retention policies handle housekeeping.
 
-A Flow is deployed as a single unit. One deployment creates one namespace, installs the CRDs, deploys the [Flow Operator](../02-flow/01-operator.md) and [system services](../02-flow/04-system-services.md), and applies the singleton `FoundryFlow` configuration resource. Everything the Flow needs ships together, avoiding partial deployment states.
+A Flow is deployed as a single unit. One deployment creates one namespace, installs the CRDs, deploys the [Flow Operator](../02-flow/01-operator.md) and [system services](../02-flow/04-system-services.md), and applies the singleton [FoundryFlow](../02-flow/05-configuration.md) configuration resource. Everything the Flow needs ships together, avoiding partial deployment states.
 
 ### Control Plane
 
@@ -132,7 +132,7 @@ Each concern in the system maps to exactly one plane. When a Node executes work,
 
 ### One Namespace, One Flow
 
-A Flow occupies exactly one Kubernetes namespace. The namespace is the isolation boundary — all CRDs, services, secrets, and storage are scoped to it. This is a singleton pattern: one deployment creates one namespace creates one Flow. There is no sharing of namespace resources between Flows and no multi-tenant namespace.
+A Flow occupies exactly one Kubernetes namespace. The namespace is the isolation boundary — all CRDs, services, secrets, and storage are scoped to it. This is a singleton pattern: one deployment creates one namespace creates one Flow.
 
 The namespace boundary also defines data sovereignty. Workitems, artefacts, and laws belong to their Flow. Cross-flow collaboration happens through the Federation Plane's export-import protocol, never through shared state.
 

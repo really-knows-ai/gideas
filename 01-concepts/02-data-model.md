@@ -89,7 +89,7 @@ State transitions have guard conditions:
 | Running | Failed | `error()` | Node returns explicit failure, handler panic, or validation error |
 | Pending | Failed | `fail()` | No available nodes for extended period, or system error |
 
-Both **Completed** and **Failed** are terminal. Once a Workitem enters either state, no further transitions are possible. The CRD remains in the cluster for the configured retention period (default 30 days) before garbage collection.
+Both **Completed** and **Failed** are terminal. Once a Workitem enters either state, no further transitions are possible. The CRD remains in the cluster for the configured retention period before garbage collection.
 
 ### Routing Instructions
 
@@ -211,7 +211,7 @@ spec:
 
 An artefact is **valid** if and only if its passport contains a stamp for every name listed in `requiredStamps`, each bound to the current content hash. An artefact is **present** if it exists, regardless of stamps.
 
-The GovernedArtefact CRD defines what stamps are required — the demand side. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (managed by the [Flow Operator](../02-flow/01-operator.md)) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
+The GovernedArtefact CRD defines what stamps are required — the demand side. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
 Validation is stamp-based, not identity-based. The specific node that applied a stamp is recorded for audit, but governance checks verify that the required stamp names are present. This enables horizontal scaling — multiple nodes can be authorised to apply the same stamp (though only one can apply it per artefact version, since stamps are write-once) — and cross-Flow trust (a stamp from a node in another Flow is valid if its certificate chain traces back to a shared trust root).
 
@@ -411,7 +411,7 @@ Laws are tiered by authority and lifecycle:
 |------|------|-------|--------|-----------|
 | 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./00-overview.md) and [Refine](./00-overview.md) in the reference arrangement) | Ephemeral. Default TTL of 30 days. Decays if uncited, promoted to Tier 2 if heavily used. |
 | 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Default TTL of 90 days. Requires a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement. |
-| 3 | **Local Statute** | Single Flow | Flow Operator (human-administered or local legislative cycle) | Persistent. No automatic decay. |
+| 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./03-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 

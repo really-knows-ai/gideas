@@ -140,7 +140,7 @@ The routing targets above (Refine, Assay, Appraise) reflect the reference arrang
 
 ### Stamps are named governance checkpoints
 
-A stamp is a named governance checkpoint on an artefact's passport. The GovernedArtefact CRD defines which stamp names are required (e.g. "linter", "security-review", "approval"). The FoundryNode CRD (managed by the Flow Operator) grants nodes permission to apply specific named stamps to specific artefact kinds via the `STAMP:artefact/<kind>/<stamp-name>` capability.
+A stamp is a named governance checkpoint on an artefact's passport. The GovernedArtefact CRD defines which stamp names are required (e.g. "linter", "security-review", "approval"). The FoundryNode CRD (configured by the Flow Architect) grants nodes permission to apply specific named stamps to specific artefact kinds via the `STAMP:artefact/<kind>/<stamp-name>` capability.
 
 The system treats all stamps identically — it attaches no special semantics to any stamp name. "Approval", "linter", "security-review" are naming conventions chosen by the Flow Architect. The reference arrangement uses an "approval" stamp applied by Sort as the final gate, but this is convention, not system behaviour.
 
@@ -240,7 +240,7 @@ Laws are organised into five tiers of jurisdiction. Higher tier always wins (sup
 |------|------|-------|-----------|
 | 1 | Finding | Single Flow | Nodes (any with `WRITE:law/finding` capability; Appraise and Refine in the reference arrangement) |
 | 2 | Ruling | Single Flow | Assay Node |
-| 3 | Local Statute | Single Flow | Flow Operator (human-administered or local legislative cycle) |
+| 3 | Local Statute | Single Flow | Flow Architect (human-administered or local legislative cycle) |
 | 4 | State Constitution | All Flows in a Governance Flow instance | Governance Flow |
 | 5 | Federal Accord | All instances in the network | Federation |
 

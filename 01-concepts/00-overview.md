@@ -120,7 +120,7 @@ flowchart TD
     Assay -.->|writes Tier 2| Library
 ```
 
-Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) — any node granted the `WRITE:law/finding` capability can do the same. Assay alone mints Tier 2 Rulings (binding precedent); it does not write Tier 1 Findings.
+Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) — any node granted the `WRITE:law/finding` capability can do the same. Assay alone mints Tier 2 Rulings (binding precedent). Its full [authority ceiling](./03-governance.md#assays-authority-ceiling) is constitutionally bounded.
 
 ---
 
@@ -142,7 +142,7 @@ Laws are tiered by authority and lifecycle:
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes (Appraise, Refine in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
 | 2 | **Ruling** | Assay Node | Binding precedent. Minted when disputes are resolved. |
-| 3 | **Local Statute** | Flow Operator | Local policy. Human-administered or via local legislative cycle. |
+| 3 | **Local Statute** | Flow Architect | Local policy. Human-administered or via local legislative cycle. |
 | 4 | **State Constitution** | [Governance Flow](./03-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
 | 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
