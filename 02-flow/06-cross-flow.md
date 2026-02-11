@@ -1,8 +1,8 @@
 # Cross-Flow Collaboration
 
-Cross-flow collaboration defines how sovereign Flows exchange work, provenance, and higher-tier governance without collapsing control-plane boundaries. Conceptual governance semantics are defined in [Governance](../01-concepts/03-governance.md); this document defines runtime behaviour in the Flow layer.
+Cross-flow collaboration defines how sovereign Flows exchange work, provenance, and higher-tier governance without collapsing control-plane boundaries. Runtime behaviour in the Flow layer is grounded in the conceptual governance semantics in [Governance](../01-concepts/03-governance.md).
 
-This document aligns with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Operations](./07-operations.md).
+Cross-flow runtime semantics align with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Operations](./07-operations.md).
 
 ## Boundary Model
 
