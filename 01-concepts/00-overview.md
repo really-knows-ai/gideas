@@ -172,7 +172,7 @@ As a Workitem moves through the cycle, nodes apply [stamps](#stamps) to the arte
 
 ### Terminal Contracts
 
-The terminal contract is defined per governed artefact. For each artefact the Flow produces, the contract specifies what the passport must carry: a set of required stamp names, or simply that the artefact must be present. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the terminal contract checks each artefact's passport against its requirements. If any requirement is unsatisfied, the Workitem cannot exit.
+The terminal contract is defined per governed artefact kind. For each kind, the contract specifies a list of required stamp names; an empty list means artefacts of that kind must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required kind, all of them must satisfy that kind's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the terminal contract checks each required kind against its requirements. If any requirement is unsatisfied, the Workitem cannot exit. When completion triggers cross-flow export, only artefacts whose kinds are listed in the selected terminal contract are exported.
 
 ```mermaid
 sequenceDiagram

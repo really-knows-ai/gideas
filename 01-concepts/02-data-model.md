@@ -116,35 +116,35 @@ When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails
 
 A terminal contract defines what a Workitem must carry to exit the Flow. Terminal contracts are declared on the [FoundryFlow](../04-reference/crds.md) CRD. Each contract has a name and a list of per-artefact requirements — different artefacts can have different requirements. Terminal nodes are bound to a specific contract by name in their configuration; only terminal nodes can call `complete()`, and the Operator validates the Workitem against the bound contract when they do.
 
-An artefact requirement references a [GovernedArtefact](#governed-artefacts) by kind and specifies a required state:
+Each terminal contract is keyed by artefact kind. For each required kind, the contract lists the required stamp names:
 
-| State | Validation |
-|-------|------------|
-| `present` | The artefact exists (has at least one version in the Archivist). Stamps are not checked. |
-| `valid` | The artefact exists **and** its passport carries every stamp listed in the GovernedArtefact's `requiredStamps`. |
+| Requirement | Validation |
+|-------------|------------|
+| `[]` | Artefacts of that kind must be present (at least one version exists in the Archivist). No stamp names are required. |
+| `['stamp-a', 'stamp-b']` | Artefacts of that kind must be present and each artefact's passport must carry all listed stamp names on its current version. |
 
-The validation model is strictly binary. A terminal contract asks "is it present?" or "is it valid?" — it never specifies a subset of stamps. Governance defines what "valid" means (the GovernedArtefact CRD). The terminal contract just checks whether that definition is satisfied. Validity requirements live exclusively in governance declarations, not in routing topology.
+A contract with no artefact keys imposes no artefact requirements.
+
+If a Workitem contains multiple artefacts of a required kind, all of them must satisfy that kind's requirement.
 
 Different exit paths use different contracts:
 
 ```yaml
 terminalContracts:
-  - name: "approved"
-    requiredArtefacts:
-      - kind: "petition-draft"
-        state: "valid"
-      - kind: "audit-log"
-        state: "present"
+  approved:
+    artefacts:
+      petition-draft:
+        - "linter"
+        - "security-review"
+        - "approval"
+      audit-log: []
 
-  - name: "rejected"
-    requiredArtefacts:
-      - kind: "petition-draft"
-        state: "present"
-      - kind: "rejection-report"
-        state: "present"
+  rejected: {}
 ```
 
-The "approved" path requires a fully validated petition draft. The "rejected" path archives whatever exists — a draft that failed governance is still preserved, just not certified.
+The "approved" path requires a petition draft carrying the named stamps and an audit log that is present. The "rejected" path imposes no artefact requirements.
+
+When terminal completion triggers cross-flow export, only artefact kinds listed in the selected terminal contract are exported. An empty contract exports no artefacts (metadata only).
 
 Entry contracts work similarly: the FoundryFlow CRD can specify which WorkitemTypes are accepted and which artefacts must be present at entry.
 
@@ -210,6 +210,8 @@ spec:
 ```
 
 An artefact is **valid** if and only if its passport contains a stamp for every name listed in `requiredStamps`, each bound to the current content hash. An artefact is **present** if it exists, regardless of stamps.
+
+Terminal contracts use kind-specific requirement lists to define exit and export conditions. A contract can require a specific subset of stamp names for a kind, or presence only with an empty list.
 
 The GovernedArtefact CRD defines what stamps are required — the demand side. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 

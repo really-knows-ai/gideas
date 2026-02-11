@@ -95,7 +95,7 @@ Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from th
 
 ### Federation Plane
 
-Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border.
+Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border. The selected terminal contract shapes the export bundle: only artefacts whose kinds are listed in that contract are transferred, and an empty contract exports no artefacts.
 
 Cross-flow relationships are governed by distinct trust models:
 

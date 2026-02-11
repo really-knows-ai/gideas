@@ -148,7 +148,11 @@ Stamps are write-once per artefact version. Once a stamp has been applied to a s
 
 ### Terminal contracts are per governed artefact
 
-A terminal contract defines what a Workitem must carry — which artefacts, with which stamps — to exit the Flow from a specific terminal node. The requirements are specified per governed artefact: each artefact's entry in the contract specifies required stamp names, or simply that the artefact must be present. Different artefacts can have different requirements.
+A terminal contract defines what a Workitem must carry — which artefacts, with which stamps — to exit the Flow from a specific terminal node. The requirements are specified per governed artefact kind. Each kind entry maps to a list of required stamp names; an empty list means that artefacts of that kind must be present but no stamps are required. A contract with no artefact entries imposes no artefact requirements.
+
+If a Workitem contains multiple artefacts of a required kind, all of them must satisfy that kind's requirement.
+
+When terminal completion triggers cross-flow export, only artefacts whose kinds are listed in the selected terminal contract are exported. An empty contract exports no artefacts (metadata only).
 
 ### Terminal nodes and the complete() contract
 
