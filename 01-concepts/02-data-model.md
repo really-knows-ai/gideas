@@ -12,7 +12,7 @@ A Workitem's structure splits into `spec` and `status`.
 
 `spec` is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries the Workitem's type, intent, priority, and application context — the inputs that define what work needs doing.
 
-`status` is the mutable working surface. As the Workitem moves through the Flow, nodes store artefacts, leave feedback, and return routing instructions. The Operator updates the assignment and lifecycle state. Every mutation to `status` follows strict ownership rules:
+`status` is the mutable working surface. As the Workitem moves through the Flow, nodes store artefacts and return routing instructions; feedback created by nodes is persisted in the Archivist and queried through the SDK. The Operator updates the assignment and lifecycle state. Every mutation to `status` follows strict ownership rules:
 
 | Field | Owner | Mutability | Description |
 |-------|-------|------------|-------------|
@@ -83,7 +83,7 @@ State transitions have guard conditions:
 |------|-----|---------|------------------|
 | Pending | Running | `assign()` | Node is ready; node has capacity |
 | Running | Pending | `route()` | Node returns routing instruction; target node exists; no thrash detected |
-| Running | Completed | `complete()` | Node returns `Complete()`; terminal contract satisfied |
+| Running | Completed | `complete()` | Node returns `complete()`; terminal contract satisfied |
 | Running | Failed | `timeout()` | `lastActivityAt` exceeds configured timeout |
 | Running | Failed | `thrash()` | Total Thrash Guard visits exceed `maxVisits` |
 | Running | Failed | `error()` | Node returns explicit failure, handler panic, or validation error |

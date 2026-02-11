@@ -124,7 +124,7 @@ When a human rejects Assay's Tier 3 proposal, the conflicting statutes remain ac
 
 ## The Governance Flow
 
-The Governance Flow is a dedicated, pre-configured [Flow](./00-overview.md) that runs in its own namespace. It uses the same runtime, the same CRDs, and the same operator as any other Flow, but its purpose is constitutional: creating and managing state law, and integrating federal authorities. It serves three distinct functions.
+The Governance Flow is a dedicated, pre-configured [Flow](./00-overview.md) that runs in its own namespace. It uses the same runtime, the same CRDs, and the same operator as any other Flow, but its purpose is constitutional: creating and managing state law, and integrating federal authorities.
 
 ### State Root Certificate Authority
 
