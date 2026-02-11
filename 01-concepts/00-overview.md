@@ -14,9 +14,9 @@ The core premise is simple: all agents are fallible. The framework verifies exec
 
 **Make Work Auditable.** Every action, decision, and review becomes an immutable, traceable record. If it happened, there is a record.
 
-**Make the Cost Visible.** Friction is a first-class, quantifiable signal exposing the real-time cost of bad systems — whether the actors are human, AI, or both. The Friction Ledger transforms abstract complaints about bureaucracy into actionable data.
+**Make the Cost Visible.** Friction is a first-class, quantifiable signal exposing the real-time cost of bad systems — whether the actors are human, AI, or both. The Friction Ledger quantifies governance cost as actionable, real-time data.
 
-**Quality is Fixed, Cost is Variable.** Work cannot leave a Flow until its artefacts carry the required stamps. The standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system — the laws, the topology, the nodes — needs to change, not the standard.
+**Quality is Fixed, Cost is Variable.** Work cannot leave a Flow until its artefacts carry the required stamps. The standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system — the laws, the topology, the nodes — needs to change.
 
 ---
 
@@ -59,9 +59,9 @@ The standard library includes configurable reference implementations for each no
 
 ### Node Types
 
-**Forge** creates the initial artefact. Before generation, it reads the Flow's constitution — the full body of applicable law, filtered by artefact kind — and seeds it into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
+**Forge** creates the initial artefact. Before generation, it reads the Flow's [constitution](#laws-and-the-library) — the full body of applicable law, filtered by artefact kind — and seeds it into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
 
-**Quench** performs deterministic validation. It queries the constitution for executable representations of applicable laws — formal logic, constraint schemas, compiled checks — and runs them against the artefact to verify deterministic compliance before it reaches the more expensive review stage. A topology with no deterministic checks to run can omit Quench entirely.
+**Quench** performs deterministic validation. It queries the constitution for executable representations of applicable laws — formal logic, constraint schemas, compiled checks — and runs them against the artefact to verify deterministic compliance before it reaches the more expensive review stage. Quench is optional — topologies that rely exclusively on non-deterministic review can omit it.
 
 **Appraise** conducts subjective review. It reads the Flow's constitution for the applicable artefact kind and orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against it. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
@@ -76,9 +76,9 @@ Sort is a gate. It evaluates state, consults the Flow config for routing targets
 
 **Refine** addresses feedback. It reads the Flow's constitution for the applicable artefact kind, reviews the consolidated (potentially contradictory) feedback, produces a new artefact version, and must address every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
-**Assay** is the judiciary. It is invoked only when feedback deadlocks — when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute by minting Tier 2 Rulings (binding precedent) — the ceiling of its judicial authority. For conflicts involving higher tiers, Assay petitions the Flow Architect (Tier 3) or the [Governance Flow](./03-governance.md) (Tiers 4-5).
+**Assay** is the judiciary. It is invoked only when feedback deadlocks — when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute by minting Tier 2 Rulings (binding precedent) — the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./03-governance.md).
 
-Assay is built into the runtime — every Flow includes it.
+Assay is built into the runtime — every Flow includes it — and Sort routes Workitems to it when disputes require judicial review.
 
 ### Cycle Flow
 
@@ -224,4 +224,4 @@ flowchart LR
     end
 ```
 
-This gives organisations a quantifiable, real-time signal for dysfunction. The [Flow Monitor](../02-flow/04-system-services.md) aggregates friction data and tags it to its source — laws, nodes, topology paths — so it can be queried across every dimension. Which laws generate the most heat? Which nodes are bottlenecks? Where in the topology do Workitems thrash? "Bureaucracy" and "technical debt" stop being complaints and become data.
+This gives organisations a quantifiable, real-time signal for dysfunction. The [Flow Monitor](../02-flow/04-system-services.md) aggregates friction data and tags it to its source — laws, nodes, topology paths — so it can be queried across every dimension. Which laws generate the most heat? Which nodes are bottlenecks? Where in the topology do Workitems thrash? Governance cost becomes data — quantified, attributable, and actionable.

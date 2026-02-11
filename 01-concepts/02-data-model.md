@@ -50,7 +50,7 @@ spec:
       - intent
 ```
 
-WorkitemTypes are shared across Flows. A Flow's entry contract specifies which WorkitemTypes it accepts.
+WorkitemTypes are shared across Flows — they define the schema, not the instance. Scoping details are defined in the [CRD Reference](../04-reference/crds.md). A Flow's entry contract specifies which WorkitemTypes it accepts.
 
 ### Context
 
@@ -105,7 +105,7 @@ When a node finishes processing, it returns a routing instruction that tells the
 
 The Thrash Guard is a map of node names to visit counts on each Workitem. Each time a Workitem is assigned to a node, that node's counter increments. The Thrash Guard is hidden from nodes — it is infrastructure, not semantic context.
 
-When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_DETECTED`. This catches infrastructure-level loops — a Workitem bouncing endlessly between nodes regardless of the reason.
+When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_DETECTED`. This catches infrastructure-level loops — a Workitem bouncing endlessly between nodes regardless of the reason. The per-node breakdown aids diagnostics — identifying which nodes a Workitem visited most — while the aggregate sum is the enforcement trigger.
 
 | Detection | Signal | Source | Response |
 |-----------|--------|--------|----------|
@@ -160,7 +160,7 @@ The [SDK](../03-node/02-sdk-core.md) exposes an Artefact object that provides ac
 
 ### Content Addressing and Versioning
 
-Every artefact version is identified by its SHA256 content hash. When a node stores content, the [Sidecar](../03-node/01-sidecar.md) computes the hash and the [Archivist](../02-flow/04-system-services.md) persists the bytes. If the content is identical to an existing version, no new version is created — the hash matches and the store is a no-op.
+Every artefact version is identified by its content hash. When a node stores content, the [Sidecar](../03-node/01-sidecar.md) computes the hash and the [Archivist](../02-flow/04-system-services.md) persists the bytes. If the content is identical to an existing version, no new version is created — the hash matches and the store is a no-op.
 
 The Workitem CRD tracks each artefact as a reference:
 
@@ -180,17 +180,17 @@ Artefacts are strictly isolated per-Workitem. Every byte of content belongs to e
 
 | Layer | Enforcement |
 |-------|-------------|
-| Storage layout | Physical path: `<workitem_id>/<artefact_id>/<hash>` — the Workitem ID is the root |
+| Storage layout | Physical isolation: content is partitioned by Workitem — cross-Workitem access is structurally impossible at the storage layer |
 | SDK | No `targetWorkitemID` parameter exists — the SDK auto-injects the current Workitem context |
 | Sidecar | Context is bound to the leased Workitem — requests for unowned IDs are rejected |
 
 When nodes need shared reference material (templates, schemas, boilerplate), the content is injected rather than shared:
 
-| Pattern | Storage | Use Case |
-|---------|---------|----------|
-| Container image | Baked into the node container at build time | Immutable templates, versioned with code |
-| Configuration mount | Mounted to the node via volume | Environment-specific, managed by deployment tooling |
-| Injection | Entry node calls `StoreArtefact()` to copy into the Workitem | Creates a unique, governed copy |
+| Pattern | Timing | Use Case |
+|---------|--------|----------|
+| Build-time bundling | Packaged with the node | Immutable templates, versioned with code |
+| Deploy-time configuration | Provided at deployment | Environment-specific settings, managed by deployment tooling |
+| Runtime injection | Entry node calls `StoreArtefact()` to copy into the Workitem | Creates a unique, governed copy |
 
 ### Governed Artefacts
 
@@ -364,7 +364,7 @@ When a node marks feedback as Won't Fix, it must provide a structured justificat
 | `citation` | `citationIds[]` | "Existing law supports my position." The node cites specific laws that justify refusing the feedback. |
 | `novel_argument` | `argument` | "Here is a new argument." The node proposes reasoning that does not yet exist in the Library. |
 
-There is no third option. A node cannot silently dismiss feedback. Every refusal creates a traceable record — either a link to existing governance or a new argument that can itself become governance (a Tier 1 Finding) if it proves valuable.
+Every refusal creates a traceable record — either a link to existing governance or a new argument that can itself become governance (a Tier 1 Finding) if it proves valuable.
 
 ### Fatigue Detection and Escalation
 

@@ -36,7 +36,7 @@ Assay evaluates the Finding's history and renders a verdict:
 | **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a configurable TTL |
 | **Retain** | Finding's TTL is reset. It continues as Tier 1. |
 
-A Finding that is neither cited enough to trigger promotion nor cited at all will expire at its TTL and enter a [TTL-expiry hearing](#decay-and-retirement). Governance hardens organically: rules that matter survive; rules that don't, disappear.
+A Finding that is neither cited enough to trigger promotion nor cited at all will expire at its TTL and enter a [TTL-expiry hearing](#decay-and-retirement).
 
 ### Administered Policy (Tier 3)
 
@@ -72,7 +72,7 @@ flowchart LR
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
 
-Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: ephemeral, specialised containers that translate a verdict's intent into the appropriate format. When promoted, a Finding can gain new [representations](./02-data-model.md#representations) — formal logic alongside the original prose — increasing enforceability without changing its goal.
+Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: specialised translation agents that convert a verdict's intent into the appropriate formal representation. When promoted, a Finding can gain new [representations](./02-data-model.md#representations) — formal logic alongside the original prose — increasing enforceability without changing its goal.
 
 ### Decay and Retirement
 
@@ -264,7 +264,7 @@ flowchart TD
     Federal --> FedPropagate["Propagate to<br/>all Governance Flows"]
 ```
 
-Each level of the chain has bounded authority. No institution can exceed its constitutional ceiling. Nodes raise issues. Assay adjudicates within its tier. The Governance Flow legislates within the State. The Federation legislates across States. The escalation path is a routing protocol, not a request for permission — it sends the conflict to the institution with the authority to resolve it.
+Nodes raise issues. Assay adjudicates within its tier. The Governance Flow legislates within the State. The Federation legislates across States. The escalation path sends the conflict to the institution with the authority to resolve it.
 
 ---
 
