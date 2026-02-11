@@ -79,7 +79,7 @@ sequenceDiagram
 
 ## Reference Arrangement and Topology Freedom
 
-The Foundry Cycle is the reference arrangement, not a mandatory topology. Flow Architects can add nodes, merge responsibilities, split gate nodes, or replace reference implementations, as long as platform invariants hold.
+The Foundry Cycle is the reference arrangement that Flow Architects adapt by adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations while preserving platform invariants.
 
 The runtime enforces behaviour through configuration and capabilities, not node names. "Forge", "Sort", or "Refine" describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
 

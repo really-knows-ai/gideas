@@ -42,7 +42,7 @@ flowchart LR
     FM --> FR["Friction queries"]
 ```
 
-Audit is not optional tooling. Audit continuity is a runtime requirement.
+Audit continuity is a runtime requirement and a mandatory operational capability.
 
 ## Core Metrics and Friction Operations
 

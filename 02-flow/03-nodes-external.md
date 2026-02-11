@@ -68,7 +68,7 @@ Enforcement split:
 
 ## Reference Arrangement Responsibilities
 
-The Foundry Cycle is the reference arrangement, not a mandatory topology. Flow Architects can adapt node layout while preserving runtime invariants.
+The Foundry Cycle is the reference arrangement that Flow Architects adapt to their node layout while preserving runtime invariants.
 
 Reference responsibilities:
 
