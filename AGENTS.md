@@ -148,7 +148,7 @@ Stamps are write-once per artefact version. Once a stamp has been applied to a s
 
 ### Terminal contracts are per governed artefact
 
-Each artefact's contract specifies required stamp names, or simply that the artefact must be present. Different artefacts can have different requirements.
+A terminal contract defines what a Workitem must carry — which artefacts, with which stamps — to exit the Flow from a specific terminal node. The requirements are specified per governed artefact: each artefact's entry in the contract specifies required stamp names, or simply that the artefact must be present. Different artefacts can have different requirements.
 
 ### Terminal nodes and the complete() contract
 
@@ -180,6 +180,8 @@ The Archivist manages all artefact-related data beyond raw content bytes. Its st
 ### Concepts documents are technology-agnostic
 
 The `01-concepts/` documents describe architecture, data model, and governance in terms of roles and responsibilities — not products. They say "embedded database", "content-addressed store", "metrics pipeline", and "deployment tooling" rather than naming SQLite, PVC, Prometheus, Helm, gRPC, or Docker. Technology choices are firm decisions (recorded in this file and throughout the key decisions below), but they belong in `02-flow/`, `03-node/`, and `04-reference/` where the audience is operators and developers making implementation decisions. The concepts audience needs to understand *what* each component does and *why* — not *which product* does it.
+
+**Exception: Kubernetes platform vocabulary.** "Kubernetes", "CRD", "namespace", and related Kubernetes-native concepts are accepted as foundational domain vocabulary in concepts documents. The spec is explicitly Kubernetes-native — these terms define the platform, not incidental implementation choices. Product names (SQLite, Prometheus, Helm, gRPC, Docker) and methodology names (GitOps) remain excluded from concepts.
 
 ### Laws and the Library stay high-level in concepts
 

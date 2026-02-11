@@ -32,7 +32,7 @@ flowchart TD
 
     subgraph sec["Security Plane"]
         direction LR
-        Sidecar ~~~ Tokens[Identity Tokens] ~~~ mTLS[Mutual TLS]
+        Sidecar ~~~ Tokens[Identity Tokens] ~~~ MutualAuth[Mutual Auth]
     end
 
     subgraph data["Data Plane"]
@@ -63,7 +63,7 @@ Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operato
 
 The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
 
-The Control Plane makes routing decisions but never executes work. It reads state and moves Workitems; Nodes do the rest.
+The Control Plane's scope is routing decisions. It reads state and moves Workitems; Nodes do the rest.
 
 ### Data Plane
 
@@ -71,7 +71,7 @@ Where work happens. The Data Plane contains the [Nodes](../03-node/00-overview.m
 
 Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
 
-Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to Kubernetes NetworkPolicies or service mesh configurations.
+Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to the platform's network policy layer.
 
 ### Security Plane
 
@@ -93,11 +93,9 @@ The [Assay Node](./00-overview.md) provides judicial review. When feedback deadl
 
 Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from the Flow's own legislative authority. Tiers 4 and 5 arrive from the [Governance Flow](./03-governance.md), synchronised into each Flow's Library as organisational and federal policy. The Library stores all tiers with equal indifference; nodes query and interpret them the same way regardless of origin.
 
-Laws are discovered, not just configured. Constitutional resistance is measurable. Judicial review is built in.
-
 ### Federation Plane
 
-Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace and cannot be moved. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border.
+Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border.
 
 Cross-flow relationships are governed by distinct trust models:
 
@@ -140,9 +138,7 @@ The namespace boundary also defines data sovereignty. Workitems, artefacts, and 
 
 ### Sequential Processing
 
-A Workitem is assigned to exactly one Node at a time. The `currentAssignee` field on the Workitem is a scalar, not a list — atomic ownership prevents race conditions in state transitions. The Operator's routing loop is linear: read state, pick a target, assign, wait for completion, repeat.
-
-The Flow is a relay race. One baton, one runner.
+A [Workitem](./02-data-model.md#workitems) is assigned to exactly one Node at a time — atomic ownership prevents race conditions in state transitions. The Operator's routing loop is linear: read state, pick a target, assign, wait for completion, repeat.
 
 When parallel execution is needed within a single step (querying multiple reviewers, running multiple validators), the Node handles it internally. A "fat node" can orchestrate concurrent work within its execution boundary — from the Flow's perspective, it is still one assignment.
 
@@ -152,7 +148,7 @@ Node pods are persistent Kubernetes Deployments. They boot once, load expensive 
 
 But execution state is ephemeral. Each Workitem assignment starts fresh — the Node reads all context from the Workitem CRD and fetches artefact content from the Archivist. If a Workitem loops back to the same Node type after visiting other Nodes, it may land on a different pod replica. The Node has no memory of having seen it before.
 
-Infrastructure state (the machinery) persists. Session state (the work) does not. Every Workitem is a stranger.
+Infrastructure state persists across assignments. Execution state is rebuilt from the Workitem and Archivist each time.
 
 ### Data Gravity
 
@@ -173,13 +169,13 @@ State is split across storage layers, each chosen for its access pattern.
 | Artefact Provenance | Embedded database — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | Content-addressed store — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Citation Processor maintains its own embedded database for the citation ledger — tracking how often laws are cited and by which nodes. The Flow Monitor aggregates friction reports from nodes into time-series metrics and emits audit events to stdout as structured JSON for log aggregation — the Friction Ledger is a conceptual view over this data, queryable through dashboards. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
+CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Citation Processor maintains its own embedded database for the citation ledger — tracking how often laws are cited and by which nodes. The Flow Monitor aggregates friction reports from nodes into time-series metrics and emits audit events for log aggregation — the Friction Ledger is a conceptual view over this data, queryable through dashboards. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 
-Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers identity on the Node's behalf using platform-native credentials and, in federated deployments, mutual TLS certificates.
+Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers identity on the Node's behalf using platform-native credentials and, in federated deployments, mutual authentication certificates.
 
-In federated deployments, the trust chain is hierarchical: the [Governance Flow](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mutual TLS certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
+In federated deployments, the trust chain is hierarchical: the [Governance Flow](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mutual authentication certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
 
 Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. The terminal contract checks stamps by validating the cryptographic chain — not by trusting the network path the Workitem travelled.
 

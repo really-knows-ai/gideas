@@ -6,8 +6,6 @@ Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work 
 
 The core premise is simple: all agents are fallible. Human reviewers miss things. AI models hallucinate. Compilers have edge cases. Every action is recorded, every decision is traceable, and every output carries a verifiable record of the governance it survived.
 
-The system uses a legal and constitutional metaphor throughout its design. Governance rules are called *laws*. Disputes go to a *judiciary*. Precedent accumulates. This is a structural choice — the metaphor maps cleanly onto the problem of governing unreliable agents at scale.
-
 ---
 
 ## Foundational Axioms
@@ -45,7 +43,7 @@ A **stamp** is a named governance checkpoint on an artefact's passport. Each sta
 
 Stamp names are defined by the GovernedArtefact CRD — the artefact declares which stamps it requires. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
-Stamps are write-once per artefact version. Once a stamp has been applied to a specific content hash, it cannot be overwritten. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
+Stamps are write-once per artefact version. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
 
 **[Feedback](./02-data-model.md#feedback)** — Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
@@ -63,7 +61,7 @@ The standard library includes configurable reference implementations for each no
 
 **Forge** creates the initial artefact. Before generation, it reads the Flow's constitution — the full body of applicable law, filtered by artefact kind — and seeds it into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
 
-**Quench** performs deterministic validation. It queries the constitution for executable representations of applicable laws — formal logic, constraint schemas, compiled checks — and runs them against the artefact to catch fundamentally broken work before it reaches the more expensive review stage. A topology with no deterministic checks to run can omit Quench entirely.
+**Quench** performs deterministic validation. It queries the constitution for executable representations of applicable laws — formal logic, constraint schemas, compiled checks — and runs them against the artefact to verify deterministic compliance before it reaches the more expensive review stage. A topology with no deterministic checks to run can omit Quench entirely.
 
 **Appraise** conducts subjective review. It reads the Flow's constitution for the applicable artefact kind and orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against it. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 

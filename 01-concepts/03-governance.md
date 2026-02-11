@@ -40,7 +40,7 @@ A Finding that is neither cited enough to trigger promotion nor cited at all wil
 
 ### Administered Policy (Tier 3)
 
-Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./02-data-model.md#laws) applied by an administrator — typically via declarative configuration or GitOps. They have no automatic decay.
+Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./02-data-model.md#laws) applied by an administrator — typically via declarative configuration. They have no automatic decay.
 
 The [Librarian](../02-flow/04-system-services.md) indexes externally applied Law CRDs and makes them available for queries and conflict detection. A law is not active until indexing is complete — conflict detection is a hard prerequisite, not a lazy background task.
 
@@ -92,7 +92,7 @@ Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Lib
 | **Demote** | Ruling drops to Tier 1 Finding (fresh 30-day TTL). Citation history does not carry over. |
 | **Promote** | Assay petitions for Tier 3 Statute (HITL ratification required). |
 
-No law dies silently. Every expiry is a hearing. Every hearing produces either a renewed mandate or a deliberate retirement.
+Every hearing produces either a renewed mandate or a deliberate retirement.
 
 Retired laws are deleted as CRDs. The full history — creation, citations, conflicts, retirement — is preserved in the audit log.
 
@@ -124,7 +124,7 @@ When a human rejects Assay's Tier 3 proposal, the conflicting statutes remain ac
 
 ## The Governance Flow
 
-The Governance Flow is a dedicated, pre-configured [Flow](./00-overview.md) that runs in its own Kubernetes namespace (`governance-flow`). It uses the same runtime, the same CRDs, and the same operator as any other Flow, but its purpose is constitutional: creating and managing state law, and integrating federal authorities. It serves three distinct functions.
+The Governance Flow is a dedicated, pre-configured [Flow](./00-overview.md) that runs in its own namespace. It uses the same runtime, the same CRDs, and the same operator as any other Flow, but its purpose is constitutional: creating and managing state law, and integrating federal authorities. It serves three distinct functions.
 
 ### State Root Certificate Authority
 
@@ -273,7 +273,7 @@ Each level of the chain has bounded authority. No institution can exceed its con
 | Capability | Standalone Flow | Federated Flow (under Governance Flow) |
 |------------|----------------|--------------------------------|
 | **Law tiers** | Tiers 1, 2, 3 | Tiers 1, 2, 3, 4, 5 |
-| **Tier 3 authority** | Administrator (CRDs via GitOps) | Administrator or local legislative cycle |
+| **Tier 3 authority** | Administrator (declarative configuration) | Administrator or local legislative cycle |
 | **Tier 4–5** | Do not exist | Published by Governance Flow / Federation |
 | **Trust root** | Flow Operator (self-signed) | State Root CA (Governance Flow) |
 | **Cross-Flow stamps** | Invalid — chain of custody resets at boundary | Valid if certificate chain traces to shared State Root |

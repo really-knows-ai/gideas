@@ -123,7 +123,7 @@ An artefact requirement references a [GovernedArtefact](#governed-artefacts) by 
 | `present` | The artefact exists (has at least one version in the Archivist). Stamps are not checked. |
 | `valid` | The artefact exists **and** its passport carries every stamp listed in the GovernedArtefact's `requiredStamps`. |
 
-The validation model is strictly binary. A terminal contract asks "is it present?" or "is it valid?" — it never specifies a subset of stamps. Governance defines what "valid" means (the GovernedArtefact CRD). The terminal contract just checks whether that definition is satisfied. This prevents shadow governance — validity requirements defined in routing topology rather than in governance declarations.
+The validation model is strictly binary. A terminal contract asks "is it present?" or "is it valid?" — it never specifies a subset of stamps. Governance defines what "valid" means (the GovernedArtefact CRD). The terminal contract just checks whether that definition is satisfied. Validity requirements live exclusively in governance declarations, not in routing topology.
 
 Different exit paths use different contracts:
 
@@ -249,7 +249,7 @@ A stamp is uniquely keyed by its **name** — the governance checkpoint it repre
 | `timestamp` | datetime | When the stamp was created |
 | `hash` | string | Content hash of the artefact at stamp time |
 | `signature` | bytes | Cryptographic signature covering the content hash and stamp identity fields. Serialization format defined in [CRD Reference](../04-reference/crds.md). |
-| `certificateChain` | []string | PEM-encoded certificates: `[node_cert, operator_cert, state_root]` |
+| `certificateChain` | []string | Certificate chain: node, operator, trust root. Encoding format defined in [CRD Reference](../04-reference/crds.md). |
 | `laws` | []LawCitation | Laws cited during the assessment that produced this stamp |
 
 Stamps are cryptographically bound to the artefact's content through the `hash` field. The signature covers the hash along with the stamp's identity fields, making it independently verifiable by tracing the certificate chain back to the Flow's trust root (or, in federated deployments, to the State Root CA). A stamp certifies specific bytes. Different bytes require new certification.
