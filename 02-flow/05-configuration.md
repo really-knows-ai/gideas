@@ -8,8 +8,8 @@ Configuration semantics align with [Architecture](../01-concepts/01-architecture
 
 Configuration is expressed through two resources with distinct authority boundaries:
 
-- [FoundryFlow](../04-reference/crds.md) defines Flow-wide behaviour: topology, contracts, governance policy limits, and cross-flow policy.
-- [FoundryNode](../04-reference/crds.md) defines node-local behaviour and permissions: routing outputs, capabilities, timeout budget, and terminal binding.
+- [FoundryFlow](../04-reference/crds.md) defines Flow-wide behaviour: topology, contracts (`entryContracts`, `exitContracts`), governance policy limits, and cross-flow policy.
+- [FoundryNode](../04-reference/crds.md) defines node-local behaviour and permissions: routing outputs, capabilities, timeout budget, and entry/exit bindings (`entry`, `exit`).
 
 Behaviour precedence is deterministic:
 
@@ -32,9 +32,9 @@ flowchart TB
 
 FoundryFlow defines the executable shape of a Flow:
 
-- Entry behaviour: accepted Workitem types and required entry conditions.
-- Topology: entry node, routable graph, and routing validity constraints.
-- Completion behaviour: named terminal contracts and export implications.
+- Entry behaviour: named entry contracts and required entry conditions.
+- Topology: optional `importNode`, routable graph, and routing validity constraints.
+- Completion behaviour: named exit contracts and export implications.
 - Governance policy limits: thresholds and timers used by runtime guards.
 - Cross-flow policy: trust topology and naturalisation requirements.
 
@@ -51,7 +51,7 @@ Routing is valid only when the target is discoverable in Flow configuration.
 The Flow graph is configurable, but it must remain internally coherent:
 
 - Every referenced routing target must exist.
-- Entry node must exist and be assignable.
+- If `importNode` is configured, it must exist and be entry-bound.
 - Cycles are allowed and controlled by timeout and thrash policies.
 
 ```mermaid
@@ -59,7 +59,7 @@ flowchart TD
     RI["Routing instruction<br/>from node"] --> T{Type}
     T -->|route_to_output| O["Resolve output name<br/>in FoundryNode"]
     T -->|route_to| D["Resolve direct node<br/>in FoundryFlow"]
-    T -->|complete| C["Terminal eligibility check"]
+    T -->|complete| C["Exit eligibility check"]
 
     O --> V1{Target exists}
     D --> V2{Target exists}
@@ -70,35 +70,52 @@ flowchart TD
     V1 -->|no| E1["Reject instruction<br/>routing error"]
     V2 -->|no| E2["Reject instruction<br/>routing error"]
 
-    C --> TC["Validate bound<br/>terminal contract"]
+    C --> TC["Validate bound<br/>exit contract"]
 ```
 
-## Terminal Node Semantics
+## Exit Node Semantics
 
-Terminal status is explicit and configuration-bound. A node is terminal only when bound to a named terminal contract in configuration.
+Exit status is explicit and configuration-bound. A node is an exit node only when bound to a named exit contract in configuration.
 
-- Only terminal nodes may call `complete()`.
-- Non-terminal `complete()` calls are rejected.
+- Only exit nodes may call `complete()`.
+- Non-exit `complete()` calls are rejected.
 - Contract selection is fixed by node binding; the node does not choose at runtime.
 - Contract validation is performed by the Operator.
 
-Terminal status is not inferred from empty outputs.
+Exit status is not inferred from empty outputs.
 
-## Terminal Contract Semantics
+## Import Node Semantics
 
-Terminal contracts are defined per governed artefact kind. Each kind maps to a required list of stamp names.
+`importNode` defines where imported Workitems enter execution in the receiving Flow.
+
+- `importNode` must reference an existing FoundryNode.
+- The referenced node must be bound to an entry contract.
+- Successful import creates the Workitem in `Pending`.
+- The Operator schedules the imported Workitem to `importNode` immediately when capacity allows.
+- If `importNode` is missing, unknown, or not entry-bound, import admission is rejected.
+
+## Entry and Exit Contract Semantics
+
+Entry and exit contracts are defined per governed artefact kind. Each kind maps to a required list of stamp names.
 
 - `{"petition-draft": ["linter", "security-review"]}` means artefacts of `petition-draft` kind must exist and carry both named stamps.
 - `{"audit-log": []}` means artefacts of `audit-log` kind must exist, with no stamp requirement.
 - `{}` means no artefact requirements.
 
+Contract usage by boundary:
+
+- Entry contracts gate Workitem admission for entry-bound nodes (local creation) and for configured `importNode` (cross-flow import).
+- Exit contracts gate `complete()` for exit-bound nodes.
+
 If multiple artefacts of a required kind exist, all must satisfy that kind's requirements.
 
-Completion succeeds only when every required kind passes validation. Otherwise completion is rejected and the Workitem remains non-terminal.
+Admission uses this same per-kind evaluation at the entry boundary.
+
+Completion succeeds only when every required kind passes validation. Otherwise completion is rejected and the Workitem does not transition to `Completed`.
 
 ```mermaid
 flowchart LR
-    N["Terminal node<br/>calls complete()"] --> B["Read bound contract<br/>from node config"]
+    N["Exit node<br/>calls complete()"] --> B["Read bound contract<br/>from node config"]
     B --> K["For each required kind<br/>evaluate all artefacts"]
     K --> P{All requirements met}
     P -->|yes| Q["Mark Completed"]
@@ -149,9 +166,9 @@ Cross-flow configuration defines trust relationships and authority treatment at 
 
 Treaty trust is directed. A configured edge from Flow A to Flow B does not imply Flow B to Flow A.
 
-Export scope at terminal completion is constrained by terminal contract kinds:
+Export scope at exit completion is constrained by bound exit-contract kinds:
 
-- Only artefacts whose kinds are listed in the selected terminal contract are exported.
+- Only artefacts whose kinds are listed in the bound exit contract are exported.
 - Empty contract exports metadata only.
 
 ## Operational Policy Knobs
@@ -171,8 +188,8 @@ These policies are behavioural inputs to Operator and service runtime logic and 
 Configuration is admitted only when invariants hold:
 
 - Every routing reference resolves to a valid target.
-- Entry node is present and routable.
-- Terminal bindings reference existing terminal contracts.
+- If import is configured, `importNode` is present, routable, and entry-bound.
+- Entry and exit bindings reference existing entry/exit contracts.
 - Capability grants are syntactically valid and enforceable.
 - Cross-flow trust declarations are structurally complete for the configured topology.
 
@@ -190,14 +207,16 @@ Configuration evolves without changing invariant meaning:
 
 All Flow configurations must preserve these invariants:
 
-1. Terminal status is explicit and contract-bound.
-2. Only terminal nodes can complete Workitems.
-3. Terminal validation is Operator-enforced against per-kind stamp requirements.
+1. Exit status is explicit and contract-bound.
+2. Only exit nodes can complete Workitems.
+3. Exit validation is Operator-enforced against per-kind stamp requirements.
 4. Stamp names are conventions; system semantics are capability and contract driven.
 5. Sort routing for missing stamps is discovered from configuration, not hardcoded role names.
 6. Assay is mandatory and bounded to resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
 7. Cross-flow verifiability and local authority remain distinct and topology-dependent.
-8. Export scope is constrained by terminal contract kind entries.
+8. Export scope is constrained by bound exit-contract kind entries.
+9. Workitem admission is constrained by bound entry-contract kind entries.
+10. Imported Workitems begin in `Pending` and are first-scheduled to configured `importNode` when capacity allows.
 
 These semantics are consumed by [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md).
 

@@ -8,7 +8,7 @@ Foundry Flow's conceptual model is defined in [Conceptual Overview](../01-concep
 
 A Flow runtime is composed of control-plane actors, data-plane workers, and boundary services:
 
-- The [Flow Operator](./01-operator.md) reconciles configuration, assigns Workitems, validates routing outcomes, and enforces terminal contracts.
+- The [Flow Operator](./01-operator.md) reconciles configuration, assigns Workitems, validates routing outcomes, and enforces entry/exit contracts.
 - The [Workitem runtime contract](./02-workitem.md) carries control-plane state and artefact references while the Workitem moves through the Flow.
 - [External and reference nodes](./03-nodes-external.md) execute work through Sidecar-mediated APIs; node pods stay stateless at execution level.
 - [System services](./04-system-services.md) provide law lifecycle, artefact lifecycle, citation processing, telemetry aggregation, and backup surfaces.
@@ -43,11 +43,11 @@ flowchart TD
 Each Workitem moves through a deterministic control loop:
 
 1. Operator observes a routable Workitem and assigns it to one node.
-2. Sidecar leases Workitem execution context to the node.
+2. Sidecar leases Workitem execution snapshot to the node.
 3. Node reads artefacts, laws, and feedback through Sidecar-mediated APIs.
 4. Node writes artefact changes and returns a routing instruction.
 5. Sidecar persists allowed writes; Operator evaluates routing guards.
-6. Operator routes to the next node or validates terminal completion.
+6. Operator routes to the next node or validates exit completion.
 
 The Flow remains sequential at orchestration level: one Workitem, one assignee, one routing outcome at a time.
 
@@ -61,7 +61,7 @@ sequenceDiagram
     participant LB as Librarian
 
     OP->>WI: assign node
-    OP->>SC: lease Workitem context
+    OP->>SC: lease Workitem assignment snapshot
     SC->>ND: invoke assigned handler
     ND->>SC: get artefact and feedback
     SC->>AR: query versions stamps feedback
@@ -102,19 +102,19 @@ Deadlocked feedback is unresolved by state, so reference implementations must tr
 - `approval` is a reference-arrangement convention, not a privileged system stamp.
 - Assay authority is bounded: resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
 
-## Terminal Completion Model
+## Exit Completion Model
 
-Terminal completion is configuration-bound:
+Exit completion is configuration-bound:
 
-- A node is terminal only when configured with a terminal contract binding.
-- Only terminal nodes may call `complete()`.
+- A node is an exit node only when configured with an exit contract binding.
+- Only exit nodes may call `complete()`.
 - The Operator, not the node, validates the bound contract.
-- Terminal contracts are keyed by artefact kind with required stamp-name lists.
+- Exit contracts are keyed by artefact kind with required stamp-name lists.
 - If multiple artefacts of a required kind exist, all must satisfy that kind's requirement.
 - A required kind with an empty stamp list means presence-only.
 - A contract with no artefact entries imposes no artefact requirements.
 
-When completion triggers cross-flow export, only artefact kinds listed in the selected terminal contract are exported. An empty contract exports metadata only.
+When completion triggers cross-flow export, only artefact kinds listed in the bound exit contract are exported. An empty contract exports metadata only.
 
 ## Data Ownership Boundaries
 
@@ -134,6 +134,7 @@ Local routing and cross-flow transfer are different runtime mechanisms:
 - Local routing moves one Workitem between nodes inside one Flow.
 - Cross-flow transfer exports a bundle and creates a new Workitem lifecycle in the receiving Flow.
 - Export/import is copy-on-write across sovereignty boundaries.
+- Successful import creates a `Pending` Workitem that is first-scheduled to configured `importNode` when capacity allows.
 
 Imported stamps are always cryptographically verifiable when chain validation succeeds. Local governance authority depends on topology:
 
@@ -143,14 +144,15 @@ Imported stamps are always cryptographically verifiable when chain validation su
 ```mermaid
 flowchart LR
     subgraph Local["Single Flow"]
-        W1["Workitem A"] --> N1["Node X"] --> N2["Node Y"] --> T1["Terminal node"]
+        W1["Workitem A"] --> N1["Node X"] --> N2["Node Y"] --> T1["Exit node"]
     end
 
     T1 -->|"complete + export"| BND["Boundary"]
 
     subgraph Remote["Receiving Flow"]
-        IMP["Import bundle"] --> W2["Workitem B<br/>new lifecycle"]
-        W2 --> NAT["Naturalisation and local checks"]
+        IMP["Import bundle"] --> W2["Workitem B<br/>Pending"]
+        W2 --> IN["Assign configured<br/>importNode"]
+        IN --> NAT["Naturalisation and local checks"]
     end
 
     BND --> IMP
@@ -176,9 +178,11 @@ The following invariants hold for every Flow deployment:
 4. Forge reads laws only; law writing belongs to authorised downstream actors.
 5. Sort gate ordering is deterministic and configuration-driven for stamp-provider routing.
 6. Stamps are named checkpoints with write-once-per-version behaviour.
-7. Terminal completion is terminal-node-only and Operator-validated against bound contracts.
-8. Artefact provenance (versions, stamps, feedback) is Archivist-owned, not Workitem-owned.
-9. Assay is always present and cannot exceed its authority ceiling.
-10. Cross-flow verifiability and local authority are distinct and topology-dependent.
+7. Exit completion is exit-node-only and Operator-validated against bound contracts.
+8. Workitem admission is entry-contract-bound.
+9. Artefact provenance (versions, stamps, feedback) is Archivist-owned, not Workitem-owned.
+10. Assay is always present and cannot exceed its authority ceiling.
+11. Cross-flow verifiability and local authority are distinct and topology-dependent.
+12. Imported Workitems are created in `Pending` and first-scheduled to configured `importNode` when capacity allows.
 
 These invariants are elaborated normatively in the remaining `02-flow` documents.

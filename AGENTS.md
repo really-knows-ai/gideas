@@ -134,7 +134,7 @@ Forge queries the Library for context seeding but does not write laws. It reads 
 
 Sort is a gate that evaluates state and routes. Its logic:
 
-1. Unresolved feedback on governed artefacts → route to **Refine**
+1. Unresolved non-deadlocked feedback on governed artefacts → route to **Refine**
 2. Deadlocked feedback → route to **Assay**
 3. Missing required stamps → route to the node configured to provide them (**Appraise**, in the reference arrangement)
 4. All feedback resolved, all required stamps present → apply the **approval** stamp and **Done**
@@ -151,19 +151,30 @@ The system treats all stamps identically — it attaches no special semantics to
 
 Stamps are write-once per artefact version. Once a stamp has been applied to a specific content hash, a second node attempting to apply the same stamp name to the same version receives an error. If two different nodes need to sign off independently, define two different stamps.
 
-### Terminal contracts are per governed artefact
+### Entry and exit contracts are per governed artefact
 
-A terminal contract defines what a Workitem must carry — which artefacts, with which stamps — to exit the Flow from a specific terminal node. The requirements are specified per governed artefact kind. Each kind entry maps to a list of required stamp names; an empty list means that artefacts of that kind must be present but no stamps are required. A contract with no artefact entries imposes no artefact requirements.
+Entry and exit contracts define what a Workitem must carry — which artefacts, with which stamps — at boundary checks. Entry checks gate Workitem admission. Exit checks gate Workitem completion. The requirements are specified per governed artefact kind. Each kind entry maps to a list of required stamp names; an empty list means that artefacts of that kind must be present but no stamps are required. A contract with no artefact entries imposes no artefact requirements.
 
 If a Workitem contains multiple artefacts of a required kind, all of them must satisfy that kind's requirement.
 
-When terminal completion triggers cross-flow export, only artefacts whose kinds are listed in the selected terminal contract are exported. An empty contract exports no artefacts (metadata only).
+Entry and exit contracts use the same shape and validation semantics.
 
-### Terminal nodes and the complete() contract
+- Entry contracts are enforced when a node admits work into a Flow lifecycle (local creation), and when imported Workitems are admitted through the configured `importNode`.
+- Exit contracts are enforced when an exit node calls `complete()`.
 
-The FoundryFlow CRD defines named terminal contracts. The FoundryNode CRD marks a node as terminal by referencing a contract by name (e.g., `terminal: "approved"`). Only terminal nodes can call `complete()` — non-terminal nodes calling `complete()` receive an error. When a terminal node calls `complete()`, the Operator validates the Workitem against the referenced terminal contract. The node does not choose which contract to validate — the binding is fixed in configuration.
+When exit completion triggers cross-flow export, only artefacts whose kinds are listed in the bound exit contract are exported. An empty contract exports no artefacts (metadata only).
 
-In the reference arrangement, Sort is the only terminal node.
+### Exit nodes and the complete() contract
+
+The FoundryFlow CRD defines named entry and exit contracts (`entryContracts`, `exitContracts`). The FoundryNode CRD can bind a node to an entry contract (`entry: "admit"`) and/or an exit contract (`exit: "approved"`). Only exit nodes can call `complete()` — non-exit nodes calling `complete()` receive an error. When an exit node calls `complete()`, the Operator validates the Workitem against the referenced exit contract. The node does not choose which contract to validate — the binding is fixed in configuration.
+
+In the reference arrangement, Sort is the only exit node.
+
+### Import starts at a configured import node
+
+The FoundryFlow CRD defines `importNode` for cross-flow intake. Imported Workitems are created in `Pending` state after import validation succeeds. The Operator then schedules them to the configured import node when capacity allows.
+
+`importNode` must reference an existing FoundryNode that is bound to an entry contract. If `importNode` is missing, unknown, or not entry-bound, import admission fails.
 
 ### Friction is systemic heat
 
@@ -287,9 +298,13 @@ Runtime conflicts (discovered during Workitem processing, not at integration tim
 
 Assay can **resolve** at Tier 2 (minting Rulings), **propose** at Tier 3, and **appeal** at Tier 4-5. It does not write Tier 1 Findings. It cannot directly modify laws above its judicial tier.
 
-### Workitem context — reserved keys
+### No Workitem context bag and no WorkitemType
 
-The Workitem `context` map reserves keys starting with an underscore (`_`) for system use. The `01-concepts/02-data-model.md` document states this convention but does not enumerate the reserved keys. `03-node/06-sdk-workitems.md` must define which system keys exist, what they contain, and when they are set.
+Workitems do not have a freeform context object. There is no `spec.context`, no `status.context`, and no reserved key namespace for bag-style metadata.
+
+Workitems also do not use `WorkitemType`, and Flow admission is not type-gated.
+
+All relevant work context must be represented by explicit Workitem state and governed artefacts.
 
 ### This is v1
 
@@ -316,6 +331,8 @@ The `legacy/` directory contains the raw source material:
 - **`legacy/Tier5.md`** — Working reference for the 5-tier law hierarchy, integration protocol, escalation paths, and treaty model. Not legacy — this is an active design document that informed the key decisions in this file.
 
 When the legacy material and this file disagree, **this file wins**. In particular, `PROGRESS.md`'s law authority table is stale — it incorrectly lists Forge as writing Tier 1 laws.
+
+Legacy terms that are explicitly superseded in this rewrite: `WorkitemType`, `spec.type` admission gating, Workitem context bags (`spec.context` / `status.context`), reserved underscore context keys, `entryNode`, `terminalContract`/`terminalContracts`, and node `terminal` bindings. Use `importNode`, entry/exit contracts, and node entry/exit bindings instead.
 
 ## Workflow
 

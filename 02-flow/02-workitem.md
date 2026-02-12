@@ -2,7 +2,7 @@
 
 Workitems are the Flow control-plane contract for work execution. They carry assignment state, routing outcomes, and artefact references while work moves through the runtime. Operational behaviour in the Flow layer is grounded in [Conceptual Overview](../01-concepts/00-overview.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
 
-Workitem semantics align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md). Node-facing SDK usage is detailed in [SDK Core](../03-node/02-sdk-core.md) and [SDK Workitems](../03-node/06-sdk-workitems.md).
+Workitem semantics align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md). Node-facing SDK usage is detailed in [SDK Core](../03-node/02-sdk-core.md).
 
 ## Runtime Role
 
@@ -21,7 +21,7 @@ Workitem mutability is partitioned by actor. Ownership is strict and non-overlap
 
 | Surface | Owner | Mutability | Purpose |
 |---|---|---|---|
-| `spec` | Operator at creation | Immutable | Declares work intent and input contract |
+| `spec` | Operator at creation | Immutable | Declares fixed orchestration metadata |
 | lifecycle state | Operator | Managed transitions | `Pending`, `Running`, terminal states |
 | assignment fields | Operator | Managed transitions | Current and previous assignee tracking |
 | routing instruction | Sidecar on node return | Overwrite per assignment | Next action requested by node |
@@ -55,7 +55,7 @@ Transition guards are fixed:
 
 - `Pending -> Running` requires a valid target node and assignment lease.
 - `Running -> Pending` requires a valid non-terminal routing instruction.
-- `Running -> Completed` requires terminal-node `complete()` and successful contract validation.
+- `Running -> Completed` requires exit-node `complete()` and successful contract validation.
 - Any guard violation or runtime failure transitions to `Failed` when recovery budget is exhausted.
 
 ## Routing Instruction Contract
@@ -64,12 +64,12 @@ Each assignment ends with exactly one routing instruction.
 
 - `route_to_output`: route by named output configured on the current node.
 - `route_to`: route directly to a specific node.
-- `complete`: request terminal completion.
+- `complete`: request exit completion.
 
 Instruction validity checks:
 
 - Output and direct targets must resolve in current configuration.
-- `complete` is valid only from terminal nodes.
+- `complete` is valid only from exit nodes.
 - Invalid instructions are rejected with structured errors and do not advance completion.
 
 Routing semantics are runtime-level control behaviour; schema-level instruction fields are defined in [CRD Reference](../04-reference/crds.md). Error mappings are defined in [Error Catalog](../04-reference/error-catalog.md).
@@ -112,14 +112,23 @@ flowchart LR
 
 This split keeps Workitem objects bounded and watch-efficient while preserving complete governance history.
 
-## Terminal Completion Interaction
+## Entry and Exit Boundary Interaction
 
-Terminal completion is a Workitem state transition controlled by configuration and Operator validation.
+Entry admission and exit completion are Workitem boundary transitions controlled by configuration and Operator validation.
 
-- Only terminal nodes may emit `complete()`.
-- Terminal binding is fixed in node configuration.
+- Only nodes bound to an entry contract can admit Workitems into a Flow lifecycle.
+- Entry checks validate the bound entry contract against current artefact state.
+- Entry and exit contracts use the same per-kind validation shape.
+- Cross-flow import admission creates Workitems in `Pending`, then Operator schedules first assignment to configured `importNode` when capacity allows.
+
+## Exit Completion Interaction
+
+Exit completion is a Workitem state transition controlled by configuration and Operator validation.
+
+- Only exit nodes may emit `complete()`.
+- Exit binding is fixed in node configuration.
 - The node does not choose a contract at runtime.
-- Operator validates the bound terminal contract against current artefact state.
+- Operator validates the bound exit contract against current artefact state.
 
 Contract evaluation rules:
 
@@ -129,7 +138,7 @@ Contract evaluation rules:
 - Empty contract means no artefact requirements.
 - If multiple artefacts of a required kind exist, all must satisfy the requirement.
 
-If validation fails, completion is rejected and the Workitem remains non-terminal.
+If validation fails, completion is rejected and the Workitem does not transition to `Completed`.
 
 ```mermaid
 sequenceDiagram
@@ -140,22 +149,20 @@ sequenceDiagram
 
     ND->>SC: complete()
     SC-->>OP: completion instruction
-    OP->>OP: confirm node is terminal
+    OP->>OP: confirm node is exit-bound
     OP->>AR: query artefact state for bound contract
     AR-->>OP: kinds stamps feedback state
     OP->>OP: evaluate per-kind requirements
     OP-->>SC: accept or reject completion
 ```
 
-When completion triggers cross-flow export, only artefact kinds listed in the selected terminal contract are export-eligible. Empty contract completion exports metadata only.
+When completion triggers cross-flow export, only artefact kinds listed in the bound exit contract are export-eligible. Empty contract completion exports metadata only.
 
-## Context and Reserved Keys
+## No Workitem Context Bag
 
-Workitem context supports application-specific key/value metadata and system-internal metadata.
+Workitems have no freeform context object. There is no `spec.context`, no `status.context`, and no reserved key namespace for bag-style metadata.
 
-- Keys prefixed with `_` are reserved for system use.
-- User-defined keys must not use `_` prefix.
-- Reserved key names and lifecycle semantics are specified in [SDK Workitems](../03-node/06-sdk-workitems.md).
+All relevant work context must be represented by explicit Workitem state and governed artefacts.
 
 ## Retention and Finalisation
 
@@ -176,8 +183,11 @@ All Flow runtimes preserve these Workitem invariants:
 5. Thrash enforcement uses aggregate visit count across all nodes.
 6. Feedback deadlock decisions are based on Archivist-backed feedback state.
 7. Artefact references live on Workitem; provenance does not.
-8. Terminal completion is terminal-node-only and Operator-validated.
-9. Terminal contract checks are per kind and apply to all artefacts of required kinds.
-10. Cross-flow export scope follows terminal contract kind entries.
+8. Exit completion is exit-node-only and Operator-validated.
+9. Exit contract checks are per kind and apply to all artefacts of required kinds.
+10. Cross-flow export scope follows bound exit-contract kind entries.
+11. Workitems expose no freeform context bag.
+12. Workitem admission is constrained by bound entry-contract kind entries.
+13. Imported Workitems are created in `Pending` and first-scheduled to configured `importNode` when capacity allows.
 
 These invariants are consumed by [Flow Operator](./01-operator.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), and [Configuration Semantics](./05-configuration.md).

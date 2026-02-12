@@ -13,7 +13,7 @@ Each branch of government has a clear institutional counterpart in the runtime.
 | **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/finding` capability ([Appraise](./00-overview.md), [Refine](./00-overview.md) in the reference arrangement) — Tier 1 [Findings](./02-data-model.md#law-tiers) |
 | **Judiciary** | Resolves disputes, codifies precedent | [Assay](./00-overview.md) node — Tier 2 [Rulings](./02-data-model.md#law-tiers) |
 | **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
-| **Executive** | Enforces compliance | [Sort](./00-overview.md) node, [Terminal Contract](./02-data-model.md#terminal-contracts), [Sidecar](../03-node/01-sidecar.md) |
+| **Executive** | Enforces compliance | [Sort](./00-overview.md) node, [Exit Contract](./02-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
 
 Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./02-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough citation weight, [Assay](./00-overview.md) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
 
@@ -225,7 +225,7 @@ When the grace period expires:
 - The conflicting Tier 3 law is **retired** (CRD deleted, audit log retained)
 - If the Flow has not adapted, its work **starts failing governance checks** — Workitems cannot exit if they violate the now-active higher-tier law
 
-The [terminal contract](./02-data-model.md#terminal-contracts) enforces compliance organically. [Friction](./00-overview.md#friction) spikes, and the data tells the story.
+The [exit contract](./02-data-model.md#entry-and-exit-contracts) enforces compliance organically. [Friction](./00-overview.md#friction) spikes, and the data tells the story.
 
 ---
 

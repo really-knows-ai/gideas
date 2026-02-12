@@ -139,7 +139,7 @@ Operational changes must preserve runtime invariants during rollout.
 - Validate compatibility of Operator, Sidecar, and service interfaces before full rollout.
 - Rollback plans must preserve audit continuity and governance state integrity.
 
-Change windows must include verification of terminal enforcement, routing guards, and cross-flow boundary behaviour.
+Change windows must include verification of exit-contract enforcement, routing guards, and cross-flow boundary behaviour.
 
 ## Testing and Operational Verification
 

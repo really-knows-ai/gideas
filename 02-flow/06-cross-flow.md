@@ -18,19 +18,29 @@ The source Workitem and imported Workitem are related by provenance, not shared 
 
 Cross-flow exchange follows a three-stage lifecycle:
 
-1. **Export**: a terminal path in the source Flow emits an export package.
+1. **Export**: an exit path in the source Flow emits an export package.
 2. **Transfer**: package is transmitted over configured trust channel.
 3. **Import**: receiving Flow validates and materialises a new Workitem.
 
 ```mermaid
 flowchart LR
-    SF["Source Flow<br/>terminal completion"] --> EX["Export package"]
+    SF["Source Flow<br/>exit completion"] --> EX["Export package"]
     EX --> TR["Transfer channel"]
     TR --> IM["Import validation"]
-    IM --> RW["Receiving Flow<br/>new Workitem lifecycle"]
+    IM --> PD["Create Pending<br/>Workitem"]
+    PD --> IN["Schedule importNode<br/>when capacity allows"]
+    IN --> RW["Receiving Flow<br/>new Workitem lifecycle"]
 ```
 
 Import is idempotent. Replayed packages must not create duplicate effective outcomes.
+
+Import admission is entry-contract bound.
+
+- The receiving Flow resolves `importNode` from Flow configuration.
+- `importNode` must exist and be bound to an entry contract.
+- The receiving Flow validates the imported Workitem against that bound entry contract.
+- On success, the Workitem is created in `Pending`.
+- The Operator then schedules the Workitem to `importNode` immediately when capacity allows.
 
 ## Trust Topologies
 
@@ -86,15 +96,15 @@ A Treaty is a directed trust policy and execution path.
 
 Treaties are receiver-enforced policy boundaries for non-sibling collaboration.
 
-## Terminal Export Scope
+## Exit Export Scope
 
-Export scope is constrained by terminal contract semantics.
+Export scope is constrained by exit contract semantics.
 
-- Only artefact kinds listed in the selected terminal contract are export-eligible.
+- Only artefact kinds listed in the bound exit contract are export-eligible.
 - Kinds omitted from the contract are not exported.
 - An empty contract exports metadata only.
 
-This behaviour is consistent with terminal completion semantics in [Workitems](./02-workitem.md) and [Configuration Semantics](./05-configuration.md).
+This behaviour is consistent with exit-completion semantics in [Workitems](./02-workitem.md) and [Configuration Semantics](./05-configuration.md).
 
 ## Law Integration Protocol
 
@@ -159,6 +169,7 @@ Cross-flow operations fail and recover through explicit policies:
 - Transfer interruption: package remains retriable without duplicate effective import.
 - Partial import failure: receiving Flow rejects activation and records structured failure.
 - Validation failure: package is quarantined or rejected according to policy.
+- Import-node misconfiguration (`importNode` missing, unknown, or not entry-bound): import is rejected as configuration error.
 - Destination unavailability: retries with backoff until retry budget exhaustion.
 - LLM contradiction evaluator unavailability: law integration retries with backoff while keeping incoming law inactive in queued state.
 
@@ -174,11 +185,12 @@ All cross-flow deployments preserve these invariants:
 4. Sibling/shared-root imports can be immediately authoritative after valid chain verification.
 5. Treaty/non-sibling imports require naturalisation for local authority.
 6. Treaty trust edges are directed; bidirectional exchange requires two treaties.
-7. Terminal contract kind entries constrain export scope.
-8. Empty terminal contracts export metadata only.
+7. Bound exit-contract kind entries constrain export scope.
+8. Empty exit contracts export metadata only.
 9. Higher-tier law integration uses semantic search plus LLM contradiction evaluation.
 10. Tier 3 integration conflicts support grace-period semantics before forced integration.
 11. Runtime law conflicts route through Assay judicial process.
 12. Cross-flow events are audit-visible and retry-safe.
+13. Successful imports create `Pending` Workitems and first-schedule them to configured `importNode` when capacity allows.
 
 Schema and wire definitions are specified in [CRD Reference](../04-reference/crds.md) and [gRPC API](../04-reference/grpc-api.md). Error outcomes map to [Error Catalog](../04-reference/error-catalog.md). Node-level implementation patterns are detailed in [Node Configuration](../03-node/08-configuration.md) and [Node Patterns](../03-node/09-patterns.md).

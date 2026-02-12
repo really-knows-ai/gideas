@@ -10,7 +10,7 @@ The [Workitem](./00-overview.md) CRD is the authoritative record of work state. 
 
 A Workitem's structure splits into `spec` and `status`.
 
-`spec` is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries the Workitem's type, intent, priority, and application context — the inputs that define what work needs doing.
+`spec` is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
 
 `status` is the mutable working surface. As the Workitem moves through the Flow, nodes store artefacts and return routing instructions; feedback created by nodes is persisted in the Archivist and queried through the SDK. The Operator updates the assignment and lifecycle state. Every mutation to `status` follows strict ownership rules:
 
@@ -25,36 +25,6 @@ A Workitem's structure splits into `spec` and `status`.
 | `status.thrashGuard` | Operator | Increment-only | Per-node visit counters |
 
 The `currentAssignee` field is a scalar, not a list. A Workitem is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Flow is a relay race: one baton, one runner.
-
-### WorkitemType
-
-A WorkitemType defines the shape of a Workitem's `spec` fields as a JSON Schema. It specifies which fields are required, their types, and any constraints.
-
-```yaml
-apiVersion: flow.gideas.io/v1
-kind: WorkitemType
-metadata:
-  name: petition-v1
-spec:
-  schema:
-    properties:
-      intent:
-        type: string
-        description: "What the petitioner wants to achieve"
-      priority:
-        type: string
-        enum: ["low", "medium", "high"]
-      requestedBy:
-        type: string
-    required:
-      - intent
-```
-
-WorkitemTypes are shared across Flows — they define the schema, not the instance. Scoping details are defined in the [CRD Reference](../04-reference/crds.md). A Flow's entry contract specifies which WorkitemTypes it accepts.
-
-### Context
-
-The Workitem carries a `context` map — key-value string pairs for application-specific metadata. Keys starting with an underscore are reserved for system use. User-defined keys carry whatever domain context nodes need to do their work.
 
 ### Lifecycle
 
@@ -74,7 +44,7 @@ stateDiagram-v2
 |-------|-------------|
 | **Pending** | Waiting for assignment or queued between nodes |
 | **Running** | Assigned to a node, actively processing |
-| **Completed** | Terminal contract satisfied, work is done |
+| **Completed** | Exit contract satisfied, work is done |
 | **Failed** | Timeout, thrash detection, explicit failure, or system error |
 
 State transitions have guard conditions:
@@ -83,7 +53,7 @@ State transitions have guard conditions:
 |------|-----|---------|------------------|
 | Pending | Running | `assign()` | Node is ready; node has capacity |
 | Running | Pending | `route()` | Node returns routing instruction; target node exists; no thrash detected |
-| Running | Completed | `complete()` | Node returns `complete()`; terminal contract satisfied |
+| Running | Completed | `complete()` | Node returns `complete()`; bound exit contract satisfied |
 | Running | Failed | `timeout()` | `lastActivityAt` exceeds configured timeout |
 | Running | Failed | `thrash()` | Total Thrash Guard visits exceed `maxVisits` |
 | Running | Failed | `error()` | Node returns explicit failure, handler panic, or validation error |
@@ -99,7 +69,7 @@ When a node finishes processing, it returns a routing instruction that tells the
 |------|-------------|
 | `route_to_output` | Route via a named output channel defined on the [FoundryNode](../02-flow/03-nodes-external.md) |
 | `route_to` | Route directly to a specific node by name |
-| `complete` | Signal terminal completion — triggers terminal contract validation |
+| `complete` | Signal exit completion — triggers exit contract validation |
 
 ### Thrash Guard
 
@@ -112,11 +82,13 @@ When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails
 | Thrash | Total visits across all nodes | Thrash Guard | Fail workitem |
 | Fatigue | History depth on a single feedback item | Feedback | Escalate to [Assay](./00-overview.md) |
 
-### Terminal Contracts
+### Entry and Exit Contracts
 
-A terminal contract defines what a Workitem must carry to exit the Flow. Terminal contracts are declared on the [FoundryFlow](../04-reference/crds.md) CRD. Each contract has a name and a list of per-artefact requirements — different artefacts can have different requirements. Terminal nodes are bound to a specific contract by name in their configuration; only terminal nodes can call `complete()`, and the Operator validates the Workitem against the bound contract when they do.
+Entry and exit contracts define what a Workitem must carry at lifecycle boundaries. Entry contracts gate admission into a Flow lifecycle. Exit contracts gate completion.
 
-Each terminal contract is keyed by artefact kind. For each required kind, the contract lists the required stamp names:
+Both contract types are declared on the [FoundryFlow](../04-reference/crds.md) CRD (`entryContracts`, `exitContracts`) and share one shape. A node bound to an entry contract can admit work only when that contract is satisfied. A node bound to an exit contract can call `complete()` only when that contract is satisfied.
+
+Each contract is keyed by artefact kind. For each required kind, the contract lists the required stamp names:
 
 | Requirement | Validation |
 |-------------|------------|
@@ -127,10 +99,16 @@ A contract with no artefact keys imposes no artefact requirements.
 
 If a Workitem contains multiple artefacts of a required kind, all of them must satisfy that kind's requirement.
 
-Different exit paths use different contracts:
+Entry and exit contracts use the same requirement model:
 
 ```yaml
-terminalContracts:
+entryContracts:
+  admit:
+    artefacts:
+      petition-draft: []
+      audit-log: []
+
+exitContracts:
   approved:
     artefacts:
       petition-draft:
@@ -142,11 +120,9 @@ terminalContracts:
   rejected: {}
 ```
 
-The "approved" path requires a petition draft carrying the named stamps and an audit log that is present. The "rejected" path imposes no artefact requirements.
+The `admit` entry path requires both artefact kinds to be present. The `approved` exit path requires named stamps on `petition-draft` and presence of `audit-log`. The `rejected` exit path imposes no artefact requirements.
 
-When terminal completion triggers cross-flow export, only artefact kinds listed in the selected terminal contract are exported. An empty contract exports no artefacts (metadata only).
-
-Entry contracts work similarly: the FoundryFlow CRD can specify which WorkitemTypes are accepted and which artefacts must be present at entry.
+When exit completion triggers cross-flow export, only artefact kinds listed in the bound exit contract are exported. An empty contract exports no artefacts (metadata only).
 
 ---
 
@@ -181,8 +157,8 @@ Artefacts are strictly isolated per-Workitem. Every byte of content belongs to e
 | Layer | Enforcement |
 |-------|-------------|
 | Storage layout | Physical isolation: content is partitioned by Workitem — cross-Workitem access is structurally impossible at the storage layer |
-| SDK | No `targetWorkitemID` parameter exists — the SDK auto-injects the current Workitem context |
-| Sidecar | Context is bound to the leased Workitem — requests for unowned IDs are rejected |
+| SDK | No `targetWorkitemID` parameter exists — the SDK auto-scopes requests to the leased Workitem |
+| Sidecar | Access is bound to the leased Workitem identity — requests for unowned IDs are rejected |
 
 When nodes need shared reference material (templates, schemas, boilerplate), the content is injected rather than shared:
 
@@ -190,7 +166,7 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 |---------|--------|----------|
 | Build-time bundling | Packaged with the node | Immutable templates, versioned with code |
 | Deploy-time configuration | Provided at deployment | Environment-specific settings, managed by deployment tooling |
-| Runtime injection | Entry node calls `StoreArtefact()` to copy into the Workitem | Creates a unique, governed copy |
+| Runtime injection | Admitting node calls `StoreArtefact()` to copy into the Workitem | Creates a unique, governed copy |
 
 ### Governed Artefacts
 
@@ -211,7 +187,7 @@ spec:
 
 An artefact is **valid** if and only if its passport contains a stamp for every name listed in `requiredStamps`, each bound to the current content hash. An artefact is **present** if it exists, regardless of stamps.
 
-Terminal contracts use kind-specific requirement lists to define exit and export conditions. A contract can require a specific subset of stamp names for a kind, or presence only with an empty list.
+Entry and exit contracts use kind-specific requirement lists to define admission, exit, and export conditions. A contract can require a specific subset of stamp names for a kind, or presence only with an empty list.
 
 The GovernedArtefact CRD defines what stamps are required — the demand side. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
@@ -263,7 +239,7 @@ Stamps are cryptographically bound to the artefact's content through the `hash` 
 | `STAMP:artefact/<kind>/<stamp-name>` | Applying a named stamp |
 | `READ:artefact/<kind>` | Fetching artefact content |
 | `WRITE:artefact/<kind>` | Storing artefact content |
-| `READ:flow` | Reading Flow configuration (terminal contracts, topology) |
+| `READ:flow` | Reading Flow configuration (entry/exit contracts, topology) |
 
 ---
 

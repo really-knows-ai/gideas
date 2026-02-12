@@ -12,6 +12,8 @@ Nodes are execution actors in the data plane. Control-plane authority remains wi
 - Nodes read and write through SDK APIs mediated by [Sidecar](../03-node/01-sidecar.md).
 - Nodes return one routing instruction at the end of each assignment.
 - Nodes do not mutate Workitem lifecycle fields directly.
+- Nodes admitting new Workitems through local creation must be bound to an entry contract.
+- Cross-flow import admission targets configured `importNode`, which must be entry-bound.
 
 Every node, including externally integrated nodes, runs inside the same control and governance contract.
 
@@ -20,11 +22,11 @@ Every node, including externally integrated nodes, runs inside the same control 
 Assignment execution follows a fixed contract:
 
 1. Operator assigns a `Pending` Workitem to one node.
-2. Sidecar provides assignment context to the node handler.
+2. Sidecar provides assignment snapshot to the node handler.
 3. Node executes business logic using SDK APIs.
 4. Sidecar validates capability-bounded operations.
 5. Node returns one routing instruction.
-6. Operator evaluates routing and terminal guards, then applies state transition.
+6. Operator evaluates routing and exit guards, then applies state transition.
 
 ```mermaid
 sequenceDiagram
@@ -64,7 +66,7 @@ Stamp capabilities are explicit and granular:
 Enforcement split:
 
 - Sidecar enforces node API and capability boundaries.
-- Operator enforces routing validity, lifecycle transitions, and terminal contract checks.
+- Operator enforces routing validity, lifecycle transitions, and exit contract checks.
 
 ## Reference Arrangement Responsibilities
 
@@ -157,7 +159,7 @@ Node boundary failures are classified and handled distinctly:
 - **Routing failure**: returned instruction is invalid or unresolvable.
 - **Governance deadlock**: feedback dispute exceeds deadlock threshold and is escalated to Assay.
 
-Retries and backoff may be configured operationally, but retries do not bypass capability checks, routing guards, or terminal validation.
+Retries and backoff may be configured operationally, but retries do not bypass capability checks, routing guards, or exit-contract validation.
 
 ## Telemetry and Friction Signals
 
@@ -182,7 +184,8 @@ All node deployments preserve these invariants:
 7. Assay is always present and constrained to resolve/propose/appeal at its authority ceiling.
 8. Stamp authority is capability-scoped by artefact kind and stamp name.
 9. Stamps are write-once per artefact version hash.
-10. External integrations preserve auditability, idempotency, and governance checks.
-11. Cross-flow handoff is export/import lifecycle, not local route transition.
+10. Nodes admitting locally created Workitems are bound to and validated against entry contracts.
+11. External integrations preserve auditability, idempotency, and governance checks.
+12. Cross-flow handoff is export/import lifecycle, not local route transition.
 
 Node configuration and implementation patterns are defined in [Node Configuration](../03-node/08-configuration.md) and [Node Patterns](../03-node/09-patterns.md). SDK behaviour is defined in [SDK Core](../03-node/02-sdk-core.md), [SDK Artefacts](../03-node/03-sdk-artefacts.md), [SDK Legal](../03-node/04-sdk-legal.md), [SDK Feedback](../03-node/05-sdk-feedback.md), and [SDK Workitems](../03-node/06-sdk-workitems.md).

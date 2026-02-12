@@ -170,9 +170,9 @@ The system verifies that work was done correctly. Deterministically.
 
 As a Workitem moves through the cycle, nodes apply [stamps](#stamps) to the artefact's passport. Each stamp binds a governance checkpoint to a specific content hash with a cryptographic signature, making it independently verifiable. If the artefact content changes, existing stamps remain with the old version — governance starts over for the new content.
 
-### Terminal Contracts
+### Exit Contracts
 
-The terminal contract is defined per governed artefact kind. For each kind, the contract specifies a list of required stamp names; an empty list means artefacts of that kind must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required kind, all of them must satisfy that kind's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the terminal contract checks each required kind against its requirements. If any requirement is unsatisfied, the Workitem cannot exit. When completion triggers cross-flow export, only artefacts whose kinds are listed in the selected terminal contract are exported.
+Exit contracts are defined per governed artefact kind. For each kind, a contract specifies a list of required stamp names; an empty list means artefacts of that kind must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required kind, all of them must satisfy that kind's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the bound exit contract checks each required kind against its requirements. If any requirement is unsatisfied, the Workitem cannot exit. When completion triggers cross-flow export, only artefacts whose kinds are listed in the bound exit contract are exported.
 
 ```mermaid
 sequenceDiagram
@@ -181,7 +181,7 @@ sequenceDiagram
     participant Q as Quench
     participant A as Appraise
     participant S as Sort
-    participant T as Terminal
+    participant T as Exit Node
 
     W->>F: assigned
     F->>W: artefact created
@@ -195,7 +195,7 @@ sequenceDiagram
     S->>S: all stamps present, no unresolved feedback
     S->>W: stamp (approval)
     W->>T: complete
-    T->>T: check passport against terminal contract
+    T->>T: check passport against exit contract
     T-->>W: all requirements met — exit approved
 ```
 

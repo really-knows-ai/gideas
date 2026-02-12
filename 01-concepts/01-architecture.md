@@ -59,7 +59,7 @@ A Flow is deployed as a single unit. One deployment creates one namespace, insta
 
 ### Control Plane
 
-Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./02-data-model.md#workitems) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the terminal contract at the exit boundary. The [Thrash Guard](./02-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold, enforcing a maximum visit budget per Workitem.
+Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./02-data-model.md#workitems) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the bound exit contract at the exit boundary. The [Thrash Guard](./02-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold, enforcing a maximum visit budget per Workitem.
 
 The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
 
@@ -79,7 +79,7 @@ Identity, authentication, and cryptographic trust. The Security Plane cross-cuts
 
 Its primary agent is the [Sidecar](../03-node/01-sidecar.md), injected into every Node pod. The Sidecar holds all credentials; the Node container itself is credential-free. Every authenticated request between a Node and the Flow's services passes through the Sidecar, which brokers identity on the Node's behalf.
 
-[Passport stamps](./02-data-model.md#passports-and-stamps) are the Security Plane's output. When a Node stamps an artefact, the Sidecar computes the content hash, signs it with the Node's private key, and attaches the full certificate chain. The stamp is cryptographically bound to the artefact's content — if the content changes, the stamp is invalidated. Terminal contract verification traces each stamp's certificate chain back to the Flow's trust root.
+[Passport stamps](./02-data-model.md#passports-and-stamps) are the Security Plane's output. When a Node stamps an artefact, the Sidecar computes the content hash, signs it with the Node's private key, and attaches the full certificate chain. The stamp is cryptographically bound to the artefact's content — if the content changes, the stamp is invalidated. Exit-contract verification traces each stamp's certificate chain back to the Flow's trust root.
 
 Every service call requires valid credentials regardless of network path.
 
@@ -95,7 +95,7 @@ Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from th
 
 ### Federation Plane
 
-Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border. The selected terminal contract shapes the export bundle: only artefacts whose kinds are listed in that contract are transferred, and an empty contract exports no artefacts.
+Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border. The bound exit contract shapes the export bundle: only artefacts whose kinds are listed in that contract are transferred, and an empty contract exports no artefacts.
 
 Cross-flow relationships are governed by distinct trust models:
 
@@ -146,7 +146,7 @@ When parallel execution is needed within a single step (querying multiple review
 
 Node pods are persistent, platform-managed processes. They boot once, load expensive infrastructure (LLM model weights, connection pools, SDK caches), and process many Workitems over their lifetime. This eliminates cold-start latency.
 
-But execution state is ephemeral. Each Workitem assignment starts fresh — the Node reads all context from the Workitem CRD and fetches artefact content from the Archivist. If a Workitem loops back to the same Node type after visiting other Nodes, it may land on a different pod replica. The Node has no memory of having seen it before.
+But execution state is ephemeral. Each Workitem assignment starts fresh — the Node reads Workitem state from the CRD and fetches artefact content from the Archivist. If a Workitem loops back to the same Node type after visiting other Nodes, it may land on a different pod replica. The Node has no memory of having seen it before.
 
 Infrastructure state persists across assignments. Execution state is rebuilt from the Workitem and Archivist each time.
 
@@ -154,7 +154,7 @@ Infrastructure state persists across assignments. Execution state is rebuilt fro
 
 Workitems are immutable residents of their namespace. They do not move between Flows — they are copied. The [export-import protocol](../02-flow/06-cross-flow.md) creates a new Workitem in the receiving Flow with its own lifecycle, its own chain of custody, and its own governance. The original Workitem remains in its home Flow, completed.
 
-Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and terminal contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's database, queryable through the [SDK](../03-node/02-sdk-core.md).
+Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and exit contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's database, queryable through the [SDK](../03-node/02-sdk-core.md).
 
 ### Hybrid Persistence
 
@@ -177,6 +177,6 @@ Every Node pod runs with a Sidecar that holds its cryptographic identity. The No
 
 In federated deployments, the trust chain is hierarchical: the [Governance Flow](./03-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mutual authentication certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
 
-Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. The terminal contract checks stamps by validating the cryptographic chain — not by trusting the network path the Workitem travelled.
+Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. Exit contract checks validate stamps by cryptographic chain, not by trusting the network path the Workitem travelled.
 
 The Security Plane's presence in the Data Plane is the Sidecar. Its presence in the Governance Plane is the signed stamp. Its presence in the Control Plane is the authenticated API call.
