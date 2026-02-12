@@ -376,3 +376,4 @@ Legacy terms that are explicitly superseded in this rewrite: `WorkitemType`, `sp
 5. Draft the document following the writing principles.
 6. **Review all completed spec documents** for consistency with the new material and technical feasibility. Consistency and technical feasibility are non-negotiable — every mechanism described must be implementable, and no two documents should contradict each other. Flag and fix any issues before considering the document complete.
 7. Update the status table in this file when a document is complete.
+8. After making changes, run the `lint-and-fix` skill. It must execute the linter in `lint/` (`pnpm lint` from that directory), fix any issues it reports, and rerun until clean.
