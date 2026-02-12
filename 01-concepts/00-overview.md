@@ -70,9 +70,9 @@ The standard library includes configurable reference implementations for each no
 1. Is there unresolved feedback that is not deadlocked? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
 3. Missing required stamps? Route to the node configured to provide them (Appraise, in the reference arrangement).
-4. All feedback resolved, all required stamps present? Stamp **approval** and **Done**.
+4. All feedback resolved, all required stamps present? Stamp **approval**, call `complete()`, and let the Operator validate the bound exit contract before marking **Done**.
 
-Sort is a gate. It evaluates state, consults the Flow config for routing targets, and stamps approval when the passport is complete and all feedback is resolved.
+Sort is a gate. It evaluates state, consults the Flow config for routing targets, and, in the reference arrangement, acts as the exit-bound node: it stamps approval when the passport is complete and all feedback is resolved, then calls `complete()`.
 
 **Refine** addresses feedback. It reads the Flow's constitution for the applicable artefact kind, reviews the consolidated (potentially contradictory) feedback, produces a new artefact version, and must address every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
@@ -172,7 +172,7 @@ As a Workitem moves through the cycle, nodes apply [stamps](#stamps) to the arte
 
 ### Exit Contracts
 
-Exit contracts are defined per governed artefact kind. For each kind, a contract specifies a list of required stamp names; an empty list means artefacts of that kind must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required kind, all of them must satisfy that kind's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the bound exit contract checks each required kind against its requirements. If any requirement is unsatisfied, the Workitem cannot exit. When completion triggers cross-flow export, only artefacts whose kinds are listed in the bound exit contract are exported.
+Exit contracts are defined per governed artefact kind. For each kind, a contract specifies a list of required stamp names; an empty list means artefacts of that kind must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required kind, all of them must satisfy that kind's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the exit-bound node calls `complete()`, and the Operator checks the bound exit contract against each required kind. If any requirement is unsatisfied, the Workitem cannot exit. When completion triggers cross-flow export, only artefacts whose kinds are listed in the bound exit contract are exported.
 
 ```mermaid
 sequenceDiagram
@@ -181,7 +181,7 @@ sequenceDiagram
     participant Q as Quench
     participant A as Appraise
     participant S as Sort
-    participant T as Exit Node
+    participant O as Operator
 
     W->>F: assigned
     F->>W: artefact created
@@ -194,9 +194,10 @@ sequenceDiagram
     W->>S: assigned
     S->>S: all stamps present, no unresolved feedback
     S->>W: stamp (approval)
-    W->>T: complete
-    T->>T: check passport against exit contract
-    T-->>W: all requirements met — exit approved
+    S->>W: complete()
+    W->>O: completion request
+    O->>O: validate bound exit contract
+    O-->>W: all requirements met — mark Completed
 ```
 
 An artefact that exits a Flow carries cryptographic proof of every governance checkpoint it passed. Quality is proved.
