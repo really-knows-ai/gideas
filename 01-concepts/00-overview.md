@@ -88,7 +88,7 @@ flowchart LR
     Forge --> Quench
     Quench --> Sort
 
-    Sort -->|unresolved (not deadlocked)| Refine
+    Sort -->|unresolved, not deadlocked| Refine
     Sort -->|needs review| Appraise
     Sort -->|deadlock| Assay
     Sort -->|all clear| Done(( ))

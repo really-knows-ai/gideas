@@ -99,6 +99,7 @@ Law and stamp behaviour in runtime is fixed by invariant:
   4. all feedback resolved and required stamps present allows Sort to apply `approval` and complete the reference path.
 
 Deadlocked feedback is unresolved by state, so reference implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
+
 - `approval` is a reference-arrangement convention, not a privileged system stamp.
 - Assay authority is bounded: resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
 
