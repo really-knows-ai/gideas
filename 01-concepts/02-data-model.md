@@ -4,27 +4,26 @@
 
 ## Workitems
 
-The [Workitem](./00-overview.md) CRD is the authoritative record of work state. [Nodes](./00-overview.md) are stateless and execute through SDK abstractions, with runtime mutation requests mediated by the [Sidecar](../03-node/01-sidecar.md) and persisted by the [Flow Operator](../02-flow/01-operator.md). Everything a node needs to know about a piece of work is exposed through the SDK surface for its current assignment.
+The [Workitem](./00-overview.md) record is the authoritative surface for work state (persisted as a Kubernetes CRD in the runtime). [Nodes](./00-overview.md) are stateless and execute through SDK abstractions, with runtime mutation requests mediated by the [Sidecar](../03-node/01-sidecar.md) and persisted by the [Flow Operator](../02-flow/01-operator.md). Everything a node needs to know about a piece of work is exposed through the SDK surface for its current assignment.
 
 ### Structure
 
-A Workitem's structure splits into `spec` and `status`.
+A Workitem has two data surfaces: an immutable declaration surface and a mutable runtime surface. In Kubernetes persistence these map to CRD `spec` and `status`, but nodes consume them through SDK abstractions rather than field paths.
 
-`spec` is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
+The declaration surface is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
 
-`status` is the mutable working surface. As the Workitem moves through the Flow, nodes issue SDK actions, the Sidecar mediates and authorises them, and the Operator applies control-plane state changes. Feedback, stamps, and version history are persisted in the Archivist and queried through the SDK. Every mutation to `status` follows strict ownership rules:
+The runtime surface is the mutable working surface. As the Workitem moves through the Flow, nodes issue SDK actions, the Sidecar mediates and authorises them, and the Operator applies control-plane state changes. Feedback, stamps, and version history are persisted in the Archivist and queried through the SDK. Runtime ownership remains strict:
 
-| Field | Owner | Mutability | Description |
-|-------|-------|------------|-------------|
-| `spec.*` | Operator | Immutable | Set at creation |
-| `status.state` | Operator | System-managed | Computed from assignment lifecycle |
-| `status.currentAssignee` | Operator | System-managed | The node currently processing this Workitem |
-| `status.previousAssignee` | Operator | System-managed | The node that last processed this Workitem |
-| `status.artefacts[]` | [Flow Operator](../02-flow/01-operator.md) | Add new `id` only; existing `id` immutable | Stable artefact references (`id` + `kind`) |
-| `status.routingInstruction` | [Flow Operator](../02-flow/01-operator.md) | Overwrite | Set from Sidecar-submitted node result |
-| `status.thrashGuard` | Operator | Increment-only | Per-node visit counters |
+| Surface | Owner | Mutability | Description |
+|---------|-------|------------|-------------|
+| Declaration metadata | Operator | Immutable | Set at Workitem creation |
+| Lifecycle state | Operator | System-managed | Computed from assignment lifecycle |
+| Assignment ownership | Operator | System-managed | Current assignee and prior assignee tracking |
+| Artefact references | [Flow Operator](../02-flow/01-operator.md) | Add new `id` only; existing `id` immutable | Stable artefact references (`id` + `kind`) |
+| Routing outcome | [Flow Operator](../02-flow/01-operator.md) | Overwrite | Set from Sidecar-submitted node result |
+| Thrash counters | Operator | Increment-only | Per-node visit counters |
 
-The `currentAssignee` field is a scalar, not a list. A Workitem is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Flow is a relay race: one baton, one runner.
+Assignment is scalar, not a fan-out list. A Workitem is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Flow is a relay race: one baton, one runner.
 
 ### Lifecycle
 
@@ -59,7 +58,7 @@ State transitions have guard conditions:
 | Running | Failed | `error()` | Node returns explicit failure, handler panic, or validation error |
 | Pending | Failed | `fail()` | No available nodes for extended period, or system error |
 
-Both **Completed** and **Failed** are terminal. Once a Workitem enters either state, no further transitions are possible. The CRD remains in the cluster for the configured retention period before garbage collection.
+Both **Completed** and **Failed** are terminal. Once a Workitem enters either state, no further transitions are possible. Runtime records are retained for the configured retention period before garbage collection.
 
 ### Routing Instructions
 
@@ -86,7 +85,7 @@ When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails
 
 Entry and exit contracts define what a Workitem must carry at lifecycle boundaries. Entry contracts gate admission into a Flow lifecycle. Exit contracts gate completion.
 
-Both contract types are declared on the [FoundryFlow](../04-reference/crds.md) CRD (`entryContracts`, `exitContracts`) and share one shape. A node bound to an entry contract can admit work only when that contract is satisfied. A node bound to an exit contract can call `complete()` only when that contract is satisfied.
+Flow configuration declares both contract types on [FoundryFlow](../04-reference/crds.md) (`entryContracts`, `exitContracts`) and uses one shared shape. A node bound to an entry contract can admit work only when that contract is satisfied. A node bound to an exit contract can call `complete()` only when that contract is satisfied.
 
 Each contract is keyed by artefact kind. For each required kind, the contract lists the required stamp names:
 
@@ -130,7 +129,7 @@ When exit completion triggers cross-flow export, only artefact kinds listed in t
 
 An [artefact](./00-overview.md) is a governed output — a document, a code file, a data model, anything the Flow produces. The [Archivist](../02-flow/04-system-services.md) is the single source of truth for all artefact data: version history, [passport stamps](#passports-and-stamps), and [feedback](#feedback) live in the Archivist's database, while raw content bytes are stored in a content-addressed blob store.
 
-The Workitem CRD carries only artefact references — an `id` and `kind` for each artefact — enough for the Operator to know what exists and for the Archivist to locate the full record. Version history, stamps, and feedback live exclusively in the Archivist, keeping the CRD lightweight regardless of version count, feedback depth, or stamp accumulation.
+The Workitem record carries only artefact references — an `id` and `kind` for each artefact — enough for the Operator to know what exists and for the Archivist to locate the full record. Version history, stamps, and feedback live exclusively in the Archivist, keeping the control-plane record lightweight regardless of version count, feedback depth, or stamp accumulation.
 
 The [SDK](../03-node/02-sdk-core.md) exposes an Artefact object that provides access to all artefact data through the [Sidecar](../03-node/01-sidecar.md). Nodes query artefacts by ID or by kind, and the SDK routes all requests to the Archivist. Nodes never interact with the Archivist directly.
 
@@ -138,7 +137,7 @@ The [SDK](../03-node/02-sdk-core.md) exposes an Artefact object that provides ac
 
 Every artefact version is identified by its content hash. When a node stores content, the [Sidecar](../03-node/01-sidecar.md) computes the hash and the [Archivist](../02-flow/04-system-services.md) persists the bytes. If the content is identical to an existing version, no new version is created — the hash matches and the store is a no-op.
 
-The Workitem CRD tracks each artefact as a reference:
+The Workitem tracks each artefact as a stable reference:
 
 ```yaml
 artefacts:
@@ -211,7 +210,7 @@ flowchart LR
             V2["&lt;hash_v2&gt; (content)"]
         end
     end
-    WI["Workitem CRD"] -->|"id + kind"| DB
+    WI["Workitem record"] -->|"id + kind"| DB
     Stamps -->|"tagged to version hash"| Versions
     FB -->|"tagged to version hash"| Versions
 ```
