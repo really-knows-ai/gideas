@@ -46,7 +46,7 @@ Each Workitem moves through a deterministic control loop:
 2. Sidecar leases Workitem execution snapshot to the node.
 3. Node reads artefacts, laws, and feedback through Sidecar-mediated APIs.
 4. Node writes artefact changes and returns a routing instruction.
-5. Sidecar persists allowed writes; Operator evaluates routing guards.
+5. Sidecar submits allowed writes and instruction; Operator validates guards and persists Workitem control-plane state.
 6. Operator routes to the next node or validates exit completion.
 
 The Flow remains sequential at orchestration level: one Workitem, one assignee, one routing outcome at a time.

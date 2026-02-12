@@ -137,7 +137,7 @@ Sort is a gate that evaluates state and routes. Its logic:
 1. Unresolved non-deadlocked feedback on governed artefacts → route to **Refine**
 2. Deadlocked feedback → route to **Assay**
 3. Missing required stamps → route to the node configured to provide them (**Appraise**, in the reference arrangement)
-4. All feedback resolved, all required stamps present → apply the **approval** stamp and **Done**
+4. All feedback resolved, all required stamps present → apply the **approval** stamp, call `complete()`, and let the Operator validate the bound exit contract before **Done**
 
 Sort is the only node that applies the "approval" stamp in the reference arrangement. Any stamp can be granted to any node by the Flow Architect. The reference arrangement makes strong recommendations but does not force the Flow Architect's hand.
 
@@ -196,6 +196,27 @@ The Archivist manages all artefact-related data beyond raw content bytes. Its st
 **The SDK exposes an Artefact object** with methods for querying versions, feedback, and stamps. All queries are routed through the Sidecar to the Archivist; nodes never interact with the Archivist directly.
 
 **Sort uses the SDK** to check feedback state, the same as any other node. `artefact.hasUnresolvedFeedback()` is the interface for routing decisions.
+
+### Workitem control-plane ownership and SDK boundary
+
+Nodes program against SDK abstractions (`Workitem`, `Artefact`) and do not depend on Kubernetes CRD field paths.
+
+Workitem mutation flow is boundary-enforced:
+
+- **Node -> Sidecar (SDK API)** for assignment-scoped actions.
+- **Sidecar -> Operator** for Workitem control-plane mutation requests (routing instruction, assignment/lifecycle transitions, artefact reference updates).
+- **Operator** validates and persists Workitem CRD state. Workitem control-plane persistence belongs to the Operator.
+
+Artefact provenance flow is service-owned:
+
+- **Sidecar -> Archivist** for artefact versions, feedback, and stamps.
+- Archivist is the sole persistence authority for artefact provenance.
+
+Artefact identity semantics on a Workitem are stable:
+
+- `id` is unique and fixed within a Workitem.
+- `kind` is immutable for a given `id`.
+- Updating an existing artefact `id` writes a new version hash in Archivist (or no-op if unchanged content); the Workitem reference remains the same.
 
 ### Concepts documents are technology-agnostic
 

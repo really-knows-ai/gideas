@@ -4,7 +4,7 @@
 
 ## Workitems
 
-The [Workitem](./00-overview.md) CRD is the authoritative record of work state. [Nodes](./00-overview.md) are stateless — they read state from the CRD at the start of each assignment and write mutations back to it. Everything a node needs to know about a piece of work lives on the Workitem or is reachable from it.
+The [Workitem](./00-overview.md) CRD is the authoritative record of work state. [Nodes](./00-overview.md) are stateless and execute through SDK abstractions, with runtime mutation requests mediated by the [Sidecar](../03-node/01-sidecar.md) and persisted by the [Flow Operator](../02-flow/01-operator.md). Everything a node needs to know about a piece of work is exposed through the SDK surface for its current assignment.
 
 ### Structure
 
@@ -12,7 +12,7 @@ A Workitem's structure splits into `spec` and `status`.
 
 `spec` is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
 
-`status` is the mutable working surface. As the Workitem moves through the Flow, nodes store artefacts and return routing instructions; feedback created by nodes is persisted in the Archivist and queried through the SDK. The Operator updates the assignment and lifecycle state. Every mutation to `status` follows strict ownership rules:
+`status` is the mutable working surface. As the Workitem moves through the Flow, nodes issue SDK actions, the Sidecar mediates and authorises them, and the Operator applies control-plane state changes. Feedback, stamps, and version history are persisted in the Archivist and queried through the SDK. Every mutation to `status` follows strict ownership rules:
 
 | Field | Owner | Mutability | Description |
 |-------|-------|------------|-------------|
@@ -20,8 +20,8 @@ A Workitem's structure splits into `spec` and `status`.
 | `status.state` | Operator | System-managed | Computed from assignment lifecycle |
 | `status.currentAssignee` | Operator | System-managed | The node currently processing this Workitem |
 | `status.previousAssignee` | Operator | System-managed | The node that last processed this Workitem |
-| `status.artefacts[]` | [Sidecar](../03-node/01-sidecar.md) | Append-only | Artefact references (`id` + `kind`) |
-| `status.routingInstruction` | Sidecar | Overwrite | Set when the node returns a result |
+| `status.artefacts[]` | [Flow Operator](../02-flow/01-operator.md) | Add new `id` only; existing `id` immutable | Stable artefact references (`id` + `kind`) |
+| `status.routingInstruction` | [Flow Operator](../02-flow/01-operator.md) | Overwrite | Set from Sidecar-submitted node result |
 | `status.thrashGuard` | Operator | Increment-only | Per-node visit counters |
 
 The `currentAssignee` field is a scalar, not a list. A Workitem is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Flow is a relay race: one baton, one runner.
@@ -63,7 +63,7 @@ Both **Completed** and **Failed** are terminal. Once a Workitem enters either st
 
 ### Routing Instructions
 
-When a node finishes processing, it returns a routing instruction that tells the Operator where the Workitem goes next. The [Sidecar](../03-node/01-sidecar.md) writes this to the Workitem CRD; the Operator consumes it.
+When a node finishes processing, it returns a routing instruction that tells the Operator where the Workitem goes next. The [Sidecar](../03-node/01-sidecar.md) submits the node result, and the Operator validates and persists the routing instruction on the Workitem.
 
 | Type | Description |
 |------|-------------|
@@ -148,7 +148,7 @@ artefacts:
     kind: "audit-log"
 ```
 
-The `id` uniquely identifies the artefact within the Workitem and is the key the Archivist uses to locate the full record. Multiple artefacts of the same kind are supported — each with its own `id`. The full version history — every prior hash, who created it, and when — is stored in the Archivist's database and queryable through the [SDK](../03-node/02-sdk-core.md).
+The `id` uniquely identifies the artefact within the Workitem and is the key the Archivist uses to locate the full record. Multiple artefacts of the same kind are supported — each with its own `id`. For a given `id`, `kind` is immutable and the Workitem reference remains stable. Updates to that artefact produce new version hashes in the Archivist (or no-op when content is unchanged). The full version history — every prior hash, who created it, and when — is stored in the Archivist's database and queryable through the [SDK](../03-node/02-sdk-core.md).
 
 ### Artefact Isolation
 

@@ -24,11 +24,11 @@ Workitem mutability is partitioned by actor. Ownership is strict and non-overlap
 | `spec` | Operator at creation | Immutable | Declares fixed orchestration metadata |
 | lifecycle state | Operator | Managed transitions | `Pending`, `Running`, terminal states |
 | assignment fields | Operator | Managed transitions | Current and previous assignee tracking |
-| routing instruction | Sidecar on node return | Overwrite per assignment | Next action requested by node |
-| artefact references | Sidecar on node write | Append/update by `id` | `id` and `kind` references only |
+| routing instruction | Operator from Sidecar-submitted result | Overwrite per assignment | Next action requested by node |
+| artefact references | Operator from Sidecar mutation request | Add new `id`; existing `id` immutable | `id` and `kind` references only |
 | thrash counters | Operator | Increment-only | Loop budget enforcement |
 
-Nodes do not mutate Workitem state directly. All node-originated state changes are mediated by the [Sidecar](../03-node/01-sidecar.md) and validated by runtime policy.
+Nodes do not mutate Workitem state directly. All node-originated state changes are mediated by the [Sidecar](../03-node/01-sidecar.md), then validated and persisted by the [Flow Operator](./01-operator.md).
 
 ## Lifecycle States and Transitions
 
@@ -96,7 +96,17 @@ Workitems carry artefact references only.
 
 - Each reference contains `id` and `kind`.
 - `id` is unique within the Workitem.
+- `id` is fixed once introduced on the Workitem.
+- `kind` is immutable for a given `id`.
 - Multiple artefacts of the same `kind` are supported through distinct `id` values.
+
+Mutation rules for artefact references are deterministic:
+
+- New `id` -> add a new Workitem artefact reference.
+- Existing `id` with same `kind` -> keep Workitem reference unchanged; persist new version hash in Archivist when content changes.
+- Existing `id` with different `kind` -> reject as identity conflict.
+
+Nodes experience this through SDK abstractions (for example, setting artefact content by `id`). The Sidecar submits mutation requests and the Operator persists Workitem control-plane state.
 
 Provenance ownership is external to the Workitem:
 
