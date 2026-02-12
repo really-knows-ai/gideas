@@ -1,6 +1,6 @@
 # Flow Runtime Overview
 
-Foundry Flow's conceptual model is defined in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md). This document defines the runtime view used by operators and platform administrators: component boundaries, execution loop, and non-negotiable behaviour invariants.
+Foundry Flow runtime for operators and platform administrators is defined by component boundaries, the execution loop, and non-negotiable behaviour invariants. Conceptual foundations remain in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
 
 `02-flow/` is the platform specification for operating a Flow. Node implementation detail lives in [Node Overview](../03-node/00-overview.md). Field-level schema and wire shape live in [CRD Reference](../04-reference/crds.md).
 

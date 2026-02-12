@@ -1,6 +1,6 @@
 # System Services
 
-System services provide the runtime substrate for law lifecycle, artefact lifecycle, governance signals, and operational resilience. This document defines service responsibilities and inter-service contracts for the Flow layer. Field-level schemas are specified in [CRD Reference](../04-reference/crds.md), and API-level wire contracts are specified in [gRPC API](../04-reference/grpc-api.md).
+System services provide the runtime substrate for law lifecycle, artefact lifecycle, governance signals, and operational resilience. Service responsibilities and inter-service contracts at the Flow layer define this substrate. Field-level schemas are specified in [CRD Reference](../04-reference/crds.md), and API-level wire contracts are specified in [gRPC API](../04-reference/grpc-api.md).
 
 This service model aligns with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), [Governance](../01-concepts/03-governance.md), [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
 
@@ -211,7 +211,7 @@ Detailed runbooks are specified in [Operations](./07-operations.md).
 
 Core call paths are stable:
 
-- Operator <-> Librarian: law lifecycle events, hearing workitem creation coordination.
+- Operator <-> Librarian: law lifecycle events, hearing Workitem creation coordination.
 - Operator <-> Archivist: completion validation queries and artefact presence checks.
 - Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
 - Sidecar <-> Librarian: law retrieval and legal-context queries.

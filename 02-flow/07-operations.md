@@ -1,6 +1,6 @@
 # Operations
 
-Operations defines how a Flow is monitored, triaged, recovered, and validated in production. This document specifies runtime-operability requirements and ownership boundaries for platform operators and SRE teams.
+Operations in production covers how a Flow is monitored, triaged, recovered, and validated. Runtime operability requirements and ownership boundaries apply to platform operators and SRE teams.
 
 Operational semantics align with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), [Governance](../01-concepts/03-governance.md), [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
 

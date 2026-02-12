@@ -1,6 +1,6 @@
 # Nodes and External Integrations
 
-Nodes execute work inside the Flow runtime but do not own control-plane transitions. This document defines node participation semantics, capability boundaries, reference arrangement responsibilities, and external integration behaviour. Conceptual framing is in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
+Nodes execute work inside the Flow runtime but do not own control-plane transitions. Node participation semantics, capability boundaries, reference-arrangement responsibilities, and external integration behaviour are runtime constraints. Conceptual framing is in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
 
 Runtime semantics here align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md). Node implementation detail is specified in [Node Overview](../03-node/00-overview.md).
 

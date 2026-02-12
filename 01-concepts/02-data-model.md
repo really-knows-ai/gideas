@@ -78,7 +78,7 @@ When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails
 
 | Detection | Signal | Source | Response |
 |-----------|--------|--------|----------|
-| Thrash | Total visits across all nodes | Thrash Guard | Fail workitem |
+| Thrash | Total visits across all nodes | Thrash Guard | Fail Workitem |
 | Fatigue | History depth on a single feedback item | Feedback | Escalate to [Assay](./00-overview.md) |
 
 ### Entry and Exit Contracts
@@ -261,7 +261,7 @@ A feedback item carries a severity, a current state, a message, and a history of
 | `message` | string | Feedback content (max 1024 characters) |
 | `linkedRuling` | string | Ruling ID if [Assay](./00-overview.md) has rendered a verdict |
 | `history` | []FeedbackEvent | Chronological record of actions |
-| `justification` | Justification | Legal basis if state is Won't Fix |
+| `justification` | Justification | Legal basis if state is `wont_fix` (display label "Won't Fix") |
 
 Severity signals urgency, not authority:
 
@@ -273,6 +273,17 @@ Severity signals urgency, not authority:
 | `CRITICAL` | Blocking issue, potential data loss |
 
 Each feedback event in the history records who acted, what action they took, and what they said. The history is append-only — it is the investigative record of the debate.
+
+Canonical state tokens in API/schema surfaces are:
+
+| Canonical token | Display label |
+|-----------------|---------------|
+| `new` | New |
+| `actioned` | Actioned |
+| `wont_fix` | Won't Fix |
+| `rejected` | Rejected |
+| `deadlocked` | Deadlocked |
+| `resolved` | Resolved |
 
 ### Feedback Lifecycle
 
@@ -303,7 +314,7 @@ stateDiagram-v2
 |-------|-------------|
 | **new** | Feedback raised, not yet addressed |
 | **actioned** | Refine addressed the issue (fix applied) |
-| **Won't Fix** | Refine refused with structured justification |
+| **wont_fix** | Refine refused with structured justification (display label "Won't Fix") |
 | **rejected** | Reviewer rejected the fix or refusal |
 | **deadlocked** | Sort detected excessive feedback depth — escalated to Assay |
 | **resolved** | Closed — final state |
@@ -312,28 +323,28 @@ stateDiagram-v2
 |------|----|-------|---------|
 | — | **new** | System | `AddFeedback()` |
 | new | actioned | Refine | `ResolveFeedback()` — applies a fix |
-| new | Won't Fix | Refine | `RefuseFeedback()` — with structured justification |
+| new | `wont_fix` | Refine | `RefuseFeedback()` — with structured justification |
 | actioned | resolved | Appraise | `AcceptFix()` — fix is adequate |
 | actioned | rejected | Appraise | `RejectFix()` — fix is inadequate |
-| Won't Fix | resolved | Appraise | `AcceptRefusal()` — refusal is justified |
-| Won't Fix | rejected | Appraise | `RejectRefusal()` — refusal is unjustified |
-| Won't Fix | deadlocked | Sort | Feedback depth exceeds `maxFeedbackDepth` |
+| `wont_fix` | resolved | Appraise | `AcceptRefusal()` — refusal is justified |
+| `wont_fix` | rejected | Appraise | `RejectRefusal()` — refusal is unjustified |
+| `wont_fix` | deadlocked | Sort | Feedback depth exceeds `maxFeedbackDepth` |
 | rejected | actioned | Refine | `ResolveFeedback()` — complies with rejection |
 | rejected | deadlocked | Sort | Feedback depth exceeds `maxFeedbackDepth` |
-| deadlocked | Won't Fix | Assay | Verdict favours Refine — `linkedRuling` set, cites Tier 2 Ruling |
+| deadlocked | `wont_fix` | Assay | Verdict favours Refine — `linkedRuling` set, cites Tier 2 Ruling |
 | deadlocked | rejected | Assay | Verdict favours Appraise — `linkedRuling` set, cites Tier 2 Ruling |
 
-Refine makes the first move: fix the issue (`actioned`) or refuse it (Won't Fix). Appraise reviews the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to Refine for compliance — re-refusal is not permitted. If Refine's subsequent fix is again rejected, the cycle continues until either Appraise accepts or Sort detects fatigue and escalates to Assay.
+Refine makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). Appraise reviews the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to Refine for compliance — re-refusal is not permitted. If Refine's subsequent fix is again rejected, the cycle continues until either Appraise accepts or Sort detects fatigue and escalates to Assay.
 
 When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, Sort transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
 
-From [Sort's](./00-overview.md) perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, Won't Fix, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a Won't Fix still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
+From [Sort's](./00-overview.md) perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont_fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont_fix` state still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
 
 In the [reference arrangement](./00-overview.md), Sort reads the Flow configuration to determine which nodes can provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. Sort queries artefact state through the [SDK](../03-node/02-sdk-core.md) — `artefact.hasUnresolvedFeedback()`, `artefact.getStamps()` — the same interface available to every node. When all required stamps are present and all feedback is resolved, Sort applies the "approval" stamp. In the reference arrangement Sort is the only node that applies the "approval" stamp, but any stamp can be granted to any node by the Flow Architect.
 
 ### Forced-Choice Justification
 
-When a node marks feedback as Won't Fix, it must provide a structured justification:
+When a node marks feedback as `wont_fix` (display label "Won't Fix"), it must provide a structured justification:
 
 | Type | Fields | Meaning |
 |------|--------|---------|
@@ -352,8 +363,8 @@ The threshold applies per feedback item, not per Workitem. A Workitem can have d
 
 Once Assay renders a verdict and sets a `linkedRuling` on a feedback item, that item is under judicial mandate. The [Sidecar](../03-node/01-sidecar.md) enforces finality in both directions:
 
-- A Won't Fix with a `linkedRuling` (Assay agreed with Refine) cannot be moved to `rejected` by Appraise. The only valid transition is to `resolved` via `AcceptRefusal()`.
-- A `rejected` with a `linkedRuling` (Assay agreed with Appraise) cannot be moved to Won't Fix or `deadlocked`. The only valid transition is to `actioned` via `ResolveFeedback()`, followed by acceptance to `resolved`.
+- A `wont_fix` with a `linkedRuling` (Assay agreed with Refine) cannot be moved to `rejected` by Appraise. The only valid transition is to `resolved` via `AcceptRefusal()`.
+- A `rejected` with a `linkedRuling` (Assay agreed with Appraise) cannot be moved to `wont_fix` or `deadlocked`. The only valid transition is to `actioned` via `ResolveFeedback()`, followed by acceptance to `resolved`.
 
 Any other state change returns `CONTEMPT_VIOLATION`. The ruling is not a suggestion. The losing side must accept the verdict.
 
