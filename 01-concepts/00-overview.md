@@ -72,11 +72,11 @@ The standard library includes configurable reference implementations for each no
 3. Missing required stamps? Route to the node configured to provide them (Appraise, in the reference arrangement).
 4. All feedback resolved, all required stamps present? Stamp **approval**, call `complete()`, and let the Operator validate the bound exit contract before marking **Done**.
 
-Sort is a gate. It evaluates state, consults the Flow config for routing targets, and, in the reference arrangement, acts as the exit-bound node: it stamps approval when the passport is complete and all feedback is resolved, then calls `complete()`.
+Sort is a gate. It evaluates state, consults the Flow config for routing targets, and, in the reference arrangement for governed artefact processing, acts as the exit-bound node: it stamps approval when the passport is complete and all feedback is resolved, then calls `complete()`.
 
 **Refine** addresses feedback. It reads the Flow's constitution for the applicable artefact kind, reviews the consolidated (potentially contradictory) feedback, produces a new artefact version, and must address every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine has the `WRITE:law/finding` capability and can record Tier 1 Findings.
 
-**Assay** is the judiciary. It is invoked only when feedback deadlocks — when the same point has been argued back and forth beyond a threshold. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves the dispute by minting Tier 2 Rulings (binding precedent) — the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./03-governance.md).
+**Assay** is the judiciary. It is invoked for deadlocked feedback disputes and for review hearings triggered by citation thresholds or TTL expiry. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent) — the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./03-governance.md).
 
 Assay is built into the runtime — every Flow includes it — and Sort routes Workitems to it when disputes require judicial review.
 
@@ -98,7 +98,7 @@ flowchart LR
     Assay --> Sort
 ```
 
-In the reference arrangement, Refine routes back through Quench — deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort. Assay routes back through Sort, which re-evaluates the state after the ruling.
+In the reference arrangement, Refine routes back through Quench — deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort. Deadlock-escalated governed-work assignments route back through Sort after Assay adjudication, while review-hearing Workitems are self-contained at Assay.
 
 ### Law Authority
 

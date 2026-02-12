@@ -84,6 +84,19 @@ Exit status is explicit and configuration-bound. A node is an exit node only whe
 
 Exit status is not inferred from empty outputs.
 
+In the reference arrangement, Sort is the only user-configured exit node for governed artefact processing. Assay is runtime-mandated and uses dedicated hearing entry/exit bindings for review-hearing processing.
+
+## Assay Hearing Bindings
+
+Review-hearing processing is configured through mandatory Assay bindings:
+
+- Assay is entry-bound for hearing admission.
+- Assay is exit-bound for hearing completion.
+- Hearing Workitems are standard Workitems carrying explicit hearing artefacts, including a `lawId` reference.
+- Hearing processing does not introduce `WorkitemType`, `spec.type`, or type-gated admission.
+
+Deadlock-escalated governed-work Workitems remain separate from hearing Workitems and continue through Sort after Assay adjudication in the reference arrangement.
+
 ## Import Node Semantics
 
 `importNode` defines where imported Workitems enter execution in the receiving Flow.
@@ -105,6 +118,7 @@ Entry and exit contracts are defined per governed artefact kind. Each kind maps 
 Contract usage by boundary:
 
 - Entry contracts gate Workitem admission for entry-bound nodes (local creation) and for configured `importNode` (cross-flow import).
+- Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `importNode` (cross-flow import), and for Assay's hearing entry binding (review-hearing processing).
 - Exit contracts gate `complete()` for exit-bound nodes.
 
 If multiple artefacts of a required kind exist, all must satisfy that kind's requirements.

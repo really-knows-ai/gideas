@@ -130,6 +130,7 @@ Entry admission and exit completion are Workitem boundary transitions controlled
 - Entry checks validate the bound entry contract against current artefact state.
 - Entry and exit contracts use the same per-kind validation shape.
 - Cross-flow import admission creates Workitems in `Pending`, then Operator schedules first assignment to configured `importNode` when capacity allows.
+- Review-hearing admission uses Assay's hearing entry binding, then Operator schedules first assignment to Assay when capacity allows.
 
 ## Exit Completion Interaction
 
@@ -139,6 +140,7 @@ Exit completion is a Workitem state transition controlled by configuration and O
 - Exit binding is fixed in node configuration.
 - The node does not choose a contract at runtime.
 - Operator validates the bound exit contract against current artefact state.
+- In the reference arrangement, governed artefact completion is user-configured through Sort, while review-hearing Workitems complete through Assay's hearing exit binding.
 
 Contract evaluation rules:
 

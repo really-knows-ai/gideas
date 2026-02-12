@@ -27,7 +27,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../03-node/02-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
 
-Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a ReviewHearing Workitem, routed to the [Assay](./00-overview.md) node.
+Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./00-overview.md) node.
 
 Assay evaluates the Finding's history and renders a verdict:
 
@@ -42,7 +42,7 @@ A Finding that is neither cited enough to trigger promotion nor cited at all wil
 
 Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./02-data-model.md#laws) applied by an administrator — typically via declarative configuration. They have no automatic decay.
 
-The [Librarian](../02-flow/04-system-services.md) indexes externally applied Law CRDs and makes them available for queries and conflict detection. A law is not active until indexing is complete — conflict detection is a hard prerequisite, not a lazy background task.
+The [Librarian](../02-flow/04-system-services.md) admits externally applied Law CRDs into the active law body only after governance checks complete. Integration sequencing and activation mechanics are defined in [System Services](../02-flow/04-system-services.md).
 
 ### Judicial Review (Assay)
 
@@ -50,7 +50,7 @@ The [Assay](./00-overview.md) node is the judiciary. It is invoked when governan
 
 1. **Feedback deadlock.** When a [feedback](./02-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
 
-2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a verdict. Citation-threshold hearings use [Promote / Retain](#organic-discovery-tiers-12). TTL-expiry hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2.
+2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a verdict. Citation-threshold hearings use [Promote / Retain](#organic-discovery-tiers-12). TTL-expiry hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2. Hearings use standard Workitems with explicit governed artefacts, including a `lawId` reference for the law under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
 
 Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — the Sidecar blocks any transition that contradicts the ruling.
 
@@ -72,11 +72,11 @@ flowchart LR
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
 
-Promotion is also where governance can harden in *form*, not just authority. Assay decides what a Ruling should say, but it is a judge, not a scribe — it may not know the formal syntax required to express the rule as executable logic. [Codification Services](../02-flow/04-system-services.md) bridge this gap: specialised translation agents that convert a verdict's intent into the appropriate formal representation. When promoted, a Finding can gain new [representations](./02-data-model.md#representations) — formal logic alongside the original prose — increasing enforceability without changing its goal.
+Promotion is also where governance can harden in *form*, not just authority. When promoted, a Finding can gain new [representations](./02-data-model.md#representations) — for example, formal logic alongside the original prose — increasing enforceability without changing its goal. Representation lifecycle responsibilities are defined in [System Services](../02-flow/04-system-services.md).
 
 ### Decay and Retirement
 
-Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Librarian](../02-flow/04-system-services.md) triggers creation of a ReviewHearing Workitem rather than letting the law expire silently. Assay evaluates the case — using citation history from the [Citation Processor](../02-flow/04-system-services.md) as evidence — and renders a tier-specific verdict:
+Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Librarian](../02-flow/04-system-services.md) triggers creation of a Workitem for review-hearing processing rather than letting the law expire silently. Assay evaluates the case — using citation history from the [Citation Processor](../02-flow/04-system-services.md) as evidence — and renders a tier-specific verdict:
 
 **Tier 1 Finding — TTL expiry:**
 
@@ -144,7 +144,7 @@ Governance Flow (Root CA)
 
 Sibling Flows share a common trust root. A [stamp](./02-data-model.md#passports-and-stamps) produced by any node in any sibling is cryptographically verifiable by tracing the certificate chain back to the State Root — without direct peer relationships between the siblings. This eliminates N-squared scaling: adding a new sibling requires a single certificate exchange with the Governance Flow, not reconfiguration of every existing Flow.
 
-Sibling Operators bootstrap trust through the **Annexation Protocol**: a Certificate Signing Request handshake that anchors the Sibling's intermediate CA to the State Root. Details of the Annexation Protocol, key management providers, and certificate lifecycle are covered in [Flow Operator](../02-flow/01-operator.md).
+Sibling Operators bootstrap trust by anchoring each Sibling's intermediate CA to the State Root. Operator-level onboarding, key management, and certificate lifecycle details are covered in [Flow Operator](../02-flow/01-operator.md).
 
 ### Legislator (Tier 4 Authority)
 

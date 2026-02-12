@@ -69,8 +69,8 @@ Integration outcomes follow tiered supremacy semantics:
 
 Librarian owns hearing trigger emission for law TTL-expiry paths:
 
-- Tier 1 nearing/at expiry -> create ReviewHearing Workitem for Assay.
-- Tier 2 nearing/at expiry -> create ReviewHearing Workitem for Assay.
+- Tier 1 nearing/at expiry -> create a Workitem for review-hearing processing, carrying hearing artefacts including `lawId`.
+- Tier 2 nearing/at expiry -> create a Workitem for review-hearing processing, carrying hearing artefacts including `lawId`.
 
 Librarian does not adjudicate hearings.
 
@@ -88,7 +88,7 @@ The Citation Processor owns citation evidence and threshold-triggered governance
 
 Citation Processor owns trigger emission when Tier 1 findings cross configured citation thresholds:
 
-- Threshold crossing -> create ReviewHearing Workitem routed to Assay.
+- Threshold crossing -> create a Workitem for review-hearing processing, carrying hearing artefacts including `lawId`, routed to Assay.
 
 ### Assay Evidence Path
 
@@ -144,6 +144,8 @@ Friction is a first-class signal:
 
 Hearings are implemented as a protocol across services and runtime actors, not as a standalone hearing service.
 
+Hearing processing uses standard Workitems with explicit governed artefacts and contract bindings. No hearing-specific Workitem subtype or `spec.type` discriminator is introduced.
+
 Trigger ownership is split by condition:
 
 - Citation threshold trigger -> Citation Processor.
@@ -151,11 +153,11 @@ Trigger ownership is split by condition:
 
 Execution and adjudication path:
 
-1. Triggering service creates a ReviewHearing Workitem.
-2. Operator routes hearing Workitem to Assay.
+1. Triggering service creates a Workitem for review-hearing processing with hearing artefacts, including `lawId`.
+2. Operator admits and assigns the hearing Workitem to Assay using Assay's bound hearing entry contract.
 3. Assay retrieves citation evidence from Citation Processor and legal context from Librarian.
-4. Assay issues tier-appropriate verdict.
-5. Operator and Librarian apply resulting law lifecycle actions.
+4. Assay issues a tier-appropriate verdict and calls `complete()`.
+5. Operator validates Assay's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions.
 
 ```mermaid
 sequenceDiagram
@@ -165,13 +167,14 @@ sequenceDiagram
     participant CP as Citation Processor
     participant LB as Librarian
 
-    TR->>OP: create ReviewHearing Workitem
-    OP->>AS: assign hearing
+    TR->>OP: create hearing Workitem (lawId artefact)
+    OP->>AS: assign hearing via entry binding
     AS->>CP: query citation evidence
     CP-->>AS: citation record set
     AS->>LB: query law context
     LB-->>AS: law versions and tiers
-    AS-->>OP: verdict
+    AS-->>OP: verdict + complete()
+    OP->>OP: validate Assay hearing exit contract
     OP->>LB: apply lifecycle action
 ```
 

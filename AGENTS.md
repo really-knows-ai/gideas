@@ -159,7 +159,7 @@ If a Workitem contains multiple artefacts of a required kind, all of them must s
 
 Entry and exit contracts use the same shape and validation semantics.
 
-- Entry contracts are enforced when a node admits work into a Flow lifecycle (local creation), and when imported Workitems are admitted through the configured `importNode`.
+- Entry contracts are enforced when a node admits work into a Flow lifecycle (local creation), when imported Workitems are admitted through the configured `importNode`, and when review-hearing Workitems are admitted through Assay's hearing entry binding.
 - Exit contracts are enforced when an exit node calls `complete()`.
 
 When exit completion triggers cross-flow export, only artefacts whose kinds are listed in the bound exit contract are exported. An empty contract exports no artefacts (metadata only).
@@ -168,7 +168,17 @@ When exit completion triggers cross-flow export, only artefacts whose kinds are 
 
 The FoundryFlow CRD defines named entry and exit contracts (`entryContracts`, `exitContracts`). The FoundryNode CRD can bind a node to an entry contract (`entry: "admit"`) and/or an exit contract (`exit: "approved"`). Only exit nodes can call `complete()` — non-exit nodes calling `complete()` receive an error. When an exit node calls `complete()`, the Operator validates the Workitem against the referenced exit contract. The node does not choose which contract to validate — the binding is fixed in configuration.
 
-In the reference arrangement, Sort is the only exit node.
+In the reference arrangement, Sort is the only user-configured exit node for governed artefact processing. Assay is runtime-mandated and exit-bound for review-hearing processing.
+
+### Review hearings run as standard Workitems
+
+Review hearings are processed as standard Workitems, not as a typed Workitem subtype.
+
+- Triggering services create a Workitem for review-hearing processing.
+- The hearing Workitem carries explicit governed artefacts, including a `lawId` reference for the law under review.
+- Assay is bound as both entry node and exit node for hearing processing.
+- Hearing Workitems are self-contained at Assay: Assay adjudicates and calls `complete()`, then the Operator validates the bound hearing exit contract.
+- Deadlock-escalated governed-work Workitems are separate from hearing Workitems and continue through Sort after Assay adjudication in the reference arrangement.
 
 ### Import starts at a configured import node
 
@@ -324,6 +334,8 @@ Assay can **resolve** at Tier 2 (minting Rulings), **propose** at Tier 3, and **
 Workitems do not have a freeform context object. There is no `spec.context`, no `status.context`, and no reserved key namespace for bag-style metadata.
 
 Workitems also do not use `WorkitemType`, and Flow admission is not type-gated.
+
+Review hearings follow the same rule: they use standard Workitems with explicit artefacts and contract bindings, not a hearing-specific Workitem type or `spec.type` discriminator.
 
 All relevant work context must be represented by explicit Workitem state and governed artefacts.
 

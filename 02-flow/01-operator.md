@@ -58,15 +58,17 @@ Workitem admission into a Flow lifecycle is entry-contract bound.
 
 - Local creation admission (nodes originating new Workitems) is enforced against the admitting node's bound entry contract.
 - Cross-flow import admission (receiving Flow) is enforced against configured `importNode` and its bound entry contract.
+- Review-hearing admission is enforced against Assay's bound hearing entry contract.
 - Entry and exit contracts share the same validation shape: per artefact kind, required stamp-name list, empty list as presence-only, empty contract as no artefact requirements.
 
 Admission outcomes:
 
-1. Resolve admitting node and bound entry contract (local creation uses admitting node; cross-flow import uses configured `importNode`).
+1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses configured `importNode`; review-hearing admission uses Assay hearing entry binding).
 2. Validate Workitem artefacts against per-kind requirements.
 3. On success, admit Workitem into `Pending` lifecycle state.
 4. For cross-flow import, schedule first assignment to configured `importNode` when capacity allows.
-5. On failure, reject admission with structured contract-validation errors.
+5. For review-hearing admission, schedule first assignment to Assay when capacity allows.
+6. On failure, reject admission with structured contract-validation errors.
 
 ## Routing and Guard Evaluation
 
@@ -93,6 +95,7 @@ Completion-specific rules:
 
 - `complete` is accepted only from an exit node bound to a named exit contract.
 - Non-exit completion attempts are rejected.
+- In the reference arrangement, governed artefact completion is user-configured through Sort, while review-hearing completion is runtime-mandated through Assay's hearing exit binding.
 
 Sort behaviour for missing stamps is configuration-driven. Sort discovers missing-stamp provider targets from Flow configuration and capability grants. The Operator validates route legality and guard compliance before transition application.
 

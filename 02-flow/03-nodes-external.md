@@ -14,6 +14,7 @@ Nodes are execution actors in the data plane. Control-plane authority remains wi
 - Nodes do not mutate Workitem lifecycle fields directly.
 - Nodes admitting new Workitems through local creation must be bound to an entry contract.
 - Cross-flow import admission targets configured `importNode`, which must be entry-bound.
+- Runtime-triggered review-hearing admission targets Assay's mandatory hearing entry binding.
 
 Every node, including externally integrated nodes, runs inside the same control and governance contract.
 
@@ -122,6 +123,11 @@ flowchart TD
 
 [Assay](../01-concepts/00-overview.md) is a standard component in every Flow. It is routable as a node and cannot be omitted from the runtime.
 
+Assay participates in two distinct runtime paths:
+
+- Deadlock adjudication for governed-work Workitems routed from Sort, then returned to Sort for re-evaluation in the reference arrangement.
+- Review-hearing processing, where Assay is both entry-bound and exit-bound and completes the hearing Workitem after verdict.
+
 Assay authority ceiling is fixed:
 
 - Resolve Tier 1-2 conflicts and mint Tier 2 rulings.
@@ -182,10 +188,11 @@ All node deployments preserve these invariants:
 5. Sort gate ordering is deterministic and configuration-driven.
 6. Missing-stamp routing targets are discovered from configuration.
 7. Assay is always present and constrained to resolve/propose/appeal at its authority ceiling.
-8. Stamp authority is capability-scoped by artefact kind and stamp name.
-9. Stamps are write-once per artefact version hash.
-10. Nodes admitting locally created Workitems are bound to and validated against entry contracts.
-11. External integrations preserve auditability, idempotency, and governance checks.
-12. Cross-flow handoff is export/import lifecycle, not local route transition.
+8. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Assay entry/exit bindings.
+9. Stamp authority is capability-scoped by artefact kind and stamp name.
+10. Stamps are write-once per artefact version hash.
+11. Nodes admitting locally created Workitems are bound to and validated against entry contracts.
+12. External integrations preserve auditability, idempotency, and governance checks.
+13. Cross-flow handoff is export/import lifecycle, not local route transition.
 
 Node configuration and implementation patterns are defined in [Node Configuration](../03-node/08-configuration.md) and [Node Patterns](../03-node/09-patterns.md). SDK behaviour is defined in [SDK Core](../03-node/02-sdk-core.md), [SDK Artefacts](../03-node/03-sdk-artefacts.md), [SDK Legal](../03-node/04-sdk-legal.md), [SDK Feedback](../03-node/05-sdk-feedback.md), and [SDK Workitems](../03-node/06-sdk-workitems.md).

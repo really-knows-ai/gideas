@@ -85,7 +85,7 @@ When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails
 
 Entry and exit contracts define what a Workitem must carry at lifecycle boundaries. Entry contracts gate admission into a Flow lifecycle. Exit contracts gate completion.
 
-Flow configuration declares both contract types on [FoundryFlow](../04-reference/crds.md) (`entryContracts`, `exitContracts`) and uses one shared shape. A node bound to an entry contract can admit work only when that contract is satisfied. A node bound to an exit contract can call `complete()` only when that contract is satisfied.
+Flow configuration declares both contract types on [FoundryFlow](../04-reference/crds.md) (`entryContracts`, `exitContracts`) and uses one shared shape. Workitem admission always resolves through a bound entry contract: the admitting node for local creation, configured `importNode` for cross-flow import, and Assay's hearing entry binding for review-hearing processing. A node bound to an exit contract can call `complete()` only when that contract is satisfied.
 
 Each contract is keyed by artefact kind. For each required kind, the contract lists the required stamp names:
 
