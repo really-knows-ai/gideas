@@ -65,7 +65,6 @@ Produce a clean, coherent, GitHub-style specification that:
     ├── governance_spec/         # Legacy governance spec (~11 files)
     ├── crds/                    # Legacy CRD YAML definitions
     ├── PolymorphicLaw.md        # Polymorphic law envelope paper
-    ├── PROGRESS.md              # Original session notes
     └── Tier5.md                 # 5-tier law hierarchy design rationale
 ```
 
@@ -360,10 +359,9 @@ The `legacy/` directory contains the raw source material:
 - **`legacy/governance_spec/`** — Governance Flow/Federation spec (~11 files). Primary source for the Governance Flow, law tiers, and precedent.
 - **`legacy/crds/`** — CRD YAML definitions. Source for `04-reference/crds.md`.
 - **`legacy/PolymorphicLaw.md`** — The polymorphic law envelope concept. Relevant to `02-flow/04-system-services.md` (Librarian).
-- **`legacy/PROGRESS.md`** — Session notes from the rewrite process. Contains decisions and clarifications, some of which are superseded by this file.
 - **`legacy/Tier5.md`** — Working reference for the 5-tier law hierarchy, integration protocol, escalation paths, and treaty model. Not legacy — this is an active design document that informed the key decisions in this file.
 
-When the legacy material and this file disagree, **this file wins**. In particular, `PROGRESS.md`'s law authority table is stale — it incorrectly lists Forge as writing Tier 1 laws.
+When the legacy material and this file disagree, **this file wins**.
 
 Legacy terms that are explicitly superseded in this rewrite: `WorkitemType`, `spec.type` admission gating, Workitem context bags (`spec.context` / `status.context`), reserved underscore context keys, `entryNode`, `terminalContract`/`terminalContracts`, and node `terminal` bindings. Use `importNode`, entry/exit contracts, and node entry/exit bindings instead.
 
