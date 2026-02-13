@@ -2,7 +2,7 @@
 
 Flow configuration defines runtime behaviour and is the normative source for behavioural semantics in the Flow layer. Field names, types, defaults, and schema constraints are specified in [CRD Reference](../05-reference/crds.md).
 
-Configuration semantics align with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md), plus the runtime model in [Flow Runtime Overview](./00-overview.md), the control-loop responsibilities in [Flow Operator](./01-operator.md), and the state contract in [Workitems](./02-workitem.md).
+Configuration semantics align with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md), plus the runtime model in [Flow Runtime Overview](./00-overview.md), the control-loop responsibilities in [Flow Operator](./01-operator.md), and the state contract in [Workitems](./02-workitem.md).
 
 ## Configuration Authority Model
 
@@ -224,7 +224,7 @@ All Flow configurations must preserve these invariants:
 2. Only exit nodes can complete Workitems.
 3. Exit validation is Operator-enforced against per-kind stamp requirements.
 4. Stamp names are conventions; system semantics are capability and contract driven.
-5. Sort routing for missing stamps is discovered from configuration, not hardcoded role names.
+5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
 6. Assay is mandatory and bounded to resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
 7. Cross-flow verifiability and local authority remain distinct and topology-dependent.
 8. Export scope is constrained by bound exit-contract kind entries.

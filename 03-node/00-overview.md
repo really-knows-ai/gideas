@@ -75,9 +75,9 @@ Completion semantics are configuration-bound:
 - Operator validates completion against the node's bound exit contract.
 - Non-exit completion attempts are rejected.
 
-Reference-arrangement boundaries are preserved:
+Law and stamp access is capability-gated:
 
-- [Forge](../02-flow/03-nodes-external.md#reference-arrangement-responsibilities) reads laws for context seeding and does not write laws.
+- A node without `WRITE:law` capability cannot write laws regardless of its role. In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) node reads laws for context seeding and does not write them.
 - [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) resolves Tier 1-2 conflicts, proposes Tier 3 changes, and appeals Tier 4-5 conflicts.
 
 ## Relationship to SDK Documents
@@ -101,6 +101,6 @@ Wire and schema references remain in [gRPC API](../05-reference/grpc-api.md) and
 4. Operator is the sole authority for lifecycle transition persistence.
 5. `complete()` is exit-node-only and Operator-validated against bound exit contract.
 6. Workitems do not use `WorkitemType`, `spec.type`, or a freeform context bag.
-7. [Sort](../02-flow/03-nodes-external.md#sort-as-reference-gate) routing order and stamp semantics are configuration-driven.
+7. Stamp-provider routing and gate logic are configuration-driven, not hardcoded by node name.
 8. Stamp authority is capability-scoped and write-once per artefact version.
 9. External service integration does not bypass Sidecar for authenticated Flow runtime operations.

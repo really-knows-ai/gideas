@@ -1,6 +1,6 @@
 # Flow Operator
 
-The Flow Operator is the control-plane authority for a Flow. It reconciles configuration, drives Workitem assignment and routing, enforces exit completion rules, and emits lifecycle audit signals. Operator behaviour is grounded in [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
+The Flow Operator is the control-plane authority for a Flow. It reconciles configuration, drives Workitem assignment and routing, enforces exit completion rules, and emits lifecycle audit signals. Operator behaviour is grounded in [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md).
 
 Operator semantics align with [Flow Runtime Overview](./00-overview.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
 
@@ -194,7 +194,7 @@ All Flow deployments preserve these Operator invariants:
 2. Configuration reconciliation is convergent and rejects invalid partial states.
 3. Assignment remains single-assignee per Workitem.
 4. Routing transition occurs only after deterministic guard evaluation.
-5. Missing-stamp routing remains configuration-discovered, not hardcoded by node name.
+5. Stamp-provider mappings are configuration-derived; the Operator does not hardcode node names for routing decisions.
 6. Workitem admission is entry-contract-bound and Operator-validated.
 7. Exit completion is exit-node-only and bound-contract validated by Operator.
 8. Contract checks are per artefact kind and apply to all artefacts of required kinds.

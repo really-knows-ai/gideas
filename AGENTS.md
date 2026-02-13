@@ -27,8 +27,9 @@ Produce a clean, coherent, GitHub-style specification that:
 ├── 01-concepts/                 # Helicopter view — read first
 │   ├── 00-overview.md           # ✅ COMPLETE
 │   ├── 01-architecture.md       # Six-plane architecture, design principles
-│   ├── 02-data-model.md         # Workitems, Artefacts, Laws, Feedback (detail)
-│   └── 03-governance.md         # Law tiers, precedent, the legal metaphor (detail)
+│   ├── 02-foundry-cycle.md      # The Foundry Cycle reference arrangement
+│   ├── 03-data-model.md         # Workitems, Artefacts, Laws, Feedback (detail)
+│   └── 04-governance.md         # Law tiers, precedent, the legal metaphor (detail)
 │
 ├── 02-flow/                     # The Platform — assumes nodes exist
 │   ├── 00-overview.md
@@ -83,10 +84,11 @@ Produce a clean, coherent, GitHub-style specification that:
 
 | Document | Status |
 |----------|--------|
-| `01-concepts/00-overview.md` | Complete |
+| `01-concepts/00-overview.md` | Drafted (Foundry Cycle content extracted to `02-foundry-cycle.md`) |
 | `01-concepts/01-architecture.md` | Complete |
-| `01-concepts/02-data-model.md` | Complete |
-| `01-concepts/03-governance.md` | Complete |
+| `01-concepts/02-foundry-cycle.md` | Drafted |
+| `01-concepts/03-data-model.md` | Drafted (role-based actor framing applied) |
+| `01-concepts/04-governance.md` | Drafted (reference arrangement qualification applied) |
 | `02-flow/*` | Drafted (first pass complete; consistency pass complete) |
 | `03-node/00-overview.md` | Drafted (prose baseline) |
 | `03-node/01-sidecar.md` | Stub outline |
@@ -149,9 +151,19 @@ Use British spelling consistently across the spec prose (`artefact`, `naturalisa
 
 These decisions have been made and must be preserved across all documents.
 
-### Forge reads laws only
+### Platform mechanisms vs. reference arrangement
 
-Forge queries the Library for context seeding but does not write laws. It reads all tiers to seed its generation context. Law writing belongs to downstream nodes (Appraise, Refine, Assay).
+The spec distinguishes between **platform mechanisms** (capabilities, contracts, Sidecar mediation, Operator enforcement — universal to every Flow) and the **reference arrangement** (Forge, Quench, Appraise, Sort, Refine — the standard node library that demonstrates the adversarial pattern). `02-flow/`, `03-node/`, and `04-sdk/` describe platform mechanisms. Reference-arrangement nodes appear only as illustrative examples of those mechanisms in action. The Foundry Cycle and its node roles are defined in `01-concepts/02-foundry-cycle.md`.
+
+Invariant sections across the spec must contain only platform invariants — constraints enforced by the runtime regardless of topology. Reference-arrangement conventions (Sort's decision order, Forge's read-only law behaviour) are not platform invariants; they are properties of the standard library reference implementations.
+
+Assay is the exception: it is a standard runtime component present in every Flow, not a reference-arrangement node. Its invariants (authority ceiling, mandatory presence) are platform invariants.
+
+### Forge reads laws only (reference arrangement)
+
+In the reference arrangement, Forge queries the Library for context seeding but does not write laws. It reads all tiers to seed its generation context. Law writing belongs to downstream nodes (Appraise, Refine, Assay).
+
+The platform mechanism that enforces this is capability-gated law access: a node without `WRITE:law` capability cannot write laws regardless of its name or role.
 
 ### Sort stamps approval
 
@@ -228,7 +240,7 @@ The Archivist manages all artefact-related data beyond raw content bytes. Its st
 
 **The SDK exposes an Artefact object** with methods for querying versions, feedback, and stamps. All queries are routed through the Sidecar to the Archivist; nodes never interact with the Archivist directly.
 
-**Sort uses the SDK** to check feedback state, the same as any other node. `artefact.hasUnresolvedFeedback()` is the interface for routing decisions.
+**Sort uses the SDK** to check feedback state, the same as any other node. `artefact.hasUnresolvedFeedback()` is the interface for routing decisions. This is a platform mechanism — any node with the appropriate capability can query artefact state through the SDK. Sort is the reference-arrangement node that uses this capability for gate routing.
 
 ### Workitem control-plane ownership and SDK boundary
 
@@ -256,6 +268,8 @@ Artefact identity semantics on a Workitem are stable:
 The `01-concepts/` documents describe architecture, data model, and governance in terms of roles and responsibilities — not products. They say "embedded database", "content-addressed store", "metrics pipeline", and "deployment tooling" rather than naming SQLite, PVC, Prometheus, Helm, gRPC, or Docker. Technology choices are firm decisions (recorded in this file and throughout the key decisions below), but they belong in `02-flow/`, `03-node/`, `04-sdk/`, and `05-reference/` where the audience is operators and developers making implementation decisions. The concepts audience needs to understand *what* each component does and *why* — not *which product* does it.
 
 **Exception: Kubernetes platform vocabulary.** "Kubernetes", "CRD", "namespace", "cluster", and related Kubernetes-native concepts are accepted as foundational domain vocabulary in concepts documents. The spec is explicitly Kubernetes-native — these terms define the platform, not incidental implementation choices. Product names (SQLite, Prometheus, Helm, gRPC, Docker) and methodology names (GitOps) remain excluded from concepts.
+
+**Exception: Foundry Cycle node names.** "Forge", "Quench", "Appraise", "Sort", and "Refine" are accepted as conceptual vocabulary in `01-concepts/` — they name the roles in the reference arrangement. When used in concepts documents, they must be clearly identified as reference-arrangement roles, not universal platform components. Assay is a platform component and is not subject to this qualifier.
 
 ### Laws and the Library stay high-level in concepts
 

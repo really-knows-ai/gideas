@@ -1,6 +1,6 @@
 # Nodes and External Integrations
 
-Nodes execute work inside the Flow runtime but do not own control-plane transitions. Node participation semantics, capability boundaries, reference-arrangement responsibilities, and external integration behaviour are runtime constraints. Conceptual framing is in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
+Nodes execute work inside the Flow runtime but do not own control-plane transitions. Node participation semantics, capability boundaries, reference-arrangement responsibilities, and external integration behaviour are runtime constraints. Conceptual framing is in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md).
 
 Runtime semantics here align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md). Node implementation detail is specified in [Node Overview](../03-node/00-overview.md).
 
@@ -96,7 +96,7 @@ flowchart LR
 
 ## Sort as Reference Gate
 
-Sort is the gate node in the reference arrangement. Its decision order is fixed:
+Sort is the gate node in the [reference arrangement](../01-concepts/02-foundry-cycle.md). Its decision order:
 
 1. Any unresolved non-deadlocked feedback on governed artefacts -> route to Refine.
 2. Any deadlocked feedback -> route to Assay.
@@ -185,15 +185,14 @@ All node deployments preserve these invariants:
 1. Nodes execute through Operator and Sidecar contracts.
 2. Nodes do not mutate Workitem lifecycle fields directly.
 3. Routing outcomes are limited to `route_to_output`, `route_to`, or `complete`.
-4. Forge reads laws for context and does not write laws.
-5. Sort gate ordering is deterministic and configuration-driven.
-6. Missing-stamp routing targets are discovered from configuration.
-7. Assay is always present and constrained to resolve/propose/appeal at its authority ceiling.
-8. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Assay entry/exit bindings.
-9. Stamp authority is capability-scoped by artefact kind and stamp name.
-10. Stamps are write-once per artefact version hash.
-11. Nodes admitting locally created Workitems are bound to and validated against entry contracts.
-12. External integrations preserve auditability, idempotency, and governance checks.
-13. Cross-flow handoff is export/import lifecycle, not local route transition.
+4. Law writing is capability-gated; nodes without `WRITE:law` capability cannot write laws.
+5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
+6. Assay is always present and constrained to resolve/propose/appeal at its authority ceiling.
+7. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Assay entry/exit bindings.
+8. Stamp authority is capability-scoped by artefact kind and stamp name.
+9. Stamps are write-once per artefact version hash.
+10. Nodes admitting locally created Workitems are bound to and validated against entry contracts.
+11. External integrations preserve auditability, idempotency, and governance checks.
+12. Cross-flow handoff is export/import lifecycle, not local route transition.
 
 Node configuration and implementation patterns are defined in [Node Configuration](../03-node/02-configuration.md) and [Node Patterns](../03-node/03-patterns.md). SDK behaviour is defined in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Workitems](../04-sdk/05-sdk-workitems.md).

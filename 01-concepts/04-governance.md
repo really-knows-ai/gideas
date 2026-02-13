@@ -1,6 +1,6 @@
 # Governance
 
-A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./02-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is the runtime's constitutional structure.
+A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./03-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is the runtime's constitutional structure.
 
 ---
 
@@ -10,12 +10,12 @@ Each branch of government has a clear institutional counterpart in the runtime.
 
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
-| **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/finding` capability ([Appraise](./00-overview.md), [Refine](./00-overview.md) in the reference arrangement) — Tier 1 [Findings](./02-data-model.md#law-tiers) |
-| **Judiciary** | Resolves disputes, codifies precedent | [Assay](./00-overview.md) node — Tier 2 [Rulings](./02-data-model.md#law-tiers) |
+| **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/finding` capability ([Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) — Tier 1 [Findings](./03-data-model.md#law-tiers) |
+| **Judiciary** | Resolves disputes, codifies precedent | [Assay](./00-overview.md) node — Tier 2 [Rulings](./03-data-model.md#law-tiers) |
 | **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
-| **Executive** | Enforces compliance | [Sort](./00-overview.md) node, [Exit Contract](./02-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
+| **Executive** | Enforces compliance | Gate node ([Sort](./02-foundry-cycle.md#sort-gate) in the reference arrangement), [Exit Contract](./03-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
 
-Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./02-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough citation weight, [Assay](./00-overview.md) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
+Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./03-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough citation weight, [Assay](./00-overview.md) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
 
 ---
 
@@ -27,7 +27,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
 
-Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./00-overview.md) node.
+Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./00-overview.md) node.
 
 Assay evaluates the Finding's history and renders a verdict:
 
@@ -40,7 +40,7 @@ A Finding that is neither cited enough to trigger promotion nor cited at all wil
 
 ### Administered Policy (Tier 3)
 
-Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./02-data-model.md#laws) applied by an administrator — typically via declarative configuration. They have no automatic decay.
+Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./03-data-model.md#laws) applied by an administrator — typically via declarative configuration. They have no automatic decay.
 
 The [Librarian](../02-flow/04-system-services.md) admits externally applied Law CRDs into the active law body only after governance checks complete. Integration sequencing and activation mechanics are defined in [System Services](../02-flow/04-system-services.md).
 
@@ -48,11 +48,11 @@ The [Librarian](../02-flow/04-system-services.md) admits externally applied Law 
 
 The [Assay](./00-overview.md) node is the judiciary. It is invoked when governance reaches an impasse:
 
-1. **Feedback deadlock.** When a [feedback](./02-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
+1. **Feedback deadlock.** When a [feedback](./03-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, the gate node (in the [reference arrangement](./02-foundry-cycle.md), [Sort](./02-foundry-cycle.md#sort-gate)) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
 
 2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a verdict. Citation-threshold hearings use [Promote / Retain](#organic-discovery-tiers-12). TTL-expiry hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2. Hearings use standard Workitems with explicit governed artefacts, including a `lawId` reference for the law under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
 
-Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
+Assay's verdicts are enforced by the [Contempt Guard](./03-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
 ---
 
@@ -72,7 +72,7 @@ flowchart LR
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
 
-Promotion is also where governance can harden in *form*, not just authority. When promoted, a Finding can gain new [representations](./02-data-model.md#representations) — for example, formal logic alongside the original prose — increasing enforceability without changing its goal. Representation lifecycle responsibilities are defined in [System Services](../02-flow/04-system-services.md).
+Promotion is also where governance can harden in *form*, not just authority. When promoted, a Finding can gain new [representations](./03-data-model.md#representations) — for example, formal logic alongside the original prose — increasing enforceability without changing its goal. Representation lifecycle responsibilities are defined in [System Services](../02-flow/04-system-services.md).
 
 ### Decay and Retirement
 
@@ -142,15 +142,15 @@ Governance Flow (Root CA)
       └─ Optimize Node (Leaf)
 ```
 
-Sibling Flows share a common trust root. A [stamp](./02-data-model.md#passports-and-stamps) produced by any node in any sibling is cryptographically verifiable by tracing the certificate chain back to the State Root — without direct peer relationships between the siblings. This eliminates N-squared scaling: adding a new sibling requires a single certificate exchange with the Governance Flow, not reconfiguration of every existing Flow.
+Sibling Flows share a common trust root. A [stamp](./03-data-model.md#passports-and-stamps) produced by any node in any sibling is cryptographically verifiable by tracing the certificate chain back to the State Root — without direct peer relationships between the siblings. This eliminates N-squared scaling: adding a new sibling requires a single certificate exchange with the Governance Flow, not reconfiguration of every existing Flow.
 
 Sibling Operators bootstrap trust by anchoring each Sibling's intermediate CA to the State Root. Operator-level onboarding, key management, and certificate lifecycle details are covered in [Flow Operator](../02-flow/01-operator.md).
 
 ### Legislator (Tier 4 Authority)
 
-The Governance Flow's governed [artefacts](./02-data-model.md#artefacts) are laws. It is subject to the same [Foundry Cycle](./00-overview.md#the-foundry-cycle) as any other Flow: Forge drafts legislation, Quench validates formal constraints, Appraise reviews for consistency with existing law, Sort gates the process, Refine addresses feedback, and Assay resolves disputes.
+The Governance Flow's governed [artefacts](./03-data-model.md#artefacts) are laws. It is subject to the same [Foundry Cycle](./02-foundry-cycle.md) as any other Flow — creation, validation, review, and refinement of law drafts, with Assay resolving disputes.
 
-The legislative process follows the standard cycle with one critical addition: a HITL gate at Sort. No Tier 4 State Constitution law is enacted without human ratification. The ratified law is minted as a Law CRD and published to all Sibling Flows.
+The legislative process follows the standard cycle with one critical addition: a HITL gate at the exit node. No Tier 4 State Constitution law is enacted without human ratification. The ratified law is minted as a Law CRD and published to all Sibling Flows.
 
 The Governance Flow holds exclusive write authority for Tier 4 laws. Sibling Flows consume them as read-only.
 
@@ -178,7 +178,7 @@ Petitions arrive from multiple sources:
 
 #### Processing
 
-The petition enters the standard Foundry Cycle. Forge drafts the law. Quench validates formal constraints against existing Tier 4 laws. Appraise reviews for consistency, unintended consequences, and conflicts with existing governance. Sort gates — and at the Sort gate, a human legislative authority reviews and ratifies.
+The petition enters the standard [Foundry Cycle](./02-foundry-cycle.md). The creating node drafts the law. Validation checks formal constraints against existing Tier 4 laws. Review evaluates consistency, unintended consequences, and conflicts with existing governance. The gate node applies a HITL checkpoint — a human legislative authority reviews and ratifies before the law is enacted.
 
 The output is a new or amended Tier 4 Law CRD, published to all Sibling Flows via the State Library snapshot.
 
@@ -225,7 +225,7 @@ When the grace period expires:
 - The conflicting Tier 3 law is **retired** (CRD deleted, audit log retained)
 - If the Flow has not adapted, its work **starts failing governance checks** — Workitems cannot exit if they violate the now-active higher-tier law
 
-The [exit contract](./02-data-model.md#entry-and-exit-contracts) enforces compliance organically. [Friction](./00-overview.md#friction) spikes, and the data tells the story.
+The [exit contract](./03-data-model.md#entry-and-exit-contracts) enforces compliance organically. [Friction](./00-overview.md#friction) spikes, and the data tells the story.
 
 ---
 
@@ -237,12 +237,12 @@ Escalation is the mechanism by which conflicts that exceed a Flow's judicial aut
 
 When a Sibling Flow's [Assay](./00-overview.md) node encounters a conflict involving Tier 4 or Tier 5 laws, it files an **appeal** — a cross-Flow message via the Librarian — to the Governance Flow.
 
-- **Tier 4 conflict:** The Governance Flow can repeal or amend its own Tier 4 laws to resolve the issue. The amendment enters the Governance Flow's Foundry Cycle and, if ratified, propagates to all sibling Flows.
+- **Tier 4 conflict:** The Governance Flow can repeal or amend its own Tier 4 laws to resolve the issue. The amendment enters the Governance Flow's [Foundry Cycle](./02-foundry-cycle.md) and, if ratified, propagates to all sibling Flows.
 - **Tier 5 conflict:** The Governance Flow escalates the appeal to the relevant Federal authority.
 
 ### Governance Flow to Federation
 
-Federal authorities operate their own Governance Flows — full Foundry Cycle deployments whose governed artefacts are Tier 5 Federal Accords. When a Governance Flow appeals a Tier 5 conflict, the Federal authority deliberates and produces one of two outcomes:
+Federal authorities operate their own Governance Flows — full [Foundry Cycle](./02-foundry-cycle.md) deployments whose governed artefacts are Tier 5 Federal Accords. When a Governance Flow appeals a Tier 5 conflict, the Federal authority deliberates and produces one of two outcomes:
 
 | Outcome | Effect |
 |---------|--------|
@@ -287,7 +287,7 @@ A standalone Flow is fully self-contained. It can be deployed, operated, and gov
 
 [Treaties](../02-flow/06-cross-flow.md) enable collaboration between Flows that do not share a Governance Flow — typically across organisational boundaries. Where Federation provides implicit trust through a shared Root CA, a Treaty provides explicit trust through a bilateral agreement with unidirectional execution. Two-way exchange requires two separate Treaties.
 
-The governance implication at Treaty boundaries is **naturalisation**: when a [Workitem](./02-data-model.md#workitems) crosses between non-sibling Flows, foreign [stamps](./02-data-model.md#passports-and-stamps) are preserved for audit but do not satisfy local stamp requirements. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. Sibling Flows do not require Treaties; under shared-root verification, sibling stamps can satisfy local requirements immediately when names match. The structural details and the full export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
+The governance implication at Treaty boundaries is **naturalisation**: when a [Workitem](./03-data-model.md#workitems) crosses between non-sibling Flows, foreign [stamps](./03-data-model.md#passports-and-stamps) are preserved for audit but do not satisfy local stamp requirements. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. Sibling Flows do not require Treaties; under shared-root verification, sibling stamps can satisfy local requirements immediately when names match. The structural details and the full export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
 
 ---
 

@@ -299,13 +299,13 @@ stateDiagram-v2
 
     wont_fix --> resolved : AcceptRefusal()
     wont_fix --> rejected : RejectRefusal()
-    wont_fix --> deadlocked : Sort detects\nexcessive depth
+    wont_fix --> deadlocked : Gate node detects\nexcessive depth
 
     rejected --> actioned : ResolveFeedback()
-    rejected --> deadlocked : Sort detects\nexcessive depth
+    rejected --> deadlocked : Gate node detects\nexcessive depth
 
-    deadlocked --> wont_fix : Assay verdict\n(favours Refine;\nlinkedRuling set)
-    deadlocked --> rejected : Assay verdict\n(favours Appraise;\nlinkedRuling set)
+    deadlocked --> wont_fix : Assay verdict\n(favours refiner;\nlinkedRuling set)
+    deadlocked --> rejected : Assay verdict\n(favours reviewer;\nlinkedRuling set)
 
     resolved --> [*]
 ```
@@ -313,34 +313,36 @@ stateDiagram-v2
 | State | Description |
 |-------|-------------|
 | **new** | Feedback raised, not yet addressed |
-| **actioned** | Refine addressed the issue (fix applied) |
-| **wont_fix** | Refine refused with structured justification (display label "Won't Fix") |
-| **rejected** | Reviewer rejected the fix or refusal |
-| **deadlocked** | Sort detected excessive feedback depth — escalated to Assay |
+| **actioned** | Refining node addressed the issue (fix applied) |
+| **wont_fix** | Refining node refused with structured justification (display label "Won't Fix") |
+| **rejected** | Reviewing node rejected the fix or refusal |
+| **deadlocked** | Gate node detected excessive feedback depth — escalated to Assay |
 | **resolved** | Closed — final state |
 
 | From | To | Actor | Trigger |
 |------|----|-------|---------|
 | — | **new** | System | `AddFeedback()` |
-| new | actioned | Refine | `ResolveFeedback()` — applies a fix |
-| new | `wont_fix` | Refine | `RefuseFeedback()` — with structured justification |
-| actioned | resolved | Appraise | `AcceptFix()` — fix is adequate |
-| actioned | rejected | Appraise | `RejectFix()` — fix is inadequate |
-| `wont_fix` | resolved | Appraise | `AcceptRefusal()` — refusal is justified |
-| `wont_fix` | rejected | Appraise | `RejectRefusal()` — refusal is unjustified |
-| `wont_fix` | deadlocked | Sort | Feedback depth exceeds `maxFeedbackDepth` |
-| rejected | actioned | Refine | `ResolveFeedback()` — complies with rejection |
-| rejected | deadlocked | Sort | Feedback depth exceeds `maxFeedbackDepth` |
-| deadlocked | `wont_fix` | Assay | Verdict favours Refine — `linkedRuling` set, cites Tier 2 Ruling |
-| deadlocked | rejected | Assay | Verdict favours Appraise — `linkedRuling` set, cites Tier 2 Ruling |
+| new | actioned | Refining node | `ResolveFeedback()` — applies a fix |
+| new | `wont_fix` | Refining node | `RefuseFeedback()` — with structured justification |
+| actioned | resolved | Reviewing node | `AcceptFix()` — fix is adequate |
+| actioned | rejected | Reviewing node | `RejectFix()` — fix is inadequate |
+| `wont_fix` | resolved | Reviewing node | `AcceptRefusal()` — refusal is justified |
+| `wont_fix` | rejected | Reviewing node | `RejectRefusal()` — refusal is unjustified |
+| `wont_fix` | deadlocked | Gate node | Feedback depth exceeds `maxFeedbackDepth` |
+| rejected | actioned | Refining node | `ResolveFeedback()` — complies with rejection |
+| rejected | deadlocked | Gate node | Feedback depth exceeds `maxFeedbackDepth` |
+| deadlocked | `wont_fix` | Assay | Verdict favours refiner — `linkedRuling` set, cites Tier 2 Ruling |
+| deadlocked | rejected | Assay | Verdict favours reviewer — `linkedRuling` set, cites Tier 2 Ruling |
 
-Refine makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). Appraise reviews the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to Refine for compliance — re-refusal is not permitted. If Refine's subsequent fix is again rejected, the cycle continues until either Appraise accepts or Sort detects fatigue and escalates to Assay.
+In the [reference arrangement](./02-foundry-cycle.md), the refining node is [Refine](./02-foundry-cycle.md#refine-refiner), the reviewing node is [Appraise](./02-foundry-cycle.md#appraise-reviewer), and the gate node is [Sort](./02-foundry-cycle.md#sort-gate). Any node granted the appropriate capabilities can perform these roles in a custom topology.
 
-When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, Sort transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
+The refining node makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). The reviewing node evaluates the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to the refining node for compliance — re-refusal is not permitted. If the refining node's subsequent fix is again rejected, the cycle continues until either the reviewer accepts or the gate node detects fatigue and escalates to Assay.
 
-From [Sort's](./00-overview.md) perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont_fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont_fix` state still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
+When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
 
-In the [reference arrangement](./00-overview.md), Sort reads the Flow configuration to determine which nodes can provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. Sort queries artefact state through the [SDK](../04-sdk/01-sdk-core.md) — `artefact.hasUnresolvedFeedback()`, `artefact.getStamps()` — the same interface available to every node. When all required stamps are present and all feedback is resolved, Sort applies the "approval" stamp. In the reference arrangement Sort is the only node that applies the "approval" stamp, but any stamp can be granted to any node by the Flow Architect.
+From the gate node's perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont_fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont_fix` state still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
+
+In the [reference arrangement](./02-foundry-cycle.md), the gate node ([Sort](./02-foundry-cycle.md#sort-gate)) reads the Flow configuration to determine which nodes can provide which stamps, then evaluates the Workitem's governance state and routes accordingly — unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward judicial review, and missing stamps toward the node configured to provide them. Sort queries artefact state through the [SDK](../04-sdk/01-sdk-core.md) — `artefact.hasUnresolvedFeedback()`, `artefact.getStamps()` — the same interface available to every node. When all required stamps are present and all feedback is resolved, Sort applies the "approval" stamp. In the reference arrangement Sort is the only node that applies the "approval" stamp, but any stamp can be granted to any node by the Flow Architect.
 
 ### Forced-Choice Justification
 
@@ -355,7 +357,7 @@ Every refusal creates a traceable record — either a link to existing governanc
 
 ### Fatigue Detection and Escalation
 
-Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, [Sort](./00-overview.md) transitions the item to `deadlocked` and routes the Workitem to [Assay](./00-overview.md).
+Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to [Assay](./00-overview.md). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate).
 
 The threshold applies per feedback item, not per Workitem. A Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
@@ -363,8 +365,8 @@ The threshold applies per feedback item, not per Workitem. A Workitem can have d
 
 Once Assay renders a verdict and sets a `linkedRuling` on a feedback item, that item is under judicial mandate. The [Archivist](../02-flow/04-system-services.md) enforces finality in both directions:
 
-- A `wont_fix` with a `linkedRuling` (Assay agreed with Refine) cannot be moved to `rejected` by Appraise. The only valid transition is to `resolved` via `AcceptRefusal()`.
-- A `rejected` with a `linkedRuling` (Assay agreed with Appraise) cannot be moved to `wont_fix` or `deadlocked`. The only valid transition is to `actioned` via `ResolveFeedback()`, followed by acceptance to `resolved`.
+- A `wont_fix` with a `linkedRuling` (Assay agreed with the refining node) cannot be moved to `rejected` by the reviewing node. The only valid transition is to `resolved` via `AcceptRefusal()`.
+- A `rejected` with a `linkedRuling` (Assay agreed with the reviewing node) cannot be moved to `wont_fix` or `deadlocked`. The only valid transition is to `actioned` via `ResolveFeedback()`, followed by acceptance to `resolved`.
 
 Any other state change returns `CONTEMPT_VIOLATION`. The ruling is not a suggestion. The losing side must accept the verdict.
 
@@ -397,22 +399,22 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
 | 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./00-overview.md) and [Refine](./00-overview.md) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
-| 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement. |
+| 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
-| 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./03-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
+| 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./04-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
 Supremacy is absolute — higher tier always wins, with no upward override. A Tier 3 Local Statute cannot override a Tier 4 State Constitution law, regardless of when either was created.
 
 Tier 1 Findings are the raw material of governance. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. Findings that prove useful (cited frequently across Workitems) accumulate citation data tracked by the [Citation Processor](../02-flow/04-system-services.md), which can trigger promotion to Tier 2. Findings that go uncited expire at their TTL.
 
-Tier 2 Rulings are binding precedent. They are minted when Assay resolves a dispute, consolidating the arguments into a durable law. Rulings have longer TTLs than Findings and require a formal [review hearing](./03-governance.md#decay-and-retirement) before retirement.
+Tier 2 Rulings are binding precedent. They are minted when Assay resolves a dispute, consolidating the arguments into a durable law. Rulings have longer TTLs than Findings and require a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement.
 
 Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows (no Governance Flow), these are CRDs applied by an administrator. Under a Governance Flow, the local legislative cycle can also produce them.
 
-Tiers 4 and 5 arrive from above. A standalone Flow has no Tiers 4 or 5 — they require a [Governance Flow](./03-governance.md) and Federation respectively. The [Governance Flow](./03-governance.md) produces Tier 4 State Constitution laws through the same [Foundry Cycle](./00-overview.md) as any other Flow (its governed artefacts are the laws themselves), and synchronises Tier 5 Federal Accords from upstream authorities.
+Tiers 4 and 5 arrive from above. A standalone Flow has no Tiers 4 or 5 — they require a [Governance Flow](./04-governance.md) and Federation respectively. The [Governance Flow](./04-governance.md) produces Tier 4 State Constitution laws through the same [Foundry Cycle](./00-overview.md) as any other Flow (its governed artefacts are the laws themselves), and synchronises Tier 5 Federal Accords from upstream authorities.
 
-The full integration protocol — how higher-tier laws are pushed to Flows, how conflicts are detected and resolved, and how escalation works across tiers — is covered in [Governance](./03-governance.md).
+The full integration protocol — how higher-tier laws are pushed to Flows, how conflicts are detected and resolved, and how escalation works across tiers — is covered in [Governance](./04-governance.md).
 
 ### Scoping
 

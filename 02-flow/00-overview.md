@@ -1,6 +1,6 @@
 # Flow Runtime Overview
 
-Foundry Flow runtime for operators and platform administrators is defined by component boundaries, the execution loop, and non-negotiable behaviour invariants. Conceptual foundations remain in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
+Foundry Flow runtime for operators and platform administrators is defined by component boundaries, the execution loop, and non-negotiable behaviour invariants. Conceptual foundations remain in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md).
 
 `02-flow/` is the platform specification for operating a Flow. Node implementation detail lives in [Node Overview](../03-node/00-overview.md). Field-level schema and wire shape live in [CRD Reference](../05-reference/crds.md).
 
@@ -87,21 +87,16 @@ Assay is the exception: it is a standard runtime component present in every Flow
 
 ## Governance Runtime Mechanics
 
-Law and stamp behaviour in runtime is fixed by invariant:
+Law and stamp behaviour is enforced by the platform through capabilities and configuration:
 
-- Forge reads laws for context seeding and does not write laws.
+- Law writing is capability-gated. A node without `WRITE:law` capability cannot write laws regardless of its role or name.
 - Laws are single objects with one goal and one-or-more representations; any mutation creates a new whole-law version.
 - Stamp names are named governance checkpoints chosen by the Flow Architect; the platform attaches no built-in semantics to names.
-- Sort is a gate in the reference arrangement with fixed decision order:
-  1. unresolved non-deadlocked feedback routes to Refine;
-  2. deadlocked feedback routes to Assay;
-  3. missing required stamps route to the node configured to provide each missing stamp;
-  4. all feedback resolved and required stamps present allows Sort to apply `approval` and complete the reference path.
-
-Deadlocked feedback is unresolved by state, so reference implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
-
-- `approval` is a reference-arrangement convention, not a privileged system stamp.
+- Stamp-provider routing is configuration-discovered. A node granted `READ:flow` capability can query the topology to discover stamp-to-node mappings at runtime.
+- `approval` is a naming convention used by the [reference arrangement](../01-concepts/02-foundry-cycle.md), not a privileged system stamp.
 - Assay authority is bounded: resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
+
+In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node uses these platform mechanisms to implement gate routing: unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward Assay, missing stamps toward the configured provider, and fully satisfied governance toward exit completion. Deadlocked feedback is unresolved by state, so gate implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
 
 ## Exit Completion Model
 
@@ -176,8 +171,8 @@ The following invariants hold for every Flow deployment:
 1. A Workitem is assigned to exactly one node at a time.
 2. Flow routing decisions are enforced by the Operator.
 3. Sidecar mediates authenticated node access and write operations.
-4. Forge reads laws only; law writing belongs to authorised downstream actors.
-5. Sort gate ordering is deterministic and configuration-driven for stamp-provider routing.
+4. Law writing is capability-gated; nodes without `WRITE:law` capability cannot write laws.
+5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
 6. Stamps are named checkpoints with write-once-per-version behaviour.
 7. Exit completion is exit-node-only and Operator-validated against bound contracts.
 8. Workitem admission is entry-contract-bound.

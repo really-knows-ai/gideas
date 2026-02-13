@@ -24,13 +24,13 @@ The core premise is simple: all agents are fallible. The framework verifies exec
 
 **Flow** — A self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
-**[Workitem](./02-data-model.md#workitems)** — The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
+**[Workitem](./03-data-model.md#workitems)** — The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](../02-flow/04-system-services.md). Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
 
 **[Node](../03-node/00-overview.md)** — A stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
 
-**[Artefact](./02-data-model.md#artefacts)** — A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model — anything the Flow produces.
+**[Artefact](./03-data-model.md#artefacts)** — A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model — anything the Flow produces.
 
-**[Passport](./02-data-model.md#passports-and-stamps)** — The collection of [stamps](#stamps) on an artefact version. A passport tracks which stamp requirements have been satisfied for a specific content hash.
+**[Passport](./03-data-model.md#passports-and-stamps)** — The collection of [stamps](#stamps) on an artefact version. A passport tracks which stamp requirements have been satisfied for a specific content hash.
 
 ### Stamps
 
@@ -45,82 +45,19 @@ Stamp names are defined by the GovernedArtefact CRD — the artefact declares wh
 
 Stamps are write-once per artefact version. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
 
-**[Feedback](./02-data-model.md#feedback)** — Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
+**[Feedback](./03-data-model.md#feedback)** — Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
-**[Law](./02-data-model.md#laws)** — A governance rule with a textual **goal** — what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
+**[Law](./03-data-model.md#laws)** — A governance rule with a textual **goal** — what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
 
 ---
 
 ## The Foundry Cycle
 
-The Foundry Cycle is the reference arrangement of node types in a governed workflow. Real deployments adapt it to their context — the node types are a vocabulary, and the topology is shaped by what the work requires. The pattern drives unreliable agents to produce artefacts that are provably compliant with a body of governance, through an adversarial loop of creation, validation, review, and refinement.
+The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. Flow Architects adapt it to their context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
 
-The standard library includes configurable reference implementations for each node type as container images. Flow Architects can extend them, adapt them, or implement completely custom nodes.
+Assay is the exception — it is a standard runtime component present in every Flow, not a swappable reference implementation.
 
-### Node Types
-
-**Forge** creates the initial artefact. Before generation, it reads the Flow's [constitution](#laws-and-the-library) — the full body of applicable law, filtered by artefact kind — and seeds it into its context, so the creator knows the rules before it starts. Forge reads laws exclusively; writing laws belongs to downstream nodes.
-
-**Quench** performs deterministic validation. It queries the constitution for executable representations of applicable laws — formal logic, constraint schemas, compiled checks — and runs them against the artefact to verify deterministic compliance before it reaches the more expensive review stage. Quench is optional — topologies that rely exclusively on non-deterministic review can omit it.
-
-**Appraise** conducts subjective review. It reads the Flow's constitution for the applicable artefact kind and orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against it. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise has the `WRITE:law/finding` capability and can record Tier 1 Findings.
-
-**Sort** is the central routing hub. Granted the `READ:flow` capability, it reads the Flow configuration to discover which nodes can provide which stamps, then applies deliberately simple logic:
-
-1. Is there unresolved feedback that is not deadlocked? Route to **Refine**.
-2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
-3. Missing required stamps? Route to the node configured to provide them (Appraise, in the reference arrangement).
-4. All feedback resolved, all required stamps present? Stamp **approval**, call `complete()`, and let the Operator validate the bound exit contract before marking **Done**.
-
-Sort is a gate. It evaluates state, consults the Flow config for routing targets, and, in the reference arrangement for governed artefact processing, acts as the exit-bound node: it stamps approval when the passport is complete and all feedback is resolved, then calls `complete()`.
-
-**Refine** addresses feedback. It reads the Flow's constitution for the applicable artefact kind, reviews the consolidated (potentially contradictory) feedback, produces a new artefact version, and must address every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured justification: either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine has the `WRITE:law/finding` capability and can record Tier 1 Findings.
-
-**Assay** is the judiciary. It is invoked for deadlocked feedback disputes and for review hearings triggered by citation thresholds or TTL expiry. Assay deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent) — the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./03-governance.md).
-
-Assay is built into the runtime — every Flow includes it — and Sort routes Workitems to it when disputes require judicial review.
-
-### Cycle Flow
-
-```mermaid
-flowchart LR
-    Start(( )) --> Forge
-    Forge --> Quench
-    Quench --> Sort
-
-    Sort -->|unresolved, not deadlocked| Refine
-    Sort -->|needs review| Appraise
-    Sort -->|deadlock| Assay
-    Sort -->|all clear| Done(( ))
-
-    Appraise --> Sort
-    Refine --> Quench
-    Assay --> Sort
-```
-
-In the reference arrangement, Refine routes back through Quench — deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort. Deadlock-escalated governed-work assignments route back through Sort after Assay adjudication, while review-hearing Workitems are self-contained at Assay.
-
-### Law Authority
-
-All nodes in the cycle can **read** laws from the Library. Only some can **write**:
-
-```mermaid
-flowchart TD
-    Library[(Library)]
-
-    Forge -->|reads| Library
-    Quench -->|reads| Library
-    Appraise -->|reads| Library
-    Sort -->|reads| Library
-    Refine -->|reads| Library
-    Assay -->|reads| Library
-
-    Appraise -.->|writes Tier 1| Library
-    Refine -.->|writes Tier 1| Library
-    Assay -.->|writes Tier 2| Library
-```
-
-Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) — any node granted the `WRITE:law/finding` capability can do the same. Assay alone mints Tier 2 Rulings (binding precedent). Its full [authority ceiling](./03-governance.md#assays-authority-ceiling) is constitutionally bounded.
+The standard library provides configurable reference implementations for each role as container images. The platform enforces behaviour through capabilities and configuration, not node names.
 
 ---
 
@@ -140,15 +77,15 @@ Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Source | Lifecycle |
 |------|------|--------|-----------|
-| 1 | **Finding** | Nodes (Appraise, Refine in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
+| 1 | **Finding** | Nodes ([Appraise, Refine](./02-foundry-cycle.md) in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
 | 2 | **Ruling** | Assay Node | Binding precedent. Minted when disputes are resolved. |
 | 3 | **Local Statute** | Flow Architect | Local policy. Human-administered or via local legislative cycle. |
-| 4 | **State Constitution** | [Governance Flow](./03-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
+| 4 | **State Constitution** | [Governance Flow](./04-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
 | 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
 Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it can be promoted to a Tier 2 Ruling through the Assay Node. The [Citation Processor](../02-flow/04-system-services.md) tracks this usage — which laws are cited, by which nodes, and whether they generate compliance or resistance — driving the promotion lifecycle and surfacing toxic laws that generate disproportionate friction.
 
-The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./02-data-model.md#representations) — formal logic, executable validators — through [Codification Services](../02-flow/04-system-services.md). Authority increases through the tier system; enforceability increases through representation.
+The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through [Codification Services](../02-flow/04-system-services.md). Authority increases through the tier system; enforceability increases through representation.
 
 ### The Governance Flow
 
@@ -156,7 +93,7 @@ Tiers 1 and 2 emerge from within a Flow. Tier 3 is the Flow's own legislative au
 
 A standalone Flow (no Governance Flow) manages its own Tier 3 Local Statutes as CRDs applied by an administrator. Tiers 4 and 5 do not exist in this configuration.
 
-Under a Governance Flow, the [Governance Flow](./03-governance.md) is a dedicated Flow whose governed artefacts are the laws themselves. It produces Tier 4 State Constitution laws through the same Foundry Cycle (Forge, Quench, Appraise, Sort, Refine, Assay) as any other Flow, and synchronises Tier 5 Federal Accords from upstream authorities. Sibling Flows receive these laws via their Librarians, ensuring every Flow in the organisation operates under a consistent body of higher-tier governance.
+Under a Governance Flow, the [Governance Flow](./04-governance.md) is a dedicated Flow whose governed artefacts are the laws themselves. It produces Tier 4 State Constitution laws through the same [Foundry Cycle](./02-foundry-cycle.md) as any other Flow, and synchronises Tier 5 Federal Accords from upstream authorities. Sibling Flows receive these laws via their Librarians, ensuring every Flow in the organisation operates under a consistent body of higher-tier governance.
 
 The Governance Flow also serves as the **State Root Certificate Authority**. It issues intermediate CA certificates to each Sibling Flow's Operator, establishing a shared trust hierarchy. Any stamp produced by any node in any sibling Flow is cryptographically verifiable by tracing the certificate chain back to the State Root.
 

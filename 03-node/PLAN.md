@@ -20,7 +20,7 @@
 
 - Each document preserves terminology and invariants from `AGENTS.md` and `02-flow/`.
 - No document reintroduces superseded constructs (`WorkitemType`, `spec.type`, context bag, terminal-by-shape semantics).
-- `03-node/` runtime boundaries remain consistent with `01-concepts/01-architecture.md` and `01-concepts/02-data-model.md`.
+- `03-node/` runtime boundaries remain consistent with `01-concepts/01-architecture.md` and `01-concepts/03-data-model.md`.
 - Cross-links to `04-sdk/` and `05-reference/` exist where API and schema details are delegated.
 - Markdown lint passes from `lint/`.
 

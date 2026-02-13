@@ -27,11 +27,11 @@
 - Map external response classes to deterministic route outcomes.
 - Design retries so replay does not duplicate irreversible external effects.
 
-## Governance-Safe Feedback and Refine Loops
+## Governance-Safe Feedback and Gate Loops
 
 - Treat non-`resolved` feedback as unresolved for gate logic.
-- Handle deadlock as a distinct branch that escalates to Assay rather than normal refine routing.
-- Implement Sort gate decision order exactly: unresolved non-deadlocked -> Refine, deadlocked -> Assay, missing stamps -> configured provider, all clear -> apply `approval` and complete.
+- Handle deadlock as a distinct branch that escalates to Assay rather than normal refinement routing.
+- Gate nodes implementing the [reference arrangement](../01-concepts/02-foundry-cycle.md) decision order: unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward Assay, missing stamps toward the configured provider, all governance satisfied leads to exit completion. The standard [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node implements this pattern.
 - Preserve judicial finality after `linkedRuling` is set; avoid transitions that trigger contempt violations.
 - Keep law and feedback interactions explicit and auditable.
 
