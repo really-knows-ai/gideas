@@ -2,8 +2,6 @@
 
 Flow configuration defines runtime behaviour and is the normative source for behavioural semantics in the Flow layer. Field names, types, defaults, and schema constraints are specified in [CRD Reference](../05-reference/crds.md).
 
-Configuration semantics align with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md), plus the runtime model in [Flow Runtime Overview](./00-overview.md), the control-loop responsibilities in [Flow Operator](./01-operator.md), and the state contract in [Workitems](./02-workitem.md).
-
 ## Configuration Authority Model
 
 Configuration is expressed through two resources with distinct authority boundaries:

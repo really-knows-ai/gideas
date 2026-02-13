@@ -1,8 +1,6 @@
 # System Services
 
-System services provide the runtime substrate for law lifecycle, artefact lifecycle, governance signals, and operational resilience. Service responsibilities and inter-service contracts at the Flow layer define this substrate. Field-level schemas are specified in [CRD Reference](../05-reference/crds.md), and API-level wire contracts are specified in [gRPC API](../05-reference/grpc-api.md).
-
-This service model aligns with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), [Governance](../01-concepts/04-governance.md), [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
+System services provide the runtime substrate for law lifecycle, artefact lifecycle, governance signals, and operational resilience.
 
 ## Service Landscape and Boundaries
 
@@ -137,7 +135,8 @@ Flow Monitor aggregates runtime observability signals:
 Friction is a first-class signal:
 
 - Friction events are source-tagged (law, node, topology path, and workflow context).
-- Aggregation supports operational and governance analysis.
+- Each friction event carries a magnitude and an aggregation operation — logarithmic, additive, or multiplicative — chosen by the emitting node. Every node emits a base friction cost for each Workitem that passes through it. Additional friction accumulates with further interactions: feedback conflicts, rework cycles, complexity penalties. A node caught in an argument loop can emit multiplicative friction that compounds on each iteration.
+- Aggregation supports operational and governance analysis at multiple scopes: per-node, per-law, per-tier, and per-topology-path.
 - Friction is not optional instrumentation; it is a mandatory runtime output surface.
 
 ## Hearing Lifecycle as Cross-Component Protocol

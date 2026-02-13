@@ -79,7 +79,7 @@ When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails
 | Detection | Signal | Source | Response |
 |-----------|--------|--------|----------|
 | Thrash | Total visits across all nodes | Thrash Guard | Fail Workitem |
-| Fatigue | History depth on a single feedback item | Feedback | Escalate to [Assay](./00-overview.md) |
+| Fatigue | History depth on a single feedback item | Feedback | Escalate to [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) |
 
 ### Entry and Exit Contracts
 
@@ -165,7 +165,7 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 |---------|--------|----------|
 | Build-time bundling | Packaged with the node | Immutable templates, versioned with code |
 | Deploy-time configuration | Provided at deployment | Environment-specific settings, managed by deployment tooling |
-| Runtime injection | Admitting node calls `StoreArtefact()` to copy into the Workitem | Creates a unique, governed copy |
+| Runtime injection | Admitting node stores content as a governed artefact in the Workitem | Creates a unique, governed copy |
 
 ### Governed Artefacts
 
@@ -259,7 +259,7 @@ A feedback item carries a severity, a current state, a message, and a history of
 | `severity` | enum | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
 | `state` | enum | Current lifecycle state |
 | `message` | string | Feedback content (max 1024 characters) |
-| `linkedRuling` | string | Ruling ID if [Assay](./00-overview.md) has rendered a verdict |
+| `linkedRuling` | string | Ruling ID if [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) has rendered a verdict |
 | `history` | []FeedbackEvent | Chronological record of actions |
 | `justification` | Justification | Legal basis if state is `wont_fix` (display label "Won't Fix") |
 
@@ -334,6 +334,8 @@ stateDiagram-v2
 | deadlocked | `wont_fix` | Assay | Verdict favours refiner — `linkedRuling` set, cites Tier 2 Ruling |
 | deadlocked | rejected | Assay | Verdict favours reviewer — `linkedRuling` set, cites Tier 2 Ruling |
 
+These are the only permitted transitions. The Archivist rejects any state change not listed above.
+
 In the [reference arrangement](./02-foundry-cycle.md), the refining node is [Refine](./02-foundry-cycle.md#refine-refiner), the reviewing node is [Appraise](./02-foundry-cycle.md#appraise-reviewer), and the gate node is [Sort](./02-foundry-cycle.md#sort-gate). Any node granted the appropriate capabilities can perform these roles in a custom topology.
 
 The refining node makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). The reviewing node evaluates the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to the refining node for compliance — re-refusal is not permitted. If the refining node's subsequent fix is again rejected, the cycle continues until either the reviewer accepts or the gate node detects fatigue and escalates to Assay.
@@ -357,7 +359,7 @@ Every refusal creates a traceable record — either a link to existing governanc
 
 ### Fatigue Detection and Escalation
 
-Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to [Assay](./00-overview.md). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate).
+Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate).
 
 The threshold applies per feedback item, not per Workitem. A Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
@@ -399,7 +401,7 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
 | 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./00-overview.md) and [Refine](./00-overview.md) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
-| 2 | **Ruling** | Single Flow | [Assay](./00-overview.md) Node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
+| 2 | **Ruling** | Single Flow | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) Node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./04-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |

@@ -1,8 +1,6 @@
 # Workitems
 
-Workitems are the Flow control-plane contract for work execution. They carry assignment state, routing outcomes, and artefact references while work moves through the runtime. Operational behaviour in the Flow layer is grounded in [Conceptual Overview](../01-concepts/00-overview.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md).
-
-Workitem semantics align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md). Node-facing SDK usage is detailed in [SDK Core](../04-sdk/01-sdk-core.md).
+Workitems are the Flow control-plane contract for work execution. They carry assignment state, routing outcomes, and [artefact](../01-concepts/03-data-model.md#artefacts) references while work moves through the runtime.
 
 ## Runtime Role
 

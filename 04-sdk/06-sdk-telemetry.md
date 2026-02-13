@@ -10,7 +10,7 @@ Describe metrics, traces, logs, and friction emission APIs available to handlers
 
 ## Friction Emission Contract
 
-Specify friction event shape, attribution requirements, and source tagging expectations.
+Specify friction event shape, attribution requirements, and source tagging expectations. Friction events carry magnitude and aggregation operation (logarithmic, additive, or multiplicative). Base friction cost is emitted per Workitem per node; additional friction accumulates from feedback conflicts, rework cycles, and complexity penalties.
 
 ## Operational Signal Quality
 

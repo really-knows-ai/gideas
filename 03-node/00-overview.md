@@ -1,10 +1,6 @@
 # Node Runtime Overview
 
-## Goal
-
-Node runtime semantics define how [Nodes](../01-concepts/00-overview.md) execute assignment-scoped work inside a Flow while preserving [Flow Operator](../02-flow/01-operator.md) control-plane authority. Node code performs business execution; lifecycle transitions, routing guard enforcement, and completion validation remain Operator responsibilities.
-
-This overview anchors node behaviour to [Flow Runtime Overview](../02-flow/00-overview.md), [Workitems](../02-flow/02-workitem.md), and [Configuration Semantics](../02-flow/05-configuration.md), then links outward to [SDK Core](../04-sdk/01-sdk-core.md) for API details.
+[Nodes](../01-concepts/00-overview.md) execute assignment-scoped work inside a Flow while preserving [Flow Operator](../02-flow/01-operator.md) control-plane authority. Node code performs business execution; lifecycle transitions, routing guard enforcement, and completion validation remain Operator responsibilities.
 
 ## Node Runtime Boundary
 

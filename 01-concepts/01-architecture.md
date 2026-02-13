@@ -89,7 +89,7 @@ The legal lifecycle. The Governance Plane manages the discovery, enforcement, an
 
 The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to Nodes that query for applicable governance. The [Citation Processor](../02-flow/04-system-services.md) tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md#friction).
 
-The [Assay Node](./00-overview.md) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
+The [Assay Node](./02-foundry-cycle.md#assay-judiciary--standard-component) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
 
 Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from the Flow's own legislative authority. Tiers 4 and 5 arrive from the [Governance Flow](./04-governance.md), synchronised into each Flow's Library as organisational and federal policy. The Library stores all tiers with equal indifference; nodes query and interpret them the same way regardless of origin.
 

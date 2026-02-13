@@ -1,8 +1,6 @@
 # Nodes and External Integrations
 
-Nodes execute work inside the Flow runtime but do not own control-plane transitions. Node participation semantics, capability boundaries, reference-arrangement responsibilities, and external integration behaviour are runtime constraints. Conceptual framing is in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md).
-
-Runtime semantics here align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md). Node implementation detail is specified in [Node Overview](../03-node/00-overview.md).
+Nodes execute work inside the Flow runtime but do not own control-plane transitions. Node participation semantics, capability boundaries, and external integration behaviour are runtime constraints.
 
 ## Node Runtime Boundary
 
@@ -70,59 +68,17 @@ Enforcement split:
 - Operator, Archivist, and Librarian authorise operations for their owned state surfaces.
 - Operator enforces routing validity, lifecycle transitions, and exit contract checks.
 
-## Reference Arrangement Responsibilities
+## Reference Arrangement
 
-The Foundry Cycle is the reference arrangement that Flow Architects adapt to their node layout while preserving runtime invariants.
+The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) defines the reference arrangement — node roles, cycle topology, and law authority. Flow Architects adapt it to their context while preserving the runtime invariants below.
 
-Reference responsibilities:
+From the platform's perspective, reference-arrangement node names (Forge, Quench, Appraise, Sort, Refine) carry no special runtime semantics. All node behaviour is determined by capability grants and configuration. A node named "Sort" with no `READ:flow` capability cannot perform gate logic; a node named "MyGate" with the right capabilities can.
 
-- **Forge**: create or reshape candidate artefacts; read laws for context seeding; does not write laws.
-- **Quench**: perform deterministic checks and produce feedback or stamps.
-- **Appraise**: perform evaluative review and produce feedback or stamps.
-- **Sort**: evaluate governance state and route accordingly; apply `approval` in the reference arrangement when completion conditions are met.
-- **Refine**: address unresolved feedback and produce new artefact versions.
-
-Responsibility labels are descriptive. Runtime semantics are configuration- and capability-driven, not name-driven.
-
-```mermaid
-flowchart LR
-    FG["Forge"] --> QN["Quench"] --> ST["Sort"] --> AP["Appraise"] --> ST2["Sort"]
-    ST -->|"unresolved (not deadlocked)"| RF["Refine"]
-    ST2 -->|"unresolved (not deadlocked)"| RF
-    RF --> QN
-    ST -->|"deadlock"| AS["Assay"]
-    ST2 -->|"deadlock"| AS
-```
-
-## Sort as Reference Gate
-
-Sort is the gate node in the [reference arrangement](../01-concepts/02-foundry-cycle.md). Its decision order:
-
-1. Any unresolved non-deadlocked feedback on governed artefacts -> route to Refine.
-2. Any deadlocked feedback -> route to Assay.
-3. Missing required stamps -> route to the node configured to provide each missing stamp.
-4. All feedback resolved and all required stamps present -> apply `approval` and complete the reference path.
-
-Deadlocked feedback is unresolved by state, so reference implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
-
-Sort discovers missing-stamp providers from Flow configuration and capability grants. It does not hardcode provider node names.
-
-`approval` is a reference-arrangement convention. It is not a privileged platform keyword.
-
-```mermaid
-flowchart TD
-    S["Sort evaluates artefact state"] --> U{Unresolved non-deadlocked feedback}
-    U -->|yes| R1["Route to Refine"]
-    U -->|no| D{Deadlocked feedback}
-    D -->|yes| A1["Route to Assay"]
-    D -->|no| M{Missing required stamps}
-    M -->|yes| P1["Route to configured stamp provider"]
-    M -->|no| AP["Apply approval stamp<br/>and complete"]
-```
+Gate nodes in the reference arrangement discover stamp-provider routing targets from Flow configuration and capability grants — they do not hardcode provider node names. Deadlocked feedback is unresolved by state, so gate implementations must treat deadlock as a special-case branch when evaluating unresolved-feedback predicates. The `approval` stamp is a reference-arrangement convention, not a privileged platform keyword.
 
 ## Assay as Standard Component
 
-[Assay](../01-concepts/00-overview.md) is a standard component in every Flow. It is routable as a node and cannot be omitted from the runtime.
+[Assay](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component) is a standard component in every Flow. It is routable as a node and cannot be omitted from the runtime.
 
 Assay participates in two distinct runtime paths:
 

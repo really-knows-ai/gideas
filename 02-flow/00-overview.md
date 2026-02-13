@@ -1,8 +1,6 @@
 # Flow Runtime Overview
 
-Foundry Flow runtime for operators and platform administrators is defined by component boundaries, the execution loop, and non-negotiable behaviour invariants. Conceptual foundations remain in [Conceptual Overview](../01-concepts/00-overview.md), [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md).
-
-`02-flow/` is the platform specification for operating a Flow. Node implementation detail lives in [Node Overview](../03-node/00-overview.md). Field-level schema and wire shape live in [CRD Reference](../05-reference/crds.md).
+The Foundry Flow runtime is defined by component boundaries, the execution loop, and non-negotiable behaviour invariants.
 
 ## Runtime Composition
 
@@ -28,12 +26,14 @@ flowchart TD
     SC --> OP
 
     SC --> AR["Archivist<br/>artefact lifecycle"]
-    SC --> LB["Librarian + Citation Processor<br/>law lifecycle"]
+    SC --> LB["Librarian<br/>law lifecycle"]
+    SC --> CP["Citation Processor<br/>citation tracking"]
 
     OP --> FM["Flow Monitor<br/>metrics traces audit"]
     SC --> FM
     AR --> FM
     LB --> FM
+    CP --> FM
 
     LB --> XF["Cross-flow channel<br/>export import law sync"]
 ```

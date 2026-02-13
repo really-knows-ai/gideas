@@ -1,8 +1,6 @@
 # Flow Operator
 
-The Flow Operator is the control-plane authority for a Flow. It reconciles configuration, drives Workitem assignment and routing, enforces exit completion rules, and emits lifecycle audit signals. Operator behaviour is grounded in [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/03-data-model.md), and [Governance](../01-concepts/04-governance.md).
-
-Operator semantics align with [Flow Runtime Overview](./00-overview.md), [Workitems](./02-workitem.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
+The Flow Operator is the control-plane authority for a Flow. It reconciles configuration, drives [Workitem](./02-workitem.md) assignment and routing, enforces exit completion rules, and emits lifecycle audit signals.
 
 ## Role and Boundaries
 
@@ -156,7 +154,7 @@ When completion also triggers export, export eligibility is filtered by bound ex
 
 Operator failure behaviour is deterministic and explicit.
 
-- **Timeout**: assignment exceeds node timeout budget -> fail assignment path.
+- **Timeout**: assignment exceeds node timeout budget -> transition Workitem to `Failed` with timeout error.
 - **Thrash**: aggregate visit count exceeds configured maximum -> transition Workitem to `Failed`.
 - **Invalid route**: unresolvable or invalid instruction -> reject transition and apply failure policy.
 - **Node unavailability**: no eligible node or repeated assignment failure -> retry according to policy, then fail when budget is exhausted.

@@ -11,11 +11,11 @@ Each branch of government has a clear institutional counterpart in the runtime.
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
 | **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/finding` capability ([Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) — Tier 1 [Findings](./03-data-model.md#law-tiers) |
-| **Judiciary** | Resolves disputes, codifies precedent | [Assay](./00-overview.md) node — Tier 2 [Rulings](./03-data-model.md#law-tiers) |
+| **Judiciary** | Resolves disputes, codifies precedent | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node — Tier 2 [Rulings](./03-data-model.md#law-tiers) |
 | **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
 | **Executive** | Enforces compliance | Gate node ([Sort](./02-foundry-cycle.md#sort-gate) in the reference arrangement), [Exit Contract](./03-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
 
-Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./03-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough citation weight, [Assay](./00-overview.md) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
+Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./03-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough citation weight, [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
 
 ---
 
@@ -27,7 +27,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
 
-Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./00-overview.md) node.
+Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node.
 
 Assay evaluates the Finding's history and renders a verdict:
 
@@ -40,13 +40,13 @@ A Finding that is neither cited enough to trigger promotion nor cited at all wil
 
 ### Administered Policy (Tier 3)
 
-Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [Law CRDs](./03-data-model.md#laws) applied by an administrator — typically via declarative configuration. They have no automatic decay.
+Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [laws](./03-data-model.md#laws) applied by an administrator — typically via declarative configuration. They have no automatic decay.
 
-The [Librarian](../02-flow/04-system-services.md) admits externally applied Law CRDs into the active law body only after governance checks complete. Integration sequencing and activation mechanics are defined in [System Services](../02-flow/04-system-services.md).
+The [Librarian](../02-flow/04-system-services.md) admits externally applied laws into the active law body only after governance checks complete. Integration sequencing and activation mechanics are defined in [System Services](../02-flow/04-system-services.md).
 
 ### Judicial Review (Assay)
 
-The [Assay](./00-overview.md) node is the judiciary. It is invoked when governance reaches an impasse:
+The [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node is the judiciary. It is invoked when governance reaches an impasse:
 
 1. **Feedback deadlock.** When a [feedback](./03-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, the gate node (in the [reference arrangement](./02-foundry-cycle.md), [Sort](./02-foundry-cycle.md#sort-gate)) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
 
@@ -94,11 +94,11 @@ Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Lib
 
 Every hearing produces either a renewed mandate or a deliberate retirement.
 
-Retired laws are deleted as CRDs. The full history — creation, citations, conflicts, retirement — is preserved in the audit log.
+Retired laws are deleted. The full history — creation, citations, conflicts, retirement — is preserved in the audit log.
 
 ### Conflict Resolution During Work
 
-When nodes cite conflicting laws during Workitem processing — not at integration time, but during the adversarial loop — the conflict is routed to [Assay](./00-overview.md) for judicial review. Supremacy heavily informs the outcome but does not bypass deliberation. Resolution depends on the tiers involved:
+When nodes cite conflicting laws during Workitem processing — not at integration time, but during the adversarial loop — the conflict is routed to [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) for judicial review. Supremacy heavily informs the outcome but does not bypass deliberation. Resolution depends on the tiers involved:
 
 | Conflict | Resolution |
 |----------|------------|
@@ -206,7 +206,7 @@ If a conflict is confirmed, resolution depends on the tier of the conflicting lo
 
 | Conflicting Local Law | Resolution |
 |-----------------------|------------|
-| **Tier 1 or Tier 2** | Immediate retirement. The lower-tier law is replaced by the incoming higher-tier law. No human intervention. The CRD is deleted; history is preserved in the audit log. |
+| **Tier 1 or Tier 2** | Immediate retirement. The lower-tier law is replaced by the incoming higher-tier law. No human intervention. The local law is retired; history is preserved in the audit log. |
 | **Tier 3** | Integration paused. HITL notification. Supremacy is not optional — the local statute *must* change — but the Flow can request a **grace period**. |
 
 ### Grace Period
@@ -235,7 +235,7 @@ Escalation is the mechanism by which conflicts that exceed a Flow's judicial aut
 
 ### Flow to Governance Flow
 
-When a Sibling Flow's [Assay](./00-overview.md) node encounters a conflict involving Tier 4 or Tier 5 laws, it files an **appeal** — a cross-Flow message via the Librarian — to the Governance Flow.
+When a Sibling Flow's [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node encounters a conflict involving Tier 4 or Tier 5 laws, it files an **appeal** — a cross-Flow message via the Librarian — to the Governance Flow.
 
 - **Tier 4 conflict:** The Governance Flow can repeal or amend its own Tier 4 laws to resolve the issue. The amendment enters the Governance Flow's [Foundry Cycle](./02-foundry-cycle.md) and, if ratified, propagates to all sibling Flows.
 - **Tier 5 conflict:** The Governance Flow escalates the appeal to the relevant Federal authority.
