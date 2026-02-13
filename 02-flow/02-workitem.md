@@ -53,7 +53,7 @@ stateDiagram-v2
 
 Transition guards are fixed:
 
-- `Pending -> Running` requires a valid target node and assignment lease.
+- `Pending -> Running` requires a valid target node and current assignment ownership recorded on the Workitem.
 - `Running -> Pending` requires a valid non-terminal routing instruction.
 - `Running -> Completed` requires exit-node `complete()` and successful contract validation.
 - Any guard violation or runtime failure transitions to `Failed` when recovery budget is exhausted.

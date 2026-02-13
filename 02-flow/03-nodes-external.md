@@ -23,9 +23,9 @@ Every node, including externally integrated nodes, runs inside the same control 
 Assignment execution follows a fixed contract:
 
 1. Operator assigns a `Pending` Workitem to one node.
-2. Sidecar provides assignment snapshot to the node handler.
+2. Sidecar invokes the node handler for the assigned Workitem.
 3. Node executes business logic using SDK APIs.
-4. Sidecar validates capability-bounded operations.
+4. Runtime services authorise capability-bounded operations on Sidecar-mediated requests.
 5. Node returns one routing instruction.
 6. Operator evaluates routing and exit guards, then applies state transition.
 
@@ -36,13 +36,13 @@ sequenceDiagram
     participant ND as Node
     participant SV as Services
 
-    OP->>SC: assignment lease
+    OP->>SC: assign Workitem to node
     SC->>ND: invoke assigned handler
     ND->>SC: SDK call
-    SC->>SV: authorised operation
+    SC->>SV: authenticated proxied operation
     SV-->>SC: response
     ND-->>SC: route_to_output / route_to / complete
-    SC-->>OP: instruction + allowed writes
+    SC-->>OP: instruction + Workitem mutation requests
     OP->>OP: evaluate guards and transition
 ```
 
@@ -50,7 +50,7 @@ Routing instructions are `route_to_output`, `route_to`, or `complete`. Their sch
 
 ## Capability and Authorisation Model
 
-Node authority is capability-driven and enforced at runtime boundaries.
+Node authority is capability-driven and authorised at runtime service boundaries.
 
 - `READ:*` grants read access to scoped resources.
 - `WRITE:*` grants write access to scoped resources.
@@ -66,7 +66,8 @@ Stamp capabilities are explicit and granular:
 
 Enforcement split:
 
-- Sidecar enforces node API and capability boundaries.
+- Sidecar mediates authenticated SDK traffic between nodes and runtime services.
+- Operator, Archivist, and Librarian authorise operations for their owned state surfaces.
 - Operator enforces routing validity, lifecycle transitions, and exit contract checks.
 
 ## Reference Arrangement Responsibilities

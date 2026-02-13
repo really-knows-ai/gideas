@@ -43,10 +43,10 @@ flowchart TD
 Each Workitem moves through a deterministic control loop:
 
 1. Operator observes a routable Workitem and assigns it to one node.
-2. Sidecar leases Workitem execution snapshot to the node.
+2. Sidecar invokes the node handler for the assigned Workitem.
 3. Node reads artefacts, laws, and feedback through Sidecar-mediated APIs.
 4. Node writes artefact changes and returns a routing instruction.
-5. Sidecar submits allowed writes and instruction; Operator validates guards and persists Workitem control-plane state.
+5. Sidecar forwards node requests to runtime services and submits routing instruction to Operator.
 6. Operator routes to the next node or validates exit completion.
 
 The Flow remains sequential at orchestration level: one Workitem, one assignee, one routing outcome at a time.
@@ -61,7 +61,7 @@ sequenceDiagram
     participant LB as Librarian
 
     OP->>WI: assign node
-    OP->>SC: lease Workitem assignment snapshot
+    OP->>SC: assign Workitem to node
     SC->>ND: invoke assigned handler
     ND->>SC: get artefact and feedback
     SC->>AR: query versions stamps feedback
@@ -72,7 +72,7 @@ sequenceDiagram
     ND->>SC: store artefact update
     SC->>AR: persist version and provenance
     ND->>SC: return route instruction
-    SC-->>OP: submit writes + instruction
+    SC-->>OP: submit Workitem mutation requests + instruction
     OP->>OP: validate routing guards
     OP->>WI: set next assignment or terminal state
 ```

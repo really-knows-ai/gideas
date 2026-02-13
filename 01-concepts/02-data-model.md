@@ -12,7 +12,7 @@ A Workitem has two data surfaces: an immutable declaration surface and a mutable
 
 The declaration surface is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
 
-The runtime surface is the mutable working surface. As the Workitem moves through the Flow, nodes issue SDK actions, the Sidecar mediates and authorises them, and the Operator applies control-plane state changes. Feedback, stamps, and version history are persisted in the Archivist and queried through the SDK. Runtime ownership remains strict:
+The runtime surface is the mutable working surface. As the Workitem moves through the Flow, nodes issue SDK actions, the Sidecar mediates authenticated service calls, and runtime services authorise and apply state changes within their authority boundaries. Feedback, stamps, and version history are persisted in the Archivist and queried through the SDK. Runtime ownership remains strict:
 
 | Surface | Owner | Mutability | Description |
 |---------|-------|------------|-------------|
@@ -156,8 +156,8 @@ Artefacts are strictly isolated per-Workitem. Every byte of content belongs to e
 | Layer | Enforcement |
 |-------|-------------|
 | Storage layout | Physical isolation: content is partitioned by Workitem — cross-Workitem access is structurally impossible at the storage layer |
-| SDK | No `targetWorkitemID` parameter exists — the SDK auto-scopes requests to the leased Workitem |
-| Sidecar | Access is bound to the leased Workitem identity — requests for unowned IDs are rejected |
+| SDK | No `targetWorkitemID` parameter exists — the SDK auto-scopes requests to the current Workitem |
+| Runtime services | Access is authorised against current Workitem state and node identity — requests for foreign IDs are rejected |
 
 When nodes need shared reference material (templates, schemas, boilerplate), the content is injected rather than shared:
 
@@ -231,7 +231,7 @@ A stamp is uniquely keyed by its **name** — the governance checkpoint it repre
 
 Stamps are cryptographically bound to the artefact's content through the `hash` field. The signature covers the hash along with the stamp's identity fields, making it independently verifiable by tracing the certificate chain back to the Flow's trust root (or, in federated deployments, to the State Root CA). A stamp certifies specific bytes. Different bytes require new certification.
 
-**Capability enforcement:** The [Sidecar](../03-node/01-sidecar.md) enforces capabilities before allowing stamp and artefact operations:
+**Capability authorisation:** Runtime services authorise capability-scoped operations using node identity mediated by the [Sidecar](../03-node/01-sidecar.md):
 
 | Capability | Required For |
 |------------|-------------|
@@ -361,7 +361,7 @@ The threshold applies per feedback item, not per Workitem. A Workitem can have d
 
 ### Contempt Guard
 
-Once Assay renders a verdict and sets a `linkedRuling` on a feedback item, that item is under judicial mandate. The [Sidecar](../03-node/01-sidecar.md) enforces finality in both directions:
+Once Assay renders a verdict and sets a `linkedRuling` on a feedback item, that item is under judicial mandate. The [Archivist](../02-flow/04-system-services.md) enforces finality in both directions:
 
 - A `wont_fix` with a `linkedRuling` (Assay agreed with Refine) cannot be moved to `rejected` by Appraise. The only valid transition is to `resolved` via `AcceptRefusal()`.
 - A `rejected` with a `linkedRuling` (Assay agreed with Appraise) cannot be moved to `wont_fix` or `deadlocked`. The only valid transition is to `actioned` via `ResolveFeedback()`, followed by acceptance to `resolved`.

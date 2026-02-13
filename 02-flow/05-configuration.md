@@ -15,7 +15,7 @@ Behaviour precedence is deterministic:
 
 1. Flow-wide invariants and policies from FoundryFlow.
 2. Node-local configuration from FoundryNode.
-3. Runtime state evaluation by the Operator and [Sidecar](../03-node/01-sidecar.md).
+3. Runtime state evaluation and authorisation by Operator and system services, with node calls mediated by [Sidecar](../03-node/01-sidecar.md).
 
 Node configuration cannot override Flow invariants.
 

@@ -52,7 +52,7 @@ The [Assay](./00-overview.md) node is the judiciary. It is invoked when governan
 
 2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a verdict. Citation-threshold hearings use [Promote / Retain](#organic-discovery-tiers-12). TTL-expiry hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2. Hearings use standard Workitems with explicit governed artefacts, including a `lawId` reference for the law under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
 
-Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — the Sidecar blocks any transition that contradicts the ruling.
+Assay's verdicts are enforced by the [Contempt Guard](./02-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
 ---
 

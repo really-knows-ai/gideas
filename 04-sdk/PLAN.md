@@ -7,7 +7,7 @@
 ## Goals
 
 - Give node developers a complete, practical programming contract.
-- Keep SDK semantics aligned with Sidecar and Operator enforcement boundaries.
+- Keep SDK semantics aligned with Sidecar mediation and service/Operator authorisation boundaries.
 - Separate API intent from transport and schema detail (which lives in reference docs).
 - Ensure all SDK behaviours are testable and operationally observable.
 

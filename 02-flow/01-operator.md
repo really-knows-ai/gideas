@@ -15,7 +15,7 @@ The Operator owns control-plane state transitions and policy enforcement:
 - Applies timeout and thrash guards.
 - Emits operator-originated metrics, traces, and audit events.
 
-The Operator does not execute node business logic and does not own artefact provenance storage. Provenance is owned by [Archivist](./04-system-services.md), and node-facing API enforcement is mediated by [Sidecar](../03-node/01-sidecar.md).
+The Operator does not execute node business logic and does not own artefact provenance storage. Provenance is owned by [Archivist](./04-system-services.md), and node-facing API authentication and mediation are handled by [Sidecar](../03-node/01-sidecar.md).
 
 ## Reconciliation Surfaces
 
@@ -107,10 +107,10 @@ sequenceDiagram
     participant ND as Node
 
     OP->>WI: assign to node
-    OP->>SC: lease assignment snapshot
+    OP->>SC: assign Workitem to node
     SC->>ND: invoke assignment handler
     ND-->>SC: routing instruction
-    SC-->>OP: instruction + allowed writes
+    SC-->>OP: instruction + Workitem mutation requests
     OP->>OP: evaluate guards in order
     OP->>WI: apply next transition
 ```

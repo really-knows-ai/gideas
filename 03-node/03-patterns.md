@@ -22,7 +22,7 @@
 
 ## Retry-Safe External Side Effects
 
-- Use idempotency keys and correlation IDs anchored to Workitem and operation identity.
+- Use idempotency keys anchored to Workitem and operation identity.
 - Separate local state mutation intent from external commit acknowledgement.
 - Map external response classes to deterministic route outcomes.
 - Design retries so replay does not duplicate irreversible external effects.
@@ -45,7 +45,7 @@
 ## External Integration Pattern
 
 - Integrate external APIs behind clear request/response contracts and bounded retry policy.
-- Preserve traceability across boundaries with correlation identifiers and audit events.
+- Preserve traceability across boundaries with explicit operation references and service audit events.
 - Use export/import for cross-flow sovereignty transfer; do not simulate it with local routing shortcuts.
 - Fail closed on ambiguous external outcomes that could compromise governance integrity.
 
@@ -53,7 +53,7 @@
 
 - Hidden mutable cross-assignment state that changes semantic outcomes.
 - Direct CRD field mutation assumptions in node code.
-- Direct service calls that bypass Sidecar enforcement.
+- Direct service calls that bypass Sidecar mediation and authentication.
 - Hardcoding Sort stamp-provider targets instead of reading configuration.
 - Treating stamp names as privileged platform keywords.
 
@@ -63,4 +63,4 @@
 - External side effects are idempotent or safely deduplicated.
 - Feedback-state handling preserves deadlock escalation and ruling finality.
 - Routing decisions are deterministic, resolvable, and single-outcome.
-- All node-originated operations remain Sidecar-mediated and capability-authorised.
+- All node-originated operations remain Sidecar-mediated and service-authorised.

@@ -19,7 +19,7 @@ This split is normative for all new writing and link updates.
 `03-node/` defines how node runtime components behave inside the Flow platform:
 
 - Node process model and assignment execution contract at implementation level.
-- Sidecar enforcement boundary (identity, capabilities, policy gate, service brokering).
+- Sidecar authentication and mediation boundary (identity brokering, service brokering, transport policy).
 - Node-local configuration semantics and implementation constraints.
 - Reusable implementation patterns that preserve runtime invariants.
 
@@ -37,7 +37,7 @@ This split is normative for all new writing and link updates.
 All `03-node/` and `04-sdk/` documents must remain consistent with these decisions:
 
 - Nodes do not mutate Workitem control-plane state directly.
-- Sidecar mediates node actions and enforces capability boundaries.
+- Sidecar mediates and authenticates node actions; runtime services enforce capability boundaries.
 - Operator validates routing and contract transitions.
 - `complete()` is exit-node-only and Operator-validated.
 - Workitems carry artefact references only (`id`, `kind`); provenance is Archivist-owned.
@@ -55,8 +55,8 @@ All `03-node/` and `04-sdk/` documents must remain consistent with these decisio
    - Must cover: execution lifecycle, control/data boundaries, relationship to Sidecar and SDK section.
 
 2. `03-node/01-sidecar.md`
-   - Purpose: define Sidecar as runtime policy and identity boundary.
-   - Must cover: assignment lease mediation, capability checks, authenticated brokering, failure behaviour.
+   - Purpose: define Sidecar as runtime authentication and identity mediation boundary.
+   - Must cover: assigned Workitem mediation, authenticated brokering, service-authorisation boundary, failure behaviour.
 
 3. `03-node/02-configuration.md`
    - Purpose: define node-local configuration that realises Flow semantics.

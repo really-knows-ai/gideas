@@ -3,14 +3,14 @@
 ## Goal
 
 - Define how [FoundryNode](../05-reference/crds.md) settings shape node runtime behaviour inside [FoundryFlow](../05-reference/crds.md) constraints.
-- Keep node-level configuration aligned with Operator guard enforcement and Sidecar policy mediation.
+- Keep node-level configuration aligned with Operator guard enforcement and service-side authorisation through Sidecar mediation.
 - Document semantics only; leave field-level schema detail to the reference section.
 
 ## Configuration Surfaces and Precedence
 
 - Flow-wide invariants and policy limits are defined in FoundryFlow.
 - Node-local behaviour and permission envelope are defined in FoundryNode.
-- Runtime resolution is performed by Operator reconciliation and Sidecar enforcement.
+- Runtime resolution is performed by Operator reconciliation and service-side validation on Sidecar-mediated requests.
 - Node configuration cannot override Flow-level invariants.
 
 ## Routing Outputs and Target Resolution
@@ -23,7 +23,7 @@
 ## Capability Grants and Enforcement Implications
 
 - Capability strings define what actions a node may request through SDK surfaces.
-- Sidecar enforces grants at runtime and denies out-of-scope operations.
+- Runtime services enforce grants using node identity presented through Sidecar.
 - Stamp grants are exact by artefact kind and stamp name.
 - Missing grants produce deterministic runtime denial for the attempted operation.
 - Malformed or non-enforceable grant definitions are rejected at configuration admission.

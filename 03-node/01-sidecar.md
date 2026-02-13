@@ -2,65 +2,68 @@
 
 ## Goal
 
-- Define Sidecar as the non-optional enforcement layer between node code and Flow runtime services.
-- Specify identity, capability, and assignment-scoping responsibilities in one coherent boundary model.
-- Make fail-closed behaviour explicit for governance-integrity paths.
+- Define Sidecar as the non-optional authentication and mediation layer between node code and Flow runtime services.
+- Specify transport-security and identity-brokering responsibilities at the SDK boundary.
+- Keep policy and authorisation authority with Operator, Archivist, and Librarian.
 
 ## Sidecar as a Mandatory Runtime Component
 
 - Every node pod includes a Sidecar that brokers all authenticated runtime operations.
 - Node containers do not hold Flow runtime identity credentials and cannot call system services directly.
-- Sidecar availability is a prerequisite for assignment execution and state mutation submission.
+- Sidecar availability is a prerequisite for SDK communication with Flow runtime services.
 - Node code may call external business services over the data-plane network path, but this never grants direct access to Flow runtime services.
 - Bypass paths are invalid by design, even when network connectivity exists.
 
 ## Identity and Trust Mediation
 
 - Sidecar holds runtime identity material and presents authenticated service calls on behalf of the node.
-- Sidecar binds identity to assignment scope, preventing cross-assignment impersonation.
+- Sidecar binds outgoing requests to node identity and Workitem metadata.
 - Stamp and governance actions are mediated through Sidecar so trust-chain evidence remains verifiable.
 - Cross-flow provenance verification and local authority remain separate concepts at the boundary.
 
-## Assignment Lease and Workitem Scoping
+## Workitem Scoping at the SDK Boundary
 
-- Sidecar receives and enforces assignment lease context from Operator.
-- SDK calls are automatically scoped to the leased Workitem identity.
-- Requests that target unleased or foreign Workitem state are rejected.
-- Lease expiry or invalidation terminates further assignment-scoped mutation attempts.
+- SDK calls include Workitem-scoped metadata that Sidecar forwards to target services.
+- Operator, Archivist, and Librarian decide request admissibility from current Workitem state and node identity.
+- Requests missing required Workitem scope metadata are rejected.
+- Sidecar does not create a separate assignment object; Workitem state is the source of truth.
 
-## Capability Enforcement
+## Service Authorisation
 
-- Sidecar evaluates capability grants before forwarding node-originated operations.
-- Enforcement applies across artefact reads/writes, feedback actions, legal operations, and telemetry submission.
-- Stamp authority is exact-scope (`STAMP:artefact/<kind>/<stamp-name>`) and respects write-once-per-version behaviour.
-- Topology/config discovery paths require explicit `READ:flow` authorisation.
+- Sidecar authenticates and proxies requests; it does not make final authorisation decisions.
+- Operator authorises control-plane mutations and routing/completion actions.
+- Archivist authorises artefact, feedback, and stamp operations, including Contempt Guard checks.
+- Librarian authorises law-read and law-write operations.
+- Capability grants from FoundryNode are evaluated by target services.
 
 ## Service Brokering Contract
 
 - Sidecar -> Operator for routing instruction submission and control-plane mutation requests.
 - Sidecar -> Archivist for artefact bytes, version history, feedback, and stamp provenance operations.
 - Sidecar -> Librarian for law retrieval and governance context queries.
-- Sidecar -> citation and telemetry surfaces for evidence capture and observability signals.
+- Sidecar -> telemetry surfaces for mediation and transport observability.
 - Sidecar never transfers control-plane ownership to node code.
 
 ## Failure and Fail-Closed Behaviour
 
-- Missing capability -> immediate denied operation with structured error.
+- Sidecar authentication failure rejects the request before proxying.
+- Service-side authorisation denial returns structured error and no state change.
 - Unavailable dependency (Operator/Archivist/Librarian) -> fail closed on affected governance path.
-- Invalid instruction shape or out-of-scope mutation -> reject and preserve current control-plane state.
-- Assignment timeout/inactivity paths return explicit failure outcomes; silent success is prohibited.
+- Invalid instruction shape or out-of-scope mutation is rejected by the authoritative service.
+- Timeout and thrash outcomes are decided by Operator guard logic.
 
-## Health, Activity, and Audit Signals
+## Health, Activity, and Telemetry Signals
 
 - Sidecar exposes health/readiness state for runtime selection and pod liveness workflows.
-- Assignment activity signals support timeout supervision and operational triage.
-- Sidecar emits audit-visible boundary events for denied operations, state submissions, and failure decisions.
+- Sidecar emits operational telemetry and logs for mediation outcomes and transport failures.
+- Authoritative governance audit for state changes is emitted by the service that accepted, rejected, or applied the change.
 - Observability signals from Sidecar are mandatory runtime outputs, not optional instrumentation.
 
 ## Sidecar Invariants
 
 - Sidecar is the sole authenticated mediation path for node-originated runtime operations.
-- Capability enforcement is deterministic and deny-by-default.
-- Assignment scope is strict and cannot cross Workitem boundaries.
+- Sidecar is an authentication and mediation boundary, not a policy authority.
+- Authorisation is service-owned and enforced by Operator, Archivist, and Librarian.
+- Workitem state (`assignedNode`, lifecycle) remains the source of truth for request admissibility.
 - Governance-integrity failures never fail open.
 - Sidecar does not own control-plane persistence; Operator remains final authority.
