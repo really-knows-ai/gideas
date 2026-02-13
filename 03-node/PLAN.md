@@ -1,64 +1,41 @@
 # 03-node Plan
 
-## Section Purpose
+`03-node/` defines the internal runtime architecture for building and operating nodes inside Foundry Flow. Detailed writing stubs now live in each target file.
 
-`03-node/` defines the internal runtime architecture for building and operating nodes inside Foundry Flow. It covers runtime boundaries, sidecar enforcement, node configuration, and implementation patterns. It does not define SDK API surfaces in detail.
+## Stub Documents
 
-## Goals
+1. [Node Runtime Overview](./00-overview.md)
+2. [Sidecar Boundary](./01-sidecar.md)
+3. [Node Configuration Semantics](./02-configuration.md)
+4. [Node Implementation Patterns](./03-patterns.md)
 
-- Define node execution semantics that are implementable and consistent with `02-flow/`.
-- Specify Sidecar as the mandatory policy, identity, and mediation boundary.
-- Capture node-local configuration behaviour that realises Flow-level semantics.
-- Provide reusable implementation patterns that preserve governance and control-plane invariants.
+## Suggested Writing Order
 
-## Planned Files
+1. [Node Runtime Overview](./00-overview.md)
+2. [Sidecar Boundary](./01-sidecar.md)
+3. [Node Configuration Semantics](./02-configuration.md)
+4. [Node Implementation Patterns](./03-patterns.md)
 
-1. `03-node/00-overview.md`
-2. `03-node/01-sidecar.md`
-3. `03-node/02-configuration.md`
-4. `03-node/03-patterns.md`
+## Done Criteria
 
-## File-by-File Scope
+- Each document preserves terminology and invariants from `AGENTS.md` and `02-flow/`.
+- No document reintroduces superseded constructs (`WorkitemType`, `spec.type`, context bag, terminal-by-shape semantics).
+- `03-node/` runtime boundaries remain consistent with `01-concepts/01-architecture.md` and `01-concepts/02-data-model.md`.
+- Cross-links to `04-sdk/` and `05-reference/` exist where API and schema details are delegated.
+- Markdown lint passes from `lint/`.
 
-## `00-overview.md`
+## 03-node Invariants
 
-- Node runtime role and boundaries.
-- Assignment lifecycle from node perspective.
-- Interaction model across Operator, Sidecar, Archivist, and Librarian.
-- Cross-links to `04-sdk/` for developer APIs.
-
-## `01-sidecar.md`
-
-- Identity and trust responsibilities.
-- Capability enforcement and API brokering.
-- Assignment lease and Workitem scoping guarantees.
-- Failure behaviour, fail-closed paths, and audit signals.
-
-## `02-configuration.md`
-
-- Node-local settings: outputs, capabilities, entry/exit bindings, timeout budgets.
-- How FoundryNode config interacts with FoundryFlow config.
-- Validation expectations and rejection scenarios.
-- Runtime implications of config drift and rollout.
-
-## `03-patterns.md`
-
-- Idempotent handlers and retry-safe side effects.
-- Human-in-loop and external integration patterns.
-- Governance-safe feedback/refine loop patterns.
-- Anti-patterns that violate invariants.
-
-## Writing Order
-
-1. `00-overview.md`
-2. `01-sidecar.md`
-3. `02-configuration.md`
-4. `03-patterns.md`
-
-## Consistency Checklist
-
-- Preserve Operator ownership of Workitem control-plane transitions.
-- Preserve Sidecar mediation for node-originated actions.
-- Preserve `complete()` as exit-node-only and Operator-validated.
-- Preserve no `WorkitemType`, no `spec.type`, no context bag.
-- Keep Sort routing order and stamp semantics unchanged.
+1. Operator is the sole authority for Workitem control-plane transition persistence.
+2. Sidecar is the mandatory mediation boundary for node-originated runtime operations.
+3. One assignment has one active assignee and one routing outcome.
+4. Nodes do not mutate Workitem lifecycle fields directly.
+5. `complete()` is exit-node-only and validated by Operator against the node's bound exit contract.
+6. Entry and exit semantics are binding-driven (`entry`, `exit`), not inferred from topology shape.
+7. No `WorkitemType`, no `spec.type`, and no freeform Workitem context bag semantics.
+8. Forge reads laws for context seeding and does not write laws.
+9. Sort decision order is fixed in the reference arrangement and missing-stamp providers are configuration-discovered.
+10. Stamp authority is capability-scoped (`STAMP:artefact/<kind>/<stamp-name>`) and write-once per artefact version.
+11. Assay is a mandatory Flow component with authority ceiling: resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
+12. Imported Workitems start at configured `importNode`, which must be entry-bound.
+13. Node code may call external business services, but authenticated Flow runtime operations remain Sidecar-mediated.
