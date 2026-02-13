@@ -25,7 +25,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 ### Organic Discovery (Tiers 1–2)
 
-Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../03-node/02-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
+Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
 
 Findings that prove useful — cited frequently across [Workitems](./02-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./00-overview.md) node.
 
@@ -293,7 +293,7 @@ The governance implication at Treaty boundaries is **naturalisation**: when a [W
 
 ## Friction as Governance Signal
 
-The [Friction Ledger](./00-overview.md#friction) is governance's economic conscience. Nodes emit friction events through the [SDK](../03-node/07-sdk-telemetry.md), choosing both the magnitude and the aggregation operation — logarithmic, additive, or multiplicative. By default, every node emits a base friction cost for each Workitem that passes through it. Additional friction accumulates with further interactions — feedback conflicts, rework cycles, complexity penalties. A node caught in an argument loop can emit multiplicative friction that compounds on each iteration. The friction signal reflects the real cost of the governance each Workitem encountered.
+The [Friction Ledger](./00-overview.md#friction) is governance's economic conscience. Nodes emit friction events through the [SDK](../04-sdk/06-sdk-telemetry.md), choosing both the magnitude and the aggregation operation — logarithmic, additive, or multiplicative. By default, every node emits a base friction cost for each Workitem that passes through it. Additional friction accumulates with further interactions — feedback conflicts, rework cycles, complexity penalties. A node caught in an argument loop can emit multiplicative friction that compounds on each iteration. The friction signal reflects the real cost of the governance each Workitem encountered.
 
 Friction data is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
 

@@ -202,4 +202,4 @@ All Flow deployments preserve these Operator invariants:
 10. Trust issuance and annexation participation remain Operator responsibilities at control-plane boundary.
 11. Operator-originated audit and telemetry emissions are mandatory runtime outputs.
 
-Field-level definitions are in [CRD Reference](../04-reference/crds.md). Runtime error mappings are in [Error Catalog](../04-reference/error-catalog.md).
+Field-level definitions are in [CRD Reference](../05-reference/crds.md). Runtime error mappings are in [Error Catalog](../05-reference/error-catalog.md).

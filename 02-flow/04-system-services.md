@@ -1,6 +1,6 @@
 # System Services
 
-System services provide the runtime substrate for law lifecycle, artefact lifecycle, governance signals, and operational resilience. Service responsibilities and inter-service contracts at the Flow layer define this substrate. Field-level schemas are specified in [CRD Reference](../04-reference/crds.md), and API-level wire contracts are specified in [gRPC API](../04-reference/grpc-api.md).
+System services provide the runtime substrate for law lifecycle, artefact lifecycle, governance signals, and operational resilience. Service responsibilities and inter-service contracts at the Flow layer define this substrate. Field-level schemas are specified in [CRD Reference](../05-reference/crds.md), and API-level wire contracts are specified in [gRPC API](../05-reference/grpc-api.md).
 
 This service model aligns with [Architecture](../01-concepts/01-architecture.md), [Data Model](../01-concepts/02-data-model.md), [Governance](../01-concepts/03-governance.md), [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md).
 
@@ -219,7 +219,7 @@ Core call paths are stable:
 - Assay <-> Citation Processor: hearing evidence queries.
 - Services -> Flow Monitor: metrics, traces, and audit events.
 
-Contract failures must return structured errors aligned with [Error Catalog](../04-reference/error-catalog.md).
+Contract failures must return structured errors aligned with [Error Catalog](../05-reference/error-catalog.md).
 
 ## Failure and Degradation Semantics
 
@@ -248,4 +248,4 @@ All deployments preserve these service invariants:
 9. Backup ownership boundaries are explicit between services and cluster administration.
 10. Cross-flow law integration preserves tiered supremacy, grace-period semantics, and audit continuity.
 
-Node-facing implications of these services are detailed in [SDK Core](../03-node/02-sdk-core.md), [SDK Artefacts](../03-node/03-sdk-artefacts.md), [SDK Legal](../03-node/04-sdk-legal.md), [SDK Feedback](../03-node/05-sdk-feedback.md), and [SDK Telemetry](../03-node/07-sdk-telemetry.md).
+Node-facing implications of these services are detailed in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Telemetry](../04-sdk/06-sdk-telemetry.md).

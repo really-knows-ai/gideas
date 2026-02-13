@@ -46,7 +46,7 @@ sequenceDiagram
     OP->>OP: evaluate guards and transition
 ```
 
-Routing instructions are `route_to_output`, `route_to`, or `complete`. Their schema is defined in [CRD Reference](../04-reference/crds.md), wire-level call contracts are defined in [gRPC API](../04-reference/grpc-api.md), and runtime rejection outcomes are defined in [Error Catalog](../04-reference/error-catalog.md).
+Routing instructions are `route_to_output`, `route_to`, or `complete`. Their schema is defined in [CRD Reference](../05-reference/crds.md), wire-level call contracts are defined in [gRPC API](../05-reference/grpc-api.md), and runtime rejection outcomes are defined in [Error Catalog](../05-reference/error-catalog.md).
 
 ## Capability and Authorisation Model
 
@@ -169,7 +169,7 @@ Retries and backoff may be configured operationally, but retries do not bypass c
 
 ## Telemetry and Friction Signals
 
-Nodes are expected to emit operational and governance signals through [SDK Telemetry](../03-node/07-sdk-telemetry.md):
+Nodes are expected to emit operational and governance signals through [SDK Telemetry](../04-sdk/06-sdk-telemetry.md):
 
 - Execution timing and error counters.
 - Route-decision context tags.
@@ -195,4 +195,4 @@ All node deployments preserve these invariants:
 12. External integrations preserve auditability, idempotency, and governance checks.
 13. Cross-flow handoff is export/import lifecycle, not local route transition.
 
-Node configuration and implementation patterns are defined in [Node Configuration](../03-node/08-configuration.md) and [Node Patterns](../03-node/09-patterns.md). SDK behaviour is defined in [SDK Core](../03-node/02-sdk-core.md), [SDK Artefacts](../03-node/03-sdk-artefacts.md), [SDK Legal](../03-node/04-sdk-legal.md), [SDK Feedback](../03-node/05-sdk-feedback.md), and [SDK Workitems](../03-node/06-sdk-workitems.md).
+Node configuration and implementation patterns are defined in [Node Configuration](../03-node/02-configuration.md) and [Node Patterns](../03-node/03-patterns.md). SDK behaviour is defined in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Workitems](../04-sdk/05-sdk-workitems.md).

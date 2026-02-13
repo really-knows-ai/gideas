@@ -10,7 +10,7 @@ The spec is being rewritten from scratch. Legacy material (earlier spec drafts, 
 
 Produce a clean, coherent, GitHub-style specification that:
 
-- Has a clear reading order: Concepts → Flow → Node → Reference
+- Has a clear reading order: Concepts → Flow → Node → SDK → Reference
 - Uses consistent terminology throughout (defined in the glossary)
 - Eliminates duplication — one source of truth per concept
 - Is informed by the foundational theory in `legacy/papers/` but implements the details from the legacy specs
@@ -40,19 +40,22 @@ Produce a clean, coherent, GitHub-style specification that:
 │   ├── 06-cross-flow.md
 │   └── 07-operations.md
 │
-├── 03-node/                     # Building Nodes — the developer perspective
+├── 03-node/                     # Building Nodes — internal runtime architecture
 │   ├── 00-overview.md
 │   ├── 01-sidecar.md
-│   ├── 02-sdk-core.md
-│   ├── 03-sdk-artefacts.md
-│   ├── 04-sdk-legal.md
-│   ├── 05-sdk-feedback.md
-│   ├── 06-sdk-workitems.md
-│   ├── 07-sdk-telemetry.md
-│   ├── 08-configuration.md
-│   └── 09-patterns.md
+│   ├── 02-configuration.md
+│   └── 03-patterns.md
 │
-├── 04-reference/                # Quick lookup
+├── 04-sdk/                      # SDK — external developer interface
+│   ├── 00-overview.md
+│   ├── 01-sdk-core.md
+│   ├── 02-sdk-artefacts.md
+│   ├── 03-sdk-legal.md
+│   ├── 04-sdk-feedback.md
+│   ├── 05-sdk-workitems.md
+│   └── 06-sdk-telemetry.md
+│
+├── 05-reference/                # Quick lookup
 │   ├── crds.md
 │   ├── grpc-api.md
 │   ├── error-catalog.md
@@ -72,8 +75,9 @@ Produce a clean, coherent, GitHub-style specification that:
 
 1. **Concepts** — What Foundry Flow is and why it exists
 2. **Flow** — The platform (audience: operators and admins)
-3. **Node** — Building nodes (audience: developers)
-4. **Reference** — Look things up
+3. **Node** — Building runtime node architecture (audience: platform and node implementors)
+4. **SDK** — Programming interfaces for node developers
+5. **Reference** — Look things up
 
 ## Current Status
 
@@ -229,13 +233,13 @@ Artefact identity semantics on a Workitem are stable:
 
 ### Concepts documents are technology-agnostic
 
-The `01-concepts/` documents describe architecture, data model, and governance in terms of roles and responsibilities — not products. They say "embedded database", "content-addressed store", "metrics pipeline", and "deployment tooling" rather than naming SQLite, PVC, Prometheus, Helm, gRPC, or Docker. Technology choices are firm decisions (recorded in this file and throughout the key decisions below), but they belong in `02-flow/`, `03-node/`, and `04-reference/` where the audience is operators and developers making implementation decisions. The concepts audience needs to understand *what* each component does and *why* — not *which product* does it.
+The `01-concepts/` documents describe architecture, data model, and governance in terms of roles and responsibilities — not products. They say "embedded database", "content-addressed store", "metrics pipeline", and "deployment tooling" rather than naming SQLite, PVC, Prometheus, Helm, gRPC, or Docker. Technology choices are firm decisions (recorded in this file and throughout the key decisions below), but they belong in `02-flow/`, `03-node/`, `04-sdk/`, and `05-reference/` where the audience is operators and developers making implementation decisions. The concepts audience needs to understand *what* each component does and *why* — not *which product* does it.
 
 **Exception: Kubernetes platform vocabulary.** "Kubernetes", "CRD", "namespace", "cluster", and related Kubernetes-native concepts are accepted as foundational domain vocabulary in concepts documents. The spec is explicitly Kubernetes-native — these terms define the platform, not incidental implementation choices. Product names (SQLite, Prometheus, Helm, gRPC, Docker) and methodology names (GitOps) remain excluded from concepts.
 
 ### Laws and the Library stay high-level in concepts
 
-The key concept: a law has a textual **goal** (what it enforces/stops/ensures) and one or more **representations** (prose, formal logic, executable code, etc.). The Library stores all representations with equal indifference and leaves interpretation to the nodes. Technical details (MIME types, CRD structure, Kubernetes labels, Codification Services, Librarian embedding pipeline) belong in later documents (`02-flow/04-system-services.md`, `04-reference/crds.md`).
+The key concept: a law has a textual **goal** (what it enforces/stops/ensures) and one or more **representations** (prose, formal logic, executable code, etc.). The Library stores all representations with equal indifference and leaves interpretation to the nodes. Technical details (MIME types, CRD structure, Kubernetes labels, Codification Services, Librarian embedding pipeline) belong in later documents (`02-flow/04-system-services.md`, `05-reference/crds.md`).
 
 ### Laws are single objects with multiple representations
 
@@ -355,9 +359,9 @@ The `legacy/` directory contains the raw source material:
 
 - **`legacy/papers/`** — Five foundational papers. These provide the conceptual "why." Read them to understand the philosophy, but do not copy their prose or structure. The new spec must stand on its own.
 - **`legacy/flow_spec/`** — The Flow runtime spec (~35 files). Dense, comprehensive, sometimes contradictory. This is the primary source for `02-flow/`.
-- **`legacy/node_spec/`** — The Node runtime spec (~18 files, including sidecar and SDK). Primary source for `03-node/`.
+- **`legacy/node_spec/`** — The Node runtime spec (~18 files, including sidecar and SDK). Primary source for `03-node/` and `04-sdk/`.
 - **`legacy/governance_spec/`** — Governance Flow/Federation spec (~11 files). Primary source for the Governance Flow, law tiers, and precedent.
-- **`legacy/crds/`** — CRD YAML definitions. Source for `04-reference/crds.md`.
+- **`legacy/crds/`** — CRD YAML definitions. Source for `05-reference/crds.md`.
 - **`legacy/PolymorphicLaw.md`** — The polymorphic law envelope concept. Relevant to `02-flow/04-system-services.md` (Librarian).
 - **`legacy/Tier5.md`** — Working reference for the 5-tier law hierarchy, integration protocol, escalation paths, and treaty model. Not legacy — this is an active design document that informed the key decisions in this file.
 

@@ -59,7 +59,7 @@ Friction operations are first-class:
 - Friction spikes must be triaged as real operational cost signals.
 - Governance and topology tuning decisions should use friction trends, not anecdotal reports.
 
-Node emission interfaces are defined in [SDK Telemetry](../03-node/07-sdk-telemetry.md).
+Node emission interfaces are defined in [SDK Telemetry](../04-sdk/06-sdk-telemetry.md).
 
 ## Alerting and Triage
 
@@ -88,13 +88,13 @@ Triage must preserve evidence. Incident response never deletes unresolved audit 
 
 ## Error Taxonomy and Operator Actions
 
-All operational error handling maps to [Error Catalog](../04-reference/error-catalog.md).
+All operational error handling maps to [Error Catalog](../05-reference/error-catalog.md).
 
 - Operators must use documented error families and remediation paths.
 - Runbooks must not introduce undocumented failure codes or ad-hoc semantics.
 - Source attribution (Operator, Sidecar, node, system service, transfer path) must be preserved in incident records.
 
-gRPC surface failure semantics are defined in [gRPC API](../04-reference/grpc-api.md).
+gRPC surface failure semantics are defined in [gRPC API](../05-reference/grpc-api.md).
 
 ## Backup and Recovery Boundaries
 
@@ -176,4 +176,4 @@ All production operations preserve these invariants:
 8. Failure-path testing is required alongside happy-path validation.
 9. Recovery readiness is continuously validated through drills.
 
-Operational schema surfaces are defined in [CRD Reference](../04-reference/crds.md). Configuration levers consumed by operations are defined in [Configuration Semantics](./05-configuration.md).
+Operational schema surfaces are defined in [CRD Reference](../05-reference/crds.md). Configuration levers consumed by operations are defined in [Configuration Semantics](./05-configuration.md).

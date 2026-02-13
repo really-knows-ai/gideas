@@ -2,7 +2,7 @@
 
 Workitems are the Flow control-plane contract for work execution. They carry assignment state, routing outcomes, and artefact references while work moves through the runtime. Operational behaviour in the Flow layer is grounded in [Conceptual Overview](../01-concepts/00-overview.md), [Data Model](../01-concepts/02-data-model.md), and [Governance](../01-concepts/03-governance.md).
 
-Workitem semantics align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md). Node-facing SDK usage is detailed in [SDK Core](../03-node/02-sdk-core.md).
+Workitem semantics align with [Flow Runtime Overview](./00-overview.md), [Flow Operator](./01-operator.md), [System Services](./04-system-services.md), [Configuration Semantics](./05-configuration.md), and [Cross-Flow Collaboration](./06-cross-flow.md). Node-facing SDK usage is detailed in [SDK Core](../04-sdk/01-sdk-core.md).
 
 ## Runtime Role
 
@@ -72,7 +72,7 @@ Instruction validity checks:
 - `complete` is valid only from exit nodes.
 - Invalid instructions are rejected with structured errors and do not advance completion.
 
-Routing semantics are runtime-level control behaviour; schema-level instruction fields are defined in [CRD Reference](../04-reference/crds.md). Error mappings are defined in [Error Catalog](../04-reference/error-catalog.md).
+Routing semantics are runtime-level control behaviour; schema-level instruction fields are defined in [CRD Reference](../05-reference/crds.md). Error mappings are defined in [Error Catalog](../05-reference/error-catalog.md).
 
 ## Thrash Guard and Feedback Deadlock
 
