@@ -88,7 +88,27 @@ Produce a clean, coherent, GitHub-style specification that:
 | `01-concepts/02-data-model.md` | Complete |
 | `01-concepts/03-governance.md` | Complete |
 | `02-flow/*` | Drafted (first pass complete; consistency pass complete) |
-| Everything else | Not started |
+| `03-node/00-overview.md` | Drafted (prose baseline) |
+| `03-node/01-sidecar.md` | Stub outline |
+| `03-node/02-configuration.md` | Stub outline |
+| `03-node/03-patterns.md` | Stub outline |
+| `04-sdk/*` | Stub outlines |
+| `05-reference/*` | Stub outlines |
+| `README.md` | Not started |
+
+### Status Terms
+
+- **Stub outline** — Intentional scaffold only (goal + section headings/scope). Not expected to contain full normative prose yet.
+- **Drafted** — Full prose exists and is internally coherent, but may still receive consistency and refinement edits.
+- **Complete** — Meets current quality bar for scope, consistency, and writing principles.
+
+### Review Discipline by Status
+
+Status is a review boundary and must be respected:
+
+- For **stub outline** files, valid feedback is limited to structural correctness, key-decision alignment, impossible mechanics, and broken/missing links.
+- For **drafted/complete** files, full semantic and writing-principle review applies.
+- Feedback that only says a file is "currently a stub", "to be finished", "not drafted yet", or equivalent is **not valid feedback**.
 
 `README.md` should be written last, once the spec is complete.
 
@@ -376,6 +396,6 @@ Legacy terms that are explicitly superseded in this rewrite: `WorkitemType`, `sp
 3. Identify the next document to write by asking the user.
 4. Read the relevant legacy source files.
 5. Draft the document following the writing principles.
-6. **Review all completed spec documents** for consistency with the new material and technical feasibility. Consistency and technical feasibility are non-negotiable — every mechanism described must be implementable, and no two documents should contradict each other. Flag and fix any issues before considering the document complete.
+6. **Review all completed spec documents** for consistency with the new material and technical feasibility. Consistency and technical feasibility are non-negotiable — every mechanism described must be implementable, and no two documents should contradict each other. For files marked **Stub outline**, review structure/alignment only and do not log "stub/incomplete" as a standalone issue.
 7. Update the status table in this file when a document is complete.
 8. After making changes, run the `lint-and-fix` skill. It must execute the linter in `lint/` (`pnpm lint` from that directory), fix any issues it reports, and rerun until clean.

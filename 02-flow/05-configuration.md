@@ -24,7 +24,7 @@ flowchart TB
     FF["FoundryFlow<br/>flow-wide semantics"] --> OP["Operator reconciliation"]
     FN["FoundryNode<br/>node-local semantics"] --> OP
     OP --> WI["Workitem runtime<br/>assignment routing completion"]
-    FN --> SC["Sidecar policy gate"]
+    FN --> SC["Sidecar mediation"]
     SC --> WI
 ```
 
@@ -117,7 +117,6 @@ Entry and exit contracts are defined per governed artefact kind. Each kind maps 
 
 Contract usage by boundary:
 
-- Entry contracts gate Workitem admission for entry-bound nodes (local creation) and for configured `importNode` (cross-flow import).
 - Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `importNode` (cross-flow import), and for Assay's hearing entry binding (review-hearing processing).
 - Exit contracts gate `complete()` for exit-bound nodes.
 

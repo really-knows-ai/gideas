@@ -25,7 +25,7 @@
 
 - SDK calls include Workitem-scoped metadata that Sidecar forwards to target services.
 - Operator, Archivist, and Librarian decide request admissibility from current Workitem state and node identity.
-- Requests missing required Workitem scope metadata are rejected.
+- Requests missing required Workitem scope metadata are rejected by the target service.
 - Sidecar does not create a separate assignment object; Workitem state is the source of truth.
 
 ## Service Authorisation
