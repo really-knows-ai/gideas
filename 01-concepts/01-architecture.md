@@ -37,7 +37,7 @@ flowchart TD
 
     subgraph data["Data Plane"]
         direction LR
-        Nodes ~~~ Archivist
+        Nodes ~~~ Archivist ~~~ SupportSvc["Support Services"]
     end
 
     mgmt --> ctrl
@@ -72,6 +72,8 @@ Where work happens. The Data Plane contains the [Nodes](../03-node/00-overview.m
 Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
 
 Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to the platform's network policy layer.
+
+Flow Architects can also deploy **Support Services** — containers that expose capabilities consumed by nodes and system services but do not process Workitems. A Codification Service that translates a law's prose goal into formal logic is a Support Service; a notification relay that pushes alerts to an external channel is another. Support Services run in the Flow namespace and are accessed through Sidecar mediation when consumed by nodes, preserving the same trust boundary as system service calls. They are declared in Flow configuration and are optional — the platform imposes no minimum set.
 
 ### Security Plane
 
@@ -114,6 +116,7 @@ Each concern in the system maps to exactly one plane. When a Node executes work,
 | Concern | Plane | Handler |
 |---------|-------|---------|
 | Work execution | Data | Node pods |
+| Pluggable capabilities | Data | Support Services |
 | Routing decisions | Control | Flow Operator |
 | Artefact lifecycle | Data | Archivist |
 | Law lifecycle | Governance | Librarian |

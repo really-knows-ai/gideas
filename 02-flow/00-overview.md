@@ -10,6 +10,7 @@ A Flow runtime is composed of control-plane actors, data-plane workers, and boun
 - The [Workitem runtime contract](./02-workitem.md) carries control-plane state and artefact references while the Workitem moves through the Flow.
 - [External and reference nodes](./03-nodes-external.md) execute work through Sidecar-mediated APIs; node pods stay stateless at execution level.
 - [System services](./04-system-services.md) provide law lifecycle, artefact lifecycle, citation processing, telemetry aggregation, and backup surfaces.
+- [Flow Support Services](./04-system-services.md#flow-support-services) are optional, Flow-Architect-deployed containers that expose pluggable capabilities (such as codification) consumed by nodes through Sidecar mediation and by system services directly.
 - [Configuration](./05-configuration.md) defines topology, contracts, capability grants, and policy limits that shape runtime behaviour.
 - [Cross-flow collaboration](./06-cross-flow.md) governs export/import boundaries, trust topology, naturalisation, and law integration.
 - [Operations](./07-operations.md) governs monitoring, triage, recovery, and validation drills.
@@ -29,11 +30,15 @@ flowchart TD
     SC --> LB["Librarian<br/>law lifecycle"]
     SC --> CP["Citation Processor<br/>citation tracking"]
 
+    SC --> SS["Support Services<br/>pluggable capabilities"]
+
     OP --> FM["Flow Monitor<br/>metrics traces audit"]
     SC --> FM
     AR --> FM
     LB --> FM
     CP --> FM
+
+    SS --> FM
 
     LB --> XF["Cross-flow channel<br/>export import law sync"]
 ```
@@ -120,6 +125,7 @@ The runtime splits control-plane state from provenance state:
 - Archivist stores artefact version history, passport stamps, and feedback in SQLite.
 - Archivist stores raw artefact content bytes in a blob store (typically fast PVC-backed storage, optionally cloud object storage) keyed by content hash.
 - Nodes access artefact and governance state through Sidecar and SDK surfaces; nodes do not call system services directly.
+- Flow Support Services are accessed through Sidecar mediation when consumed by nodes, extending the same trust boundary to pluggable capabilities.
 
 This split keeps Workitems small and watchable while retaining full provenance depth.
 
@@ -180,5 +186,6 @@ The following invariants hold for every Flow deployment:
 10. Assay is always present and cannot exceed its authority ceiling.
 11. Cross-flow verifiability and local authority are distinct and topology-dependent.
 12. Imported Workitems are created in `Pending` and first-scheduled to configured `importNode` when capacity allows.
+13. Flow Support Services are consumed through Sidecar mediation by nodes and do not process Workitems.
 
 These invariants are elaborated normatively in the remaining `02-flow` documents.

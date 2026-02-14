@@ -42,13 +42,15 @@
 - Sidecar -> Archivist for artefact bytes, version history, feedback, and stamp provenance operations.
 - Sidecar -> Librarian for law retrieval and governance context queries.
 - Sidecar -> telemetry surfaces for mediation and transport observability.
+- Sidecar -> Citation Processor for citation submission and citation evidence query paths.
+- Sidecar -> Flow Support Services for capability-gated operations on Flow-Architect-deployed services.
 - Sidecar never transfers control-plane ownership to node code.
 
 ## Failure and Fail-Closed Behaviour
 
 - Sidecar authentication failure rejects the request before proxying.
 - Service-side authorisation denial returns structured error and no state change.
-- Unavailable dependency (Operator/Archivist/Librarian) -> fail closed on affected governance path.
+- Unavailable dependency (Operator/Archivist/Librarian/Support Service) -> fail closed on affected path.
 - Invalid instruction shape or out-of-scope mutation is rejected by the authoritative service.
 - Timeout and thrash outcomes are decided by Operator guard logic.
 
@@ -67,3 +69,4 @@
 - Workitem state (`assignedNode`, lifecycle) remains the source of truth for request admissibility.
 - Governance-integrity failures never fail open.
 - Sidecar does not own control-plane persistence; Operator remains final authority.
+- Flow Support Service access is Sidecar-mediated for nodes, using the same trust boundary as system service calls.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Define the SDK contract that node developers use to execute Workitem-scoped logic through Sidecar mediation while runtime services remain authoritative for authorisation and state changes.
+Define the SDK contracts for node developers (Workitem-scoped handler execution) and Support Service developers (capability endpoint implementation), both mediated through Sidecar boundaries while runtime services remain authoritative for authorisation and state changes.
 
 ## SDK Runtime Role
 
@@ -18,7 +18,11 @@ Clarify authentication via Sidecar, service-side authorisation, and authoritativ
 
 ## SDK Surface Map
 
-Introduce the SDK domains: core, artefacts, legal, feedback, Workitems, and telemetry.
+Introduce the SDK domains: core, artefacts, legal, feedback, Workitems, telemetry, and the `FlowSupportService` base class for Support Service implementations.
+
+## FlowSupportService Base Class
+
+Define the SDK base class for Flow Support Service implementations. Covers capability declaration, gRPC endpoint registration, health reporting, and the simplified permission model distinct from node handler execution. Specialised subtypes (such as `CodificationService`) extend `FlowSupportService` with subtype-specific contracts.
 
 ## Failure and Error Model
 

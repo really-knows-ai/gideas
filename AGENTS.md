@@ -36,7 +36,7 @@ Produce a clean, coherent, GitHub-style specification that:
 │   ├── 01-operator.md
 │   ├── 02-workitem.md
 │   ├── 03-nodes-external.md
-│   ├── 04-system-services.md
+│   ├── 04-system-services.md    # System services + Flow Support Services
 │   ├── 05-configuration.md
 │   ├── 06-cross-flow.md
 │   └── 07-operations.md
@@ -263,6 +263,8 @@ Artefact identity semantics on a Workitem are stable:
 - `kind` is immutable for a given `id`.
 - Updating an existing artefact `id` writes a new version hash in Archivist (or no-op if unchanged content); the Workitem reference remains the same.
 
+The `FlowSupportService` base class is a distinct SDK surface from the Workitem-scoped node handler contract. Support Services do not participate in Workitem mutation flow or artefact provenance flow — they expose stateless gRPC capabilities consumed through Sidecar mediation. The `FlowSupportService` contract covers capability declaration, health reporting, and the simplified permission model; it does not include Workitem, Artefact, or routing abstractions.
+
 ### Concepts documents are technology-agnostic
 
 The `01-concepts/` documents describe architecture, data model, and governance in terms of roles and responsibilities — not products. They say "embedded database", "content-addressed store", "metrics pipeline", and "deployment tooling" rather than naming SQLite, PVC, Prometheus, Helm, gRPC, or Docker. Technology choices are firm decisions (recorded in this file and throughout the key decisions below), but they belong in `02-flow/`, `03-node/`, `04-sdk/`, and `05-reference/` where the audience is operators and developers making implementation decisions. The concepts audience needs to understand *what* each component does and *why* — not *which product* does it.
@@ -315,6 +317,28 @@ The Foundry Cycle is the reference arrangement — the standard pattern demonstr
 ### Assay is a standard Flow component
 
 Assay is a standard component of every Flow, not a swappable reference implementation. It is built into the runtime as a Flow component. Despite being routable as a node (Workitems can be sent to it for judicial review), it is always present — Flow Architects do not choose whether to include it. Full detail in `02-flow/`.
+
+### Flow Support Services are pluggable service containers
+
+Flow Support Services are optional, Flow-Architect-deployed containers that expose gRPC capabilities consumed by nodes (via Sidecar mediation) and system services (via direct service-to-service calls). They run in the Flow namespace alongside system services and do not process Workitems.
+
+Support Services are declared via their own CRD (or specialised sub-CRDs for specific subtypes). The CRD declares what capabilities the service provides and supports infrastructure configuration including PVC mounts and deployment strategy (ReplicaSet default, StatefulSet as an option). Support Services are not required to be stateless. The FoundryFlow configuration grants consuming nodes access to Support Service capabilities. System services discover Support Services through the same Flow configuration.
+
+Node access to Support Service capabilities is granted through the same capability-grant pattern as other capabilities, using the `USE:support/<service>/<capability>` syntax. For example, `USE:support/codify-smt/encode` grants a node access to the `encode` capability of the `codify-smt` Codification Service.
+
+Nodes consume Support Services through Sidecar mediation — the consuming node's Sidecar brokers the call, preserving the platform invariant that nodes never call services directly. Assay is a node and accesses Support Services through its Sidecar. System services consume Support Services via direct service-to-service gRPC.
+
+Support Services use the SDK's `FlowSupportService` base class and have a simplified permission model distinct from the full node capability envelope. Specialised subtypes (such as Codification Services) extend subtype-specific base classes that inherit from `FlowSupportService`.
+
+The Operator manages Support Service deployments. Default deployment strategy is ReplicaSet with minimum replicas of 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum. Support Services must implement standard `healthz`/`readyz` endpoints for Operator health management and pod lifecycle. Support Services emit context-specific telemetry relevant to their capability.
+
+### Codification Services are Flow Support Services
+
+Codification Services are a specialisation of Flow Support Services for translating law goals into formal representations during governance hardening. They inherit from `CodificationService`, which extends the SDK's `FlowSupportService` base class. They expose an `encode` capability that Assay can consume during law promotion.
+
+When Assay renders a verdict for Tier 1-to-Tier 2 promotion, it sends the natural-language goal to a Codification Service, which returns one or more formal representations (formal logic, executable validators, etc.). Assay mints the Tier 2 Ruling with both the original prose and the new formal representations. Assay decides what the ruling should be; the Codification Service writes the formal syntax.
+
+Codification Services are pluggable and replaceable. A Flow Architect can deploy multiple Codification Services for different representation types (e.g., `codify-smt` for formal logic, `codify-rego` for policy-as-code). Assay discovers available Codification Services through Flow configuration.
 
 ### Governance Flow is in scope
 

@@ -11,6 +11,7 @@ Each service owns one primary concern:
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
 - **Flow Monitor**: telemetry aggregation, audit stream integration, and friction signal surfacing.
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
+- **Flow Support Services**: optional, Flow-Architect-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the worked example in this spec.
 
 No service duplicates another service's source of truth.
 
@@ -24,10 +25,14 @@ flowchart TD
     SC --> CP
     SC --> AR
 
+    SC --> SS["Support Services<br/>(Flow Architect deployed)"]
+
     LB --> FM["Flow Monitor"]
     CP --> FM
     AR --> FM
     OP --> FM
+
+    SS --> FM
 
     LB <-->|"law sync and appeals"| XFL["Cross-flow Librarian"]
 ```
@@ -139,6 +144,62 @@ Friction is a first-class signal:
 - Aggregation supports operational and governance analysis at multiple scopes: per-node, per-law, per-tier, and per-topology-path.
 - Friction is not optional instrumentation; it is a mandatory runtime output surface.
 
+## Flow Support Services
+
+Flow Support Services are optional containers deployed by the Flow Architect that expose gRPC capabilities to nodes and system services. They run in the Flow namespace — pluggable, replaceable, and Flow-Architect-owned.
+
+Support Services do not process Workitems — they expose gRPC capabilities consumed by nodes and system services through different access paths:
+
+- Nodes consume Support Services through [Sidecar](../03-node/01-sidecar.md) mediation, preserving the platform invariant that nodes never call services directly. Assay is a node and accesses Support Services through its Sidecar.
+- System services discover and consume Support Services via the Flow configuration and direct service-to-service gRPC.
+
+Support Services are declared via their own CRD, which specifies:
+
+- The capabilities the service provides (e.g., `encode` for Codification Services).
+- Infrastructure configuration: PVC mounts, deployment strategy (ReplicaSet default, StatefulSet as an option), resource limits.
+- Health and readiness endpoints (`healthz`/`readyz`).
+
+The [Operator](./01-operator.md) manages Support Service deployments. Default deployment strategy is ReplicaSet with minimum replicas of 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum replica count. Support Services must implement standard `healthz`/`readyz` endpoints for Operator health management and pod lifecycle.
+
+The FoundryFlow [configuration](./05-configuration.md) grants consuming nodes access to Support Service capabilities using `USE:support/<service>/<capability>` syntax (e.g., `USE:support/codify-smt/encode`). Support Services use the [SDK](../04-sdk/00-overview.md)'s `FlowSupportService` base class and have a simplified permission model distinct from the full node capability envelope. Specialised subtypes (such as `CodificationService`) extend subtype-specific base classes that inherit from `FlowSupportService`.
+
+Support Services are not required to be stateless. A Codification Service might cache model weights on a PVC; a notification relay might maintain connection pools. Infrastructure state is Support-Service-owned and not part of the Workitem provenance boundary.
+
+Support Services emit context-specific telemetry relevant to their capability. No mandatory generic telemetry schema is imposed beyond standard health signals.
+
+CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
+
+### Codification Services
+
+Codification Services are a Flow Support Service specialisation for governance hardening. They translate a [law](../01-concepts/03-data-model.md#laws)'s natural-language goal into formal representations — formal logic, executable validators, policy-as-code — increasing enforceability without changing the law's intent.
+
+Codification Services expose an `encode` capability consumed during law promotion:
+
+1. Assay renders a verdict during Tier 1 → Tier 2 promotion, expressing the ruling's goal in natural language.
+2. Assay sends the goal to a Codification Service via its Sidecar.
+3. The Codification Service returns one or more formal representations alongside the original prose.
+4. Assay mints the Tier 2 Ruling as a single law object with multiple representations.
+
+Assay decides what the ruling should be; the Codification Service writes the formal syntax.
+
+Flow Architects can deploy multiple Codification Services for different representation types (e.g., `codify-smt` for formal logic, `codify-rego` for policy-as-code). Assay discovers available Codification Services through [Flow configuration](./05-configuration.md). If no Codification Service is deployed, Assay mints rulings with prose representations only — governance hardening through codification is optional, not a platform requirement.
+
+```mermaid
+sequenceDiagram
+    participant AS as Assay
+    participant SC as Sidecar
+    participant CS as Codification Service
+    participant LB as Librarian
+
+    AS->>SC: encode(goal, target-format)
+    SC->>CS: encode request
+    CS-->>SC: formal representation(s)
+    SC-->>AS: representation(s)
+    AS->>AS: mint Ruling with prose + formal representations
+    AS->>SC: write law
+    SC->>LB: persist new Tier 2 Ruling
+```
+
 ## Hearing Lifecycle as Cross-Component Protocol
 
 Hearings are implemented as a protocol across services and runtime actors, not as a standalone hearing service.
@@ -163,16 +224,22 @@ sequenceDiagram
     participant TR as Trigger Service
     participant OP as Operator
     participant AS as Assay
+    participant SC as Sidecar
     participant CP as Citation Processor
     participant LB as Librarian
 
     TR->>OP: create hearing Workitem (lawId artefact)
     OP->>AS: assign hearing via entry binding
-    AS->>CP: query citation evidence
-    CP-->>AS: citation record set
-    AS->>LB: query law context
-    LB-->>AS: law versions and tiers
-    AS-->>OP: verdict + complete()
+    AS->>SC: query citation evidence
+    SC->>CP: citation evidence request
+    CP-->>SC: citation record set
+    SC-->>AS: citation record set
+    AS->>SC: query law context
+    SC->>LB: law context request
+    LB-->>SC: law versions and tiers
+    SC-->>AS: law versions and tiers
+    AS->>SC: verdict + complete()
+    SC-->>OP: verdict + complete()
     OP->>OP: validate Assay hearing exit contract
     OP->>LB: apply lifecycle action
 ```
@@ -215,7 +282,9 @@ Core call paths are stable:
 - Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
 - Sidecar <-> Librarian: law retrieval and legal-context queries.
 - Sidecar <-> Citation Processor: citation submission and citation evidence query paths.
-- Assay <-> Citation Processor: hearing evidence queries.
+- Assay (via Sidecar) <-> Citation Processor: hearing evidence queries.
+- Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
+- Assay (via Sidecar) <-> Codification Services: encode requests during law promotion.
 - Services -> Flow Monitor: metrics, traces, and audit events.
 
 Contract failures must return structured errors aligned with [Error Catalog](../05-reference/error-catalog.md).
@@ -228,6 +297,7 @@ Service outages degrade behaviour predictably:
 - Librarian unavailable: law retrieval and law lifecycle actions fail closed.
 - LLM contradiction evaluator unavailable: higher-tier law activation pauses in queued state; integration retries with backoff and raises operational alerts.
 - Citation Processor unavailable: hearing evidence retrieval and threshold-trigger automation are blocked; explicit operational intervention is required.
+- Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Governance hardening (codification) degrades gracefully — Assay can mint prose-only rulings when Codification Services are unavailable.
 - Flow Monitor unavailable: processing continues, but observability coverage degrades and alerting is raised.
 
 Fail-open behaviour is prohibited for governance integrity paths.
@@ -246,5 +316,7 @@ All deployments preserve these service invariants:
 8. Friction is first-class and queryable by source attribution.
 9. Backup ownership boundaries are explicit between services and cluster administration.
 10. Cross-flow law integration preserves tiered supremacy, grace-period semantics, and audit continuity.
+11. Flow Support Services are optional, Flow-Architect-deployed, and do not process Workitems.
+12. Codification Services are optional; their absence degrades governance hardening to prose-only rulings.
 
 Node-facing implications of these services are detailed in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Telemetry](../04-sdk/06-sdk-telemetry.md).

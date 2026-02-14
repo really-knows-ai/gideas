@@ -4,10 +4,11 @@ Flow configuration defines runtime behaviour and is the normative source for beh
 
 ## Configuration Authority Model
 
-Configuration is expressed through two resources with distinct authority boundaries:
+Configuration is expressed through three resource types with distinct authority boundaries:
 
 - [FoundryFlow](../05-reference/crds.md) defines Flow-wide behaviour: topology, contracts (`entryContracts`, `exitContracts`), governance policy limits, and cross-flow policy.
 - [FoundryNode](../05-reference/crds.md) defines node-local behaviour and permissions: routing outputs, capabilities, timeout budget, and entry/exit bindings (`entry`, `exit`).
+- Support Service CRDs define per-service capabilities, infrastructure requirements, and deployment policy. FoundryFlow controls which nodes can consume which Support Service capabilities. Support Service CRDs are subordinate to FoundryFlow — they declare what is available; FoundryFlow governs who can use it.
 
 Behaviour precedence is deterministic:
 
@@ -21,6 +22,7 @@ Node configuration cannot override Flow invariants.
 flowchart TB
     FF["FoundryFlow<br/>flow-wide semantics"] --> OP["Operator reconciliation"]
     FN["FoundryNode<br/>node-local semantics"] --> OP
+    SS["Support Service CRDs<br/>capabilities infrastructure"] --> OP
     OP --> WI["Workitem runtime<br/>assignment routing completion"]
     FN --> SC["Sidecar mediation"]
     SC --> WI
@@ -168,6 +170,20 @@ Custom topologies can split, merge, or replace these responsibilities. Runtime s
 
 [Assay](./03-nodes-external.md) is always present as a standard runtime component and cannot be omitted.
 
+## Support Service Configuration
+
+Flow Support Services are declared via dedicated CRDs that define provided capabilities and infrastructure requirements.
+
+- Each Support Service CRD declares the capabilities it exposes (e.g., `encode` for Codification Services).
+- Infrastructure configuration includes PVC mounts, deployment strategy (ReplicaSet default, StatefulSet option), resource limits, and replica count.
+- Default minimum replicas is 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum.
+- Support Services must implement standard `healthz`/`readyz` endpoints.
+- The FoundryFlow configuration grants consuming nodes access to Support Service capabilities using `USE:support/<service>/<capability>` syntax (e.g., `USE:support/codify-smt/encode`), following the same capability-grant pattern as stamp and law capabilities.
+
+Assay discovers available Codification Services from Flow configuration. Other nodes discover Support Services through their granted capabilities. System services discover Support Services through the same Flow configuration.
+
+Support Service CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
+
 ## Cross-Flow Configuration Semantics
 
 Cross-flow configuration defines trust relationships and authority treatment at boundaries.
@@ -228,6 +244,7 @@ All Flow configurations must preserve these invariants:
 8. Export scope is constrained by bound exit-contract kind entries.
 9. Workitem admission is constrained by bound entry-contract kind entries.
 10. Imported Workitems begin in `Pending` and are first-scheduled to configured `importNode` when capacity allows.
+11. Support Service capabilities are configuration-granted and Sidecar-mediated for node consumers.
 
 These semantics are consumed by [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md).
 

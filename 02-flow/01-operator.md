@@ -19,17 +19,19 @@ The Operator maintains a direct service-level query path to the Archivist, disti
 
 ## Reconciliation Surfaces
 
-The Operator reconciles three state surfaces continuously:
+The Operator reconciles four state surfaces continuously:
 
 - **FoundryFlow**: topology, contracts, policy limits, and cross-flow policy.
 - **FoundryNode**: node capability envelope, routing outputs, timeout budget, and entry/exit bindings.
 - **Workitem**: lifecycle progression through assignment, routing, and completion transition.
+- **Support Service**: deployment lifecycle, health monitoring, and scaling policy for Flow-Architect-deployed [Flow Support Services](./04-system-services.md#flow-support-services).
 
 ```mermaid
 flowchart TD
     FF["FoundryFlow<br/>topology contracts policy"] --> OP["Operator reconcile loop"]
     FN["FoundryNode<br/>capabilities outputs entry/exit"] --> OP
     WI["Workitems<br/>pending running completed/failed"] --> OP
+    SS["Support Services<br/>health scaling lifecycle"] --> OP
 
     OP --> RT["Runtime graph and guards"]
     OP --> AS["Assignments and transitions"]
@@ -201,5 +203,6 @@ All Flow deployments preserve these Operator invariants:
 9. Thrash enforcement uses aggregate visit count across all node assignments.
 10. Trust issuance and annexation participation remain Operator responsibilities at control-plane boundary.
 11. Operator-originated audit and telemetry emissions are mandatory runtime outputs.
+12. Support Service deployment lifecycle, health monitoring, and scaling policy are Operator-managed.
 
 Field-level definitions are in [CRD Reference](../05-reference/crds.md). Runtime error mappings are in [Error Catalog](../05-reference/error-catalog.md).

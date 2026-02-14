@@ -26,7 +26,7 @@ The Operator is shown querying the Archivist directly for stamp and artefact sta
 
 ---
 
-### 2. Codification Services referenced but never defined
+### ~~2. Codification Services referenced but never defined~~ RESOLVED
 
 **Files:** `01-concepts/00-overview.md:88`, `01-concepts/03-data-model.md:395`, `01-concepts/04-governance.md:75`, `02-flow/04-system-services.md` (entire file)
 **Criterion:** Completeness vs AGENTS.md / Cross-Document Consistency
@@ -36,9 +36,11 @@ The Operator is shown querying the Archivist directly for stamp and artefact sta
 
 **Suggested fix:** Either (a) add a Codification Services section to `02-flow/04-system-services.md` defining it as a service or a Librarian sub-capability, or (b) fold codification into the Librarian's responsibilities in `02-flow/04-system-services.md` and update the concepts references to point to the Librarian rather than a standalone "Codification Services" name.
 
+**Resolution:** Introduced Flow Support Services as a new architectural concept in AGENTS.md (key decisions), `01-concepts/01-architecture.md` (Data Plane, Responsibility Boundaries), `02-flow/04-system-services.md` (dedicated section with Codification Services subsection), `02-flow/05-configuration.md` (configuration authority model and Support Service configuration), `02-flow/01-operator.md` (reconciliation surface), `02-flow/00-overview.md` (runtime composition), `03-node/00-overview.md` (Runtime Interaction Model), `03-node/01-sidecar.md` (brokering contract), and `04-sdk/00-overview.md` (FlowSupportService base class). Codification Services are the first concrete instance, exposing an `encode` capability consumed by Assay during law promotion. Links in concepts documents updated to point to the new section.
+
 ---
 
-### 3. Librarian cited as source of law query by Sidecar in gRPC API stub, but Citation Processor also receives Sidecar calls — unclear in service contract
+### ~~3. Librarian cited as source of law query by Sidecar in gRPC API stub, but Citation Processor also receives Sidecar calls — unclear in service contract~~ RESOLVED
 
 **Files:** `02-flow/04-system-services.md:217`, `02-flow/00-overview.md:30`
 **Criterion:** Technical Feasibility / Cross-Document Consistency
@@ -46,6 +48,8 @@ The Operator is shown querying the Archivist directly for stamp and artefact sta
 The overview diagram (`02-flow/00-overview.md:30`) shows `SC --> CP` (Sidecar to Citation Processor). The inter-service contracts in `04-system-services.md:217` confirm "Sidecar <-> Citation Processor: citation submission and citation evidence query paths." However, the AGENTS.md key decision section does not mention a Sidecar-to-Citation-Processor path — it describes the Sidecar's role only in terms of routing to the Archivist for artefact provenance and to the Operator for control-plane mutations. Nodes submitting citations through the Sidecar to the Citation Processor is architecturally coherent, but the concepts documents (`01-concepts/01-architecture.md`) do not mention this data path in the Data Plane or Security Plane descriptions.
 
 **Suggested fix:** In `01-concepts/01-architecture.md`, mention that the Sidecar also mediates citation submissions to the Citation Processor (alongside Archivist and Librarian calls), or ensure the Governance Plane section acknowledges this path. This is a completeness gap rather than a contradiction, but it could mislead implementors who read the concepts layer and assume the Sidecar's mediation scope is only Archivist + Librarian + Operator.
+
+**Resolution:** Added Citation Processor and Flow Support Services to the Sidecar's service brokering contract in `03-node/01-sidecar.md`. The Sidecar stub now lists all five brokered paths: Operator, Archivist, Librarian, Citation Processor, and Flow Support Services. The concepts architecture document (`01-concepts/01-architecture.md`) was not changed for this specific issue since it describes planes at a higher abstraction level where the Sidecar's brokering detail is not enumerated.
 
 ---
 
@@ -395,14 +399,14 @@ The sequence diagram shows `Q->>W: stamp (linter)` — Quench applying a "linter
 | Assay | Capitalised, no "Node" suffix except in some places | Mostly consistent; occasionally "Assay Node" vs "Assay" |
 | `wont_fix` | Canonical token with display label "Won't Fix" | Consistent |
 | annexation | Used only in `02-flow/01-operator.md` | Orphan term (see #27) |
-| Codification Services | Capitalised, used in concepts | Never defined in flow layer (see #2) |
+| Codification Services | Capitalised, used in concepts | Defined in flow layer as Flow Support Service specialisation (~~see #2~~) |
 | GovernedArtefact | CRD name used in concepts and flow | Consistent but borderline for concepts (see #30) |
 
 ### Cross-link coverage
 
 Cross-linking is generally thorough across the drafted documents. Key gaps:
 
-- Codification Services is referenced but has no target page or section (#2)
+- ~~Codification Services is referenced but has no target page or section (#2)~~ Resolved
 - Treaty first mention in architecture doc is unlinked (#26)
 - Appraise/Refine in data-model law tiers table link to overview instead of foundry-cycle (#6)
 
@@ -422,7 +426,7 @@ Duplication is well-managed. The primary concern is:
 
 | Severity | Count | Issues |
 |----------|-------|--------|
-| **Critical** | 3 | #1, #2, #3 |
+| **Critical** | 3 (all resolved) | ~~#1~~, ~~#2~~, ~~#3~~ |
 | **Significant** | 9 | #4, #5, #6, #10, #11, #12, #16, #17, #22 |
 | **Minor** | 5 | #25, #26, #27, #28, #30, #31 |
 | **No fix required** | 7 | #7, #13, #15, #18, #19, #21, #23, #24, #29 |

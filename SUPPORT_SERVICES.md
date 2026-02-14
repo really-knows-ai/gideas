@@ -86,13 +86,13 @@ Codification Services are pluggable and replaceable. A Flow Architect can deploy
 
 **Also:** Update the spec structure comment for `02-flow/04-system-services.md` to note it now covers Support Services. In the Spec Structure block (line 39), change:
 
-```
+```text
 │   ├── 04-system-services.md
 ```
 
 to:
 
-```
+```text
 │   ├── 04-system-services.md    # System services + Flow Support Services
 ```
 
@@ -135,7 +135,8 @@ The full table row should sit naturally among the existing rows. Insert it after
 **Location:** In the Mermaid diagram at lines 38-41, update the Data Plane subgraph:
 
 Change:
-```
+
+```text
     subgraph data["Data Plane"]
         direction LR
         Nodes ~~~ Archivist
@@ -143,7 +144,8 @@ Change:
 ```
 
 To:
-```
+
+```text
     subgraph data["Data Plane"]
         direction LR
         Nodes ~~~ Archivist ~~~ SupportSvc["Support Services"]
@@ -159,11 +161,13 @@ To:
 **Location:** Line 88
 
 **Current text:**
+
 ```markdown
 ...through [Codification Services](../02-flow/04-system-services.md). Authority increases through the tier system; enforceability increases through representation.
 ```
 
 **Replace with:**
+
 ```markdown
 ...through [Codification Services](../02-flow/04-system-services.md#codification-services). Authority increases through the tier system; enforceability increases through representation.
 ```
@@ -179,11 +183,13 @@ The anchor `#codification-services` must match the heading we create in `02-flow
 **Location:** Line 395
 
 **Current text:**
+
 ```markdown
 ...If the Finding proves durable enough to be promoted to a Tier 2 Ruling, [Codification Services](../02-flow/04-system-services.md) can translate the goal into formal logic, adding a deterministic representation alongside the original prose.
 ```
 
 **Replace with:**
+
 ```markdown
 ...If the Finding proves durable enough to be promoted to a Tier 2 Ruling, [Codification Services](../02-flow/04-system-services.md#codification-services) can translate the goal into formal logic, adding a deterministic representation alongside the original prose.
 ```
@@ -197,11 +203,13 @@ The anchor `#codification-services` must match the heading we create in `02-flow
 **Location:** Line 75
 
 **Current text:**
+
 ```markdown
 Representation lifecycle responsibilities are defined in [System Services](../02-flow/04-system-services.md).
 ```
 
 **Replace with:**
+
 ```markdown
 Representation lifecycle responsibilities — including [Codification Services](../02-flow/04-system-services.md#codification-services) that translate goals into formal representations — are defined in [System Services](../02-flow/04-system-services.md).
 ```
@@ -224,13 +232,13 @@ Representation lifecycle responsibilities — including [Codification Services](
 
 **Location:** In the diagram at lines 17-39, add Support Services. After line 30 (`SC --> CP["Citation Processor<br/>citation tracking"]`), add:
 
-```
+```text
     SC --> SS["Support Services<br/>pluggable capabilities"]
 ```
 
 Also add the telemetry connection after line 36 (`CP --> FM`):
 
-```
+```text
     SS --> FM
 ```
 
@@ -270,13 +278,13 @@ This is the largest change. Add a new top-level section and update several exist
 
 **Location:** In the diagram at lines 17-33, add Support Services. After line 25 (`SC --> AR`), add:
 
-```
+```text
     SC --> SS["Support Services<br/>(Flow Architect deployed)"]
 ```
 
 After line 30 (`OP --> FM`), add:
 
-```
+```text
     SS --> FM
 ```
 
@@ -346,6 +354,7 @@ sequenceDiagram
 **Location:** In the hearing lifecycle sequence diagram (lines 161-178), Assay calls Citation Processor and Librarian directly. Since Assay is a node, these calls must go through its Sidecar.
 
 Change:
+
 ```mermaid
 sequenceDiagram
     participant TR as Trigger Service
@@ -366,6 +375,7 @@ sequenceDiagram
 ```
 
 To:
+
 ```mermaid
 sequenceDiagram
     participant TR as Trigger Service
@@ -444,11 +454,13 @@ Also add after that line:
 **Location:** Line 7
 
 Change:
+
 ```markdown
 Configuration is expressed through two resources with distinct authority boundaries:
 ```
 
 To:
+
 ```markdown
 Configuration is expressed through three resource types with distinct authority boundaries:
 ```
@@ -465,7 +477,7 @@ Configuration is expressed through three resource types with distinct authority 
 
 **Location:** In the diagram at lines 20-27, add Support Services. After line 23 (`FN["FoundryNode<br/>node-local semantics"] --> OP`), add:
 
-```
+```text
     SS["Support Service CRDs<br/>capabilities infrastructure"] --> OP
 ```
 
@@ -508,11 +520,13 @@ Update the Behavioural Invariants list (lines 217-231). After invariant 10 (line
 **Location:** Line 22
 
 Change:
+
 ```markdown
 The Operator reconciles three state surfaces continuously:
 ```
 
 To:
+
 ```markdown
 The Operator reconciles four state surfaces continuously:
 ```
@@ -529,7 +543,7 @@ The Operator reconciles four state surfaces continuously:
 
 **Location:** In the Mermaid diagram at lines 28-37, add Support Services. After line 32 (`WI["Workitems<br/>pending running completed/failed"] --> OP`), add:
 
-```
+```text
     SS["Support Services<br/>health scaling lifecycle"] --> OP
 ```
 
@@ -576,11 +590,13 @@ The Operator reconciles four state surfaces continuously:
 **Location:** In "Failure and Fail-Closed Behaviour" (line 51), update to include Support Services in the unavailable-dependency list:
 
 Change:
+
 ```markdown
 - Unavailable dependency (Operator/Archivist/Librarian) -> fail closed on affected governance path.
 ```
 
 To:
+
 ```markdown
 - Unavailable dependency (Operator/Archivist/Librarian/Support Service) -> fail closed on affected path.
 ```
@@ -604,11 +620,13 @@ To:
 **Location:** Line 5
 
 **Current text:**
+
 ```markdown
 Define the SDK contract that node developers use to execute Workitem-scoped logic through Sidecar mediation while runtime services remain authoritative for authorisation and state changes.
 ```
 
 **Replace with:**
+
 ```markdown
 Define the SDK contracts for node developers (Workitem-scoped handler execution) and Support Service developers (capability endpoint implementation), both mediated through Sidecar boundaries while runtime services remain authoritative for authorisation and state changes.
 ```
@@ -618,6 +636,7 @@ Define the SDK contracts for node developers (Workitem-scoped handler execution)
 **Location:** Lines 19-21
 
 **Current text:**
+
 ```markdown
 ## SDK Surface Map
 
@@ -625,6 +644,7 @@ Introduce the SDK domains: core, artefacts, legal, feedback, Workitems, and tele
 ```
 
 **Replace with:**
+
 ```markdown
 ## SDK Surface Map
 
@@ -650,11 +670,13 @@ After all changes are applied, update `REVIEW.md`:
 ### Mark issue #2 as RESOLVED
 
 Change:
+
 ```markdown
 ### 2. Codification Services referenced but never defined
 ```
 
 To:
+
 ```markdown
 ### ~~2. Codification Services referenced but never defined~~ RESOLVED
 ```
@@ -670,11 +692,13 @@ Add after the suggested fix paragraph:
 The Sidecar stub now includes both Citation Processor and Support Services in its brokering contract.
 
 Change:
+
 ```markdown
 ### 3. Librarian cited as source of law query by Sidecar in gRPC API stub, but Citation Processor also receives Sidecar calls — unclear in service contract
 ```
 
 To:
+
 ```markdown
 ### ~~3. Librarian cited as source of law query by Sidecar in gRPC API stub, but Citation Processor also receives Sidecar calls — unclear in service contract~~ RESOLVED
 ```

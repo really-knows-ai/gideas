@@ -85,7 +85,7 @@ Laws are tiered by authority and lifecycle:
 
 Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it can be promoted to a Tier 2 Ruling through the Assay Node. The [Citation Processor](../02-flow/04-system-services.md) tracks this usage — which laws are cited, by which nodes, and whether they generate compliance or resistance — driving the promotion lifecycle and surfacing toxic laws that generate disproportionate friction.
 
-The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through [Codification Services](../02-flow/04-system-services.md). Authority increases through the tier system; enforceability increases through representation.
+The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through [Codification Services](../02-flow/04-system-services.md#codification-services). Authority increases through the tier system; enforceability increases through representation.
 
 ### The Governance Flow
 
