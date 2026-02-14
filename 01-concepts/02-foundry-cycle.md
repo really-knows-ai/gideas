@@ -16,7 +16,7 @@ Forge creates the initial artefact. Before generation, it reads the Flow's body 
 
 ### Quench (Deterministic Validator)
 
-Quench performs deterministic validation. It queries the law body for executable [representations](./03-data-model.md#representations) — formal logic, constraint schemas, compiled checks — and runs them against the artefact to verify deterministic compliance before it reaches the more expensive review stage. Quench is optional. Topologies that rely exclusively on non-deterministic review can omit it, routing directly from Forge to the gate node.
+Quench performs deterministic validation. It queries the law body for executable [representations](./03-data-model.md#representations) — formal logic, constraint schemas, compiled checks — and runs them against the artefact to verify deterministic compliance before it reaches the more expensive review stage. In the reference arrangement, Quench can apply deterministic validation stamps (e.g., "linter") when granted the appropriate `STAMP` capability. Quench is optional. Topologies that rely exclusively on non-deterministic review can omit it, routing directly from Forge to the gate node.
 
 ### Appraise (Reviewer)
 
@@ -24,7 +24,7 @@ Appraise conducts subjective review. It reads the applicable laws for the artefa
 
 ### Sort (Gate)
 
-Sort is the central routing hub. It evaluates governance state and routes. Granted the `READ:flow` capability, Sort reads the [Flow configuration](../02-flow/05-configuration.md) to discover which nodes can provide which [stamps](./03-data-model.md#passports-and-stamps), then applies deliberately simple logic:
+Sort is the central routing hub. It evaluates governance state and routes. Granted the `READ:flow` capability, Sort reads the [Flow configuration](../02-flow/05-configuration.md) to discover which nodes can provide which [stamps](./03-data-model.md#passports-and-stamps), then applies its routing rules:
 
 1. Is there unresolved [feedback](./03-data-model.md#feedback) that is not deadlocked? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
@@ -43,7 +43,7 @@ Refine addresses feedback. It reads the applicable laws for the artefact kind, r
 
 Assay is the judiciary. Unlike the five roles above, Assay is built into the runtime — every Flow includes it, and Flow Architects do not choose whether to include it.
 
-Assay is invoked for deadlocked feedback disputes and for review hearings triggered by citation thresholds or TTL expiry. It deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent) — the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./04-governance.md). Its full [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
+Assay is invoked for deadlocked feedback disputes and for review hearings triggered by citation thresholds or TTL expiry. It deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent). Assay does not write Tier 1 Findings — Tier 2 Rulings are both the floor and the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./04-governance.md). Its full [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
 
 ---
 

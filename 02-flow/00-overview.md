@@ -86,7 +86,7 @@ sequenceDiagram
 
 The Foundry Cycle is the reference arrangement that Flow Architects adapt by adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations while preserving platform invariants.
 
-The runtime enforces behaviour through configuration and capabilities, not node names. "Forge", "Sort", or "Refine" describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
+The runtime enforces behaviour through configuration and capabilities, not node names. Forge, Sort, and Refine describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
 
 Assay is the exception: it is a standard runtime component present in every Flow and participates as a routable judicial node.
 
@@ -99,7 +99,7 @@ Law and stamp behaviour is enforced by the platform through capabilities and con
 - Stamp names are named governance checkpoints chosen by the Flow Architect; the platform attaches no built-in semantics to names.
 - Stamp-provider routing is configuration-discovered. A node granted `READ:flow` capability can query the topology to discover stamp-to-node mappings at runtime.
 - `approval` is a naming convention used by the [reference arrangement](../01-concepts/02-foundry-cycle.md), not a privileged system stamp.
-- Assay authority is bounded: resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
+- Assay authority is bounded: resolve conflicts involving Tier 1-2 laws by minting Tier 2 Rulings, propose at Tier 3, appeal at Tier 4-5.
 
 In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node uses these platform mechanisms to implement gate routing: unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward Assay, missing stamps toward the configured provider, and fully satisfied governance toward exit completion. Deadlocked feedback is unresolved by state, so gate implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
 

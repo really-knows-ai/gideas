@@ -169,7 +169,7 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 
 ### Governed Artefacts
 
-A GovernedArtefact CRD defines the validity requirements for an artefact kind. It specifies the named [stamps](#passports-and-stamps) the artefact must carry:
+A GovernedArtefact CRD declares the stamp vocabulary for an artefact kind — the set of stamp names that are meaningful for that kind:
 
 ```yaml
 apiVersion: flow.gideas.io/v1
@@ -177,18 +177,18 @@ kind: GovernedArtefact
 metadata:
   name: petition-draft
 spec:
-  requiredStamps:
+  stamps:
     - "linter"
     - "security-review"
     - "legal-review"
     - "approval"
 ```
 
-An artefact is **valid** if and only if its passport contains a stamp for every name listed in `requiredStamps`, each bound to the current content hash. An artefact is **present** if it exists, regardless of stamps.
+The `stamps` field defines which stamp names exist for this artefact kind — not which stamps are required at any particular boundary. [Entry and exit contracts](#entry-and-exit-contracts) define which of these stamps are required at each lifecycle boundary. An artefact is **present** if it exists in the Archivist, regardless of stamps.
 
-Entry and exit contracts use kind-specific requirement lists to define admission, exit, and export conditions. A contract can require a specific subset of stamp names for a kind, or presence only with an empty list.
+Entry and exit contracts select from the GovernedArtefact's vocabulary. A contract can require all stamps, a subset, or none (presence only with an empty list). The [Operator](../02-flow/01-operator.md) enforces contracts at boundary checks — it does not enforce the GovernedArtefact's full vocabulary as a blanket requirement.
 
-The GovernedArtefact CRD defines what stamps are required — the demand side. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
+The GovernedArtefact CRD declares the stamp vocabulary — which stamp names are meaningful for a kind. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
 Validation is stamp-based, not identity-based. The specific node that applied a stamp is recorded for audit, but governance checks verify that the required stamp names are present. This enables horizontal scaling — multiple nodes can be authorised to apply the same stamp (though only one can apply it per artefact version, since stamps are write-once) — and topology-aware cross-Flow trust. In sibling Flows that share a State Root, imported stamps are authoritative once the certificate chain validates. In Treaty/non-sibling crossings, imported stamps remain provenance only until the receiving Flow naturalises and applies its own local checks.
 
@@ -400,7 +400,7 @@ Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
-| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./00-overview.md) and [Refine](./00-overview.md) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
+| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer) and [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
 | 2 | **Ruling** | Single Flow | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) Node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./04-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |

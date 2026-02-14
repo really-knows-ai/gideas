@@ -180,7 +180,7 @@ The routing targets above (Refine, Assay, Appraise) reflect the reference arrang
 
 ### Stamps are named governance checkpoints
 
-A stamp is a named governance checkpoint on an artefact's passport. The GovernedArtefact CRD defines which stamp names are required (e.g. "linter", "security-review", "approval"). The FoundryNode CRD (configured by the Flow Architect) grants nodes permission to apply specific named stamps to specific artefact kinds via the `STAMP:artefact/<kind>/<stamp-name>` capability.
+A stamp is a named governance checkpoint on an artefact's passport. The GovernedArtefact CRD declares the stamp vocabulary for an artefact kind — the set of stamp names that are meaningful for that kind (e.g. "linter", "security-review", "approval"). Entry and exit contracts define which of those stamps are required at each boundary. The FoundryNode CRD (configured by the Flow Architect) grants nodes permission to apply specific named stamps to specific artefact kinds via the `STAMP:artefact/<kind>/<stamp-name>` capability.
 
 The system treats all stamps identically — it attaches no special semantics to any stamp name. "Approval", "linter", "security-review" are naming conventions chosen by the Flow Architect. The reference arrangement uses an "approval" stamp applied by Sort as the final gate, but this is convention, not system behaviour.
 

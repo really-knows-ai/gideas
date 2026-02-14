@@ -55,7 +55,7 @@ The overview diagram (`02-flow/00-overview.md:30`) shows `SC --> CP` (Sidecar to
 
 ## Significant Issues
 
-### 4. Writing principle violation: meta-commentary in multiple documents
+### ~~4. Writing principle violation: meta-commentary in multiple documents~~ RESOLVED
 
 **Files:** `01-concepts/01-architecture.md:6`, `01-concepts/02-foundry-cycle.md:27`
 **Criterion:** Writing Principles — No meta-commentary
@@ -66,9 +66,11 @@ The overview diagram (`02-flow/00-overview.md:30`) shows `SC --> CP` (Sidecar to
 
 **Suggested fix:** In `01-architecture.md:6`, remove or rephrase to avoid narrating the document structure. In `02-foundry-cycle.md:27`, replace "deliberately simple logic" with just the logic itself (e.g., "then applies its routing rules:").
 
+**Resolution:** Removed the structural narration sentence from `01-architecture.md`. Changed "deliberately simple logic" to "its routing rules" in `02-foundry-cycle.md`.
+
 ---
 
-### 5. Writing principle violation: planning voice in `01-concepts/00-overview.md`
+### ~~5. Writing principle violation: planning voice in `01-concepts/00-overview.md`~~ RESOLVED
 
 **Files:** `01-concepts/00-overview.md:12`
 **Criterion:** Writing Principles — No planning voice
@@ -77,9 +79,11 @@ The "Foundational Axioms" section at line 12 is presented as a titled block with
 
 **Suggested fix:** Consider integrating the axiom content into the surrounding narrative rather than presenting them as a labelled list. Alternatively, if the heading must remain, remove the bold-label format and weave each principle into flowing prose.
 
+**Resolution:** Removed the "Foundational Axioms" heading and bold-label enumeration. Wove all four axiom concepts (unreliability, auditability, visible cost, fixed quality) into the "What is Foundry Flow?" narrative as flowing prose paragraphs. Each principle now emerges naturally from the exposition.
+
 ---
 
-### 6. Cross-link gap: Appraise and Refine links in law tiers table point to overview, not foundry-cycle
+### ~~6. Cross-link gap: Appraise and Refine links in law tiers table point to overview, not foundry-cycle~~ RESOLVED
 
 **Files:** `01-concepts/03-data-model.md:403`
 **Criterion:** Writing Principles — Cross-link aggressively / Cross-Document Consistency
@@ -87,6 +91,8 @@ The "Foundational Axioms" section at line 12 is presented as a titled block with
 The law tiers table at line 403 links Appraise and Refine to `./00-overview.md` but those roles are defined in `./02-foundry-cycle.md`. The overview mentions them briefly but `02-foundry-cycle.md` is the normative detail page.
 
 **Suggested fix:** Change the links in the Tier 1 source column from `[Appraise](./00-overview.md)` and `[Refine](./00-overview.md)` to `[Appraise](./02-foundry-cycle.md#appraise-reviewer)` and `[Refine](./02-foundry-cycle.md#refine-refiner)`.
+
+**Resolution:** Changed both links to point to `./02-foundry-cycle.md` with the correct section anchors (`#appraise-reviewer` and `#refine-refiner`).
 
 ---
 
@@ -123,7 +129,7 @@ Line 1: "a judiciary that resolves disputes" — Assay is mentioned indirectly b
 
 ---
 
-### 10. Hearing Workitem creation — who creates the Workitem is inconsistent
+### ~~10. Hearing Workitem creation — who creates the Workitem is inconsistent~~ RESOLVED
 
 **Files:** `02-flow/04-system-services.md:155-156`, `01-concepts/04-governance.md:30`, `01-concepts/04-governance.md:79`
 **Criterion:** Cross-Document Consistency / Key Decisions Compliance
@@ -133,9 +139,11 @@ In `04-system-services.md:155`, step 1 says "Triggering service creates a Workit
 
 **Suggested fix:** Clarify in `02-flow/04-system-services.md` that the triggering service requests Workitem creation through the Operator (consistent with Operator being the authoritative engine for Workitem lifecycle transitions, per Operator invariant #1). The triggering service emits the trigger; the Operator creates and admits the Workitem.
 
+**Resolution:** Changed step 1 of the hearing lifecycle in `02-flow/04-system-services.md` from "Triggering service creates a Workitem" to "Triggering service requests hearing Workitem creation through the Operator, supplying hearing artefacts including `lawId`." The concepts documents already use "triggers creation of" which correctly implies the service triggers rather than directly creates.
+
 ---
 
-### 11. GovernedArtefact CRD defines `requiredStamps` but contracts also define per-kind stamp requirements — potential overlap
+### ~~11. GovernedArtefact CRD defines `requiredStamps` but contracts also define per-kind stamp requirements — potential overlap~~ RESOLVED
 
 **Files:** `01-concepts/03-data-model.md:172-191`, `01-concepts/03-data-model.md:84-124`
 **Criterion:** Technical Feasibility / Cross-Document Consistency
@@ -144,9 +152,11 @@ The GovernedArtefact CRD (line 172-185) defines `requiredStamps` as the stamps a
 
 **Suggested fix:** Add a clarifying paragraph in `01-concepts/03-data-model.md` (near the GovernedArtefact section or the contracts section) that explains the relationship. The most likely intended design: GovernedArtefact defines the *full validity standard* for the kind; contracts can specify a *subset* (or the full set) for boundary checks. Exit contracts enforce their own stated requirements, not GovernedArtefact's. GovernedArtefact serves as a governance reference and stamp definition surface. Make this explicit.
 
+**Resolution:** Redefined GovernedArtefact's role: it declares the stamp *vocabulary* for a kind (which stamp names are meaningful), not what's required at any boundary. Renamed `requiredStamps` to `stamps` in the CRD example. Contracts are the sole mechanism defining which stamps are required at each lifecycle boundary, enforced by the Operator. Updated AGENTS.md key decision, `01-concepts/03-data-model.md` (GovernedArtefact section and surrounding prose), and `01-concepts/00-overview.md` (stamps section) to reflect this.
+
 ---
 
-### 12. Friction aggregation operations — `01-concepts/04-governance.md` introduces logarithmic/additive/multiplicative but `01-concepts/00-overview.md` does not
+### ~~12. Friction aggregation operations — `01-concepts/04-governance.md` introduces logarithmic/additive/multiplicative but `01-concepts/00-overview.md` does not~~ RESOLVED
 
 **Files:** `01-concepts/04-governance.md:296`, `01-concepts/00-overview.md:146-165`
 **Criterion:** Cross-Document Consistency
@@ -154,6 +164,8 @@ The GovernedArtefact CRD (line 172-185) defines `requiredStamps` as the stamps a
 The overview introduces friction as "systemic heat" with a conceptual description and a diagram, but says nothing about aggregation operations. The governance document at line 296 adds detail about "magnitude and the aggregation operation — logarithmic, additive, or multiplicative" and "base friction cost for each Workitem." These details are first introduced in `01-concepts/04-governance.md` rather than in the overview's Friction section. The `02-flow/04-system-services.md:138` also mentions these aggregation operations. This creates a situation where the concepts-level friction description differs in detail between documents.
 
 **Suggested fix:** Either add a brief mention of friction magnitude and aggregation operations to the overview's friction section (with a cross-link to the governance document for the full treatment), or ensure the overview explicitly defers to the governance document for the friction emission model. Currently the overview's friction section is self-contained but incomplete relative to what governance states.
+
+**Resolution:** Established `02-flow/04-system-services.md` (Flow Monitor section) as the single source of truth for friction emission mechanics. Trimmed the duplicate detail (magnitude, aggregation operations, base cost) from `01-concepts/04-governance.md:296`, replacing it with a cross-link to the Flow Monitor section. The governance doc now focuses on why friction matters to governance (law-attributable, tier-attributable, feedback loop) without duplicating the emission model. Added cross-links from the overview's friction section to both the Flow Monitor (for the model) and the governance doc (for the governance feedback loop).
 
 ---
 
@@ -168,7 +180,7 @@ The Hybrid Persistence table at line 165 lists "Laws" under the CRD storage laye
 
 ---
 
-### 14. Writing principle violation: "Show, don't scaffold" — announced tables
+### ~~14. Writing principle violation: "Show, don't scaffold" — announced tables~~ RESOLVED
 
 **Files:** `01-concepts/01-architecture.md:163`
 **Criterion:** Writing Principles — Show, don't scaffold
@@ -176,6 +188,8 @@ The Hybrid Persistence table at line 165 lists "Laws" under the CRD storage laye
 Line 163: "State is split across storage layers, each chosen for its access pattern." followed immediately by a table. This is a mild announcement of the table. The principle says tables should "feel like natural parts of the explanation, not bolted-on visual aids announced by a sentence."
 
 **Suggested fix:** Integrate the introductory sentence into the table context or remove the announcement and let the section heading and table speak for themselves.
+
+**Resolution:** Removed the announcing sentence. The "Hybrid Persistence" heading and the table now present directly without preamble.
 
 ---
 
@@ -190,7 +204,7 @@ Line 165: "The Flow Monitor aggregates friction data" — links to `../02-flow/0
 
 ---
 
-### 16. `02-flow/06-cross-flow.md` duplicates Tier 3 conflict status-quo language differently from `01-concepts/04-governance.md`
+### ~~16. `02-flow/06-cross-flow.md` duplicates Tier 3 conflict status-quo language differently from `01-concepts/04-governance.md`~~ RESOLVED
 
 **Files:** `02-flow/06-cross-flow.md:146`, `01-concepts/04-governance.md:108`
 **Criterion:** Cross-Document Consistency
@@ -203,9 +217,11 @@ The concepts version says "every future Workitem that hits the same conflict gen
 
 **Suggested fix:** Align the language in `02-flow/06-cross-flow.md:146` to match the concepts version more closely, or cross-link to the governance document for the authoritative description.
 
+**Resolution:** Aligned the cross-flow document's Tier 3 vs Tier 3 language to match the governance document and AGENTS.md key decision: "the conflict persists — every future Workitem that hits the same conflict generates another HITL escalation and more friction until the humans act."
+
 ---
 
-### 17. Assay "does not write Tier 1 Findings" — stated in key decisions but not consistently reflected
+### ~~17. Assay "does not write Tier 1 Findings" — stated in key decisions but not consistently reflected~~ RESOLVED
 
 **Files:** `01-concepts/02-foundry-cycle.md:92`, `02-flow/03-nodes-external.md:94`
 **Criterion:** Key Decisions Compliance
@@ -214,6 +230,8 @@ The concepts version says "every future Workitem that hits the same conflict gen
 AGENTS.md states: "It does not write Tier 1 Findings." `02-foundry-cycle.md:92` says "Assay alone mints Tier 2 Rulings" but does not explicitly state Assay cannot write Findings. `03-nodes-external.md:94` states "Assay does not write Tier 1 findings." The concepts document `04-governance.md` does not explicitly state this constraint. While the authority ceiling table in `04-governance.md:115-119` implicitly excludes Tier 1 (Assay's authority starts at Tier 2), the explicit prohibition from the key decision is worth stating once in the concepts layer for clarity.
 
 **Suggested fix:** Add a brief note in `01-concepts/02-foundry-cycle.md` Assay section (around line 46) that Assay does not write Tier 1 Findings — it only mints Tier 2 Rulings.
+
+**Resolution:** Added explicit statement to `01-concepts/02-foundry-cycle.md` Assay section: "Assay does not write Tier 1 Findings — Tier 2 Rulings are both the floor and the ceiling of its judicial authority."
 
 ---
 
@@ -241,7 +259,7 @@ Checked all `flowchart` and `sequenceDiagram` blocks across the spec — they us
 
 ---
 
-### 20. `02-flow/04-system-services.md` mentions "Operator <-> Librarian: law lifecycle events, hearing Workitem creation coordination" — Operator creates hearing Workitems?
+### ~~20. `02-flow/04-system-services.md` mentions "Operator <-> Librarian: law lifecycle events, hearing Workitem creation coordination" — Operator creates hearing Workitems?~~ RESOLVED
 
 **Files:** `02-flow/04-system-services.md:213`
 **Criterion:** Cross-Document Consistency
@@ -249,6 +267,8 @@ Checked all `flowchart` and `sequenceDiagram` blocks across the spec — they us
 This echoes issue #10. The inter-service contract at line 213 says "Operator <-> Librarian: law lifecycle events, hearing Workitem creation coordination." This implies the Operator and Librarian coordinate on hearing Workitem creation, supporting the interpretation that the triggering service requests creation through the Operator. But the hearing lifecycle at line 155 says "Triggering service creates a Workitem" — present-tense active voice implying the service does it directly.
 
 **Suggested fix:** Covered by fix for issue #10.
+
+**Resolution:** Covered by the fix for issue #10. The hearing lifecycle step now reads "Triggering service requests hearing Workitem creation through the Operator," aligning with the inter-service contract's "hearing Workitem creation coordination."
 
 ---
 
@@ -263,7 +283,7 @@ The overview defines stamps at lines 35-46 and uses `### Stamps` as the heading.
 
 ---
 
-### 22. `01-concepts/04-governance.md` "Friction as Governance Signal" section introduces friction emission detail that overlaps SDK Telemetry
+### ~~22. `01-concepts/04-governance.md` "Friction as Governance Signal" section introduces friction emission detail that overlaps SDK Telemetry~~ RESOLVED
 
 **Files:** `01-concepts/04-governance.md:296-300`, `04-sdk/06-sdk-telemetry.md:13`
 **Criterion:** Cross-Document Consistency — Duplication
@@ -271,6 +291,8 @@ The overview defines stamps at lines 35-46 and uses `### Stamps` as the heading.
 `04-governance.md:296` describes friction emission with magnitude, aggregation operations (logarithmic, additive, multiplicative), and base friction cost per node per Workitem. `04-sdk/06-sdk-telemetry.md:13` (stub outline) repeats the same detail in its friction emission contract description. `02-flow/04-system-services.md:138` also describes these. The detail is consistent across all three but duplicated. When the SDK telemetry document is fully drafted, this triplication needs to be resolved into a single source of truth with cross-links.
 
 **Suggested fix:** When `04-sdk/06-sdk-telemetry.md` is drafted, establish the normative friction emission contract in one location (likely `02-flow/04-system-services.md` or `04-sdk/06-sdk-telemetry.md`) and have others cross-link. For now, the concepts document should describe friction conceptually and defer emission mechanics to the flow/SDK layers. The current level of detail in `04-governance.md:296` (magnitude, aggregation operations) may be too implementation-specific for a concepts document.
+
+**Resolution:** The governance doc was already trimmed in issue #12 (emission mechanics replaced with cross-link to Flow Monitor). The SDK telemetry stub was updated to cross-link to the Flow Monitor section as the normative source for the friction model, rather than duplicating the detail inline. `02-flow/04-system-services.md` (Flow Monitor section) is now the single source of truth for friction emission mechanics.
 
 ---
 
@@ -298,7 +320,7 @@ The document defines the canonical token as `wont_fix` and the display label as 
 
 ## Minor Issues
 
-### 25. `02-flow/00-overview.md` "Reference Arrangement and Topology Freedom" section uses quotes around node names
+### ~~25. `02-flow/00-overview.md` "Reference Arrangement and Topology Freedom" section uses quotes around node names~~ RESOLVED
 
 **Files:** `02-flow/00-overview.md:84`
 **Criterion:** Writing Principles — Cross-Document Consistency
@@ -307,9 +329,11 @@ Line 84: '"Forge", "Sort", or "Refine" describe standard responsibilities' — u
 
 **Suggested fix:** Remove quotes and use the node names directly, consistent with usage elsewhere in the spec.
 
+**Resolution:** Removed the double quotes around Forge, Sort, and Refine. Node names are now unquoted, consistent with the rest of the spec.
+
 ---
 
-### 26. `01-concepts/01-architecture.md` Federation Plane uses "bilateral" for Treaties but could link to detail
+### ~~26. `01-concepts/01-architecture.md` Federation Plane uses "bilateral" for Treaties but could link to detail~~ RESOLVED
 
 **Files:** `01-concepts/01-architecture.md:104`
 **Criterion:** Writing Principles — Cross-link aggressively
@@ -318,9 +342,11 @@ Line 104 describes Treaties in detail but does not link "Treaty" to `../02-flow/
 
 **Suggested fix:** Link "Treaty" on first mention at line 104 to `../02-flow/06-cross-flow.md`.
 
+**Resolution:** On re-examination, the first mention of Treaty at line 104 is already linked: `[Treaty](../02-flow/06-cross-flow.md)`. No change needed — this issue was already resolved in a prior edit.
+
 ---
 
-### 27. `01-concepts/04-governance.md` references "annexation" in Operator trust responsibilities
+### ~~27. `01-concepts/04-governance.md` references "annexation" in Operator trust responsibilities~~ RESOLVED
 
 **Files:** `01-concepts/04-governance.md:147`, `02-flow/01-operator.md:171`
 **Criterion:** Cross-Document Consistency — Terminology
@@ -329,9 +355,11 @@ Line 104 describes Treaties in detail but does not link "Treaty" to `../02-flow/
 
 **Suggested fix:** Either define "annexation" in the glossary (when drafted) and use it consistently, or replace it with a more descriptive term like "onboarding" or "enrolment" that matches the language in `04-governance.md`.
 
+**Resolution:** Replaced "annexation" with "accession" in `02-flow/01-operator.md`. The term reflects consensual joining (the Flow joins the Governance Flow's jurisdiction) rather than forced incorporation, which fits the spec's governance model where Flows voluntarily come under Governance Flow authority.
+
 ---
 
-### 28. `02-flow/00-overview.md` Governance Runtime Mechanics section mentions "Assay authority is bounded: resolve Tier 1-2"
+### ~~28. `02-flow/00-overview.md` Governance Runtime Mechanics section mentions "Assay authority is bounded: resolve Tier 1-2"~~ RESOLVED
 
 **Files:** `02-flow/00-overview.md:97`
 **Criterion:** Key Decisions Compliance
@@ -340,6 +368,8 @@ Line 104 describes Treaties in detail but does not link "Treaty" to `../02-flow/
 Line 97 says "resolve Tier 1-2" which could be read as "resolve Tier 1 and Tier 2 conflicts." The key decision states Assay can resolve at Tier 2 by minting Rulings and that it does not write Tier 1 Findings. "Resolve Tier 1-2" could misleadingly imply Assay writes Tier 1 laws. The authority ceiling in `04-governance.md:115-119` correctly shows Tier 2 as the resolve tier. The wording here is technically correct (Assay resolves *conflicts involving* Tier 1-2 laws) but ambiguous.
 
 **Suggested fix:** Change "resolve Tier 1-2" to "resolve conflicts at Tier 1-2 by minting Tier 2 Rulings" for precision.
+
+**Resolution:** Changed to "resolve conflicts involving Tier 1-2 laws by minting Tier 2 Rulings, propose at Tier 3, appeal at Tier 4-5." This makes clear that Assay resolves *conflicts* involving those tiers, and the output is always Tier 2 Rulings.
 
 ---
 
@@ -354,7 +384,7 @@ Line 99: "Workitems do not use `WorkitemType`, `spec.type`, or a freeform contex
 
 ---
 
-### 30. `01-concepts/00-overview.md` exit contract section references GovernedArtefact CRD and FoundryNode CRD
+### ~~30. `01-concepts/00-overview.md` exit contract section references GovernedArtefact CRD and FoundryNode CRD~~ RESOLVED
 
 **Files:** `01-concepts/00-overview.md:112`
 **Criterion:** Key Decisions Compliance — Concepts documents are technology-agnostic
@@ -363,9 +393,11 @@ Line 112: "The Flow grants nodes permission to apply specific named stamps via t
 
 **Suggested fix:** Consider whether CRD-specific names (FoundryNode, GovernedArtefact, FoundryFlow) should be mentioned by name in concepts or described generically (e.g., "the node configuration resource" or "the artefact governance configuration"). Current usage is not wrong but pushes against the technology-agnostic boundary.
 
+**Resolution:** No change. CRD-specific names are Foundry Flow's own domain vocabulary, integral to understanding the configuration model. Usage in concepts documents is sparse and defensible under the Kubernetes vocabulary exception.
+
 ---
 
-### 31. `01-concepts/00-overview.md` sequence diagram at line 114 shows Quench stamping "linter" but Quench is described as deterministic validator, not stamper
+### ~~31. `01-concepts/00-overview.md` sequence diagram at line 114 shows Quench stamping "linter" but Quench is described as deterministic validator, not stamper~~ RESOLVED
 
 **Files:** `01-concepts/00-overview.md:126`
 **Criterion:** Cross-Document Consistency
@@ -373,6 +405,8 @@ Line 112: "The Flow grants nodes permission to apply specific named stamps via t
 The sequence diagram shows `Q->>W: stamp (linter)` — Quench applying a "linter" stamp. `01-concepts/02-foundry-cycle.md:19` describes Quench as performing deterministic validation. There is no explicit statement that Quench stamps artefacts, but the reference arrangement could grant Quench a stamp capability. This is a valid illustration — Quench running a linter and applying the "linter" stamp is a reasonable reference-arrangement configuration. However, it is not explicitly discussed in the Quench role description.
 
 **Suggested fix:** Either add a brief note in `02-foundry-cycle.md` Quench section that in the reference arrangement, Quench may apply deterministic validation stamps (e.g., "linter"), or adjust the diagram to show the stamp being applied by a different node. The current diagram is not wrong but is unexplained.
+
+**Resolution:** Added a sentence to the Quench section in `01-concepts/02-foundry-cycle.md`: "In the reference arrangement, Quench can apply deterministic validation stamps (e.g., 'linter') when granted the appropriate `STAMP` capability." This makes the overview's sequence diagram self-explanatory.
 
 ---
 
@@ -398,25 +432,25 @@ The sequence diagram shows `Q->>W: stamp (linter)` — Quench applying a "linter
 | Flow Monitor | Capitalised, two words | Consistent |
 | Assay | Capitalised, no "Node" suffix except in some places | Mostly consistent; occasionally "Assay Node" vs "Assay" |
 | `wont_fix` | Canonical token with display label "Won't Fix" | Consistent |
-| annexation | Used only in `02-flow/01-operator.md` | Orphan term (see #27) |
+| accession | Replaced "annexation" in `02-flow/01-operator.md` | Consistent (single use) |
 | Codification Services | Capitalised, used in concepts | Defined in flow layer as Flow Support Service specialisation (~~see #2~~) |
-| GovernedArtefact | CRD name used in concepts and flow | Consistent but borderline for concepts (see #30) |
+| GovernedArtefact | CRD name used in concepts and flow | Consistent, defensible for concepts (~~see #30~~) |
 
 ### Cross-link coverage
 
-Cross-linking is generally thorough across the drafted documents. Key gaps:
+Cross-linking is generally thorough across the drafted documents. Key gaps resolved:
 
 - ~~Codification Services is referenced but has no target page or section (#2)~~ Resolved
-- Treaty first mention in architecture doc is unlinked (#26)
-- Appraise/Refine in data-model law tiers table link to overview instead of foundry-cycle (#6)
+- ~~Treaty first mention in architecture doc is unlinked (#26)~~ Already linked on re-examination
+- ~~Appraise/Refine in data-model law tiers table link to overview instead of foundry-cycle (#6)~~ Resolved
 
 All stub outline documents appropriately link to their peer documents and reference sections.
 
 ### Duplication
 
-Duplication is well-managed. The primary concern is:
+Duplication is well-managed. The primary concern is resolved:
 
-- Friction emission mechanics (aggregation operations, base cost) appear in three places (#22)
+- ~~Friction emission mechanics (aggregation operations, base cost) appear in three places (#22)~~ Resolved — single source of truth established in `02-flow/04-system-services.md`
 - Exit contract semantics are restated across multiple flow documents — this is intentional per the invariant-list pattern and is consistent
 - Hearing lifecycle is described in both concepts and system services — descriptions agree
 
@@ -424,9 +458,12 @@ Duplication is well-managed. The primary concern is:
 
 ## Summary
 
-| Severity | Count | Issues |
-|----------|-------|--------|
-| **Critical** | 3 (all resolved) | ~~#1~~, ~~#2~~, ~~#3~~ |
-| **Significant** | 9 | #4, #5, #6, #10, #11, #12, #16, #17, #22 |
-| **Minor** | 5 | #25, #26, #27, #28, #30, #31 |
-| **No fix required** | 7 | #7, #13, #15, #18, #19, #21, #23, #24, #29 |
+| Severity | Count | Resolved | Issues |
+|----------|-------|----------|--------|
+| **Critical** | 3 | 3 | ~~#1~~, ~~#2~~, ~~#3~~ |
+| **Significant** | 10 | 10 | ~~#4~~, ~~#5~~, ~~#6~~, ~~#10~~, ~~#11~~, ~~#12~~, ~~#14~~, ~~#16~~, ~~#17~~, ~~#22~~ |
+| **Minor** | 6 | 6 | ~~#25~~, ~~#26~~, ~~#27~~, ~~#28~~, ~~#30~~, ~~#31~~ |
+| **No fix required** | 7 | — | #7, #13, #15, #18, #19, #21, #23, #24, #29 |
+| **Covered by other fix** | 1 | 1 | ~~#20~~ (by #10) |
+
+**All issues resolved.**

@@ -172,7 +172,7 @@ Recovery policy can tune retry budgets and backoff strategy, but it cannot viola
 The Operator is the trust anchor manager for its Flow execution boundary.
 
 - In standalone topology, Operator manages local trust-chain issuance for runtime participants.
-- Under a Governance Flow, Operator participates in annexation and receives intermediate authority anchored to the shared State Root.
+- Under a Governance Flow, Operator participates in accession and receives intermediate authority anchored to the shared State Root.
 - Operator rotates and applies runtime trust material according to policy windows.
 
 Trust lifecycle details, treaty boundaries, and cross-flow authority semantics are defined in [Cross-Flow Collaboration](./06-cross-flow.md).

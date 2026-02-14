@@ -2,8 +2,6 @@
 
 A [Flow](./00-overview.md) is a self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary. The namespace is the sovereignty line — nothing enters or leaves without crossing a guarded border.
 
-The internal structure separates into distinct planes, each owning a single concern.
-
 ---
 
 ## Architectural Planes
@@ -160,8 +158,6 @@ Workitems are immutable residents of their namespace. They do not move between F
 Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and exit contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's database, queryable through the [SDK](../04-sdk/01-sdk-core.md).
 
 ### Hybrid Persistence
-
-State is split across storage layers, each chosen for its access pattern.
 
 | Layer | Storage | Data | Access Pattern |
 |-------|---------|------|----------------|

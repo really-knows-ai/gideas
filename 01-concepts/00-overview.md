@@ -4,19 +4,11 @@
 
 Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work through adversarial cycles of creation, validation, review, and refinement — producing artefacts that carry cryptographic proof of every check they passed.
 
-The core premise is simple: all agents are fallible. The framework verifies execution regardless of the agent's nature — human, AI, or deterministic. Every action is recorded, every decision is traceable, and every output carries a verifiable record of the governance it survived.
+All agents are fallible — human, AI, or deterministic. The framework provides a safety harness: trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots. Every action, decision, and review becomes an immutable, traceable record. If it happened, there is a record.
 
----
+Governance has a measurable cost. Friction is a first-class, quantifiable signal exposing the real-time cost of governance — whether the actors are human, AI, or both. The [Friction Ledger](../02-flow/04-system-services.md) quantifies that cost as actionable data.
 
-## Foundational Axioms
-
-**Assume Unreliability.** All agents — human or AI — are fallible. The framework provides a safety harness. Trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots.
-
-**Make Work Auditable.** Every action, decision, and review becomes an immutable, traceable record. If it happened, there is a record.
-
-**Make the Cost Visible.** Friction is a first-class, quantifiable signal exposing the real-time cost of bad systems — whether the actors are human, AI, or both. The Friction Ledger quantifies governance cost as actionable, real-time data.
-
-**Quality is Fixed, Cost is Variable.** Work cannot leave a Flow until its artefacts carry the required stamps. The standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system — the laws, the topology, the nodes — needs to change.
+Work cannot leave a Flow until its artefacts carry the required stamps. The quality standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system — the laws, the topology, the nodes — needs to change.
 
 ---
 
@@ -41,7 +33,7 @@ A **stamp** is a named governance checkpoint on an artefact's passport. Each sta
 - The **content hash** of the artefact at stamp time.
 - A **cryptographic signature** and certificate chain.
 
-Stamp names are defined by the GovernedArtefact CRD — the artefact declares which stamps it requires. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
+Stamp names are declared by the GovernedArtefact CRD — the artefact kind defines which stamps are meaningful for it. [Entry and exit contracts](./03-data-model.md#entry-and-exit-contracts) define which of those stamps are required at each lifecycle boundary. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
 Stamps are write-once per artefact version. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
 
@@ -162,4 +154,4 @@ flowchart LR
     end
 ```
 
-This gives organisations a quantifiable, real-time signal for dysfunction. The [Flow Monitor](../02-flow/04-system-services.md) aggregates friction data and tags it to its source — laws, nodes, topology paths — so it can be queried across every dimension. Which laws generate the most heat? Which nodes are bottlenecks? Where in the topology do Workitems thrash? Governance cost becomes data — quantified, attributable, and actionable.
+This gives organisations a quantifiable, real-time signal for dysfunction. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates friction data and tags it to its source — laws, nodes, topology paths — so it can be queried across every dimension. Which laws generate the most heat? Which nodes are bottlenecks? Where in the topology do Workitems thrash? Governance cost becomes data — quantified, attributable, and actionable. How friction feeds back into governance — surfacing costly laws for review, driving amendment pressure — is covered in [Governance](./04-governance.md#friction-as-governance-signal).

@@ -213,7 +213,7 @@ Trigger ownership is split by condition:
 
 Execution and adjudication path:
 
-1. Triggering service creates a Workitem for review-hearing processing with hearing artefacts, including `lawId`.
+1. Triggering service requests hearing Workitem creation through the Operator, supplying hearing artefacts including `lawId`.
 2. Operator admits and assigns the hearing Workitem to Assay using Assay's bound hearing entry contract.
 3. Assay retrieves citation evidence from Citation Processor and legal context from Librarian.
 4. Assay issues a tier-appropriate verdict and calls `complete()`.

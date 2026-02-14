@@ -10,7 +10,7 @@ Describe metrics, traces, logs, and friction emission APIs available to handlers
 
 ## Friction Emission Contract
 
-Specify friction event shape, attribution requirements, and source tagging expectations. Friction events carry magnitude and aggregation operation (logarithmic, additive, or multiplicative). Base friction cost is emitted per Workitem per node; additional friction accumulates from feedback conflicts, rework cycles, and complexity penalties.
+Specify the SDK interface for emitting friction events. The friction model (magnitude, aggregation operations, source tagging) is defined in the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface). This section covers the SDK surface: the emit API, attribution requirements, and how nodes choose emission parameters.
 
 ## Operational Signal Quality
 
