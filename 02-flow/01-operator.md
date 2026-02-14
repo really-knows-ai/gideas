@@ -15,6 +15,8 @@ The Operator owns control-plane state transitions and policy enforcement:
 
 The Operator does not execute node business logic and does not own artefact provenance storage. Provenance is owned by [Archivist](./04-system-services.md), and node-facing API authentication and mediation are handled by [Sidecar](../03-node/01-sidecar.md).
 
+The Operator maintains a direct service-level query path to the Archivist, distinct from the Sidecar-mediated path that nodes use. Entry and exit contract validation requires artefact kind, stamp, and feedback state that only the Archivist holds. Workitem retention and cleanup coordinate with the Archivist for artefact lifecycle management. The full inter-service contract surface is defined in [System Services](./04-system-services.md#inter-service-contracts).
+
 ## Reconciliation Surfaces
 
 The Operator reconciles three state surfaces continuously:
