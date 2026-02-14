@@ -44,7 +44,7 @@ The Codification Service does not adjudicate. Assay is the judge; the Codificati
 
 ## Files to Change
 
-Ten files require changes. Each is described below with its current status, exact locations, and proposed content.
+Twelve files require changes. Each is described below with its current status, exact locations, and proposed content.
 
 ---
 
@@ -59,13 +59,15 @@ Ten files require changes. Each is described below with its current status, exac
 ```markdown
 ### Flow Support Services are pluggable service containers
 
-Flow Support Services are containers deployed by the Flow Architect that expose gRPC capabilities consumed by nodes (via Sidecar mediation) and system services (via direct service-to-service calls). They run in the Flow namespace alongside system services but are not system services — they are optional, Flow-Architect-deployed, and do not process Workitems.
+Flow Support Services are optional, Flow-Architect-deployed containers that expose gRPC capabilities consumed by nodes (via Sidecar mediation) and system services (via direct service-to-service calls). They run in the Flow namespace alongside system services and do not process Workitems.
 
 Support Services are declared via their own CRD (or specialised sub-CRDs for specific subtypes). The CRD declares what capabilities the service provides and supports infrastructure configuration including PVC mounts and deployment strategy (ReplicaSet default, StatefulSet as an option). Support Services are not required to be stateless. The FoundryFlow configuration grants consuming nodes access to Support Service capabilities. System services discover Support Services through the same Flow configuration.
 
+Node access to Support Service capabilities is granted through the same capability-grant pattern as other capabilities, using the `USE:support/<service>/<capability>` syntax. For example, `USE:support/codify-smt/encode` grants a node access to the `encode` capability of the `codify-smt` Codification Service.
+
 Nodes consume Support Services through Sidecar mediation — the consuming node's Sidecar brokers the call, preserving the platform invariant that nodes never call services directly. Assay is a node and accesses Support Services through its Sidecar. System services consume Support Services via direct service-to-service gRPC.
 
-Support Services use the SDK's `FlowSupportService` base class and have a simplified permission model distinct from the full node capability envelope.
+Support Services use the SDK's `FlowSupportService` base class and have a simplified permission model distinct from the full node capability envelope. Specialised subtypes (such as Codification Services) extend subtype-specific base classes that inherit from `FlowSupportService`.
 
 The Operator manages Support Service deployments. Default deployment strategy is ReplicaSet with minimum replicas of 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum. Support Services must implement standard `healthz`/`readyz` endpoints for Operator health management and pod lifecycle. Support Services emit context-specific telemetry relevant to their capability.
 ```
@@ -75,9 +77,9 @@ The Operator manages Support Service deployments. Default deployment strategy is
 ```markdown
 ### Codification Services are Flow Support Services
 
-Codification Services are the standard Flow Support Service for translating law goals into formal representations during governance hardening. They expose an `encode` capability consumed by Assay during law promotion.
+Codification Services are a specialisation of Flow Support Services for translating law goals into formal representations during governance hardening. They inherit from `CodificationService`, which extends the SDK's `FlowSupportService` base class. They expose an `encode` capability that Assay can consume during law promotion.
 
-When Assay renders a verdict for Tier 1-to-Tier 2 promotion, it sends the natural-language goal to a Codification Service, which returns one or more formal representations (formal logic, executable validators, etc.). Assay mints the Tier 2 Ruling with both the original prose and the new formal representations. The Codification Service does not adjudicate — Assay decides what the ruling should be; the Codification Service writes the formal syntax.
+When Assay renders a verdict for Tier 1-to-Tier 2 promotion, it sends the natural-language goal to a Codification Service, which returns one or more formal representations (formal logic, executable validators, etc.). Assay mints the Tier 2 Ruling with both the original prose and the new formal representations. Assay decides what the ruling should be; the Codification Service writes the formal syntax.
 
 Codification Services are pluggable and replaceable. A Flow Architect can deploy multiple Codification Services for different representation types (e.g., `codify-smt` for formal logic, `codify-rego` for policy-as-code). Assay discovers available Codification Services through Flow configuration.
 ```
@@ -92,6 +94,13 @@ to:
 
 ```
 │   ├── 04-system-services.md    # System services + Flow Support Services
+```
+
+**Also:** Append a paragraph to the existing "Workitem control-plane ownership and SDK boundary" key decision (after line 264, before "Concepts documents are technology-agnostic" at line 266):
+
+```markdown
+
+The `FlowSupportService` base class is a distinct SDK surface from the Workitem-scoped node handler contract. Support Services do not participate in Workitem mutation flow or artefact provenance flow — they expose stateless gRPC capabilities consumed through Sidecar mediation. The `FlowSupportService` contract covers capability declaration, health reporting, and the simplified permission model; it does not include Workitem, Artefact, or routing abstractions.
 ```
 
 ---
@@ -194,7 +203,7 @@ Representation lifecycle responsibilities are defined in [System Services](../02
 
 **Replace with:**
 ```markdown
-Representation lifecycle responsibilities — including [Codification Services](../02-flow/04-system-services.md#codification-services) that translate goals into formal representations — are defined in [System Services](../02-flow/04-system-services.md#flow-support-services).
+Representation lifecycle responsibilities — including [Codification Services](../02-flow/04-system-services.md#codification-services) that translate goals into formal representations — are defined in [System Services](../02-flow/04-system-services.md).
 ```
 
 ---
@@ -254,7 +263,7 @@ This is the largest change. Add a new top-level section and update several exist
 **Location:** At line 13 (after the backup surfaces bullet), add:
 
 ```markdown
-- **Flow Support Services**: optional, Flow-Architect-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the standard example.
+- **Flow Support Services**: optional, Flow-Architect-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the worked example in this spec.
 ```
 
 **Change 2: Update the service landscape Mermaid diagram**
@@ -271,12 +280,6 @@ After line 30 (`OP --> FM`), add:
     SS --> FM
 ```
 
-Also add Assay's connection to Codification Services:
-
-```
-    AS["Assay"] --> SS
-```
-
 **Change 3: Add new "Flow Support Services" section**
 
 **Location:** After the "Flow Monitor and Friction Surface" section (after line 140, before "Hearing Lifecycle as Cross-Component Protocol"). Insert the following section:
@@ -284,9 +287,9 @@ Also add Assay's connection to Codification Services:
 ```markdown
 ## Flow Support Services
 
-Flow Support Services are optional containers deployed by the Flow Architect that expose gRPC capabilities to nodes and system services. They run in the Flow namespace alongside system services but are not part of the mandatory runtime substrate — they are pluggable, replaceable, and Flow-Architect-owned.
+Flow Support Services are optional containers deployed by the Flow Architect that expose gRPC capabilities to nodes and system services. They run in the Flow namespace — pluggable, replaceable, and Flow-Architect-owned.
 
-Support Services do not process Workitems. They expose gRPC endpoints that other actors consume:
+Support Services do not process Workitems — they expose gRPC capabilities consumed by nodes and system services through different access paths:
 
 - Nodes consume Support Services through [Sidecar](../03-node/01-sidecar.md) mediation, preserving the platform invariant that nodes never call services directly. Assay is a node and accesses Support Services through its Sidecar.
 - System services discover and consume Support Services via the Flow configuration and direct service-to-service gRPC.
@@ -297,9 +300,9 @@ Support Services are declared via their own CRD, which specifies:
 - Infrastructure configuration: PVC mounts, deployment strategy (ReplicaSet default, StatefulSet as an option), resource limits.
 - Health and readiness endpoints (`healthz`/`readyz`).
 
-The Operator manages Support Service deployments. Default deployment strategy is ReplicaSet with minimum replicas of 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum replica count. Support Services must implement standard `healthz`/`readyz` endpoints for Operator health management and pod lifecycle.
+The [Operator](./01-operator.md) manages Support Service deployments. Default deployment strategy is ReplicaSet with minimum replicas of 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum replica count. Support Services must implement standard `healthz`/`readyz` endpoints for Operator health management and pod lifecycle.
 
-The FoundryFlow configuration grants consuming nodes access to Support Service capabilities. Support Services use the SDK's `FlowSupportService` base class and have a simplified permission model distinct from the full node capability envelope.
+The FoundryFlow [configuration](./05-configuration.md) grants consuming nodes access to Support Service capabilities using `USE:support/<service>/<capability>` syntax (e.g., `USE:support/codify-smt/encode`). Support Services use the [SDK](../04-sdk/00-overview.md)'s `FlowSupportService` base class and have a simplified permission model distinct from the full node capability envelope. Specialised subtypes (such as `CodificationService`) extend subtype-specific base classes that inherit from `FlowSupportService`.
 
 Support Services are not required to be stateless. A Codification Service might cache model weights on a PVC; a notification relay might maintain connection pools. Infrastructure state is Support-Service-owned and not part of the Workitem provenance boundary.
 
@@ -309,18 +312,18 @@ CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 
 ### Codification Services
 
-Codification Services are the standard Flow Support Service for governance hardening. They translate a law's natural-language goal into formal representations — formal logic, executable validators, policy-as-code — increasing enforceability without changing the law's intent.
+Codification Services are a Flow Support Service specialisation for governance hardening. They translate a [law](../01-concepts/03-data-model.md#laws)'s natural-language goal into formal representations — formal logic, executable validators, policy-as-code — increasing enforceability without changing the law's intent.
 
-Codification Services expose an `encode` capability. The consumption pattern during law promotion:
+Codification Services expose an `encode` capability consumed during law promotion:
 
 1. Assay renders a verdict during Tier 1 → Tier 2 promotion, expressing the ruling's goal in natural language.
 2. Assay sends the goal to a Codification Service via its Sidecar.
 3. The Codification Service returns one or more formal representations alongside the original prose.
 4. Assay mints the Tier 2 Ruling as a single law object with multiple representations.
 
-The Codification Service does not adjudicate. Assay decides what the ruling should be; the Codification Service writes the formal syntax.
+Assay decides what the ruling should be; the Codification Service writes the formal syntax.
 
-Flow Architects can deploy multiple Codification Services for different representation types (e.g., `codify-smt` for formal logic, `codify-rego` for policy-as-code). Assay discovers available Codification Services through Flow configuration. If no Codification Service is deployed, Assay mints rulings with prose representations only — governance hardening through codification is optional, not a platform requirement.
+Flow Architects can deploy multiple Codification Services for different representation types (e.g., `codify-smt` for formal logic, `codify-rego` for policy-as-code). Assay discovers available Codification Services through [Flow configuration](./05-configuration.md). If no Codification Service is deployed, Assay mints rulings with prose representations only — governance hardening through codification is optional, not a platform requirement.
 
 ```mermaid
 sequenceDiagram
@@ -337,18 +340,83 @@ sequenceDiagram
     AS->>SC: write law
     SC->>LB: persist new Tier 2 Ruling
 ```
+
+**Change 4: Fix hearing lifecycle diagram to show Sidecar mediation**
+
+**Location:** In the hearing lifecycle sequence diagram (lines 161-178), Assay calls Citation Processor and Librarian directly. Since Assay is a node, these calls must go through its Sidecar.
+
+Change:
+```mermaid
+sequenceDiagram
+    participant TR as Trigger Service
+    participant OP as Operator
+    participant AS as Assay
+    participant CP as Citation Processor
+    participant LB as Librarian
+
+    TR->>OP: create hearing Workitem (lawId artefact)
+    OP->>AS: assign hearing via entry binding
+    AS->>CP: query citation evidence
+    CP-->>AS: citation record set
+    AS->>LB: query law context
+    LB-->>AS: law versions and tiers
+    AS-->>OP: verdict + complete()
+    OP->>OP: validate Assay hearing exit contract
+    OP->>LB: apply lifecycle action
 ```
 
-**Change 4: Update inter-service contracts**
+To:
+```mermaid
+sequenceDiagram
+    participant TR as Trigger Service
+    participant OP as Operator
+    participant AS as Assay
+    participant SC as Sidecar
+    participant CP as Citation Processor
+    participant LB as Librarian
 
-**Location:** In the "Inter-Service Contracts" section (lines 209-221), after line 218 (`Assay <-> Citation Processor: hearing evidence queries.`), add:
+    TR->>OP: create hearing Workitem (lawId artefact)
+    OP->>AS: assign hearing via entry binding
+    AS->>SC: query citation evidence
+    SC->>CP: citation evidence request
+    CP-->>SC: citation record set
+    SC-->>AS: citation record set
+    AS->>SC: query law context
+    SC->>LB: law context request
+    LB-->>SC: law versions and tiers
+    SC-->>AS: law versions and tiers
+    AS->>SC: verdict + complete()
+    SC-->>OP: verdict + complete()
+    OP->>OP: validate Assay hearing exit contract
+    OP->>LB: apply lifecycle action
+```
+
+**Note:** This fixes a pre-existing inconsistency (Assay shown calling services directly) exposed by our new Codification Services diagram which correctly shows Sidecar mediation.
+
+**Change 5: Update inter-service contracts**
+
+**Location:** In the "Inter-Service Contracts" section (lines 209-221), change line 218:
+
+```markdown
+- Assay <-> Citation Processor: hearing evidence queries.
+```
+
+To:
+
+```markdown
+- Assay (via Sidecar) <-> Citation Processor: hearing evidence queries.
+```
+
+Also add after that line:
 
 ```markdown
 - Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
 - Assay (via Sidecar) <-> Codification Services: encode requests during law promotion.
 ```
 
-**Change 5: Update failure and degradation semantics**
+**Note:** The existing contract entry lacked "(via Sidecar)" — Assay is a node and all its service calls are Sidecar-mediated. This fix ensures consistency with the new Codification Services entry.
+
+**Change 6: Update failure and degradation semantics**
 
 **Location:** In the "Failure and Degradation Semantics" section (lines 223-233), after line 230 (`Citation Processor unavailable...`), add:
 
@@ -356,20 +424,52 @@ sequenceDiagram
 - Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Governance hardening (codification) degrades gracefully — Assay can mint prose-only rulings when Codification Services are unavailable.
 ```
 
-**Change 6: Update service invariants**
+**Change 7: Update service invariants**
 
 **Location:** In the "Service Invariants" section (lines 235-249), after invariant 10 (line 248), add:
 
 ```markdown
 11. Flow Support Services are optional, Flow-Architect-deployed, and do not process Workitems.
-12. Codification is the standard Support Service for governance hardening; its absence degrades to prose-only rulings.
+12. Codification Services are optional; their absence degrades governance hardening to prose-only rulings.
 ```
 
 ---
 
-### 8. `02-flow/05-configuration.md` — Support Service declaration
+### 8. `02-flow/05-configuration.md` — Configuration authority model + Support Service declaration
 
 **Status:** Drafted
+
+**Change 1: Update Configuration Authority Model text**
+
+**Location:** Line 7
+
+Change:
+```markdown
+Configuration is expressed through two resources with distinct authority boundaries:
+```
+
+To:
+```markdown
+Configuration is expressed through three resource types with distinct authority boundaries:
+```
+
+**Change 2: Add Support Service CRD bullet to authority model**
+
+**Location:** After line 10 (`- [FoundryNode]...`), add:
+
+```markdown
+- Support Service CRDs define per-service capabilities, infrastructure requirements, and deployment policy. FoundryFlow controls which nodes can consume which Support Service capabilities. Support Service CRDs are subordinate to FoundryFlow — they declare what is available; FoundryFlow governs who can use it.
+```
+
+**Change 3: Update Mermaid diagram**
+
+**Location:** In the diagram at lines 20-27, add Support Services. After line 23 (`FN["FoundryNode<br/>node-local semantics"] --> OP`), add:
+
+```
+    SS["Support Service CRDs<br/>capabilities infrastructure"] --> OP
+```
+
+**Change 4: Add new Support Service Configuration section**
 
 **Location:** After the "Reference Arrangement Defaults and Custom Topology" section (after line 169, before "Cross-Flow Configuration Semantics" at line 171). Insert a new section:
 
@@ -382,14 +482,16 @@ Flow Support Services are declared via dedicated CRDs that define provided capab
 - Infrastructure configuration includes PVC mounts, deployment strategy (ReplicaSet default, StatefulSet option), resource limits, and replica count.
 - Default minimum replicas is 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum.
 - Support Services must implement standard `healthz`/`readyz` endpoints.
-- The FoundryFlow configuration grants consuming nodes access to Support Service capabilities, following the same capability-grant pattern as stamp and law capabilities.
+- The FoundryFlow configuration grants consuming nodes access to Support Service capabilities using `USE:support/<service>/<capability>` syntax (e.g., `USE:support/codify-smt/encode`), following the same capability-grant pattern as stamp and law capabilities.
 
 Assay discovers available Codification Services from Flow configuration. Other nodes discover Support Services through their granted capabilities. System services discover Support Services through the same Flow configuration.
 
 Support Service CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 ```
 
-Also update the Behavioural Invariants list (lines 217-231). After invariant 10 (line 230), add:
+**Change 5: Update Behavioural Invariants**
+
+Update the Behavioural Invariants list (lines 217-231). After invariant 10 (line 230), add:
 
 ```markdown
 11. Support Service capabilities are configuration-granted and Sidecar-mediated for node consumers.
@@ -397,7 +499,64 @@ Also update the Behavioural Invariants list (lines 217-231). After invariant 10 
 
 ---
 
-### 9. `03-node/01-sidecar.md` — Update service brokering contract
+### 9. `02-flow/01-operator.md` — Add Support Service reconciliation surface
+
+**Status:** Drafted (full writing-principle review applies)
+
+**Change 1: Update Reconciliation Surfaces text**
+
+**Location:** Line 22
+
+Change:
+```markdown
+The Operator reconciles three state surfaces continuously:
+```
+
+To:
+```markdown
+The Operator reconciles four state surfaces continuously:
+```
+
+**Change 2: Add Support Service bullet to reconciliation list**
+
+**Location:** After line 26 (`- **Workitem**: lifecycle progression...`), add:
+
+```markdown
+- **Support Service**: deployment lifecycle, health monitoring, and scaling policy for Flow-Architect-deployed [Flow Support Services](./04-system-services.md#flow-support-services).
+```
+
+**Change 3: Update Reconciliation Surfaces Mermaid diagram**
+
+**Location:** In the Mermaid diagram at lines 28-37, add Support Services. After line 32 (`WI["Workitems<br/>pending running completed/failed"] --> OP`), add:
+
+```
+    SS["Support Services<br/>health scaling lifecycle"] --> OP
+```
+
+**Change 4: Add Operator invariant**
+
+**Location:** In the Operator Invariants list (lines 189-203), after invariant 11 (line 203), add:
+
+```markdown
+12. Support Service deployment lifecycle, health monitoring, and scaling policy are Operator-managed.
+```
+
+---
+
+### 10. `03-node/00-overview.md` — Update Runtime Interaction Model
+
+**Status:** Drafted (full writing-principle review applies)
+
+**Location:** In the "Runtime Interaction Model" bullet list (lines 50-54), after line 54 (`Sidecar -> telemetry surfaces...`), add:
+
+```markdown
+- Sidecar -> Citation Processor: citation submission and citation evidence queries.
+- Sidecar -> Flow Support Services: capability-gated operations on Flow-Architect-deployed services.
+```
+
+---
+
+### 11. `03-node/01-sidecar.md` — Update service brokering contract
 
 **Status:** Stub outline (structural changes only)
 
@@ -436,7 +595,7 @@ To:
 
 ---
 
-### 10. `04-sdk/00-overview.md` — Add FlowSupportService to SDK surface
+### 12. `04-sdk/00-overview.md` — Add FlowSupportService to SDK surface
 
 **Status:** Stub outline (structural changes only)
 
@@ -479,7 +638,7 @@ Introduce the SDK domains: core, artefacts, legal, feedback, Workitems, telemetr
 ```markdown
 ## FlowSupportService Base Class
 
-Define the SDK base class for Flow Support Service implementations. Covers capability declaration, gRPC endpoint registration, health reporting, and the simplified permission model distinct from node handler execution.
+Define the SDK base class for Flow Support Service implementations. Covers capability declaration, gRPC endpoint registration, health reporting, and the simplified permission model distinct from node handler execution. Specialised subtypes (such as `CodificationService`) extend `FlowSupportService` with subtype-specific contracts.
 ```
 
 ---
@@ -503,7 +662,7 @@ To:
 Add after the suggested fix paragraph:
 
 ```markdown
-**Resolution:** Introduced Flow Support Services as a new architectural concept in AGENTS.md (key decisions), `01-concepts/01-architecture.md` (Data Plane, Responsibility Boundaries), `02-flow/04-system-services.md` (dedicated section with Codification Services subsection), `02-flow/05-configuration.md` (Support Service configuration), `02-flow/00-overview.md` (runtime composition), `03-node/01-sidecar.md` (brokering contract), and `04-sdk/00-overview.md` (FlowSupportService base class). Codification Services are the first concrete instance, exposing an `encode` capability consumed by Assay during law promotion. Links in concepts documents updated to point to the new section.
+**Resolution:** Introduced Flow Support Services as a new architectural concept in AGENTS.md (key decisions), `01-concepts/01-architecture.md` (Data Plane, Responsibility Boundaries), `02-flow/04-system-services.md` (dedicated section with Codification Services subsection), `02-flow/05-configuration.md` (configuration authority model and Support Service configuration), `02-flow/01-operator.md` (reconciliation surface), `02-flow/00-overview.md` (runtime composition), `03-node/00-overview.md` (Runtime Interaction Model), `03-node/01-sidecar.md` (brokering contract), and `04-sdk/00-overview.md` (FlowSupportService base class). Codification Services are the first concrete instance, exposing an `encode` capability consumed by Assay during law promotion. Links in concepts documents updated to point to the new section.
 ```
 
 ### Mark issue #3 as RESOLVED (Sidecar brokering gap)
@@ -558,15 +717,17 @@ Execute changes in this order to minimise context-switching:
 1. `AGENTS.md` (key decisions — establishes the authoritative design)
 2. `02-flow/04-system-services.md` (the largest change — creates the target sections and anchors)
 3. `02-flow/00-overview.md` (runtime composition update)
-4. `02-flow/05-configuration.md` (configuration section)
-5. `01-concepts/01-architecture.md` (Data Plane + Responsibility Boundaries)
-6. `01-concepts/00-overview.md` (link fix)
-7. `01-concepts/03-data-model.md` (link fix)
-8. `01-concepts/04-governance.md` (link fix + text update)
-9. `03-node/01-sidecar.md` (brokering contract update)
-10. `04-sdk/00-overview.md` (SDK surface update)
-11. `REVIEW.md` (mark issues resolved)
-12. Run `lint-and-fix`
+4. `02-flow/05-configuration.md` (configuration authority model + Support Service section)
+5. `02-flow/01-operator.md` (reconciliation surface update)
+6. `01-concepts/01-architecture.md` (Data Plane + Responsibility Boundaries)
+7. `01-concepts/00-overview.md` (link fix)
+8. `01-concepts/03-data-model.md` (link fix)
+9. `01-concepts/04-governance.md` (link fix + text update)
+10. `03-node/00-overview.md` (Runtime Interaction Model update)
+11. `03-node/01-sidecar.md` (brokering contract update)
+12. `04-sdk/00-overview.md` (SDK surface update)
+13. `REVIEW.md` (mark issues resolved)
+14. Run `lint-and-fix`
 
 ---
 
