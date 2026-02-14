@@ -107,7 +107,7 @@ These are `02-flow/` documents where technology-specific terms are appropriate p
 
 ---
 
-### 8. `02-flow/01-operator.md` references Assay link to `./03-nodes-external.md` without anchor
+### ~~8. `02-flow/01-operator.md` references Assay link to `./03-nodes-external.md` without anchor~~ RESOLVED
 
 **Files:** `02-flow/01-operator.md:162`
 **Criterion:** Cross-Document Consistency — Cross-links
@@ -116,9 +116,11 @@ Line 162 references "[Assay](./03-nodes-external.md)" but the Assay section in t
 
 **Suggested fix:** Change to `[Assay](./03-nodes-external.md#assay-as-standard-component)`.
 
+**Resolution:** Changed the link to `[Assay](./03-nodes-external.md#assay-as-standard-component)` for precise anchor targeting.
+
 ---
 
-### 9. `01-concepts/04-governance.md` references "Assay Node" in overview paragraph without link
+### ~~9. `01-concepts/04-governance.md` references "Assay Node" in overview paragraph without link~~ RESOLVED
 
 **Files:** `01-concepts/04-governance.md:1`
 **Criterion:** Writing Principles — Cross-link aggressively
@@ -126,6 +128,8 @@ Line 162 references "[Assay](./03-nodes-external.md)" but the Assay section in t
 Line 1: "a judiciary that resolves disputes" — Assay is mentioned indirectly but not linked. The first explicit mention of Assay in this document is at line 13 in the table, which does link to the foundry-cycle anchor. However, the judiciary concept in the opening sentence could benefit from a link to Assay's detail page for readers entering from this document.
 
 **Suggested fix:** Link "judiciary" in line 1 to `./02-foundry-cycle.md#assay-judiciary--standard-component` or similar.
+
+**Resolution:** Linked "judiciary" to `./02-foundry-cycle.md#assay-judiciary--standard-component` in the opening sentence.
 
 ---
 
@@ -461,9 +465,9 @@ Duplication is well-managed. The primary concern is resolved:
 | Severity | Count | Resolved | Issues |
 |----------|-------|----------|--------|
 | **Critical** | 3 | 3 | ~~#1~~, ~~#2~~, ~~#3~~ |
-| **Significant** | 10 | 10 | ~~#4~~, ~~#5~~, ~~#6~~, ~~#10~~, ~~#11~~, ~~#12~~, ~~#14~~, ~~#16~~, ~~#17~~, ~~#22~~ |
+| **Significant** | 12 | 12 | ~~#4~~, ~~#5~~, ~~#6~~, ~~#8~~, ~~#9~~, ~~#10~~, ~~#11~~, ~~#12~~, ~~#14~~, ~~#16~~, ~~#17~~, ~~#22~~ |
 | **Minor** | 6 | 6 | ~~#25~~, ~~#26~~, ~~#27~~, ~~#28~~, ~~#30~~, ~~#31~~ |
-| **No fix required** | 7 | — | #7, #13, #15, #18, #19, #21, #23, #24, #29 |
+| **No fix required** | 9 | — | #7, #13, #15, #18, #19, #21, #23, #24, #29 |
 | **Covered by other fix** | 1 | 1 | ~~#20~~ (by #10) |
 
 **All issues resolved.**

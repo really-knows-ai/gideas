@@ -163,7 +163,7 @@ Operator failure behaviour is deterministic and explicit.
 - **Invalid route**: unresolvable or invalid instruction -> reject transition and apply failure policy.
 - **Node unavailability**: no eligible node or repeated assignment failure -> retry according to policy, then fail when budget is exhausted.
 
-Thrash and governance deadlock are separate mechanisms. Thrash is infrastructure loop failure; governance deadlock routes to [Assay](./03-nodes-external.md) through Sort logic.
+Thrash and governance deadlock are separate mechanisms. Thrash is infrastructure loop failure; governance deadlock routes to [Assay](./03-nodes-external.md#assay-as-standard-component) through Sort logic.
 
 Recovery policy can tune retry budgets and backoff strategy, but it cannot violate lifecycle invariants or exit enforcement rules.
 
@@ -201,7 +201,7 @@ All Flow deployments preserve these Operator invariants:
 7. Exit completion is exit-node-only and bound-contract validated by Operator.
 8. Contract checks are per artefact kind and apply to all artefacts of required kinds.
 9. Thrash enforcement uses aggregate visit count across all node assignments.
-10. Trust issuance and annexation participation remain Operator responsibilities at control-plane boundary.
+10. Trust issuance and accession participation remain Operator responsibilities at control-plane boundary.
 11. Operator-originated audit and telemetry emissions are mandatory runtime outputs.
 12. Support Service deployment lifecycle, health monitoring, and scaling policy are Operator-managed.
 

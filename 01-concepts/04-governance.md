@@ -1,6 +1,6 @@
 # Governance
 
-A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./03-data-model.md#laws), a [judiciary](./00-overview.md) that resolves disputes, and a legislative authority that codifies policy. Governance is the runtime's constitutional structure.
+A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./03-data-model.md#laws), a [judiciary](./02-foundry-cycle.md#assay-judiciary--standard-component) that resolves disputes, and a legislative authority that codifies policy. Governance is the runtime's constitutional structure.
 
 ---
 
