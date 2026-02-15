@@ -96,7 +96,7 @@ Produce a clean, coherent, GitHub-style specification that:
 | `03-node/03-patterns.md` | Drafted |
 | `04-sdk/*` | Drafted |
 | `05-reference/*` | Drafted |
-| `README.md` | Not started |
+| `README.md` | Drafted |
 
 ### Status Terms
 
