@@ -10,26 +10,45 @@ Describe metrics, traces, logs, and friction emission APIs available to handlers
 
 ## Friction Emission Contract
 
-Specify the SDK interface for emitting friction events. The friction model (magnitude, aggregation operations, source tagging) is defined in the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
+Friction is additive. Callers emit a magnitude and optional law attribution; the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates the raw events post-hoc across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). There is no caller-side operation selection — every emission adds to the total.
 
-### Sidecar Identity Injection
+### AddFriction — Node Context
 
-To ensure the integrity of the Friction Ledger, the Sidecar must automatically inject the following identity context into every friction report:
+When called from a node handler, the Sidecar automatically injects identity context. The node SDK surface accepts only semantic data:
+
+- `magnitude` (`float64`) — how much friction to record.
+- `law_ids` (`[]string`, optional) — one or more law identifiers to attribute the friction to.
+
+The Sidecar injects:
 
 - `node_id`
 - `workitem_id`
 - `flow_id`
 
-### SDK Constraints
+The SDK must not accept these identity fields from node code. This strict separation prevents identity spoofing and guarantees that friction is always attributed to the correct runtime context.
 
-The SDK must not accept these identity fields from the node code. The API surface must be restricted to semantic data only:
+### AddFriction — Service Context
 
-- `magnitude` (`float64`)
-- `op` (`FrictionOp`: `Add`, `Multiply`, `Log`)
-- `reason` (`string`)
-- `tags` (`map[string]string` for semantic attribution like `law_id`)
+When called from a [Flow Support Service](../02-flow/04-system-services.md#flow-support-services) or system service, the caller operates outside a node assignment and must provide its own attribution context:
 
-This strict separation prevents identity spoofing and guarantees that friction is always attributed to the correct runtime context.
+- `magnitude` (`float64`) — how much friction to record.
+- `workitem_id` (`string`) — the Workitem the friction pertains to.
+- `node_id` (`string`, optional) — the node the friction pertains to, if attributable.
+- `law_ids` (`[]string`, optional) — one or more law identifiers.
+
+The service's `flow_id` is injected from the service's own identity context.
+
+### Recorded Event Shape
+
+Regardless of calling context, every friction event is recorded with the same shape:
+
+| Field | Source (node) | Source (service) |
+|-------|--------------|-----------------|
+| `flow_id` | Sidecar-injected | Service identity |
+| `workitem_id` | Sidecar-injected | Caller-provided |
+| `node_id` | Sidecar-injected | Caller-provided (optional) |
+| `law_ids` | Caller-provided (optional) | Caller-provided (optional) |
+| `magnitude` | Caller-provided | Caller-provided |
 
 ## Operational Signal Quality
 

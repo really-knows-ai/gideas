@@ -222,7 +222,14 @@ The FoundryFlow CRD defines `importNode` for cross-flow intake. Imported Workite
 
 ### Friction is systemic heat
 
-Workitems generate friction everywhere they touch — nodes, laws, rework loops, reviewers. The Friction Ledger tracks it and tags it to source (laws, nodes, topology paths) for aggregation and querying. Friction is defined affirmatively as a measurable signal, not defended against the accusation of being "just governance overhead."
+Workitems generate friction everywhere they touch — nodes, laws, rework loops, reviewers. Friction is purely additive: callers emit a magnitude, and the Flow Monitor aggregates the raw events post-hoc across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). There are no caller-side operations (multiply, log, set) — if a caller wants to emit more friction, it emits a larger magnitude.
+
+Friction is defined affirmatively as a measurable signal, not defended against the accusation of being "just governance overhead."
+
+The SDK provides a single `AddFriction` call with two calling contexts:
+
+- **From a node (via Sidecar):** The Sidecar injects `node_id`, `workitem_id`, and `flow_id`. The caller provides `magnitude` (float) and optionally one or more `law_ids`.
+- **From a Flow Support Service or system service:** The caller provides `magnitude`, `workitem_id` (required), `node_id` (optional), and `law_ids` (optional). `flow_id` is injected from the service's identity context.
 
 ### Archivist is the artefact lifecycle service
 

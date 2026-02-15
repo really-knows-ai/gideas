@@ -130,7 +130,7 @@ Nodes are expected to emit operational and governance signals through [SDK Telem
 
 - Execution timing and error counters.
 - Route-decision context tags.
-- Friction events attributed by source (law, node, topology path).
+- Friction events attributed to the current Workitem and optionally to specific laws.
 
 Friction signalling is first-class runtime behaviour and feeds governance-cost analysis in [System Services](./04-system-services.md).
 

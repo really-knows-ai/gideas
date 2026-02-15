@@ -333,7 +333,7 @@ Feedback messages are capped at 1024 characters. For detailed analysis that exce
 
 ### Friction
 
-Nodes emit [friction](./00-overview.md#friction) through the [SDK](../04-sdk/06-sdk-telemetry.md) at any point during execution. What a node reports — and whether it reports at all — is a decision made by the node implementor. The feedback lifecycle described here is a natural source of friction signals, but the [Friction Ledger](./00-overview.md#friction) records only what nodes choose to emit.
+Nodes emit [friction](./00-overview.md#friction) through the [SDK](../04-sdk/06-sdk-telemetry.md) at any point during execution. What a node reports — and whether it reports at all — is a decision made by the node implementor. The feedback lifecycle described here is a natural source of friction signals, but the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) records only what nodes choose to emit.
 
 ---
 

@@ -6,7 +6,7 @@ Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work 
 
 All agents are fallible — human, AI, or deterministic. The framework provides a safety harness: trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots. Every action, decision, and review becomes an immutable, traceable record. If it happened, there is a record.
 
-Governance has a measurable cost. Friction is a first-class, quantifiable signal exposing the real-time cost of governance — whether the actors are human, AI, or both. The [Friction Ledger](../02-flow/04-system-services.md) quantifies that cost as actionable data.
+Governance has a measurable cost. Friction is a first-class, quantifiable signal exposing the real-time cost of governance — whether the actors are human, AI, or both. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates that cost as actionable data.
 
 Work cannot leave a Flow until its artefacts carry the required stamps. The quality standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system — the laws, the topology, the nodes — needs to change.
 
@@ -137,7 +137,7 @@ An artefact that exits a Flow carries cryptographic proof of every governance ch
 
 Friction is systemic heat. As Workitems move through a Flow, they generate friction everywhere they touch — bumping into nodes, bouncing off laws, looping through rework cycles, waiting on reviewers, escalating to the judiciary. Every interaction has a cost, and the system tracks it.
 
-The Friction Ledger captures where and why heat builds up. A Workitem that flows smoothly generates low friction. One that thrashes — looping between Refine and Sort, escalating to Assay, timing out on a human reviewer — generates high friction. The ledger records the source: which nodes, which laws, which topology paths.
+The system captures where and why heat builds up. A Workitem that flows smoothly generates low friction. One that thrashes — looping between Refine and Sort, escalating to Assay, timing out on a human reviewer — generates high friction. Every friction event is tagged to its source: which node, which Workitem, which laws.
 
 ```mermaid
 flowchart LR

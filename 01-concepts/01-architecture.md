@@ -164,11 +164,11 @@ Artefact content lives in the Archivist as content-addressed blobs. The Workitem
 | State | CRDs | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
 | Governance Query | Embedded database — Librarian | Embeddings | Analytical, vector similarity search |
 | Citation Tracking | Embedded database — Citation Processor | Citation ledger | Analytical, aggregation queries |
-| Telemetry | Metrics pipeline — Flow Monitor | Friction Ledger, workitem lifecycle metrics, node health | Time-series queries, alerting |
+| Telemetry | Metrics pipeline — Flow Monitor | Friction events, workitem lifecycle metrics, node health | Time-series queries, alerting |
 | Artefact Provenance | Embedded database — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | Content-addressed store — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Citation Processor maintains its own embedded database for the citation ledger — tracking how often laws are cited and by which nodes. The Flow Monitor aggregates friction reports from nodes into time-series metrics and emits audit events for log aggregation — the Friction Ledger is a conceptual view over this data, queryable through dashboards. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
+CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Citation Processor maintains its own embedded database for the citation ledger — tracking how often laws are cited and by which nodes. The Flow Monitor aggregates friction events from nodes and services into time-series metrics and emits audit events for log aggregation — friction data is queryable through dashboards across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 

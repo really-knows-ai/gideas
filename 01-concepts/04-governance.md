@@ -292,7 +292,7 @@ The governance implication at Treaty boundaries is **naturalisation**: when a [W
 
 ## Friction as Governance Signal
 
-The [Friction Ledger](./00-overview.md#friction) is governance's economic conscience. Nodes emit friction events through the [SDK](../04-sdk/06-sdk-telemetry.md) as Workitems pass through them — base costs, rework penalties, complexity surcharges. The emission model (magnitude, aggregation operations, source tagging) is defined in the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface). The friction signal reflects the real cost of the governance each Workitem encountered.
+Friction is governance's economic conscience. Nodes emit friction events through the [SDK](../04-sdk/06-sdk-telemetry.md) as Workitems pass through them — base costs, rework penalties, complexity surcharges. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events post-hoc across whatever axes operators need. The friction signal reflects the real cost of the governance each Workitem encountered.
 
 Friction data is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
 

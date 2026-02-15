@@ -140,9 +140,9 @@ Flow Monitor aggregates runtime observability signals:
 
 Friction is a first-class signal:
 
-- Friction events are source-tagged (law, node, topology path, and workflow context).
-- Each friction event carries a magnitude and an aggregation operation — logarithmic, additive, or multiplicative — chosen by the emitting node. Every node emits a base friction cost for each Workitem that passes through it. Additional friction accumulates with further interactions: feedback conflicts, rework cycles, complexity penalties. A node caught in an argument loop can emit multiplicative friction that compounds on each iteration.
-- Aggregation supports operational and governance analysis at multiple scopes: per-node, per-law, per-tier, and per-topology-path.
+- Friction events carry a magnitude and are purely additive — every emission adds to the total. Aggregation and analysis happen post-hoc.
+- Each event is attributed to a Workitem and the emitting node. Callers may optionally tag one or more law identifiers to attribute friction to specific governance rules.
+- The Flow Monitor aggregates friction data across multiple axes: per-node, per-law, per-tier, and per-topology-path.
 - Friction is not optional instrumentation; it is a mandatory runtime output surface.
 
 ## Flow Support Services
