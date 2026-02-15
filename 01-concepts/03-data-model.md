@@ -189,7 +189,6 @@ A stamp records:
 - The **node** that applied it (for audit)
 - The **content hash** of the artefact at stamp time
 - A **cryptographic signature** and **certificate chain** binding the stamp to the content
-- The **laws cited** during the assessment that produced the stamp
 
 The precise field schema is defined in the [CRD Reference](../05-reference/crds.md).
 

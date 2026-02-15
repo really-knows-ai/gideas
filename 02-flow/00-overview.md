@@ -9,7 +9,7 @@ A Flow runtime is composed of control-plane actors, data-plane workers, and boun
 - The [Flow Operator](./01-operator.md) reconciles configuration, assigns Workitems, validates routing outcomes, and enforces entry/exit contracts.
 - The [Workitem runtime contract](./02-workitem.md) carries control-plane state and artefact references while the Workitem moves through the Flow.
 - [External and reference nodes](./03-nodes-external.md) execute work through Sidecar-mediated APIs; node pods stay stateless at execution level.
-- [System services](./04-system-services.md) provide law lifecycle, artefact lifecycle, citation processing, telemetry aggregation, and backup surfaces.
+- [System services](./04-system-services.md) provide law lifecycle, artefact lifecycle, friction aggregation, telemetry, and backup surfaces.
 - [Flow Support Services](./04-system-services.md#flow-support-services) are optional, Flow-Architect-deployed containers that expose pluggable capabilities (such as codification) consumed by nodes through Sidecar mediation and by system services directly.
 - [Configuration](./05-configuration.md) defines topology, contracts, capability grants, and policy limits that shape runtime behaviour.
 - [Cross-flow collaboration](./06-cross-flow.md) governs export/import boundaries, trust topology, naturalisation, and law integration.

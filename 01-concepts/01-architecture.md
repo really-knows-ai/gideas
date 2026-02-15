@@ -109,7 +109,7 @@ Cross-flow verifiability and local authority are distinct. Sibling imports under
 
 ## Responsibility Boundaries
 
-Each concern in the system maps to exactly one plane. When a node executes work, it operates in the Data Plane. When the result needs routing, the Control Plane decides where it goes. When a law is cited, the Governance Plane records it. When a stamp is applied, the Security Plane signs it.
+Each concern in the system maps to exactly one plane. When a node executes work, it operates in the Data Plane. When the result needs routing, the Control Plane decides where it goes. When a law is cited, it generates a friction signal that feeds the Governance Plane. When a stamp is applied, the Security Plane signs it.
 
 | Concern | Plane | Handler |
 |---------|-------|---------|
