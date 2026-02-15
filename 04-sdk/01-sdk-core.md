@@ -18,7 +18,15 @@ Define `route_to_output`, `route_to`, and `complete` semantics and response expe
 
 ## Completion Semantics
 
-Clarify that `complete()` is exit-bound and validated by Operator against configured exit contracts.
+### Blind Completion
+
+The `Complete(route_to string)` method represents a **submission of work**, not a declaration of validity. When a node calls `Complete()`, it is signalling that it has finished its processing and is handing control back to the platform. It makes no assertion about whether the artefact satisfies any governance contract.
+
+### Operator Exit Contract Responsibility
+
+Exit Contract validation happens **after** the SDK call, within the Operator. The SDK must not attempt to "pre-validate" against the contract locally.
+
+If the node calls `Complete()` but the artefact lacks the required stamps (as defined in the Flow's `exitContract`), the Operator will reject the completion and return an error to the node (or fail the Workitem). This ensures that all governance decisions are made in a single, authoritative location — the Operator — and never duplicated in node code.
 
 ## Error Taxonomy and Recovery
 
