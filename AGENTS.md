@@ -91,9 +91,9 @@ Produce a clean, coherent, GitHub-style specification that:
 | `01-concepts/04-governance.md` | Drafted (reference arrangement qualification applied) |
 | `02-flow/*` | Drafted (first pass complete; consistency pass complete) |
 | `03-node/00-overview.md` | Drafted (prose baseline) |
-| `03-node/01-sidecar.md` | Stub outline |
-| `03-node/02-configuration.md` | Stub outline |
-| `03-node/03-patterns.md` | Stub outline |
+| `03-node/01-sidecar.md` | Drafted |
+| `03-node/02-configuration.md` | Drafted |
+| `03-node/03-patterns.md` | Drafted |
 | `04-sdk/*` | Stub outlines |
 | `05-reference/*` | Stub outlines |
 | `README.md` | Not started |
