@@ -297,6 +297,20 @@ Governance hardening means a law gains new representations over time. A prose-on
 
 This replaces the earlier "Law Groups" design where separate Law CRDs were linked by a shared group identifier.
 
+### Laws are scoped by `appliesTo`
+
+Each law carries an `appliesTo` field — a list of zero or more governed artefact kinds (e.g., `["haiku"]`, `["haiku", "sonnet"]`). An empty `appliesTo` means the law is global and applies to all artefact kinds in the Flow.
+
+The SDK exposes law retrieval through the Sidecar with three query modes:
+
+- **All laws** — no filter. Returns every law in the Flow's Library.
+- **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.
+- **By artefact kind + representation type** — same kind filter, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
+
+All three modes return full law objects (goal, all representations, tier, metadata). Filters gate which laws are included in the result; they never strip representations from returned law objects. The node sees the whole law and picks the representation it uses.
+
+Conflict detection during law integration is scoped by `appliesTo` — a law governing `"haiku"` is not conflict-checked against a law governing `"python-source"`. Global laws are conflict-checked against all laws regardless of scope.
+
 ### Review hearing verdict schema
 
 Review hearings use tier-specific verdicts. There are three hearing types:

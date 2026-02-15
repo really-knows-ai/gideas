@@ -375,4 +375,14 @@ The full integration protocol — how higher-tier laws are pushed to Flows, how 
 
 ### Scoping
 
-Each law specifies which artefact kind it governs. When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws, the results are filtered by the artefact the node is working on and by the representation types the node can interpret.
+Each law carries an `appliesTo` scope — a list of zero or more governed artefact kinds. A law with `appliesTo: ["haiku"]` governs haiku artefacts. A law with `appliesTo: ["haiku", "sonnet"]` governs both. An empty `appliesTo` means the law is global and applies to all artefact kinds in the Flow.
+
+When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws, three query modes are available:
+
+- **All laws** — no filter. Returns every law in the Flow's Library.
+- **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.
+- **By artefact kind + representation type** — same kind filter, plus the law must have at least one representation of the requested type.
+
+All three modes return full law objects — goal, all representations, tier, and metadata. Filters gate which laws are included; they never strip representations from returned objects. The node sees the whole law and picks the representation it uses.
+
+In the [reference arrangement](./02-foundry-cycle.md), [Forge](./02-foundry-cycle.md#forge-creator) queries by artefact kind to seed its generation context with all applicable governance. [Quench](./02-foundry-cycle.md#quench-deterministic-validator) queries by kind and executable representation type to find laws it can run as deterministic checks. [Appraise](./02-foundry-cycle.md#appraise-reviewer) queries by kind and prose representation type to find laws a review panel can evaluate subjectively. Each node sees the same body of law through a different lens.

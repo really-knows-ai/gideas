@@ -50,15 +50,23 @@ The Librarian is the law lifecycle service for a Flow.
 
 ### Retrieval and Serving
 
-- Nodes and system actors query laws by scope and applicability.
-- Retrieval is representation-aware, allowing consumers to request forms they can interpret.
-- Tier is part of legal authority, but retrieval remains one law body with one identity model.
+Each law carries an `appliesTo` field — a list of zero or more governed artefact kinds. An empty `appliesTo` means the law is global and applies to all artefact kinds in the Flow.
+
+The Librarian serves law queries through the [Sidecar](../03-node/01-sidecar.md) (for nodes) and direct service-to-service gRPC (for system actors). Three query modes are supported:
+
+- **All laws** — no filter. Returns every law in the Flow's Library.
+- **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.
+- **By artefact kind + representation type** — same kind filter, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
+
+All three modes return full law objects (goal, all representations, tier, metadata). Filters gate which laws are included in the result; they never strip representations from returned law objects.
+
+Tier is part of legal authority, but retrieval remains one law body with one identity model — all tiers are returned together.
 
 ### Integration and Conflict Checks
 
 When higher-tier laws arrive from cross-flow replication, the Librarian performs a two-stage conflict protocol:
 
-1. Semantic search for candidate contradictions.
+1. Semantic search for candidate contradictions, scoped by `appliesTo` — a law governing `"haiku"` is not conflict-checked against a law governing `"python-source"`. Global laws are conflict-checked against all laws regardless of scope.
 2. LLM contradiction evaluation of candidates to determine actual contradiction.
 
 Integration outcomes follow tiered supremacy semantics:
