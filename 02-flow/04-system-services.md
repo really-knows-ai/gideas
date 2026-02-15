@@ -135,6 +135,14 @@ Friction is a first-class signal:
 - The Flow Monitor aggregates friction data across multiple axes: per-node, per-law, per-tier, and per-topology-path.
 - Friction is not optional instrumentation; it is a mandatory runtime output surface.
 
+Three SDK operations emit friction transparently as mandatory side effects:
+
+- [`Cite(law_ids)`](../04-sdk/03-sdk-legal.md#citation) emits a fixed low magnitude attributed to the cited laws.
+- [`AddFeedback`](../04-sdk/04-sdk-feedback.md#feedback-friction) emits magnitude equal to the feedback depth for that item (1, 2, ..., n).
+- [Assay jury rounds](../01-concepts/04-governance.md#judicial-review-assay) emit magnitude = depth ^ (round + 1) per round; HITL escalation emits depth ^ (rounds * 2).
+
+These mandatory emissions ensure that governance cost is captured regardless of node implementation choices. Nodes may also call `AddFriction` directly for domain-specific costs.
+
 ## Flow Support Services
 
 Flow Support Services are optional containers deployed by the Flow Architect that expose gRPC capabilities to nodes and system services. They run in the Flow namespace — pluggable, replaceable, and Flow-Architect-owned.

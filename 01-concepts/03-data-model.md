@@ -333,7 +333,19 @@ Feedback messages are capped at 1024 characters. For detailed analysis that exce
 
 ### Friction
 
-Nodes emit [friction](./00-overview.md#friction) through the [SDK](../04-sdk/06-sdk-telemetry.md) at any point during execution. What a node reports — and whether it reports at all — is a decision made by the node implementor. The feedback lifecycle described here is a natural source of friction signals, but the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) records only what nodes choose to emit.
+The [feedback](./00-overview.md) lifecycle generates [friction](./00-overview.md#friction) transparently. Every `AddFeedback` call emits a friction event through the [SDK](../04-sdk/06-sdk-telemetry.md) with magnitude equal to the feedback depth for that item — the first feedback emits 1, the second emits 2, the nth emits n. Nodes do not control this emission; it is a mandatory side effect recorded by the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
+
+Friction compounds as governance escalates:
+
+| Layer | Trigger | Magnitude | Example (depth 5) |
+|-------|---------|-----------|-------------------|
+| Feedback | Each `AddFeedback` call | depth | 1, 2, 3, 4, 5 |
+| Assay jury | Each jury deliberation round | depth ^ (round + 1) | 25, 125, 625 |
+| HITL escalation | Assay deadlocks to human | depth ^ (rounds * 2) | 15,625 (after 3 rounds) |
+
+The cost curve ensures that every layer of escalation is dramatically more expensive than the last. A routine feedback exchange costs single digits. A deadlocked dispute that reaches Assay costs hundreds to thousands. A dispute that exhausts Assay and requires human intervention costs tens of thousands. The system makes the governance cost visible and creates economic pressure to resolve disputes at the lowest possible layer.
+
+Nodes may also emit friction directly through `AddFriction` at any point during execution for domain-specific costs. These voluntary emissions flow through the same pipeline alongside the mandatory feedback, jury, and HITL friction.
 
 ---
 

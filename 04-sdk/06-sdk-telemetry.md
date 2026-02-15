@@ -14,6 +14,10 @@ Friction is additive. Callers emit a magnitude and optional law attribution; the
 
 [`Cite(law_ids)`](./03-sdk-legal.md#citation) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Librarian](../02-flow/04-system-services.md#librarian) uses to evaluate friction-threshold hearing triggers.
 
+[`AddFeedback`](./04-sdk-feedback.md#feedback-friction) transparently emits `AddFriction` with magnitude equal to the feedback depth for that item. The first feedback on an item emits 1, the second 2, the nth n. This escalating cost signal makes the adversarial loop's price visible before deadlock.
+
+These wrappers are additive contributions to the same friction stream. `Cite` records law usage. `AddFeedback` records governance debate cost. Both flow through the same `AddFriction` pipeline and are aggregated by the Flow Monitor alongside any direct `AddFriction` calls nodes make.
+
 ### AddFriction — Node Context
 
 When called from a node handler, the Sidecar automatically injects identity context. The node SDK surface accepts only semantic data:

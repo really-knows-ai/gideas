@@ -231,6 +231,18 @@ The SDK provides a single `AddFriction` call with two calling contexts:
 - **From a node (via Sidecar):** The Sidecar injects `node_id`, `workitem_id`, and `flow_id`. The caller provides `magnitude` (float) and optionally one or more `law_ids`.
 - **From a Flow Support Service or system service:** The caller provides `magnitude`, `workitem_id` (required), `node_id` (optional), and `law_ids` (optional). `flow_id` is injected from the service's identity context.
 
+### Friction escalation through governance layers
+
+Friction compounds as governance escalates. Three layers produce friction transparently:
+
+**Feedback friction.** Every `AddFeedback` call transparently emits an `AddFriction` event. The magnitude equals the feedback depth for that item — the first feedback on an item emits magnitude 1, the second emits 2, the nth emits n. Friction is attributed to the Workitem and the current node.
+
+**Assay jury friction.** When a deadlocked feedback item reaches Assay, each jury deliberation round emits `AddFriction` with magnitude = `depth ^ (round + 1)`, where `depth` is the feedback depth at escalation time and `round` is the current jury round (1-indexed). A feedback item escalated at depth 5 produces: round 1 = 5^2 = 25, round 2 = 5^3 = 125, round 3 = 5^4 = 625.
+
+**HITL escalation friction.** If Assay deadlocks and escalates to human intervention, a single friction event is emitted with magnitude = `depth ^ (rounds * 2)`, where `rounds` is the total number of Assay jury rounds completed. A depth-5 item after 3 jury rounds produces 5^6 = 15,625.
+
+The cost curve is designed so that every layer of escalation is dramatically more expensive than the last. This makes the governance cost visible and creates economic pressure to resolve disputes at the lowest possible layer.
+
 ### Archivist is the artefact lifecycle service
 
 The Archivist manages all artefact-related data beyond raw content bytes. Its storage is split into two layers:
