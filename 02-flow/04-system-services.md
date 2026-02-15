@@ -72,8 +72,8 @@ Integration outcomes follow tiered supremacy semantics:
 
 Librarian owns hearing trigger emission for law TTL-expiry paths:
 
-- Tier 1 nearing/at expiry -> create a Workitem for review-hearing processing, carrying hearing artefacts including `lawId`.
-- Tier 2 nearing/at expiry -> create a Workitem for review-hearing processing, carrying hearing artefacts including `lawId`.
+- Tier 1 nearing/at expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
+- Tier 2 nearing/at expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
 
 Librarian does not adjudicate hearings.
 
@@ -91,7 +91,7 @@ The Citation Processor owns citation evidence and threshold-triggered governance
 
 Citation Processor owns trigger emission when Tier 1 findings cross configured citation thresholds:
 
-- Threshold crossing -> create a Workitem for review-hearing processing, carrying hearing artefacts including `lawId`, routed to Assay.
+- Threshold crossing -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`, routed to Assay.
 
 ### Assay Evidence Path
 
@@ -128,6 +128,7 @@ flowchart LR
 - Nodes never call Archivist directly.
 - SDK calls are mediated by the [Sidecar](../03-node/01-sidecar.md).
 - Query and write operations enforce capability boundaries configured in FoundryNode.
+- The [Flow Operator](./01-operator.md) maintains a direct service-level query path to the Archivist for exit contract validation and Workitem lifecycle coordination — this is distinct from the Sidecar-mediated path that nodes use.
 
 ## Flow Monitor and Friction Surface
 

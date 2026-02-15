@@ -8,7 +8,7 @@ The [Workitem](./00-overview.md) record is the authoritative surface for work st
 
 ### Structure
 
-A Workitem has two data surfaces: an immutable declaration surface and a mutable runtime surface. In Kubernetes persistence these map to CRD `spec` and `status`, but nodes consume them through SDK abstractions rather than field paths.
+A Workitem separates an immutable declaration surface from a mutable runtime surface. In Kubernetes persistence these map to CRD `spec` and `status`, but nodes consume them through SDK abstractions rather than field paths.
 
 The declaration surface is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
 
@@ -98,28 +98,7 @@ A contract with no artefact keys imposes no artefact requirements.
 
 If a Workitem contains multiple artefacts of a required kind, all of them must satisfy that kind's requirement.
 
-Entry and exit contracts use the same requirement model:
-
-```yaml
-entryContracts:
-  admit:
-    artefacts:
-      petition-draft: []
-      audit-log: []
-
-exitContracts:
-  approved:
-    artefacts:
-      petition-draft:
-        - "linter"
-        - "security-review"
-        - "approval"
-      audit-log: []
-
-  rejected: {}
-```
-
-The `admit` entry path requires both artefact kinds to be present. The `approved` exit path requires named stamps on `petition-draft` and presence of `audit-log`. The `rejected` exit path imposes no artefact requirements.
+Entry and exit contracts use the same requirement model. For example, an entry contract might require that artefacts of a given kind are present, while an exit contract might additionally require that specific named stamps have been applied to each artefact of that kind. A contract can also impose no artefact requirements at all — meaning the Workitem can complete without carrying governed artefacts. The contract structure is defined in the [Flow Configuration](../02-flow/05-configuration.md) and the [CRD Reference](../05-reference/crds.md).
 
 When exit completion triggers cross-flow export, only artefact kinds listed in the bound exit contract are exported. An empty contract exports no artefacts (metadata only).
 
@@ -169,26 +148,13 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 
 ### Governed Artefacts
 
-A GovernedArtefact CRD declares the stamp vocabulary for an artefact kind — the set of stamp names that are meaningful for that kind:
-
-```yaml
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: petition-draft
-spec:
-  stamps:
-    - "linter"
-    - "security-review"
-    - "legal-review"
-    - "approval"
-```
+A GovernedArtefact CRD declares the stamp vocabulary for an artefact kind — the set of stamp names that are meaningful for that kind. For example, a `petition-draft` kind might declare stamps like "linter", "security-review", "legal-review", and "approval". The CRD structure is defined in the [CRD Reference](../05-reference/crds.md).
 
 The `stamps` field defines which stamp names exist for this artefact kind — not which stamps are required at any particular boundary. [Entry and exit contracts](#entry-and-exit-contracts) define which of these stamps are required at each lifecycle boundary. An artefact is **present** if it exists in the Archivist, regardless of stamps.
 
 Entry and exit contracts select from the GovernedArtefact's vocabulary. A contract can require all stamps, a subset, or none (presence only with an empty list). The [Operator](../02-flow/01-operator.md) enforces contracts at boundary checks — it does not enforce the GovernedArtefact's full vocabulary as a blanket requirement.
 
-The GovernedArtefact CRD declares the stamp vocabulary — which stamp names are meaningful for a kind. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. The `STAMP:artefact/<kind>/<stamp-name>` capability grants a node permission to apply a specific named stamp to a specific artefact kind. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
+The GovernedArtefact CRD declares the stamp vocabulary — which stamp names are meaningful for a kind. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. Capability grants control which nodes can apply which stamps to which artefact kinds. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
 Validation is stamp-based, not identity-based. The specific node that applied a stamp is recorded for audit, but governance checks verify that the required stamp names are present. This enables horizontal scaling — multiple nodes can be authorised to apply the same stamp (though only one can apply it per artefact version, since stamps are write-once) — and topology-aware cross-Flow trust. In sibling Flows that share a State Root, imported stamps are authoritative once the certificate chain validates. In Treaty/non-sibling crossings, imported stamps remain provenance only until the receiving Flow naturalises and applies its own local checks.
 
@@ -217,28 +183,19 @@ flowchart LR
 
 A stamp is uniquely keyed by its **name** — the governance checkpoint it represents. Stamps are write-once per artefact version: once a named stamp has been applied to a specific content hash, a second node attempting to apply the same stamp name to the same version receives an error. If two different nodes need to sign off independently, the Flow Architect defines two different stamps.
 
-**Stamp fields:**
+A stamp records:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | The governance checkpoint being satisfied (e.g. "linter", "security-review", "approval") |
-| `node` | string | Node name (for audit) |
-| `timestamp` | datetime | When the stamp was created |
-| `hash` | string | Content hash of the artefact at stamp time |
-| `signature` | bytes | Cryptographic signature covering the content hash and stamp identity fields. Serialization format defined in [CRD Reference](../05-reference/crds.md). |
-| `certificateChain` | []string | Certificate chain: node, operator, trust root. Encoding format defined in [CRD Reference](../05-reference/crds.md). |
-| `laws` | []LawCitation | Laws cited during the assessment that produced this stamp |
+- The **name** of the governance checkpoint being satisfied (e.g. "linter", "security-review", "approval")
+- The **node** that applied it (for audit)
+- The **content hash** of the artefact at stamp time
+- A **cryptographic signature** and **certificate chain** binding the stamp to the content
+- The **laws cited** during the assessment that produced the stamp
+
+The precise field schema is defined in the [CRD Reference](../05-reference/crds.md).
 
 Stamps are cryptographically bound to the artefact's content through the `hash` field. The signature covers the hash along with the stamp's identity fields, making it independently verifiable by tracing the certificate chain back to the Flow's trust root (or, in federated deployments, to the State Root CA). A stamp certifies specific bytes. Different bytes require new certification.
 
-**Capability authorisation:** Runtime services authorise capability-scoped operations using node identity mediated by the [Sidecar](../03-node/01-sidecar.md):
-
-| Capability | Required For |
-|------------|-------------|
-| `STAMP:artefact/<kind>/<stamp-name>` | Applying a named stamp |
-| `READ:artefact/<kind>` | Fetching artefact content |
-| `WRITE:artefact/<kind>` | Storing artefact content |
-| `READ:flow` | Reading Flow configuration (entry/exit contracts, topology) |
+**Capability authorisation:** Runtime services authorise capability-scoped operations using node identity mediated by the [Sidecar](../03-node/01-sidecar.md). Capabilities gate what a node can do: applying named stamps, reading and writing artefact content, and reading Flow configuration. Capability grant syntax is defined in the [Flow Configuration](../02-flow/05-configuration.md) and [Nodes](../02-flow/03-nodes-external.md).
 
 ---
 
@@ -273,8 +230,6 @@ Severity signals urgency, not authority:
 | `CRITICAL` | Blocking issue, potential data loss |
 
 Each feedback event in the history records who acted, what action they took, and what they said. The history is append-only — it is the investigative record of the debate.
-
-Canonical state tokens in API/schema surfaces are:
 
 | Canonical token | Display label |
 |-----------------|---------------|
@@ -392,7 +347,7 @@ A law can have multiple **representations**: different ways of expressing the sa
 
 Representations are not independent rules. They must all enforce the same goal. A prose representation that says "poetry must not reference processed meats" and a formal logic representation that checks for the string "sausage" are two faces of the same law. Adding, removing, or modifying any representation produces a new version of the law (identified by its content hash). The full version history is preserved.
 
-Governance hardens through representations. A Tier 1 Finding starts as prose — a reviewer noticed a pattern and articulated it. If the Finding proves durable enough to be promoted to a Tier 2 Ruling, [Codification Services](../02-flow/04-system-services.md#codification-services) can translate the goal into formal logic, adding a deterministic representation alongside the original prose. The goal stays the same; enforceability increases.
+Governance hardens through representations. A Tier 1 Finding starts as prose — a reviewer noticed a pattern and articulated it. If the Finding proves durable enough to be promoted to a Tier 2 Ruling, specialised [translation services](../02-flow/04-system-services.md#codification-services) can translate the goal into formal logic, adding a deterministic representation alongside the original prose. The goal stays the same; enforceability increases.
 
 ### Law Tiers
 
@@ -401,7 +356,7 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
 | 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer) and [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
-| 2 | **Ruling** | Single Flow | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) Node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
+| 2 | **Ruling** | Single Flow | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./04-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |

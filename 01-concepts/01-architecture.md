@@ -67,7 +67,7 @@ The Control Plane's scope is routing decisions. It reads state and moves Workite
 
 Where work happens. The Data Plane contains the [Nodes](../03-node/00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./03-data-model.md#passports-and-stamps), [feedback](./03-data-model.md#feedback), and raw content bytes.
 
-Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A Node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
+Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
 
 Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to the platform's network policy layer.
 
@@ -77,9 +77,9 @@ Flow Architects can also deploy **Support Services** — containers that expose 
 
 Identity, authentication, and cryptographic trust. The Security Plane cross-cuts all other planes — a concern that runs through each of them, present wherever identity, authentication, or trust is exercised.
 
-Its primary agent is the [Sidecar](../03-node/01-sidecar.md), injected into every Node pod. The Sidecar holds all credentials; the Node container itself is credential-free. Every authenticated request between a Node and the Flow's services passes through the Sidecar, which brokers identity on the Node's behalf.
+Its primary agent is the [Sidecar](../03-node/01-sidecar.md), injected into every node pod. The Sidecar holds all credentials; the node container itself is credential-free. Every authenticated request between a node and the Flow's services passes through the Sidecar, which brokers identity on the node's behalf.
 
-[Passport stamps](./03-data-model.md#passports-and-stamps) are the Security Plane's output. When a Node stamps an artefact, the Sidecar computes the content hash, signs it with the Node's private key, and attaches the full certificate chain. The stamp is cryptographically bound to the artefact's content — if the content changes, the stamp is invalidated. Exit-contract verification traces each stamp's certificate chain back to the Flow's trust root.
+[Passport stamps](./03-data-model.md#passports-and-stamps) are the Security Plane's output. When a node stamps an artefact, the Sidecar computes the content hash, signs it with the node's private key, and attaches the full certificate chain. The stamp is cryptographically bound to the artefact's content — if the content changes, the stamp is invalidated. Exit-contract verification traces each stamp's certificate chain back to the Flow's trust root.
 
 Every service call requires valid credentials regardless of network path.
 
@@ -89,7 +89,7 @@ The legal lifecycle. The Governance Plane manages the discovery, enforcement, an
 
 The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to Nodes that query for applicable governance. The [Citation Processor](../02-flow/04-system-services.md) tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md#friction).
 
-The [Assay Node](./02-foundry-cycle.md#assay-judiciary--standard-component) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
+The [Assay node](./02-foundry-cycle.md#assay-judiciary--standard-component) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
 
 Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from the Flow's own legislative authority. Tiers 4 and 5 arrive from the [Governance Flow](./04-governance.md), synchronised into each Flow's Library as organisational and federal policy. The Library stores all tiers with equal indifference; nodes query and interpret them the same way regardless of origin.
 
@@ -109,17 +109,17 @@ Cross-flow verifiability and local authority are distinct. Sibling imports under
 
 ## Responsibility Boundaries
 
-Each concern in the system maps to exactly one plane. When a Node executes work, it operates in the Data Plane. When the result needs routing, the Control Plane decides where it goes. When a law is cited, the Governance Plane records it. When a stamp is applied, the Security Plane signs it.
+Each concern in the system maps to exactly one plane. When a node executes work, it operates in the Data Plane. When the result needs routing, the Control Plane decides where it goes. When a law is cited, the Governance Plane records it. When a stamp is applied, the Security Plane signs it.
 
 | Concern | Plane | Handler |
 |---------|-------|---------|
-| Work execution | Data | Node pods |
+| Work execution | Data | node pods |
 | Pluggable capabilities | Data | Support Services |
 | Routing decisions | Control | Flow Operator |
 | Artefact lifecycle | Data | Archivist |
 | Law lifecycle | Governance | Librarian |
 | Citation tracking | Governance | Citation Processor |
-| Dispute resolution | Governance | Assay Node |
+| Dispute resolution | Governance | Assay node |
 | Authentication | Security | Sidecar |
 | Cryptographic stamps | Security | Sidecar |
 | Telemetry and audit | Control | Flow Monitor |
@@ -139,15 +139,15 @@ The namespace boundary also defines data sovereignty. Workitems, artefacts, and 
 
 ### Sequential Processing
 
-A [Workitem](./03-data-model.md#workitems) is assigned to exactly one Node at a time — atomic ownership prevents race conditions in state transitions. The Operator's routing loop is linear: read state, pick a target, assign, wait for completion, repeat.
+A [Workitem](./03-data-model.md#workitems) is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Operator's routing loop is linear: read state, pick a target, assign, wait for completion, repeat.
 
-When parallel execution is needed within a single step (querying multiple reviewers, running multiple validators), the Node handles it internally. A "fat node" can orchestrate concurrent work within its execution boundary — from the Flow's perspective, it is still one assignment.
+When parallel execution is needed within a single step (querying multiple reviewers, running multiple validators), the node handles it internally. A "fat node" can orchestrate concurrent work within its execution boundary — from the Flow's perspective, it is still one assignment.
 
 ### Stateless Workers
 
 Node pods are persistent, platform-managed processes. They boot once, load expensive infrastructure (LLM model weights, connection pools, SDK caches), and process many Workitems over their lifetime. This eliminates cold-start latency.
 
-But execution state is ephemeral. Each Workitem assignment starts fresh — the Node reads Workitem state from the CRD and fetches artefact content from the Archivist. If a Workitem loops back to the same Node type after visiting other Nodes, it may land on a different pod replica. The Node has no memory of having seen it before.
+But execution state is ephemeral. Each Workitem assignment starts fresh — the node reads Workitem state from the CRD and fetches artefact content from the Archivist. If a Workitem loops back to the same node type after visiting other nodes, it may land on a different pod replica. The node has no memory of having seen it before.
 
 Infrastructure state persists across assignments. Execution state is rebuilt from the Workitem and Archivist each time.
 
@@ -172,9 +172,9 @@ CRDs provide the watch-driven consistency the Operator needs for state transitio
 
 ### Zero-Trust Security
 
-Every Node pod runs with a Sidecar that holds its cryptographic identity. The Node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers identity on the Node's behalf using platform-native credentials and, in federated deployments, mutual authentication certificates.
+Every node pod runs with a Sidecar that holds its cryptographic identity. The node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers identity on the node's behalf using platform-native credentials and, in federated deployments, mutual authentication certificates.
 
-In federated deployments, the trust chain is hierarchical: the [Governance Flow](./04-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mutual authentication certificates to its Node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
+In federated deployments, the trust chain is hierarchical: the [Governance Flow](./04-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mutual authentication certificates to its node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
 
 Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. Exit contract checks validate stamps by cryptographic chain, not by trusting the network path the Workitem travelled.
 

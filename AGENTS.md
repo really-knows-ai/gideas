@@ -25,7 +25,7 @@ Produce a clean, coherent, GitHub-style specification that:
 ├── README.md                    # Entry point, navigation (write last)
 │
 ├── 01-concepts/                 # Helicopter view — read first
-│   ├── 00-overview.md           # ✅ COMPLETE
+│   ├── 00-overview.md           # High-level introduction to Foundry Flow
 │   ├── 01-architecture.md       # Six-plane architecture, design principles
 │   ├── 02-foundry-cycle.md      # The Foundry Cycle reference arrangement
 │   ├── 03-data-model.md         # Workitems, Artefacts, Laws, Feedback (detail)
@@ -85,7 +85,7 @@ Produce a clean, coherent, GitHub-style specification that:
 | Document | Status |
 |----------|--------|
 | `01-concepts/00-overview.md` | Drafted (Foundry Cycle content extracted to `02-foundry-cycle.md`) |
-| `01-concepts/01-architecture.md` | Complete |
+| `01-concepts/01-architecture.md` | Drafted |
 | `01-concepts/02-foundry-cycle.md` | Drafted |
 | `01-concepts/03-data-model.md` | Drafted (role-based actor framing applied) |
 | `01-concepts/04-governance.md` | Drafted (reference arrangement qualification applied) |
@@ -102,14 +102,13 @@ Produce a clean, coherent, GitHub-style specification that:
 
 - **Stub outline** — Intentional scaffold only (goal + section headings/scope). Not expected to contain full normative prose yet.
 - **Drafted** — Full prose exists and is internally coherent, but may still receive consistency and refinement edits.
-- **Complete** — Meets current quality bar for scope, consistency, and writing principles.
 
 ### Review Discipline by Status
 
 Status is a review boundary and must be respected:
 
 - For **stub outline** files, valid feedback is limited to structural correctness, key-decision alignment, impossible mechanics, and broken/missing links.
-- For **drafted/complete** files, full semantic and writing-principle review applies.
+- For **drafted** files, full semantic and writing-principle review applies.
 - Feedback that only says a file is "currently a stub", "to be finished", "not drafted yet", or equivalent is **not valid feedback**.
 
 `README.md` should be written last, once the spec is complete.

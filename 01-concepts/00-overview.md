@@ -14,15 +14,15 @@ Work cannot leave a Flow until its artefacts carry the required stamps. The qual
 
 ## Core Concepts
 
-**Flow** — A self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
+A **Flow** is a self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
-**[Workitem](./03-data-model.md#workitems)** — The unit of work. A Workitem carries state and references artefacts managed by the [Archivist](./03-data-model.md#artefacts). Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
+A **[Workitem](./03-data-model.md#workitems)** is the unit of work. It carries state and references artefacts managed by the [Archivist](./03-data-model.md#artefacts). Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
 
-**[Node](../03-node/00-overview.md)** — A stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
+A **[Node](../03-node/00-overview.md)** is a stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
 
-**[Artefact](./03-data-model.md#artefacts)** — A governed output. Versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model — anything the Flow produces.
+An **[artefact](./03-data-model.md#artefacts)** is a governed output — versioned, content-addressed, and stored in the Archivist. An artefact could be a document, a code file, a data model — anything the Flow produces.
 
-**[Passport](./03-data-model.md#passports-and-stamps)** — The collection of [stamps](#stamps) on an artefact version. A passport tracks which stamp requirements have been satisfied for a specific content hash.
+An artefact's **[passport](./03-data-model.md#passports-and-stamps)** is the collection of [stamps](#stamps) on a specific version. It tracks which governance checkpoints have been satisfied for that content hash.
 
 ### Stamps
 
@@ -37,9 +37,9 @@ Stamp names are declared by the GovernedArtefact CRD — the artefact kind defin
 
 Stamps are write-once per artefact version. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
 
-**[Feedback](./03-data-model.md#feedback)** — Structured annotations on artefacts. Threaded, with forced-choice resolution: when addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
+**[Feedback](./03-data-model.md#feedback)** is structured annotations on artefacts — threaded, with forced-choice resolution. When addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
-**[Law](./03-data-model.md#laws)** — A governance rule with a textual **goal** — what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
+A **[law](./03-data-model.md#laws)** is a governance rule with a textual **goal** — what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
 
 ---
 
@@ -70,20 +70,20 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Source | Lifecycle |
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes ([Appraise, Refine](./02-foundry-cycle.md) in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
-| 2 | **Ruling** | Assay Node | Binding precedent. Minted when disputes are resolved. |
+| 2 | **Ruling** | Assay node | Binding precedent. Minted when disputes are resolved. |
 | 3 | **Local Statute** | Flow Architect | Local policy. Human-administered or via local legislative cycle. |
 | 4 | **State Constitution** | [Governance Flow](./04-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
 | 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
-Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it can be promoted to a Tier 2 Ruling through the Assay Node. The [Citation Processor](../02-flow/04-system-services.md) tracks this usage — which laws are cited, by which nodes, and whether they generate compliance or resistance — driving the promotion lifecycle and surfacing toxic laws that generate disproportionate friction.
+Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it can be promoted to a Tier 2 Ruling through the Assay node. The [Citation Processor](../02-flow/04-system-services.md) tracks this usage — which laws are cited, by which nodes, and whether they generate compliance or resistance — driving the promotion lifecycle and surfacing toxic laws that generate disproportionate friction.
 
-The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through [Codification Services](../02-flow/04-system-services.md#codification-services). Authority increases through the tier system; enforceability increases through representation.
+The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through specialised [translation services](../02-flow/04-system-services.md#codification-services). Authority increases through the tier system; enforceability increases through representation.
 
 ### The Governance Flow
 
 Tiers 1 and 2 emerge from within a Flow. Tier 3 is the Flow's own legislative authority. Tiers 4 and 5 arrive from above.
 
-A standalone Flow (no Governance Flow) manages its own Tier 3 Local Statutes as CRDs applied by an administrator. Tiers 4 and 5 do not exist in this configuration.
+A standalone Flow (no [Governance Flow](./04-governance.md)) manages its own Tier 3 Local Statutes as CRDs applied by an administrator. Tiers 4 and 5 do not exist in this configuration.
 
 Under a Governance Flow, the [Governance Flow](./04-governance.md) is a dedicated Flow whose governed artefacts are the laws themselves. It produces Tier 4 State Constitution laws through the same [Foundry Cycle](./02-foundry-cycle.md) as any other Flow, and synchronises Tier 5 Federal Accords from upstream authorities. Sibling Flows receive these laws via their Librarians, ensuring every Flow in the organisation operates under a consistent body of higher-tier governance.
 

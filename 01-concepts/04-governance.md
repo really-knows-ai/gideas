@@ -6,8 +6,6 @@ A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./
 
 ## The Legal Metaphor
 
-Each branch of government has a clear institutional counterpart in the runtime.
-
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
 | **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/finding` capability ([Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) — Tier 1 [Findings](./03-data-model.md#law-tiers) |
@@ -72,7 +70,7 @@ flowchart LR
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
 
-Promotion is also where governance can harden in *form*, not just authority. When promoted, a Finding can gain new [representations](./03-data-model.md#representations) — for example, formal logic alongside the original prose — increasing enforceability without changing its goal. Representation lifecycle responsibilities — including [Codification Services](../02-flow/04-system-services.md#codification-services) that translate goals into formal representations — are defined in [System Services](../02-flow/04-system-services.md).
+Promotion is also where governance can harden in *form*, not just authority. When promoted, a Finding can gain new [representations](./03-data-model.md#representations) — for example, formal logic alongside the original prose — increasing enforceability without changing its goal. Representation lifecycle responsibilities — including specialised [translation services](../02-flow/04-system-services.md#codification-services) that translate goals into formal representations — are defined in [System Services](../02-flow/04-system-services.md).
 
 ### Decay and Retirement
 
@@ -114,6 +112,7 @@ Assay's power is constitutionally bounded:
 
 | Tier range | Authority | Action |
 |------------|-----------|--------|
+| Tier 1 | **None** | Assay does not write Tier 1 Findings. Tier 2 is both the floor and the ceiling of its judicial authority. |
 | Tier 2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings. |
 | Tier 3 | **Propose** | Drafts a proposal. HITL approves or rejects. |
 | Tier 4–5 | **Appeal** | Files an appeal to the Governance Flow. Cannot directly modify. |

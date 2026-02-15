@@ -18,7 +18,11 @@ Define methods for artefact bytes, version history, feedback, and stamp operatio
 
 ## Librarian API
 
-Define methods for law retrieval, law mutation paths, citation operations, and governance queries.
+Define methods for law retrieval, law mutation paths, and governance queries.
+
+## Citation Processor API
+
+Define methods for citation recording, citation aggregation, and threshold queries.
 
 ## Sidecar-Mediated SDK Paths
 
