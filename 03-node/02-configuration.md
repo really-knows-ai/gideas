@@ -43,11 +43,12 @@ Capability strings define what actions a node may request through [SDK](../04-sd
 
 The capability grammar follows a verb-resource pattern:
 
-- `READ:artefact`, `WRITE:artefact/<kind>` — artefact access scoped by kind.
+- `READ:artefact`, `WRITE:artefact`, `WRITE:artefact/<kind>` — artefact access. `WRITE:artefact` grants write access to all kinds; `WRITE:artefact/<kind>` scopes to a specific kind.
 - `READ:law`, `WRITE:law/finding` — law access, with finding-write as the node-level ceiling.
 - `STAMP:artefact/<kind>/<stamp-name>` — stamp authority scoped to a specific artefact kind and stamp name.
 - `READ:flow` — topology discovery, enabling a node to query stamp-to-node mappings at runtime.
 - `READ:workitem` — Workitem state access beyond the current assignment.
+- `READ:feedback`, `WRITE:feedback` — feedback access on artefacts. Required for querying and creating/transitioning feedback items.
 - `ESCALATE:assay` — deadlock escalation authority.
 - `USE:support/<service>/<capability>` — access to a specific [Flow Support Service](../02-flow/04-system-services.md#flow-support-services) capability.
 

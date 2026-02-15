@@ -74,7 +74,7 @@ When a node finishes processing, it returns a routing instruction that tells the
 
 The Thrash Guard is a map of node names to visit counts on each Workitem. Each time a Workitem is assigned to a node, that node's counter increments. The Thrash Guard is hidden from nodes — it is infrastructure, not semantic context.
 
-When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_DETECTED`. This catches infrastructure-level loops — a Workitem bouncing endlessly between nodes regardless of the reason. The per-node breakdown aids diagnostics — identifying which nodes a Workitem visited most — while the aggregate sum is the enforcement trigger.
+When the sum of all Thrash Guard entries exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_BUDGET_EXCEEDED`. This catches infrastructure-level loops — a Workitem bouncing endlessly between nodes regardless of the reason. The per-node breakdown aids diagnostics — identifying which nodes a Workitem visited most — while the aggregate sum is the enforcement trigger.
 
 | Detection | Signal | Source | Response |
 |-----------|--------|--------|----------|

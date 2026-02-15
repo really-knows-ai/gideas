@@ -1,8 +1,6 @@
 # SDK Legal
 
-## Goal
-
-Define the SDK surface for law retrieval, citation, and law-adjacent authoring actions.
+The legal SDK surface provides law retrieval, citation, and finding creation operations. All legal operations are routed through the [Sidecar](../03-node/01-sidecar.md) to the [Librarian](../02-flow/04-system-services.md#librarian), which owns law storage, retrieval, and lifecycle management.
 
 ## Law Retrieval and Selection
 
@@ -31,7 +29,7 @@ These are conventions of the reference arrangement. Any node with `READ:law` can
 
 ## Citation
 
-`Cite(law_ids)` records that a node used one or more laws during processing. It is a convenience wrapper around [`AddFriction`](./06-sdk-telemetry.md#addfriction--node-context) that emits a fixed, low magnitude of friction attributed to the specified laws.
+`Cite(law_ids)` records that a node used one or more laws during processing. It is a convenience wrapper around [`AddFriction`](./06-sdk-telemetry.md#addfriction-node-context) that emits a fixed, low magnitude of friction attributed to the specified laws.
 
 The SDK surface accepts a single parameter:
 
@@ -39,26 +37,84 @@ The SDK surface accepts a single parameter:
 
 The Sidecar injects all identity context (`node_id`, `workitem_id`, `flow_id`) and the fixed citation magnitude. The node cannot override the magnitude — the signal is frequency of use, not caller-weighted importance.
 
-Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events alongside all other friction. The [Librarian](../02-flow/04-system-services.md#librarian) queries the Flow Monitor for accumulated friction on individual laws to determine when friction-threshold hearings should be triggered.
+Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events alongside all other friction. The [Librarian](../02-flow/04-system-services.md#librarian) queries the Flow Monitor for accumulated friction on individual laws to determine when friction-threshold [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol) should be triggered.
 
 Requires `READ:law` capability — a node that cannot read laws has no basis for citing them.
 
-## Finding and Ruling Interaction Boundaries
+## Finding Creation
 
-Clarify what node roles may record findings and what remains judicial or human-governed.
+Nodes with the `WRITE:law/finding` capability can record Tier 1 [Findings](../01-concepts/03-data-model.md#law-tiers) — observations that emerge from work.
+
+| Operation | Parameters |
+|-----------|-----------|
+| `RecordFinding(goal, appliesTo, representations?)` | `goal` (string) — plain-language statement of what the law enforces, stops, or ensures. `appliesTo` (`[]string`) — governed artefact kinds this law applies to; empty for global. `representations` (optional) — initial representations (typically prose). |
+
+`RecordFinding` returns immediately with a law identifier. The write is eventually consistent — the new Finding is available for writes immediately but may not appear in `QueryLaws` results until the [Librarian](../02-flow/04-system-services.md#librarian) has indexed it. Duplicate detection is asynchronous: the Librarian runs background conflict checks against existing laws using [semantic search and LLM evaluation](../02-flow/04-system-services.md#librarian). Duplicate Findings are merged or retired without node involvement.
+
+This write-availability-first design means nodes can record Findings as they discover patterns without blocking on indexing or conflict resolution. The Librarian handles deduplication and integration asynchronously.
+
+Tier 1 Findings have a configurable TTL. Findings that go uncited expire at their TTL. Findings that accumulate [friction through citation](#citation) persist and can be promoted to Tier 2 Rulings through [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol).
+
+### Authority Boundaries
+
+Finding creation is the only law-writing operation available through the node SDK. The authority boundary is strict:
+
+| Tier | Write Authority | SDK Available |
+|------|----------------|---------------|
+| 1 — Finding | Nodes with `WRITE:law/finding` | Yes — `RecordFinding` |
+| 2 — Ruling | [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) only | No |
+| 3 — Local Statute | Flow Architect (human-administered or local legislative cycle) | No |
+| 4 — State Constitution | [Governance Flow](../01-concepts/04-governance.md#the-governance-flow) | No |
+| 5 — Federal Accord | Federation | No |
+
+Assay creates Tier 2 Rulings when resolving conflicts and during [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol). Assay proposes Tier 3 amendments for human ratification and appeals Tier 4-5 conflicts to the [Governance Flow](../01-concepts/04-governance.md#the-governance-flow). These are Assay's internal judicial operations, not SDK methods available to node handlers.
 
 ## Representation-Aware Usage
 
-Describe how nodes consume multiple law representations while preserving single-goal law identity.
+A [law](../01-concepts/03-data-model.md#laws) is a single object with one goal and one or more representations. Every query mode returns the full law object — all representations included. The node decides which representation to consume.
+
+A prose representation and an executable representation of the same law enforce the same goal. Different nodes consume the same law through different lenses:
+
+- A review node reads the prose representation to evaluate subjective compliance.
+- A validation node runs the executable representation as a deterministic check.
+- A generation node reads the prose representation to understand constraints.
+
+Nodes should not assume that every law carries a specific representation type. Query by artefact kind + representation type to find laws that have the representations the node can interpret. Laws without a matching representation are excluded from the result, not returned with empty representation lists.
+
+[Governance hardening](../01-concepts/04-governance.md#precedent) adds representations over time. A prose-only Tier 1 Finding gains a formal logic representation when promoted to a Tier 2 Ruling through a [Codification Service](../02-flow/04-system-services.md#codification-services). The goal stays the same; enforceability increases. A node that runs deterministic checks can only use laws that have executable representations, and automatically picks up newly hardened laws as they gain those representations.
 
 ## Capability and Authorisation Semantics
 
-Map legal operations to capability requirements and service-authorised outcomes.
+Legal operations map to capability requirements enforced by the [Librarian](../02-flow/04-system-services.md#librarian):
+
+| Operation | Required Capability | Enforcing Service |
+|-----------|-------------------|-------------------|
+| `QueryLaws` (all modes) | `READ:law` | Librarian |
+| `Cite` | `READ:law` | Librarian (via Flow Monitor) |
+| `RecordFinding` | `WRITE:law/finding` | Librarian |
+
+Missing capabilities produce a `CAPABILITY_DENIED` error from the Librarian, forwarded through the Sidecar as a structured error. The node does not learn what capabilities it lacks — the error indicates the operation was denied, not which specific grant is missing.
 
 ## Failure Behaviour
 
-Document deterministic rejection and retry guidance for legal operations.
+| Error | Cause | Retry |
+|-------|-------|-------|
+| `CAPABILITY_DENIED` | Node lacks `READ:law` or `WRITE:law/finding` | No — permanent until configuration changes |
+| `LAW_NOT_FOUND` | Cited law has been retired or does not exist | No — the law is gone |
+| `SERVICE_UNAVAILABLE` | Librarian is temporarily unreachable | Yes — transient, use exponential backoff |
+| `MESSAGE_TOO_LONG` | Finding goal exceeds maximum length | No — reduce content length |
+
+`RecordFinding` failures do not affect the current Workitem's processing — they are a governance side effect. A node that fails to record a Finding can continue its primary work and retry the Finding later or accept the loss.
+
+`QueryLaws` failures prevent the node from loading its governance context. Whether this is blocking depends on the node's design — a deterministic validator cannot proceed without laws to check against, while a generator may be able to proceed with degraded governance context and emit appropriate friction to signal the gap.
 
 ## Legal SDK Invariants
 
-Capture governance constraints that legal APIs must preserve.
+1. `READ:law` is required for all law queries and citations.
+2. `WRITE:law/finding` is required to record Tier 1 Findings. No other tier is writable through the SDK.
+3. Query results return full law objects — filters gate inclusion, never strip representations.
+4. `Cite` emits friction at a fixed magnitude. The node cannot override the magnitude.
+5. `RecordFinding` is eventually consistent — the Finding is writable immediately but queryable after indexing.
+6. Duplicate Finding detection is asynchronous and Librarian-owned.
+7. Law objects are immutable from the SDK's perspective. Any mutation produces a new version with a new content hash. The node reads laws; the Librarian manages lifecycle.
+8. Governance hardening (adding representations) is a [Codification Service](../02-flow/04-system-services.md#codification-services) operation triggered by Assay, not a node SDK operation.
