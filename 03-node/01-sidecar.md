@@ -14,7 +14,6 @@ flowchart LR
     SC --> OP["Operator<br/>control-plane authority"]
     SC --> AR["Archivist<br/>artefact provenance"]
     SC --> LB["Librarian<br/>law lifecycle"]
-    SC --> CP["Citation Processor<br/>citation tracking"]
     SC --> SS["Support Services<br/>pluggable capabilities"]
     SC --> FM["Flow Monitor<br/>telemetry"]
 ```
@@ -41,14 +40,13 @@ When a Workitem is assigned to a node, the Sidecar receives the assignment conte
 
 ## Service Brokering
 
-The Sidecar brokers requests to six categories of runtime service. Each path has a distinct authority owner:
+The Sidecar brokers requests to five categories of runtime service. Each path has a distinct authority owner:
 
 | Target service | Sidecar role | Authority owner |
 |---|---|---|
 | [Operator](../02-flow/01-operator.md) | Submit routing instructions and control-plane mutation requests | Operator validates and persists |
 | [Archivist](../02-flow/04-system-services.md#archivist) | Proxy artefact, feedback, and stamp operations | Archivist authorises based on capability and Workitem scope |
 | [Librarian](../02-flow/04-system-services.md#librarian) | Proxy law retrieval and write operations | Librarian authorises based on capability grants |
-| [Citation Processor](../02-flow/04-system-services.md#citation-processor) | Submit citation events and query citation evidence | Citation Processor validates and records |
 | [Flow Support Services](../02-flow/04-system-services.md#flow-support-services) | Proxy capability-gated requests to Flow-Architect-deployed services | Support Service validates capability grants |
 | [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) | Emit telemetry, metrics, and friction signals | Flow Monitor ingests |
 

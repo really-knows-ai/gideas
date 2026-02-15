@@ -313,22 +313,25 @@ Conflict detection during law integration is scoped by `appliesTo` — a law gov
 
 ### Review hearing verdict schema
 
-Review hearings use tier-specific verdicts. There are three hearing types:
+Review hearings use tier-specific verdicts. There are two hearing types, both triggered by the Librarian based on law lifecycle signals:
 
-**Citation-threshold hearing** (Tier 1 Finding is heavily cited):
+**Friction-threshold hearing** (Tier 1 Finding accumulates significant friction):
 
 - **Promote** — Finding is minted as a Tier 2 Ruling
-- **Retain** — Finding's TTL is reset, stays at Tier 1
 
-**Tier 1 TTL-expiry hearing:**
+**TTL-proximity hearing** (law enters configurable window before TTL expiry):
+
+Tier 1 Finding:
 
 - **Retire** — Finding is deleted (history preserved in audit log)
 - **Promote** — Finding is minted as a Tier 2 Ruling
 
-**Tier 2 TTL-expiry hearing:**
+Tier 2 Ruling:
 
-- **Demote** — Ruling drops to Tier 1 Finding (fresh TTL, citation history does not carry over)
+- **Demote** — Ruling drops to Tier 1 Finding (fresh TTL)
 - **Promote** — Assay petitions for Tier 3 Statute (HITL ratification required)
+
+Assay considers the law's accumulated friction (queried from the Flow Monitor) and the law's goal when rendering verdicts. There is no TTL reset — hearings produce a decisive outcome (promote, retire, or demote).
 
 ### The Foundry Cycle is a reference arrangement
 

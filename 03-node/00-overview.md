@@ -52,7 +52,6 @@ Runtime interactions separate business execution from persistence authority:
 - Sidecar -> Archivist: artefact versions, feedback, and stamp operations.
 - Sidecar -> Librarian: law retrieval and legal context queries.
 - Sidecar -> telemetry surfaces: metrics, traces, and mediation logs.
-- Sidecar -> Citation Processor: citation submission and citation evidence queries.
 - Sidecar -> Flow Support Services: capability-gated operations on Flow-Architect-deployed services.
 
 Node code may call external business services over the data-plane network path. That does not change Flow runtime authority boundaries: authenticated runtime operations still pass through Sidecar mediation.

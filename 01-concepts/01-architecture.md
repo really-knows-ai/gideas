@@ -87,7 +87,7 @@ Every service call requires valid credentials regardless of network path.
 
 The legal lifecycle. The Governance Plane manages the discovery, enforcement, and evolution of [law](./03-data-model.md#laws) within the Flow.
 
-The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to Nodes that query for applicable governance. The [Citation Processor](../02-flow/04-system-services.md) tracks which laws are actually used: how often they are cited, by which Nodes, and whether they generate compliance or resistance. This citation data drives law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and identifies toxic laws that generate disproportionate [friction](./00-overview.md#friction).
+The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to Nodes that query for applicable governance. The Librarian also monitors law usage through [friction](./00-overview.md#friction) data: when nodes cite laws during processing, each citation generates a friction event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the Librarian queries the accumulated friction to drive law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and to identify laws that generate disproportionate resistance.
 
 The [Assay node](./02-foundry-cycle.md#assay-judiciary--standard-component) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
 
@@ -118,7 +118,7 @@ Each concern in the system maps to exactly one plane. When a node executes work,
 | Routing decisions | Control | Flow Operator |
 | Artefact lifecycle | Data | Archivist |
 | Law lifecycle | Governance | Librarian |
-| Citation tracking | Governance | Citation Processor |
+| Friction tracking | Governance | Flow Monitor |
 | Dispute resolution | Governance | Assay node |
 | Authentication | Security | Sidecar |
 | Cryptographic stamps | Security | Sidecar |
@@ -163,12 +163,11 @@ Artefact content lives in the Archivist as content-addressed blobs. The Workitem
 |-------|---------|------|----------------|
 | State | CRDs | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
 | Governance Query | Embedded database — Librarian | Embeddings | Analytical, vector similarity search |
-| Citation Tracking | Embedded database — Citation Processor | Citation ledger | Analytical, aggregation queries |
 | Telemetry | Metrics pipeline — Flow Monitor | Friction events, workitem lifecycle metrics, node health | Time-series queries, alerting |
 | Artefact Provenance | Embedded database — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | Content-addressed store — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Citation Processor maintains its own embedded database for the citation ledger — tracking how often laws are cited and by which nodes. The Flow Monitor aggregates friction events from nodes and services into time-series metrics and emits audit events for log aggregation — friction data is queryable through dashboards across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
+CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Flow Monitor aggregates friction events from nodes and services into time-series metrics and emits audit events for log aggregation — friction data is queryable through dashboards across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). The Librarian queries the Flow Monitor for law-attributed friction to evaluate promotion thresholds and TTL-proximity hearing triggers. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 

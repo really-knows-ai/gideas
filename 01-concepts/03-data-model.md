@@ -363,7 +363,7 @@ Laws are tiered by authority and lifecycle:
 
 Supremacy is absolute — higher tier always wins, with no upward override. A Tier 3 Local Statute cannot override a Tier 4 State Constitution law, regardless of when either was created.
 
-Tier 1 Findings are the raw material of governance. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. Findings that prove useful (cited frequently across Workitems) accumulate citation data tracked by the [Citation Processor](../02-flow/04-system-services.md), which can trigger promotion to Tier 2. Findings that go uncited expire at their TTL.
+Tier 1 Findings are the raw material of governance. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. Findings that prove useful accumulate friction as nodes [cite](../04-sdk/03-sdk-legal.md#citation) them during processing. When a Finding's accumulated friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md) triggers a review hearing that can promote it to Tier 2. Findings that go uncited expire at their TTL.
 
 Tier 2 Rulings are binding precedent. They are minted when Assay resolves a dispute, consolidating the arguments into a durable law. Rulings have longer TTLs than Findings and require a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement.
 

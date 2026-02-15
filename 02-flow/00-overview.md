@@ -28,7 +28,6 @@ flowchart TD
 
     SC --> AR["Archivist<br/>artefact lifecycle"]
     SC --> LB["Librarian<br/>law lifecycle"]
-    SC --> CP["Citation Processor<br/>citation tracking"]
 
     SC --> SS["Support Services<br/>pluggable capabilities"]
 
@@ -36,7 +35,6 @@ flowchart TD
     SC --> FM
     AR --> FM
     LB --> FM
-    CP --> FM
 
     SS --> FM
 

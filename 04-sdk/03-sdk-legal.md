@@ -29,9 +29,19 @@ In the [reference arrangement](../01-concepts/02-foundry-cycle.md), each node ty
 
 These are conventions of the reference arrangement. Any node with `READ:law` can use any query mode.
 
-## Citation Submission
+## Citation
 
-Define citation request flows, required fields, and evidence linkage expectations.
+`Cite(law_ids)` records that a node used one or more laws during processing. It is a convenience wrapper around [`AddFriction`](./06-sdk-telemetry.md#addfriction--node-context) that emits a fixed, low magnitude of friction attributed to the specified laws.
+
+The SDK surface accepts a single parameter:
+
+- `law_ids` (`[]string`, one or more) — the laws the node used.
+
+The Sidecar injects all identity context (`node_id`, `workitem_id`, `flow_id`) and the fixed citation magnitude. The node cannot override the magnitude — the signal is frequency of use, not caller-weighted importance.
+
+Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events alongside all other friction. The [Librarian](../02-flow/04-system-services.md#librarian) queries the Flow Monitor for accumulated friction on individual laws to determine when friction-threshold hearings should be triggered.
+
+Requires `READ:law` capability — a node that cannot read laws has no basis for citing them.
 
 ## Finding and Ruling Interaction Boundaries
 

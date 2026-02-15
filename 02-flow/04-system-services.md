@@ -6,10 +6,9 @@ System services provide the runtime substrate for law lifecycle, artefact lifecy
 
 Each service owns one primary concern:
 
-- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and TTL-expiry hearing triggers.
-- **Citation Processor**: citation ledger, citation analytics, and citation-threshold hearing triggers.
+- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (both friction-threshold and TTL-proximity).
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
-- **Flow Monitor**: telemetry aggregation, audit stream integration, and friction signal surfacing.
+- **Flow Monitor**: telemetry aggregation, friction signal surfacing, and audit stream integration.
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
 - **Flow Support Services**: optional, Flow-Architect-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the worked example in this spec.
 
@@ -18,17 +17,14 @@ No service duplicates another service's source of truth.
 ```mermaid
 flowchart TD
     OP["Operator"] --> LB["Librarian"]
-    OP --> CP["Citation Processor"]
     OP --> AR["Archivist"]
 
     SC["Sidecar"] --> LB
-    SC --> CP
     SC --> AR
 
     SC --> SS["Support Services<br/>(Flow Architect deployed)"]
 
     LB --> FM["Flow Monitor"]
-    CP --> FM
     AR --> FM
     OP --> FM
 
@@ -76,34 +72,20 @@ Integration outcomes follow tiered supremacy semantics:
 - On grace expiry, incoming law integrates automatically and conflicting Tier 3 law retires.
 - If the LLM evaluator is unavailable or returns an indeterminate result, incoming higher-tier laws remain queued and inactive until evaluation succeeds.
 
-### TTL-Expiry Hearing Triggers
+### Law Lifecycle Hearing Triggers
 
-Librarian owns hearing trigger emission for law TTL-expiry paths:
+The Librarian owns all hearing trigger emission for law lifecycle events. It monitors two signals and triggers review hearings by requesting Workitem creation through the Operator.
 
-- Tier 1 nearing/at expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
-- Tier 2 nearing/at expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
+**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a Tier 1 Finding's friction crosses a configured threshold, the Librarian triggers a review hearing. Thresholds are configurable per law tier in the FoundryFlow [configuration](./05-configuration.md).
+
+**TTL-proximity triggers:** When a law enters a configurable window before its TTL expiry, the Librarian triggers the appropriate review hearing:
+
+- Tier 1 Finding nearing expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
+- Tier 2 Ruling nearing expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
+
+There is no TTL reset. Hearings produce a decisive outcome — promote, retire, or demote.
 
 Librarian does not adjudicate hearings.
-
-## Citation Processor
-
-The Citation Processor owns citation evidence and threshold-triggered governance review.
-
-### Citation Ledger
-
-- Records citations by law, node, work context, and outcome metadata.
-- Supports aggregation for promotion, decay analysis, and governance cost analysis.
-- Preserves evidence required for judicial review and audit.
-
-### Citation-Threshold Hearing Triggers
-
-Citation Processor owns trigger emission when Tier 1 findings cross configured citation thresholds:
-
-- Threshold crossing -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`, routed to Assay.
-
-### Assay Evidence Path
-
-During hearings and deadlock adjudication, Assay queries Citation Processor for supporting citation evidence. Evidence retrieval is mandatory for hearing-quality deliberation and audit traceability.
 
 ## Archivist
 
@@ -215,34 +197,33 @@ Hearings are implemented as a protocol across services and runtime actors, not a
 
 Hearing processing uses standard Workitems with explicit governed artefacts and contract bindings. No hearing-specific Workitem subtype or `spec.type` discriminator is introduced.
 
-Trigger ownership is split by condition:
+Trigger ownership is consolidated in the Librarian:
 
-- Citation threshold trigger -> Citation Processor.
-- TTL-expiry trigger -> Librarian.
+- Friction-threshold trigger (Tier 1 Finding) -> Librarian queries Flow Monitor, detects threshold crossing.
+- TTL-proximity trigger (Tier 1 or Tier 2) -> Librarian detects law entering configurable window before TTL expiry.
 
 Execution and adjudication path:
 
-1. Triggering service requests hearing Workitem creation through the Operator, supplying hearing artefacts including `lawId`.
+1. Librarian requests hearing Workitem creation through the Operator, supplying hearing artefacts including `lawId`.
 2. Operator admits and assigns the hearing Workitem to Assay using Assay's bound hearing entry contract.
-3. Assay retrieves citation evidence from Citation Processor and legal context from Librarian.
+3. Assay retrieves the law's friction data from the Flow Monitor (via Sidecar) and legal context from the Librarian.
 4. Assay issues a tier-appropriate verdict and calls `complete()`.
 5. Operator validates Assay's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions.
 
 ```mermaid
 sequenceDiagram
-    participant TR as Trigger Service
+    participant LB as Librarian
     participant OP as Operator
     participant AS as Assay
     participant SC as Sidecar
-    participant CP as Citation Processor
-    participant LB as Librarian
+    participant FM as Flow Monitor
 
-    TR->>OP: create hearing Workitem (lawId artefact)
+    LB->>OP: create hearing Workitem (lawId artefact)
     OP->>AS: assign hearing via entry binding
-    AS->>SC: query citation evidence
-    SC->>CP: citation evidence request
-    CP-->>SC: citation record set
-    SC-->>AS: citation record set
+    AS->>SC: query friction for law
+    SC->>FM: friction query (by law_id)
+    FM-->>SC: friction data
+    SC-->>AS: friction data
     AS->>SC: query law context
     SC->>LB: law context request
     LB-->>SC: law versions and tiers
@@ -255,16 +236,17 @@ sequenceDiagram
 
 Verdict schema is tier-specific:
 
-- **Citation-threshold hearing (Tier 1):** `Promote` or `Retain`.
-- **Tier 1 TTL-expiry hearing:** `Retire` or `Promote`.
-- **Tier 2 TTL-expiry hearing:** `Demote` or `Promote` (petition for Tier 3 ratification).
+- **Friction-threshold hearing (Tier 1):** `Promote`.
+- **Tier 1 TTL-proximity hearing:** `Retire` or `Promote`.
+- **Tier 2 TTL-proximity hearing:** `Demote` or `Promote` (petition for Tier 3 ratification).
+
+Assay considers the law's accumulated friction and goal when rendering verdicts. There is no TTL reset — hearings produce a decisive outcome.
 
 ## Backup and Recovery Boundaries
 
 Service backup scope is explicit:
 
 - Librarian embedded stores and indexes: service-owned backup process.
-- Citation Processor ledger store: service-owned backup process.
 - Archivist SQLite provenance store: service-owned backup process.
 - Archivist blob store (PVC-backed or object storage): service-owned backup and restore process consistent with storage backend.
 
@@ -275,7 +257,7 @@ Infrastructure-owned scope remains external to services:
 Recovery ordering must preserve referential integrity:
 
 1. Restore control-plane CRDs (infrastructure domain).
-2. Restore Librarian and Citation Processor stores.
+2. Restore Librarian stores.
 3. Restore Archivist SQLite provenance.
 4. Restore Archivist blob content.
 5. Reconcile and verify provenance references and governance continuity.
@@ -290,10 +272,11 @@ Core call paths are stable:
 - Operator <-> Archivist: completion validation queries and artefact presence checks.
 - Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
 - Sidecar <-> Librarian: law retrieval and legal-context queries.
-- Sidecar <-> Citation Processor: citation submission and citation evidence query paths.
-- Assay (via Sidecar) <-> Citation Processor: hearing evidence queries.
+- Sidecar <-> Flow Monitor: friction emission, friction queries, and telemetry signals.
+- Librarian -> Flow Monitor: friction queries for law lifecycle threshold evaluation.
 - Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
 - Assay (via Sidecar) <-> Codification Services: encode requests during law promotion.
+- Assay (via Sidecar) <-> Flow Monitor: friction queries for hearing evidence.
 - Services -> Flow Monitor: metrics, traces, and audit events.
 
 Contract failures must return structured errors aligned with [Error Catalog](../05-reference/error-catalog.md).
@@ -303,11 +286,10 @@ Contract failures must return structured errors aligned with [Error Catalog](../
 Service outages degrade behaviour predictably:
 
 - Archivist unavailable: artefact mutation and provenance queries fail closed; Workitems cannot progress through affected steps.
-- Librarian unavailable: law retrieval and law lifecycle actions fail closed.
+- Librarian unavailable: law retrieval and law lifecycle actions fail closed. Hearing trigger evaluation pauses until the Librarian recovers.
 - LLM contradiction evaluator unavailable: higher-tier law activation pauses in queued state; integration retries with backoff and raises operational alerts.
-- Citation Processor unavailable: hearing evidence retrieval and threshold-trigger automation are blocked; explicit operational intervention is required.
+- Flow Monitor unavailable: processing continues, but observability coverage degrades, friction queries return errors, and hearing threshold evaluation is blocked until recovery. Alerting is raised.
 - Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Governance hardening (codification) degrades gracefully — Assay can mint prose-only rulings when Codification Services are unavailable.
-- Flow Monitor unavailable: processing continues, but observability coverage degrades and alerting is raised.
 
 Fail-open behaviour is prohibited for governance integrity paths.
 
@@ -318,9 +300,9 @@ All deployments preserve these service invariants:
 1. Archivist is the source of truth for artefact provenance beyond raw bytes.
 2. Workitem CRD stores artefact references only (`id`, `kind`).
 3. Laws are single objects with one goal and multiple representations under whole-law versioning.
-4. Citation threshold hearing triggers are emitted by Citation Processor.
-5. TTL-expiry hearing triggers are emitted by Librarian.
-6. Assay evidence retrieval includes Citation Processor data.
+4. Friction-threshold hearing triggers are emitted by the Librarian based on Flow Monitor queries.
+5. TTL-proximity hearing triggers are emitted by the Librarian.
+6. Assay evidence retrieval includes friction data from the Flow Monitor.
 7. Hearing adjudication remains an Assay responsibility, not a service-local shortcut.
 8. Friction is first-class and queryable by source attribution.
 9. Backup ownership boundaries are explicit between services and cluster administration.

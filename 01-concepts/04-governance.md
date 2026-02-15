@@ -23,18 +23,17 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 ### Organic Discovery (Tiers 1–2)
 
-Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if uncited. The [Citation Processor](../02-flow/04-system-services.md) tracks usage: how often each law is cited, by which nodes, and whether those citations are compliant (the law functioned as a guardrail) or conflicting (the law forced a correction).
+Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if unused. Nodes that use a law [cite](../04-sdk/03-sdk-legal.md#citation) it through the SDK, which records a low-magnitude [friction](./00-overview.md#friction) event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the [Librarian](../02-flow/04-system-services.md) periodically queries the accumulated friction on each law.
 
-Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate citation data that can trigger a **review hearing**. The [Citation Processor](../02-flow/04-system-services.md) detects when a Finding crosses a configurable citation threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node.
+Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate friction that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding's friction crosses a configurable threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node.
 
-Assay evaluates the Finding's history and renders a verdict:
+Assay evaluates the Finding's friction level and goal, and renders a verdict:
 
 | Verdict | Effect |
 |---------|--------|
 | **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a configurable TTL |
-| **Retain** | Finding's TTL is reset. It continues as Tier 1. |
 
-A Finding that is neither cited enough to trigger promotion nor cited at all will expire at its TTL and enter a [TTL-expiry hearing](#decay-and-retirement).
+A Finding that does not accumulate enough friction to trigger promotion will expire at its TTL and enter a [TTL-proximity hearing](#decay-and-retirement).
 
 ### Administered Policy (Tier 3)
 
@@ -48,7 +47,7 @@ The [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node is t
 
 1. **Feedback deadlock.** When a [feedback](./03-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, the gate node (in the [reference arrangement](./02-foundry-cycle.md), [Sort](./02-foundry-cycle.md#sort-gate)) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
 
-2. **Review hearing.** When a law's citation count or TTL triggers a review, Assay renders a verdict. Citation-threshold hearings use [Promote / Retain](#organic-discovery-tiers-12). TTL-expiry hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2. Hearings use standard Workitems with explicit governed artefacts, including a `lawId` reference for the law under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
+2. **Review hearing.** When a law's friction level or TTL triggers a review, Assay renders a verdict. Friction-threshold hearings for Tier 1 use [Promote](#organic-discovery-tiers-12). TTL-proximity hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2. Hearings use standard Workitems with explicit governed artefacts, including a `lawId` reference for the law under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
 
 Assay's verdicts are enforced by the [Contempt Guard](./03-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
@@ -64,8 +63,8 @@ The promotion path runs upward through the tiers:
 
 ```mermaid
 flowchart LR
-    T1["Tier 1<br/>Finding"] -->|"citation threshold<br/>+ Assay verdict"| T2["Tier 2<br/>Ruling"]
-    T2 -->|"citation threshold<br/>+ Assay proposal<br/>+ HITL ratification"| T3["Tier 3<br/>Local Statute"]
+    T1["Tier 1<br/>Finding"] -->|"friction threshold<br/>+ Assay verdict"| T2["Tier 2<br/>Ruling"]
+    T2 -->|"Assay proposal<br/>+ HITL ratification"| T3["Tier 3<br/>Local Statute"]
 ```
 
 Tier 1 to Tier 2 is automatic upon Assay's verdict. Tier 2 to Tier 3 is never automatic — Assay can propose a statute, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
@@ -74,7 +73,7 @@ Promotion is also where governance can harden in *form*, not just authority. Whe
 
 ### Decay and Retirement
 
-Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Librarian](../02-flow/04-system-services.md) triggers creation of a Workitem for review-hearing processing rather than letting the law expire silently. Assay evaluates the case — using citation history from the [Citation Processor](../02-flow/04-system-services.md) as evidence — and renders a tier-specific verdict:
+Laws below Tier 3 decay if unused. When a law enters a configurable window before its TTL expiry, the [Librarian](../02-flow/04-system-services.md) triggers creation of a Workitem for review-hearing processing rather than letting the law expire silently. Assay evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
 
 **Tier 1 Finding — TTL expiry:**
 
@@ -87,10 +86,10 @@ Laws below Tier 3 decay if uncited. When a law's TTL approaches expiry, the [Lib
 
 | Verdict | Effect |
 |---------|--------|
-| **Demote** | Ruling drops to Tier 1 Finding (fresh TTL). Citation history does not carry over. |
+| **Demote** | Ruling drops to Tier 1 Finding (fresh TTL). |
 | **Promote** | Assay petitions for Tier 3 Statute (HITL ratification required). |
 
-Every hearing produces either a renewed mandate or a deliberate retirement.
+Every hearing produces either a renewed mandate or a deliberate retirement. There is no TTL reset — hearings are decisive.
 
 Retired laws are deleted. The full history — creation, citations, conflicts, retirement — is preserved in the audit log.
 

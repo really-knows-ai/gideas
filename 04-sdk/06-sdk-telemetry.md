@@ -12,6 +12,8 @@ Describe metrics, traces, logs, and friction emission APIs available to handlers
 
 Friction is additive. Callers emit a magnitude and optional law attribution; the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates the raw events post-hoc across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). There is no caller-side operation selection — every emission adds to the total.
 
+[`Cite(law_ids)`](./03-sdk-legal.md#citation) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Librarian](../02-flow/04-system-services.md#librarian) uses to evaluate friction-threshold hearing triggers.
+
 ### AddFriction — Node Context
 
 When called from a node handler, the Sidecar automatically injects identity context. The node SDK surface accepts only semantic data:

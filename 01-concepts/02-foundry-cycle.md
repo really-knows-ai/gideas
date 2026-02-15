@@ -43,7 +43,7 @@ Refine addresses feedback. It reads the applicable laws for the artefact kind, r
 
 Assay is the judiciary. Unlike the five roles above, Assay is built into the runtime — every Flow includes it, and Flow Architects do not choose whether to include it.
 
-Assay is invoked for deadlocked feedback disputes and for review hearings triggered by citation thresholds or TTL expiry. It deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent). Assay does not write Tier 1 Findings — Tier 2 Rulings are both the floor and the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./04-governance.md). Its full [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
+Assay is invoked for deadlocked feedback disputes and for review hearings triggered by friction thresholds or TTL proximity. It deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent). Assay does not write Tier 1 Findings — Tier 2 Rulings are both the floor and the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./04-governance.md). Its full [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
 
 ---
 

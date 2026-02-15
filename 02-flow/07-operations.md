@@ -31,7 +31,6 @@ flowchart LR
     SC["Sidecar"] --> FM
     ND["Nodes"] --> FM
     LB["Librarian"] --> FM
-    CP["Citation Processor"] --> FM
     AR["Archivist"] --> FM
 
     FM --> MT["Metrics sink"]
@@ -102,7 +101,6 @@ Backup ownership is split by storage authority:
 |---|---|---|
 | Workitem and config CRDs in etcd | Cluster administration | etcd backup and restore |
 | Librarian stores and indexes | Service operations | service-level snapshots and restore |
-| Citation Processor ledger | Service operations | service-level snapshots and restore |
 | Archivist SQLite provenance | Service operations | snapshot and restore |
 | Archivist blob content | Service operations | backend-consistent backup and restore |
 | Audit pipeline storage | Platform/audit owner | retention and restore according to policy |
@@ -114,7 +112,7 @@ Workitem CRD backup is not handled by application services.
 Recovery order is fixed to preserve referential and governance integrity:
 
 1. Restore etcd control-plane state (CRDs and configuration).
-2. Restore Librarian and Citation Processor stores.
+2. Restore Librarian stores.
 3. Restore Archivist SQLite provenance store.
 4. Restore Archivist blob content store.
 5. Run reconciliation and integrity verification.

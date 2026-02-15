@@ -20,9 +20,9 @@ Define methods for artefact bytes, version history, feedback, and stamp operatio
 
 Define methods for law retrieval, law mutation paths, and governance queries.
 
-## Citation Processor API
+## Flow Monitor API
 
-Define methods for citation recording, citation aggregation, and threshold queries.
+Define methods for friction queries, telemetry ingestion, and audit event retrieval.
 
 ## Sidecar-Mediated SDK Paths
 
