@@ -80,7 +80,7 @@ For requests that pass local validation, the Sidecar forwards them to the author
 
 - **Operator**: whether the routing instruction is valid and the node holds appropriate bindings. Only [exit-bound](../02-flow/05-configuration.md#exit-node-semantics) nodes may call `complete()`.
 - **Archivist**: whether the node holds the required capability for the requested operation (e.g., `STAMP:artefact/<kind>/<stamp-name>` for stamp operations), and whether the operation is consistent with current artefact state (e.g., write-once stamp enforcement). The Archivist also enforces the [Contempt Guard](../01-concepts/03-data-model.md#contempt-guard) — attempts to refuse feedback that carries a linked Assay ruling are rejected as contempt violations.
-- **Librarian**: whether the node holds `READ:law` or `WRITE:law/finding` capability for the requested operation.
+- **Librarian**: whether the node holds `READ:law` or the required `WRITE:law/tierN` capability for the requested operation.
 - **Support Services**: whether the node holds the required `USE:support/<service>/<capability>` grant for the requested operation.
 
 Capability grants are defined in the [FoundryNode CRD](../02-flow/05-configuration.md#stamp-grant-and-capability-semantics) and evaluated by each service against the node identity that the Sidecar presents.

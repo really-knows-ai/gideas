@@ -161,7 +161,7 @@ The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrange
 Reference arrangement expectations:
 
 - [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) performs creation and reads laws only.
-- [Quench](../01-concepts/02-foundry-cycle.md#quench-validator) performs deterministic checks.
+- [Quench](../01-concepts/02-foundry-cycle.md#quench-deterministic-validator) performs deterministic checks.
 - [Appraise](../01-concepts/02-foundry-cycle.md#appraise-reviewer) performs subjective review.
 - Sort performs gate routing and final approval checkpoint in the reference arrangement.
 - [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner) addresses unresolved feedback.

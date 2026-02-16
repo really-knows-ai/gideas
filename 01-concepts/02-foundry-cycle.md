@@ -12,7 +12,7 @@ Assay is the exception. It is a standard runtime component present in every Flow
 
 ### Forge (Creator)
 
-Forge creates the initial artefact. Before generation, it reads the Flow's [Library](../02-flow/04-system-services.md#librarian) of applicable [law](./03-data-model.md#laws), filtered by artefact kind, and seeds it into its context — so the creator knows the rules before it starts. In the reference arrangement, Forge reads laws exclusively; it does not write them. The platform enforces this through capability grants: a node without `WRITE:law` capability cannot write laws regardless of its role.
+Forge creates the initial artefact. Before generation, it reads the Flow's [Library](../02-flow/04-system-services.md#librarian) of applicable [law](./03-data-model.md#laws), filtered by artefact kind, and seeds it into its context — so the creator knows the rules before it starts. In the reference arrangement, Forge reads laws exclusively; it does not write them. The platform enforces this through capability grants: a node without a `WRITE:law/tierN` capability grant cannot write laws regardless of its role.
 
 ### Quench (Deterministic Validator)
 
@@ -20,7 +20,7 @@ Quench performs deterministic validation. It queries the law body for executable
 
 ### Appraise (Reviewer)
 
-Appraise conducts subjective review. It reads the applicable laws for the artefact kind and orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against them. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise holds the `WRITE:law/finding` capability and can record Tier 1 [Findings](./03-data-model.md#law-tiers) — emergent patterns observed during review.
+Appraise conducts subjective review. It reads the applicable laws for the artefact kind and orchestrates a panel of specialist reviewers (AI agents, human reviewers, or both) who evaluate the artefact against them. Appraise intentionally preserves contradictions in its feedback — resolving them is Refine's job. In the reference arrangement, Appraise holds the `WRITE:law/tier1` capability and can record Tier 1 [Findings](./03-data-model.md#law-tiers) — emergent patterns observed during review.
 
 ### Sort (Gate)
 
@@ -37,13 +37,13 @@ Sort queries artefact state through the [SDK](../04-sdk/01-sdk-core.md) — `art
 
 ### Refine (Refiner)
 
-Refine addresses feedback. It reads the applicable laws for the artefact kind, reviews the consolidated (potentially contradictory) feedback, produces a new artefact version, and must address every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured [justification](./03-data-model.md#forced-choice-justification): either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine holds the `WRITE:law/finding` capability and can record Tier 1 Findings.
+Refine addresses feedback. It reads the applicable laws for the artefact kind, reviews the consolidated (potentially contradictory) feedback, produces a new artefact version, and must address every item — marking each as *actioned* or *Won't Fix*. A Won't Fix requires a structured [justification](./03-data-model.md#forced-choice-justification): either a citation of existing law or a novel argument proposing new reasoning. In the reference arrangement, Refine holds the `WRITE:law/tier1` capability and can record Tier 1 Findings.
 
 ### Assay (Judiciary — Standard Component)
 
 Assay is the judiciary. It is built into the runtime as a standard component — every Flow includes it, and Flow Architects do not choose whether to include it.
 
-Assay is invoked for deadlocked feedback disputes and for review hearings triggered by friction thresholds or TTL proximity. It deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent). Assay does not write Tier 1 Findings — Tier 2 Rulings are both the floor and the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./04-governance.md). Its full [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
+Assay is invoked for deadlocked feedback disputes and for review hearings triggered by friction thresholds or TTL proximity. It deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent). Assay holds the `WRITE:law/tier2` capability — Tier 2 Rulings are both the floor and the ceiling of its judicial authority, and the ceiling grant also covers Tier 1. Assay does not write Tier 1 Findings by convention; its role is judicial, not observational. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./04-governance.md). Its full [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
 
 ---
 
@@ -89,7 +89,7 @@ flowchart TD
     Assay -.->|writes Tier 2| Library
 ```
 
-Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) — any node granted the `WRITE:law/finding` capability can do the same, regardless of whether it bears one of these names. Assay alone mints Tier 2 Rulings (binding precedent). Its [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
+Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) — any node granted the `WRITE:law/tier1` capability can do the same, regardless of whether it bears one of these names. Assay holds `WRITE:law/tier2` and mints Tier 2 Rulings (binding precedent). Its [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
 
 The underlying platform mechanism is capability-gated law access. Law read and write permissions are granted per node through the FoundryNode CRD. The reference arrangement maps these capabilities to specific roles, but a custom topology can distribute them differently.
 

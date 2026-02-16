@@ -136,7 +136,7 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 | Condition | Error | gRPC Status |
 |-----------|-------|-------------|
 | Missing `READ:law` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
-| Missing `WRITE:law/finding` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
+| Missing `WRITE:law/tier1` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
 | Cited law does not exist or is retired | `LAW_NOT_FOUND` | `NOT_FOUND` |
 | Finding goal exceeds maximum length | `MESSAGE_TOO_LONG` | `INVALID_ARGUMENT` |
 | Librarian service unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |

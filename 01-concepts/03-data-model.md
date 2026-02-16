@@ -33,7 +33,7 @@ stateDiagram-v2
     Pending --> Running : assign()
     Running --> Pending : route()
     Running --> Completed : complete()
-    Running --> Failed : timeout()\nthrash()\nerror()
+    Running --> Failed : timeout()<br/>thrash()<br/>error()
     Pending --> Failed : fail()
     Completed --> [*]
     Failed --> [*]
@@ -160,7 +160,7 @@ Validation is stamp-based, not identity-based. The specific node that applied a 
 
 ### Passports and Stamps
 
-Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) database, scoped to Workitem ID and artefact `id` — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../04-sdk/01-sdk-core.md) Artefact object (`artefact.getPassport()`, `artefact.getStamps()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
+Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) database, scoped to Workitem ID and artefact `id` — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../04-sdk/01-sdk-core.md) (`GetArtefactMetadata(id)`, `GetStamps(id)`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
 ```mermaid
 flowchart LR
@@ -202,7 +202,7 @@ Stamps are cryptographically bound to the artefact's content through the `hash` 
 
 [Feedback](./00-overview.md) is threaded, artefact-scoped, and adversarial by design. A structured protocol forces every disagreement into the open and demands justification for every refusal.
 
-Feedback lives in the [Archivist's](../02-flow/04-system-services.md) database, scoped to Workitem ID and artefact `id`. Each feedback item is tagged with the artefact version hash it was raised against. All feedback is preserved across versions — when new content is stored, existing feedback remains queryable and relevant. Nodes access feedback through the [SDK](../04-sdk/01-sdk-core.md) Artefact object (`artefact.getFeedback()`, `artefact.hasUnresolvedFeedback()`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
+Feedback lives in the [Archivist's](../02-flow/04-system-services.md) database, scoped to Workitem ID and artefact `id`. Each feedback item is tagged with the artefact version hash it was raised against. All feedback is preserved across versions — when new content is stored, existing feedback remains queryable and relevant. Nodes access feedback through the [SDK](../04-sdk/01-sdk-core.md) (`GetFeedback(artefactId)`, `HasUnresolvedFeedback(artefactId)`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
 ### Structure
 
@@ -246,20 +246,20 @@ stateDiagram-v2
     [*] --> new : AddFeedback()
 
     new --> actioned : ResolveFeedback()
-    new --> wont_fix : RefuseFeedback()\nwith Justification
+    new --> wont_fix : RefuseFeedback()<br/>with Justification
 
     actioned --> resolved : AcceptFix()
     actioned --> rejected : RejectFix()
 
     wont_fix --> resolved : AcceptRefusal()
     wont_fix --> rejected : RejectRefusal()
-    wont_fix --> deadlocked : Gate node detects\nexcessive depth
+    wont_fix --> deadlocked : Gate node detects<br/>excessive depth
 
     rejected --> actioned : ResolveFeedback()
-    rejected --> deadlocked : Gate node detects\nexcessive depth
+    rejected --> deadlocked : Gate node detects<br/>excessive depth
 
-    deadlocked --> wont_fix : Assay verdict\n(favours refiner;\nlinkedRuling set)
-    deadlocked --> rejected : Assay verdict\n(favours reviewer;\nlinkedRuling set)
+    deadlocked --> wont_fix : Assay verdict<br/>(favours refiner;<br/>linkedRuling set)
+    deadlocked --> rejected : Assay verdict<br/>(favours reviewer;<br/>linkedRuling set)
 
     resolved --> [*]
 ```
@@ -366,7 +366,7 @@ Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
-| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/finding` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer) and [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
+| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer) and [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
 | 2 | **Ruling** | Single Flow | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./04-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
@@ -380,7 +380,7 @@ Tier 2 Rulings are binding precedent. They are minted when Assay resolves a disp
 
 Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows (no Governance Flow), these are CRDs applied by an administrator. Under a Governance Flow, the local legislative cycle can also produce them.
 
-Tiers 4 and 5 arrive from above. A standalone Flow has no Tiers 4 or 5 — they require a [Governance Flow](./04-governance.md) and Federation respectively. The [Governance Flow](./04-governance.md) produces Tier 4 State Constitution laws through the same [Foundry Cycle](./00-overview.md) as any other Flow (its governed artefacts are the laws themselves), and synchronises Tier 5 Federal Accords from upstream authorities.
+Tiers 4 and 5 arrive from above. A standalone Flow has no Tiers 4 or 5 — they require a [Governance Flow](./04-governance.md) and Federation respectively. The [Governance Flow](./04-governance.md) produces Tier 4 State Constitution laws through the same [Foundry Cycle](./02-foundry-cycle.md) as any other Flow (its governed artefacts are the laws themselves), and synchronises Tier 5 Federal Accords from upstream authorities.
 
 The full integration protocol — how higher-tier laws are pushed to Flows, how conflicts are detected and resolved, and how escalation works across tiers — is covered in [Governance](./04-governance.md).
 

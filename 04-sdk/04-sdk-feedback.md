@@ -34,20 +34,20 @@ stateDiagram-v2
     [*] --> new : AddFeedback()
 
     new --> actioned : ResolveFeedback()
-    new --> wont_fix : RefuseFeedback()\nwith Justification
+    new --> wont_fix : RefuseFeedback()<br/>with Justification
 
     actioned --> resolved : AcceptFix()
     actioned --> rejected : RejectFix()
 
     wont_fix --> resolved : AcceptRefusal()
     wont_fix --> rejected : RejectRefusal()
-    wont_fix --> deadlocked : Gate node detects\nexcessive depth
+    wont_fix --> deadlocked : Gate node detects<br/>excessive depth
 
     rejected --> actioned : ResolveFeedback()
-    rejected --> deadlocked : Gate node detects\nexcessive depth
+    rejected --> deadlocked : Gate node detects<br/>excessive depth
 
-    deadlocked --> wont_fix : Assay verdict\n(favours refiner;\nlinkedRuling set)
-    deadlocked --> rejected : Assay verdict\n(favours reviewer;\nlinkedRuling set)
+    deadlocked --> wont_fix : Assay verdict<br/>(favours refiner;<br/>linkedRuling set)
+    deadlocked --> rejected : Assay verdict<br/>(favours reviewer;<br/>linkedRuling set)
 
     resolved --> [*]
 ```

@@ -6,7 +6,7 @@ Node handlers execute within strict runtime boundaries: single-assignment scope,
 
 - **Deterministic at boundaries.** Routing decisions and side-effect commits must produce the same outcome when replayed against the same state. Non-determinism in business logic (LLM inference, heuristic evaluation) is acceptable; non-determinism in control-flow decisions is not.
 - **Auditable by construction.** Every material decision — artefact mutation, feedback state change, routing outcome — must be reconstructable from the audit trail. Hidden state that affects outcomes without leaving a trace violates the [auditability axiom](../01-concepts/00-overview.md).
-- **Capability-aware.** Handlers must anticipate permission denial as a normal control path, not an exceptional one. A node that lacks `WRITE:law/finding` capability will receive a structured error if it attempts to record a Finding. The handler decides what that means for routing.
+- **Capability-aware.** Handlers must anticipate permission denial as a normal control path, not an exceptional one. A node that lacks `WRITE:law/tier1` capability will receive a structured error if it attempts to record a Finding. The handler decides what that means for routing.
 - **Assignment-scoped.** All execution state is rebuilt from [Workitem](../02-flow/02-workitem.md) and [Archivist](../02-flow/04-system-services.md#archivist) state at the start of each assignment. Pod-local memory from a previous assignment is not a valid input.
 
 ## Idempotent Assignment Handlers

@@ -43,7 +43,7 @@ Requires `READ:law` capability — a node that cannot read laws has no basis for
 
 ## Finding Creation
 
-Nodes with the `WRITE:law/finding` capability can record Tier 1 [Findings](../01-concepts/03-data-model.md#law-tiers) — observations that emerge from work.
+Nodes with the `WRITE:law/tier1` capability can record Tier 1 [Findings](../01-concepts/03-data-model.md#law-tiers) — observations that emerge from work.
 
 | Operation | Parameters |
 |-----------|-----------|
@@ -61,8 +61,8 @@ Finding creation is the only law-writing operation available through the node SD
 
 | Tier | Write Authority | SDK Available |
 |------|----------------|---------------|
-| 1 — Finding | Nodes with `WRITE:law/finding` | Yes — `RecordFinding` |
-| 2 — Ruling | [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) only | No |
+| 1 — Finding | Nodes with `WRITE:law/tier1` | Yes — `RecordFinding` |
+| 2 — Ruling | [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) (`WRITE:law/tier2`) | No |
 | 3 — Local Statute | Flow Architect (human-administered or local legislative cycle) | No |
 | 4 — State Constitution | [Governance Flow](../01-concepts/04-governance.md#the-governance-flow) | No |
 | 5 — Federal Accord | Federation | No |
@@ -91,7 +91,7 @@ Legal operations map to capability requirements enforced by the [Librarian](../0
 |-----------|-------------------|-------------------|
 | `QueryLaws` (all modes) | `READ:law` | Librarian |
 | `Cite` | `READ:law` | Librarian (via Flow Monitor) |
-| `RecordFinding` | `WRITE:law/finding` | Librarian |
+| `RecordFinding` | `WRITE:law/tier1` | Librarian |
 
 Missing capabilities produce a `CAPABILITY_DENIED` error from the Librarian, forwarded through the Sidecar as a structured error. The node does not learn what capabilities it lacks — the error indicates the operation was denied, not which specific grant is missing.
 
@@ -99,7 +99,7 @@ Missing capabilities produce a `CAPABILITY_DENIED` error from the Librarian, for
 
 | Error | Cause | Retry |
 |-------|-------|-------|
-| `CAPABILITY_DENIED` | Node lacks `READ:law` or `WRITE:law/finding` | No — permanent until configuration changes |
+| `CAPABILITY_DENIED` | Node lacks `READ:law` or `WRITE:law/tier1` | No — permanent until configuration changes |
 | `LAW_NOT_FOUND` | Cited law has been retired or does not exist | No — the law is gone |
 | `SERVICE_UNAVAILABLE` | Librarian is temporarily unreachable | Yes — transient, use exponential backoff |
 | `MESSAGE_TOO_LONG` | Finding goal exceeds maximum length | No — reduce content length |
@@ -111,7 +111,7 @@ Missing capabilities produce a `CAPABILITY_DENIED` error from the Librarian, for
 ## Legal SDK Invariants
 
 1. `READ:law` is required for all law queries and citations.
-2. `WRITE:law/finding` is required to record Tier 1 Findings. No other tier is writable through the SDK.
+2. `WRITE:law/tier1` is required to record Tier 1 Findings. No other tier is writable through the SDK.
 3. Query results return full law objects — filters gate inclusion, never strip representations.
 4. `Cite` emits friction at a fixed magnitude. The node cannot override the magnitude.
 5. `RecordFinding` is eventually consistent — the Finding is writable immediately but queryable after indexing.

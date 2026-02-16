@@ -74,7 +74,7 @@ Completion semantics are configuration-bound:
 
 Law and stamp access is capability-gated:
 
-- A node without `WRITE:law` capability cannot write laws regardless of its role. In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) node reads laws for context seeding and does not write them.
+- A node without a `WRITE:law/tierN` capability grant cannot write laws regardless of its role. In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) node reads laws for context seeding and does not write them.
 - [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) resolves Tier 1-2 conflicts, proposes Tier 3 changes, and appeals Tier 4-5 conflicts.
 
 ## Relationship to SDK Documents

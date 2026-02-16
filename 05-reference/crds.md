@@ -47,7 +47,7 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 | `hearingEntryContract` | `string` | yes | Name of the entry contract bound to Assay for hearing admission. Must reference a key in `entryContracts`. |
 | `hearingExitContract` | `string` | yes | Name of the exit contract bound to Assay for hearing completion. Must reference a key in `exitContracts`. |
 
-Assay is a runtime-mandated component — the Operator provisions it from the `AssayConfig` without requiring a separate FoundryNode CRD. Its entry and exit bindings are derived from `hearingEntryContract` and `hearingExitContract`. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include the permissions required for judicial review: law reads, friction queries, feedback resolution, stamp application for hearing artefacts, and Codification Service access.
+Assay is a runtime-mandated component — the Operator provisions it from the `AssayConfig` without requiring a separate FoundryNode CRD. Its entry and exit bindings are derived from `hearingEntryContract` and `hearingExitContract`. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and Codification Service access.
 
 ### Governance Policy
 
@@ -130,7 +130,11 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:artefact` | Write artefact content (all kinds). |
 | `WRITE:artefact/<kind>` | Write artefact content scoped to a specific kind. |
 | `READ:law` | Query laws from the Library. |
-| `WRITE:law/finding` | Record Tier 1 Findings. Node-level ceiling for law writes. |
+| `WRITE:law/tier1` | Write Tier 1 laws (Findings). |
+| `WRITE:law/tier2` | Write Tier 2 and below (Rulings, Findings). |
+| `WRITE:law/tier3` | Write Tier 3 and below (Local Statutes, Rulings, Findings). |
+| `WRITE:law/tier4` | Write Tier 4 and below (State Constitutions and all lower tiers). |
+| `WRITE:law/tier5` | Write Tier 5 and below (all tiers). |
 | `STAMP:artefact/<kind>/<stamp-name>` | Apply a named stamp to a specific artefact kind. Exact match on both kind and stamp name. |
 | `READ:flow` | Query Flow topology and configuration. Enables stamp-to-node mapping discovery. |
 | `READ:workitem` | Read Workitem state beyond the current assignment. |
@@ -155,7 +159,7 @@ Immutable after creation.
 |-------|------|----------|-------------|
 | `intent` | `string` | yes | Human-readable statement of the Workitem's purpose. |
 | `priority` | `string` | yes | `low`, `medium`, `high`, or `critical`. Influences scheduling order. |
-| `artefacts` | `[]ArtefactRef` | no | Initial artefact references. Additional references can be added during processing. |
+| `artefacts` | `[]ArtefactRef` | no | Initial artefact references at creation time. The running artefact list is maintained in `status.artefacts`. |
 
 ### ArtefactRef
 
@@ -174,7 +178,7 @@ Managed by the Operator. Nodes do not write to `status` directly.
 | `currentAssignee` | `string` | Node currently processing this Workitem. Empty when `Pending`. |
 | `previousAssignee` | `string` | Node that last processed this Workitem. |
 | `routingInstruction` | `RoutingInstruction` | Most recent routing outcome submitted by the assigned node. |
-| `artefacts` | `[]ArtefactRef` | Current artefact reference list. Refs can be added; existing `id`/`kind` pairs are immutable. |
+| `artefacts` | `[]ArtefactRef` | Current artefact reference list. Initialised from `spec.artefacts` at creation. Refs can be added during processing; existing `id`/`kind` pairs are immutable. |
 | `thrashCounters` | `map[string]integer` | Per-node visit counts. Hidden from nodes. The Thrash Guard triggers when the aggregate sum exceeds `governancePolicy.maxVisits`. |
 | `history` | `[]HistoryEntry` | Chronological record of assignments and transitions. Append-only. |
 
@@ -210,7 +214,6 @@ The GovernedArtefact CRD registers an artefact kind and declares its stamp vocab
 | `kind` | `string` | yes | Artefact kind identifier (e.g. `"petition-draft"`, `"haiku"`). Unique within the Flow namespace. |
 | `stamps` | `[]string` | no | Stamp vocabulary — the set of stamp names meaningful for this kind (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. |
 | `retention` | `RetentionPolicy` | no | Version retention policy for artefacts of this kind. |
-| `validityConditions` | `[]string` | no | Declarative validity conditions for artefacts of this kind. |
 
 ### RetentionPolicy
 
@@ -223,7 +226,7 @@ The GovernedArtefact CRD registers an artefact kind and declares its stamp vocab
 
 ## Law
 
-The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/finding` capability; Tier 2 Rulings are minted by Assay; Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Governance Flow and Federation. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
+The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by Assay (with `WRITE:law/tier2`); Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Governance Flow and Federation. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
 
 ### `spec`
 

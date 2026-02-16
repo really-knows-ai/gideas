@@ -8,7 +8,7 @@ A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./
 
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
-| **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/finding` capability ([Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) — Tier 1 [Findings](./03-data-model.md#law-tiers) |
+| **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/tier1` capability ([Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) — Tier 1 [Findings](./03-data-model.md#law-tiers) |
 | **Judiciary** | Resolves disputes, codifies precedent | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node — Tier 2 [Rulings](./03-data-model.md#law-tiers) |
 | **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
 | **Executive** | Enforces compliance | Gate node ([Sort](./02-foundry-cycle.md#sort-gate) in the reference arrangement), [Exit Contract](./03-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
@@ -113,7 +113,7 @@ Assay's power is constitutionally bounded:
 
 | Tier range | Authority | Action |
 |------------|-----------|--------|
-| Tier 1 | **None** | Assay does not write Tier 1 Findings. Tier 2 is both the floor and the ceiling of its judicial authority. |
+| Tier 1 | **None** (by convention) | Assay holds `WRITE:law/tier2` (which covers Tier 1), but does not write Findings — its role is judicial, not observational. Tier 2 Rulings are the exclusive output of its authority. |
 | Tier 2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings. |
 | Tier 3 | **Propose** | Drafts a proposal. HITL approves or rejects. |
 | Tier 4–5 | **Appeal** | Files an appeal to the Governance Flow. Cannot directly modify. |

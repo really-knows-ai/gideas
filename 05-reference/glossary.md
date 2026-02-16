@@ -6,7 +6,7 @@
 : The system service that manages artefact lifecycle data — version history, passport stamps, and feedback in an SQLite database; raw content bytes in a content-addressed blob store. The single source of truth for all artefact provenance. Detail: [System Services](../02-flow/04-system-services.md#archivist).
 
 **Assay**
-: The judicial node present in every Flow as a standard runtime component. Assay resolves deadlocked feedback disputes by minting Tier 2 Rulings and adjudicates review hearings triggered by friction thresholds or TTL proximity. Its authority ceiling is constitutionally bounded: resolve at Tier 2, propose at Tier 3, appeal at Tier 4-5. Assay does not write Tier 1 Findings. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component), [Governance](../01-concepts/04-governance.md#assays-authority-ceiling).
+: The judicial node present in every Flow as a standard runtime component. Assay holds `WRITE:law/tier2` and resolves deadlocked feedback disputes by minting Tier 2 Rulings. It adjudicates review hearings triggered by friction thresholds or TTL proximity. Its authority ceiling is constitutionally bounded: resolve at Tier 2, propose at Tier 3, appeal at Tier 4-5. Assay does not write Tier 1 Findings by convention — its role is judicial, not observational. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component), [Governance](../01-concepts/04-governance.md#assays-authority-ceiling).
 
 **assignment**
 : The binding of a single Workitem to a single node for processing. A Workitem has exactly one assignee at a time. The Sidecar establishes an assignment session and all SDK calls are automatically scoped to it. Detail: [Operator](../02-flow/01-operator.md), [SDK Core](../04-sdk/01-sdk-core.md).
@@ -24,7 +24,7 @@
 : An optional, Flow-Architect-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via their own CRD. Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
 
 **Forge** (reference arrangement)
-: The creator node. Generates artefacts seeded by law context queried from the Library. Reads all law tiers for context seeding but does not write laws — it lacks `WRITE:law` capability in the reference arrangement. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#forge-creator).
+: The creator node. Generates artefacts seeded by law context queried from the Library. Reads all law tiers for context seeding but does not write laws — it holds no `WRITE:law/tierN` grant in the reference arrangement. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#forge-creator).
 
 **Foundry Cycle**
 : The reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) demonstrating adversarial creation, validation, review, and refinement. Flow Architects adapt it to their context. The platform enforces behaviour through capabilities and configuration, not node names. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md).
@@ -42,7 +42,7 @@
 : The standard node topology (Forge, Quench, Appraise, Sort, Refine) provided by the Foundry Cycle. Distinguished from platform mechanisms, which are universal to every Flow regardless of topology. Assay is not part of the reference arrangement — it is a standard runtime component.
 
 **Refine** (reference arrangement)
-: The refiner node. Addresses feedback by modifying artefacts. Produces new artefact versions, driving the Workitem back through review. In the reference arrangement, Refine holds `WRITE:law/finding` capability. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#refine-refiner).
+: The refiner node. Addresses feedback by modifying artefacts. Produces new artefact versions, driving the Workitem back through review. In the reference arrangement, Refine holds `WRITE:law/tier1` capability. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#refine-refiner).
 
 **routing instruction**
 : The outcome a node returns after processing: `route_to_output` (named output channel), `route_to` (specific node), or `complete` (exit completion). The Operator validates and persists the instruction. Detail: [SDK Core](../04-sdk/01-sdk-core.md), [Workitem](../02-flow/02-workitem.md).
@@ -61,7 +61,7 @@
 ## Data and Provenance Terms
 
 **Appraise** (reference arrangement)
-: The reviewer node. Evaluates artefacts against the Library's body of law and raises feedback. In the reference arrangement, Appraise holds `WRITE:law/finding` capability and can record Tier 1 Findings. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#appraise-reviewer).
+: The reviewer node. Evaluates artefacts against the Library's body of law and raises feedback. In the reference arrangement, Appraise holds `WRITE:law/tier1` capability and can record Tier 1 Findings. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#appraise-reviewer).
 
 **artefact**
 : A governed output — a document, code file, data model, or anything a Flow produces. Versioned, content-addressed, and stored in the Archivist. The Workitem carries only a reference (`id` and `kind`); version history, stamps, and feedback live in the Archivist. Detail: [Data Model](../01-concepts/03-data-model.md#artefacts).

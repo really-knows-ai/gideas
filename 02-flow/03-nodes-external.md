@@ -82,16 +82,18 @@ Gate nodes in the reference arrangement discover stamp-provider routing targets 
 
 Assay participates in distinct runtime paths:
 
-- Deadlock adjudication for governed-work Workitems routed from Sort, then returned to Sort for re-evaluation in the reference arrangement.
-- Review-hearing processing, where Assay is both entry-bound and exit-bound and completes the hearing Workitem after verdict.
+- Deadlock adjudication: governed-work Workitems are *routed* to Assay (via `route_to`) by the gate node. The governed-work Workitem is already in flight — Assay adjudicates and returns it to Sort for re-evaluation in the reference arrangement.
+- Review-hearing processing: the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a *new* hearing Workitem, admitted through Assay's entry binding. Assay is both entry-bound and exit-bound for hearing Workitems. The hearing Workitem carries explicit hearing artefacts including a `lawId` reference; the governed-work Workitem that prompted the hearing is unaffected.
 
-Assay authority ceiling is fixed:
+The two paths are distinguished by admission mechanism: deadlock-escalated Workitems arrive through routing; hearing Workitems arrive through entry-contract admission as new Workitems.
 
-- Resolve Tier 1-2 conflicts and mint Tier 2 rulings.
+Assay authority ceiling is fixed (holds `WRITE:law/tier2`):
+
+- Resolve Tier 1-2 conflicts and mint Tier 2 Rulings.
 - Propose Tier 3 changes for human ratification.
 - Appeal Tier 4-5 conflicts to Governance Flow authorities.
 
-Assay does not write Tier 1 findings.
+Assay does not write Tier 1 Findings by convention; its role is judicial, not observational.
 
 ## External Integration Nodes
 
@@ -141,7 +143,7 @@ All node deployments preserve these invariants:
 1. Nodes execute through Operator and Sidecar contracts.
 2. Nodes do not mutate Workitem lifecycle fields directly.
 3. Routing outcomes are limited to `route_to_output`, `route_to`, or `complete`.
-4. Law writing is capability-gated; nodes without `WRITE:law` capability cannot write laws.
+4. Law writing is capability-gated; nodes without a `WRITE:law/tierN` capability grant cannot write laws.
 5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
 6. Assay is always present and constrained to resolve/propose/appeal at its authority ceiling.
 7. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Assay entry/exit bindings.

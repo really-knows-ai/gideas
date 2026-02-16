@@ -92,7 +92,7 @@ The runtime enforces behaviour through configuration and capabilities, not node 
 
 [Law](../01-concepts/03-data-model.md#laws) and [stamp](../01-concepts/03-data-model.md#passports-and-stamps) behaviour is enforced by the platform through capabilities and configuration:
 
-- Law writing is capability-gated. A node without `WRITE:law` capability cannot write laws regardless of its role or name.
+- Law writing is capability-gated. A node without a `WRITE:law/tierN` capability grant cannot write laws regardless of its role or name.
 - Laws are single objects with one goal and one-or-more representations; any mutation creates a new whole-law version.
 - Stamp names are named governance checkpoints chosen by the Flow Architect; the platform attaches no built-in semantics to names.
 - Stamp-provider routing is configuration-discovered. A node granted `READ:flow` capability can query the topology to discover stamp-to-node mappings at runtime.
@@ -175,7 +175,7 @@ The following invariants hold for every Flow deployment:
 1. A Workitem is assigned to exactly one node at a time.
 2. Flow routing decisions are enforced by the Operator.
 3. Sidecar mediates authenticated node access and write operations.
-4. Law writing is capability-gated; nodes without `WRITE:law` capability cannot write laws.
+4. Law writing is capability-gated; nodes without a `WRITE:law/tierN` capability grant cannot write laws.
 5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
 6. Stamps are named checkpoints with write-once-per-version behaviour.
 7. Exit completion is exit-node-only and Operator-validated against bound contracts.

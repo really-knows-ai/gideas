@@ -118,11 +118,10 @@ Each concern in the system maps to exactly one plane. When a node executes work,
 | Routing decisions | Control | Flow Operator |
 | Artefact lifecycle | Data | Archivist |
 | Law lifecycle | Governance | Librarian |
-| Friction tracking | Governance | Flow Monitor |
 | Dispute resolution | Governance | Assay node |
 | Authentication | Security | Sidecar |
 | Cryptographic stamps | Security | Sidecar |
-| Telemetry and audit | Control | Flow Monitor |
+| Telemetry, audit, and friction | Control | Flow Monitor |
 | Cross-flow transfer | Federation | Export / Import |
 | Tier 4/5 law authority | Federation | Governance Flow |
 | Configuration and deployment | Management | CRDs, deployment tooling |
