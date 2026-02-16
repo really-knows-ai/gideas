@@ -11,7 +11,6 @@ The handler receives a `Workitem` object at invocation. This object is a snapsho
 | `id` | string | Workitem identifier |
 | `state` | enum | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed` |
 | `currentAssignee` | string | Node currently assigned (this node, during handler execution) |
-| `previousAssignee` | string | Node that last held the assignment |
 
 The snapshot does not update during handler execution.
 

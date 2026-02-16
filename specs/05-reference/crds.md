@@ -32,7 +32,6 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 | `assay` | `AssayConfig` | yes | Assay hearing configuration. See [Assay configuration](#assay-configuration). |
 | `governancePolicy` | `GovernancePolicy` | yes | Governance thresholds and timers. See [governance policy](#governance-policy). |
 | `crossFlow` | `CrossFlowConfig` | no | Cross-flow trust and naturalisation settings. See [cross-flow configuration](#cross-flow-configuration). |
-| `supportServiceGrants` | `map[string][]string` | no | Maps node names to lists of `USE:support/<service>/<capability>` grants. Supplements per-node capability grants with Flow-level Support Service access control. |
 
 ### TopologyEdge
 
@@ -69,6 +68,12 @@ The Operator also provisions a `law-reference` GovernedArtefact kind alongside A
 |-------|------|----------|-------------|
 | `tier1ReviewHearing` | `float` | no | Accumulated friction on a Tier 1 Finding that triggers a review hearing. |
 | `tier2ReviewHearing` | `float` | no | Accumulated friction on a Tier 2 Ruling that triggers a review hearing. |
+
+### RetentionPolicy
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `maxAge` | `duration` | no | Maximum age of terminal Workitems before garbage collection. |
 
 ### Cross-Flow Configuration
 
@@ -171,10 +176,8 @@ Managed by the Operator. Nodes do not write to `status` directly.
 |-------|------|-------------|
 | `phase` | `string` | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed`. |
 | `currentAssignee` | `string` | Node currently processing this Workitem. Empty when `Pending`. |
-| `previousAssignee` | `string` | Node that last processed this Workitem. |
 | `routingInstruction` | `RoutingInstruction` | Most recent routing outcome submitted by the assigned node. |
 | `thrashCounters` | `map[string]integer` | Per-node visit counts. Hidden from nodes. The Thrash Guard triggers when the aggregate sum exceeds `governancePolicy.maxVisits`. |
-| `history` | `[]HistoryEntry` | Chronological record of assignments and transitions. Append-only. |
 
 ### RoutingInstruction
 
@@ -210,14 +213,6 @@ The GovernedArtefact CRD registers an artefact kind and declares its stamp vocab
 |-------|------|----------|-------------|
 | `kind` | `string` | yes | Artefact kind identifier (e.g. `"petition-draft"`, `"haiku"`). Unique within the Flow namespace. |
 | `stamps` | `[]string` | no | Stamp vocabulary — the set of stamp names meaningful for this kind (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. |
-| `retention` | `RetentionPolicy` | no | Version retention policy for artefacts of this kind. |
-
-### RetentionPolicy
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `maxVersions` | `integer` | no | Maximum number of versions to retain per artefact. |
-| `maxAge` | `duration` | no | Maximum age of retained versions. |
 
 ---
 
@@ -247,10 +242,6 @@ The Law object is managed by the [Librarian](../02-flow/04-system-services.md#li
 | Field | Type | Description |
 |-------|------|-------------|
 | `version` | `string` | Content hash of the current law version. Any mutation to `spec` produces a new hash. |
-| `citationCount` | `integer` | Number of times this law has been cited. |
-| `frictionAccumulated` | `float` | Total friction attributed to this law. |
-| `lastHearing` | `datetime` | Timestamp of the most recent review hearing for this law. |
-| `linkedRulings` | `[]string` | IDs of Tier 2 Rulings that superseded or consolidated this law. |
 
 ### Versioning
 
@@ -283,7 +274,7 @@ The FlowSupportService CRD declares an optional, Flow-Architect-deployed service
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `image` | `string` | yes | Container image for the Support Service. |
-| `capabilities` | `[]string` | yes | List of capability names this service exposes (e.g. `["encode"]`). These are "provided capabilities" (what the service offers), not "granted capabilities" (the verb-resource permission grammar used in [FoundryNode](#foundrynode)). |
+| `providesCapabilities` | `[]string` | yes | Capability names this service exposes (e.g. `["encode"]`). Nodes consume these via `USE:support/<service>/<capability>` grants on their [FoundryNode](#foundrynode) `capabilities` field. |
 | `deploymentStrategy` | `string` | no | `ReplicaSet` (default) or `StatefulSet`. |
 | `minReplicas` | `integer` | no | Minimum replica count. Default `0`, allowing scale-to-zero. Stateful services or services that cannot scale to zero override this. |
 | `storage` | `StorageConfig` | no | Volume mounts and PVC declarations. |
@@ -305,7 +296,7 @@ Specialised CRDs (e.g. [CodificationService](#codificationservice)) share the sa
 
 The CodificationService CRD declares a [Codification Service](../02-flow/04-system-services.md#codification-services) — a specialised Flow Support Service that translates law goals into formal representations. Each CodificationService instance produces exactly one representation type, declared via `outputFormat`.
 
-The CodificationService shares the base deployment fields of FlowSupportService (image, deployment strategy, replicas, storage, resources). Its capability is always `encode` — the Operator enforces this implicitly; no `capabilities` field is declared.
+The CodificationService shares the base deployment fields of FlowSupportService (image, deployment strategy, replicas, storage, resources). Its provided capability is always `encode` — the Operator enforces this implicitly; no `providesCapabilities` field is declared.
 
 ### `spec`
 
@@ -326,7 +317,7 @@ The CodificationService shares the base deployment fields of FlowSupportService 
 | `availableReplicas` | `integer` | Current number of ready replicas. |
 | `conditions` | `[]Condition` | Standard Kubernetes conditions. |
 
-The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator automatically grants Assay `USE:support/<name>/encode` for each registered CodificationService instance — no manual `supportServiceGrants` entry is needed for Assay. Other nodes that need direct access to a Codification Service require explicit grants via `supportServiceGrants` on the FoundryFlow.
+The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator internally manages Assay's `USE:support/<name>/encode` capability for each registered CodificationService instance. Other nodes that need direct access to a Codification Service require an explicit `USE:support/<name>/encode` grant on their FoundryNode `capabilities`.
 
 ---
 

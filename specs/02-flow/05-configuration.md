@@ -174,13 +174,13 @@ Custom topologies can split, merge, or replace these responsibilities. Runtime s
 
 Flow Support Services are declared via dedicated CRDs that define provided capabilities and infrastructure requirements.
 
-- Each Support Service CRD declares the capabilities it exposes (e.g., `encode` for Codification Services).
+- Each Support Service CRD declares the capabilities it provides via `providesCapabilities` (e.g., `["encode"]` for Codification Services).
 - Infrastructure configuration includes PVC mounts, deployment strategy (ReplicaSet default, StatefulSet option), resource limits, and replica count.
 - Default minimum replicas is 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum.
 - Support Services must implement standard `healthz`/`readyz` endpoints.
-- The FoundryFlow configuration grants consuming nodes access to Support Service capabilities using `USE:support/<service>/<capability>` syntax (e.g., `USE:support/codify-smt/encode`), following the same capability-grant pattern as stamp and law capabilities.
+- Nodes consume Support Service capabilities via `USE:support/<service>/<capability>` grants on their FoundryNode `capabilities` field, following the same capability-grant pattern as stamp and law capabilities.
 
-Assay discovers available Codification Services from Flow configuration. Other nodes discover Support Services through their granted capabilities. System services discover Support Services through the same Flow configuration.
+Assay discovers available Codification Services from Flow configuration. Other nodes discover Support Services through their granted capabilities.
 
 Support Service CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 
@@ -244,7 +244,7 @@ All Flow configurations must preserve these invariants:
 8. Export scope is constrained by bound exit-contract kind entries.
 9. Workitem admission is constrained by bound entry-contract kind entries.
 10. Imported Workitems begin in `Pending` and are first-scheduled to configured `importNode` when capacity allows.
-11. Support Service capabilities are configuration-granted and Sidecar-mediated for node consumers.
+11. Support Service capabilities are node-granted and Sidecar-mediated.
 
 These semantics are consumed by [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md).
 
