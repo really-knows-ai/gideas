@@ -123,7 +123,7 @@ The Operator validates configuration at admission time and rejects invalid confi
 
 Rejected configurations produce structured errors suitable for operational triage and audit. Partial application is never attempted — a FoundryNode with invalid configuration is not reconciled.
 
-Runtime denial (as opposed to admission rejection) occurs when a valid configuration encounters unexpected state: a routing target that existed at configuration time becomes unavailable, or a capability grant references an artefact kind that no GovernedArtefact CRD defines. These are operational failures, not configuration errors.
+Runtime denial (as opposed to admission rejection) occurs when a valid configuration encounters unexpected state: a routing target that existed at configuration time becomes unavailable, or a capability grant references an artefact kind that no [GovernedArtefact CRD](../05-reference/crds.md#governedartefact) defines. These are operational failures, not configuration errors.
 
 ## Rollout and Configuration Evolution
 

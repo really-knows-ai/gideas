@@ -93,7 +93,7 @@ The Archivist is the artefact lifecycle service and authoritative provenance sto
 
 ### Storage Split
 
-Archivist storage is normatively split into two layers:
+Archivist storage is normatively split:
 
 - **SQLite**: artefact version history, passport stamps, and feedback.
 - **Blob store**: raw artefact bytes keyed by content hash, typically on fast PVC-backed storage and optionally on cloud object storage.

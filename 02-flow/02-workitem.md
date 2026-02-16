@@ -84,7 +84,7 @@ Thrash and deadlock are distinct mechanisms with different sources and outcomes.
 - **Feedback deadlock** is governance dispute detection on artefact feedback history.
   - Source of truth: Archivist feedback records via SDK queries.
   - Enforcement actor: gate node routing logic under configured deadlock threshold policy (the reference [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node in the standard arrangement).
-  - Outcome: Workitem routes to Assay for adjudication.
+  - Outcome: Workitem routes to [Assay](./03-nodes-external.md#assay-as-standard-component) for adjudication.
 
 Thrash failure and governance deadlock escalation are never treated as equivalent transitions.
 

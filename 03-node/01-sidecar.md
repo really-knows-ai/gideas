@@ -83,11 +83,11 @@ For requests that pass local validation, the Sidecar forwards them to the author
 - **Librarian**: whether the node holds `READ:law` or `WRITE:law/finding` capability for the requested operation.
 - **Support Services**: whether the node holds the required `USE:support/<service>/<capability>` grant for the requested operation.
 
-Capability grants are defined in the [FoundryNode CRD](../02-flow/05-configuration.md#capability-grants-and-enforcement-implications) and evaluated by each service against the node identity that the Sidecar presents.
+Capability grants are defined in the [FoundryNode CRD](../02-flow/05-configuration.md#stamp-grant-and-capability-semantics) and evaluated by each service against the node identity that the Sidecar presents.
 
 ## Heartbeat and Activity Tracking
 
-The Sidecar tracks node activity through two mechanisms:
+The Sidecar tracks node activity through complementary mechanisms:
 
 **Implicit heartbeat.** Every SDK call that transits the Sidecar resets the activity timer. A node making regular artefact, feedback, or law queries is continuously signalling liveness without explicit action.
 
@@ -153,7 +153,7 @@ The Sidecar fails closed on any path where governance integrity could be comprom
 
 Service-side authorisation denial (e.g., missing capability, write-once stamp violation, contempt violation) returns a structured error to the node through the Sidecar. No state change occurs.
 
-Timeout and thrash outcomes are decided by Operator guard logic, not by the Sidecar. The Sidecar reports the relevant signals; the [Operator](../02-flow/01-operator.md#failure-handling) applies failure policy.
+Timeout and thrash outcomes are decided by Operator guard logic, not by the Sidecar. The Sidecar reports the relevant signals; the [Operator](../02-flow/01-operator.md#failure-handling-and-recovery) applies failure policy.
 
 ## Telemetry
 

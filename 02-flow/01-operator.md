@@ -21,8 +21,8 @@ The Operator maintains a direct service-level query path to the Archivist, disti
 
 The Operator reconciles four state surfaces continuously:
 
-- **FoundryFlow**: topology, contracts, policy limits, and cross-flow policy.
-- **FoundryNode**: node capability envelope, routing outputs, timeout budget, and entry/exit bindings.
+- **[FoundryFlow](../05-reference/crds.md#foundryflow)**: topology, contracts, policy limits, and cross-flow policy.
+- **[FoundryNode](../05-reference/crds.md#foundrynode)**: node capability envelope, routing outputs, timeout budget, and entry/exit bindings.
 - **Workitem**: lifecycle progression through assignment, routing, and completion transition.
 - **Support Service**: deployment lifecycle, health monitoring, and scaling policy for Flow-Architect-deployed [Flow Support Services](./04-system-services.md#flow-support-services).
 

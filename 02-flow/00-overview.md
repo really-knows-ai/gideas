@@ -82,15 +82,15 @@ sequenceDiagram
 
 ## Reference Arrangement and Topology Freedom
 
-The Foundry Cycle is the reference arrangement that Flow Architects adapt by adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations while preserving platform invariants.
+The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement that Flow Architects adapt by adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations while preserving platform invariants.
 
-The runtime enforces behaviour through configuration and capabilities, not node names. Forge, Sort, and Refine describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
+The runtime enforces behaviour through configuration and capabilities, not node names. [Forge](../01-concepts/02-foundry-cycle.md#forge-creator), [Sort](../01-concepts/02-foundry-cycle.md#sort-gate), and [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner) describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
 
-Assay is the exception: it is a standard runtime component present in every Flow and participates as a routable judicial node.
+[Assay](./03-nodes-external.md#assay-as-standard-component) is the exception: it is a standard runtime component present in every Flow and participates as a routable judicial node.
 
 ## Governance Runtime Mechanics
 
-Law and stamp behaviour is enforced by the platform through capabilities and configuration:
+[Law](../01-concepts/03-data-model.md#laws) and [stamp](../01-concepts/03-data-model.md#passports-and-stamps) behaviour is enforced by the platform through capabilities and configuration:
 
 - Law writing is capability-gated. A node without `WRITE:law` capability cannot write laws regardless of its role or name.
 - Laws are single objects with one goal and one-or-more representations; any mutation creates a new whole-law version.
@@ -120,7 +120,7 @@ When completion triggers cross-flow export, only artefact kinds listed in the bo
 The runtime splits control-plane state from provenance state:
 
 - Workitem CRD stores assignment state and artefact references (`id`, `kind`).
-- Archivist stores artefact version history, passport stamps, and feedback in SQLite.
+- [Archivist](./04-system-services.md#archivist) stores artefact version history, passport stamps, and feedback in SQLite.
 - Archivist stores raw artefact content bytes in a blob store (typically fast PVC-backed storage, optionally cloud object storage) keyed by content hash.
 - Nodes access artefact and governance state through Sidecar and SDK surfaces; nodes do not call system services directly.
 - Flow Support Services are accessed through Sidecar mediation when consumed by nodes, extending the same trust boundary to pluggable capabilities.

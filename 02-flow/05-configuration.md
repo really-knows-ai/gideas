@@ -84,7 +84,7 @@ Exit status is explicit and configuration-bound. A node is an exit node only whe
 
 Exit status is not inferred from empty outputs.
 
-In the reference arrangement, Sort is the only user-configured exit node for governed artefact processing. Assay is runtime-mandated and uses dedicated hearing entry/exit bindings for review-hearing processing.
+In the reference arrangement, [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) is the only user-configured exit node for governed artefact processing. [Assay](./03-nodes-external.md#assay-as-standard-component) is runtime-mandated and uses dedicated hearing entry/exit bindings for review-hearing processing.
 
 ## Assay Hearing Bindings
 
@@ -156,17 +156,17 @@ The reference arrangement uses `approval` as the final checkpoint applied by Sor
 
 ## Reference Arrangement Defaults and Custom Topology
 
-The Foundry Cycle is the reference arrangement and standard recommendation for governed workflows. Flow Architects can adapt topology while preserving platform invariants.
+The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement and standard recommendation for governed workflows. Flow Architects can adapt topology while preserving platform invariants.
 
 Reference arrangement expectations:
 
-- Forge performs creation and reads laws only.
-- Quench performs deterministic checks.
-- Appraise performs subjective review.
+- [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) performs creation and reads laws only.
+- [Quench](../01-concepts/02-foundry-cycle.md#quench-validator) performs deterministic checks.
+- [Appraise](../01-concepts/02-foundry-cycle.md#appraise-reviewer) performs subjective review.
 - Sort performs gate routing and final approval checkpoint in the reference arrangement.
-- Refine addresses unresolved feedback.
+- [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner) addresses unresolved feedback.
 
-Custom topologies can split, merge, or replace these responsibilities. Runtime semantics remain invariant-driven rather than name-driven.
+Custom topologies can split, merge, or replace these responsibilities. Runtime semantics remain invariant-driven.
 
 [Assay](./03-nodes-external.md) is always present as a standard runtime component and cannot be omitted.
 

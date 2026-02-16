@@ -80,7 +80,7 @@ Gate nodes in the reference arrangement discover stamp-provider routing targets 
 
 [Assay](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component) is a standard component in every Flow. It is routable as a node and cannot be omitted from the runtime.
 
-Assay participates in two distinct runtime paths:
+Assay participates in distinct runtime paths:
 
 - Deadlock adjudication for governed-work Workitems routed from Sort, then returned to Sort for re-evaluation in the reference arrangement.
 - Review-hearing processing, where Assay is both entry-bound and exit-bound and completes the hearing Workitem after verdict.

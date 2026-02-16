@@ -27,7 +27,7 @@ From the gate node's perspective, only `resolved` feedback is settled. Feedback 
 
 ## Feedback State Transitions
 
-Feedback follows a strict state machine. The [Archivist](../02-flow/04-system-services.md#archivist) enforces these transitions — any state change not listed below is rejected.
+Feedback follows a strict state machine. The [Archivist](../02-flow/04-system-services.md#archivist) enforces these transitions — any state change outside this state machine is rejected.
 
 ```mermaid
 stateDiagram-v2

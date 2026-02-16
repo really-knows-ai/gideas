@@ -8,7 +8,7 @@ Nodes query the [Librarian](../02-flow/04-system-services.md#librarian) for appl
 
 ### Query Modes
 
-The SDK exposes law retrieval with three query modes:
+The SDK exposes law retrieval with distinct query modes:
 
 - **All laws** — no filter. Returns every law in the Flow's Library.
 - **By artefact kind** — caller provides an artefact kind (e.g., `"haiku"`). Returns laws whose `appliesTo` includes the queried kind, plus all global laws (empty `appliesTo`).

@@ -33,7 +33,7 @@ A **stamp** is a named governance checkpoint on an artefact's passport. Each sta
 - The **content hash** of the artefact at stamp time.
 - A **cryptographic signature** and certificate chain.
 
-Stamp names are declared by the GovernedArtefact CRD — the artefact kind defines which stamps are meaningful for it. [Entry and exit contracts](./03-data-model.md#entry-and-exit-contracts) define which of those stamps are required at each lifecycle boundary. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
+Stamp names are declared by the [GovernedArtefact CRD](../05-reference/crds.md#governedartefact) — the artefact kind defines which stamps are meaningful for it. [Entry and exit contracts](./03-data-model.md#entry-and-exit-contracts) define which of those stamps are required at each lifecycle boundary. The Flow grants nodes permission to apply specific named stamps via the [FoundryNode CRD](../05-reference/crds.md#foundrynode)'s capabilities. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
 Stamps are write-once per artefact version. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
 

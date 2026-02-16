@@ -4,7 +4,7 @@
 
 ## Node Runtime Boundary
 
-Nodes are data-plane executors. They process assigned work, evaluate artefact state, and decide the next routing outcome. They do not persist Workitem control-plane state.
+Nodes are data-plane executors. They process assigned work, evaluate artefact state, and decide the next routing outcome. They do not persist [Workitem](../02-flow/02-workitem.md) control-plane state.
 
 Boundary responsibilities are fixed:
 

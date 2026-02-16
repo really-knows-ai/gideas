@@ -174,7 +174,7 @@ Telemetry ingestion is non-blocking. If the Flow Monitor is degraded, `AddFricti
 
 ## Sidecar-Mediated SDK Paths
 
-The [Sidecar](../03-node/01-sidecar.md) is not a separate gRPC service from the node's perspective — the SDK abstracts all transport. Internally, the Sidecar operates as an in-pod proxy with the following responsibilities:
+The [Sidecar](../03-node/01-sidecar.md) abstracts all transport — the node sees SDK calls, and the Sidecar operates as an in-pod proxy with the following responsibilities:
 
 ```mermaid
 sequenceDiagram

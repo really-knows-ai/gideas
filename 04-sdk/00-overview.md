@@ -25,7 +25,7 @@ The SDK abstracts transport, identity injection, and service topology from node 
 
 Every handler invocation is scoped to a single [Workitem](../02-flow/02-workitem.md) assignment. The Sidecar establishes an assignment session when the [Operator](../02-flow/01-operator.md) assigns a Workitem to the node, and all SDK calls within that session are automatically scoped to the assigned Workitem.
 
-Assignment scoping is enforced at three layers:
+Assignment scoping is enforced at every layer:
 
 - **SDK surface** — no parameter exists for targeting a foreign Workitem. Operations are implicitly scoped to the current assignment.
 - **Sidecar** — injects `node_id`, `workitem_id`, and `flow_id` into every outgoing request. Requests referencing artefacts or state outside the current assignment are rejected before they reach a service.
@@ -42,9 +42,9 @@ The SDK expresses intent. It does not persist state, enforce governance, or make
 | SDK | Intent expression. Structured API for node business logic. |
 | Sidecar | Authentication. Identity injection. Local validation (malformed requests, scope violations). |
 | Operator | Workitem lifecycle persistence. Routing guard evaluation. Entry and exit contract enforcement. |
-| Archivist | Artefact provenance persistence. Stamp authorisation (capability + write-once). Feedback state machine enforcement. Contempt guard. |
-| Librarian | Law storage and retrieval. Law write authorisation. Integration and conflict detection. |
-| Flow Monitor | Telemetry and friction event ingestion. |
+| [Archivist](../02-flow/04-system-services.md#archivist) | Artefact provenance persistence. Stamp authorisation (capability + write-once). Feedback state machine enforcement. Contempt guard. |
+| [Librarian](../02-flow/04-system-services.md#librarian) | Law storage and retrieval. Law write authorisation. Integration and conflict detection. |
+| [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) | Telemetry and friction event ingestion. |
 | Support Services | Capability-specific authorisation for pluggable operations. |
 
 Node containers hold no Flow runtime credentials. The Sidecar holds identity material and attaches it to outgoing requests. This strict separation prevents credential leakage into node code and guarantees that all runtime attribution is Sidecar-authoritative.
@@ -62,7 +62,7 @@ The SDK is organised into domain-specific surfaces, each backed by a runtime ser
 | [Workitems](./05-sdk-workitems.md) | Read state, create locally, inspect | Operator (via Sidecar) | Assignment-scoped access, snapshot semantics |
 | [Telemetry](./06-sdk-telemetry.md) | Friction, metrics, traces, custom events | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
 
-All six surfaces share the same trust model: SDK calls transit the Sidecar, which authenticates and proxies to the authoritative service.
+All surfaces share the same trust model: SDK calls transit the Sidecar, which authenticates and proxies to the authoritative service.
 
 ## FlowSupportService Base Class
 
@@ -81,7 +81,7 @@ Specialised subtypes extend `FlowSupportService` with domain-specific contracts.
 
 ## Failure and Error Model
 
-SDK operations produce structured errors with stable error codes. Errors originate from two layers:
+SDK operations produce structured errors with stable error codes. Errors originate from the Sidecar (local validation) and from runtime services (authoritative enforcement):
 
 **Sidecar-local rejections** — caught before the request reaches a service:
 

@@ -4,7 +4,7 @@ Cross-flow collaboration defines how sovereign Flows exchange work, provenance, 
 
 ## Boundary Model
 
-Each Flow is a sovereignty boundary for Workitems and governance execution.
+Each Flow is a sovereignty boundary for [Workitems](./02-workitem.md) and governance execution.
 
 - Intra-flow routing moves one Workitem between nodes in one Flow.
 - Cross-flow transfer exports a package and creates a new Workitem lifecycle in the receiving Flow.
@@ -64,7 +64,7 @@ flowchart TD
 
 ## Stamp Verifiability and Local Authority
 
-Imported stamp handling has two separate questions:
+Imported stamp handling separates verifiability from authority:
 
 1. **Verifiability**: can the stamp chain be cryptographically validated?
 2. **Authority**: does this imported stamp satisfy local governance requirements?
@@ -106,7 +106,7 @@ This behaviour is consistent with exit-completion semantics in [Workitems](./02-
 
 ## Law Integration Protocol
 
-Higher-tier law integration occurs through Librarian-to-Librarian replication.
+Higher-tier law integration occurs through [Librarian](./04-system-services.md#librarian)-to-Librarian replication.
 
 Integration performs two stages before activation:
 

@@ -1,6 +1,6 @@
 # Node Implementation Patterns
 
-Node handlers execute within strict runtime boundaries: single-assignment scope, [Sidecar](./01-sidecar.md)-mediated operations, [Operator](../02-flow/01-operator.md)-owned lifecycle transitions, and capability-gated governance. What follows translates those boundaries into practical handler-level guidance — what correct implementations look like under retries, reassignment, and adversarial governance.
+Node handlers execute within strict runtime boundaries: single-assignment scope, [Sidecar](./01-sidecar.md)-mediated operations, [Operator](../02-flow/01-operator.md)-owned lifecycle transitions, and capability-gated governance. Correct implementations handle retries, reassignment, and adversarial governance within these constraints.
 
 ## Pattern Principles
 

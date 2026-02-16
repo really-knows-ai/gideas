@@ -82,7 +82,7 @@ On timeout expiry:
 
 ## Error Taxonomy and Recovery
 
-SDK errors fall into two categories based on where they originate.
+SDK errors fall into categories based on where they originate.
 
 **Sidecar-local rejections** — caught before the request reaches a service:
 

@@ -8,7 +8,7 @@ The [Workitem](./00-overview.md) record is the authoritative surface for work st
 
 ### Structure
 
-A Workitem separates an immutable declaration surface from a mutable runtime surface. In Kubernetes persistence these map to CRD `spec` and `status`, but nodes consume them through SDK abstractions rather than field paths.
+A Workitem separates an immutable declaration surface from a mutable runtime surface. In Kubernetes persistence these map to CRD `spec` and `status`, but nodes consume them through SDK abstractions.
 
 The declaration surface is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
 
@@ -130,7 +130,7 @@ The `id` uniquely identifies the artefact within the Workitem and is the key the
 
 ### Artefact Isolation
 
-Artefacts are strictly isolated per-Workitem. Every byte of content belongs to exactly one Workitem. There is no cross-Workitem access. This is enforced at three layers:
+Artefacts are strictly isolated per-Workitem. Every byte of content belongs to exactly one Workitem. There is no cross-Workitem access. This is enforced at every layer:
 
 | Layer | Enforcement |
 |-------|-------------|
@@ -388,7 +388,7 @@ The full integration protocol — how higher-tier laws are pushed to Flows, how 
 
 Each law carries an `appliesTo` scope — a list of zero or more governed artefact kinds. A law with `appliesTo: ["haiku"]` governs haiku artefacts. A law with `appliesTo: ["haiku", "sonnet"]` governs both. An empty `appliesTo` means the law is global and applies to all artefact kinds in the Flow.
 
-When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws, three query modes are available:
+When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws:
 
 - **All laws** — no filter. Returns every law in the Flow's Library.
 - **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.

@@ -12,7 +12,7 @@ Assay is the exception. It is a standard runtime component present in every Flow
 
 ### Forge (Creator)
 
-Forge creates the initial artefact. Before generation, it reads the Flow's body of applicable [law](./03-data-model.md#laws), filtered by artefact kind, and seeds it into its context — so the creator knows the rules before it starts. In the reference arrangement, Forge reads laws exclusively; it does not write them. The platform enforces this through capability grants: a node without `WRITE:law` capability cannot write laws regardless of its role.
+Forge creates the initial artefact. Before generation, it reads the Flow's [Library](../02-flow/04-system-services.md#librarian) of applicable [law](./03-data-model.md#laws), filtered by artefact kind, and seeds it into its context — so the creator knows the rules before it starts. In the reference arrangement, Forge reads laws exclusively; it does not write them. The platform enforces this through capability grants: a node without `WRITE:law` capability cannot write laws regardless of its role.
 
 ### Quench (Deterministic Validator)
 
@@ -41,7 +41,7 @@ Refine addresses feedback. It reads the applicable laws for the artefact kind, r
 
 ### Assay (Judiciary — Standard Component)
 
-Assay is the judiciary. Unlike the five roles above, Assay is built into the runtime — every Flow includes it, and Flow Architects do not choose whether to include it.
+Assay is the judiciary. It is built into the runtime as a standard component — every Flow includes it, and Flow Architects do not choose whether to include it.
 
 Assay is invoked for deadlocked feedback disputes and for review hearings triggered by friction thresholds or TTL proximity. It deliberates (potentially via a multi-agent jury), examines the investigative history, and resolves disputes by minting Tier 2 Rulings (binding precedent). Assay does not write Tier 1 Findings — Tier 2 Rulings are both the floor and the ceiling of its judicial authority. For Tier 3 conflicts, Assay drafts a proposal for human ratification. For Tiers 4-5, Assay files an appeal to the [Governance Flow](./04-governance.md). Its full [authority ceiling](./04-governance.md#assays-authority-ceiling) is constitutionally bounded.
 

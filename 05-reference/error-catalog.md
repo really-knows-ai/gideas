@@ -1,6 +1,6 @@
 # Error Catalog
 
-All runtime errors use structured responses with stable error codes. Errors originate from two layers: the [Sidecar](../03-node/01-sidecar.md) (local validation) and runtime services (authoritative enforcement). Both layers use the same error shape.
+All runtime errors use structured responses with stable error codes. Errors originate from the [Sidecar](../03-node/01-sidecar.md) (local validation) and from runtime services (authoritative enforcement). Both layers use the same error shape.
 
 ## Error Model
 

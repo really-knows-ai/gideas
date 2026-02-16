@@ -4,7 +4,7 @@ The telemetry SDK surface provides friction emission, custom telemetry events, a
 
 ## Telemetry Surface Overview
 
-The SDK emits four signal classes:
+The SDK emits distinct signal classes:
 
 | Signal | Purpose | Destination |
 |--------|---------|-------------|
@@ -129,7 +129,7 @@ Guidance:
 
 ## Telemetry SDK Invariants
 
-1. Friction is purely additive — callers emit a magnitude. There are no caller-side operations (multiply, log, set).
+1. Friction is purely additive — callers emit a magnitude. The only operation is additive emission; multiply, log, and set are not available.
 2. Friction emission is mandatory for `Cite` and `AddFeedback`. These are not optional instrumentation — they are runtime outputs.
 3. The Sidecar injects identity context for node-originated telemetry. Nodes cannot spoof attribution.
 4. Telemetry failures do not block or fail work execution.

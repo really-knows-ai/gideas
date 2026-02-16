@@ -6,8 +6,8 @@ Operations covers how a Flow is monitored, triaged, recovered, and validated in 
 
 Operators are accountable for three outcomes:
 
-- Runtime reliability: Workitems continue to flow with predictable latency and bounded failure rate.
-- Governance integrity: stamps, feedback lineage, law lineage, and hearing outcomes remain trustworthy.
+- Runtime reliability: [Workitems](./02-workitem.md) continue to flow with predictable latency and bounded failure rate.
+- Governance integrity: [stamps](../01-concepts/03-data-model.md#passports-and-stamps), [feedback](../01-concepts/03-data-model.md#feedback) lineage, [law](../01-concepts/03-data-model.md#laws) lineage, and hearing outcomes remain trustworthy.
 - Recovery readiness: backup, restore, and failure drills are executable and verified.
 
 Control boundaries are explicit:
@@ -18,7 +18,7 @@ Control boundaries are explicit:
 
 ## Telemetry Architecture
 
-Telemetry is a mandatory runtime surface and includes four signal classes:
+Telemetry is a mandatory runtime surface:
 
 - Metrics
 - Traces
@@ -167,7 +167,7 @@ All production operations preserve these invariants:
 3. Backup ownership boundaries are explicit by data surface.
 4. etcd/CRD backup remains a cluster-admin responsibility.
 5. Restore procedures preserve stamp, feedback, and law lineage integrity.
-6. Error handling follows shared catalog semantics.
+6. Error handling follows shared [Error Catalog](../05-reference/error-catalog.md) semantics.
 7. Cross-flow operations preserve provenance chain and topology-dependent authority.
 8. Failure-path testing is required alongside happy-path validation.
 9. Recovery readiness is continuously validated through drills.

@@ -71,7 +71,7 @@ Nodes are stateless workers — their pods persist for efficiency (model loading
 
 Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to the platform's network policy layer.
 
-Flow Architects can also deploy **Support Services** — containers that expose capabilities consumed by nodes and system services but do not process Workitems. A Codification Service that translates a law's prose goal into formal logic is a Support Service; a notification relay that pushes alerts to an external channel is another. Support Services run in the Flow namespace and are accessed through Sidecar mediation when consumed by nodes, preserving the same trust boundary as system service calls. They are declared in Flow configuration and are optional — the platform imposes no minimum set.
+Flow Architects can also deploy **[Support Services](../02-flow/04-system-services.md#flow-support-services)** — containers that expose capabilities consumed by nodes and system services but do not process Workitems. A [Codification Service](../02-flow/04-system-services.md#codification-services) that translates a law's prose goal into formal logic is a Support Service; a notification relay that pushes alerts to an external channel is another. Support Services run in the Flow namespace and are accessed through Sidecar mediation when consumed by nodes, preserving the same trust boundary as system service calls. They are declared in Flow configuration and are optional — the platform imposes no minimum set.
 
 ### Security Plane
 
