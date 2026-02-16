@@ -27,7 +27,7 @@ DOMPurify.addHook = () => {};
 DOMPurify.sanitize = (x) => x;
 
 const mermaidMatch = /```mermaid(.*?)```/gms;
-const repoRoot = path.resolve(import.meta.dirname, "..");
+const repoRoot = path.resolve(import.meta.dirname, "../..");
 
 // Collect files: either from CLI args or default glob
 const argv = process.argv.slice(2);
@@ -44,7 +44,7 @@ if (argv.length > 0) {
 } else {
   mdFiles = await glob("**/*.md", {
     cwd: repoRoot,
-    ignore: ["legacy/**", "**/node_modules/**", "lint/**"],
+    ignore: ["legacy/**", "**/node_modules/**", "tools/lint/**"],
     absolute: true,
   });
 }
