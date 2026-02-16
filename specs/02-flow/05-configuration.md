@@ -174,7 +174,7 @@ Custom topologies can split, merge, or replace these responsibilities. Runtime s
 
 Flow Support Services are declared via dedicated CRDs that define provided capabilities and infrastructure requirements.
 
-- Each Support Service CRD declares the capabilities it provides via `providesCapabilities` (e.g., `["encode"]` for Codification Services).
+- Each [FlowSupportService](../05-reference/crds.md#flowsupportservice) CRD declares the capabilities it provides via `providesCapabilities`. [CodificationService](../05-reference/crds.md#codificationservice) CRDs do not declare `providesCapabilities` — their `encode` capability is implicit and enforced by the Operator.
 - Infrastructure configuration includes PVC mounts, deployment strategy (ReplicaSet default, StatefulSet option), resource limits, and replica count.
 - Default minimum replicas is 0, allowing the Operator to scale services down when unused. Stateful services or services that cannot scale to zero can override the minimum.
 - Support Services must implement standard `healthz`/`readyz` endpoints.

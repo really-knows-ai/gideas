@@ -17,7 +17,7 @@ The runtime surface is the mutable working surface. As the Workitem moves throug
 | Surface | Owner | Mutability | Description |
 |---------|-------|------------|-------------|
 | Lifecycle state | Operator | System-managed | Computed from assignment lifecycle |
-| Assignment ownership | Operator | System-managed | Current assignee and prior assignee tracking |
+| Assignment ownership | Operator | System-managed | Current assignee tracking |
 | Routing outcome | [Flow Operator](../02-flow/01-operator.md) | Overwrite | Set from Sidecar-submitted node result |
 | Thrash counters | Operator | Increment-only | Per-node visit counters |
 

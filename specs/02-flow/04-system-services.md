@@ -216,13 +216,13 @@ Hearings are implemented as a protocol across services and runtime actors, not a
 
 Hearing processing uses standard Workitems with explicit governed artefacts and contract bindings. No hearing-specific Workitem subtype or `spec.type` discriminator is introduced.
 
-Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact kind provisioned by the Operator alongside Assay. The `law-reference` artefact's content is a plain-text string containing the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
+Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact kind provisioned by the Operator alongside Assay with an empty stamp vocabulary. The `law-reference` artefact's content is a plain-text string containing the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
 
 Assay writes its verdict directly to the Library as a Tier 2 Ruling (for Tier 1 promotion) or petitions HITL via the Librarian (for Tier 2 promotion to Tier 3). Assay's output is a law in the Library, not a stamp on an artefact. After Assay calls `complete()`, the Operator notifies the Librarian via `ApplyLifecycleAction` to apply the verdict outcome (promote, retire, or demote) to the original law.
 
 Trigger ownership is consolidated in the Librarian:
 
-- Friction-threshold trigger (Tier 1 or Tier 2) -> Librarian queries Flow Monitor, detects threshold crossing.
+- Friction-threshold trigger (all tiers) -> Librarian queries Flow Monitor, detects threshold crossing. For Tiers 1-2, Assay adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
 - Review-TTL-expiry trigger -> Librarian detects law age exceeding tier's configured review TTL. The law remains active during the hearing.
 
 Execution and adjudication path:

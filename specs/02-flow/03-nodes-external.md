@@ -82,13 +82,16 @@ Gate nodes in the reference arrangement discover stamp-provider routing targets 
 Assay participates in distinct runtime paths:
 
 - Deadlock adjudication: governed-work Workitems are *routed* to Assay (via `route_to`) by the gate node. The governed-work Workitem is already in flight — Assay adjudicates and returns it to Sort for re-evaluation in the reference arrangement.
-- Review-hearing processing: the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a *new* hearing Workitem, admitted through Assay's entry binding. Assay is both entry-bound and exit-bound for hearing Workitems. The hearing Workitem carries explicit hearing artefacts including a `lawId` reference; the governed-work Workitem that prompted the hearing is unaffected.
+- Review-hearing processing: the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a *new* hearing Workitem, admitted through Assay's entry binding. Assay is both entry-bound and exit-bound for hearing Workitems. The hearing Workitem carries a single `law-reference` artefact — a built-in [GovernedArtefact](../05-reference/crds.md#governedartefact) kind provisioned by the Operator alongside Assay, whose content is a plain-text string containing the law ID under review. The governed-work Workitem that prompted the hearing is unaffected.
 
 The two paths are distinguished by admission mechanism: deadlock-escalated Workitems arrive through routing; hearing Workitems arrive through entry-contract admission as new Workitems.
 
-Assay authority ceiling is fixed (holds `WRITE:law/tier2`):
+Assay capabilities are fixed by the runtime (not configurable by the Flow Architect):
 
-- Resolve Tier 1-2 conflicts and mint Tier 2 Rulings.
+- `WRITE:law/tier2` — resolve Tier 1-2 conflicts and mint Tier 2 Rulings.
+- `READ:law` — query the Library for law context.
+- Friction queries, feedback resolution, and stamp application for hearing artefacts.
+- `USE:support/<name>/encode` — access to all registered [CodificationService](../05-reference/crds.md#codificationservice) instances (the Operator internally manages these grants).
 - Propose Tier 3 changes for human ratification.
 - Appeal Tier 4-5 conflicts to Governance Flow authorities.
 

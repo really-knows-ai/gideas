@@ -29,7 +29,7 @@ Sort is the central routing hub. It evaluates governance state and routes. Grant
 1. Is there unresolved [feedback](./03-data-model.md#feedback) that is not deadlocked? Route to **Refine**.
 2. Is feedback deadlocked (arguing in circles)? Route to **Assay**.
 3. Missing required stamps? Route to the node configured to provide them (Appraise, in the reference arrangement).
-4. All feedback resolved, all required stamps present? Stamp **approval**, call `complete()`, and let the [Operator](../02-flow/01-operator.md) validate the bound [exit contract](./03-data-model.md#entry-and-exit-contracts) before marking **Done**.
+4. All feedback resolved, all required stamps present? Stamp **approval**, call `complete()`, and let the [Operator](../02-flow/01-operator.md) validate the bound [exit contract](./03-data-model.md#entry-and-exit-contracts) before marking **Completed**.
 
 Sort is a gate. It evaluates state, consults the Flow config for routing targets, and — in the reference arrangement for governed artefact processing — acts as the exit-bound node: it stamps approval when the passport is complete and all feedback is resolved, then calls `complete()`.
 
@@ -58,7 +58,7 @@ flowchart LR
     Sort -->|unresolved, not deadlocked| Refine
     Sort -->|needs review| Appraise
     Sort -->|deadlock| Assay
-    Sort -->|all clear| Done(( ))
+    Sort -->|all clear| Completed(( ))
 
     Appraise --> Sort
     Refine --> Quench

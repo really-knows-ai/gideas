@@ -9,7 +9,7 @@ The handler receives a `Workitem` object at invocation. This object is a snapsho
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Workitem identifier |
-| `state` | enum | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed` |
+| `phase` | string | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed` |
 | `currentAssignee` | string | Node currently assigned (this node, during handler execution) |
 
 The snapshot does not update during handler execution.
@@ -29,11 +29,10 @@ All SDK Workitem operations apply to the currently assigned Workitem. The [Sidec
 
 A handler cannot:
 
-- Read or modify a Workitem it is not assigned to.
 - Query the Flow's Workitem queue or pending assignments.
 - Observe other nodes' active assignments.
 
-This strict scoping prevents information leakage between assignments and ensures that node code cannot make scheduling or prioritisation decisions that belong to the [Operator](../02-flow/01-operator.md).
+By default, all SDK Workitem operations are scoped to the current assignment. Nodes granted the `READ:workitem` capability can read Workitem state beyond the current assignment — this is an opt-in capability configured on the [FoundryNode](../05-reference/crds.md#foundrynode) CRD, not a default behaviour.
 
 ## Local Workitem Creation
 
@@ -87,7 +86,7 @@ Export is triggered by exit completion. When a handler calls `Complete()` on an 
 
 ## Workitem SDK Invariants
 
-1. All Workitem SDK operations are scoped to the current assignment.
+1. All Workitem SDK operations are scoped to the current assignment by default. Nodes with `READ:workitem` capability can read beyond the current assignment.
 2. The `Workitem` object is a snapshot at assignment time and does not update during handler execution.
 3. No freeform context bag, `WorkitemType`, or type discriminator exists on the SDK surface.
 4. Feedback is not part of the Workitem read surface — it is accessed through [Artefact](./02-sdk-artefacts.md) and [Feedback](./04-sdk-feedback.md) operations.

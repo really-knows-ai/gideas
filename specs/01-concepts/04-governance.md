@@ -50,7 +50,7 @@ The [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node is t
 
     Assay's deliberation is itself a friction source. Each jury round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first jury round, 125 on the second, 625 on the third. If Assay cannot resolve the dispute and escalates to human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 jury rounds produces 15,625. The cost curve ensures that disputes reaching Assay are visibly expensive, and disputes reaching humans are dramatically so.
 
-2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Assay renders a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
+2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [governance policy](../05-reference/crds.md#governance-policy). The law remains active during the hearing. For Tiers 1-2, Assay adjudicates directly — rendering a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow. Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
 
 Assay's verdicts are enforced by the [Contempt Guard](./03-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
@@ -76,7 +76,7 @@ Promotion is also where governance can harden in *form*, not just authority. Whe
 
 ### Decay and Retirement
 
-Laws below Tier 3 decay if unused. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Assay evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
+All law tiers can be subject to review. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Assay evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
 
 **Tier 1 Finding — review hearing:**
 
@@ -90,6 +90,7 @@ Laws below Tier 3 decay if unused. When a law's age exceeds its tier's configure
 | Verdict | Effect |
 |---------|--------|
 | **Retire** | Ruling is deleted. History preserved in the audit log. |
+| **Promote** | Ruling is petitioned to HITL for Tier 3 Local Statute ratification. |
 | **Demote** | Ruling drops to Tier 1 Finding. |
 
 Every review hearing produces a decisive outcome — promote, retire, or demote.

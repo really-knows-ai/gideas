@@ -21,7 +21,7 @@
 : The system service that ingests telemetry, friction events, metrics, traces, and audit records. Provides queryable aggregation of friction data across any axis (per-node, per-law, per-tier, per-topology-path). Detail: [System Services](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
 
 **Flow Support Service**
-: An optional, Flow-Architect-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via their own CRD. Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
+: An optional, Flow-Architect-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via the [FlowSupportService CRD](./crds.md#flowsupportservice). Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
 
 **Librarian**
 : The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and review TTL expiry, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
@@ -74,7 +74,7 @@
 ## Data and Provenance Terms
 
 **artefact**
-: A governed output — a document, code file, data model, or anything a Flow produces. Versioned, content-addressed, and stored in the Archivist. The Workitem carries only a reference (`id` and `kind`); version history, stamps, and feedback live in the Archivist. Detail: [Data Model](../01-concepts/03-data-model.md#artefacts).
+: A governed output — a document, code file, data model, or anything a Flow produces. Versioned, content-addressed, and stored in the Archivist. The Workitem CRD carries no artefact references — the Archivist maintains artefact-to-Workitem associations by `workitem_id`. Version history, stamps, and feedback live in the Archivist. Detail: [Data Model](../01-concepts/03-data-model.md#artefacts).
 
 **artefact kind**
 : A classification string (e.g. `"haiku"`, `"python-source"`) declared by a GovernedArtefact CRD. Artefact kind determines which stamp vocabulary applies, which laws are scoped to it (via `appliesTo`), and which contract requirements reference it.
@@ -110,7 +110,7 @@
 : A specific snapshot of an artefact's content, identified by its content hash. The Archivist maintains the full version history. When content changes, a new version is created; existing stamps remain with the old version and the new version starts with no stamps.
 
 **Workitem**
-: The unit of work. A Kubernetes CRD that carries an immutable declaration surface (`spec`) and a mutable runtime surface (`status`). References artefacts by `id` and `kind`. Assigned to exactly one node at a time. Detail: [Data Model](../01-concepts/03-data-model.md#workitems), [Workitem Runtime](../02-flow/02-workitem.md).
+: The unit of work. A Kubernetes CRD with no `spec` block — all mutable state lives in `status`, managed exclusively by the [Operator](../02-flow/01-operator.md). The Workitem carries lifecycle state, assignment ownership, routing instructions, and thrash counters. It does not reference artefacts — the [Archivist](../02-flow/04-system-services.md#archivist) maintains artefact-to-Workitem associations. Assigned to exactly one node at a time. Detail: [Data Model](../01-concepts/03-data-model.md#workitems), [Workitem Runtime](../02-flow/02-workitem.md).
 
 ---
 
@@ -129,7 +129,7 @@
 : The process of translating a law's natural-language goal into a formal representation (formal logic, executable validator, policy-as-code) through a Codification Service. Detail: [System Services](../02-flow/04-system-services.md#codification-services).
 
 **Codification Service**
-: A specialised Flow Support Service for translating law goals into formal representations. Extends the `CodificationService` SDK base class and exposes an `encode` capability. Detail: [System Services](../02-flow/04-system-services.md#codification-services).
+: A specialised Flow Support Service for translating law goals into formal representations. Declared via the [CodificationService CRD](./crds.md#codificationservice), which specifies an `outputFormat` (MIME type) and whose `encode` capability is implicitly enforced by the Operator. Detail: [System Services](../02-flow/04-system-services.md#codification-services).
 
 **contempt guard**
 : The Archivist-enforced mechanism that prevents overriding Assay-linked judicial rulings on feedback items. Once a `linkedRuling` is set, the losing side must accept the verdict — contradictory state transitions return `CONTEMPT_VIOLATION`. Detail: [Data Model](../01-concepts/03-data-model.md#contempt-guard).
@@ -156,7 +156,7 @@
 : See **review hearing** below.
 
 **law**
-: A governance rule with a goal and one or more representations. A single object (not a group of linked objects). Any mutation to any part produces a new version identified by content hash. Scoped to artefact kinds via `appliesTo`. Detail: [Data Model](../01-concepts/03-data-model.md#laws).
+: A governance rule with a goal and one or more representations. Persisted as a [Law CRD](./crds.md#law) with a `spec` containing `goal`, `representations`, `tier`, and `appliesTo`, and a `status` containing the content-hash `version`. A single object (not a group of linked objects). Any mutation to any part produces a new version identified by content hash. Scoped to artefact kinds via `appliesTo`. Detail: [Data Model](../01-concepts/03-data-model.md#laws).
 
 **law integration**
 : The protocol by which higher-tier laws are integrated into a Flow's Library. A two-stage process: semantic search (vector similarity) followed by LLM conflict evaluation. Resolution depends on the tier of conflicting local laws. Detail: [Governance](../01-concepts/04-governance.md#law-integration-protocol), [Cross-Flow](../02-flow/06-cross-flow.md).
@@ -174,7 +174,7 @@
 : A specific expression of a law's goal — prose, formal logic, executable code, or any other format identified by MIME type. A law can carry multiple representations. Nodes query for representations they can interpret. Adding or removing a representation produces a new law version. Detail: [Data Model](../01-concepts/03-data-model.md#representations).
 
 **review hearing**
-: A judicial proceeding processed as a standard Workitem at Assay. Triggered by the Librarian when a law's accumulated friction crosses a configured threshold or when a law's age exceeds its tier's configured review TTL. The law remains active during the hearing. Produces tier-specific verdicts: promote, retire, or demote. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
+: A judicial proceeding processed as a standard Workitem at Assay. Triggered by the Librarian when a law's accumulated friction crosses a configured threshold or when a law's age exceeds its tier's configured review TTL. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`). The law remains active during the hearing. For Tiers 1-2, Assay adjudicates directly with tier-specific verdicts: promote, retire, or demote. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
 
 **Ruling** (Tier 2)
 : Binding precedent minted by Assay when resolving disputes. Requires a formal review hearing before retirement. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
@@ -214,7 +214,7 @@
 : The self-signed Root CA keypair held by the Governance Flow. Issues intermediate CA certificates to each Sibling Flow's Operator, establishing a shared trust hierarchy. Detail: [Governance](../01-concepts/04-governance.md#state-root-certificate-authority).
 
 **treaty**
-: A bilateral agreement enabling collaboration between Flows that do not share a Governance Flow. Provides explicit trust through a directed trust edge — unidirectional. Two-way exchange requires two treaties. Detail: [Governance](../01-concepts/04-governance.md#treaties), [Cross-Flow](../02-flow/06-cross-flow.md).
+: A directed trust policy enabling collaboration between Flows that do not share a Governance Flow. Declared via a [Treaty CRD](./crds.md#treaty) — each CRD represents one direction of trust (import or export). Two-way exchange requires two Treaty CRDs. Detail: [Governance](../01-concepts/04-governance.md#treaties), [Cross-Flow](../02-flow/06-cross-flow.md).
 
 ---
 

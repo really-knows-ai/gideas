@@ -90,7 +90,7 @@ Methods that interpret stamp semantics are intentionally absent:
 |-----------|-----------|
 | `StampArtefact(id, stampName)` | Apply a named stamp to the artefact's current version. |
 
-Stamp application is capability-gated. The node must hold `STAMP:artefact/<kind>/<stamp-name>` for the artefact's kind and the specific stamp name. The [Archivist](../02-flow/04-system-services.md#archivist) validates the capability grant and records the stamp with the applying node's identity, the artefact's current content hash, and a cryptographic signature from the Sidecar's identity material.
+Stamp application is capability-gated. The node must hold `STAMP:artefact/<kind>/<stamp-name>` for the artefact's kind and the specific stamp name. The stamp name must also be declared in the artefact kind's [GovernedArtefact](../05-reference/crds.md#governedartefact) stamp vocabulary — stamp names not in the vocabulary are rejected at configuration admission. The [Archivist](../02-flow/04-system-services.md#archivist) validates the capability grant and records the stamp with the applying node's identity, the artefact's current content hash, and a cryptographic signature from the Sidecar's identity material.
 
 Stamps are write-once per artefact version. Applying the same stamp name to the same content hash a second time — whether from the same node or a different one — produces an error. If two different nodes need to independently sign off on the same artefact, define two different stamp names.
 
@@ -104,7 +104,7 @@ Artefact operations map to capability requirements enforced by the backing servi
 |-----------|-------------------|-------------------|
 | Read operations (`GetArtefact`, `GetArtefactVersion`, `GetArtefactMetadata`) | `READ:artefact` | Archivist |
 | `ListArtefacts` | Assignment scope (implicit) | Archivist |
-| `StoreArtefact` | `WRITE:artefact` | Archivist |
+| `StoreArtefact` | `WRITE:artefact` or `WRITE:artefact/<kind>` | Archivist |
 | `StampArtefact` | `STAMP:artefact/<kind>/<stamp-name>` | Archivist |
 | Feedback operations | See [SDK Feedback](./04-sdk-feedback.md#capability-and-error-semantics) | Archivist |
 

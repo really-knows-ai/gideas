@@ -73,7 +73,7 @@ Emitted at CRD admission time by the Operator, or at request time when configura
 |------|-------------|-------|-----------------|
 | `INVALID_CAPABILITY` | `INVALID_ARGUMENT` | A capability string in the FoundryNode CRD uses an invalid verb, is missing a required qualifier, or has unknown syntax. | Fix the capability string. The Operator does not reconcile a FoundryNode with syntactically invalid capabilities. See [capability syntax](./crds.md#capability-syntax). |
 | `UNKNOWN_CONTRACT` | `INVALID_ARGUMENT` | A node's entry or exit binding references a contract name not defined in the FoundryFlow's `entryContracts` or `exitContracts`. | Fix the binding to reference an existing contract, or add the contract to the FoundryFlow CRD. |
-| `IMPORT_NODE_INVALID` | `FAILED_PRECONDITION` | The `importNode` field references a node that does not exist, or the referenced node is not bound to an entry contract. | Fix the `importNode` reference or add an entry binding to the target node. Cross-flow import is rejected until this is resolved. |
+| `IMPORT_NODE_INVALID` | `INVALID_ARGUMENT` | The `importNode` field references a node that does not exist, or the referenced node is not bound to an entry contract. | Fix the `importNode` reference or add an entry binding to the target node. Cross-flow import is rejected until this is resolved. |
 | `SCHEMA_VALIDATION_FAILED` | `INVALID_ARGUMENT` | CRD admission validation failed — missing required fields, invalid field types, constraint violations, or structural inconsistencies. | Fix the CRD content. The Operator provides a descriptive message identifying the specific validation failure. |
 
 ---
@@ -142,4 +142,4 @@ Emitted when a service is temporarily unreachable.
 5. Telemetry emission failures do not produce errors visible to the handler — they are absorbed by the Sidecar.
 6. Configuration errors are caught at CRD admission time. Runtime services do not encounter malformed configuration.
 7. `IsRetryable` returns `true` only for errors with stable code `SERVICE_UNAVAILABLE`. It checks the stable error code, not the gRPC status code.
-8. gRPC status codes follow a consistent mapping: `PERMISSION_DENIED` for capability failures, `FAILED_PRECONDITION` for guard violations, `NOT_FOUND` for missing resources, `ALREADY_EXISTS` for write-once violations, `UNAVAILABLE` for transient failures, `INVALID_ARGUMENT` for malformed input, `DATA_LOSS` for integrity failures.
+8. gRPC status codes follow a consistent mapping: `PERMISSION_DENIED` for capability failures, `FAILED_PRECONDITION` for guard violations, `NOT_FOUND` for missing resources, `ALREADY_EXISTS` for write-once violations, `UNAVAILABLE` for transient failures, `INVALID_ARGUMENT` for malformed input, `DATA_LOSS` for integrity failures, `DEADLINE_EXCEEDED` for timeout failures, `UNAUTHENTICATED` for identity failures.

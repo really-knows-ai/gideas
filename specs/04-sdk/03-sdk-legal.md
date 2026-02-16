@@ -47,7 +47,7 @@ Nodes with the `WRITE:law/tier1` capability can record Tier 1 [Findings](../01-c
 
 | Operation | Parameters |
 |-----------|-----------|
-| `RecordFinding(goal, appliesTo, representations?)` | `goal` (string) — plain-language statement of what the law enforces, stops, or ensures. `appliesTo` (`[]string`) — governed artefact kinds this law applies to; empty for global. `representations` (optional) — initial representations (typically prose). |
+| `RecordFinding(goal, appliesTo, representations)` | `goal` (string) — plain-language statement of what the law enforces, stops, or ensures. `appliesTo` (`[]string`) — governed artefact kinds this law applies to; empty for global. `representations` (`[]Representation`) — at least one representation is required (typically prose). Each representation has a `type` (MIME type) and `content` (payload). |
 
 `RecordFinding` returns immediately with a law identifier. The write is eventually consistent — the new Finding is available for writes immediately but may not appear in `QueryLaws` results until the [Librarian](../02-flow/04-system-services.md#librarian) has indexed it. Duplicate detection is asynchronous: the Librarian runs background conflict checks against existing laws using [semantic search and LLM evaluation](../02-flow/04-system-services.md#librarian). Duplicate Findings are merged or retired without node involvement.
 

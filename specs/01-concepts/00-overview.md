@@ -14,7 +14,7 @@ Work cannot leave a Flow until its artefacts carry the required stamps. The qual
 
 A **Flow** is a self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
-A **[Workitem](./03-data-model.md#workitems)** is the unit of work. It carries state and references artefacts managed by the [Archivist](./03-data-model.md#artefacts). Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
+A **[Workitem](./03-data-model.md#workitems)** is the unit of work. It carries lifecycle state, assignment ownership, routing instructions, and thrash counters — all managed by the [Operator](../02-flow/01-operator.md) in `status` (the Workitem CRD has no `spec` block). Artefacts are not referenced on the Workitem — the [Archivist](./03-data-model.md#artefacts) maintains artefact-to-Workitem associations. Feedback, stamps, and version history live in the Archivist, scoped to artefact `id` and tagged to specific versions.
 
 A **[Node](../03-node/00-overview.md)** is a stateless worker. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each time. A node that sees a Workitem for the second time treats it as a stranger.
 
