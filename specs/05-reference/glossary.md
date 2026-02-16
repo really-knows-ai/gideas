@@ -6,7 +6,7 @@
 : The system service that manages artefact lifecycle data — version history, passport stamps, and feedback in an embedded relational database (SQLite in the reference implementation); raw content bytes in a content-addressed blob store. The single source of truth for all artefact provenance. Detail: [System Services](../02-flow/04-system-services.md#archivist).
 
 **Assay**
-: The judicial node present in every Flow as a standard runtime component. Assay holds `WRITE:law/tier2` and resolves deadlocked feedback disputes by minting Tier 2 Rulings. It adjudicates review hearings triggered by friction thresholds or TTL expiry. Its authority ceiling is constitutionally bounded: resolve at Tier 2, propose at Tier 3, appeal at Tier 4-5. Assay does not write Tier 1 Findings by convention — its role is judicial, not observational. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component), [Governance](../01-concepts/04-governance.md#assays-authority-ceiling).
+: The judicial node present in every Flow as a standard runtime component. Assay holds `WRITE:law/tier2` and resolves deadlocked feedback disputes by minting Tier 2 Rulings. It adjudicates review hearings triggered by friction thresholds or review TTL expiry. Its authority ceiling is constitutionally bounded: resolve at Tier 2, propose at Tier 3, appeal at Tier 4-5. Assay does not write Tier 1 Findings by convention — its role is judicial, not observational. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component), [Governance](../01-concepts/04-governance.md#assays-authority-ceiling).
 
 **assignment**
 : The binding of a single Workitem to a single node for processing. A Workitem has exactly one assignee at a time. The Sidecar establishes an assignment session and all SDK calls are automatically scoped to it. Detail: [Operator](../02-flow/01-operator.md), [SDK Core](../04-sdk/01-sdk-core.md).
@@ -24,7 +24,7 @@
 : An optional, Flow-Architect-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via their own CRD. Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
 
 **Librarian**
-: The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and TTL expiry, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
+: The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and review TTL expiry, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
 
 **node**
 : A stateless worker that processes Workitems. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each assignment. Nodes interact with runtime services exclusively through the Sidecar. Detail: [Node Overview](../03-node/00-overview.md).
@@ -39,7 +39,7 @@
 : The Security Plane's presence in the Data Plane. An in-pod proxy that authenticates node requests, injects identity (`node_id`, `workitem_id`, `flow_id`), enforces assignment scoping, and brokers all communication between the node and runtime services. Nodes never call services directly. Detail: [Sidecar](../03-node/01-sidecar.md).
 
 **topology**
-: The directed graph of nodes and routing edges defined in the FoundryFlow CRD. Determines how Workitems can move between nodes. Detail: [Configuration](../02-flow/05-configuration.md).
+: The directed graph of nodes and routing edges derived from FoundryNode output declarations. Determines how Workitems can move between nodes. Detail: [Configuration](../02-flow/05-configuration.md).
 
 **Thrash Guard**
 : The per-node visit counter map on each Workitem. Each assignment increments the assigned node's counter. When the aggregate sum exceeds `maxVisits`, the Operator fails the Workitem with `THRASH_BUDGET_EXCEEDED`. Detects infrastructure-level routing loops. Hidden from nodes. Detail: [Data Model](../01-concepts/03-data-model.md#thrash-guard).
@@ -86,7 +86,7 @@
 : Structured, threaded annotations on artefacts stored in the Archivist. Each item carries a severity, a lifecycle state, a message, and a history of every action taken. Feedback follows a forced-choice state machine: every disagreement must be justified, and every dispute has a resolution path. Detail: [Data Model](../01-concepts/03-data-model.md#feedback), [SDK Feedback](../04-sdk/04-sdk-feedback.md).
 
 **feedback depth**
-: The number of actions in a single feedback item's history. When depth exceeds `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to Assay.
+: The number of actions in a single feedback item's history. The gate node uses feedback depth to determine when to transition the item to `deadlocked` and route the Workitem to Assay.
 
 **friction**
 : A quantitative signal measuring governance cost. Purely additive — callers emit a magnitude and the Flow Monitor aggregates. Generated transparently by feedback (magnitude = depth), Assay jury rounds (magnitude = depth ^ (round + 1)), and HITL escalation (magnitude = depth ^ (rounds * 2)). Nodes may also emit friction voluntarily via `AddFriction`. Detail: [Conceptual Overview](../01-concepts/00-overview.md#friction), [Data Model](../01-concepts/03-data-model.md#friction).
@@ -123,7 +123,7 @@
 : A field on each law listing zero or more governed artefact kinds the law applies to (e.g. `["haiku"]`, `["haiku", "sonnet"]`). An empty list means the law is global — it applies to all artefact kinds in the Flow. Law conflict detection is scoped by `appliesTo`. Detail: [CRD Reference](./crds.md#law), [SDK Legal](../04-sdk/03-sdk-legal.md).
 
 **citation**
-: Recording usage of a law during Workitem processing. Each `Cite` call emits a low-magnitude friction event attributed to the cited law. Accumulated citations drive friction-threshold hearings. Detail: [SDK Legal](../04-sdk/03-sdk-legal.md#citation).
+: Recording usage of a law during Workitem processing. `Cite` is syntactic sugar around `AddFriction` — each call emits a low-magnitude friction event attributed to the cited law. Detail: [SDK Legal](../04-sdk/03-sdk-legal.md#citation).
 
 **codification**
 : The process of translating a law's natural-language goal into a formal representation (formal logic, executable validator, policy-as-code) through a Codification Service. Detail: [System Services](../02-flow/04-system-services.md#codification-services).
@@ -135,13 +135,13 @@
 : The Archivist-enforced mechanism that prevents overriding Assay-linked judicial rulings on feedback items. Once a `linkedRuling` is set, the losing side must accept the verdict — contradictory state transitions return `CONTEMPT_VIOLATION`. Detail: [Data Model](../01-concepts/03-data-model.md#contempt-guard).
 
 **deadlock**
-: The state a feedback item enters when its history depth exceeds `maxFeedbackDepth`. The gate node transitions the item to `deadlocked` and routes the Workitem to Assay for judicial review. Distinct from the Thrash Guard, which detects infrastructure-level loops across the whole Workitem.
+: The state a feedback item enters when the gate node determines its history depth warrants escalation. The gate node transitions the item to `deadlocked` and routes the Workitem to Assay for judicial review. Distinct from the Thrash Guard, which detects infrastructure-level loops across the whole Workitem.
 
 **Federal Accord** (Tier 5)
 : A law synchronised from upstream Federal authorities. Applies across all Governance Flow instances in the network. The highest tier of law. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 **Finding** (Tier 1)
-: An ephemeral law recorded by nodes during Workitem processing. Carries a configurable TTL. Decays if uncited; can be promoted to a Tier 2 Ruling through a friction-threshold hearing. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
+: An ephemeral law recorded by nodes during Workitem processing. Decays if uncited; can be promoted to a Tier 2 Ruling through a friction-threshold or review TTL hearing. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 **goal**
 : A law's plain-language statement of what it enforces, stops, or ensures. The law's identity. All representations of a law must express the same goal.
@@ -174,10 +174,10 @@
 : A specific expression of a law's goal — prose, formal logic, executable code, or any other format identified by MIME type. A law can carry multiple representations. Nodes query for representations they can interpret. Adding or removing a representation produces a new law version. Detail: [Data Model](../01-concepts/03-data-model.md#representations).
 
 **review hearing**
-: A judicial proceeding processed as a standard Workitem at Assay. Triggered by the Librarian when a law's accumulated friction crosses a configured threshold or when a law's TTL expires. The law remains active during the hearing. Produces tier-specific verdicts: promote, retire, or demote. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
+: A judicial proceeding processed as a standard Workitem at Assay. Triggered by the Librarian when a law's accumulated friction crosses a configured threshold or when a law's age exceeds its tier's configured review TTL. The law remains active during the hearing. Produces tier-specific verdicts: promote, retire, or demote. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
 
 **Ruling** (Tier 2)
-: Binding precedent minted by Assay when resolving disputes. Carries a configurable TTL and requires a formal review hearing before retirement. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
+: Binding precedent minted by Assay when resolving disputes. Requires a formal review hearing before retirement. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 **State Constitution** (Tier 4)
 : Organisational policy produced by the Governance Flow through the standard Foundry Cycle with HITL ratification. Applies to all Sibling Flows under the Governance Flow. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
@@ -188,11 +188,11 @@
 **tier**
 : A law's level in the five-tier jurisdictional hierarchy. Tier 1 (Finding), Tier 2 (Ruling), Tier 3 (Local Statute), Tier 4 (State Constitution), Tier 5 (Federal Accord). Higher tier carries greater authority. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
-**TTL**
-: Time-to-live. A configurable expiry window on Tier 1 and Tier 2 laws. When a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing.
+**TTL** (Review TTL)
+: Time-to-live. A per-tier expiry window configured on the FoundryFlow's governance policy. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing.
 
 **verdict**
-: The outcome of a review hearing rendered by Assay. Tier-specific: promote, retire (Tier 1), or demote (Tier 2). Hearings produce a decisive outcome — there is no TTL reset.
+: The outcome of a review hearing rendered by Assay. Tier-specific: promote, retire (Tier 1), or demote (Tier 2). Hearings produce a decisive outcome.
 
 ---
 

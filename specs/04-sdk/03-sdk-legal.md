@@ -53,7 +53,7 @@ Nodes with the `WRITE:law/tier1` capability can record Tier 1 [Findings](../01-c
 
 This write-availability-first design means nodes can record Findings as they discover patterns without blocking on indexing or conflict resolution. The Librarian handles deduplication and integration asynchronously.
 
-Tier 1 Findings have a configurable TTL. Findings that go uncited expire at their TTL. Findings that accumulate [friction through citation](#citation) persist and can be promoted to Tier 2 Rulings through [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol).
+Tier 1 Findings decay when their tier's configured review TTL expires. Findings that accumulate [friction through citation](#citation) persist and can be promoted to Tier 2 Rulings through [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol).
 
 ### Authority Boundaries
 

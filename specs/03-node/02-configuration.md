@@ -20,13 +20,13 @@ Each node declares named routing outputs that map to target nodes or target reso
 
 Each output maps a name to a target node. When the handler returns `route_to_output("pass")`, the Operator looks up `"pass"` in the node's output configuration and resolves the declared target.
 
-`route_to` bypasses output configuration entirely and names a target node directly. The Operator validates that the target exists in the Flow topology.
+`route_to` bypasses output configuration entirely and names a target node directly. The Operator validates that the target exists as a FoundryNode in the namespace.
 
 Resolution failures are terminal for the routing instruction:
 
 - An output name that does not exist in the node's configuration is rejected synchronously by the Sidecar.
 - An output whose declared target resolves to zero available pods causes Workitem failure after Operator retry policy is exhausted.
-- A `route_to` target that does not exist in the Flow topology is rejected by the Operator.
+- A `route_to` target that does not exist as a FoundryNode is rejected by the Operator.
 
 Configuration must keep routes coherent: every declared output target must be resolvable under normal operating conditions. The Operator surfaces unresolvable configurations through reconciliation warnings and telemetry.
 

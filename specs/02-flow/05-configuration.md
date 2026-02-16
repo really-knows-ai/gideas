@@ -6,9 +6,9 @@ Flow configuration defines runtime behaviour and is the normative source for beh
 
 Configuration is expressed through three resource types with distinct authority boundaries:
 
-- [FoundryFlow](../05-reference/crds.md) defines Flow-wide behaviour: topology, contracts (`entryContracts`, `exitContracts`), governance policy limits, and cross-flow policy.
+- [FoundryFlow](../05-reference/crds.md) defines Flow-wide behaviour: contracts (`entryContracts`, `exitContracts`), governance policy limits, and cross-flow policy.
 - [FoundryNode](../05-reference/crds.md) defines node-local behaviour and permissions: routing outputs, capabilities, timeout budget, and entry/exit bindings (`entry`, `exit`).
-- Support Service CRDs define per-service capabilities, infrastructure requirements, and deployment policy. FoundryFlow controls which nodes can consume which Support Service capabilities. Support Service CRDs are subordinate to FoundryFlow — they declare what is available; FoundryFlow governs who can use it.
+- Support Service CRDs define per-service provided capabilities, infrastructure requirements, and deployment policy. Nodes consume Support Service capabilities via `USE:support/...` grants on their FoundryNode `capabilities` field.
 
 Behaviour precedence is deterministic:
 
@@ -33,14 +33,14 @@ flowchart TB
 FoundryFlow defines the executable shape of a Flow:
 
 - Entry behaviour: named entry contracts and required entry conditions.
-- Topology: optional `importNode`, routable graph, and routing validity constraints.
+- Topology: optional `importNode` and routing validity constraints.
 - Completion behaviour: named exit contracts and export implications.
 - Governance policy limits: thresholds and timers used by runtime guards.
 - Cross-flow policy: trust topology and naturalisation requirements.
 
 The Operator treats FoundryFlow as the source of reconciliation truth for behaviour-shaping runtime decisions.
 
-## Topology and Routing Semantics
+## Routing Semantics
 
 Routing is valid only when the target is discoverable in Flow configuration.
 
@@ -204,9 +204,8 @@ Configuration exposes policy limits that bound runtime behaviour:
 
 - Assignment timeout budgets for node execution windows.
 - Thrash limits for aggregate Workitem visit budgets.
-- Feedback deadlock thresholds for Assay escalation.
 - Retention windows for completed and failed Workitems.
-- Citation, TTL expiry, and friction threshold values driving review hearing triggers.
+- Review TTL expiry and friction threshold values driving review hearing triggers.
 
 These policies are behavioural inputs to Operator and service runtime logic and must be deterministic under reconciliation.
 

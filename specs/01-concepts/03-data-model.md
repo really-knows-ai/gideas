@@ -296,7 +296,7 @@ In the [reference arrangement](./02-foundry-cycle.md), the refining node is [Ref
 
 The refining node makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). The reviewing node evaluates the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to the refining node, which may either comply by applying a fix (`actioned`) or re-refuse with a new structured justification (`wont_fix`). The argument is essential — the refiner always retains the right to refuse, provided they justify the refusal on governance grounds. The cycle continues until either the reviewer accepts or the gate node detects fatigue and escalates to Assay.
 
-When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, the gate node calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to Assay via its normal routing instruction. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
+When the gate node determines that a feedback item's history depth warrants escalation, it calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to Assay via its normal routing instruction. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
 
 From the gate node's perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont_fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont_fix` state still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
 
@@ -315,7 +315,7 @@ Every refusal creates a traceable record — either a link to existing governanc
 
 ### Fatigue Detection and Escalation
 
-Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, the gate node calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) via its normal routing instruction. In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate).
+Each round of review-and-refine appends entries to the feedback item's `history` array. When the gate node determines that a feedback item's history depth warrants escalation, it calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) via its normal routing instruction. In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate).
 
 The threshold applies per feedback item, not per Workitem. A Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
@@ -368,17 +368,17 @@ Laws are tiered by authority and lifecycle:
 
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
-| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer) and [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Configurable TTL. Decays if uncited, promoted to Tier 2 if heavily used. |
-| 2 | **Ruling** | Single Flow | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node | Binding precedent. Configurable TTL. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
+| 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer) and [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Decays if uncited, promoted to Tier 2 if heavily used. |
+| 2 | **Ruling** | Single Flow | [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node | Binding precedent. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./04-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
 Supremacy is absolute — higher tier always wins, with no upward override. A Tier 3 Local Statute cannot override a Tier 4 State Constitution law, regardless of when either was created.
 
-Tier 1 Findings are the raw material of governance. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. Findings that prove useful accumulate friction as nodes [cite](../04-sdk/03-sdk-legal.md#citation) them during processing. When a Finding's accumulated friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md) triggers a review hearing that can promote it to Tier 2. Findings that go uncited expire at their TTL.
+Tier 1 Findings are the raw material of governance. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. Findings that prove useful accumulate friction as nodes [cite](../04-sdk/03-sdk-legal.md#citation) them during processing. When a Finding's accumulated friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md) triggers a review hearing that can promote it to Tier 2. Findings that go uncited decay when their tier's configured review TTL expires.
 
-Tier 2 Rulings are binding precedent. They are minted when Assay resolves a dispute, consolidating the arguments into a durable law. Rulings have longer TTLs than Findings and require a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement.
+Tier 2 Rulings are binding precedent. They are minted when Assay resolves a dispute, consolidating the arguments into a durable law. Rulings require a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement.
 
 Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows (no Governance Flow), these are CRDs applied by an administrator. Under a Governance Flow, the local legislative cycle can also produce them.
 

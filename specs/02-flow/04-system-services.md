@@ -6,7 +6,7 @@ System services provide the runtime substrate for law lifecycle, artefact lifecy
 
 Each service owns one primary concern:
 
-- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (friction-threshold and TTL-expiry).
+- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (friction-threshold and review-TTL-expiry).
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
 - **Flow Monitor**: telemetry aggregation, friction signal surfacing, and audit stream integration.
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
@@ -76,11 +76,11 @@ Integration outcomes follow tiered supremacy semantics:
 
 The Librarian owns all hearing trigger emission for law lifecycle events. It monitors two signals and triggers review hearings by requesting Workitem creation through the Operator.
 
-**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a Tier 1 Finding's or Tier 2 Ruling's friction crosses its tier's configured threshold, the Librarian triggers a review hearing. Separate thresholds are configurable per law tier (`tier1ReviewHearing`, `tier2ReviewHearing`) in the FoundryFlow [configuration](./05-configuration.md).
+**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a law's friction crosses its tier's configured threshold, the Librarian triggers a review hearing. Thresholds are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [configuration](./05-configuration.md). For Tiers 1-2, Assay adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
 
-**TTL-expiry triggers:** When a Tier 1 or Tier 2 law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing — expiry is the trigger, not a demotion event.
+**Review-TTL-expiry triggers:** When a law's age exceeds its tier's configured review TTL (from the FoundryFlow's [governance policy](./05-configuration.md)), the Librarian triggers a review hearing. The law remains active during the hearing — expiry is the trigger, not a demotion event.
 
-Every review hearing produces a decisive outcome — promote, retire, or demote. There is no TTL reset.
+Every review hearing produces a decisive outcome — promote, retire, or demote.
 
 Librarian does not adjudicate hearings.
 
@@ -223,7 +223,7 @@ Assay writes its verdict directly to the Library as a Tier 2 Ruling (for Tier 1 
 Trigger ownership is consolidated in the Librarian:
 
 - Friction-threshold trigger (Tier 1 or Tier 2) -> Librarian queries Flow Monitor, detects threshold crossing.
-- TTL-expiry trigger (Tier 1 or Tier 2) -> Librarian detects law TTL expiry. The law remains active during the hearing.
+- Review-TTL-expiry trigger -> Librarian detects law age exceeding tier's configured review TTL. The law remains active during the hearing.
 
 Execution and adjudication path:
 
@@ -275,9 +275,9 @@ sequenceDiagram
 Review hearing verdicts are tier-specific:
 
 - **Tier 1 under review:** `Promote` (mint Tier 2 Ruling) or `Retire`.
-- **Tier 2 under review:** `Promote` (petition HITL for Tier 3 Local Statute), `Retire`, or `Demote` (drop to Tier 1 Finding with fresh TTL).
+- **Tier 2 under review:** `Promote` (petition HITL for Tier 3 Local Statute), `Retire`, or `Demote` (drop to Tier 1 Finding).
 
-Assay considers the law's accumulated friction and goal when rendering verdicts. There is no TTL reset — hearings produce a decisive outcome.
+Assay considers the law's accumulated friction and goal when rendering verdicts. Hearings produce a decisive outcome.
 
 ## Backup and Recovery Boundaries
 
@@ -338,7 +338,7 @@ All deployments preserve these service invariants:
 2. Workitem CRD carries no artefact references. Artefact-to-Workitem associations are Archivist-owned.
 3. Laws are single objects with one goal and multiple representations under whole-law versioning.
 4. Friction-threshold hearing triggers are emitted by the Librarian based on Flow Monitor queries.
-5. TTL-expiry hearing triggers are emitted by the Librarian.
+5. Review-TTL-expiry hearing triggers are emitted by the Librarian.
 6. Assay evidence retrieval includes friction data from the Flow Monitor.
 7. Hearing adjudication remains an Assay responsibility, not a service-local shortcut.
 8. Friction is first-class and queryable by source attribution.

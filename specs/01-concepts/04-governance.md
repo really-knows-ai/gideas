@@ -13,7 +13,7 @@ A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./
 | **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
 | **Executive** | Enforces compliance | Gate node ([Sort](./02-foundry-cycle.md#sort-gate) in the reference arrangement), [Exit Contract](./03-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
 
-Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./03-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough citation weight, [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
+Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./03-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough [friction](./00-overview.md#friction), [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
 
 ---
 
@@ -23,7 +23,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 ### Organic Discovery (Tiers 1–2)
 
-Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They carry a configurable TTL and decay if unused. Nodes that use a law [cite](../04-sdk/03-sdk-legal.md#citation) it through the SDK, which records a low-magnitude [friction](./00-overview.md#friction) event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the [Librarian](../02-flow/04-system-services.md) periodically queries the accumulated friction on each law.
+Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They decay if unused. Nodes that use a law [cite](../04-sdk/03-sdk-legal.md#citation) it through the SDK, which records a low-magnitude [friction](./00-overview.md#friction) event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the [Librarian](../02-flow/04-system-services.md) periodically queries the accumulated friction on each law.
 
 Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate friction that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding's friction crosses a configurable threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node.
 
@@ -32,9 +32,9 @@ Assay evaluates the Finding's friction level and goal, and renders a verdict:
 | Verdict | Effect |
 |---------|--------|
 | **Retire** | Finding is deleted. History preserved in the audit log. |
-| **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a configurable TTL |
+| **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent |
 
-A Finding that does not accumulate enough friction to trigger a review hearing will enter a review hearing when its TTL expires.
+A Finding that does not accumulate enough friction to trigger a review hearing will enter a review hearing when its tier's configured review TTL expires.
 
 ### Administered Policy (Tier 3)
 
@@ -46,11 +46,11 @@ The [Librarian](../02-flow/04-system-services.md) admits externally applied laws
 
 The [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node is the judiciary. It is invoked when governance reaches an impasse:
 
-1. **Feedback deadlock.** When a [feedback](./03-data-model.md#feedback) item's history depth exceeds the configured `maxFeedbackDepth`, the gate node (in the [reference arrangement](./02-foundry-cycle.md), [Sort](./02-foundry-cycle.md#sort-gate)) transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
+1. **Feedback deadlock.** When a gate node determines that a [feedback](./03-data-model.md#feedback) item's history depth warrants escalation, it transitions the item to `deadlocked` and routes the Workitem to Assay. In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate). Assay examines the investigative history — the forced-choice justifications, the citations, the novel arguments — retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side Assay favours.
 
     Assay's deliberation is itself a friction source. Each jury round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first jury round, 125 on the second, 625 on the third. If Assay cannot resolve the dispute and escalates to human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 jury rounds produces 15,625. The cost curve ensures that disputes reaching Assay are visibly expensive, and disputes reaching humans are dramatically so.
 
-2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing. Assay renders a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
+2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Assay renders a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
 
 Assay's verdicts are enforced by the [Contempt Guard](./03-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
@@ -76,7 +76,7 @@ Promotion is also where governance can harden in *form*, not just authority. Whe
 
 ### Decay and Retirement
 
-Laws below Tier 3 decay if unused. When a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing. Assay evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
+Laws below Tier 3 decay if unused. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Assay evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
 
 **Tier 1 Finding — review hearing:**
 
@@ -90,10 +90,9 @@ Laws below Tier 3 decay if unused. When a law's TTL expires, the Librarian trigg
 | Verdict | Effect |
 |---------|--------|
 | **Retire** | Ruling is deleted. History preserved in the audit log. |
-| **Demote** | Ruling drops to Tier 1 Finding (fresh TTL). |
-| **Promote** | Assay petitions for Tier 3 Statute (HITL ratification required). |
+| **Demote** | Ruling drops to Tier 1 Finding. |
 
-Every review hearing produces a decisive outcome — promote, retire, or demote. There is no TTL reset.
+Every review hearing produces a decisive outcome — promote, retire, or demote.
 
 Retired laws are deleted. The full history — creation, citations, conflicts, retirement — is preserved in the audit log.
 

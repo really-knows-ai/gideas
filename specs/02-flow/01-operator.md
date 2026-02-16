@@ -21,14 +21,14 @@ The Operator maintains a direct service-level query path to the Archivist, disti
 
 The Operator reconciles four state surfaces continuously:
 
-- **[FoundryFlow](../05-reference/crds.md#foundryflow)**: topology, contracts, policy limits, and cross-flow policy.
+- **[FoundryFlow](../05-reference/crds.md#foundryflow)**: contracts, policy limits, and cross-flow policy.
 - **[FoundryNode](../05-reference/crds.md#foundrynode)**: node capability envelope, routing outputs, timeout budget, and entry/exit bindings.
 - **Workitem**: lifecycle progression through assignment, routing, and completion transition.
 - **Support Service**: deployment lifecycle, health monitoring, and scaling policy for Flow-Architect-deployed [Flow Support Services](./04-system-services.md#flow-support-services).
 
 ```mermaid
 flowchart TD
-    FF["FoundryFlow<br/>topology contracts policy"] --> OP["Operator reconcile loop"]
+    FF["FoundryFlow<br/>contracts policy cross-flow"] --> OP["Operator reconcile loop"]
     FN["FoundryNode<br/>capabilities outputs entry/exit"] --> OP
     WI["Workitems<br/>pending running completed/failed"] --> OP
     SS["Support Services<br/>health scaling lifecycle"] --> OP
@@ -90,7 +90,7 @@ Guard evaluation order is fixed:
 Routing-specific rules:
 
 - `route_to_output` resolves output name on the current node configuration.
-- `route_to` resolves direct node identity in Flow topology.
+- `route_to` resolves direct node identity against existing FoundryNode CRDs.
 - Unresolvable targets are rejected with structured errors.
 
 Completion-specific rules:

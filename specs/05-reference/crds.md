@@ -6,7 +6,7 @@ All custom resources use API group `flow.gideas.io/v1` and are namespace-scoped.
 
 | CRD | Owner | Purpose |
 |-----|-------|---------|
-| [FoundryFlow](#foundryflow) | Flow Architect / Operator | Flow-wide topology, contracts, governance policy, cross-flow settings |
+| [FoundryFlow](#foundryflow) | Flow Architect / Operator | Flow-wide contracts, governance policy, cross-flow settings |
 | [FoundryNode](#foundrynode) | Flow Architect / Operator | Node-local behaviour, capabilities, routing outputs, contract bindings |
 | [Workitem](#workitem) | Operator (sole mutator) | Workitem lifecycle state, assignment, routing |
 | [GovernedArtefact](#governedartefact) | Flow Architect | Artefact kind registration and stamp vocabulary |
@@ -25,31 +25,17 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `topology` | `[]TopologyEdge` | yes | Directed graph of routable node connections. Each edge names a source node and target node. Every referenced node must have a corresponding FoundryNode CRD. |
 | `entryContracts` | `map[string]Contract` | yes | Named entry contracts. Each contract is a [Contract shape](#contract-shape). At least one entry contract must be defined. |
 | `exitContracts` | `map[string]Contract` | yes | Named exit contracts. Each contract is a [Contract shape](#contract-shape). |
 | `importNode` | `string` | no | Name of the FoundryNode that receives cross-flow imported Workitems. Must reference an existing entry-bound node. If absent, cross-flow import is disabled. |
-| `assay` | `AssayConfig` | yes | Assay hearing configuration. See [Assay configuration](#assay-configuration). |
 | `governancePolicy` | `GovernancePolicy` | yes | Governance thresholds and timers. See [governance policy](#governance-policy). |
 | `crossFlow` | `CrossFlowConfig` | no | Cross-flow trust and naturalisation settings. See [cross-flow configuration](#cross-flow-configuration). |
 
-### TopologyEdge
+### Assay
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `source` | `string` | yes | Source node name. |
-| `target` | `string` | yes | Target node name. |
+Assay is a runtime-mandated component — the Operator provisions it without requiring a separate FoundryNode CRD. Its hearing entry and exit contracts are fixed by the runtime: the entry contract requires a single `law-reference` artefact; the exit contract requires it to still be present. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages Assay's `USE:support/<name>/encode` capability for each).
 
-### Assay Configuration
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `hearingEntryContract` | `string` | yes | Name of the entry contract bound to Assay for hearing admission. Must reference a key in `entryContracts`. |
-| `hearingExitContract` | `string` | yes | Name of the exit contract bound to Assay for hearing completion. Must reference a key in `exitContracts`. |
-
-Assay is a runtime-mandated component — the Operator provisions it from the `AssayConfig` without requiring a separate FoundryNode CRD. Its entry and exit bindings are derived from `hearingEntryContract` and `hearingExitContract`. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator automatically grants `USE:support/<name>/encode` for each).
-
-The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The hearing entry and exit contracts reference this kind with no stamp requirements.
+The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID.
 
 ### Governance Policy
 
@@ -58,16 +44,33 @@ The Operator also provisions a `law-reference` GovernedArtefact kind alongside A
 | `maxVisits` | `integer` | yes | Thrash Guard budget. When the aggregate visit count across all nodes exceeds this value, the Workitem fails with `THRASH_BUDGET_EXCEEDED`. |
 | `defaultTimeout` | `duration` | yes | Default inactivity timeout for node assignments. Used as the fallback when no node-specific timeout is set in FoundryNode. |
 | `maxTimeout` | `duration` | yes | Maximum inactivity timeout for node assignments. No node-specific timeout can exceed this value. Must be >= `defaultTimeout`. |
-| `maxFeedbackDepth` | `integer` | yes | Feedback deadlock threshold. When a single feedback item's history depth exceeds this value, the gate node transitions it to `deadlocked`. |
 | `frictionThresholds` | `FrictionThresholds` | no | Per-tier friction thresholds that trigger review hearings. |
+| `reviewTTLs` | `ReviewTTLs` | no | Per-tier time-to-live durations that trigger review hearings. |
 | `retentionPolicy` | `RetentionPolicy` | no | Retention duration for terminal Workitems before garbage collection. |
 
 ### FrictionThresholds
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `tier1ReviewHearing` | `float` | no | Accumulated friction on a Tier 1 Finding that triggers a review hearing. |
-| `tier2ReviewHearing` | `float` | no | Accumulated friction on a Tier 2 Ruling that triggers a review hearing. |
+| `tier1` | `float` | no | Accumulated friction threshold for Tier 1 laws (Findings). |
+| `tier2` | `float` | no | Accumulated friction threshold for Tier 2 laws (Rulings). |
+| `tier3` | `float` | no | Accumulated friction threshold for Tier 3 laws (Local Statutes). |
+| `tier4` | `float` | no | Accumulated friction threshold for Tier 4 laws (State Constitutions). |
+| `tier5` | `float` | no | Accumulated friction threshold for Tier 5 laws (Federal Accords). |
+
+When a law's accumulated friction crosses its tier's configured threshold, the Librarian triggers a review hearing. For Tiers 1-2, Assay adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
+
+### ReviewTTLs
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tier1` | `duration` | no | Time-to-live for Tier 1 laws (Findings). |
+| `tier2` | `duration` | no | Time-to-live for Tier 2 laws (Rulings). |
+| `tier3` | `duration` | no | Time-to-live for Tier 3 laws (Local Statutes). |
+| `tier4` | `duration` | no | Time-to-live for Tier 4 laws (State Constitutions). |
+| `tier5` | `duration` | no | Time-to-live for Tier 5 laws (Federal Accords). |
+
+When a law's age exceeds its tier's configured TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Like friction thresholds, Tiers 1-2 hearings are adjudicated by Assay; Tiers 3-5 produce petitions.
 
 ### RetentionPolicy
 
@@ -120,7 +123,7 @@ The FoundryNode CRD defines node-local behaviour, permission envelope, and routi
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | `string` | yes | Output channel name. Referenced by `route_to_output` instructions. |
-| `target` | `string` | yes | Target node name. Must exist in the Flow topology. |
+| `target` | `string` | yes | Target node name. Must reference an existing FoundryNode in the namespace. |
 
 ### StorageConfig
 
@@ -145,7 +148,7 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:law/tier4` | Write Tier 4 and below (State Constitutions and all lower tiers). |
 | `WRITE:law/tier5` | Write Tier 5 and below (all tiers). |
 | `STAMP:artefact/<kind>/<stamp-name>` | Apply a named stamp to a specific artefact kind. Exact match on both kind and stamp name. |
-| `READ:flow` | Query Flow topology and configuration. Enables stamp-to-node mapping discovery. |
+| `READ:flow` | Query Flow configuration and node routing graph. Enables stamp-to-node mapping discovery. |
 | `READ:workitem` | Read Workitem state beyond the current assignment. |
 | `READ:feedback` | Read feedback items on artefacts. |
 | `WRITE:feedback/new` | Create feedback items (`AddFeedback`). |
@@ -186,21 +189,6 @@ Managed by the Operator. Nodes do not write to `status` directly.
 | `type` | `string` | `route_to_output`, `route_to`, or `complete`. |
 | `target` | `string` | Output name (for `route_to_output`) or node name (for `route_to`). Empty for `complete`. |
 
-### Absent by Design
-
-These fields do not exist on the Workitem CRD:
-
-| Absent Field | Rationale |
-|--------------|-----------|
-| `spec` block | The Workitem has no immutable user-provided fields. The Operator creates it and manages all state in `status`. |
-| `spec.type` / `WorkitemType` reference | Flow admission is contract-bound, not type-gated. |
-| `spec.context` / `status.context` | No freeform context bag. Work context is governed artefacts. |
-| `intent` / `priority` | Not consumed by any runtime mechanism. |
-| Artefact references | Artefacts record the Workitem they belong to. The [Archivist](../02-flow/04-system-services.md#archivist) is the source of truth for artefact-to-Workitem relationships, queried by `workitem_id`. |
-| Feedback | Feedback lives in the [Archivist](../02-flow/04-system-services.md#archivist), scoped to `workitem_id` and artefact `id`. |
-| Stamps / passport | Stamps live in the [Archivist](../02-flow/04-system-services.md#archivist), scoped to `workitem_id`, artefact `id`, and version hash. |
-| Version history | Version history lives in the [Archivist](../02-flow/04-system-services.md#archivist). |
-
 ---
 
 ## GovernedArtefact
@@ -228,7 +216,6 @@ The Law object is managed by the [Librarian](../02-flow/04-system-services.md#li
 | `representations` | `[]Representation` | yes | One or more typed expressions of the goal. At least one representation is required. |
 | `tier` | `integer` | yes | Law tier: `1` (Finding), `2` (Ruling), `3` (Local Statute), `4` (State Constitution), `5` (Federal Accord). |
 | `appliesTo` | `[]string` | no | Governed artefact kinds this law applies to. Empty means global — applies to all kinds in the Flow. |
-| `ttl` | `duration` | no | Time-to-live. Applicable to Tier 1 and Tier 2 laws. When a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing. Tier 3+ laws have no automatic decay. |
 
 ### Representation
 
@@ -362,7 +349,6 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 | Node timeout exceeds Flow-level `maxTimeout` | FoundryNode | `SCHEMA_VALIDATION_FAILED` |
 | `maxTimeout` is less than `defaultTimeout` | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Stamp name in a contract is not declared in the GovernedArtefact's stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
-| Assay hearing contract references (`hearingEntryContract`, `hearingExitContract`) reference undefined contract names | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Duplicate artefact `id` with different `kind` for the same Workitem | Archivist | `ARTEFACT_KIND_CONFLICT` |
 
 ---
@@ -376,6 +362,5 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 5. Capability enforcement is exact — verb, resource, kind, and stamp name must match the grant.
 6. Laws are single objects; any `spec` mutation produces a new content-hash version.
 7. Treaty trust is directed — a single CRD represents one direction of trust.
-8. No CRD field path reintroduces `WorkitemType`, `spec.type`, `spec.context`, `status.context`, `entryNode`, `terminalContract`, `terminal` bindings, `intent`, `priority`, or artefact references on Workitems.
-9. Invalid configuration is rejected at admission; partial application does not occur.
-10. Stamp vocabulary on GovernedArtefact defines which stamp names are meaningful; contracts select from that vocabulary.
+8. Invalid configuration is rejected at admission; partial application does not occur.
+9. Stamp vocabulary on GovernedArtefact defines which stamp names are meaningful; contracts select from that vocabulary.

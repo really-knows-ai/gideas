@@ -30,7 +30,7 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `CreateHearingWorkitem` | `law_id` | `workitem_id` | Creates a review hearing Workitem for Assay processing. The Operator creates a `law-reference` artefact from the supplied `law_id` and admits the Workitem via Assay's bound hearing entry contract. Called by the Librarian when friction thresholds or TTL expiry trigger a review hearing. |
+| `CreateHearingWorkitem` | `law_id` | `workitem_id` | Creates a review hearing Workitem for Assay processing. The Operator creates a `law-reference` artefact from the supplied `law_id` and admits the Workitem via Assay's bound hearing entry contract. Called by the Librarian when friction thresholds or review TTL expiry trigger a review hearing. |
 | `ExportWorkitem` | `workitem_id` | `export_package` | Assembles an export package from the completed Workitem: artefact content (scoped by exit contract), passport stamps, Workitem metadata, and provenance chain. The Operator signs the package with the Flow's identity material and includes the certificate chain. |
 | `ImportWorkitem` | `export_package`, `treaty_name?` | `workitem_id` or structured error | Validates and materialises a Workitem from an export package. Verifies the package signature against the certificate chain (State Root for siblings, Treaty `caCert` for non-siblings), enforces `allowedSubjects` and `maxBundleSize` from the Treaty if applicable, validates the materialised Workitem against the configured `importNode`'s entry contract, and creates the Workitem in `Pending`. |
 
@@ -46,7 +46,7 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 | Condition | Error | gRPC Status |
 |-----------|-------|-------------|
 | Output name not in node's configured outputs | `INVALID_ROUTE` | `FAILED_PRECONDITION` |
-| Target node does not exist in topology | `INVALID_ROUTE` | `FAILED_PRECONDITION` |
+| Target node does not exist as a FoundryNode | `INVALID_ROUTE` | `FAILED_PRECONDITION` |
 | `complete` from non-exit node | `EXIT_NOT_BOUND` | `FAILED_PRECONDITION` |
 | Exit contract not satisfied | `CONTRACT_VIOLATION` | `FAILED_PRECONDITION` |
 | Thrash budget exceeded | `THRASH_BUDGET_EXCEEDED` | `FAILED_PRECONDITION` |
@@ -98,7 +98,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | `AcceptRefusal` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `wont_fix` to `resolved`. |
 | `RejectRefusal` | `workitem_id`, `feedback_id`, `message` | `updated_item` | Transitions feedback from `wont_fix` to `rejected`. |
 | `GetFeedbackDepth` | `workitem_id`, `feedback_id` | `depth` (integer) | Returns the current history depth (number of transitions) for the specified feedback item. |
-| `DeadlockFeedback` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `wont_fix` or `rejected` to `deadlocked`. Requires `WRITE:feedback/deadlocked` capability. The Archivist validates capability and from-state; threshold enforcement (`maxFeedbackDepth`) is gate node logic, not Archivist enforcement. |
+| `DeadlockFeedback` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `wont_fix` or `rejected` to `deadlocked`. Requires `WRITE:feedback/deadlocked` capability. The Archivist validates capability and from-state; deadlock determination is gate node logic, not Archivist enforcement. |
 
 ### Archivist Error Responses
 

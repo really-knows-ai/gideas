@@ -49,8 +49,8 @@ Every handler returns one routing instruction. The instruction tells the [Operat
 
 | Instruction | Semantics | Constraint |
 |-------------|-----------|------------|
-| `RouteToOutput(name)` | Route the Workitem through a named output channel defined on the [FoundryNode](../05-reference/crds.md). The Operator resolves the output name to a target node using [topology configuration](../02-flow/05-configuration.md#topology-and-routing-semantics). | Output name must exist in the node's configured outputs. |
-| `RouteTo(node)` | Route the Workitem directly to a specific node by name. | Target node must exist in the current Flow topology. |
+| `RouteToOutput(name)` | Route the Workitem through a named output channel defined on the [FoundryNode](../05-reference/crds.md). The Operator resolves the output name to a target node using the node's [routing configuration](../02-flow/05-configuration.md#routing-semantics). | Output name must exist in the node's configured outputs. |
+| `RouteTo(node)` | Route the Workitem directly to a specific node by name. | Target node must exist as a FoundryNode in the namespace. |
 | `Complete()` | Signal exit completion. The Workitem is ready for [exit contract](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) validation. | Node must be bound to an exit contract. Non-exit nodes receive an error. |
 
 Invalid instructions — unresolvable output names, nonexistent target nodes, `Complete()` from a non-exit node — are rejected with structured errors. The Workitem state does not advance on rejection; the handler receives the error and decides how to respond.
