@@ -31,6 +31,7 @@ Assay evaluates the Finding's friction level and goal, and renders a verdict:
 
 | Verdict | Effect |
 |---------|--------|
+| **Retire** | Finding is deleted. History preserved in the audit log. |
 | **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a configurable TTL |
 
 A Finding that does not accumulate enough friction to trigger a review hearing will enter a review hearing when its TTL expires.
