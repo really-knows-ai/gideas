@@ -33,7 +33,7 @@ The mode is determined automatically based on the state of `REVIEW.md`.
 
 ### Step 1: Discover spec directories
 
-Find all directories at the repository root matching the pattern `[0-9][0-9]-*` (e.g. `01-concepts/`, `02-flow/`). These are the spec directories to review. Ignore `legacy/`, `README.md`, and any non-spec content.
+Find all directories at the repository root matching the pattern `[0-9][0-9]-*` (e.g. `01-concepts/`, `02-flow/`). These are the spec directories to review as well as the base `README.md`.
 
 ### Step 2: Read all spec documents
 
@@ -43,17 +43,9 @@ For each spec directory, read every `.md` file. Build a mental model of the enti
 
 Review every spec document against the following five criteria. Each criterion should be evaluated independently and thoroughly.
 
-#### Criterion 1: Key Decisions Compliance
+#### Criterion: Writing Principles
 
-For each key decision in the "Key Decisions" section of `AGENTS.md`, verify that the spec documents honour it. Check for:
-
-- Direct contradictions (a spec doc says the opposite of a key decision)
-- Omissions that create ambiguity (a spec doc describes a mechanism without mentioning a constraint that the key decision requires)
-- Drift (a spec doc uses slightly different framing that could mislead a reader about the key decision's intent)
-
-#### Criterion 2: Writing Principles
-
-Check every spec document against the writing principles in `AGENTS.md`:
+Check every spec document against the writing principles:
 
 - **Define things on their own terms** — Flag any negative definitions ("unlike X", "not like Y", "doesn't do Z")
 - **No planning voice** — Flag enumerations like "there are four axioms" or "eight nouns describe the system"
@@ -62,7 +54,7 @@ Check every spec document against the writing principles in `AGENTS.md`:
 - **Mermaid line breaks** — Check that `flowchart` and `sequenceDiagram` blocks use `<br/>` not `\n` for line breaks
 - **Cross-link aggressively** — Flag concepts that have detail pages but are not linked on first mention
 
-#### Criterion 3: Cross-Document Consistency
+#### Criterion: Cross-Document Consistency
 
 Check across all spec documents for:
 
@@ -71,30 +63,17 @@ Check across all spec documents for:
 - **Cross-links** — Are forward and backward references present and correct? Flag missing cross-links to related documents.
 - **Numbering and naming** — Do references to other documents use correct file paths?
 
-#### Criterion 4: Technical Feasibility
+#### Criterion: Technical Feasibility
 
-For each mechanism described in the spec, evaluate whether it is implementable:
-
-- Can the described CRD structures fit within etcd's 1.5MB limit?
-- Are the described gRPC interactions between components coherent (no circular dependencies, no impossible sequencing)?
-- Are the described Kubernetes patterns sound (operator patterns, CRD watches, sidecar injection)?
-- Are there any described behaviours that would require capabilities not available in the described architecture?
-
-#### Criterion 5: Completeness vs AGENTS.md
-
-For each spec document listed in the AGENTS.md spec structure, check:
-
-- Does the document cover the topics described in its brief (the comment next to the filename in the structure)?
-- Are there key decisions that should be reflected in this document but are missing?
-- Are there concepts mentioned in the document that should link to detail but don't?
+For each mechanism described in the spec, evaluate whether it is implementable.
 
 ### Step 4: Classify issues
 
 Assign each issue a severity:
 
-- **Critical** — Contradicts a key decision or creates an internal inconsistency that would confuse implementors. Must be fixed.
+- **Critical** — Creates an internal inconsistency that would confuse implementors. Must be fixed.
 - **Significant** — Weakens accuracy, violates writing principles, or creates ambiguity. Should be fixed.
-- **Minor** — Defensible or low-impact but worth noting for consistency. Nice to fix.
+- **Minor** — Low-impact but worth noting for consistency.
 
 ### Step 5: Write REVIEW.md
 
@@ -184,6 +163,7 @@ After writing `REVIEW.md`, present a summary to the user:
 
 For each outstanding issue, one at a time:
 
+1. **Verify**: ready the relevant files and verify it's still a present issue as described.
 1. **Present the issue clearly**: what the problem is, which file(s) and line(s) are affected, and what the suggested fix is.
 2. **Read the affected file(s)** to understand the current state of the text.
 3. **Discuss the fix with the user.** They may agree, disagree, or want to modify the approach.
