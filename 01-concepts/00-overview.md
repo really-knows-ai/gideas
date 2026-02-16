@@ -10,9 +10,7 @@ Governance has a measurable cost. Friction is a first-class, quantifiable signal
 
 Work cannot leave a Flow until its artefacts carry the required stamps. The quality standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system — the laws, the topology, the nodes — needs to change.
 
----
-
-## Core Concepts
+## Core Definitions
 
 A **Flow** is a self-contained runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary.
 
