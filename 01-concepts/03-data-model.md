@@ -253,10 +253,11 @@ stateDiagram-v2
 
     wont_fix --> resolved : AcceptRefusal()
     wont_fix --> rejected : RejectRefusal()
-    wont_fix --> deadlocked : Gate node detects<br/>excessive depth
+    wont_fix --> deadlocked : DeadlockFeedback()
 
     rejected --> actioned : ResolveFeedback()
-    rejected --> deadlocked : Gate node detects<br/>excessive depth
+    rejected --> wont_fix : RefuseFeedback()<br/>with Justification
+    rejected --> deadlocked : DeadlockFeedback()
 
     deadlocked --> wont_fix : Assay verdict<br/>(favours refiner;<br/>linkedRuling set)
     deadlocked --> rejected : Assay verdict<br/>(favours reviewer;<br/>linkedRuling set)
@@ -282,9 +283,10 @@ stateDiagram-v2
 | actioned | rejected | Reviewing node | `RejectFix()` — fix is inadequate |
 | `wont_fix` | resolved | Reviewing node | `AcceptRefusal()` — refusal is justified |
 | `wont_fix` | rejected | Reviewing node | `RejectRefusal()` — refusal is unjustified |
-| `wont_fix` | deadlocked | Gate node | Feedback depth exceeds `maxFeedbackDepth` |
+| `wont_fix` | deadlocked | Gate node | `DeadlockFeedback()` — gate node escalates when feedback depth exceeds configured threshold |
 | rejected | actioned | Refining node | `ResolveFeedback()` — complies with rejection |
-| rejected | deadlocked | Gate node | Feedback depth exceeds `maxFeedbackDepth` |
+| rejected | `wont_fix` | Refining node | `RefuseFeedback()` — with structured justification |
+| rejected | deadlocked | Gate node | `DeadlockFeedback()` — gate node escalates when feedback depth exceeds configured threshold |
 | deadlocked | `wont_fix` | Assay | Verdict favours refiner — `linkedRuling` set, cites Tier 2 Ruling |
 | deadlocked | rejected | Assay | Verdict favours reviewer — `linkedRuling` set, cites Tier 2 Ruling |
 
@@ -292,9 +294,9 @@ These are the only permitted transitions. The Archivist rejects any state change
 
 In the [reference arrangement](./02-foundry-cycle.md), the refining node is [Refine](./02-foundry-cycle.md#refine-refiner), the reviewing node is [Appraise](./02-foundry-cycle.md#appraise-reviewer), and the gate node is [Sort](./02-foundry-cycle.md#sort-gate). Any node granted the appropriate capabilities can perform these roles in a custom topology.
 
-The refining node makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). The reviewing node evaluates the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to the refining node for compliance — re-refusal is not permitted. If the refining node's subsequent fix is again rejected, the cycle continues until either the reviewer accepts or the gate node detects fatigue and escalates to Assay.
+The refining node makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). The reviewing node evaluates the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to the refining node, which may either comply by applying a fix (`actioned`) or re-refuse with a new structured justification (`wont_fix`). The argument is essential — the refiner always retains the right to refuse, provided they justify the refusal on governance grounds. The cycle continues until either the reviewer accepts or the gate node detects fatigue and escalates to Assay.
 
-When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to Assay. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
+When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, the gate node calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to Assay via its normal routing instruction. Assay examines the investigative history, retires the conflicting laws, and mints a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side Assay favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
 
 From the gate node's perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont_fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont_fix` state still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
 
@@ -313,7 +315,7 @@ Every refusal creates a traceable record — either a link to existing governanc
 
 ### Fatigue Detection and Escalation
 
-Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate).
+Each round of review-and-refine appends entries to the feedback item's `history` array. When the history depth on a single feedback item exceeds the configured `maxFeedbackDepth`, the gate node calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) via its normal routing instruction. In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate).
 
 The threshold applies per feedback item, not per Workitem. A Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
