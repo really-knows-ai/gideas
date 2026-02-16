@@ -92,7 +92,7 @@ Review-hearing processing is configured through mandatory Assay bindings:
 
 - Assay is entry-bound for hearing admission.
 - Assay is exit-bound for hearing completion.
-- Hearing Workitems are standard Workitems carrying explicit hearing artefacts, including a `lawId` reference.
+- Hearing Workitems are standard Workitems carrying a `law-reference` artefact — the law ID under review.
 - Hearing processing does not introduce `WorkitemType`, `spec.type`, or type-gated admission.
 
 Deadlock-escalated governed-work Workitems remain separate from hearing Workitems and continue through Sort after Assay adjudication in the reference arrangement.
@@ -206,7 +206,7 @@ Configuration exposes policy limits that bound runtime behaviour:
 - Thrash limits for aggregate Workitem visit budgets.
 - Feedback deadlock thresholds for Assay escalation.
 - Retention windows for completed and failed Workitems.
-- Citation and TTL policy values driving hearing triggers.
+- Citation, TTL expiry, and friction threshold values driving review hearing triggers.
 
 These policies are behavioural inputs to Operator and service runtime logic and must be deterministic under reconciliation.
 

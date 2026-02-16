@@ -6,7 +6,7 @@ System services provide the runtime substrate for law lifecycle, artefact lifecy
 
 Each service owns one primary concern:
 
-- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (both friction-threshold and TTL-proximity).
+- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (friction-threshold and TTL-expiry).
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
 - **Flow Monitor**: telemetry aggregation, friction signal surfacing, and audit stream integration.
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
@@ -76,14 +76,11 @@ Integration outcomes follow tiered supremacy semantics:
 
 The Librarian owns all hearing trigger emission for law lifecycle events. It monitors two signals and triggers review hearings by requesting Workitem creation through the Operator.
 
-**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a Tier 1 Finding's friction crosses a configured threshold, the Librarian triggers a review hearing. Thresholds are configurable per law tier in the FoundryFlow [configuration](./05-configuration.md).
+**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a Tier 1 Finding's or Tier 2 Ruling's friction crosses its tier's configured threshold, the Librarian triggers a review hearing. Separate thresholds are configurable per law tier (`tier1ReviewHearing`, `tier2ReviewHearing`) in the FoundryFlow [configuration](./05-configuration.md).
 
-**TTL-proximity triggers:** When a law enters a configurable window before its TTL expiry, the Librarian triggers the appropriate review hearing:
+**TTL-expiry triggers:** When a Tier 1 or Tier 2 law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing — expiry is the trigger, not a demotion event.
 
-- Tier 1 Finding nearing expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
-- Tier 2 Ruling nearing expiry -> request creation of a Workitem for review-hearing processing through the Operator, carrying hearing artefacts including `lawId`.
-
-There is no TTL reset. Hearings produce a decisive outcome — promote, retire, or demote.
+Every review hearing produces a decisive outcome — promote, retire, or demote. There is no TTL reset.
 
 Librarian does not adjudicate hearings.
 
@@ -205,14 +202,18 @@ Hearings are implemented as a protocol across services and runtime actors, not a
 
 Hearing processing uses standard Workitems with explicit governed artefacts and contract bindings. No hearing-specific Workitem subtype or `spec.type` discriminator is introduced.
 
+Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact kind provisioned by the Operator alongside Assay. The `law-reference` artefact contains the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
+
+Assay writes its verdict directly to the Library as a Tier 2 Ruling (for Tier 1 promotion) or petitions HITL via the Librarian (for Tier 2 promotion to Tier 3). Assay's output is a law in the Library, not a stamp on an artefact. After Assay calls `complete()`, the Operator notifies the Librarian via `ApplyLifecycleAction` to apply the verdict outcome (promote, retire, or demote) to the original law.
+
 Trigger ownership is consolidated in the Librarian:
 
-- Friction-threshold trigger (Tier 1 Finding) -> Librarian queries Flow Monitor, detects threshold crossing.
-- TTL-proximity trigger (Tier 1 or Tier 2) -> Librarian detects law entering configurable window before TTL expiry.
+- Friction-threshold trigger (Tier 1 or Tier 2) -> Librarian queries Flow Monitor, detects threshold crossing.
+- TTL-expiry trigger (Tier 1 or Tier 2) -> Librarian detects law TTL expiry. The law remains active during the hearing.
 
 Execution and adjudication path:
 
-1. Librarian requests hearing Workitem creation through the Operator, supplying hearing artefacts including `lawId`.
+1. Librarian requests hearing Workitem creation through the Operator, supplying the `lawId`.
 2. Operator admits and assigns the hearing Workitem to Assay using Assay's bound hearing entry contract.
 3. Assay retrieves the law's friction data from the Flow Monitor (via Sidecar) and legal context from the Librarian.
 4. Assay issues a tier-appropriate verdict and calls `complete()`.
@@ -226,7 +227,7 @@ sequenceDiagram
     participant SC as Sidecar
     participant FM as Flow Monitor
 
-    LB->>OP: create hearing Workitem (lawId artefact)
+    LB->>OP: create hearing Workitem (lawId)
     OP->>AS: assign hearing via entry binding
     AS->>SC: query friction for law
     SC->>FM: friction query (by law_id)
@@ -242,11 +243,10 @@ sequenceDiagram
     OP->>LB: apply lifecycle action
 ```
 
-Verdict schema is tier-specific:
+Review hearing verdicts are tier-specific:
 
-- **Friction-threshold hearing (Tier 1):** `Promote`.
-- **Tier 1 TTL-proximity hearing:** `Retire` or `Promote`.
-- **Tier 2 TTL-proximity hearing:** `Demote` or `Promote` (petition for Tier 3 ratification).
+- **Tier 1 under review:** `Promote` (mint Tier 2 Ruling) or `Retire`.
+- **Tier 2 under review:** `Promote` (petition HITL for Tier 3 Local Statute), `Retire`, or `Demote` (drop to Tier 1 Finding with fresh TTL).
 
 Assay considers the law's accumulated friction and goal when rendering verdicts. There is no TTL reset — hearings produce a decisive outcome.
 
@@ -309,7 +309,7 @@ All deployments preserve these service invariants:
 2. Workitem CRD stores artefact references only (`id`, `kind`).
 3. Laws are single objects with one goal and multiple representations under whole-law versioning.
 4. Friction-threshold hearing triggers are emitted by the Librarian based on Flow Monitor queries.
-5. TTL-proximity hearing triggers are emitted by the Librarian.
+5. TTL-expiry hearing triggers are emitted by the Librarian.
 6. Assay evidence retrieval includes friction data from the Flow Monitor.
 7. Hearing adjudication remains an Assay responsibility, not a service-local shortcut.
 8. Friction is first-class and queryable by source attribution.

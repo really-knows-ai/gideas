@@ -49,6 +49,8 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 
 Assay is a runtime-mandated component — the Operator provisions it from the `AssayConfig` without requiring a separate FoundryNode CRD. Its entry and exit bindings are derived from `hearingEntryContract` and `hearingExitContract`. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and Codification Service access.
 
+The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The hearing entry and exit contracts reference this kind with no stamp requirements.
+
 ### Governance Policy
 
 | Field | Type | Required | Description |
@@ -57,14 +59,14 @@ Assay is a runtime-mandated component — the Operator provisions it from the `A
 | `defaultTimeout` | `duration` | yes | Default inactivity timeout for node assignments. Nodes can override with a shorter value in FoundryNode; they cannot exceed this. |
 | `maxFeedbackDepth` | `integer` | yes | Feedback deadlock threshold. When a single feedback item's history depth exceeds this value, the gate node transitions it to `deadlocked`. |
 | `frictionThresholds` | `FrictionThresholds` | no | Per-tier friction thresholds that trigger review hearings. |
-| `ttlProximityWindow` | `duration` | no | Window before TTL expiry at which the Librarian triggers a TTL-proximity hearing. |
 | `retentionPolicy` | `RetentionPolicy` | no | Retention duration for terminal Workitems before garbage collection. |
 
 ### FrictionThresholds
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `tier1Promotion` | `float` | no | Accumulated friction on a Tier 1 Finding that triggers a friction-threshold hearing. |
+| `tier1ReviewHearing` | `float` | no | Accumulated friction on a Tier 1 Finding that triggers a review hearing. |
+| `tier2ReviewHearing` | `float` | no | Accumulated friction on a Tier 2 Ruling that triggers a review hearing. |
 
 ### Cross-Flow Configuration
 
@@ -240,7 +242,7 @@ The Law object is managed by the [Librarian](../02-flow/04-system-services.md#li
 | `representations` | `[]Representation` | yes | One or more typed expressions of the goal. At least one representation is required. |
 | `tier` | `integer` | yes | Law tier: `1` (Finding), `2` (Ruling), `3` (Local Statute), `4` (State Constitution), `5` (Federal Accord). |
 | `appliesTo` | `[]string` | no | Governed artefact kinds this law applies to. Empty means global — applies to all kinds in the Flow. |
-| `ttl` | `duration` | no | Time-to-live. Applicable to Tier 1 and Tier 2 laws. When a law enters a configurable window before expiry, the Librarian triggers a TTL-proximity hearing. Tier 3+ laws have no automatic decay. |
+| `ttl` | `duration` | no | Time-to-live. Applicable to Tier 1 and Tier 2 laws. When a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing. Tier 3+ laws have no automatic decay. |
 
 ### Representation
 

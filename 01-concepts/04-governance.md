@@ -33,7 +33,7 @@ Assay evaluates the Finding's friction level and goal, and renders a verdict:
 |---------|--------|
 | **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent with a configurable TTL |
 
-A Finding that does not accumulate enough friction to trigger promotion will expire at its TTL and enter a [TTL-proximity hearing](#decay-and-retirement).
+A Finding that does not accumulate enough friction to trigger a review hearing will enter a review hearing when its TTL expires.
 
 ### Administered Policy (Tier 3)
 
@@ -49,7 +49,7 @@ The [Assay](./02-foundry-cycle.md#assay-judiciary--standard-component) node is t
 
     Assay's deliberation is itself a friction source. Each jury round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first jury round, 125 on the second, 625 on the third. If Assay cannot resolve the dispute and escalates to human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 jury rounds produces 15,625. The cost curve ensures that disputes reaching Assay are visibly expensive, and disputes reaching humans are dramatically so.
 
-2. **Review hearing.** When a law's friction level or TTL triggers a review, Assay renders a verdict. Friction-threshold hearings for Tier 1 use [Promote](#organic-discovery-tiers-12). TTL-proximity hearings use tier-specific verdicts: [Retire / Promote](#decay-and-retirement) for Tier 1, [Demote / Promote](#decay-and-retirement) for Tier 2. Hearings use standard Workitems with explicit governed artefacts, including a `lawId` reference for the law under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
+2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing. Assay renders a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at Assay.
 
 Assay's verdicts are enforced by the [Contempt Guard](./03-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
@@ -75,23 +75,24 @@ Promotion is also where governance can harden in *form*, not just authority. Whe
 
 ### Decay and Retirement
 
-Laws below Tier 3 decay if unused. When a law enters a configurable window before its TTL expiry, the [Librarian](../02-flow/04-system-services.md) triggers creation of a Workitem for review-hearing processing rather than letting the law expire silently. Assay evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
+Laws below Tier 3 decay if unused. When a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing. Assay evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
 
-**Tier 1 Finding — TTL expiry:**
+**Tier 1 Finding — review hearing:**
 
 | Verdict | Effect |
 |---------|--------|
 | **Retire** | Finding is deleted. History preserved in the audit log. |
 | **Promote** | Finding is minted as a Tier 2 Ruling. |
 
-**Tier 2 Ruling — TTL expiry:**
+**Tier 2 Ruling — review hearing:**
 
 | Verdict | Effect |
 |---------|--------|
+| **Retire** | Ruling is deleted. History preserved in the audit log. |
 | **Demote** | Ruling drops to Tier 1 Finding (fresh TTL). |
 | **Promote** | Assay petitions for Tier 3 Statute (HITL ratification required). |
 
-Every hearing produces either a renewed mandate or a deliberate retirement. There is no TTL reset — hearings are decisive.
+Every review hearing produces a decisive outcome — promote, retire, or demote. There is no TTL reset.
 
 Retired laws are deleted. The full history — creation, citations, conflicts, retirement — is preserved in the audit log.
 

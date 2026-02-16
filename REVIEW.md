@@ -50,22 +50,12 @@ Issues that weaken accuracy, violate writing principles, or create ambiguity. Sh
 
 ---
 
-### 5. Assay hearing Workitem creation lacks explicit artefact structure
+### ~~5. Assay hearing Workitem creation lacks explicit artefact structure~~ RESOLVED
 
 **Files:** `02-flow/04-system-services.md:215`, `02-flow/03-nodes-external.md:50-56`, `05-reference/crds.md`, `05-reference/grpc-api.md:38`
 **Criterion:** Technical Feasibility
 
-Hearing Workitems are described as "standard Workitems with explicit governed artefacts including a `lawId` reference" (`02-flow/04-system-services.md:215`). The gRPC API `CreateHearingWorkitem` method takes `law_id`, `hearing_artefacts[]`, and `hearing_type`.
-
-However, the spec never defines:
-- What governed artefact kind(s) hearing Workitems carry
-- Whether a `GovernedArtefact` CRD must be registered for hearing artefacts
-- What stamps (if any) the hearing entry and exit contracts require
-- How the `lawId` reference is structurally carried (as an artefact? as metadata within an artefact?)
-
-Without this, an implementor cannot configure the Assay hearing entry/exit contracts because the artefact kinds and stamp vocabulary are undefined.
-
-**Suggested fix:** Define a standard hearing artefact kind (e.g., `hearing-brief`) in the spec, or state that hearing artefact configuration is Flow-Architect-defined and provide a reference configuration example. Specify how the `lawId` reference is structurally represented within the hearing Workitem's governed artefacts. Add this to either `02-flow/04-system-services.md` or `02-flow/05-configuration.md`.
+**Resolution:** Defined a built-in `law-reference` GovernedArtefact kind (runtime-provisioned, empty stamp vocabulary) as the hearing Workitem's payload. Simplified `CreateHearingWorkitem` to take only `law_id`. Assay writes verdicts directly to the Library via SDK, not as artefact stamps. Replaced TTL-proximity triggers with TTL-expiry triggers (law remains active during hearing). Dropped `ttlProximityWindow` from FoundryFlow CRD. Split friction threshold into per-tier fields (`tier1ReviewHearing`, `tier2ReviewHearing`). Added `Retire` as an explicit Tier 2 verdict option. Updated across 8 spec files.
 
 ---
 

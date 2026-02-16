@@ -6,7 +6,7 @@
 : The system service that manages artefact lifecycle data — version history, passport stamps, and feedback in an SQLite database; raw content bytes in a content-addressed blob store. The single source of truth for all artefact provenance. Detail: [System Services](../02-flow/04-system-services.md#archivist).
 
 **Assay**
-: The judicial node present in every Flow as a standard runtime component. Assay holds `WRITE:law/tier2` and resolves deadlocked feedback disputes by minting Tier 2 Rulings. It adjudicates review hearings triggered by friction thresholds or TTL proximity. Its authority ceiling is constitutionally bounded: resolve at Tier 2, propose at Tier 3, appeal at Tier 4-5. Assay does not write Tier 1 Findings by convention — its role is judicial, not observational. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component), [Governance](../01-concepts/04-governance.md#assays-authority-ceiling).
+: The judicial node present in every Flow as a standard runtime component. Assay holds `WRITE:law/tier2` and resolves deadlocked feedback disputes by minting Tier 2 Rulings. It adjudicates review hearings triggered by friction thresholds or TTL expiry. Its authority ceiling is constitutionally bounded: resolve at Tier 2, propose at Tier 3, appeal at Tier 4-5. Assay does not write Tier 1 Findings by convention — its role is judicial, not observational. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component), [Governance](../01-concepts/04-governance.md#assays-authority-ceiling).
 
 **assignment**
 : The binding of a single Workitem to a single node for processing. A Workitem has exactly one assignee at a time. The Sidecar establishes an assignment session and all SDK calls are automatically scoped to it. Detail: [Operator](../02-flow/01-operator.md), [SDK Core](../04-sdk/01-sdk-core.md).
@@ -30,7 +30,7 @@
 : The reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) demonstrating adversarial creation, validation, review, and refinement. Flow Architects adapt it to their context. The platform enforces behaviour through capabilities and configuration, not node names. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md).
 
 **Librarian**
-: The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and TTL proximity, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
+: The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and TTL expiry, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
 
 **node**
 : A stateless worker that processes Workitems. Node pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist each assignment. Nodes interact with runtime services exclusively through the Sidecar. Detail: [Node Overview](../03-node/00-overview.md).
@@ -170,7 +170,7 @@
 : A specific expression of a law's goal — prose, formal logic, executable code, or any other format identified by MIME type. A law can carry multiple representations. Nodes query for representations they can interpret. Adding or removing a representation produces a new law version. Detail: [Data Model](../01-concepts/03-data-model.md#representations).
 
 **review hearing**
-: A judicial proceeding processed as a standard Workitem at Assay. Triggered by the Librarian when a law's friction crosses a configured threshold (friction-threshold hearing) or when a law enters a configurable window before TTL expiry (TTL-proximity hearing). Produces tier-specific verdicts: promote, retire, or demote. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
+: A judicial proceeding processed as a standard Workitem at Assay. Triggered by the Librarian when a law's accumulated friction crosses a configured threshold or when a law's TTL expires. The law remains active during the hearing. Produces tier-specific verdicts: promote, retire, or demote. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
 
 **Ruling** (Tier 2)
 : Binding precedent minted by Assay when resolving disputes. Carries a configurable TTL and requires a formal review hearing before retirement. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
@@ -185,7 +185,7 @@
 : A law's level in the five-tier jurisdictional hierarchy. Tier 1 (Finding), Tier 2 (Ruling), Tier 3 (Local Statute), Tier 4 (State Constitution), Tier 5 (Federal Accord). Higher tier carries greater authority. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 **TTL**
-: Time-to-live. A configurable expiry window on Tier 1 and Tier 2 laws. When a law enters a configurable window before TTL expiry, the Librarian triggers a review hearing.
+: Time-to-live. A configurable expiry window on Tier 1 and Tier 2 laws. When a law's TTL expires, the Librarian triggers a review hearing. The law remains active during the hearing.
 
 **verdict**
 : The outcome of a review hearing rendered by Assay. Tier-specific: promote, retire (Tier 1), or demote (Tier 2). Hearings produce a decisive outcome — there is no TTL reset.
