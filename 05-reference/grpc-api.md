@@ -243,13 +243,13 @@ The Sidecar catches invalid requests early. The owning service makes authoritati
 | Nodes | Sidecar-mediated | `USE:support/<service>/<capability>` grant on the node. |
 | System services | Direct service-to-service gRPC | Flow configuration discovery. |
 
-### Codification Service Example
+### Codification Service API
 
-The `encode` capability is the worked example:
+Each [CodificationService](./crds.md#codificationservice) exposes a single `Encode` method:
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `Encode` | `goal` (string), `target_format` (MIME type) | `representations[]` | Translates a law's natural-language goal into one or more formal representations. |
+| `Encode` | `law` (Law object) | `representation` (Representation) | Translates the law's goal into the service's declared `outputFormat`. The service receives the full law object (goal, existing representations, tier, metadata) and returns a single typed representation. The output MIME type matches the `outputFormat` declared in the service's CRD. |
 
 ### Health Endpoints
 
@@ -274,9 +274,9 @@ All Support Services implement:
 1. All node-originated requests transit the Sidecar. No node calls a runtime service directly.
 2. Identity context (`node_id`, `workitem_id`, `flow_id`) is Sidecar-injected and cannot be overridden by node code.
 3. Capability enforcement is performed by the owning service, not by the Sidecar or the SDK.
-4. All errors use structured responses with stable error codes from the [Error Catalog](./error-catalog.md).
+4. All errors use structured responses with stable error codes from the [Error Catalogue](./error-catalogue.md).
 5. Telemetry ingestion failures do not block or fail work execution.
 6. State-mutating operations return structured errors with no state change on rejection.
 7. gRPC status codes map to error categories: `PERMISSION_DENIED` for capability failures, `FAILED_PRECONDITION` for guard violations, `NOT_FOUND` for missing resources, `ALREADY_EXISTS` for write-once violations, `UNAVAILABLE` for transient service failures, `INVALID_ARGUMENT` for malformed input, `DATA_LOSS` for integrity failures, `DEADLINE_EXCEEDED` for timeout failures, `UNAUTHENTICATED` for identity failures.
 8. Inter-service calls (Operator-Archivist, Librarian-Flow Monitor) use the same error model as node-facing calls.
-9. Configuration errors (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) are caught at CRD admission time and do not appear in runtime gRPC responses. See [Error Catalog](./error-catalog.md#configuration-and-validation-errors).
+9. Configuration errors (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) are caught at CRD admission time and do not appear in runtime gRPC responses. See [Error Catalogue](./error-catalogue.md#configuration-and-validation-errors).

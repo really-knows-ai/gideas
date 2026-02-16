@@ -23,12 +23,6 @@
 **Flow Support Service**
 : An optional, Flow-Architect-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via their own CRD. Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
 
-**Forge** (reference arrangement)
-: The creator node. Generates artefacts seeded by law context queried from the Library. Reads all law tiers for context seeding but does not write laws — it holds no `WRITE:law/tierN` grant in the reference arrangement. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#forge-creator).
-
-**Foundry Cycle**
-: The reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) demonstrating adversarial creation, validation, review, and refinement. Flow Architects adapt it to their context. The platform enforces behaviour through capabilities and configuration, not node names. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md).
-
 **Librarian**
 : The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and TTL expiry, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
 
@@ -37,12 +31,6 @@
 
 **Operator** (Flow Operator)
 : The Kubernetes controller that reconciles FoundryFlow and FoundryNode CRDs, assigns Workitems to nodes, validates routing outcomes, enforces entry and exit contracts, and manages the Workitem lifecycle state machine. The Operator is the sole authority for Workitem control-plane persistence. Detail: [Operator](../02-flow/01-operator.md).
-
-**reference arrangement**
-: The standard node topology (Forge, Quench, Appraise, Sort, Refine) provided by the Foundry Cycle. Distinguished from platform mechanisms, which are universal to every Flow regardless of topology. Assay is not part of the reference arrangement — it is a standard runtime component.
-
-**Refine** (reference arrangement)
-: The refiner node. Addresses feedback by modifying artefacts. Produces new artefact versions, driving the Workitem back through review. In the reference arrangement, Refine holds `WRITE:law/tier1` capability. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#refine-refiner).
 
 **routing instruction**
 : The outcome a node returns after processing: `route_to_output` (named output channel), `route_to` (specific node), or `complete` (exit completion). The Operator validates and persists the instruction. Detail: [SDK Core](../04-sdk/01-sdk-core.md), [Workitem](../02-flow/02-workitem.md).
@@ -58,10 +46,32 @@
 
 ---
 
-## Data and Provenance Terms
+## Foundry Cycle Terms
 
 **Appraise** (reference arrangement)
 : The reviewer node. Evaluates artefacts against the Library's body of law and raises feedback. In the reference arrangement, Appraise holds `WRITE:law/tier1` capability and can record Tier 1 Findings. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#appraise-reviewer).
+
+**Forge** (reference arrangement)
+: The creator node. Generates artefacts seeded by law context queried from the Library. Reads all law tiers for context seeding but does not write laws — it holds no `WRITE:law/tierN` grant in the reference arrangement. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#forge-creator).
+
+**Foundry Cycle**
+: The reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) demonstrating adversarial creation, validation, review, and refinement. Flow Architects adapt it to their context. The platform enforces behaviour through capabilities and configuration, not node names. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md).
+
+**Quench** (reference arrangement)
+: The deterministic validator node. Runs repeatable, deterministic checks against artefacts (syntax validation, schema compliance, executable law representations). Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#quench-deterministic-validator).
+
+**reference arrangement**
+: The standard node topology (Forge, Quench, Appraise, Sort, Refine) provided by the Foundry Cycle. Distinguished from platform mechanisms, which are universal to every Flow regardless of topology. Assay is not part of the reference arrangement — it is a standard runtime component.
+
+**Refine** (reference arrangement)
+: The refiner node. Addresses feedback by modifying artefacts. Produces new artefact versions, driving the Workitem back through review. In the reference arrangement, Refine holds `WRITE:law/tier1` capability. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#refine-refiner).
+
+**Sort** (reference arrangement)
+: The gate node. Evaluates Workitem state and routes: unresolved feedback to Refine, deadlocked items to Assay, missing stamps to the configured stamp provider (Appraise in the reference arrangement), and fully satisfied Workitems to exit completion. Sort is the only node that applies the "approval" stamp in the reference arrangement. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#sort-gate).
+
+---
+
+## Data and Provenance Terms
 
 **artefact**
 : A governed output — a document, code file, data model, or anything a Flow produces. Versioned, content-addressed, and stored in the Archivist. The Workitem carries only a reference (`id` and `kind`); version history, stamps, and feedback live in the Archivist. Detail: [Data Model](../01-concepts/03-data-model.md#artefacts).
@@ -89,12 +99,6 @@
 
 **passport**
 : The collection of stamps on a specific artefact version. Tracks which governance checkpoints have been satisfied for that content hash. Stored in the Archivist's database, not on the Workitem CRD. Detail: [Data Model](../01-concepts/03-data-model.md#passports-and-stamps).
-
-**Quench** (reference arrangement)
-: The deterministic validator node. Runs repeatable, deterministic checks against artefacts (syntax validation, schema compliance, executable law representations). Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#quench-deterministic-validator).
-
-**Sort** (reference arrangement)
-: The gate node. Evaluates Workitem state and routes: unresolved feedback to Refine, deadlocked items to Assay, missing stamps to the configured stamp provider (Appraise in the reference arrangement), and fully satisfied Workitems to exit completion. Sort is the only node that applies the "approval" stamp in the reference arrangement. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#sort-gate).
 
 **stamp**
 : A named governance checkpoint on an artefact's passport. Records the stamp name, the applying node, the content hash, and a cryptographic signature with certificate chain. Stamps are write-once per artefact version — a second application of the same stamp name to the same version is rejected. Detail: [Conceptual Overview](../01-concepts/00-overview.md#stamps), [Data Model](../01-concepts/03-data-model.md#passports-and-stamps).

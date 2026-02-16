@@ -65,6 +65,8 @@ stateDiagram-v2
 | `RejectRefusal(feedbackId, message)` | `wont_fix` | `rejected` | Reviewing node | `message` explaining why the refusal is unjustified |
 | `DeadlockFeedback(feedbackId)` | `wont_fix`, `rejected` | `deadlocked` | Gate node | — |
 
+The **Actor** column describes the expected role in the [reference arrangement](../01-concepts/02-foundry-cycle.md), not an enforced identity constraint. Any node holding the required `WRITE:feedback/<status>` [capability](../03-node/02-configuration.md) can call the corresponding operation. The Archivist validates the capability grant and the from-state; node identity is recorded in each `FeedbackEvent` for audit, not for access control.
+
 The gate node queries feedback depth via `GetFeedbackDepth(feedbackId)` and compares against `maxFeedbackDepth` from [Flow configuration](../02-flow/05-configuration.md). When the depth exceeds the threshold, the gate node calls `DeadlockFeedback(feedbackId)` to transition the feedback item to `deadlocked`, then returns a routing instruction to send the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The Archivist validates the `WRITE:feedback/deadlocked` capability and the from-state — threshold enforcement is gate node logic, not Archivist enforcement. Assay renders a verdict and transitions the item to either `wont_fix` (favouring the refiner) or `rejected` (favouring the reviewer), setting the `linkedRuling` field to the Tier 2 Ruling that captures the decision.
 
 Each transition appends a `FeedbackEvent` to the item's history — an append-only chronological record of who acted, what action they took, and what they said.
@@ -146,7 +148,7 @@ Common error conditions:
 | `FEEDBACK_NOT_FOUND` | Specified feedback ID does not exist on the artefact |
 | `MESSAGE_TOO_LONG` | Message exceeds 1024 character limit |
 
-All errors are structured and carry stable error codes. Full error semantics are in the [Error Catalog](../05-reference/error-catalog.md).
+All errors are structured and carry stable error codes. Full error semantics are in the [Error Catalogue](../05-reference/error-catalogue.md).
 
 ## Feedback SDK Invariants
 

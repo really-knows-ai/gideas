@@ -57,19 +57,19 @@ A Flow is deployed as a single unit. One deployment creates one namespace, insta
 
 ### Control Plane
 
-Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./03-data-model.md#workitems) CRDs, assigns them to [Nodes](../03-node/00-overview.md), and validates the bound exit contract at the exit boundary. The [Thrash Guard](./03-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold, enforcing a maximum visit budget per Workitem.
+Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./03-data-model.md#workitems) CRDs, assigns them to [nodes](../03-node/00-overview.md), and validates the bound exit contract at the exit boundary. The [Thrash Guard](./03-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold, enforcing a maximum visit budget per Workitem.
 
 The [Flow Monitor](../02-flow/04-system-services.md) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
 
-The Control Plane's scope is routing decisions. It reads state and moves Workitems; Nodes do the rest.
+The Control Plane's scope is routing decisions. It reads state and moves Workitems; nodes do the rest.
 
 ### Data Plane
 
-Where work happens. The Data Plane contains the [Nodes](../03-node/00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./03-data-model.md#passports-and-stamps), [feedback](./03-data-model.md#feedback), and raw content bytes.
+Where work happens. The Data Plane contains the [nodes](../03-node/00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./03-data-model.md#passports-and-stamps), [feedback](./03-data-model.md#feedback), and raw content bytes.
 
 Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
 
-Nodes have direct, uninhibited network access to external services. Network security is an infrastructure concern delegated to the platform's network policy layer.
+The Flow platform does not mediate or restrict node network access to external services — nodes and [Support Services](../02-flow/04-system-services.md#flow-support-services) reach external endpoints directly. Network segmentation is an infrastructure concern; operators who require egress controls should define Kubernetes NetworkPolicies or service mesh configuration accordingly.
 
 Flow Architects can also deploy **[Support Services](../02-flow/04-system-services.md#flow-support-services)** — containers that expose capabilities consumed by nodes and system services but do not process Workitems. A [Codification Service](../02-flow/04-system-services.md#codification-services) that translates a law's prose goal into formal logic is a Support Service; a notification relay that pushes alerts to an external channel is another. Support Services run in the Flow namespace and are accessed through Sidecar mediation when consumed by nodes, preserving the same trust boundary as system service calls. They are declared in Flow configuration and are optional — the platform imposes no minimum set.
 
@@ -87,7 +87,7 @@ Every service call requires valid credentials regardless of network path.
 
 The legal lifecycle. The Governance Plane manages the discovery, enforcement, and evolution of [law](./03-data-model.md#laws) within the Flow.
 
-The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to Nodes that query for applicable governance. The Librarian also monitors law usage through [friction](./00-overview.md#friction) data: when nodes cite laws during processing, each citation generates a friction event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the Librarian queries the accumulated friction to drive law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and to identify laws that generate disproportionate resistance.
+The [Librarian](../02-flow/04-system-services.md) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to nodes that query for applicable governance. The Librarian also monitors law usage through [friction](./00-overview.md#friction) data: when nodes cite laws during processing, each citation generates a friction event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the Librarian queries the accumulated friction to drive law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and to identify laws that generate disproportionate resistance.
 
 The [Assay node](./02-foundry-cycle.md#assay-judiciary--standard-component) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
 

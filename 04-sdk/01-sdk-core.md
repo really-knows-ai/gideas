@@ -109,7 +109,7 @@ Error classification utilities:
 - `IsRetryable(err)` — returns `true` for transient failures (service unavailable, deadline exceeded, resource exhausted). Transient errors can be retried with exponential backoff.
 - `IsError(err, code)` — checks whether the error matches a specific stable error code.
 
-The SDK does not implement built-in error routing. When an operation fails, the handler receives a structured error and decides what failure means in its business domain. A handler may retry, route to a different node, or let the assignment fail. The stable error code inventory is in the [Error Catalog](../05-reference/error-catalog.md).
+The SDK does not implement built-in error routing. When an operation fails, the handler receives a structured error and decides what failure means in its business domain. A handler may retry, route to a different node, or let the assignment fail. The stable error code inventory is in the [Error Catalogue](../05-reference/error-catalogue.md).
 
 ## Concurrency and Idempotency
 

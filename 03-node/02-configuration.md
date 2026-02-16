@@ -10,7 +10,7 @@ Configuration resolves through a fixed hierarchy:
 2. **FoundryNode** — Node-local capability grants, routing outputs, contract bindings, timeout overrides, concurrency, and storage.
 3. **Runtime evaluation** — Operator reconciliation and service-side validation on [Sidecar](./01-sidecar.md)-mediated requests.
 
-A node's configured timeout cannot exceed the Flow-level maximum. A node's capability grants cannot exceed the Flow-level permission envelope. When node configuration conflicts with Flow-level constraints, the Flow-level constraint wins — silently, at reconciliation time, not at request time.
+A node's configured timeout cannot exceed the Flow-level [`maxTimeout`](../05-reference/crds.md#governance-policy). A node's capability grants cannot exceed the Flow-level permission envelope. When node configuration conflicts with Flow-level constraints, the Flow-level constraint wins — silently, at reconciliation time, not at request time.
 
 The [Operator](../02-flow/01-operator.md) reconciles both CRDs into the effective runtime state. Services evaluate requests against the reconciled state, not against raw CRD fields.
 

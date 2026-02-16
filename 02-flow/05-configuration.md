@@ -248,4 +248,4 @@ All Flow configurations must preserve these invariants:
 
 These semantics are consumed by [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md).
 
-Node-level implementation patterns that realise this configuration model are detailed in [Node Configuration](../03-node/02-configuration.md) and [Node Patterns](../03-node/03-patterns.md). Runtime rejection outcomes map to [Error Catalog](../05-reference/error-catalog.md).
+Node-level implementation patterns that realise this configuration model are detailed in [Node Configuration](../03-node/02-configuration.md) and [Node Patterns](../03-node/03-patterns.md). Runtime rejection outcomes map to [Error Catalogue](../05-reference/error-catalogue.md).

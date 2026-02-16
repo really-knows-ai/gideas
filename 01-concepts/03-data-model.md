@@ -290,7 +290,7 @@ stateDiagram-v2
 | deadlocked | `wont_fix` | Assay | Verdict favours refiner — `linkedRuling` set, cites Tier 2 Ruling |
 | deadlocked | rejected | Assay | Verdict favours reviewer — `linkedRuling` set, cites Tier 2 Ruling |
 
-These are the only permitted transitions. The Archivist rejects any state change not listed above.
+These are the only permitted transitions. The Archivist rejects any state change not listed above. The **Actor** column describes the expected role, not an enforced identity constraint — any node holding the required `WRITE:feedback/<status>` capability can perform the transition. The Archivist validates the capability grant and the from-state; it does not track which node is the "refiner" or "reviewer" for a given feedback item. Node identity is recorded in each `FeedbackEvent` for auditability.
 
 In the [reference arrangement](./02-foundry-cycle.md), the refining node is [Refine](./02-foundry-cycle.md#refine-refiner), the reviewing node is [Appraise](./02-foundry-cycle.md#appraise-reviewer), and the gate node is [Sort](./02-foundry-cycle.md#sort-gate). Any node granted the appropriate capabilities can perform these roles in a custom topology.
 

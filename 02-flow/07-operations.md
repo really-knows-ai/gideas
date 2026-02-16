@@ -85,7 +85,7 @@ Triage must preserve evidence. Incident response never deletes unresolved audit 
 
 ## Error Taxonomy and Operator Actions
 
-All operational error handling maps to [Error Catalog](../05-reference/error-catalog.md).
+All operational error handling maps to [Error Catalogue](../05-reference/error-catalogue.md).
 
 - Operators must use documented error families and remediation paths.
 - Runbooks must not introduce undocumented failure codes or ad-hoc semantics.
@@ -167,7 +167,7 @@ All production operations preserve these invariants:
 3. Backup ownership boundaries are explicit by data surface.
 4. etcd/CRD backup remains a cluster-admin responsibility.
 5. Restore procedures preserve stamp, feedback, and law lineage integrity.
-6. Error handling follows shared [Error Catalog](../05-reference/error-catalog.md) semantics.
+6. Error handling follows shared [Error Catalogue](../05-reference/error-catalogue.md) semantics.
 7. Cross-flow operations preserve provenance chain and topology-dependent authority.
 8. Failure-path testing is required alongside happy-path validation.
 9. Recovery readiness is continuously validated through drills.

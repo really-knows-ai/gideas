@@ -100,7 +100,7 @@ The SDK does not implement built-in error routing. When an SDK call fails, the h
 
 Telemetry emission failures are non-blocking. If the telemetry sink is degraded, the SDK logs a warning and continues processing. Work execution never fails because telemetry delivery failed.
 
-Stable error codes and their semantics are catalogued in the [Error Catalog](../05-reference/error-catalog.md). Wire-level error mappings are in the [gRPC API Reference](../05-reference/grpc-api.md).
+Stable error codes and their semantics are catalogued in the [Error Catalogue](../05-reference/error-catalogue.md). Wire-level error mappings are in the [gRPC API Reference](../05-reference/grpc-api.md).
 
 ## Relationship to Reference Documents
 
@@ -108,7 +108,7 @@ The SDK documents define behavioural contracts and API semantics. Implementation
 
 - [gRPC API Reference](../05-reference/grpc-api.md) — wire-level service and method definitions, request/response shapes, status code mappings.
 - [CRD Reference](../05-reference/crds.md) — Kubernetes resource schemas, field constraints, validation rules.
-- [Error Catalog](../05-reference/error-catalog.md) — complete error code inventory, causes, and caller response guidance.
+- [Error Catalogue](../05-reference/error-catalogue.md) — complete error code inventory, causes, and caller response guidance.
 - [Glossary](../05-reference/glossary.md) — canonical term definitions.
 
 ## SDK Invariants

@@ -205,4 +205,4 @@ All Flow deployments preserve these Operator invariants:
 11. Operator-originated audit and telemetry emissions are mandatory runtime outputs.
 12. Support Service deployment lifecycle, health monitoring, and scaling policy are Operator-managed.
 
-Field-level definitions are in [CRD Reference](../05-reference/crds.md). Runtime error mappings are in [Error Catalog](../05-reference/error-catalog.md).
+Field-level definitions are in [CRD Reference](../05-reference/crds.md). Runtime error mappings are in [Error Catalogue](../05-reference/error-catalogue.md).

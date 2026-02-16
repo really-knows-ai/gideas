@@ -54,5 +54,5 @@ Quick lookup for implementors across all roles.
 |----------|-------------|
 | [CRDs](05-reference/crds.md) | All custom resources under `flow.gideas.io/v1` with full field schemas |
 | [gRPC API](05-reference/grpc-api.md) | All runtime service APIs with method signatures |
-| [Error Catalogue](05-reference/error-catalog.md) | Structured error codes, categories, and caller response guidance |
+| [Error Catalogue](05-reference/error-catalogue.md) | Structured error codes, categories, and caller response guidance |
 | [Glossary](05-reference/glossary.md) | Canonical term definitions organised by domain |

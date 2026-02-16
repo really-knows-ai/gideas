@@ -46,7 +46,7 @@ This repository contains the technical specification for **Foundry Flow** — a 
 ├── 05-reference/                # Quick lookup
 │   ├── crds.md
 │   ├── grpc-api.md
-│   ├── error-catalog.md
+│   ├── error-catalogue.md
 │   └── glossary.md
 │
 └── legacy/                      # Source material (read-only reference)

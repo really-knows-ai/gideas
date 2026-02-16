@@ -24,16 +24,7 @@ An artefact's **[passport](./03-data-model.md#passports-and-stamps)** is the col
 
 ### Stamps
 
-A **stamp** is a named governance checkpoint on an artefact's passport. Each stamp records:
-
-- The **stamp name** — which checkpoint this satisfies (e.g. "linter", "security-review", "approval").
-- The **node** that applied it (for audit).
-- The **content hash** of the artefact at stamp time.
-- A **cryptographic signature** and certificate chain.
-
-Stamp names are declared by the [GovernedArtefact CRD](../05-reference/crds.md#governedartefact) — the artefact kind defines which stamps are meaningful for it. [Entry and exit contracts](./03-data-model.md#entry-and-exit-contracts) define which of those stamps are required at each lifecycle boundary. The Flow grants nodes permission to apply specific named stamps via the [FoundryNode CRD](../05-reference/crds.md#foundrynode)'s capabilities. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
-
-Stamps are write-once per artefact version. If two different nodes need to sign off independently, the Flow Architect defines two different stamps. Stamps are version-specific: if the artefact content changes, existing stamps remain with the old version and the new version starts with no stamps.
+A **stamp** is a named governance checkpoint on an artefact's passport — recording which node applied it, the content hash at stamp time, and a cryptographic signature. Stamp names are declared by the [GovernedArtefact CRD](../05-reference/crds.md#governedartefact), and [entry and exit contracts](./03-data-model.md#entry-and-exit-contracts) define which stamps are required at each lifecycle boundary. Stamps are write-once per artefact version — if artefact content changes, existing stamps remain with the old version and the new version starts with no stamps. Detail: [Data Model](./03-data-model.md#passports-and-stamps).
 
 **[Feedback](./03-data-model.md#feedback)** is structured annotations on artefacts — threaded, with forced-choice resolution. When addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
@@ -55,7 +46,7 @@ The standard library provides configurable reference implementations for each ro
 
 ### Laws and the Library
 
-A Flow's Library is its collective body of law — its constitution. Every law the Flow has ever discovered, enacted, or inherited lives here.
+A Flow's [Library](../02-flow/04-system-services.md#librarian) is its collective body of law — its constitution. Every law the Flow has ever discovered, enacted, or inherited lives here.
 
 Each law has a **goal** — a plain-language statement of what it enforces, stops, or ensures — and one or more **representations**: prose, formal logic, executable code, or any other format. The Library stores all representations as part of a single law object with equal indifference. It cares only that a law exists and has a goal; interpretation belongs to the nodes that consume it.
 

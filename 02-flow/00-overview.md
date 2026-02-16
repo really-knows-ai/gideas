@@ -86,7 +86,7 @@ The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrange
 
 The runtime enforces behaviour through configuration and capabilities, not node names. [Forge](../01-concepts/02-foundry-cycle.md#forge-creator), [Sort](../01-concepts/02-foundry-cycle.md#sort-gate), and [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner) describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
 
-[Assay](./03-nodes-external.md#assay-as-standard-component) is the exception: it is a standard runtime component present in every Flow and participates as a routable judicial node.
+[Assay](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component) is the exception: it is a standard runtime component present in every Flow and participates as a routable judicial node.
 
 ## Governance Runtime Mechanics
 

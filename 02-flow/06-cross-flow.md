@@ -216,4 +216,4 @@ All cross-flow deployments preserve these invariants:
 12. Cross-flow events are audit-visible and retry-safe.
 13. Successful imports create `Pending` Workitems and first-schedule them to configured `importNode` when capacity allows.
 
-Schema and wire definitions are specified in [CRD Reference](../05-reference/crds.md) and [gRPC API](../05-reference/grpc-api.md). Error outcomes map to [Error Catalog](../05-reference/error-catalog.md). Node-level implementation patterns are detailed in [Node Configuration](../03-node/02-configuration.md) and [Node Patterns](../03-node/03-patterns.md).
+Schema and wire definitions are specified in [CRD Reference](../05-reference/crds.md) and [gRPC API](../05-reference/grpc-api.md). Error outcomes map to [Error Catalogue](../05-reference/error-catalogue.md). Node-level implementation patterns are detailed in [Node Configuration](../03-node/02-configuration.md) and [Node Patterns](../03-node/03-patterns.md).

@@ -169,31 +169,45 @@ CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 
 Codification Services are a Flow Support Service specialisation for governance hardening. They translate a [law](../01-concepts/03-data-model.md#laws)'s natural-language goal into formal representations — formal logic, executable validators, policy-as-code — increasing enforceability without changing the law's intent.
 
-Codification Services expose an `encode` capability consumed during law promotion:
+Each Codification Service is declared via its own [CodificationService CRD](../05-reference/crds.md#codificationservice), which specifies exactly one `outputFormat` — the MIME type of the representation the service produces (e.g., `application/smt-lib` for formal logic, `application/rego` for policy-as-code). The Operator manages CodificationService deployments identically to other Support Services and automatically grants Assay `USE:support/<name>/encode` for each registered instance.
 
-1. Assay renders a verdict during Tier 1 → Tier 2 promotion, expressing the ruling's goal in natural language.
-2. Assay sends the goal to a Codification Service via its Sidecar.
-3. The Codification Service returns one or more formal representations alongside the original prose.
-4. Assay mints the Tier 2 Ruling as a single law object with multiple representations.
+Codification Services expose a single `Encode` [gRPC method](../05-reference/grpc-api.md#codification-service-api) consumed during law promotion:
 
-Assay decides what the ruling should be; the Codification Service writes the formal syntax.
+1. Assay renders a Promote verdict and drafts the Ruling's prose representation — the goal and its `text/markdown` content.
+2. Assay queries the Flow configuration for registered CodificationService CRDs and probes each service's `readyz` endpoint via its Sidecar. Services that are not ready are skipped.
+3. Assay dispatches `Encode` requests in parallel to all ready Codification Services via its Sidecar. Each request carries the full law object (goal, existing representations, tier, metadata). Each service returns a single typed representation in its declared `outputFormat`.
+4. Assay collects the results. If a Codification Service fails, Assay logs the failure and omits that representation — the Ruling proceeds without it.
+5. Assay assembles the Tier 2 Ruling as a single law object: the prose representation plus all successfully returned formal representations.
 
-Flow Architects can deploy multiple Codification Services for different representation types (e.g., `codify-smt` for formal logic, `codify-rego` for policy-as-code). Assay discovers available Codification Services through [Flow configuration](./05-configuration.md). If no Codification Service is deployed, Assay mints rulings with prose representations only — governance hardening through codification is optional, not a platform requirement.
+Assay decides what the ruling says; each Codification Service translates the goal into its declared formal syntax.
+
+Flow Architects deploy zero or more CodificationService CRDs. Each declares exactly one `outputFormat` — `codify-smt` outputs `application/smt-lib`, `codify-rego` outputs `application/rego`. If no CodificationService is registered or none are ready at the time of promotion, Assay mints rulings with prose representations only — governance hardening through codification is optional, not a platform requirement.
 
 ```mermaid
 sequenceDiagram
     participant AS as Assay
     participant SC as Sidecar
-    participant CS as Codification Service
+    participant CSa as Codification Service A
+    participant CSb as Codification Service B
     participant LB as Librarian
 
-    AS->>SC: encode(goal, target-format)
-    SC->>CS: encode request
-    CS-->>SC: formal representation(s)
-    SC-->>AS: representation(s)
-    AS->>AS: mint Ruling with prose + formal representations
-    AS->>SC: write law
-    SC->>LB: persist new Tier 2 Ruling
+    AS->>AS: draft prose representation
+    AS->>SC: discover registered CodificationServices
+    SC-->>AS: [CSa (ready), CSb (ready)]
+    par codify in parallel
+        AS->>SC: Encode(law) -> CSa
+        SC->>CSa: Encode
+        CSa-->>SC: representation (application/smt-lib)
+        SC-->>AS: representation
+    and
+        AS->>SC: Encode(law) -> CSb
+        SC->>CSb: Encode
+        CSb-->>SC: representation (application/rego)
+        SC-->>AS: representation
+    end
+    AS->>AS: assemble Ruling<br/>(prose + formal representations)
+    AS->>SC: WriteLaw
+    SC->>LB: persist Tier 2 Ruling
 ```
 
 ## Hearing Lifecycle as Cross-Component Protocol
@@ -216,8 +230,10 @@ Execution and adjudication path:
 1. Librarian requests hearing Workitem creation through the Operator, supplying the `lawId`.
 2. Operator admits and assigns the hearing Workitem to Assay using Assay's bound hearing entry contract.
 3. Assay retrieves the law's friction data from the Flow Monitor (via Sidecar) and legal context from the Librarian.
-4. Assay issues a tier-appropriate verdict and calls `complete()`.
-5. Operator validates Assay's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions.
+4. Assay issues a tier-appropriate verdict.
+5. For a **Promote** verdict, Assay drafts the prose representation and codifies formal representations in parallel via registered [Codification Services](#codification-services). Services that are not ready or that fail are skipped with logging. For Retire or Demote verdicts, this step is skipped.
+6. Assay writes the new law to the Librarian (via `WriteLaw`) and calls `complete()`.
+7. Operator validates Assay's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions.
 
 ```mermaid
 sequenceDiagram
@@ -226,6 +242,7 @@ sequenceDiagram
     participant AS as Assay
     participant SC as Sidecar
     participant FM as Flow Monitor
+    participant CS as Codification Services
 
     LB->>OP: create hearing Workitem (lawId)
     OP->>AS: assign hearing via entry binding
@@ -237,9 +254,21 @@ sequenceDiagram
     SC->>LB: law context request
     LB-->>SC: law versions and tiers
     SC-->>AS: law versions and tiers
-    AS->>SC: verdict + complete()
-    SC-->>OP: verdict + complete()
-    OP->>OP: validate Assay hearing exit contract
+    AS->>AS: render verdict
+    opt Promote verdict
+        AS->>AS: draft prose representation
+        AS->>SC: discover ready CodificationServices
+        SC-->>AS: ready services
+        AS->>SC: Encode(law) to ready services
+        SC->>CS: Encode requests (parallel)
+        CS-->>SC: representations
+        SC-->>AS: representations
+        AS->>AS: assemble law with all representations
+    end
+    AS->>SC: WriteLaw + complete()
+    SC->>LB: persist new law
+    SC-->>OP: complete()
+    OP->>OP: validate hearing exit contract
     OP->>LB: apply lifecycle action
 ```
 
@@ -287,7 +316,7 @@ Core call paths are stable:
 - Assay (via Sidecar) <-> Flow Monitor: friction queries for hearing evidence.
 - Services -> Flow Monitor: metrics, traces, and audit events.
 
-Contract failures must return structured errors aligned with [Error Catalog](../05-reference/error-catalog.md).
+Contract failures must return structured errors aligned with [Error Catalogue](../05-reference/error-catalogue.md).
 
 ## Failure and Degradation Semantics
 
@@ -297,7 +326,7 @@ Service outages degrade behaviour predictably:
 - Librarian unavailable: law retrieval and law lifecycle actions fail closed. Hearing trigger evaluation pauses until the Librarian recovers.
 - LLM contradiction evaluator unavailable: higher-tier law activation pauses in queued state; integration retries with backoff and raises operational alerts.
 - Flow Monitor unavailable: processing continues, but observability coverage degrades, friction queries return errors, and hearing threshold evaluation is blocked until recovery. Alerting is raised.
-- Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Governance hardening (codification) degrades gracefully — Assay can mint prose-only rulings when Codification Services are unavailable.
+- Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; Assay proceeds with whatever representations succeeded (prose at minimum).
 
 Fail-open behaviour is prohibited for governance integrity paths.
 

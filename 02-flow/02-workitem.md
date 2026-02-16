@@ -70,7 +70,7 @@ Instruction validity checks:
 - `complete` is valid only from exit nodes.
 - Invalid instructions are rejected with structured errors and do not advance completion.
 
-Routing semantics are runtime-level control behaviour; schema-level instruction fields are defined in [CRD Reference](../05-reference/crds.md). Error mappings are defined in [Error Catalog](../05-reference/error-catalog.md).
+Routing semantics are runtime-level control behaviour; schema-level instruction fields are defined in [CRD Reference](../05-reference/crds.md). Error mappings are defined in [Error Catalogue](../05-reference/error-catalogue.md).
 
 ## Thrash Guard and Feedback Deadlock
 

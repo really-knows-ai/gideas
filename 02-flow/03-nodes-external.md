@@ -44,7 +44,7 @@ sequenceDiagram
     OP->>OP: evaluate guards and transition
 ```
 
-Routing instructions are `route_to_output`, `route_to`, or `complete`. Their schema is defined in [CRD Reference](../05-reference/crds.md), wire-level call contracts are defined in [gRPC API](../05-reference/grpc-api.md), and runtime rejection outcomes are defined in [Error Catalog](../05-reference/error-catalog.md).
+Routing instructions are `route_to_output`, `route_to`, or `complete`. Their schema is defined in [CRD Reference](../05-reference/crds.md), wire-level call contracts are defined in [gRPC API](../05-reference/grpc-api.md), and runtime rejection outcomes are defined in [Error Catalogue](../05-reference/error-catalogue.md).
 
 ## Capability and Authorisation Model
 

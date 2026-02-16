@@ -13,6 +13,7 @@ All custom resources use API group `flow.gideas.io/v1` and are namespace-scoped.
 | [Law](#law) | Librarian / Assay / nodes | Law goal, representations, tier, lifecycle metadata |
 | [Treaty](#treaty) | Flow Architect | Directed cross-flow trust policy |
 | [FlowSupportService](#flowsupportservice) | Flow Architect / Operator | Support Service capability declaration and infrastructure |
+| [CodificationService](#codificationservice) | Flow Architect / Operator | Codification Service: output format declaration and deployment |
 
 ---
 
@@ -47,7 +48,7 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 | `hearingEntryContract` | `string` | yes | Name of the entry contract bound to Assay for hearing admission. Must reference a key in `entryContracts`. |
 | `hearingExitContract` | `string` | yes | Name of the exit contract bound to Assay for hearing completion. Must reference a key in `exitContracts`. |
 
-Assay is a runtime-mandated component — the Operator provisions it from the `AssayConfig` without requiring a separate FoundryNode CRD. Its entry and exit bindings are derived from `hearingEntryContract` and `hearingExitContract`. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and Codification Service access.
+Assay is a runtime-mandated component — the Operator provisions it from the `AssayConfig` without requiring a separate FoundryNode CRD. Its entry and exit bindings are derived from `hearingEntryContract` and `hearingExitContract`. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator automatically grants `USE:support/<name>/encode` for each).
 
 The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The hearing entry and exit contracts reference this kind with no stamp requirements.
 
@@ -56,7 +57,8 @@ The Operator also provisions a `law-reference` GovernedArtefact kind alongside A
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `maxVisits` | `integer` | yes | Thrash Guard budget. When the aggregate visit count across all nodes exceeds this value, the Workitem fails with `THRASH_BUDGET_EXCEEDED`. |
-| `defaultTimeout` | `duration` | yes | Default inactivity timeout for node assignments. Nodes can override with a shorter value in FoundryNode; they cannot exceed this. |
+| `defaultTimeout` | `duration` | yes | Default inactivity timeout for node assignments. Used as the fallback when no node-specific timeout is set in FoundryNode. |
+| `maxTimeout` | `duration` | yes | Maximum inactivity timeout for node assignments. No node-specific timeout can exceed this value. Must be >= `defaultTimeout`. |
 | `maxFeedbackDepth` | `integer` | yes | Feedback deadlock threshold. When a single feedback item's history depth exceeds this value, the gate node transitions it to `deadlocked`. |
 | `frictionThresholds` | `FrictionThresholds` | no | Per-tier friction thresholds that trigger review hearings. |
 | `retentionPolicy` | `RetentionPolicy` | no | Retention duration for terminal Workitems before garbage collection. |
@@ -104,7 +106,7 @@ The FoundryNode CRD defines node-local behaviour, permission envelope, and routi
 | `capabilities` | `[]string` | no | Capability grant strings. Grammar: `VERB:RESOURCE[/QUALIFIER]`. See [capability syntax](#capability-syntax). |
 | `entry` | `string` | no | Name of the entry contract this node is bound to. Must reference a key in the FoundryFlow's `entryContracts`. |
 | `exit` | `string` | no | Name of the exit contract this node is bound to. Must reference a key in the FoundryFlow's `exitContracts`. Grants `complete()` eligibility. |
-| `timeout` | `duration` | no | Inactivity timeout for assignments to this node. Cannot exceed `governancePolicy.defaultTimeout` on the FoundryFlow. Falls back to the Flow-level default if unset. |
+| `timeout` | `duration` | no | Inactivity timeout for assignments to this node. Cannot exceed `governancePolicy.maxTimeout` on the FoundryFlow. Falls back to `governancePolicy.defaultTimeout` if unset. |
 | `concurrency` | `integer` | no | Maximum concurrent Workitem assignments per pod. Default `1`. Value `0` means unlimited. |
 | `storage` | `StorageConfig` | no | Volume mounts and deployment strategy. Presence of persistent volumes triggers StatefulSet deployment; otherwise ReplicaSet (default). |
 
@@ -306,7 +308,36 @@ The FlowSupportService CRD declares an optional, Flow-Architect-deployed service
 | `availableReplicas` | `integer` | Current number of ready replicas. |
 | `conditions` | `[]Condition` | Standard Kubernetes conditions. |
 
-Specialised sub-CRDs (e.g. `CodificationService`) extend this base schema with subtype-specific fields while inheriting all base fields.
+Specialised CRDs (e.g. [CodificationService](#codificationservice)) share the same base deployment fields with subtype-specific additions.
+
+---
+
+## CodificationService
+
+The CodificationService CRD declares a [Codification Service](../02-flow/04-system-services.md#codification-services) — a specialised Flow Support Service that translates law goals into formal representations. Each CodificationService instance produces exactly one representation type, declared via `outputFormat`.
+
+The CodificationService shares the base deployment fields of FlowSupportService (image, deployment strategy, replicas, storage, resources). Its capability is always `encode` — the Operator enforces this implicitly; no `capabilities` field is declared.
+
+### `spec`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `image` | `string` | yes | Container image for the Codification Service. |
+| `outputFormat` | `string` | yes | MIME type of the representation this service produces (e.g. `application/smt-lib`, `application/rego`, `application/python`). Exactly one output format per service instance. |
+| `deploymentStrategy` | `string` | no | `ReplicaSet` (default) or `StatefulSet`. |
+| `minReplicas` | `integer` | no | Minimum replica count. Default `0`, allowing scale-to-zero. |
+| `storage` | `StorageConfig` | no | Volume mounts and PVC declarations. |
+| `resources` | `ResourceRequirements` | no | CPU and memory resource limits and requests. |
+
+### `status`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | `string` | `Initialising`, `Ready`, `Degraded`, `Stopped`. |
+| `availableReplicas` | `integer` | Current number of ready replicas. |
+| `conditions` | `[]Condition` | Standard Kubernetes conditions. |
+
+The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator automatically grants Assay `USE:support/<name>/encode` for each registered CodificationService instance — no manual `supportServiceGrants` entry is needed for Assay. Other nodes that need direct access to a Codification Service require explicit grants via `supportServiceGrants` on the FoundryFlow.
 
 ---
 
@@ -348,7 +379,8 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 | Entry or exit binding references a contract name not defined on the FoundryFlow | FoundryNode | `UNKNOWN_CONTRACT` |
 | Capability string uses invalid verb, missing qualifier, or unknown syntax | FoundryNode | `INVALID_CAPABILITY` |
 | Exit binding present without a valid contract reference | FoundryNode | `SCHEMA_VALIDATION_FAILED` |
-| Node timeout exceeds Flow-level `defaultTimeout` | FoundryNode | `SCHEMA_VALIDATION_FAILED` |
+| Node timeout exceeds Flow-level `maxTimeout` | FoundryNode | `SCHEMA_VALIDATION_FAILED` |
+| `maxTimeout` is less than `defaultTimeout` | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Stamp name in a contract is not declared in the GovernedArtefact's stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Assay hearing contract references (`hearingEntryContract`, `hearingExitContract`) reference undefined contract names | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Duplicate artefact `id` with different `kind` in a Workitem's artefact list | Workitem | `ARTEFACT_KIND_CONFLICT` |
