@@ -104,6 +104,31 @@ Export scope is constrained by exit contract semantics.
 
 This behaviour is consistent with exit-completion semantics in [Workitems](./02-workitem.md) and [Configuration Semantics](./05-configuration.md).
 
+## Export Package Structure
+
+The export package is the unit of cross-flow transfer. It carries the Workitem's portable state and a cryptographic chain tying the package to its source Flow.
+
+An export package contains:
+
+| Component | Description |
+|-----------|-------------|
+| Workitem metadata | Identifier, intent, priority, provenance chain (parent Workitem references). |
+| Artefact content | Content bytes for each artefact kind listed in the bound exit contract. Kinds not listed are excluded. |
+| Passport stamps | All stamps on exported artefacts — the full provenance record. |
+| Package signature | The source Flow's Operator signs the package using the Flow's identity material. |
+| Certificate chain | The Operator's certificate chain, rooted in the Flow's CA (or the State Root CA for sibling Flows). |
+
+The Operator signs the export package because it represents the Flow as a sovereign authority. The Operator's identity is the Flow's identity — the same certificate that authenticates inter-service and cross-flow communication. Node identities are internal to the Flow and are not exposed across Flow boundaries.
+
+### Verification at Import
+
+The receiving Flow validates the export package before materialising a Workitem:
+
+1. **Chain verification** — the package signature is verified against the certificate chain. For sibling imports, the chain traces to the shared State Root CA. For treaty imports, the chain traces to the CA certificate pinned in the Treaty CRD's `caCert` field.
+2. **Subject filtering** — if the Treaty CRD specifies `allowedSubjects`, the signing certificate's subject must match one of the listed values. If `allowedSubjects` is empty, any subject under the pinned CA is accepted.
+3. **Bundle size enforcement** — if the Treaty CRD specifies `maxBundleSize`, the package must not exceed it.
+4. **Entry contract validation** — the receiving Flow validates the materialised Workitem against the configured `importNode`'s bound entry contract.
+
 ## Law Integration Protocol
 
 Higher-tier law integration occurs through [Librarian](./04-system-services.md#librarian)-to-Librarian replication.

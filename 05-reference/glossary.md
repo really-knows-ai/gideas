@@ -220,7 +220,7 @@
 : A permission granted to a node through the FoundryNode CRD's `capabilities` field. Determines what operations the node is authorised to perform. Enforced by the owning runtime service, not by the SDK or the node. Detail: [Configuration](../02-flow/05-configuration.md), [Nodes](../02-flow/03-nodes-external.md).
 
 **capability syntax**
-: The structured grammar for capability grants: `VERB:RESOURCE[/QUALIFIER]`. Verbs: `READ`, `WRITE`, `STAMP`, `ESCALATE`, `USE`. Examples: `READ:law`, `WRITE:artefact`, `STAMP:artefact/haiku/linter`, `ESCALATE:assay`, `USE:support/codify-smt/encode`. Detail: [Configuration](../02-flow/05-configuration.md), [Node Configuration](../03-node/02-configuration.md).
+: The structured grammar for capability grants: `VERB:RESOURCE[/QUALIFIER]`. Verbs: `READ`, `WRITE`, `STAMP`, `USE`. Examples: `READ:law`, `WRITE:artefact`, `WRITE:feedback/deadlocked`, `STAMP:artefact/haiku/linter`, `USE:support/codify-smt/encode`. Detail: [Configuration](../02-flow/05-configuration.md), [Node Configuration](../03-node/02-configuration.md).
 
 **entry binding**
 : A FoundryNode CRD field (`entry`) that references a named entry contract on the FoundryFlow. Nodes with entry bindings serve as admission points: local Workitem creation, cross-flow import (via `importNode`), and review-hearing intake. Detail: [Configuration](../02-flow/05-configuration.md).

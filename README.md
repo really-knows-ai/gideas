@@ -4,7 +4,7 @@ Foundry Flow is a governed workflow runtime on Kubernetes that orchestrates work
 
 ## Concepts
 
-The [Conceptual Overview](01-concepts/00-overview.md) introduces the core vocabulary: Flows, Workitems, nodes, artefacts, passports, stamps, feedback, and friction. [Architecture](01-concepts/01-architecture.md) defines the six-plane structure and responsibility boundaries that keep concerns separated. [The Foundry Cycle](01-concepts/02-foundry-cycle.md) describes the reference arrangement — the standard adversarial pattern of Forge, Quench, Appraise, Sort, and Refine. [Data Model](01-concepts/03-data-model.md) covers the four core data types in detail: Workitems, artefacts, feedback, and laws. [Governance](01-concepts/04-governance.md) establishes the legal metaphor — law tiers, precedent, judicial review, and friction as a governance signal.
+The [Conceptual Overview](01-concepts/00-overview.md) defines Flows, Workitems, nodes, artefacts, passports, stamps, feedback, and friction. [Architecture](01-concepts/01-architecture.md) defines the six-plane structure and responsibility boundaries that keep concerns separated. [The Foundry Cycle](01-concepts/02-foundry-cycle.md) describes the reference arrangement — the standard adversarial pattern of Forge, Quench, Appraise, Sort, and Refine. [Data Model](01-concepts/03-data-model.md) details Workitems, artefacts, feedback, and laws. [Governance](01-concepts/04-governance.md) establishes the legal metaphor — law tiers, precedent, judicial review, and friction as a governance signal.
 
 ## Flow Runtime
 

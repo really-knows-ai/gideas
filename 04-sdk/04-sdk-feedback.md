@@ -20,6 +20,7 @@ Feedback is accessed through the [Artefact](./02-sdk-artefacts.md) object, not t
 |-----------|---------|
 | `GetFeedback(artefactId)` | All feedback items for the specified artefact, across all versions. |
 | `HasUnresolvedFeedback(artefactId)` | `true` if any feedback item on the artefact is in a non-`resolved` state. |
+| `GetFeedbackDepth(feedbackId)` | The current history depth (number of transitions) for the specified feedback item. |
 
 Feedback items are tagged with the artefact version hash they were raised against. All feedback is preserved across versions — storing new content does not discard or invalidate existing feedback.
 
@@ -41,10 +42,11 @@ stateDiagram-v2
 
     wont_fix --> resolved : AcceptRefusal()
     wont_fix --> rejected : RejectRefusal()
-    wont_fix --> deadlocked : Gate node detects<br/>excessive depth
+    wont_fix --> deadlocked : DeadlockFeedback()
 
     rejected --> actioned : ResolveFeedback()
-    rejected --> deadlocked : Gate node detects<br/>excessive depth
+    rejected --> wont_fix : RefuseFeedback()<br/>with Justification
+    rejected --> deadlocked : DeadlockFeedback()
 
     deadlocked --> wont_fix : Assay verdict<br/>(favours refiner;<br/>linkedRuling set)
     deadlocked --> rejected : Assay verdict<br/>(favours reviewer;<br/>linkedRuling set)
@@ -56,13 +58,14 @@ stateDiagram-v2
 |-----------|-----------|----------|-------|-----------------|
 | `AddFeedback(artefactId, severity, message)` | — | `new` | Any node with capability | `severity` (enum), `message` (string, max 1024 chars) |
 | `ResolveFeedback(feedbackId, message)` | `new`, `rejected` | `actioned` | Refining node | `message` describing the fix applied |
-| `RefuseFeedback(feedbackId, justification)` | `new` | `wont_fix` | Refining node | Structured [justification](#refusal-and-justification-contract) (required) |
+| `RefuseFeedback(feedbackId, justification)` | `new`, `rejected` | `wont_fix` | Refining node | Structured [justification](#refusal-and-justification-contract) (required) |
 | `AcceptFix(feedbackId)` | `actioned` | `resolved` | Reviewing node | — |
 | `RejectFix(feedbackId, message)` | `actioned` | `rejected` | Reviewing node | `message` explaining why the fix is inadequate |
 | `AcceptRefusal(feedbackId)` | `wont_fix` | `resolved` | Reviewing node | — |
 | `RejectRefusal(feedbackId, message)` | `wont_fix` | `rejected` | Reviewing node | `message` explaining why the refusal is unjustified |
+| `DeadlockFeedback(feedbackId)` | `wont_fix`, `rejected` | `deadlocked` | Gate node | — |
 
-Deadlock transitions are not direct SDK calls from handlers. The gate node detects excessive feedback depth (history depth exceeds configured `maxFeedbackDepth`) and transitions the item to `deadlocked` by routing the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). Assay renders a verdict and transitions the item to either `wont_fix` (favouring the refiner) or `rejected` (favouring the reviewer), setting the `linkedRuling` field to the Tier 2 Ruling that captures the decision.
+The gate node queries feedback depth via `GetFeedbackDepth(feedbackId)` and compares against `maxFeedbackDepth` from [Flow configuration](../02-flow/05-configuration.md). When the depth exceeds the threshold, the gate node calls `DeadlockFeedback(feedbackId)` to transition the feedback item to `deadlocked`, then returns a routing instruction to send the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The Archivist validates the `WRITE:feedback/deadlocked` capability and the from-state — threshold enforcement is gate node logic, not Archivist enforcement. Assay renders a verdict and transitions the item to either `wont_fix` (favouring the refiner) or `rejected` (favouring the reviewer), setting the `linkedRuling` field to the Tier 2 Ruling that captures the decision.
 
 Each transition appends a `FeedbackEvent` to the item's history — an append-only chronological record of who acted, what action they took, and what they said.
 
@@ -90,7 +93,7 @@ The forced-choice structure prevents drive-by refusals. A node cannot dismiss fe
 
 ## Deadlock and Assay Interaction
 
-When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, the gate node transitions the item to `deadlocked` and routes the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The threshold applies per feedback item, not per Workitem — a Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
+When the feedback history depth on a single item exceeds the configured `maxFeedbackDepth`, the gate node calls `DeadlockFeedback(feedbackId)` to transition the item to `deadlocked`, then returns a routing instruction to send the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The threshold applies per feedback item, not per Workitem — a Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
 Assay examines the investigative history, deliberates, and renders a verdict:
 
@@ -125,12 +128,13 @@ Feedback operations map to capability requirements:
 
 | Operation | Required Capability | Enforcing Service |
 |-----------|-------------------|-------------------|
-| `AddFeedback` | `WRITE:feedback` | Archivist |
-| `ResolveFeedback` | `WRITE:feedback` | Archivist |
-| `RefuseFeedback` | `WRITE:feedback` | Archivist |
-| `AcceptFix`, `AcceptRefusal` | `WRITE:feedback` | Archivist |
-| `RejectFix`, `RejectRefusal` | `WRITE:feedback` | Archivist |
-| `GetFeedback`, `HasUnresolvedFeedback` | `READ:feedback` | Archivist |
+| `AddFeedback` | `WRITE:feedback/new` | Archivist |
+| `ResolveFeedback` | `WRITE:feedback/actioned` | Archivist |
+| `RefuseFeedback` | `WRITE:feedback/wont_fix` | Archivist |
+| `AcceptFix`, `AcceptRefusal` | `WRITE:feedback/resolved` | Archivist |
+| `RejectFix`, `RejectRefusal` | `WRITE:feedback/rejected` | Archivist |
+| `DeadlockFeedback` | `WRITE:feedback/deadlocked` | Archivist |
+| `GetFeedback`, `HasUnresolvedFeedback`, `GetFeedbackDepth` | `READ:feedback` | Archivist |
 
 Common error conditions:
 

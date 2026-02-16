@@ -32,6 +32,8 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 |--------|---------|----------|-------------|
 | `CreateHearingWorkitem` | `law_id`, `hearing_artefacts[]`, `hearing_type` | `workitem_id` | Creates a hearing Workitem for Assay processing. Called by the Librarian when friction thresholds or TTL proximity trigger a review hearing. |
 | `QueryArtefactState` | `workitem_id`, `artefact_kinds[]` | `artefact_states[]` | Returns artefact presence and stamp state for exit contract validation. Called by the Operator's own reconciliation loop against the Archivist. |
+| `ExportWorkitem` | `workitem_id` | `export_package` | Assembles an export package from the completed Workitem: artefact content (scoped by exit contract), passport stamps, Workitem metadata, and provenance chain. The Operator signs the package with the Flow's identity material and includes the certificate chain. |
+| `ImportWorkitem` | `export_package`, `treaty_name?` | `workitem_id` or structured error | Validates and materialises a Workitem from an export package. Verifies the package signature against the certificate chain (State Root for siblings, Treaty `caCert` for non-siblings), enforces `allowedSubjects` and `maxBundleSize` from the Treaty if applicable, validates the materialised Workitem against the configured `importNode`'s entry contract, and creates the Workitem in `Pending`. |
 
 ### Routing Instruction Shape
 
@@ -85,11 +87,13 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | `GetFeedback` | `workitem_id`, `artefact_id` | `feedback_items[]` | Returns all feedback items for the artefact across all versions. |
 | `HasUnresolvedFeedback` | `workitem_id`, `artefact_id` | `has_unresolved` (bool) | Returns `true` if any feedback item is in a non-`resolved` state. |
 | `ResolveFeedback` | `workitem_id`, `feedback_id`, `message` | `updated_item` | Transitions feedback from `new` or `rejected` to `actioned`. |
-| `RefuseFeedback` | `workitem_id`, `feedback_id`, `justification` | `updated_item` | Transitions feedback from `new` to `wont_fix`. Requires structured justification (`citation` with `citation_ids[]` or `novel_argument` with `argument`). |
+| `RefuseFeedback` | `workitem_id`, `feedback_id`, `justification` | `updated_item` | Transitions feedback from `new` or `rejected` to `wont_fix`. Requires structured justification (`citation` with `citation_ids[]` or `novel_argument` with `argument`). |
 | `AcceptFix` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `actioned` to `resolved`. |
 | `RejectFix` | `workitem_id`, `feedback_id`, `message` | `updated_item` | Transitions feedback from `actioned` to `rejected`. |
 | `AcceptRefusal` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `wont_fix` to `resolved`. |
 | `RejectRefusal` | `workitem_id`, `feedback_id`, `message` | `updated_item` | Transitions feedback from `wont_fix` to `rejected`. |
+| `GetFeedbackDepth` | `workitem_id`, `feedback_id` | `depth` (integer) | Returns the current history depth (number of transitions) for the specified feedback item. |
+| `DeadlockFeedback` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `wont_fix` or `rejected` to `deadlocked`. Requires `WRITE:feedback/deadlocked` capability. The Archivist validates capability and from-state; threshold enforcement (`maxFeedbackDepth`) is gate node logic, not Archivist enforcement. |
 
 ### Archivist Error Responses
 
@@ -98,7 +102,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | Missing `READ:artefact` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
 | Missing `WRITE:artefact` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
 | Missing `STAMP:artefact/<kind>/<stamp>` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
-| Missing `READ:feedback` or `WRITE:feedback` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
+| Missing `READ:feedback` or `WRITE:feedback/<status>` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
 | Stamp already applied to this version | `STAMP_ALREADY_APPLIED` | `ALREADY_EXISTS` |
 | Content hash mismatch on read | `ARTEFACT_CORRUPTED` | `DATA_LOSS` |
 | Existing `id` with different `kind` | `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` |

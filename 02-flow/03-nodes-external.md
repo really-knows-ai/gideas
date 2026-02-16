@@ -53,7 +53,6 @@ Node authority is capability-driven and authorised at runtime service boundaries
 - `READ:*` grants read access to scoped resources.
 - `WRITE:*` grants write access to scoped resources.
 - `STAMP:*` grants stamp application rights.
-- `ESCALATE:*` grants escalation action rights where configured.
 - `READ:flow` grants topology and configuration discovery access used by gate logic.
 
 Stamp capabilities are explicit and granular:

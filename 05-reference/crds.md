@@ -139,8 +139,12 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `READ:flow` | Query Flow topology and configuration. Enables stamp-to-node mapping discovery. |
 | `READ:workitem` | Read Workitem state beyond the current assignment. |
 | `READ:feedback` | Read feedback items on artefacts. |
-| `WRITE:feedback` | Create and transition feedback items. |
-| `ESCALATE:assay` | Authority to route deadlocked items to Assay. |
+| `WRITE:feedback/new` | Create feedback items (`AddFeedback`). |
+| `WRITE:feedback/actioned` | Transition feedback to `actioned` (`ResolveFeedback`). |
+| `WRITE:feedback/wont_fix` | Transition feedback to `wont_fix` (`RefuseFeedback`). |
+| `WRITE:feedback/rejected` | Transition feedback to `rejected` (`RejectFix`, `RejectRefusal`). |
+| `WRITE:feedback/resolved` | Transition feedback to `resolved` (`AcceptFix`, `AcceptRefusal`). |
+| `WRITE:feedback/deadlocked` | Transition feedback to `deadlocked` (`DeadlockFeedback`). |
 | `USE:support/<service>/<capability>` | Invoke a specific Flow Support Service capability. |
 
 Malformed capability strings are rejected at configuration admission. The Operator does not reconcile a FoundryNode with syntactically invalid capabilities.
