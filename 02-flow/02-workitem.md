@@ -1,6 +1,6 @@
 # Workitems
 
-Workitems are the Flow control-plane contract for work execution. They carry assignment state, routing outcomes, and [artefact](../01-concepts/03-data-model.md#artefacts) references while work moves through the runtime.
+Workitems are the Flow control-plane state machine for work execution. They carry assignment state and routing outcomes while work moves through the runtime. Artefacts are associated with Workitems through a reverse reference in the [Archivist](../02-flow/04-system-services.md#archivist) — each artefact records the `workitem_id` it belongs to.
 
 ## Runtime Role
 
@@ -8,8 +8,8 @@ A Workitem is the unit of orchestration state, not the unit of provenance storag
 
 - It anchors assignment lifecycle in the control plane.
 - It carries node routing instructions between assignments.
-- It references governed artefacts by stable in-Workitem identity.
-- It does not store artefact version history, stamps, or feedback bodies.
+- It does not store artefact references, version history, stamps, or feedback bodies.
+- Artefacts are associated with the Workitem in the Archivist, which records the `workitem_id` each artefact belongs to.
 
 The Workitem state machine is single-assignee: one Workitem is assigned to exactly one node at a time.
 
@@ -19,11 +19,9 @@ Workitem mutability is partitioned by actor. Ownership is strict and non-overlap
 
 | Surface | Owner | Mutability | Purpose |
 |---|---|---|---|
-| `spec` | Operator at creation | Immutable | Declares fixed orchestration metadata |
 | lifecycle state | Operator | Managed transitions | `Pending`, `Running`, terminal states |
 | assignment fields | Operator | Managed transitions | Current and previous assignee tracking |
 | routing instruction | Operator from Sidecar-submitted result | Overwrite per assignment | Next action requested by node |
-| artefact references | Operator from Sidecar mutation request | Add new `id`; existing `id` immutable | `id` and `kind` references only |
 | thrash counters | Operator | Increment-only | Loop budget enforcement |
 
 Nodes do not mutate Workitem state directly. All node-originated state changes are mediated by the [Sidecar](../03-node/01-sidecar.md), then validated and persisted by the [Flow Operator](./01-operator.md).
@@ -88,33 +86,28 @@ Thrash and deadlock are distinct mechanisms with different sources and outcomes.
 
 Thrash failure and governance deadlock escalation are never treated as equivalent transitions.
 
-## Artefact Reference Model
+## Artefact Association Model
 
-Workitems carry artefact references only.
+Workitems do not carry artefact references. The [Archivist](../02-flow/04-system-services.md#archivist) is the single source of truth for artefact-to-Workitem relationships.
 
-- Each reference contains `id` and `kind`.
-- `id` is unique within the Workitem.
-- `id` is fixed once introduced on the Workitem.
-- `kind` is immutable for a given `id`.
+- Each artefact in the Archivist records the `workitem_id` it belongs to.
+- Each artefact has an `id` (unique within the Workitem) and a `kind` (immutable for a given `id`).
 - Multiple artefacts of the same `kind` are supported through distinct `id` values.
+- The Archivist enforces identity rules: existing `id` with a different `kind` is rejected as `ARTEFACT_KIND_CONFLICT`.
 
-Mutation rules for artefact references are deterministic:
+Nodes interact with artefacts through SDK abstractions (for example, storing artefact content by `id`). The Sidecar submits requests to the Archivist, which persists content and maintains the artefact-to-Workitem association.
 
-- New `id` -> add a new Workitem artefact reference.
-- Existing `id` with same `kind` -> keep Workitem reference unchanged; persist new version hash in Archivist when content changes.
-- Existing `id` with different `kind` -> reject as identity conflict.
+Provenance ownership is entirely within the Archivist:
 
-Nodes experience this through SDK abstractions (for example, setting artefact content by `id`). The Sidecar submits mutation requests and the Operator persists Workitem control-plane state.
-
-Provenance ownership is external to the Workitem:
-
+- artefact identity and association -> Archivist
 - version history -> Archivist
 - stamps/passports -> Archivist
 - feedback -> Archivist
 
 ```mermaid
 flowchart LR
-    WI["Workitem CRD<br/>assignment + artefact refs"] --> ARDB["Archivist SQLite<br/>versions stamps feedback"]
+    WI["Workitem CRD<br/>assignment + routing"] --> OP["Operator<br/>queries Archivist for contract checks"]
+    OP --> ARDB["Archivist SQLite<br/>artefacts versions stamps feedback"]
     ARDB --> BL["Blob store (PVC/object)<br/>content bytes by hash"]
 ```
 
@@ -125,7 +118,7 @@ This split keeps Workitem objects bounded and watch-efficient while preserving c
 Entry admission and exit completion are Workitem boundary transitions controlled by configuration and Operator validation.
 
 - Only nodes bound to an entry contract can admit Workitems into a Flow lifecycle.
-- Entry checks validate the bound entry contract against current artefact state.
+- Entry checks validate the bound entry contract against current artefact state in the Archivist.
 - Entry and exit contracts use the same per-kind validation shape.
 - Cross-flow import admission creates Workitems in `Pending`, then Operator schedules first assignment to configured `importNode` when capacity allows.
 - Review-hearing admission uses Assay's hearing entry binding, then Operator schedules first assignment to Assay when capacity allows.
@@ -137,7 +130,7 @@ Exit completion is a Workitem state transition controlled by configuration and O
 - Only exit nodes may emit `complete()`.
 - Exit binding is fixed in node configuration.
 - The node does not choose a contract at runtime.
-- Operator validates the bound exit contract against current artefact state.
+- Operator validates the bound exit contract against current artefact state in the Archivist.
 - In the reference arrangement, governed artefact completion is user-configured through Sort, while review-hearing Workitems complete through Assay's hearing exit binding.
 
 Contract evaluation rules:
@@ -170,7 +163,7 @@ When completion triggers cross-flow export, only artefact kinds listed in the bo
 
 ## No Workitem Context Bag
 
-Workitems have no freeform context object. There is no `spec.context`, no `status.context`, and no reserved key namespace for bag-style metadata.
+Workitems have no freeform context object. There is no `status.context` and no reserved key namespace for bag-style metadata.
 
 All relevant work context must be represented by explicit Workitem state and governed artefacts.
 
@@ -186,15 +179,15 @@ All relevant work context must be represented by explicit Workitem state and gov
 
 All Flow runtimes preserve these Workitem invariants:
 
-1. `spec` is immutable after creation.
+1. The Workitem CRD has no `spec` block. All state is Operator-managed.
 2. A Workitem has one current assignee at a time.
 3. Node mutations are Sidecar-mediated; nodes do not write Workitem state directly.
 4. Routing advances only on valid, resolvable instructions.
 5. Thrash enforcement uses aggregate visit count across all nodes.
 6. Feedback deadlock decisions are based on Archivist-backed feedback state.
-7. Artefact references live on Workitem; provenance does not.
+7. Artefact-to-Workitem association is Archivist-owned. The Workitem CRD carries no artefact references.
 8. Exit completion is exit-node-only and Operator-validated.
-9. Exit contract checks are per kind and apply to all artefacts of required kinds.
+9. Exit contract checks query the Archivist for artefact kinds and stamps.
 10. Cross-flow export scope follows bound exit-contract kind entries.
 11. Workitems expose no freeform context bag.
 12. Workitem admission is constrained by bound entry-contract kind entries.

@@ -110,7 +110,7 @@ When completion triggers cross-flow export, only artefact kinds listed in the bo
 
 The runtime splits control-plane state from provenance state:
 
-- Workitem CRD stores assignment state and artefact references (`id`, `kind`).
+- Workitem CRD stores assignment state and routing outcomes. Artefacts are associated with Workitems in the Archivist.
 - [Archivist](./04-system-services.md#archivist) stores artefact version history, passport stamps, and feedback in an embedded relational database (SQLite).
 - Archivist stores raw artefact content bytes in a blob store (typically fast PVC-backed storage, optionally cloud object storage) keyed by content hash.
 - Nodes access artefact and governance state through Sidecar and SDK surfaces; nodes do not call system services directly.

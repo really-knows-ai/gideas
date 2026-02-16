@@ -54,7 +54,7 @@ The capability grammar follows a `VERB:RESOURCE[/QUALIFIER]` pattern:
 
 Enforcement is exact. A node granted `STAMP:artefact/petition-draft/linter` can stamp `linter` on `petition-draft` artefacts. It cannot stamp `security-review` on `petition-draft` artefacts, and it cannot stamp `linter` on `audit-log` artefacts. Missing grants produce deterministic denial with structured errors — the node receives a permission error, not a silent no-op.
 
-Some operations do not require explicit capability grants. For example, `ListArtefacts` (listing artefact references on the assigned Workitem) is implicitly available to all nodes by virtue of the assignment scope.
+Some operations do not require explicit capability grants. For example, `ListArtefacts` (listing artefacts associated with the assigned Workitem, queried from the Archivist) is implicitly available to all nodes by virtue of the assignment scope.
 
 Malformed capability strings (invalid verb, missing resource qualifier where required, unknown verb) are rejected at configuration admission. The Operator does not reconcile a FoundryNode with syntactically invalid capabilities.
 

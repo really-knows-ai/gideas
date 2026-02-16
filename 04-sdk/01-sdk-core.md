@@ -8,8 +8,8 @@ The SDK exposes a small set of first-class types. Node handlers program against 
 
 | Type | Role | Detail |
 |------|------|--------|
-| `Workitem` | Read surface for the assigned Workitem's state — identity, intent, priority, lifecycle state, artefact references. | [SDK Workitems](./05-sdk-workitems.md) |
-| `Artefact` | Read/write surface for artefact content, versions, feedback, and stamps. One `Artefact` object per artefact reference on the Workitem. | [SDK Artefacts](./02-sdk-artefacts.md) |
+| `Workitem` | Read surface for the assigned Workitem's state — identity, lifecycle state, and assignment tracking. | [SDK Workitems](./05-sdk-workitems.md) |
+| `Artefact` | Read/write surface for artefact content, versions, feedback, and stamps. One `Artefact` object per artefact associated with the Workitem in the Archivist. | [SDK Artefacts](./02-sdk-artefacts.md) |
 | `Context` | Handler execution context. Carries assignment identity and a cancellation signal. Cancelled on inactivity timeout or graceful termination. | [Sidecar lifecycle](../03-node/01-sidecar.md) |
 | `Result` | The handler's single return value: one of three [routing instructions](#routing-instruction-model). | Below |
 

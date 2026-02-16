@@ -112,7 +112,7 @@ An export package contains:
 
 | Component | Description |
 |-----------|-------------|
-| Workitem metadata | Identifier, intent, priority, provenance chain (parent Workitem references). |
+| Workitem metadata | Identifier, provenance chain (parent Workitem references). |
 | Artefact content | Content bytes for each artefact kind listed in the bound exit contract. Kinds not listed are excluded. |
 | Passport stamps | All stamps on exported artefacts — the full provenance record. |
 | Package signature | The source Flow's Operator signs the package using the Flow's identity material. |

@@ -8,7 +8,7 @@ All custom resources use API group `flow.gideas.io/v1` and are namespace-scoped.
 |-----|-------|---------|
 | [FoundryFlow](#foundryflow) | Flow Architect / Operator | Flow-wide topology, contracts, governance policy, cross-flow settings |
 | [FoundryNode](#foundrynode) | Flow Architect / Operator | Node-local behaviour, capabilities, routing outputs, contract bindings |
-| [Workitem](#workitem) | Operator (sole mutator) | Workitem lifecycle state, assignment, artefact references |
+| [Workitem](#workitem) | Operator (sole mutator) | Workitem lifecycle state, assignment, routing |
 | [GovernedArtefact](#governedartefact) | Flow Architect | Artefact kind registration and stamp vocabulary |
 | [Law](#law) | Librarian / Assay / nodes | Law goal, representations, tier, lifecycle metadata |
 | [Treaty](#treaty) | Flow Architect | Directed cross-flow trust policy |
@@ -151,7 +151,7 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:feedback/deadlocked` | Transition feedback to `deadlocked` (`DeadlockFeedback`). |
 | `USE:support/<service>/<capability>` | Invoke a specific Flow Support Service capability. |
 
-Some operations (such as `ListArtefacts` — listing artefact references on the assigned Workitem) are implicitly available to all nodes by virtue of the assignment scope and do not require explicit capability grants.
+Some operations (such as `ListArtefacts` — listing artefacts associated with the assigned Workitem via the Archivist) are implicitly available to all nodes by virtue of the assignment scope and do not require explicit capability grants.
 
 Malformed capability strings are rejected at configuration admission. The Operator does not reconcile a FoundryNode with syntactically invalid capabilities.
 
@@ -159,24 +159,9 @@ Malformed capability strings are rejected at configuration admission. The Operat
 
 ## Workitem
 
-The Workitem CRD carries control-plane state for a unit of work. The [Operator](../02-flow/01-operator.md) is the sole mutator. Nodes interact through [SDK abstractions](../04-sdk/05-sdk-workitems.md), not CRD field paths. Detail: [Workitem Runtime](../02-flow/02-workitem.md).
+The Workitem CRD is a pure control-plane state machine for a unit of work. It carries lifecycle state, assignment ownership, routing outcomes, and loop-detection counters. The [Operator](../02-flow/01-operator.md) is the sole mutator. Nodes interact through [SDK abstractions](../04-sdk/05-sdk-workitems.md), not CRD field paths. Detail: [Workitem Runtime](../02-flow/02-workitem.md).
 
-### `spec`
-
-Immutable after creation.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `intent` | `string` | yes | Human-readable statement of the Workitem's purpose. |
-| `priority` | `string` | yes | `low`, `medium`, `high`, or `critical`. Influences scheduling order. |
-| `artefacts` | `[]ArtefactRef` | no | Initial artefact references at creation time. The running artefact list is maintained in `status.artefacts`. |
-
-### ArtefactRef
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | `string` | yes | Unique within the Workitem. Fixed once introduced. |
-| `kind` | `string` | yes | Governed artefact kind. Immutable for a given `id`. |
+The Workitem CRD has no `spec` block. It is created by the Operator and all mutable state lives in `status`.
 
 ### `status`
 
@@ -188,7 +173,6 @@ Managed by the Operator. Nodes do not write to `status` directly.
 | `currentAssignee` | `string` | Node currently processing this Workitem. Empty when `Pending`. |
 | `previousAssignee` | `string` | Node that last processed this Workitem. |
 | `routingInstruction` | `RoutingInstruction` | Most recent routing outcome submitted by the assigned node. |
-| `artefacts` | `[]ArtefactRef` | Current artefact reference list. Initialised from `spec.artefacts` at creation. Refs can be added during processing; existing `id`/`kind` pairs are immutable. |
 | `thrashCounters` | `map[string]integer` | Per-node visit counts. Hidden from nodes. The Thrash Guard triggers when the aggregate sum exceeds `governancePolicy.maxVisits`. |
 | `history` | `[]HistoryEntry` | Chronological record of assignments and transitions. Append-only. |
 
@@ -205,10 +189,13 @@ These fields do not exist on the Workitem CRD:
 
 | Absent Field | Rationale |
 |--------------|-----------|
+| `spec` block | The Workitem has no immutable user-provided fields. The Operator creates it and manages all state in `status`. |
 | `spec.type` / `WorkitemType` reference | Flow admission is contract-bound, not type-gated. |
 | `spec.context` / `status.context` | No freeform context bag. Work context is governed artefacts. |
-| Feedback | Feedback lives in the [Archivist](../02-flow/04-system-services.md#archivist), scoped to artefact `id`. |
-| Stamps / passport | Stamps live in the [Archivist](../02-flow/04-system-services.md#archivist), scoped to artefact `id` and version hash. |
+| `intent` / `priority` | Not consumed by any runtime mechanism. |
+| Artefact references | Artefacts record the Workitem they belong to. The [Archivist](../02-flow/04-system-services.md#archivist) is the source of truth for artefact-to-Workitem relationships, queried by `workitem_id`. |
+| Feedback | Feedback lives in the [Archivist](../02-flow/04-system-services.md#archivist), scoped to `workitem_id` and artefact `id`. |
+| Stamps / passport | Stamps live in the [Archivist](../02-flow/04-system-services.md#archivist), scoped to `workitem_id`, artefact `id`, and version hash. |
 | Version history | Version history lives in the [Archivist](../02-flow/04-system-services.md#archivist). |
 
 ---
@@ -385,19 +372,19 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 | `maxTimeout` is less than `defaultTimeout` | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Stamp name in a contract is not declared in the GovernedArtefact's stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Assay hearing contract references (`hearingEntryContract`, `hearingExitContract`) reference undefined contract names | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
-| Duplicate artefact `id` with different `kind` in a Workitem's artefact list | Workitem | `ARTEFACT_KIND_CONFLICT` |
+| Duplicate artefact `id` with different `kind` for the same Workitem | Archivist | `ARTEFACT_KIND_CONFLICT` |
 
 ---
 
 ## CRD Invariants
 
-1. `spec` fields on Workitems are immutable after creation.
-2. Artefact references use `id` (unique within Workitem) and `kind` (immutable for a given `id`).
+1. The Workitem CRD has no `spec` block. All state is Operator-managed in `status`.
+2. Artefact identity (`id` unique within Workitem, `kind` immutable for a given `id`) is enforced by the Archivist, not the Workitem CRD.
 3. The Operator is the sole mutator of Workitem `status`.
 4. Entry and exit contracts share the same [Contract shape](#contract-shape) and evaluation semantics.
 5. Capability enforcement is exact — verb, resource, kind, and stamp name must match the grant.
 6. Laws are single objects; any `spec` mutation produces a new content-hash version.
 7. Treaty trust is directed — a single CRD represents one direction of trust.
-8. No CRD field path reintroduces `WorkitemType`, `spec.type`, `spec.context`, `status.context`, `entryNode`, `terminalContract`, or `terminal` bindings.
+8. No CRD field path reintroduces `WorkitemType`, `spec.type`, `spec.context`, `status.context`, `entryNode`, `terminalContract`, `terminal` bindings, `intent`, `priority`, or artefact references on Workitems.
 9. Invalid configuration is rejected at admission; partial application does not occur.
 10. Stamp vocabulary on GovernedArtefact defines which stamp names are meaningful; contracts select from that vocabulary.

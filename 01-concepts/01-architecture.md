@@ -67,7 +67,7 @@ The Control Plane's scope is routing decisions. It reads state and moves Workite
 
 Where work happens. The Data Plane contains the [nodes](../03-node/00-overview.md) that execute logic and the [Archivist](../02-flow/04-system-services.md) that manages artefact lifecycle — version history, [passport stamps](./03-data-model.md#passports-and-stamps), [feedback](./03-data-model.md#feedback), and raw content bytes.
 
-Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries artefact references (`id` and `kind`); the full version history, stamps, and feedback live in the Archivist.
+Nodes are stateless workers — their pods persist for efficiency (model loading, connection pools), but execution state is rebuilt from the Workitem and Archivist on every assignment. A node that sees a Workitem for the second time treats it as a stranger. The Workitem CRD carries only control-plane state (lifecycle, assignment, routing); artefacts are associated with Workitems in the Archivist, which the Operator queries for contract validation.
 
 The Flow platform does not mediate or restrict node network access to external services — nodes and [Support Services](../02-flow/04-system-services.md#flow-support-services) reach external endpoints directly. Network segmentation is an infrastructure concern; operators who require egress controls should define Kubernetes NetworkPolicies or service mesh configuration accordingly.
 
@@ -154,7 +154,7 @@ Infrastructure state persists across assignments. Execution state is rebuilt fro
 
 Workitems are immutable residents of their namespace. They do not move between Flows — they are copied. The [export-import protocol](../02-flow/06-cross-flow.md) creates a new Workitem in the receiving Flow with its own lifecycle, its own chain of custody, and its own governance. The original Workitem remains in its home Flow, completed.
 
-Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries only artefact references — `id` and `kind` — enough for routing and exit contract checks without carrying the full provenance. Version history, passport stamps, and feedback live in the Archivist's database, queryable through the [SDK](../04-sdk/01-sdk-core.md).
+Artefact content lives in the Archivist as content-addressed blobs. The Workitem CRD carries no artefact references — artefacts are associated with Workitems in the Archivist, which the Operator queries for routing and exit contract checks. Version history, passport stamps, and feedback live in the Archivist's database, queryable through the [SDK](../04-sdk/01-sdk-core.md).
 
 ### Hybrid Persistence
 

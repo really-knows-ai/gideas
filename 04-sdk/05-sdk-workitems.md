@@ -9,16 +9,13 @@ The handler receives a `Workitem` object at invocation. This object is a snapsho
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Workitem identifier |
-| `intent` | string | Human-readable purpose of the Workitem |
-| `priority` | enum | `low`, `medium`, `high`, `critical` |
 | `state` | enum | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed` |
 | `currentAssignee` | string | Node currently assigned (this node, during handler execution) |
 | `previousAssignee` | string | Node that last held the assignment |
-| `artefacts` | list | Artefact references — each carrying `id` and `kind` |
 
-The snapshot does not update during handler execution. Artefact mutations made through [StoreArtefact](./02-sdk-artefacts.md#write-and-versioning-operations) are persisted by the [Archivist](../02-flow/04-system-services.md#archivist), and artefact reference additions are submitted to the Operator at assignment completion. But the `Workitem` object the handler holds remains the original snapshot.
+The snapshot does not update during handler execution.
 
-Live artefact state — content, versions, stamps, feedback — is accessed through the [Artefact SDK](./02-sdk-artefacts.md) and [Feedback SDK](./04-sdk-feedback.md) operations, which query the Archivist on demand.
+Live artefact state — content, versions, stamps, feedback — is accessed through the [Artefact SDK](./02-sdk-artefacts.md) and [Feedback SDK](./04-sdk-feedback.md) operations, which query the Archivist on demand. The Archivist maintains artefact-to-Workitem associations; the Workitem CRD itself carries no artefact references.
 
 Fields intentionally absent from the Workitem read surface:
 
@@ -45,11 +42,11 @@ Nodes can create new Workitems within the same Flow.
 
 | Operation | Parameters |
 |-----------|-----------|
-| `CreateWorkitem(intent, priority, artefacts?)` | `intent` (string) — human-readable purpose. `priority` (enum) — `low`, `medium`, `high`, `critical`. `artefacts` (optional) — initial artefact references to attach. |
+| `CreateWorkitem()` | No parameters. |
 
 The created Workitem enters `Pending` state and is subject to entry contract validation by the [Operator](../02-flow/01-operator.md). The creating node must be bound to an [entry contract](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) — nodes without an entry binding cannot create Workitems.
 
-Entry contract validation checks the new Workitem's artefact state against the node's bound entry contract requirements. If the contract requires specific artefact kinds or stamps, those must be present at creation time. Validation failure rejects the creation and returns a structured error.
+Entry contract validation checks artefact state in the Archivist against the node's bound entry contract requirements. Validation failure rejects the creation and returns a structured error.
 
 Created Workitems are independent lifecycle objects. They are not child Workitems, sub-tasks, or continuations of the creating handler's assignment. The Operator schedules them through normal assignment logic.
 
@@ -57,7 +54,7 @@ Created Workitems are independent lifecycle objects. They are not child Workitem
 
 Routing is the handler's final action — the single [Result](./01-sdk-core.md#routing-instruction-model) returned to the platform. The three routing instructions (`RouteToOutput`, `RouteTo`, `Complete`) are defined in [SDK Core](./01-sdk-core.md#routing-instruction-model).
 
-The Sidecar submits the routing instruction alongside any pending Workitem mutation requests (artefact reference additions) to the Operator. The Operator validates routing guards — output name resolution, target node existence, exit contract satisfaction — and applies the lifecycle transition or returns a structured error.
+The Sidecar submits the routing instruction to the Operator. The Operator validates routing guards — output name resolution, target node existence, exit contract satisfaction — and applies the lifecycle transition or returns a structured error.
 
 The handler does not observe the Operator's routing decision. Once the handler returns a `Result`, the assignment is over from the node's perspective.
 
@@ -69,8 +66,7 @@ The SDK requests mutations; runtime services authorise and persist them.
 |----------|-----------|-------------------|
 | Lifecycle transitions (`Pending` -> `Running` -> `Completed`/`Failed`) | Implicit (assignment, routing, completion) | [Operator](../02-flow/01-operator.md) |
 | Routing instruction | Handler returns `Result` | [Operator](../02-flow/01-operator.md) validates and applies |
-| Artefact reference additions | `StoreArtefact` with new `id` | [Operator](../02-flow/01-operator.md) persists reference; [Archivist](../02-flow/04-system-services.md#archivist) persists content |
-| Artefact content and versions | `StoreArtefact` | [Archivist](../02-flow/04-system-services.md#archivist) |
+| Artefact content and versions | `StoreArtefact` | [Archivist](../02-flow/04-system-services.md#archivist) persists content and maintains artefact-to-Workitem association |
 | Stamps | `StampArtefact` | [Archivist](../02-flow/04-system-services.md#archivist) |
 | Feedback | `AddFeedback`, transitions | [Archivist](../02-flow/04-system-services.md#archivist) |
 | Laws | `RecordFinding` | [Librarian](../02-flow/04-system-services.md#librarian) |
@@ -94,7 +90,7 @@ Export is triggered by exit completion. When a handler calls `Complete()` on an 
 
 1. All Workitem SDK operations are scoped to the current assignment.
 2. The `Workitem` object is a snapshot at assignment time and does not update during handler execution.
-3. No freeform context bag, `WorkitemType`, or `spec.type` discriminator exists on the SDK surface.
+3. No freeform context bag, `WorkitemType`, or type discriminator exists on the SDK surface.
 4. Feedback is not part of the Workitem read surface — it is accessed through [Artefact](./02-sdk-artefacts.md) and [Feedback](./04-sdk-feedback.md) operations.
 5. Local Workitem creation requires an entry contract binding on the creating node.
 6. The [Operator](../02-flow/01-operator.md) owns lifecycle transitions, routing validation, and contract enforcement.

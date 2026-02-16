@@ -119,7 +119,7 @@ Recovery order is fixed to preserve referential and governance integrity:
 
 Post-restore verification must include:
 
-- Workitem-to-artefact reference consistency.
+- Archivist artefact-to-Workitem association consistency.
 - Stamp-to-version hash consistency.
 - Feedback history continuity.
 - Law lineage and tier state continuity.

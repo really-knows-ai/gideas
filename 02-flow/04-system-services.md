@@ -97,15 +97,15 @@ Archivist storage is normatively split:
 
 ```mermaid
 flowchart LR
-    WI["Workitem CRD<br/>artefact id + kind"] --> ARS["Archivist service"]
+    WI["Workitem CRD<br/>assignment + routing"] --> ARS["Archivist service"]
     SC["Sidecar + SDK"] --> ARS
-    ARS --> SQ["Archivist SQLite<br/>versions stamps feedback"]
+    ARS --> SQ["Archivist SQLite<br/>artefacts versions stamps feedback"]
     ARS --> BL["Blob store (PVC/object)<br/>content by hash"]
 ```
 
 ### Workitem Boundary
 
-- Workitem CRDs carry artefact references only: `id` and `kind`.
+- Workitem CRDs carry no artefact references. Artefacts record the `workitem_id` they belong to in the Archivist.
 - Feedback does not live on Workitem status.
 - Passports and stamps do not live on Workitem status.
 - Artefact version history does not live on Workitem status.
@@ -335,7 +335,7 @@ Fail-open behaviour is prohibited for governance integrity paths.
 All deployments preserve these service invariants:
 
 1. Archivist is the source of truth for artefact provenance beyond raw bytes.
-2. Workitem CRD stores artefact references only (`id`, `kind`).
+2. Workitem CRD carries no artefact references. Artefact-to-Workitem associations are Archivist-owned.
 3. Laws are single objects with one goal and multiple representations under whole-law versioning.
 4. Friction-threshold hearing triggers are emitted by the Librarian based on Flow Monitor queries.
 5. TTL-expiry hearing triggers are emitted by the Librarian.

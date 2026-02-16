@@ -23,8 +23,8 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `SubmitResult` | `workitem_id`, `routing_instruction`, `artefact_mutations[]` | `accepted` or structured error | Submits the handler's routing instruction and any pending artefact reference additions. The Operator validates routing guards and applies the lifecycle transition. |
-| `CreateWorkitem` | `intent`, `priority`, `artefacts[]?` | `workitem_id` or structured error | Creates a new Workitem in `Pending`. The creating node must be entry-bound. The Operator validates the bound entry contract. |
+| `SubmitResult` | `workitem_id`, `routing_instruction` | `accepted` or structured error | Submits the handler's routing instruction. The Operator validates routing guards and applies the lifecycle transition. |
+| `CreateWorkitem` | (none) | `workitem_id` or structured error | Creates a new Workitem in `Pending`. The creating node must be entry-bound. The Operator validates the bound entry contract against artefact state in the Archivist. |
 
 ### Service-Facing Methods
 
@@ -73,7 +73,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | `GetArtefact` | `workitem_id`, `artefact_id` | `content`, `version_hash`, `kind` | Returns the latest version's content bytes. Sidecar verifies `SHA256(content) == version_hash`. |
 | `GetArtefactVersion` | `workitem_id`, `artefact_id`, `version_hash` | `content` | Returns content bytes for a specific version by hash. |
 | `GetArtefactMetadata` | `workitem_id`, `artefact_id` | `version_history[]`, `stamps[]` | Returns version history and current passport without content bytes. |
-| `ListArtefacts` | `workitem_id` | `artefact_refs[]` | Returns all artefact references (`id`, `kind`) on the Workitem. |
+| `ListArtefacts` | `workitem_id` | `artefact_refs[]` | Returns all artefacts (`id`, `kind`) associated with the Workitem. The Archivist is the source of truth for artefact-to-Workitem relationships. |
 | `StoreArtefact` | `workitem_id`, `artefact_id`, `kind`, `content`, `content_hash`\* | `version_hash`, `is_new_version` | Stores content bytes and creates a version record. Returns the confirmed version hash and whether a new version was created. \*`content_hash` is Sidecar-computed, not node-supplied. |
 
 ### Stamp Methods

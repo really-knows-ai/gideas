@@ -8,18 +8,16 @@ The [Workitem](./00-overview.md) record is the authoritative surface for work st
 
 ### Structure
 
-A Workitem separates an immutable declaration surface from a mutable runtime surface. In Kubernetes persistence these map to CRD `spec` and `status`, but nodes consume them through SDK abstractions.
+A Workitem separates control-plane orchestration state from artefact provenance. In Kubernetes persistence the Workitem is a CRD with all mutable state in `status`, but nodes consume it through SDK abstractions.
 
-The declaration surface is immutable. It is set at creation by the [Flow Operator](../02-flow/01-operator.md) and never changes. It carries fixed orchestration metadata required by runtime scheduling and audit. Domain meaning lives in governed artefacts.
+The Workitem CRD has no `spec` block. It is created by the [Flow Operator](../02-flow/01-operator.md) and all state is Operator-managed. Artefacts are not referenced on the Workitem — the [Archivist](../02-flow/04-system-services.md) maintains artefact-to-Workitem associations, and the Operator queries the Archivist for contract checks. Domain meaning lives in governed artefacts.
 
 The runtime surface is the mutable working surface. As the Workitem moves through the Flow, nodes issue SDK actions, the Sidecar mediates authenticated service calls, and runtime services authorise and apply state changes within their authority boundaries. Feedback, stamps, and version history are persisted in the Archivist and queried through the SDK. Runtime ownership remains strict:
 
 | Surface | Owner | Mutability | Description |
 |---------|-------|------------|-------------|
-| Declaration metadata | Operator | Immutable | Set at Workitem creation |
 | Lifecycle state | Operator | System-managed | Computed from assignment lifecycle |
 | Assignment ownership | Operator | System-managed | Current assignee and prior assignee tracking |
-| Artefact references | [Flow Operator](../02-flow/01-operator.md) | Add new `id` only; existing `id` immutable | Stable artefact references (`id` + `kind`) |
 | Routing outcome | [Flow Operator](../02-flow/01-operator.md) | Overwrite | Set from Sidecar-submitted node result |
 | Thrash counters | Operator | Increment-only | Per-node visit counters |
 
@@ -108,7 +106,7 @@ When exit completion triggers cross-flow export, only artefact kinds listed in t
 
 An [artefact](./00-overview.md) is a governed output — a document, a code file, a data model, anything the Flow produces. The [Archivist](../02-flow/04-system-services.md) is the single source of truth for all artefact data: version history, [passport stamps](#passports-and-stamps), and [feedback](#feedback) live in the Archivist's database, while raw content bytes are stored in a content-addressed blob store.
 
-The Workitem record carries only artefact references — an `id` and `kind` for each artefact — enough for the Operator to know what exists and for the Archivist to locate the full record. Version history, stamps, and feedback live exclusively in the Archivist, keeping the control-plane record lightweight regardless of version count, feedback depth, or stamp accumulation.
+Each artefact records the `workitem_id` it belongs to. The Archivist maintains the artefact-to-Workitem association — the Workitem CRD itself carries no artefact references. The Operator queries the Archivist when evaluating entry and exit contracts. This keeps the control-plane record lightweight regardless of version count, feedback depth, or stamp accumulation.
 
 The [SDK](../04-sdk/01-sdk-core.md) exposes an Artefact object that provides access to all artefact data through the [Sidecar](../03-node/01-sidecar.md). Nodes query artefacts by ID or by kind, and the SDK routes all requests to the Archivist. Nodes never interact with the Archivist directly.
 
@@ -116,9 +114,11 @@ The [SDK](../04-sdk/01-sdk-core.md) exposes an Artefact object that provides acc
 
 Every artefact version is identified by its content hash. When a node stores content, the [Sidecar](../03-node/01-sidecar.md) computes the hash and the [Archivist](../02-flow/04-system-services.md) persists the bytes. If the content is identical to an existing version, no new version is created — the hash matches and the store is a no-op.
 
-The Workitem tracks each artefact as a stable reference:
+The Workitem does not carry artefact references. The Archivist tracks each artefact's association:
 
 ```yaml
+# Archivist artefact records for a Workitem
+workitem_id: "wi-abc123"
 artefacts:
   - id: "art-001"
     kind: "petition-draft"
@@ -126,7 +126,7 @@ artefacts:
     kind: "audit-log"
 ```
 
-The `id` uniquely identifies the artefact within the Workitem and is the key the Archivist uses to locate the full record. Multiple artefacts of the same kind are supported — each with its own `id`. For a given `id`, `kind` is immutable and the Workitem reference remains stable. Updates to that artefact produce new version hashes in the Archivist (or no-op when content is unchanged). The full version history — every prior hash, who created it, and when — is stored in the Archivist's database and queryable through the [SDK](../04-sdk/01-sdk-core.md).
+The `id` uniquely identifies the artefact within the Workitem and is the key the Archivist uses to locate the full record. Multiple artefacts of the same kind are supported — each with its own `id`. For a given `id`, `kind` is immutable and the artefact association remains stable. Updates to that artefact produce new version hashes in the Archivist (or no-op when content is unchanged). The full version history — every prior hash, who created it, and when — is stored in the Archivist's database and queryable through the [SDK](../04-sdk/01-sdk-core.md).
 
 ### Artefact Isolation
 
@@ -160,7 +160,7 @@ Validation is stamp-based, not identity-based. The specific node that applied a 
 
 ### Passports and Stamps
 
-Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) database, scoped to Workitem ID and artefact `id` — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../04-sdk/01-sdk-core.md) (`GetArtefactMetadata(id)`, `GetStamps(id)`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
+Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) database, scoped to `workitem_id` and artefact `id` — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../04-sdk/01-sdk-core.md) (`GetArtefactMetadata(id)`, `GetStamps(id)`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
 
 ```mermaid
 flowchart LR
@@ -176,7 +176,7 @@ flowchart LR
             V2["&lt;hash_v2&gt; (content)"]
         end
     end
-    WI["Workitem record"] -->|"id + kind"| DB
+    WI["Workitem record"] -->|"workitem_id"| DB
     Stamps -->|"tagged to version hash"| Versions
     FB -->|"tagged to version hash"| Versions
 ```

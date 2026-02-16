@@ -13,7 +13,7 @@ Each artefact on a [Workitem](../02-flow/02-workitem.md) is identified by two fi
 
 Multiple artefacts of the same `kind` are supported — each has a distinct `id`.
 
-The [Workitem CRD](../05-reference/crds.md) carries artefact references (`id` and `kind` only). Full version history, stamps, and feedback live in the Archivist, keyed by artefact `id`. This split keeps the CRD small and watchable regardless of version depth or feedback volume.
+The [Archivist](../02-flow/04-system-services.md#archivist) is the single source of truth for artefact-to-Workitem associations. Each artefact records the `workitem_id` it belongs to. The Archivist stores full version history, stamps, and feedback, keyed by `workitem_id` and artefact `id`. This keeps the Workitem CRD small and watchable regardless of version depth or feedback volume.
 
 ## Read and Query Operations
 
@@ -24,13 +24,13 @@ Artefact reads are scoped to the current [assignment](./01-sdk-core.md#handler-l
 | `GetArtefact(id)` | The latest version's content bytes for the specified artefact. |
 | `GetArtefactVersion(id, versionHash)` | Content bytes for a specific version, identified by content hash. |
 | `GetArtefactMetadata(id)` | Version history list and passport (stamps) without content bytes. |
-| `ListArtefacts()` | All artefact references (`id`, `kind`) on the current Workitem. |
+| `ListArtefacts()` | All artefacts (`id`, `kind`) associated with the current Workitem, queried from the Archivist. |
 
 The Sidecar verifies content integrity on fetch: `SHA256(content) == storedHash`. A hash mismatch produces an `ARTEFACT_CORRUPTED` error.
 
 The Sidecar caches artefact content for the duration of the handler invocation. Repeated reads of the same version within one handler do not generate additional Archivist requests. The cache is discarded when the assignment completes.
 
-The `Workitem` object returned at handler invocation is a snapshot of state at assignment time. Artefact references on the snapshot reflect the Workitem's artefact list at that moment. Artefact content, versions, and stamps are fetched from the Archivist on demand through the operations above.
+The `Workitem` object returned at handler invocation is a snapshot of state at assignment time. Artefact content, versions, and stamps are fetched from the Archivist on demand through the operations above.
 
 ## Write and Versioning Operations
 
@@ -38,13 +38,13 @@ Artefact writes are content-addressed. Every version is identified by a SHA256 h
 
 | Operation | Behaviour |
 |-----------|-----------|
-| `StoreArtefact(id, kind, content)` | Writes content to the Archivist and updates the Workitem's artefact references. |
+| `StoreArtefact(id, kind, content)` | Writes content to the Archivist. For a new `id`, the Archivist creates the artefact record associated with the current Workitem. |
 
 Write outcomes depend on whether the `id` already exists on the Workitem:
 
 | Scenario | Outcome |
 |----------|---------|
-| New `id` | Archivist stores content and version record. Operator adds a new artefact reference (`id`, `kind`) to the Workitem. |
+| New `id` | Archivist stores content, version record, and artefact-to-Workitem association (`id`, `kind`, `workitem_id`). |
 | Existing `id`, same `kind`, new content | Archivist stores a new version. Workitem reference unchanged. |
 | Existing `id`, same `kind`, identical content | No-op. Content hash matches an existing version — no new version is created. |
 | Existing `id`, different `kind` | **Rejected.** `kind` is immutable for a given `id`. Returns an identity conflict error. |
@@ -58,14 +58,11 @@ sequenceDiagram
     participant HD as Handler
     participant SC as Sidecar
     participant AR as Archivist
-    participant OP as Operator
 
     HD->>SC: StoreArtefact(id, kind, content)
     SC->>SC: Compute SHA256 hash
-    SC->>AR: Persist content bytes + version record
+    SC->>AR: Persist content bytes + version record + Workitem association
     AR-->>SC: Version hash confirmed
-    SC->>OP: Update Workitem artefact reference (if new id)
-    OP-->>SC: Acknowledged
     SC-->>HD: Version hash
 ```
 
@@ -106,7 +103,7 @@ Artefact operations map to capability requirements enforced by the backing servi
 | Operation | Required Capability | Enforcing Service |
 |-----------|-------------------|-------------------|
 | Read operations (`GetArtefact`, `GetArtefactVersion`, `GetArtefactMetadata`) | `READ:artefact` | Archivist |
-| `ListArtefacts` | Assignment scope (implicit) | Sidecar |
+| `ListArtefacts` | Assignment scope (implicit) | Archivist |
 | `StoreArtefact` | `WRITE:artefact` | Archivist |
 | `StampArtefact` | `STAMP:artefact/<kind>/<stamp-name>` | Archivist |
 | Feedback operations | See [SDK Feedback](./04-sdk-feedback.md#capability-and-error-semantics) | Archivist |
