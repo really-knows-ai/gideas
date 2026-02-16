@@ -144,7 +144,7 @@ Stamp authority is configured through capability grants on FoundryNode.
 - Grant scope is exact for artefact kind and stamp name.
 - A node may apply only stamps it is granted.
 
-Stamp names are governance conventions chosen by the Flow Architect. The platform does not attach special system semantics to names.
+Stamp names are governance conventions chosen by the [Flow Architect](../05-reference/glossary.md#flow-architect). The platform does not attach special system semantics to names.
 
 Stamp application is write-once per artefact version hash:
 
@@ -156,14 +156,14 @@ The reference arrangement uses `approval` as the final checkpoint applied by Sor
 
 ## Reference Arrangement Defaults and Custom Topology
 
-The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement and standard recommendation for governed workflows. Flow Architects can adapt topology while preserving platform invariants.
+The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement and standard recommendation for governed workflows. [Flow Architects](../05-reference/glossary.md#flow-architect) can adapt topology while preserving platform invariants.
 
 Reference arrangement expectations:
 
 - [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) performs creation and reads laws only.
 - [Quench](../01-concepts/02-foundry-cycle.md#quench-deterministic-validator) performs deterministic checks.
 - [Appraise](../01-concepts/02-foundry-cycle.md#appraise-reviewer) performs subjective review.
-- Sort performs gate routing and final approval checkpoint in the reference arrangement.
+- [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) performs gate routing and final approval checkpoint in the reference arrangement.
 - [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner) addresses unresolved feedback.
 
 Custom topologies can split, merge, or replace these responsibilities. Runtime semantics remain invariant-driven.

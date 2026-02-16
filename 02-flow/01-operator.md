@@ -13,7 +13,7 @@ The Operator owns control-plane state transitions and policy enforcement:
 - Applies timeout and thrash guards.
 - Emits operator-originated metrics, traces, and audit events.
 
-The Operator does not execute node business logic and does not own artefact provenance storage. Provenance is owned by [Archivist](./04-system-services.md), and node-facing API authentication and mediation are handled by [Sidecar](../03-node/01-sidecar.md).
+The Operator does not execute node business logic and does not own artefact provenance storage. Provenance is owned by [Archivist](./04-system-services.md#archivist), and node-facing API authentication and mediation are handled by [Sidecar](../03-node/01-sidecar.md).
 
 The Operator maintains a direct service-level query path to the Archivist, distinct from the Sidecar-mediated path that nodes use. Entry and exit contract validation requires artefact kind, stamp, and feedback state that only the Archivist holds. Workitem retention and cleanup coordinate with the Archivist for artefact lifecycle management. The full inter-service contract surface is defined in [System Services](./04-system-services.md#inter-service-contracts).
 
@@ -136,23 +136,15 @@ Validation semantics:
 
 On validation failure, completion is rejected and the Workitem does not transition to `Completed`.
 
-```mermaid
-sequenceDiagram
-    participant ND as Node
-    participant SC as Sidecar
-    participant OP as Operator
-    participant AR as Archivist
+## Cross-Flow Collaboration and Treaties
 
-    ND->>SC: complete()
-    SC-->>OP: completion instruction
-    OP->>OP: verify exit binding
-    OP->>AR: query artefact state for bound contract
-    AR-->>OP: kinds and stamps
-    OP->>OP: evaluate per-kind rules
-    OP-->>SC: accept or reject completion
-```
+The Operator is the gateway for work crossing Flow boundaries. It manages the assembly and signing of export bundles and the verification and admission of import bundles.
 
-When completion also triggers export, export eligibility is filtered by bound exit-contract kind entries. Empty contract completion exports metadata only.
+- **Export**: When a Workitem completes and is configured for export, the Operator assembles the export package. It filters artefacts by the bound exit contract, includes all provenance (stamps, feedback, version history), signs the package with the Flow's identity material, and attaches the certificate chain.
+- **Import**: The Operator receives export packages, verifies the cryptographic signature against the appropriate trust root (State Root for siblings, Treaty CA for non-siblings), and validates the materialised Workitem against the configured `importNode`'s entry contract.
+- **Treaty Enforcement**: For non-sibling transfers, the Operator enforces Treaty constraints (allowed subjects, bundle size limits) during import admission.
+
+The technical specifications for these operations are detailed in the [gRPC API Reference](../05-reference/grpc-api.md#service-facing-methods), and the collaboration models are covered in [Cross-Flow Collaboration](./06-cross-flow.md).
 
 ## Failure Handling and Recovery
 

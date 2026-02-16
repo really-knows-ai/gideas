@@ -4,16 +4,7 @@ The Foundry Flow runtime is defined by component boundaries, the execution loop,
 
 ## Runtime Composition
 
-A Flow runtime is composed of control-plane actors, data-plane workers, and boundary services:
-
-- The [Flow Operator](./01-operator.md) reconciles configuration, assigns Workitems, validates routing outcomes, and enforces entry/exit contracts.
-- The [Workitem runtime contract](./02-workitem.md) carries control-plane state and artefact references while the Workitem moves through the Flow.
-- [External and reference nodes](./03-nodes-external.md) execute work through Sidecar-mediated APIs; node pods stay stateless at execution level.
-- [System services](./04-system-services.md) provide law lifecycle, artefact lifecycle, friction aggregation, telemetry, and backup surfaces.
-- [Flow Support Services](./04-system-services.md#flow-support-services) are optional, Flow-Architect-deployed containers that expose pluggable capabilities (such as codification) consumed by nodes through Sidecar mediation and by system services directly.
-- [Configuration](./05-configuration.md) defines topology, contracts, capability grants, and policy limits that shape runtime behaviour.
-- [Cross-flow collaboration](./06-cross-flow.md) governs export/import boundaries, trust topology, naturalisation, and law integration.
-- [Operations](./07-operations.md) governs monitoring, triage, recovery, and validation drills.
+The Flow runtime coordinates the collaborative execution of work through a set of [Control Plane](../01-concepts/01-architecture.md#control-plane) and [Data Plane](../01-concepts/01-architecture.md#data-plane) components. The [Flow Operator](./01-operator.md) manages the [Workitem lifecycle](./02-workitem.md) by reconciling [Configuration](./05-configuration.md) and assigning work to [Nodes](./03-nodes-external.md). These nodes execute logic within a secure boundary managed by the [Sidecar](../03-node/01-sidecar.md), which mediates access to [System Services](./04-system-services.md) like the Librarian and Archivist. [Support Services](./04-system-services.md#flow-support-services) provide pluggable capabilities that nodes use to perform domain-specific tasks. When work must cross between sovereign environments, the [Cross-flow collaboration](./06-cross-flow.md) model governs the export and import of work, while the entire runtime is managed through dedicated [Operations](./07-operations.md) procedures.
 
 ```mermaid
 flowchart TD
@@ -120,7 +111,7 @@ When completion triggers cross-flow export, only artefact kinds listed in the bo
 The runtime splits control-plane state from provenance state:
 
 - Workitem CRD stores assignment state and artefact references (`id`, `kind`).
-- [Archivist](./04-system-services.md#archivist) stores artefact version history, passport stamps, and feedback in SQLite.
+- [Archivist](./04-system-services.md#archivist) stores artefact version history, passport stamps, and feedback in an embedded relational database (SQLite).
 - Archivist stores raw artefact content bytes in a blob store (typically fast PVC-backed storage, optionally cloud object storage) keyed by content hash.
 - Nodes access artefact and governance state through Sidecar and SDK surfaces; nodes do not call system services directly.
 - Flow Support Services are accessed through Sidecar mediation when consumed by nodes, extending the same trust boundary to pluggable capabilities.

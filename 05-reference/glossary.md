@@ -3,7 +3,7 @@
 ## Canonical Runtime Terms
 
 **Archivist**
-: The system service that manages artefact lifecycle data — version history, passport stamps, and feedback in an SQLite database; raw content bytes in a content-addressed blob store. The single source of truth for all artefact provenance. Detail: [System Services](../02-flow/04-system-services.md#archivist).
+: The system service that manages artefact lifecycle data — version history, passport stamps, and feedback in an embedded relational database (SQLite in the reference implementation); raw content bytes in a content-addressed blob store. The single source of truth for all artefact provenance. Detail: [System Services](../02-flow/04-system-services.md#archivist).
 
 **Assay**
 : The judicial node present in every Flow as a standard runtime component. Assay holds `WRITE:law/tier2` and resolves deadlocked feedback disputes by minting Tier 2 Rulings. It adjudicates review hearings triggered by friction thresholds or TTL expiry. Its authority ceiling is constitutionally bounded: resolve at Tier 2, propose at Tier 3, appeal at Tier 4-5. Assay does not write Tier 1 Findings by convention — its role is judicial, not observational. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component), [Governance](../01-concepts/04-governance.md#assays-authority-ceiling).

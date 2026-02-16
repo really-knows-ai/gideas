@@ -13,7 +13,7 @@ This repository contains the technical specification for **Foundry Flow** — a 
 │
 ├── 01-concepts/                 # Helicopter view — read first
 │   ├── 00-overview.md           # High-level introduction to Foundry Flow
-│   ├── 01-architecture.md       # Six-plane architecture, design principles
+│   ├── 01-architecture.md       # Architecture, design principles
 │   ├── 02-foundry-cycle.md      # The Foundry Cycle reference arrangement
 │   ├── 03-data-model.md         # Workitems, Artefacts, Laws, Feedback (detail)
 │   └── 04-governance.md         # Law tiers, precedent, the legal metaphor (detail)
@@ -67,7 +67,7 @@ This repository contains the technical specification for **Foundry Flow** — a 
 4. **SDK** — Programming interfaces for node developers
 5. **Reference** — Look things up
 
-### Four foundational axioms
+### Foundational Axioms
 
 1. **Assume Unreliability** — All agents are fallible. Trust intent, verify execution.
 2. **Make Work Auditable** — Every action becomes an immutable, traceable record.

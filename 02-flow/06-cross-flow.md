@@ -88,7 +88,7 @@ Naturalisation is a governance process, not a cryptographic replacement. Origina
 
 A Treaty is a directed trust policy and execution path.
 
-- A Treaty from Flow A to Flow B grants one-way import authority in that direction.
+- A Treaty from Flow A to Flow B grants one-way import authority in that direction. In this configuration, Flow B defines a Treaty CRD with `direction: import` (referencing Flow A) to authorize admission.
 - Reverse direction requires a distinct Treaty from Flow B to Flow A.
 - Directed edges allow bilateral collaboration without implicit reciprocal trust.
 

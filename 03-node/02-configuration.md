@@ -41,9 +41,9 @@ flowchart TD
 
 Capability strings define what actions a node may request through [SDK](../04-sdk/01-sdk-core.md) surfaces. Grants are declared in the FoundryNode CRD and enforced by the target service when the [Sidecar](./01-sidecar.md#authorisation-enforcement) presents the node's identity.
 
-The capability grammar follows a verb-resource pattern:
+The capability grammar follows a `VERB:RESOURCE[/QUALIFIER]` pattern:
 
-- `READ:artefact`, `WRITE:artefact`, `WRITE:artefact/<kind>` — artefact access. `WRITE:artefact` grants write access to all kinds; `WRITE:artefact/<kind>` scopes to a specific kind.
+- `READ:artefact`, `WRITE:artefact`, `WRITE:artefact/<kind>` — artefact access. `WRITE:artefact` grants write access to all kinds; `WRITE:artefact/<kind>` scopes to a specific kind. See [SDK Artefacts](../04-sdk/02-sdk-artefacts.md#capability-gated-actions) for the specific SDK operations each capability enables.
 - `READ:law`, `WRITE:law/tier1` through `WRITE:law/tier5` — law access. Each tier grant is a ceiling: `WRITE:law/tier2` authorises writes at Tier 2 and below.
 - `STAMP:artefact/<kind>/<stamp-name>` — stamp authority scoped to a specific artefact kind and stamp name.
 - `READ:flow` — topology discovery, enabling a node to query stamp-to-node mappings at runtime.
@@ -53,6 +53,8 @@ The capability grammar follows a verb-resource pattern:
 - `USE:support/<service>/<capability>` — access to a specific [Flow Support Service](../02-flow/04-system-services.md#flow-support-services) capability.
 
 Enforcement is exact. A node granted `STAMP:artefact/petition-draft/linter` can stamp `linter` on `petition-draft` artefacts. It cannot stamp `security-review` on `petition-draft` artefacts, and it cannot stamp `linter` on `audit-log` artefacts. Missing grants produce deterministic denial with structured errors — the node receives a permission error, not a silent no-op.
+
+Some operations do not require explicit capability grants. For example, `ListArtefacts` (listing artefact references on the assigned Workitem) is implicitly available to all nodes by virtue of the assignment scope.
 
 Malformed capability strings (invalid verb, missing resource qualifier where required, unknown verb) are rejected at configuration admission. The Operator does not reconcile a FoundryNode with syntactically invalid capabilities.
 

@@ -92,7 +92,7 @@ The Archivist is the artefact lifecycle service and authoritative provenance sto
 
 Archivist storage is normatively split:
 
-- **SQLite**: artefact version history, passport stamps, and feedback.
+- **Embedded Relational Database**: artefact version history, passport stamps, and feedback. SQLite is the reference implementation choice.
 - **Blob store**: raw artefact bytes keyed by content hash, typically on fast PVC-backed storage and optionally on cloud object storage.
 
 ```mermaid
@@ -216,7 +216,7 @@ Hearings are implemented as a protocol across services and runtime actors, not a
 
 Hearing processing uses standard Workitems with explicit governed artefacts and contract bindings. No hearing-specific Workitem subtype or `spec.type` discriminator is introduced.
 
-Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact kind provisioned by the Operator alongside Assay. The `law-reference` artefact contains the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
+Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact kind provisioned by the Operator alongside Assay. The `law-reference` artefact's content is a plain-text string containing the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
 
 Assay writes its verdict directly to the Library as a Tier 2 Ruling (for Tier 1 promotion) or petitions HITL via the Librarian (for Tier 2 promotion to Tier 3). Assay's output is a law in the Library, not a stamp on an artefact. After Assay calls `complete()`, the Operator notifies the Librarian via `ApplyLifecycleAction` to apply the verdict outcome (promote, retire, or demote) to the original law.
 
@@ -232,8 +232,8 @@ Execution and adjudication path:
 3. Assay retrieves the law's friction data from the Flow Monitor (via Sidecar) and legal context from the Librarian.
 4. Assay issues a tier-appropriate verdict.
 5. For a **Promote** verdict, Assay drafts the prose representation and codifies formal representations in parallel via registered [Codification Services](#codification-services). Services that are not ready or that fail are skipped with logging. For Retire or Demote verdicts, this step is skipped.
-6. Assay writes the new law to the Librarian (via `WriteLaw`) and calls `complete()`.
-7. Operator validates Assay's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions.
+6. Assay writes the new law to the Librarian (via `WriteLaw`) and calls `complete()`. The law is created in a pending state and remains inactive until ratification.
+7. Operator validates Assay's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions, activating the new law.
 
 ```mermaid
 sequenceDiagram

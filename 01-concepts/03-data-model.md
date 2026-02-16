@@ -134,7 +134,7 @@ Artefacts are strictly isolated per-Workitem. Every byte of content belongs to e
 
 | Layer | Enforcement |
 |-------|-------------|
-| Storage layout | Physical isolation: content is partitioned by Workitem — cross-Workitem access is structurally impossible at the storage layer |
+| Storage layout | Structural isolation: content is partitioned by Workitem — cross-Workitem access is structurally impossible at the storage layer |
 | SDK | No `targetWorkitemID` parameter exists — the SDK auto-scopes requests to the current Workitem |
 | Runtime services | Access is authorised against current Workitem state and node identity — requests for foreign IDs are rejected |
 
@@ -225,7 +225,7 @@ Severity signals urgency, not authority:
 |----------|-------------|
 | `LOW` | Minor style or preference issue |
 | `MEDIUM` | Quality issue that should be addressed |
-| `HIGH` | Functional or security concern — must be addressed |
+| `HIGH` | Functional or security concern |
 | `CRITICAL` | Blocking issue, potential data loss |
 
 Each feedback event in the history records who acted, what action they took, and what they said. The history is append-only — it is the investigative record of the debate.

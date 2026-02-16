@@ -50,7 +50,7 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 
 Assay is a runtime-mandated component — the Operator provisions it from the `AssayConfig` without requiring a separate FoundryNode CRD. Its entry and exit bindings are derived from `hearingEntryContract` and `hearingExitContract`. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator automatically grants `USE:support/<name>/encode` for each).
 
-The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The hearing entry and exit contracts reference this kind with no stamp requirements.
+The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The hearing entry and exit contracts reference this kind with no stamp requirements.
 
 ### Governance Policy
 
@@ -150,6 +150,8 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:feedback/resolved` | Transition feedback to `resolved` (`AcceptFix`, `AcceptRefusal`). |
 | `WRITE:feedback/deadlocked` | Transition feedback to `deadlocked` (`DeadlockFeedback`). |
 | `USE:support/<service>/<capability>` | Invoke a specific Flow Support Service capability. |
+
+Some operations (such as `ListArtefacts` — listing artefact references on the assigned Workitem) are implicitly available to all nodes by virtue of the assignment scope and do not require explicit capability grants.
 
 Malformed capability strings are rejected at configuration admission. The Operator does not reconcile a FoundryNode with syntactically invalid capabilities.
 
@@ -278,7 +280,7 @@ The Treaty CRD defines a directed trust policy for cross-flow collaboration betw
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `remoteName` | `string` | yes | Identifier of the remote Flow. |
-| `direction` | `string` | yes | `import` (this Flow receives from remote), `export` (this Flow sends to remote). Bidirectional exchange requires two Treaty CRDs. |
+| `direction` | `string` | yes | `import` (this Flow receives from remote), `export` (this Flow sends to remote). Bidirectional exchange requires two Treaty CRDs. Note: a Treaty with `direction: import` in Flow B corresponds to "a Treaty from Flow A to Flow B" in cross-flow descriptions. |
 | `caCert` | `string` | yes | PEM-encoded CA certificate of the remote Flow's trust root. Used for chain verification of imported stamps and packages. |
 | `allowedSubjects` | `[]string` | no | Permitted identity subjects on imported certificates. If empty, all subjects under the CA are accepted. |
 | `maxBundleSize` | `string` | no | Maximum size of export/import bundles. |
@@ -294,7 +296,7 @@ The FlowSupportService CRD declares an optional, Flow-Architect-deployed service
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `image` | `string` | yes | Container image for the Support Service. |
-| `capabilities` | `[]string` | yes | Capabilities this service exposes (e.g. `["encode"]` for a Codification Service). |
+| `capabilities` | `[]string` | yes | List of capability names this service exposes (e.g. `["encode"]`). These are "provided capabilities" (what the service offers), not "granted capabilities" (the verb-resource permission grammar used in [FoundryNode](#foundrynode)). |
 | `deploymentStrategy` | `string` | no | `ReplicaSet` (default) or `StatefulSet`. |
 | `minReplicas` | `integer` | no | Minimum replica count. Default `0`, allowing scale-to-zero. Stateful services or services that cannot scale to zero override this. |
 | `storage` | `StorageConfig` | no | Volume mounts and PVC declarations. |

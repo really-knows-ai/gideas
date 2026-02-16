@@ -28,13 +28,13 @@ A **stamp** is a named governance checkpoint on an artefact's passport — recor
 
 **[Feedback](./03-data-model.md#feedback)** is structured annotations on artefacts — threaded, with forced-choice resolution. When addressing contradictory feedback, a node must either cite existing law or propose a novel argument. Every disagreement is explicit and justified.
 
-A **[law](./03-data-model.md#laws)** is a governance rule with a textual **goal** — what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md) stores them all with equal indifference.
+A **[law](./03-data-model.md#laws)** is a governance rule with a textual **goal** — what it enforces, stops, or ensures. A law can carry one or more **representations** (prose, formal logic, executable code, or anything else), all expressing the same goal. The [Library](../02-flow/04-system-services.md#librarian) stores them all with equal indifference.
 
 ---
 
 ## The Foundry Cycle
 
-The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. Flow Architects adapt it to their context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
+The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. [Flow Architects](../05-reference/glossary.md#flow-architect) adapt it to their context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
 
 Assay is the exception — it is a standard runtime component present in every Flow, not a swappable reference implementation.
 
@@ -60,11 +60,11 @@ Laws are tiered by authority and lifecycle:
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes ([Appraise, Refine](./02-foundry-cycle.md) in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
 | 2 | **Ruling** | Assay node | Binding precedent. Minted when disputes are resolved. |
-| 3 | **Local Statute** | Flow Architect | Local policy. Human-administered or via local legislative cycle. |
+| 3 | **Local Statute** | [Flow Architect](../05-reference/glossary.md#flow-architect) | Local policy. Human-administered or via local legislative cycle. |
 | 4 | **State Constitution** | [Governance Flow](./04-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
 | 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
-Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it accumulates [friction](./03-data-model.md#friction) attributed to it. When that friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md) triggers a review hearing that can promote it to a Tier 2 Ruling through the Assay node. Laws that generate disproportionate friction surface for review — the system makes the cost of its own governance visible.
+Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it accumulates [friction](./03-data-model.md#friction) attributed to it. When that friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md#librarian) triggers a review hearing that can promote it to a Tier 2 Ruling through the Assay node. Laws that generate disproportionate friction surface for review — the system makes the cost of its own governance visible.
 
 The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through specialised [translation services](../02-flow/04-system-services.md#codification-services). Authority increases through the tier system; enforceability increases through representation.
 

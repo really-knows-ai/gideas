@@ -31,7 +31,6 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `CreateHearingWorkitem` | `law_id` | `workitem_id` | Creates a review hearing Workitem for Assay processing. The Operator creates a `law-reference` artefact from the supplied `law_id` and admits the Workitem via Assay's bound hearing entry contract. Called by the Librarian when friction thresholds or TTL expiry trigger a review hearing. |
-| `QueryArtefactState` | `workitem_id`, `artefact_kinds[]` | `artefact_states[]` | Returns artefact presence and stamp state for exit contract validation. Called by the Operator's own reconciliation loop against the Archivist. |
 | `ExportWorkitem` | `workitem_id` | `export_package` | Assembles an export package from the completed Workitem: artefact content (scoped by exit contract), passport stamps, Workitem metadata, and provenance chain. The Operator signs the package with the Flow's identity material and includes the certificate chain. |
 | `ImportWorkitem` | `export_package`, `treaty_name?` | `workitem_id` or structured error | Validates and materialises a Workitem from an export package. Verifies the package signature against the certificate chain (State Root for siblings, Treaty `caCert` for non-siblings), enforces `allowedSubjects` and `maxBundleSize` from the Treaty if applicable, validates the materialised Workitem against the configured `importNode`'s entry contract, and creates the Workitem in `Pending`. |
 
@@ -59,7 +58,13 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 
 ## Archivist API
 
-The Archivist API manages artefact lifecycle and provenance. All node-facing methods are reached through the Sidecar. The Operator has a direct query path for contract validation.
+The Archivist API manages artefact lifecycle and provenance. All node-facing methods are reached through the Sidecar. The Operator also exposes service-facing methods for contract validation.
+
+### Service-Facing Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `QueryArtefactState` | `workitem_id`, `artefact_kinds[]` | `artefact_states[]` | Returns artefact presence and stamp state for exit contract validation. Called by the Operator's own reconciliation loop. |
 
 ### Artefact Content and Version Methods
 
@@ -130,10 +135,10 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `GetLaw` | `law_id` | `law` | Returns the full law object by identifier. Used by Assay for hearing evidence retrieval. |
-| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling minted by Assay, Tier 3+ applied by administrator or Governance Flow). |
+| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling minted by Assay, Tier 3+ applied by administrator or Governance Flow). During hearing processing, the law is created in an inactive state pending hearing completion. |
 | `RetireLaw` | `law_id` | `acknowledged` | Removes a law from the active Library. History is preserved in the audit log. |
 | `ReplicateLaws` | `laws[]`, `source_flow_id` | `integration_results[]` | Receives higher-tier laws from a remote Librarian for integration. Triggers the two-stage conflict protocol. |
-| `ApplyLifecycleAction` | `law_id`, `verdict` | `acknowledged` | Applies the outcome of a review hearing (promote, retire, demote) to the specified law. Called by the Operator after Assay hearing completion. |
+| `ApplyLifecycleAction` | `law_id`, `verdict` | `acknowledged` | Applies the outcome of a review hearing (promote, retire, demote) to the specified law. Called by the Operator after Assay hearing completion. This action activates any law created during the hearing. |
 
 ### Librarian Error Responses
 
