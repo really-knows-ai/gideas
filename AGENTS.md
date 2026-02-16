@@ -1,11 +1,13 @@
 # AGENTS.md
 
 ## Project
+
 This repository contains the technical specification and reference implementation for **Foundry Flow** — a governed workflow runtime on Kubernetes.
 
 ## Repository Structure
 
 ### Documentation (`/specs`)
+
 The authoritative source of truth for the system design.
 
 /specs
