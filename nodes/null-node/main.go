@@ -1,17 +1,22 @@
 // Null-Node is a minimal verification node for the Foundry Flow runtime.
 //
-// It exercises the SDK -> Sidecar link by performing the simplest possible
-// node lifecycle:
+// It uses the push-based model via flow.Start(), acting as a persistent
+// gRPC server that receives work assignments from the Sidecar. When the
+// Sidecar calls Process, the handler is invoked:
 //
-//  1. Connect to the Sidecar via the SDK.
-//  2. Send a Heartbeat.
-//  3. Wait 1 second (simulating work).
-//  4. Call Complete with a success message.
-//  5. Exit.
+//  1. Log the received workitem context.
+//  2. Initialize an SDK client to interact with the Sidecar.
+//  3. Send a Heartbeat.
+//  4. Simulate work (1 second).
+//  5. Call Complete to submit a routing instruction.
+//  6. Return (the server continues to accept new assignments).
 //
 // Usage:
 //
-//	FLOW_WORKITEM_ID=test-123 go run ./nodes/null-node/main.go
+//	go run ./nodes/null-node/main.go
+//
+// The node listens on :50053 (default) for Process calls from the Sidecar.
+// Override with FLOW_NODE_PORT=<port>.
 package main
 
 import (
@@ -20,49 +25,61 @@ import (
 	"os"
 	"time"
 
+	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
 func main() {
-	slog.Info("null-node: starting")
+	slog.Info("null-node: starting push-based server")
 
-	// 1. Initialize the SDK.
+	if err := flow.Start(handler); err != nil {
+		slog.Error("null-node: server failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// handler is the user-provided work processing function.
+// It is called by the SDK server when the Sidecar forwards an AssignWork request.
+func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
+	slog.Info("null-node: Processing...",
+		"flow_id", wctx.GetFlowId(),
+		"workitem_id", wctx.GetWorkitemId(),
+		"node_id", wctx.GetNodeId(),
+	)
+
+	// Initialize the SDK client to interact with the Sidecar.
+	// Set the workitem ID from the pushed context.
+	os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
 	client, err := flow.NewClient()
 	if err != nil {
 		slog.Error("null-node: failed to create SDK client", "error", err)
-		slog.Error("null-node: is the sidecar running?")
-		os.Exit(1)
+		return err
 	}
 	defer client.Close()
 
-	slog.Info("null-node: SDK connected",
-		"workitem_id", client.WorkitemID(),
-		"sidecar", flow.DefaultSidecarAddress,
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// 2. Send a Heartbeat.
+	// Send a Heartbeat.
 	ack, err := client.Heartbeat(ctx)
 	if err != nil {
 		slog.Error("null-node: heartbeat failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 	slog.Info("null-node: heartbeat acknowledged", "ack", ack)
 
-	// 3. Simulate work.
+	// Simulate work.
 	slog.Info("null-node: simulating work for 1 second...")
 	time.Sleep(1 * time.Second)
 
-	// 4. Complete.
+	// Complete — submit routing instruction back through Sidecar -> Operator.
 	accepted, err := client.Complete(ctx, "")
 	if err != nil {
 		slog.Error("null-node: completion failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 	slog.Info("null-node: completion accepted", "accepted", accepted)
 
-	// 5. Exit.
-	slog.Info("null-node: done")
+	slog.Info("null-node: done processing",
+		"workitem_id", wctx.GetWorkitemId(),
+	)
+
+	return nil
 }

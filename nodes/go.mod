@@ -2,10 +2,12 @@ module github.com/gideas/flow/nodes
 
 go 1.25.0
 
-require github.com/gideas/flow/sdk/go v0.0.0
+require (
+	github.com/gideas/flow/gen v0.0.0
+	github.com/gideas/flow/sdk/go v0.0.0
+)
 
 require (
-	github.com/gideas/flow/gen v0.0.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

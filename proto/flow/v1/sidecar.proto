@@ -4,6 +4,8 @@ package flow.v1;
 
 option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
 
+import "flow/v1/common.proto";
+
 // SidecarService is the internal pod proxy for node-to-runtime communication.
 // The Sidecar authenticates, injects identity context, and proxies to the
 // owning service. Nodes see SDK calls; the Sidecar handles transport.
@@ -20,6 +22,11 @@ service SidecarService {
   // computation. The Sidecar propagates activity timestamps to the Operator,
   // throttled to avoid excessive writes.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Called by the Operator to push a work assignment to this specific
+  // Sidecar/Pod. The Sidecar validates the request and forwards it to
+  // the co-located User Code container via the NodeService.Process RPC.
+  rpc AssignWork(AssignWorkRequest) returns (Ack);
 }
 
 message HeartbeatRequest {
@@ -28,4 +35,17 @@ message HeartbeatRequest {
 
 message HeartbeatResponse {
   bool acknowledged = 1;
+}
+
+// AssignWorkRequest is sent by the Operator to push a Workitem assignment
+// to a specific Sidecar instance.
+message AssignWorkRequest {
+  // The identity context for this assignment (flow, workitem, node).
+  WorkitemContext context = 1;
+}
+
+// Ack is a generic acknowledgement response.
+message Ack {
+  bool accepted = 1;
+  string message = 2;
 }

@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "flow/v1/sidecar.proto";
+
+// NodeService is the gRPC interface implemented by the SDK inside the User
+// Code container. The Sidecar calls this service over localhost to forward
+// work assignments received from the Operator.
+//
+// Communication path: Operator -> (network) -> Sidecar:AssignWork
+//                     -> (localhost) -> NodeService:Process
+service NodeService {
+  // Process is called by the Sidecar to hand off a work assignment to the
+  // User Code. The SDK starts a gRPC server implementing this service and
+  // invokes the user-provided handler function.
+  rpc Process(AssignWorkRequest) returns (Ack);
+}

@@ -1,0 +1,97 @@
+# Null-Node Deployment for Foundry Flow Push-Based Dispatcher Verification
+#
+# This manifest deploys the null-node with its sidecar in a single Pod.
+# The Operator discovers these Pods via the flow.gideas.io/node-name label
+# and pushes work assignments to the Sidecar via gRPC.
+#
+# Communication path:
+#   Operator -> Pod IP:50051 (Sidecar) -> localhost:50053 (Null-Node SDK Server)
+#
+# Prerequisites:
+#   - Build null-node image: docker build -t null-node:latest -f nodes/null-node/Dockerfile .
+#   - Build sidecar image:   docker build -t flow-sidecar:latest -f sidecar/Dockerfile .
+#   - Apply FoundryNode CRD: kubectl apply -f operator/config/samples/flow_v1_foundrynode_null.yaml
+#
+# For Kind cluster:
+#   kind load docker-image null-node:latest --name <cluster>
+#   kind load docker-image flow-sidecar:latest --name <cluster>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: null-node
+  namespace: default
+  labels:
+    app.kubernetes.io/name: null-node
+    app.kubernetes.io/part-of: foundry-flow
+    flow.gideas.io/node-name: null-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      flow.gideas.io/node-name: null-node
+  template:
+    metadata:
+      labels:
+        flow.gideas.io/node-name: null-node
+        app.kubernetes.io/name: null-node
+    spec:
+      containers:
+        # User Code container — runs the null-node with flow.Start()
+        - name: node
+          image: null-node:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: node-grpc
+              containerPort: 50053
+              protocol: TCP
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+
+        # Sidecar container — receives AssignWork from Operator, forwards to node
+        - name: sidecar
+          image: flow-sidecar:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: sidecar-grpc
+              containerPort: 50051
+              protocol: TCP
+          env:
+            - name: FLOW_NODE_ID
+              value: "null-node"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "operator-grpc.default.svc.cluster.local:50052"
+            - name: FLOW_NODE_ADDRESS
+              value: "localhost:50053"
+---
+# FoundryNode CRD for the null-node
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: null-node
+  namespace: default
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+    flow.gideas.io/flow-name: basic-linear-flow
+spec:
+  image: null-node:latest
+  exit: "standard-exit"
+---
+# Sample Workitem to trigger assignment
+# Apply this after the Deployment and FoundryNode are ready.
+# The Operator will see phase=Pending + currentAssignee=null-node and dispatch.
+apiVersion: flow.gideas.io/v1
+kind: Workitem
+metadata:
+  name: test-workitem-001
+  namespace: default
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+status:
+  phase: Pending
+  currentAssignee: "null-node"
