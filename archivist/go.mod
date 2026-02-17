@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/gideas/flow/gen v0.0.0
+	github.com/mattn/go-sqlite3 v1.14.28
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
 )

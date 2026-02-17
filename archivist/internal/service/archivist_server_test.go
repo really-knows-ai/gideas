@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gideas/flow/archivist/internal/store"
+	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,8 +17,18 @@ func sha256Hex(data []byte) string {
 	return fmt.Sprintf("%x", h[:])
 }
 
+func newTestServer(t *testing.T) *ArchivistServer {
+	t.Helper()
+	store, err := sqlite.New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create test store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return NewArchivistServer(store)
+}
+
 func TestStoreArtefact_NewVersion(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	content := []byte("Hello from Step 1")
@@ -43,7 +53,7 @@ func TestStoreArtefact_NewVersion(t *testing.T) {
 }
 
 func TestStoreArtefact_DuplicateContent(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	content := []byte("Hello from Step 1")
@@ -71,7 +81,7 @@ func TestStoreArtefact_DuplicateContent(t *testing.T) {
 }
 
 func TestStoreArtefact_UpdatedContent(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	// Store v1.
@@ -107,7 +117,7 @@ func TestStoreArtefact_UpdatedContent(t *testing.T) {
 }
 
 func TestGetArtefact_LatestVersion(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	content := []byte("Hello from Step 1")
@@ -140,7 +150,7 @@ func TestGetArtefact_LatestVersion(t *testing.T) {
 }
 
 func TestGetArtefact_NotFound(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	_, err := s.GetArtefact(ctx, &flowv1.GetArtefactRequest{
@@ -157,7 +167,7 @@ func TestGetArtefact_NotFound(t *testing.T) {
 }
 
 func TestGetArtefactVersion(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	content := []byte("specific version")
@@ -185,7 +195,7 @@ func TestGetArtefactVersion(t *testing.T) {
 }
 
 func TestGetArtefactVersion_NotFound(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	_, err := s.GetArtefactVersion(ctx, &flowv1.GetArtefactVersionRequest{
@@ -203,7 +213,7 @@ func TestGetArtefactVersion_NotFound(t *testing.T) {
 }
 
 func TestListArtefacts(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
@@ -233,7 +243,7 @@ func TestListArtefacts(t *testing.T) {
 }
 
 func TestGetArtefactMetadata(t *testing.T) {
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	v1 := []byte("v1")
@@ -267,7 +277,7 @@ func TestGetArtefactMetadata(t *testing.T) {
 
 func TestEndToEnd_StoreAndRetrieve(t *testing.T) {
 	// Simulates the full data handover: Step 1 writes, Step 2 reads.
-	s := NewArchivistServer(store.NewMemoryStore())
+	s := newTestServer(t)
 	ctx := context.Background()
 
 	content := []byte("Hello from Step 1")

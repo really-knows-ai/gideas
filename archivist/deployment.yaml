@@ -4,7 +4,8 @@
 # Storage (CAS) service that manages artefact content and provenance.
 #
 # It listens on port 50054 and is accessed by Sidecars via the
-# flow-archivist Service.
+# flow-archivist Service. Data is persisted to a SQLite database on a
+# PersistentVolumeClaim.
 #
 # Prerequisites:
 #   - Build archivist image: docker build -t flow-archivist:latest -f archivist/Dockerfile .
@@ -42,6 +43,15 @@ spec:
           env:
             - name: ARCHIVIST_PORT
               value: "50054"
+            - name: ARCHIVIST_DB_PATH
+              value: /data/archivist.db
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: archivist-data
 ---
 apiVersion: v1
 kind: Service
@@ -60,3 +70,18 @@ spec:
       targetPort: 50054
       protocol: TCP
   type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: archivist-data
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-archivist
+    app.kubernetes.io/part-of: foundry-flow
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

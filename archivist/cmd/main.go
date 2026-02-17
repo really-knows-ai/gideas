@@ -3,12 +3,14 @@
 //
 // It separates Content (raw bytes, deduplicated by SHA-256 hash) from
 // Provenance (version history keyed by workitem + artefact). The Sidecar
-// forwards node artefact operations to this service.
+// forwards node artefact operations to this service. Data is persisted to a
+// SQLite database at the path specified by ARCHIVIST_DB_PATH (default:
+// /data/archivist.db).
 //
 // Usage:
 //
 //	go run ./archivist/cmd/main.go
-//	ARCHIVIST_PORT=50054 go run ./archivist/cmd/main.go
+//	ARCHIVIST_PORT=50054 ARCHIVIST_DB_PATH=/data/archivist.db go run ./archivist/cmd/main.go
 package main
 
 import (
@@ -20,15 +22,18 @@ import (
 	"syscall"
 
 	"github.com/gideas/flow/archivist/internal/service"
-	"github.com/gideas/flow/archivist/internal/store"
+	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 const (
-	defaultPort = "50054"
-	envPort     = "ARCHIVIST_PORT"
+	defaultPort   = "50054"
+	defaultDBPath = "/data/archivist.db"
+
+	envPort   = "ARCHIVIST_PORT"
+	envDBPath = "ARCHIVIST_DB_PATH"
 )
 
 func main() {
@@ -37,7 +42,20 @@ func main() {
 		port = defaultPort
 	}
 
-	slog.Info("Archivist starting", "port", port)
+	dbPath := os.Getenv(envDBPath)
+	if dbPath == "" {
+		dbPath = defaultDBPath
+	}
+
+	slog.Info("Archivist starting", "port", port, "db_path", dbPath)
+
+	// Initialise the SQLite store.
+	store, err := sqlite.New(dbPath)
+	if err != nil {
+		slog.Error("Failed to initialise SQLite store", "error", err)
+		os.Exit(1)
+	}
+	defer store.Close()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -47,8 +65,7 @@ func main() {
 
 	srv := grpc.NewServer()
 
-	memStore := store.NewMemoryStore()
-	archivistSrv := service.NewArchivistServer(memStore)
+	archivistSrv := service.NewArchivistServer(store)
 	flowv1.RegisterArchivistServiceServer(srv, archivistSrv)
 
 	// Enable gRPC reflection for debugging with grpcurl.
@@ -61,6 +78,7 @@ func main() {
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		srv.GracefulStop()
+		store.Close()
 	}()
 
 	slog.Info("Archivist listening", "address", lis.Addr().String())

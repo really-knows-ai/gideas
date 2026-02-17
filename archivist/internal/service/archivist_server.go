@@ -11,7 +11,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/gideas/flow/archivist/internal/store"
+	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,14 +19,14 @@ import (
 )
 
 // ArchivistServer implements flowv1.ArchivistServiceServer backed by
-// an in-memory CAS store.
+// a SQLite CAS store.
 type ArchivistServer struct {
 	flowv1.UnimplementedArchivistServiceServer
-	store *store.MemoryStore
+	store *sqlite.Store
 }
 
 // NewArchivistServer returns an ArchivistServer backed by the given store.
-func NewArchivistServer(s *store.MemoryStore) *ArchivistServer {
+func NewArchivistServer(s *sqlite.Store) *ArchivistServer {
 	return &ArchivistServer{store: s}
 }
 
@@ -38,7 +38,7 @@ func NewArchivistServer(s *store.MemoryStore) *ArchivistServer {
 //  3. If history is empty OR head hash != content_hash: append new version, is_new_version=true.
 //  4. If head hash == content_hash: no-op, is_new_version=false.
 //  5. Return the version_hash (which equals content_hash for the stored version).
-func (s *ArchivistServer) StoreArtefact(_ context.Context, req *flowv1.StoreArtefactRequest) (*flowv1.StoreArtefactResponse, error) {
+func (s *ArchivistServer) StoreArtefact(ctx context.Context, req *flowv1.StoreArtefactRequest) (*flowv1.StoreArtefactResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 	contentHash := req.GetContentHash()
@@ -52,10 +52,15 @@ func (s *ArchivistServer) StoreArtefact(_ context.Context, req *flowv1.StoreArte
 	)
 
 	// Step 1: Store blob (deduplicated by hash).
-	s.store.StoreBlob(contentHash, req.GetContent())
+	if _, err := s.store.StoreBlob(ctx, contentHash, req.GetContent()); err != nil {
+		return nil, status.Errorf(codes.Internal, "store blob: %v", err)
+	}
 
 	// Step 2: Check provenance history.
-	head := s.store.GetHead(workitemID, artefactID)
+	head, err := s.store.GetHead(ctx, workitemID, artefactID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get head: %v", err)
+	}
 
 	// Step 3: Compare — only append if this is actually a new version.
 	if head != nil && head.Hash == contentHash {
@@ -70,7 +75,9 @@ func (s *ArchivistServer) StoreArtefact(_ context.Context, req *flowv1.StoreArte
 	}
 
 	// New version — append to history.
-	s.store.AppendVersion(workitemID, artefactID, contentHash, kind)
+	if err := s.store.AppendVersion(ctx, workitemID, artefactID, contentHash, kind); err != nil {
+		return nil, status.Errorf(codes.Internal, "append version: %v", err)
+	}
 
 	slog.Info("StoreArtefact: new version created",
 		"workitem_id", workitemID,
@@ -90,7 +97,7 @@ func (s *ArchivistServer) StoreArtefact(_ context.Context, req *flowv1.StoreArte
 //  1. Look up provenance history for (workitem_id, artefact_id).
 //  2. If empty, return NotFound.
 //  3. Get head hash, retrieve bytes from BlobStore.
-func (s *ArchivistServer) GetArtefact(_ context.Context, req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
+func (s *ArchivistServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -99,13 +106,19 @@ func (s *ArchivistServer) GetArtefact(_ context.Context, req *flowv1.GetArtefact
 		"artefact_id", artefactID,
 	)
 
-	head := s.store.GetHead(workitemID, artefactID)
+	head, err := s.store.GetHead(ctx, workitemID, artefactID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get head: %v", err)
+	}
 	if head == nil {
 		return nil, status.Errorf(codes.NotFound,
 			"artefact %q not found for workitem %q", artefactID, workitemID)
 	}
 
-	data, ok := s.store.GetBlob(head.Hash)
+	data, ok, err := s.store.GetBlob(ctx, head.Hash)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get blob: %v", err)
+	}
 	if !ok {
 		// This should never happen — provenance points to a hash that was stored.
 		return nil, status.Errorf(codes.Internal,
@@ -120,12 +133,15 @@ func (s *ArchivistServer) GetArtefact(_ context.Context, req *flowv1.GetArtefact
 }
 
 // GetArtefactVersion returns content bytes for a specific version by hash.
-func (s *ArchivistServer) GetArtefactVersion(_ context.Context, req *flowv1.GetArtefactVersionRequest) (*flowv1.GetArtefactVersionResponse, error) {
+func (s *ArchivistServer) GetArtefactVersion(ctx context.Context, req *flowv1.GetArtefactVersionRequest) (*flowv1.GetArtefactVersionResponse, error) {
 	versionHash := req.GetVersionHash()
 
 	slog.Info("GetArtefactVersion", "version_hash", versionHash)
 
-	data, ok := s.store.GetBlob(versionHash)
+	data, ok, err := s.store.GetBlob(ctx, versionHash)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get blob: %v", err)
+	}
 	if !ok {
 		return nil, status.Errorf(codes.NotFound,
 			"version %q not found", versionHash)
@@ -137,11 +153,14 @@ func (s *ArchivistServer) GetArtefactVersion(_ context.Context, req *flowv1.GetA
 }
 
 // GetArtefactMetadata returns version history and stamps (stamps stubbed for now).
-func (s *ArchivistServer) GetArtefactMetadata(_ context.Context, req *flowv1.GetArtefactMetadataRequest) (*flowv1.GetArtefactMetadataResponse, error) {
+func (s *ArchivistServer) GetArtefactMetadata(ctx context.Context, req *flowv1.GetArtefactMetadataRequest) (*flowv1.GetArtefactMetadataResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
-	history := s.store.GetHistory(workitemID, artefactID)
+	history, err := s.store.GetHistory(ctx, workitemID, artefactID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get history: %v", err)
+	}
 	if history == nil {
 		return nil, status.Errorf(codes.NotFound,
 			"artefact %q not found for workitem %q", artefactID, workitemID)
@@ -162,12 +181,15 @@ func (s *ArchivistServer) GetArtefactMetadata(_ context.Context, req *flowv1.Get
 }
 
 // ListArtefacts returns all artefact refs for a workitem.
-func (s *ArchivistServer) ListArtefacts(_ context.Context, req *flowv1.ListArtefactsRequest) (*flowv1.ListArtefactsResponse, error) {
+func (s *ArchivistServer) ListArtefacts(ctx context.Context, req *flowv1.ListArtefactsRequest) (*flowv1.ListArtefactsResponse, error) {
 	workitemID := req.GetWorkitemId()
 
 	slog.Info("ListArtefacts", "workitem_id", workitemID)
 
-	entries := s.store.ListArtefacts(workitemID)
+	entries, err := s.store.ListArtefacts(ctx, workitemID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list artefacts: %v", err)
+	}
 
 	refs := make([]*flowv1.ArtefactRef, 0, len(entries))
 	for _, e := range entries {
@@ -184,16 +206,22 @@ func (s *ArchivistServer) ListArtefacts(_ context.Context, req *flowv1.ListArtef
 
 // QueryArtefactState returns artefact presence and stamp state for
 // exit contract validation. Called by the Operator.
-func (s *ArchivistServer) QueryArtefactState(_ context.Context, req *flowv1.QueryArtefactStateRequest) (*flowv1.QueryArtefactStateResponse, error) {
+func (s *ArchivistServer) QueryArtefactState(ctx context.Context, req *flowv1.QueryArtefactStateRequest) (*flowv1.QueryArtefactStateResponse, error) {
 	workitemID := req.GetWorkitemId()
 
 	slog.Info("QueryArtefactState", "workitem_id", workitemID)
 
-	entries := s.store.ListArtefacts(workitemID)
-	states := make([]*flowv1.ArtefactState, 0, len(entries))
+	entries, err := s.store.ListArtefacts(ctx, workitemID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list artefacts: %v", err)
+	}
 
+	states := make([]*flowv1.ArtefactState, 0, len(entries))
 	for _, e := range entries {
-		head := s.store.GetHead(workitemID, e.ID)
+		head, err := s.store.GetHead(ctx, workitemID, e.ID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "get head: %v", err)
+		}
 		if head == nil {
 			continue
 		}
