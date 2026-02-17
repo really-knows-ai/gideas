@@ -42,14 +42,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"node_id", wctx.GetNodeId(),
 	)
 
-	os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
+	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
 	client, err := flow.NewClient()
 	if err != nil {
 		return fmt.Errorf("quench: create client: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
-	client.Heartbeat(ctx)
+	_, _ = client.Heartbeat(ctx)
 
 	// Resolve any ACTIONED feedback from prior cycles. Refine already revised
 	// the haiku to address this feedback; Quench (as the structural authority)
@@ -100,9 +100,16 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 				clean := strings.Trim(w, ",.!?;:'\"")
 				parts = append(parts, fmt.Sprintf("%s(%d)", w, syllable.Count(clean)))
 			}
-			breakdown.WriteString(fmt.Sprintf("  Line %d: %s = %d syllables\n", i+1, strings.Join(parts, " + "), counts[i]))
+			breakdown.WriteString(fmt.Sprintf(
+				"  Line %d: %s = %d syllables\n",
+				i+1, strings.Join(parts, " + "), counts[i],
+			))
 		}
-		msg := fmt.Sprintf("Haiku syllable structure is %d-%d-%d, must be exactly 5-7-5.\n%sPlease revise to exactly 5-7-5 syllables.", counts[0], counts[1], counts[2], breakdown.String())
+		msg := fmt.Sprintf(
+			"Haiku syllable structure is %d-%d-%d, must be exactly 5-7-5.\n"+
+				"%sPlease revise to exactly 5-7-5 syllables.",
+			counts[0], counts[1], counts[2], breakdown.String(),
+		)
 		slog.Info("haiku-quench: haiku FAILED validation, raising feedback",
 			"expected", "5-7-5",
 			"got", fmt.Sprintf("%d-%d-%d", counts[0], counts[1], counts[2]),

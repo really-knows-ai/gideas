@@ -76,7 +76,7 @@ func TestSidecarServer_AssignWork_ForwardsToNode(t *testing.T) {
 
 	// Create SidecarServer pointing at the fake node.
 	sidecar := NewSidecarServer("test-node", lis.Addr().String())
-	t.Cleanup(func() { sidecar.Close() })
+	t.Cleanup(func() { _ = sidecar.Close() })
 
 	ack, err := sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{
 		Context: &flowv1.WorkitemContext{
@@ -117,7 +117,7 @@ func TestSidecarServer_AssignWork_NodeFailure(t *testing.T) {
 	t.Cleanup(func() { nodeSrv.GracefulStop() })
 
 	sidecar := NewSidecarServer("test-node", lis.Addr().String())
-	t.Cleanup(func() { sidecar.Close() })
+	t.Cleanup(func() { _ = sidecar.Close() })
 
 	_, err = sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{
 		Context: &flowv1.WorkitemContext{
@@ -147,7 +147,7 @@ func TestSidecarServer_AssignWork_UnreachableNode(t *testing.T) {
 	}
 	sidecar.nodeConn = conn
 	sidecar.nodeClient = flowv1.NewNodeServiceClient(conn)
-	t.Cleanup(func() { sidecar.Close() })
+	t.Cleanup(func() { _ = sidecar.Close() })
 
 	_, err = sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{
 		Context: &flowv1.WorkitemContext{

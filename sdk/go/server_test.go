@@ -43,7 +43,7 @@ func TestNodeServiceServer_Process_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	client := flowv1.NewNodeServiceClient(conn)
 
@@ -102,7 +102,7 @@ func TestNodeServiceServer_Process_HandlerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	client := flowv1.NewNodeServiceClient(conn)
 

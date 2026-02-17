@@ -35,8 +35,18 @@ import (
 var (
 	workitemName  = flag.String("workitem", "haiku-001", "Name of the Workitem to watch")
 	namespace     = flag.String("namespace", "default", "Kubernetes namespace")
-	archivistAddr = flag.String("archivist", "", "Archivist gRPC address (e.g. localhost:50054). If empty, skip final haiku display.")
-	kubeconfig    = flag.String("kubeconfig", "", "Path to kubeconfig (defaults to in-cluster or ~/.kube/config)")
+	archivistAddr = flag.String("archivist", "",
+		"Archivist gRPC address (e.g. localhost:50054). If empty, skip final haiku display.")
+	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig (defaults to in-cluster or ~/.kube/config)")
+)
+
+// Phase constants used in status comparisons and display.
+const (
+	phaseCompleted = "Completed"
+	phaseFailed    = "Failed"
+	phasePending   = "Pending"
+	phaseRunning   = "Running"
+	phaseRouting   = "Routing"
 )
 
 // nodeLabels maps node names to display labels for the timeline.
@@ -50,11 +60,155 @@ var nodeLabels = map[string]string{
 
 // phaseSymbols maps phases to visual indicators.
 var phaseSymbols = map[string]string{
-	"Pending":   "...",
-	"Running":   ">>>",
-	"Routing":   "-->",
-	"Completed": "[+]",
-	"Failed":    "[!]",
+	phasePending:   "...",
+	phaseRunning:   ">>>",
+	phaseRouting:   "-->",
+	phaseCompleted: "[+]",
+	phaseFailed:    "[!]",
+}
+
+// eventState carries mutable state across watch events.
+type eventState struct {
+	prevPhase       string
+	prevAssignee    string
+	visitCount      int
+	seenFeedbackIDs map[string]bool
+	prevHaikuHash   string
+}
+
+// buildKubeClient creates a Kubernetes dynamic client from the configured
+// kubeconfig path (or default loading rules).
+func buildKubeClient() (dynamic.Interface, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if *kubeconfig != "" {
+		loadingRules.ExplicitPath = *kubeconfig
+	}
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		loadingRules,
+		&clientcmd.ConfigOverrides{},
+	).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("building kubeconfig: %w", err)
+	}
+	client, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("creating dynamic client: %w", err)
+	}
+	return client, nil
+}
+
+// connectArchivist dials the Archivist gRPC endpoint and returns a client
+// with its underlying connection. If addr is empty, both return values are nil.
+func connectArchivist(addr string) (flowv1.ArchivistServiceClient, *grpc.ClientConn) {
+	if addr == "" {
+		return nil, nil
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not connect to archivist at %s: %v\n", addr, err)
+		return nil, nil
+	}
+	return flowv1.NewArchivistServiceClient(conn), conn
+}
+
+// processEvent handles a single watch event, printing timeline rows and
+// querying the archivist for live state. It returns true when the workitem
+// has reached a terminal phase and the caller should stop watching.
+func processEvent(
+	ctx context.Context,
+	event watch.Event,
+	state *eventState,
+	archClient flowv1.ArchivistServiceClient,
+) bool {
+	if event.Type == watch.Error {
+		fmt.Fprintf(os.Stderr, "Watch error: %v\n", event.Object)
+		return false
+	}
+
+	obj, ok := event.Object.(*unstructured.Unstructured)
+	if !ok {
+		return false
+	}
+
+	status, _, _ := unstructured.NestedMap(obj.Object, "status")
+	if status == nil {
+		return false
+	}
+
+	phase, _ := status["phase"].(string)
+	assignee, _ := status["currentAssignee"].(string)
+
+	// Skip duplicate events.
+	if phase == state.prevPhase && assignee == state.prevAssignee {
+		return false
+	}
+
+	// Compact display: only show meaningful transitions.
+	showRow := false
+	switch {
+	case phase == phaseCompleted || phase == phaseFailed:
+		showRow = true
+	case assignee != state.prevAssignee && assignee != "":
+		showRow = true
+	case phase == phaseRunning && assignee != "sort":
+		showRow = true
+	}
+
+	// Count node visits.
+	if assignee != state.prevAssignee && assignee != "" {
+		state.visitCount++
+	}
+
+	if showRow {
+		sym := phaseSymbols[phase]
+		if sym == "" {
+			sym = "???"
+		}
+
+		nodeLabel := nodeLabels[assignee]
+		if nodeLabel == "" && assignee != "" {
+			nodeLabel = assignee
+		}
+		if assignee == "" {
+			nodeLabel = "(none)"
+		}
+
+		now := time.Now().Format("15:04:05")
+		fmt.Printf("%-12s %-5s %-20s %s\n", now, sym, nodeLabel, phase)
+
+		// Print thrash counters if present.
+		if tc, ok := status["thrashCounters"]; ok {
+			if counters, ok := tc.(map[string]any); ok && len(counters) > 0 {
+				parts := make([]string, 0, len(counters))
+				for node, count := range counters {
+					parts = append(parts, fmt.Sprintf("%s:%v", node, count))
+				}
+				fmt.Printf("%-12s       visits: %s\n", "", strings.Join(parts, ", "))
+			}
+		}
+	}
+
+	state.prevPhase = phase
+	state.prevAssignee = assignee
+
+	// Live archivist queries: show haiku text and new feedback on meaningful transitions.
+	if archClient != nil && showRow {
+		printLiveState(ctx, archClient, *workitemName, &state.prevHaikuHash, state.seenFeedbackIDs)
+	}
+
+	// Terminal states.
+	if phase == phaseCompleted || phase == phaseFailed {
+		fmt.Println(strings.Repeat("-", 72))
+		fmt.Printf("\nWorkitem %s after %d node visits.\n", strings.ToLower(phase), state.visitCount)
+
+		if phase == phaseCompleted && *archivistAddr != "" {
+			fetchAndPrintHaiku(ctx, *archivistAddr, *workitemName)
+		} else if phase == phaseCompleted {
+			fmt.Println("\nTip: pass --archivist=<host:port> to display the final haiku.")
+		}
+		return true
+	}
+	return false
 }
 
 func main() {
@@ -76,23 +230,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Build K8s dynamic client.
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if *kubeconfig != "" {
-		loadingRules.ExplicitPath = *kubeconfig
-	}
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		loadingRules,
-		&clientcmd.ConfigOverrides{},
-	).ClientConfig()
+	dynClient, err := buildKubeClient()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error building kubeconfig: %v\n", err)
-		os.Exit(1)
-	}
-
-	dynClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating dynamic client: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -112,114 +252,17 @@ func main() {
 	}
 	defer watcher.Stop()
 
-	var prevPhase, prevAssignee string
-	visitCount := 0
-	seenFeedbackIDs := make(map[string]bool)
-	var prevHaikuHash string
+	archClient, archConn := connectArchivist(*archivistAddr)
+	if archConn != nil {
+		defer func() { _ = archConn.Close() }()
+	}
 
-	// Connect to Archivist once for live queries.
-	var archClient flowv1.ArchivistServiceClient
-	if *archivistAddr != "" {
-		conn, err := grpc.NewClient(*archivistAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not connect to archivist at %s: %v\n", *archivistAddr, err)
-		} else {
-			defer conn.Close()
-			archClient = flowv1.NewArchivistServiceClient(conn)
-		}
+	state := &eventState{
+		seenFeedbackIDs: make(map[string]bool),
 	}
 
 	for event := range watcher.ResultChan() {
-		if event.Type == watch.Error {
-			fmt.Fprintf(os.Stderr, "Watch error: %v\n", event.Object)
-			continue
-		}
-
-		obj, ok := event.Object.(*unstructured.Unstructured)
-		if !ok {
-			continue
-		}
-
-		status, _, _ := unstructured.NestedMap(obj.Object, "status")
-		if status == nil {
-			continue
-		}
-
-		phase, _ := status["phase"].(string)
-		assignee, _ := status["currentAssignee"].(string)
-
-		// Skip duplicate events.
-		if phase == prevPhase && assignee == prevAssignee {
-			continue
-		}
-
-		// Compact display: only show meaningful transitions.
-		// Skip intermediate phases for sort (it's the hub — too noisy).
-		// Show: node entry (Pending with new assignee), Running for non-sort, and terminal states.
-		showRow := false
-		switch {
-		case phase == "Completed" || phase == "Failed":
-			showRow = true
-		case assignee != prevAssignee && assignee != "":
-			// New node assignment — always show.
-			showRow = true
-		case phase == "Running" && assignee != "sort":
-			// Show Running for non-hub nodes (where actual work happens).
-			showRow = true
-		}
-
-		// Count node visits.
-		if assignee != prevAssignee && assignee != "" {
-			visitCount++
-		}
-
-		if showRow {
-			sym := phaseSymbols[phase]
-			if sym == "" {
-				sym = "???"
-			}
-
-			nodeLabel := nodeLabels[assignee]
-			if nodeLabel == "" && assignee != "" {
-				nodeLabel = assignee
-			}
-			if assignee == "" {
-				nodeLabel = "(none)"
-			}
-
-			now := time.Now().Format("15:04:05")
-			fmt.Printf("%-12s %-5s %-20s %s\n", now, sym, nodeLabel, phase)
-
-			// Print thrash counters if present.
-			if tc, ok := status["thrashCounters"]; ok {
-				if counters, ok := tc.(map[string]any); ok && len(counters) > 0 {
-					parts := make([]string, 0, len(counters))
-					for node, count := range counters {
-						parts = append(parts, fmt.Sprintf("%s:%v", node, count))
-					}
-					fmt.Printf("%-12s       visits: %s\n", "", strings.Join(parts, ", "))
-				}
-			}
-		}
-
-		prevPhase = phase
-		prevAssignee = assignee
-
-		// Live archivist queries: show haiku text and new feedback on meaningful transitions.
-		if archClient != nil && showRow {
-			printLiveState(ctx, archClient, *workitemName, &prevHaikuHash, seenFeedbackIDs)
-		}
-
-		// Terminal states.
-		if phase == "Completed" || phase == "Failed" {
-			fmt.Println(strings.Repeat("-", 72))
-			fmt.Printf("\nWorkitem %s after %d node visits.\n", strings.ToLower(phase), visitCount)
-
-			if phase == "Completed" && *archivistAddr != "" {
-				fetchAndPrintHaiku(ctx, *archivistAddr, *workitemName)
-			} else if phase == "Completed" {
-				fmt.Println("\nTip: pass --archivist=<host:port> to display the final haiku.")
-			}
+		if processEvent(ctx, event, state, archClient) {
 			return
 		}
 	}
@@ -227,7 +270,10 @@ func main() {
 
 // printLiveState queries the Archivist for the current haiku and any new
 // feedback, printing them inline in the timeline.
-func printLiveState(ctx context.Context, client flowv1.ArchivistServiceClient, workitemID string, prevHash *string, seenFeedback map[string]bool) {
+func printLiveState(
+	ctx context.Context, client flowv1.ArchivistServiceClient,
+	workitemID string, prevHash *string, seenFeedback map[string]bool,
+) {
 	// Fetch current haiku text.
 	haikuResp, err := client.GetArtefact(ctx, &flowv1.GetArtefactRequest{
 		WorkitemId: workitemID,
@@ -291,7 +337,7 @@ func fetchAndPrintHaiku(ctx context.Context, addr, workitemID string) {
 		fmt.Fprintf(os.Stderr, "\nCould not connect to archivist at %s: %v\n", addr, err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := flowv1.NewArchivistServiceClient(conn)
 

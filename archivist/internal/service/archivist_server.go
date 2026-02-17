@@ -39,7 +39,9 @@ func NewArchivistServer(s *sqlite.Store) *ArchivistServer {
 //  3. If history is empty OR head hash != content_hash: append new version, is_new_version=true.
 //  4. If head hash == content_hash: no-op, is_new_version=false.
 //  5. Return the version_hash (which equals content_hash for the stored version).
-func (s *ArchivistServer) StoreArtefact(ctx context.Context, req *flowv1.StoreArtefactRequest) (*flowv1.StoreArtefactResponse, error) {
+func (s *ArchivistServer) StoreArtefact(
+	ctx context.Context, req *flowv1.StoreArtefactRequest,
+) (*flowv1.StoreArtefactResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 	contentHash := req.GetContentHash()
@@ -98,7 +100,9 @@ func (s *ArchivistServer) StoreArtefact(ctx context.Context, req *flowv1.StoreAr
 //  1. Look up provenance history for (workitem_id, artefact_id).
 //  2. If empty, return NotFound.
 //  3. Get head hash, retrieve bytes from BlobStore.
-func (s *ArchivistServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
+func (s *ArchivistServer) GetArtefact(
+	ctx context.Context, req *flowv1.GetArtefactRequest,
+) (*flowv1.GetArtefactResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -134,7 +138,9 @@ func (s *ArchivistServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefa
 }
 
 // GetArtefactVersion returns content bytes for a specific version by hash.
-func (s *ArchivistServer) GetArtefactVersion(ctx context.Context, req *flowv1.GetArtefactVersionRequest) (*flowv1.GetArtefactVersionResponse, error) {
+func (s *ArchivistServer) GetArtefactVersion(
+	ctx context.Context, req *flowv1.GetArtefactVersionRequest,
+) (*flowv1.GetArtefactVersionResponse, error) {
 	versionHash := req.GetVersionHash()
 
 	slog.Info("GetArtefactVersion", "version_hash", versionHash)
@@ -154,7 +160,9 @@ func (s *ArchivistServer) GetArtefactVersion(ctx context.Context, req *flowv1.Ge
 }
 
 // GetArtefactMetadata returns version history and stamps for the current version.
-func (s *ArchivistServer) GetArtefactMetadata(ctx context.Context, req *flowv1.GetArtefactMetadataRequest) (*flowv1.GetArtefactMetadataResponse, error) {
+func (s *ArchivistServer) GetArtefactMetadata(
+	ctx context.Context, req *flowv1.GetArtefactMetadataRequest,
+) (*flowv1.GetArtefactMetadataResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -201,7 +209,9 @@ func (s *ArchivistServer) GetArtefactMetadata(ctx context.Context, req *flowv1.G
 }
 
 // ListArtefacts returns all artefact refs for a workitem.
-func (s *ArchivistServer) ListArtefacts(ctx context.Context, req *flowv1.ListArtefactsRequest) (*flowv1.ListArtefactsResponse, error) {
+func (s *ArchivistServer) ListArtefacts(
+	ctx context.Context, req *flowv1.ListArtefactsRequest,
+) (*flowv1.ListArtefactsResponse, error) {
 	workitemID := req.GetWorkitemId()
 
 	slog.Info("ListArtefacts", "workitem_id", workitemID)
@@ -226,7 +236,9 @@ func (s *ArchivistServer) ListArtefacts(ctx context.Context, req *flowv1.ListArt
 
 // QueryArtefactState returns artefact presence and stamp state for
 // exit contract validation. Called by the Operator.
-func (s *ArchivistServer) QueryArtefactState(ctx context.Context, req *flowv1.QueryArtefactStateRequest) (*flowv1.QueryArtefactStateResponse, error) {
+func (s *ArchivistServer) QueryArtefactState(
+	ctx context.Context, req *flowv1.QueryArtefactStateRequest,
+) (*flowv1.QueryArtefactStateResponse, error) {
 	workitemID := req.GetWorkitemId()
 
 	slog.Info("QueryArtefactState", "workitem_id", workitemID)
@@ -271,7 +283,9 @@ func (s *ArchivistServer) QueryArtefactState(ctx context.Context, req *flowv1.Qu
 // StampArtefact applies a named stamp to the current (head) version of an
 // artefact. Returns the created stamp. The signature and cert_chain are
 // Sidecar-injected from the node's identity material.
-func (s *ArchivistServer) StampArtefact(ctx context.Context, req *flowv1.StampArtefactRequest) (*flowv1.StampArtefactResponse, error) {
+func (s *ArchivistServer) StampArtefact(
+	ctx context.Context, req *flowv1.StampArtefactRequest,
+) (*flowv1.StampArtefactResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 	stampName := req.GetStampName()
@@ -293,9 +307,12 @@ func (s *ArchivistServer) StampArtefact(ctx context.Context, req *flowv1.StampAr
 	}
 
 	// Extract applying_node from gRPC metadata if available.
-	applyingNode := extractMetadataValue(ctx, "x-flow-node-id")
+	applyingNode := extractNodeID(ctx)
 
-	isNew, err := s.store.StampArtefact(ctx, workitemID, artefactID, head.Hash, stampName, applyingNode, req.GetSignature(), req.GetCertChain())
+	isNew, err := s.store.StampArtefact(
+		ctx, workitemID, artefactID, head.Hash, stampName,
+		applyingNode, req.GetSignature(), req.GetCertChain(),
+	)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "stamp artefact: %v", err)
 	}
@@ -320,7 +337,9 @@ func (s *ArchivistServer) StampArtefact(ctx context.Context, req *flowv1.StampAr
 }
 
 // GetStamps returns all stamps on the current (head) version of an artefact.
-func (s *ArchivistServer) GetStamps(ctx context.Context, req *flowv1.GetStampsRequest) (*flowv1.GetStampsResponse, error) {
+func (s *ArchivistServer) GetStamps(
+	ctx context.Context, req *flowv1.GetStampsRequest,
+) (*flowv1.GetStampsResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -375,10 +394,12 @@ const (
 )
 
 // AddFeedback creates a new feedback item in NEW state.
-func (s *ArchivistServer) AddFeedback(ctx context.Context, req *flowv1.AddFeedbackRequest) (*flowv1.AddFeedbackResponse, error) {
+func (s *ArchivistServer) AddFeedback(
+	ctx context.Context, req *flowv1.AddFeedbackRequest,
+) (*flowv1.AddFeedbackResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
-	source := extractMetadataValue(ctx, "x-flow-node-id")
+	source := extractNodeID(ctx)
 
 	slog.Info("AddFeedback",
 		"workitem_id", workitemID,
@@ -399,7 +420,10 @@ func (s *ArchivistServer) AddFeedback(ctx context.Context, req *flowv1.AddFeedba
 		}
 	}
 
-	feedbackID, err := s.store.AddFeedback(ctx, workitemID, artefactID, source, int32(req.GetSeverity()), req.GetMessage(), versionHash)
+	feedbackID, err := s.store.AddFeedback(
+		ctx, workitemID, artefactID, source,
+		int32(req.GetSeverity()), req.GetMessage(), versionHash,
+	)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "add feedback: %v", err)
 	}
@@ -408,7 +432,9 @@ func (s *ArchivistServer) AddFeedback(ctx context.Context, req *flowv1.AddFeedba
 }
 
 // GetFeedback returns all feedback items for an artefact.
-func (s *ArchivistServer) GetFeedback(ctx context.Context, req *flowv1.GetFeedbackRequest) (*flowv1.GetFeedbackResponse, error) {
+func (s *ArchivistServer) GetFeedback(
+	ctx context.Context, req *flowv1.GetFeedbackRequest,
+) (*flowv1.GetFeedbackResponse, error) {
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -451,7 +477,9 @@ func (s *ArchivistServer) GetFeedback(ctx context.Context, req *flowv1.GetFeedba
 
 // HasUnresolvedFeedback returns true if any feedback for the artefact is
 // not in RESOLVED state.
-func (s *ArchivistServer) HasUnresolvedFeedback(ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest) (*flowv1.HasUnresolvedFeedbackResponse, error) {
+func (s *ArchivistServer) HasUnresolvedFeedback(
+	ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest,
+) (*flowv1.HasUnresolvedFeedbackResponse, error) {
 	has, err := s.store.HasUnresolvedFeedback(ctx, req.GetWorkitemId(), req.GetArtefactId())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "has unresolved feedback: %v", err)
@@ -460,8 +488,10 @@ func (s *ArchivistServer) HasUnresolvedFeedback(ctx context.Context, req *flowv1
 }
 
 // ResolveFeedback transitions feedback from NEW or REJECTED to ACTIONED.
-func (s *ArchivistServer) ResolveFeedback(ctx context.Context, req *flowv1.ResolveFeedbackRequest) (*flowv1.ResolveFeedbackResponse, error) {
-	actor := extractMetadataValue(ctx, "x-flow-node-id")
+func (s *ArchivistServer) ResolveFeedback(
+	ctx context.Context, req *flowv1.ResolveFeedbackRequest,
+) (*flowv1.ResolveFeedbackResponse, error) {
+	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
 		[]int32{feedbackStateNew, feedbackStateRejected},
@@ -478,8 +508,10 @@ func (s *ArchivistServer) ResolveFeedback(ctx context.Context, req *flowv1.Resol
 }
 
 // RefuseFeedback transitions feedback from NEW or REJECTED to WONT_FIX.
-func (s *ArchivistServer) RefuseFeedback(ctx context.Context, req *flowv1.RefuseFeedbackRequest) (*flowv1.RefuseFeedbackResponse, error) {
-	actor := extractMetadataValue(ctx, "x-flow-node-id")
+func (s *ArchivistServer) RefuseFeedback(
+	ctx context.Context, req *flowv1.RefuseFeedbackRequest,
+) (*flowv1.RefuseFeedbackResponse, error) {
+	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
 		[]int32{feedbackStateNew, feedbackStateRejected},
@@ -496,8 +528,10 @@ func (s *ArchivistServer) RefuseFeedback(ctx context.Context, req *flowv1.Refuse
 }
 
 // AcceptFix transitions feedback from ACTIONED to RESOLVED.
-func (s *ArchivistServer) AcceptFix(ctx context.Context, req *flowv1.AcceptFixRequest) (*flowv1.AcceptFixResponse, error) {
-	actor := extractMetadataValue(ctx, "x-flow-node-id")
+func (s *ArchivistServer) AcceptFix(
+	ctx context.Context, req *flowv1.AcceptFixRequest,
+) (*flowv1.AcceptFixResponse, error) {
+	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
 		[]int32{feedbackStateActioned},
@@ -514,8 +548,10 @@ func (s *ArchivistServer) AcceptFix(ctx context.Context, req *flowv1.AcceptFixRe
 }
 
 // RejectFix transitions feedback from ACTIONED to REJECTED.
-func (s *ArchivistServer) RejectFix(ctx context.Context, req *flowv1.RejectFixRequest) (*flowv1.RejectFixResponse, error) {
-	actor := extractMetadataValue(ctx, "x-flow-node-id")
+func (s *ArchivistServer) RejectFix(
+	ctx context.Context, req *flowv1.RejectFixRequest,
+) (*flowv1.RejectFixResponse, error) {
+	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
 		[]int32{feedbackStateActioned},
@@ -532,8 +568,10 @@ func (s *ArchivistServer) RejectFix(ctx context.Context, req *flowv1.RejectFixRe
 }
 
 // AcceptRefusal transitions feedback from WONT_FIX to RESOLVED.
-func (s *ArchivistServer) AcceptRefusal(ctx context.Context, req *flowv1.AcceptRefusalRequest) (*flowv1.AcceptRefusalResponse, error) {
-	actor := extractMetadataValue(ctx, "x-flow-node-id")
+func (s *ArchivistServer) AcceptRefusal(
+	ctx context.Context, req *flowv1.AcceptRefusalRequest,
+) (*flowv1.AcceptRefusalResponse, error) {
+	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
 		[]int32{feedbackStateWontFix},
@@ -550,8 +588,10 @@ func (s *ArchivistServer) AcceptRefusal(ctx context.Context, req *flowv1.AcceptR
 }
 
 // RejectRefusal transitions feedback from WONT_FIX to REJECTED.
-func (s *ArchivistServer) RejectRefusal(ctx context.Context, req *flowv1.RejectRefusalRequest) (*flowv1.RejectRefusalResponse, error) {
-	actor := extractMetadataValue(ctx, "x-flow-node-id")
+func (s *ArchivistServer) RejectRefusal(
+	ctx context.Context, req *flowv1.RejectRefusalRequest,
+) (*flowv1.RejectRefusalResponse, error) {
+	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
 		[]int32{feedbackStateWontFix},
@@ -568,7 +608,9 @@ func (s *ArchivistServer) RejectRefusal(ctx context.Context, req *flowv1.RejectR
 }
 
 // GetFeedbackDepth returns the number of events in a feedback item's history.
-func (s *ArchivistServer) GetFeedbackDepth(ctx context.Context, req *flowv1.GetFeedbackDepthRequest) (*flowv1.GetFeedbackDepthResponse, error) {
+func (s *ArchivistServer) GetFeedbackDepth(
+	ctx context.Context, req *flowv1.GetFeedbackDepthRequest,
+) (*flowv1.GetFeedbackDepthResponse, error) {
 	depth, err := s.store.GetFeedbackDepth(ctx, req.GetFeedbackId())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get feedback depth: %v", err)
@@ -577,8 +619,10 @@ func (s *ArchivistServer) GetFeedbackDepth(ctx context.Context, req *flowv1.GetF
 }
 
 // DeadlockFeedback transitions feedback from WONT_FIX or REJECTED to DEADLOCKED.
-func (s *ArchivistServer) DeadlockFeedback(ctx context.Context, req *flowv1.DeadlockFeedbackRequest) (*flowv1.DeadlockFeedbackResponse, error) {
-	actor := extractMetadataValue(ctx, "x-flow-node-id")
+func (s *ArchivistServer) DeadlockFeedback(
+	ctx context.Context, req *flowv1.DeadlockFeedbackRequest,
+) (*flowv1.DeadlockFeedbackResponse, error) {
+	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
 		[]int32{feedbackStateWontFix, feedbackStateRejected},
@@ -598,13 +642,13 @@ func (s *ArchivistServer) DeadlockFeedback(ctx context.Context, req *flowv1.Dead
 // Helpers
 // ---------------------------------------------------------------------------
 
-// extractMetadataValue reads a single value from incoming gRPC metadata.
-func extractMetadataValue(ctx context.Context, key string) string {
+// extractNodeID reads the x-flow-node-id value from incoming gRPC metadata.
+func extractNodeID(ctx context.Context) string {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return ""
 	}
-	vals := md.Get(key)
+	vals := md.Get("x-flow-node-id")
 	if len(vals) == 0 {
 		return ""
 	}

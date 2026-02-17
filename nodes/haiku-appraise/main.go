@@ -61,14 +61,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"node_id", wctx.GetNodeId(),
 	)
 
-	os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
+	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
 	client, err := flow.NewClient()
 	if err != nil {
 		return fmt.Errorf("appraise: create client: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
-	client.Heartbeat(ctx)
+	_, _ = client.Heartbeat(ctx)
 
 	// Read the petition and haiku.
 	petitionResp, err := client.GetArtefact(ctx, "petition")
@@ -116,7 +116,9 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	// Build law context with IDs so the LLM can cite them.
 	var lawBlock string
 	if len(laws) > 0 {
-		lawBlock = "\n## GOVERNANCE LAWS\n\nThe following laws are active. The haiku MUST comply with all of them.\nIf a law is violated, cite it by ID in your feedback.\n\n"
+		lawBlock = "\n## GOVERNANCE LAWS\n\n" +
+			"The following laws are active. The haiku MUST comply with all of them.\n" +
+			"If a law is violated, cite it by ID in your feedback.\n\n"
 		for _, law := range laws {
 			lawBlock += fmt.Sprintf("- [%s] (Tier %d): %s\n", law.GetId(), law.GetTier(), law.GetGoal())
 		}
@@ -136,11 +138,15 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 
 	prompt := fmt.Sprintf(`You are a haiku reviewer for a governed creative pipeline.
 
-Your job is to review the haiku and produce feedback. You are NOT approving or rejecting — you are producing observations. If you have no issues, return an empty list.
+Your job is to review the haiku and produce feedback. You are NOT approving
+or rejecting — you are producing observations. If you have no issues, return
+an empty list.
 
 Every piece of feedback must either:
-1. CITE one or more governance laws by ID — the haiku violates or insufficiently addresses the law.
-2. Offer a NOVEL observation — something not covered by any law but worth improving. Use an empty cited_laws array for these.
+1. CITE one or more governance laws by ID — the haiku violates or
+   insufficiently addresses the law.
+2. Offer a NOVEL observation — something not covered by any law but
+   worth improving. Use an empty cited_laws array for these.
 
 ---
 
@@ -176,7 +182,7 @@ No issues:
 []
 
 Law violation:
-[{"message": "The haiku names the season directly ('in winter') rather than evoking it through imagery.", "cited_laws": ["%s"]}]
+[{"message": "Names the season directly rather than evoking it through imagery.", "cited_laws": ["%s"]}]
 
 Novel observation:
 [{"message": "The final line feels rushed — consider a more contemplative closing image.", "cited_laws": []}]

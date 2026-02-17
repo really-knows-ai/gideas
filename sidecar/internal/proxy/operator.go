@@ -51,7 +51,9 @@ func (p *OperatorProxy) Close() error {
 // SubmitResult forwards the routing instruction to the Operator.
 // The x-flow-workitem-id metadata header is propagated from the incoming
 // Node request to the outgoing Operator request.
-func (p *OperatorProxy) SubmitResult(ctx context.Context, req *flowv1.SubmitResultRequest) (*flowv1.SubmitResultResponse, error) {
+func (p *OperatorProxy) SubmitResult(
+	ctx context.Context, req *flowv1.SubmitResultRequest,
+) (*flowv1.SubmitResultResponse, error) {
 	outCtx := propagateMetadata(ctx)
 
 	slog.Info("Forwarding SubmitResult to Operator",
@@ -72,28 +74,36 @@ func (p *OperatorProxy) SubmitResult(ctx context.Context, req *flowv1.SubmitResu
 }
 
 // CreateWorkitem forwards to the Operator.
-func (p *OperatorProxy) CreateWorkitem(ctx context.Context, req *flowv1.CreateWorkitemRequest) (*flowv1.CreateWorkitemResponse, error) {
+func (p *OperatorProxy) CreateWorkitem(
+	ctx context.Context, req *flowv1.CreateWorkitemRequest,
+) (*flowv1.CreateWorkitemResponse, error) {
 	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding CreateWorkitem to Operator")
 	return p.client.CreateWorkitem(outCtx, req)
 }
 
 // CreateHearingWorkitem forwards to the Operator.
-func (p *OperatorProxy) CreateHearingWorkitem(ctx context.Context, req *flowv1.CreateHearingWorkitemRequest) (*flowv1.CreateHearingWorkitemResponse, error) {
+func (p *OperatorProxy) CreateHearingWorkitem(
+	ctx context.Context, req *flowv1.CreateHearingWorkitemRequest,
+) (*flowv1.CreateHearingWorkitemResponse, error) {
 	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding CreateHearingWorkitem to Operator", "law_id", req.GetLawId())
 	return p.client.CreateHearingWorkitem(outCtx, req)
 }
 
 // ExportWorkitem forwards to the Operator.
-func (p *OperatorProxy) ExportWorkitem(ctx context.Context, req *flowv1.ExportWorkitemRequest) (*flowv1.ExportWorkitemResponse, error) {
+func (p *OperatorProxy) ExportWorkitem(
+	ctx context.Context, req *flowv1.ExportWorkitemRequest,
+) (*flowv1.ExportWorkitemResponse, error) {
 	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding ExportWorkitem to Operator", "workitem_id", req.GetWorkitemId())
 	return p.client.ExportWorkitem(outCtx, req)
 }
 
 // ImportWorkitem forwards to the Operator.
-func (p *OperatorProxy) ImportWorkitem(ctx context.Context, req *flowv1.ImportWorkitemRequest) (*flowv1.ImportWorkitemResponse, error) {
+func (p *OperatorProxy) ImportWorkitem(
+	ctx context.Context, req *flowv1.ImportWorkitemRequest,
+) (*flowv1.ImportWorkitemResponse, error) {
 	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding ImportWorkitem to Operator", "treaty", req.GetTreatyName())
 	return p.client.ImportWorkitem(outCtx, req)

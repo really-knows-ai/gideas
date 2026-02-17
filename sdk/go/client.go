@@ -79,7 +79,10 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		grpc.WithUnaryInterceptor(workitemContextInterceptor(workitemID)),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("flow sdk: failed to connect to sidecar at %s: %w (is the sidecar running?)", cfg.sidecarAddr, err)
+		return nil, fmt.Errorf(
+			"flow sdk: failed to connect to sidecar at %s: %w (is the sidecar running?)",
+			cfg.sidecarAddr, err,
+		)
 	}
 
 	return &Client{
@@ -172,7 +175,9 @@ func (c *Client) GetArtefact(ctx context.Context, artefactID string) (*flowv1.Ge
 // StoreArtefact stores content as a named artefact. The Sidecar will compute
 // the content hash — the SDK does not need to supply it. Returns the response
 // containing the version_hash and whether this was a new version.
-func (c *Client) StoreArtefact(ctx context.Context, artefactID, kind string, content []byte) (*flowv1.StoreArtefactResponse, error) {
+func (c *Client) StoreArtefact(
+	ctx context.Context, artefactID, kind string, content []byte,
+) (*flowv1.StoreArtefactResponse, error) {
 	resp, err := c.Archivist.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId: c.workitemID,
 		ArtefactId: artefactID,
@@ -192,7 +197,9 @@ func (c *Client) StoreArtefact(ctx context.Context, artefactID, kind string, con
 // StampArtefact applies a named governance stamp to the current (head)
 // version of the specified artefact. The Sidecar injects cryptographic
 // identity (signature, cert_chain) — the SDK does not supply these.
-func (c *Client) StampArtefact(ctx context.Context, artefactID, stampName string) (*flowv1.StampArtefactResponse, error) {
+func (c *Client) StampArtefact(
+	ctx context.Context, artefactID, stampName string,
+) (*flowv1.StampArtefactResponse, error) {
 	resp, err := c.Archivist.StampArtefact(ctx, &flowv1.StampArtefactRequest{
 		WorkitemId: c.workitemID,
 		ArtefactId: artefactID,
@@ -236,7 +243,9 @@ func (c *Client) HasStamp(ctx context.Context, artefactID, stampName string) (bo
 
 // AddFeedback creates a new feedback item on the specified artefact.
 // The feedback starts in NEW state. Returns the generated feedback ID.
-func (c *Client) AddFeedback(ctx context.Context, artefactID string, severity flowv1.Severity, message string) (string, error) {
+func (c *Client) AddFeedback(
+	ctx context.Context, artefactID string, severity flowv1.Severity, message string,
+) (string, error) {
 	resp, err := c.Archivist.AddFeedback(ctx, &flowv1.AddFeedbackRequest{
 		WorkitemId: c.workitemID,
 		ArtefactId: artefactID,
@@ -337,7 +346,9 @@ func (c *Client) Cite(ctx context.Context, lawIDs ...string) error {
 }
 
 // RecordFinding creates a Tier 1 Finding.
-func (c *Client) RecordFinding(ctx context.Context, goal string, appliesTo []string, representations []*flowv1.Representation) (string, error) {
+func (c *Client) RecordFinding(
+	ctx context.Context, goal string, appliesTo []string, representations []*flowv1.Representation,
+) (string, error) {
 	resp, err := c.Librarian.RecordFinding(ctx, &flowv1.RecordFindingRequest{
 		Goal:            goal,
 		AppliesTo:       appliesTo,

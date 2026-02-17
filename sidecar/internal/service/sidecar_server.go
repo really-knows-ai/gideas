@@ -87,7 +87,8 @@ func (s *SidecarServer) AssignWork(ctx context.Context, req *flowv1.AssignWorkRe
 	// Lazily connect to the User Code container.
 	if err := s.ensureNodeConnection(); err != nil {
 		slog.Error("Failed to connect to User Code", "address", s.NodeAddress, "error", err)
-		return nil, status.Error(codes.Unavailable, fmt.Sprintf("failed to connect to user code at %s: %v", s.NodeAddress, err))
+		return nil, status.Error(codes.Unavailable,
+			fmt.Sprintf("failed to connect to user code at %s: %v", s.NodeAddress, err))
 	}
 
 	// Forward to the User Code via NodeService.Process.

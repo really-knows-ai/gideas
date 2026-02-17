@@ -48,11 +48,6 @@ func Count(word string) int {
 		count--
 	}
 
-	// Common suffixes that form their own syllable.
-	if strings.HasSuffix(cleaned, "tion") || strings.HasSuffix(cleaned, "sion") {
-		// Already counted — no adjustment needed.
-	}
-
 	// -ed at end is usually silent unless preceded by t or d.
 	if strings.HasSuffix(cleaned, "ed") && len(cleaned) > 3 {
 		beforeEd := cleaned[len(cleaned)-3]

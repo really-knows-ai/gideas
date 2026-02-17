@@ -53,7 +53,7 @@ func NewLibrarianProxy(librarianAddr, monitorAddr string) (*LibrarianProxy, erro
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, err
 		}
 		p.monitorClient = flowv1.NewFlowMonitorServiceClient(monitorConn)
@@ -93,7 +93,9 @@ func citationMagnitude() int32 {
 // ---------------------------------------------------------------------------
 
 // QueryLaws forwards to the Librarian (passthrough).
-func (p *LibrarianProxy) QueryLaws(ctx context.Context, req *flowv1.QueryLawsRequest) (*flowv1.QueryLawsResponse, error) {
+func (p *LibrarianProxy) QueryLaws(
+	ctx context.Context, req *flowv1.QueryLawsRequest,
+) (*flowv1.QueryLawsResponse, error) {
 	return p.client.QueryLaws(propagateMetadata(ctx), req)
 }
 
@@ -136,7 +138,9 @@ func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*fl
 }
 
 // RecordFinding forwards to the Librarian (passthrough).
-func (p *LibrarianProxy) RecordFinding(ctx context.Context, req *flowv1.RecordFindingRequest) (*flowv1.RecordFindingResponse, error) {
+func (p *LibrarianProxy) RecordFinding(
+	ctx context.Context, req *flowv1.RecordFindingRequest,
+) (*flowv1.RecordFindingResponse, error) {
 	return p.client.RecordFinding(propagateMetadata(ctx), req)
 }
 
@@ -151,17 +155,23 @@ func (p *LibrarianProxy) WriteLaw(ctx context.Context, req *flowv1.WriteLawReque
 }
 
 // RetireLaw forwards to the Librarian (passthrough).
-func (p *LibrarianProxy) RetireLaw(ctx context.Context, req *flowv1.RetireLawRequest) (*flowv1.RetireLawResponse, error) {
+func (p *LibrarianProxy) RetireLaw(
+	ctx context.Context, req *flowv1.RetireLawRequest,
+) (*flowv1.RetireLawResponse, error) {
 	return p.client.RetireLaw(propagateMetadata(ctx), req)
 }
 
 // ReplicateLaws forwards to the Librarian (passthrough).
-func (p *LibrarianProxy) ReplicateLaws(ctx context.Context, req *flowv1.ReplicateLawsRequest) (*flowv1.ReplicateLawsResponse, error) {
+func (p *LibrarianProxy) ReplicateLaws(
+	ctx context.Context, req *flowv1.ReplicateLawsRequest,
+) (*flowv1.ReplicateLawsResponse, error) {
 	return p.client.ReplicateLaws(propagateMetadata(ctx), req)
 }
 
 // ApplyLifecycleAction forwards to the Librarian (passthrough).
-func (p *LibrarianProxy) ApplyLifecycleAction(ctx context.Context, req *flowv1.ApplyLifecycleActionRequest) (*flowv1.ApplyLifecycleActionResponse, error) {
+func (p *LibrarianProxy) ApplyLifecycleAction(
+	ctx context.Context, req *flowv1.ApplyLifecycleActionRequest,
+) (*flowv1.ApplyLifecycleActionResponse, error) {
 	return p.client.ApplyLifecycleAction(propagateMetadata(ctx), req)
 }
 

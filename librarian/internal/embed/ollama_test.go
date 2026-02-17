@@ -32,7 +32,7 @@ func TestOllamaEmbedder_Success(t *testing.T) {
 
 		resp := ollamaEmbedResponse{Embeddings: [][]float32{expected}}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -54,7 +54,7 @@ func TestOllamaEmbedder_Success(t *testing.T) {
 func TestOllamaEmbedder_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal error"))
+		_, _ = w.Write([]byte("internal error"))
 	}))
 	defer srv.Close()
 
@@ -68,7 +68,7 @@ func TestOllamaEmbedder_HTTPError(t *testing.T) {
 func TestOllamaEmbedder_MalformedResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"not_embeddings": true}`))
+		_, _ = w.Write([]byte(`{"not_embeddings": true}`))
 	}))
 	defer srv.Close()
 
@@ -82,7 +82,7 @@ func TestOllamaEmbedder_MalformedResponse(t *testing.T) {
 func TestOllamaEmbedder_EmptyEmbeddings(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ollamaEmbedResponse{Embeddings: [][]float32{}})
+		_ = json.NewEncoder(w).Encode(ollamaEmbedResponse{Embeddings: [][]float32{}})
 	}))
 	defer srv.Close()
 

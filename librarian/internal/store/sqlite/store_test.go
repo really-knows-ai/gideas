@@ -11,7 +11,7 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -132,9 +132,18 @@ func TestQueryLaws_AllActive(t *testing.T) {
 	ctx := context.Background()
 
 	// Create 2 active, 1 inactive.
-	s.CreateLaw(ctx, "law-a", Law{Goal: "A", Tier: 1, Representations: []Representation{{Type: "text/plain", Content: "a"}}})
-	s.CreateLaw(ctx, "law-b", Law{Goal: "B", Tier: 1, Representations: []Representation{{Type: "text/plain", Content: "b"}}})
-	s.CreateLawInactive(ctx, "law-c", Law{Goal: "C", Tier: 2, Representations: []Representation{{Type: "text/plain", Content: "c"}}})
+	lawA := Law{Goal: "A", Tier: 1, Representations: []Representation{{Type: "text/plain", Content: "a"}}}
+	if _, err := s.CreateLaw(ctx, "law-a", lawA); err != nil {
+		t.Fatalf("CreateLaw law-a: %v", err)
+	}
+	lawB := Law{Goal: "B", Tier: 1, Representations: []Representation{{Type: "text/plain", Content: "b"}}}
+	if _, err := s.CreateLaw(ctx, "law-b", lawB); err != nil {
+		t.Fatalf("CreateLaw law-b: %v", err)
+	}
+	lawC := Law{Goal: "C", Tier: 2, Representations: []Representation{{Type: "text/plain", Content: "c"}}}
+	if _, err := s.CreateLawInactive(ctx, "law-c", lawC); err != nil {
+		t.Fatalf("CreateLawInactive law-c: %v", err)
+	}
 
 	laws, err := s.QueryLaws(ctx, QueryFilter{})
 	if err != nil {
@@ -150,25 +159,31 @@ func TestQueryLaws_ScopedPlusGlobal(t *testing.T) {
 	ctx := context.Background()
 
 	// Scoped law.
-	s.CreateLaw(ctx, "law-scoped", Law{
+	if _, err := s.CreateLaw(ctx, "law-scoped", Law{
 		Goal:            "Scoped",
 		Tier:            1,
 		AppliesTo:       []string{"source-code"},
 		Representations: []Representation{{Type: "text/plain", Content: "scoped"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-scoped: %v", err)
+	}
 	// Global law (no appliesTo).
-	s.CreateLaw(ctx, "law-global", Law{
+	if _, err := s.CreateLaw(ctx, "law-global", Law{
 		Goal:            "Global",
 		Tier:            1,
 		Representations: []Representation{{Type: "text/plain", Content: "global"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-global: %v", err)
+	}
 	// Different scope.
-	s.CreateLaw(ctx, "law-other", Law{
+	if _, err := s.CreateLaw(ctx, "law-other", Law{
 		Goal:            "Other",
 		Tier:            1,
 		AppliesTo:       []string{"docs"},
 		Representations: []Representation{{Type: "text/plain", Content: "other"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-other: %v", err)
+	}
 
 	laws, err := s.QueryLaws(ctx, QueryFilter{ArtefactKind: "source-code"})
 	if err != nil {
@@ -193,7 +208,7 @@ func TestQueryLaws_RepresentationFiltering(t *testing.T) {
 	ctx := context.Background()
 
 	// Law with markdown representation.
-	s.CreateLaw(ctx, "law-md", Law{
+	if _, err := s.CreateLaw(ctx, "law-md", Law{
 		Goal:      "Markdown law",
 		Tier:      1,
 		AppliesTo: []string{"docs"},
@@ -201,14 +216,18 @@ func TestQueryLaws_RepresentationFiltering(t *testing.T) {
 			{Type: "text/markdown", Content: "# Rule"},
 			{Type: "text/plain", Content: "Rule in plain text"},
 		},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-md: %v", err)
+	}
 	// Law without markdown.
-	s.CreateLaw(ctx, "law-plain", Law{
+	if _, err := s.CreateLaw(ctx, "law-plain", Law{
 		Goal:            "Plain law",
 		Tier:            1,
 		AppliesTo:       []string{"docs"},
 		Representations: []Representation{{Type: "text/plain", Content: "Plain only"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-plain: %v", err)
+	}
 
 	laws, err := s.QueryLaws(ctx, QueryFilter{
 		ArtefactKind:       "docs",
@@ -233,11 +252,13 @@ func TestRetireLaw_PreservesHistory(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.CreateLaw(ctx, "law-retire", Law{
+	if _, err := s.CreateLaw(ctx, "law-retire", Law{
 		Goal:            "To be retired",
 		Tier:            1,
 		Representations: []Representation{{Type: "text/plain", Content: "old"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-retire: %v", err)
+	}
 
 	err := s.RetireLaw(ctx, "law-retire")
 	if err != nil {
@@ -265,11 +286,13 @@ func TestActivateLaw(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.CreateLawInactive(ctx, "law-pending", Law{
+	if _, err := s.CreateLawInactive(ctx, "law-pending", Law{
 		Goal:            "Pending",
 		Tier:            2,
 		Representations: []Representation{{Type: "text/plain", Content: "pending"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLawInactive law-pending: %v", err)
+	}
 
 	// Should not appear in active query.
 	laws, _ := s.QueryLaws(ctx, QueryFilter{})
@@ -330,14 +353,18 @@ func TestGetAllActiveEmbeddings(t *testing.T) {
 		AppliesTo:       []string{"source-code"},
 		Representations: []Representation{{Type: "text/plain", Content: "l1"}},
 	})
-	s.SetEmbedding(ctx, "law-e1", hash1, []float32{1.0, 0.0, 0.0})
+	if err := s.SetEmbedding(ctx, "law-e1", hash1, []float32{1.0, 0.0, 0.0}); err != nil {
+		t.Fatalf("SetEmbedding law-e1: %v", err)
+	}
 
 	hash2, _ := s.CreateLaw(ctx, "law-e2", Law{
 		Goal:            "Law 2",
 		Tier:            1,
 		Representations: []Representation{{Type: "text/plain", Content: "l2"}},
 	})
-	s.SetEmbedding(ctx, "law-e2", hash2, []float32{0.0, 1.0, 0.0})
+	if err := s.SetEmbedding(ctx, "law-e2", hash2, []float32{0.0, 1.0, 0.0}); err != nil {
+		t.Fatalf("SetEmbedding law-e2: %v", err)
+	}
 
 	// Inactive law with embedding — should NOT appear.
 	hash3, _ := s.CreateLawInactive(ctx, "law-e3", Law{
@@ -345,7 +372,9 @@ func TestGetAllActiveEmbeddings(t *testing.T) {
 		Tier:            2,
 		Representations: []Representation{{Type: "text/plain", Content: "l3"}},
 	})
-	s.SetEmbedding(ctx, "law-e3", hash3, []float32{0.0, 0.0, 1.0})
+	if err := s.SetEmbedding(ctx, "law-e3", hash3, []float32{0.0, 0.0, 1.0}); err != nil {
+		t.Fatalf("SetEmbedding law-e3: %v", err)
+	}
 
 	embeddings, err := s.GetAllActiveEmbeddings(ctx)
 	if err != nil {
@@ -404,11 +433,13 @@ func TestSetTier(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.CreateLaw(ctx, "law-tier", Law{
+	if _, err := s.CreateLaw(ctx, "law-tier", Law{
 		Goal:            "Tier test",
 		Tier:            1,
 		Representations: []Representation{{Type: "text/plain", Content: "tier"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-tier: %v", err)
+	}
 
 	err := s.SetTier(ctx, "law-tier", 2)
 	if err != nil {
@@ -428,23 +459,29 @@ func TestGetLawsByScope(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.CreateLaw(ctx, "law-s1", Law{
+	if _, err := s.CreateLaw(ctx, "law-s1", Law{
 		Goal:            "Scoped A",
 		Tier:            1,
 		AppliesTo:       []string{"source-code", "docs"},
 		Representations: []Representation{{Type: "text/plain", Content: "a"}},
-	})
-	s.CreateLaw(ctx, "law-s2", Law{
+	}); err != nil {
+		t.Fatalf("CreateLaw law-s1: %v", err)
+	}
+	if _, err := s.CreateLaw(ctx, "law-s2", Law{
 		Goal:            "Global",
 		Tier:            1,
 		Representations: []Representation{{Type: "text/plain", Content: "g"}},
-	})
-	s.CreateLaw(ctx, "law-s3", Law{
+	}); err != nil {
+		t.Fatalf("CreateLaw law-s2: %v", err)
+	}
+	if _, err := s.CreateLaw(ctx, "law-s3", Law{
 		Goal:            "Scoped B",
 		Tier:            1,
 		AppliesTo:       []string{"images"},
 		Representations: []Representation{{Type: "text/plain", Content: "b"}},
-	})
+	}); err != nil {
+		t.Fatalf("CreateLaw law-s3: %v", err)
+	}
 
 	laws, err := s.GetLawsByScope(ctx, []string{"docs"})
 	if err != nil {

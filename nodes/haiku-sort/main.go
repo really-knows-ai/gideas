@@ -45,14 +45,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"node_id", wctx.GetNodeId(),
 	)
 
-	os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
+	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
 	client, err := flow.NewClient()
 	if err != nil {
 		return fmt.Errorf("sort: create client: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
-	client.Heartbeat(ctx)
+	_, _ = client.Heartbeat(ctx)
 
 	// Check governance state of the haiku artefact.
 	hasLinter, err := client.HasStamp(ctx, "haiku", "linter")

@@ -21,7 +21,9 @@ type captureLibrarianServer struct {
 	capturedMD    metadata.MD
 }
 
-func (s *captureLibrarianServer) QueryLaws(ctx context.Context, req *flowv1.QueryLawsRequest) (*flowv1.QueryLawsResponse, error) {
+func (s *captureLibrarianServer) QueryLaws(
+	ctx context.Context, req *flowv1.QueryLawsRequest,
+) (*flowv1.QueryLawsResponse, error) {
 	s.lastQueryReq = req
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		s.capturedMD = md
@@ -37,7 +39,9 @@ func (s *captureLibrarianServer) Cite(ctx context.Context, req *flowv1.CiteReque
 	return &flowv1.CiteResponse{Acknowledged: true}, nil
 }
 
-func (s *captureLibrarianServer) GetLaw(ctx context.Context, req *flowv1.GetLawRequest) (*flowv1.GetLawResponse, error) {
+func (s *captureLibrarianServer) GetLaw(
+	ctx context.Context, req *flowv1.GetLawRequest,
+) (*flowv1.GetLawResponse, error) {
 	s.lastGetLawReq = req
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		s.capturedMD = md
@@ -52,7 +56,9 @@ type captureMonitorServer struct {
 	capturedMD      metadata.MD
 }
 
-func (s *captureMonitorServer) AddFriction(ctx context.Context, req *flowv1.AddFrictionRequest) (*flowv1.AddFrictionResponse, error) {
+func (s *captureMonitorServer) AddFriction(
+	ctx context.Context, req *flowv1.AddFrictionRequest,
+) (*flowv1.AddFrictionResponse, error) {
 	s.lastFrictionReq = req
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		s.capturedMD = md
@@ -74,8 +80,8 @@ func setupLibrarianProxy(t *testing.T) *librarianTestEnv {
 	libSrv := grpc.NewServer()
 	libSpy := &captureLibrarianServer{}
 	flowv1.RegisterLibrarianServiceServer(libSrv, libSpy)
-	go func() { libSrv.Serve(libLis) }()
-	t.Cleanup(func() { libSrv.Stop(); libLis.Close() })
+	go func() { _ = libSrv.Serve(libLis) }()
+	t.Cleanup(func() { libSrv.Stop(); _ = libLis.Close() })
 
 	libConn, err := grpc.NewClient(
 		"passthrough:///bufconn",
@@ -87,15 +93,15 @@ func setupLibrarianProxy(t *testing.T) *librarianTestEnv {
 	if err != nil {
 		t.Fatalf("failed to dial librarian bufconn: %v", err)
 	}
-	t.Cleanup(func() { libConn.Close() })
+	t.Cleanup(func() { _ = libConn.Close() })
 
 	// Monitor backend.
 	monLis := bufconn.Listen(1024 * 1024)
 	monSrv := grpc.NewServer()
 	monSpy := &captureMonitorServer{}
 	flowv1.RegisterFlowMonitorServiceServer(monSrv, monSpy)
-	go func() { monSrv.Serve(monLis) }()
-	t.Cleanup(func() { monSrv.Stop(); monLis.Close() })
+	go func() { _ = monSrv.Serve(monLis) }()
+	t.Cleanup(func() { monSrv.Stop(); _ = monLis.Close() })
 
 	monConn, err := grpc.NewClient(
 		"passthrough:///bufconn",
@@ -107,7 +113,7 @@ func setupLibrarianProxy(t *testing.T) *librarianTestEnv {
 	if err != nil {
 		t.Fatalf("failed to dial monitor bufconn: %v", err)
 	}
-	t.Cleanup(func() { monConn.Close() })
+	t.Cleanup(func() { _ = monConn.Close() })
 
 	proxy := &LibrarianProxy{
 		client:        flowv1.NewLibrarianServiceClient(libConn),
