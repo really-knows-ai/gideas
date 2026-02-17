@@ -39,6 +39,15 @@ The "Walking Skeleton" and reference components.
 3. **The Contract** (`proto/`) — The wire protocol that binds the components.
 4. **Implementation** — The code in `operator`, `sidecar`, and `sdk`.
 
+## Quality Gates
+
+All changes to this repository **must** pass the following before being committed:
+
+1. **Tests** — Run `go test ./...` (or the relevant subset) and ensure all tests pass. New functionality requires new or updated tests.
+2. **Lint** — Run `make check-fix` and resolve every issue it reports. Do not commit with lint failures.
+
+These two steps are non-negotiable. A change without tests or with lint violations is incomplete.
+
 ## Foundational Axioms
 
 1. **Assume Unreliability** — All agents are fallible. Trust intent, verify execution.
