@@ -125,6 +125,9 @@ lint-all: lint lint-operator ## Run golangci-lint across every module including 
 .PHONY: check
 check: fmt vet lint ## Run fmt, vet, and lint in sequence.
 
+.PHONY: check-fix
+check-fix: tidy lint-fix ## Run tidy, fmt (via goimports), and lint with auto-fix.
+
 # ---------------------------------------------------------------------------
 ##@ Code Generation
 # ---------------------------------------------------------------------------
