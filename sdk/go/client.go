@@ -54,6 +54,7 @@ type Client struct {
 	Operator  flowv1.OperatorServiceClient
 	Archivist flowv1.ArchivistServiceClient
 	Librarian flowv1.LibrarianServiceClient
+	Monitor   flowv1.FlowMonitorServiceClient
 }
 
 // NewClient connects to the Sidecar and returns a configured Client.
@@ -88,6 +89,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		Operator:   flowv1.NewOperatorServiceClient(conn),
 		Archivist:  flowv1.NewArchivistServiceClient(conn),
 		Librarian:  flowv1.NewLibrarianServiceClient(conn),
+		Monitor:    flowv1.NewFlowMonitorServiceClient(conn),
 	}, nil
 }
 
@@ -345,6 +347,29 @@ func (c *Client) RecordFinding(ctx context.Context, goal string, appliesTo []str
 		return "", fmt.Errorf("flow sdk: record finding failed: %w", err)
 	}
 	return resp.GetLawId(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Monitor Convenience Methods
+// ---------------------------------------------------------------------------
+
+// RecordTelemetry emits a custom telemetry event through the Sidecar to the
+// Flow Monitor. The eventType identifies the event kind (use the "foundry."
+// namespace prefix). The payload must be JSON-serializable and at most 64 KB.
+// The Sidecar wraps the event in a standard envelope with identity context.
+//
+// Telemetry emission is non-blocking from the caller's perspective; however,
+// the gRPC call itself is synchronous. Delivery failures are returned as
+// errors but should not fail work execution.
+func (c *Client) RecordTelemetry(ctx context.Context, eventType string, payload []byte) error {
+	_, err := c.Monitor.RecordTelemetry(ctx, &flowv1.RecordTelemetryRequest{
+		EventType: eventType,
+		Payload:   payload,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: record telemetry failed: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
