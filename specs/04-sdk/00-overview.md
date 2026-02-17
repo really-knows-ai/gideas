@@ -2,7 +2,7 @@
 
 The SDK is the programming interface between node handler code and the Foundry Flow runtime. All runtime operations originating from a node — artefact reads and writes, law queries, feedback, stamp applications, routing decisions, and telemetry — pass through the SDK to the [Sidecar](../03-node/01-sidecar.md), which mediates authenticated access to runtime services.
 
-A separate SDK surface, the [`FlowSupportService`](#flowsupportservice-base-class) base class, serves developers building [Flow Support Services](../02-flow/04-system-services.md#flow-support-services). Support Service development does not use the Workitem-scoped handler contract.
+A separate SDK surface, the [`FlowSupportService`](#flowsupportservice-base-class) base class, serves developers building [Flow Support Services](../02-flow/04-system-services.md#flow-support-services). Support Service development does not use the Workitem-scoped handler contract. For inference workloads, the [`FoundryAgent`](./07-sdk-agent.md) wrapper provides a managed handler contract with automatic heartbeat, output validation, and cost accounting.
 
 ## SDK Runtime Role
 
@@ -61,6 +61,7 @@ The SDK is organised into domain-specific surfaces, each backed by a runtime ser
 | [Feedback](./04-sdk-feedback.md) | Create, transition, query, resolve | Archivist (via Sidecar) | State machine, justification, contempt guard |
 | [Workitems](./05-sdk-workitems.md) | Read state, create locally, inspect | Operator (via Sidecar) | Assignment-scoped access, snapshot semantics |
 | [Telemetry](./06-sdk-telemetry.md) | Friction, metrics, traces, custom events | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
+| [Agent](./07-sdk-agent.md) | Managed inference wrapper | Operator + Flow Monitor (via Sidecar) | Automatic heartbeat, schema validation, atomic cost accounting |
 
 All surfaces share the same trust model: SDK calls transit the Sidecar, which authenticates and proxies to the authoritative service.
 

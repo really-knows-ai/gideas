@@ -127,8 +127,7 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `QueryLaws` | `filter` (optional) | `laws[]` | Returns laws matching the filter. Three modes: (1) no filter — all laws, (2) `artefact_kind` — laws whose `appliesTo` includes the kind plus global laws, (3) `artefact_kind` + `representation_type` — same kind filter plus at least one representation of the requested MIME type. All modes return full law objects. |
-| `Cite` | `law_ids[]` | `acknowledged` | Records law usage. The Sidecar wraps this as an `AddFriction` call with fixed citation magnitude and the specified law identifiers. |
-| `RecordFinding` | `goal`, `applies_to[]`, `representations[]?` | `law_id` | Creates a Tier 1 Finding. Write-availability-first: returns immediately with a law identifier. Indexing and duplicate detection are asynchronous. |
+| `RecordFinding` | `goal`, `applies_to[]`, `representations[]` | `law_id` | Creates a Tier 1 Finding. Write-availability-first: returns immediately with a law identifier. Indexing and duplicate detection are asynchronous. |
 
 ### Service-Facing Methods
 
@@ -162,7 +161,7 @@ The Flow Monitor API ingests telemetry, friction events, and custom events. It a
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `AddFriction` | `flow_id`, `workitem_id`, `node_id?`, `law_ids[]?`, `magnitude` | `acknowledged` | Records a friction event. Identity fields are Sidecar-injected for node context; caller-provided for service context. |
+| `AddFriction` | `flow_id`, `workitem_id`, `node_id?`, `law_ids[]?`, `magnitude` | `acknowledged` | Records a friction event. Requires `WRITE:friction` capability. Identity fields are Sidecar-injected for node context; caller-provided for service context. [`Cite`](../04-sdk/03-sdk-legal.md#citation) is SDK-level sugar that calls `AddFriction` with a fixed citation magnitude and law attribution. |
 | `RecordTelemetry` | `flow_id`, `node_id`, `workitem_id`, `event_type`, `payload` | `acknowledged` | Records a custom telemetry event. Payload is JSON-serializable, max 64 KB. The Sidecar wraps the event in a standard envelope with timestamp and trace context. |
 
 ### Query Methods
@@ -183,7 +182,7 @@ Telemetry ingestion is non-blocking. If the Flow Monitor is degraded, `AddFricti
 
 ## Sidecar-Mediated SDK Paths
 
-The [Sidecar](../03-node/01-sidecar.md) abstracts all transport — the node sees SDK calls, and the Sidecar operates as an in-pod proxy with the following responsibilities:
+The [Sidecar](../03-node/01-sidecar.md) abstracts all transport — the node sees SDK calls, and the Sidecar authenticates, injects identity, and proxies to the owning service:
 
 ```mermaid
 sequenceDiagram

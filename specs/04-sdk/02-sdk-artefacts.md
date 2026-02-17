@@ -9,7 +9,7 @@ Each artefact on a [Workitem](../02-flow/02-workitem.md) is identified by two fi
 | Field | Behaviour |
 |-------|-----------|
 | `id` | Unique within the Workitem. Fixed once introduced — the same `id` refers to the same artefact for the Workitem's lifetime. Used as the primary key for all Archivist lookups. |
-| `kind` | Immutable for a given `id`. Matches a [GovernedArtefact](../05-reference/crds.md) kind declared in the Flow. Determines which [laws](./03-sdk-legal.md), [stamps](#stamp-operations), and [contract requirements](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) apply. |
+| `kind` | Immutable for a given `id`. Matches a [GovernedArtefact](../05-reference/crds.md#governedartefact) kind declared in the Flow. Determines which [laws](./03-sdk-legal.md), [stamps](#stamp-operations), and [contract requirements](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) apply. |
 
 Multiple artefacts of the same `kind` are supported — each has a distinct `id`.
 

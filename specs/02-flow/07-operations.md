@@ -4,7 +4,7 @@ Operations covers how a Flow is monitored, triaged, recovered, and validated in 
 
 ## Operational Scope
 
-Operators are accountable for three outcomes:
+Flow Administrators are accountable for three outcomes:
 
 - Runtime reliability: [Workitems](./02-workitem.md) continue to flow with predictable latency and bounded failure rate.
 - Governance integrity: [stamps](../01-concepts/03-data-model.md#passports-and-stamps), [feedback](../01-concepts/03-data-model.md#feedback) lineage, [law](../01-concepts/03-data-model.md#laws) lineage, and hearing outcomes remain trustworthy.
@@ -14,7 +14,7 @@ Control boundaries are explicit:
 
 - Service teams own service-level backup and restore for their stores.
 - Cluster administrators own Kubernetes control-plane backup and restore.
-- Operators own end-to-end validation that restored systems preserve Flow invariants.
+- Flow Administrators own end-to-end validation that restored systems preserve Flow invariants.
 
 ## Telemetry Architecture
 
@@ -43,7 +43,7 @@ Audit continuity is a runtime requirement and a mandatory operational capability
 
 ## Core Metrics and Friction Operations
 
-Operators track at least these metric families:
+Flow Administrators track at least these metric families:
 
 - Assignment and queue health: queue depth, assignment latency, running duration.
 - Transition outcomes: completion rate, failure rate, timeout rate, thrash rate.
@@ -77,17 +77,17 @@ flowchart TD
 
     AV --> N1["Apply service-specific runbook"]
     IN --> N2["Quarantine affected path and verify lineage"]
-    GV --> N3["Escalate to governance operators"]
+    GV --> N3["Escalate to Flow Administrators"]
     CP --> N4["Scale or throttle according to policy"]
 ```
 
 Triage must preserve evidence. Incident response never deletes unresolved audit context.
 
-## Error Taxonomy and Operator Actions
+## Error Taxonomy and Administrative Actions
 
 All operational error handling maps to [Error Catalogue](../05-reference/error-catalogue.md).
 
-- Operators must use documented error families and remediation paths.
+- Flow Administrators must use documented error families and remediation paths.
 - Runbooks must not introduce undocumented failure codes or ad-hoc semantics.
 - Source attribution (Operator, Sidecar, node, system service, transfer path) must be preserved in incident records.
 

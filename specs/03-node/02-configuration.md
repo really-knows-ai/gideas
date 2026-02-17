@@ -45,6 +45,7 @@ The capability grammar follows a `VERB:RESOURCE[/QUALIFIER]` pattern:
 
 - `READ:artefact`, `WRITE:artefact`, `WRITE:artefact/<kind>` — artefact access. `WRITE:artefact` grants write access to all kinds; `WRITE:artefact/<kind>` scopes to a specific kind. See [SDK Artefacts](../04-sdk/02-sdk-artefacts.md#capability-gated-actions) for the specific SDK operations each capability enables.
 - `READ:law`, `WRITE:law/tier1` through `WRITE:law/tier5` — law access. Each tier grant is a ceiling: `WRITE:law/tier2` authorises writes at Tier 2 and below.
+- `WRITE:friction` — friction emission. Required for `AddFriction` and its convenience wrapper [`Cite`](../04-sdk/03-sdk-legal.md#citation). Enforced by the Sidecar before forwarding to the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
 - `STAMP:artefact/<kind>/<stamp-name>` — stamp authority scoped to a specific artefact kind and stamp name.
 - `READ:flow` — topology discovery, enabling a node to query stamp-to-node mappings at runtime.
 - `READ:workitem` — Workitem state access beyond the current assignment.

@@ -80,6 +80,8 @@ On timeout expiry:
 3. Operator transitions the Workitem to `Failed` with a timeout reason.
 4. The pod remains alive for subsequent assignments.
 
+For inference workloads that perform long-running LLM calls, the [FoundryAgent](./07-sdk-agent.md) wrapper automates heartbeat management entirely — the developer implements an `Infer` method and FoundryAgent maintains the heartbeat loop throughout inference execution. Nodes that do not use FoundryAgent must call `Heartbeat()` explicitly during extended computation.
+
 ## Error Taxonomy and Recovery
 
 SDK errors fall into categories based on where they originate.

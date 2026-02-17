@@ -14,14 +14,20 @@
 **Flow**
 : A self-contained workflow runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary. Detail: [Conceptual Overview](../01-concepts/00-overview.md).
 
+**Flow Administrator**
+: The human role accountable for runtime reliability, governance integrity, and recovery readiness of a running Flow. Flow Administrators monitor, triage, and recover Flows in production. Distinct from the [Flow Architect](#flow-architect) (who designs the Flow) and the [Operator](#operator-flow-operator) (the Kubernetes controller). Detail: [Operations](../02-flow/07-operations.md).
+
 **Flow Architect**
-: The human operator who designs and configures a Flow — defining topology, capability grants, contracts, stamp vocabulary, and policy limits through CRD configuration. The Flow Architect chooses which nodes exist, what they can do, and how work routes between them.
+: The human role that designs and configures a Flow — defining topology, capability grants, contracts, stamp vocabulary, and policy limits through CRD configuration. The Flow Architect chooses which nodes exist, what they can do, and how work routes between them.
 
 **Flow Monitor**
 : The system service that ingests telemetry, friction events, metrics, traces, and audit records. Provides queryable aggregation of friction data across any axis (per-node, per-law, per-tier, per-topology-path). Detail: [System Services](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
 
 **Flow Support Service**
 : An optional, Flow-Architect-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via the [FlowSupportService CRD](./crds.md#flowsupportservice). Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
+
+**FoundryAgent**
+: The SDK's managed inference wrapper for LLM-backed nodes. Provides three behavioural guarantees: automatic heartbeat management during inference execution, schema-first output validation before artefact writes or routing decisions, and atomic per-step cost accounting via `foundry.cost.llm` telemetry events. FoundryAgent is the recommended pattern for all inference workloads and the runtime powering Assay's multi-agent jury mechanism. Detail: [SDK Agent](../04-sdk/07-sdk-agent.md).
 
 **Librarian**
 : The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and review TTL expiry, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
@@ -120,7 +126,7 @@
 : The mechanism by which Assay escalates conflicts involving Tier 4 or Tier 5 laws to the Governance Flow via the Librarian. Assay cannot directly modify laws above its judicial tier. Detail: [Governance](../01-concepts/04-governance.md#escalation-across-boundaries).
 
 **`appliesTo`**
-: A field on each law listing zero or more governed artefact kinds the law applies to (e.g. `["haiku"]`, `["haiku", "sonnet"]`). An empty list means the law is global — it applies to all artefact kinds in the Flow. Law conflict detection is scoped by `appliesTo`. Detail: [CRD Reference](./crds.md#law), [SDK Legal](../04-sdk/03-sdk-legal.md).
+: A field on each law listing zero or more governed artefact kinds the law applies to (e.g. `["haiku"]`, `["haiku", "sonnet"]`). An empty list means the law is global — it applies to all artefact kinds in the Flow. Law conflict detection is scoped by `appliesTo`. Detail: [Data Model](../01-concepts/03-data-model.md#scoping), [CRD Reference](./crds.md#law), [SDK Legal](../04-sdk/03-sdk-legal.md).
 
 **citation**
 : Recording usage of a law during Workitem processing. `Cite` is syntactic sugar around `AddFriction` — each call emits a low-magnitude friction event attributed to the cited law. Detail: [SDK Legal](../04-sdk/03-sdk-legal.md#citation).

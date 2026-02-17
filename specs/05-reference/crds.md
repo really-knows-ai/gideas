@@ -33,7 +33,7 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 
 ### Assay
 
-Assay is a runtime-mandated component — the Operator provisions it without requiring a separate FoundryNode CRD. Its hearing entry and exit contracts are fixed by the runtime: the entry contract requires a single `law-reference` artefact; the exit contract requires it to still be present. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, friction queries, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages Assay's `USE:support/<name>/encode` capability for each).
+Assay is a runtime-mandated component — the Operator provisions it without requiring a separate FoundryNode CRD. Its hearing entry and exit contracts are fixed by the runtime: the entry contract requires a single `law-reference` artefact; the exit contract requires it to still be present. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages Assay's `USE:support/<name>/encode` capability for each).
 
 The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID.
 
@@ -147,6 +147,7 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:law/tier3` | Write Tier 3 and below (Local Statutes, Rulings, Findings). |
 | `WRITE:law/tier4` | Write Tier 4 and below (State Constitutions and all lower tiers). |
 | `WRITE:law/tier5` | Write Tier 5 and below (all tiers). |
+| `WRITE:friction` | Emit friction events (`AddFriction`, `Cite`). Enforced by the Sidecar. |
 | `STAMP:artefact/<kind>/<stamp-name>` | Apply a named stamp to a specific artefact kind. Exact match on both kind and stamp name. |
 | `READ:flow` | Query Flow configuration and node routing graph. Enables stamp-to-node mapping discovery. |
 | `READ:workitem` | Read Workitem state beyond the current assignment. |
