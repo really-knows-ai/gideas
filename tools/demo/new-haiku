@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# new-haiku — Seed a petition and kick off a new haiku workitem.
+#
+# Usage:
+#   ./tools/demo/new-haiku "write me a haiku about autumn leaves"
+#   ./tools/demo/new-haiku "write me a haiku about autumn leaves" haiku-002
+#
+# Requires:
+#   - kubectl port-forward svc/flow-archivist 50054:50054
+#   - grpcurl installed
+set -euo pipefail
+
+PETITION="${1:?Usage: new-haiku <petition-text> [workitem-id]}"
+WORKITEM_ID="${2:-haiku-$(date +%s)}"
+ARCHIVIST="localhost:50054"
+
+# 1. Base64-encode the petition and compute its SHA-256 hash.
+CONTENT_B64=$(printf '%s' "$PETITION" | base64)
+CONTENT_HASH=$(printf '%s' "$PETITION" | shasum -a 256 | awk '{print $1}')
+
+echo "=== New Haiku Workitem ==="
+echo "  ID:       $WORKITEM_ID"
+echo "  Petition: $PETITION"
+echo ""
+
+# 2. Seed the petition into the Archivist.
+echo "Seeding petition into archivist..."
+grpcurl -plaintext -d "{
+  \"workitem_id\": \"$WORKITEM_ID\",
+  \"artefact_id\": \"petition\",
+  \"kind\": \"text/petition\",
+  \"content\": \"$CONTENT_B64\",
+  \"content_hash\": \"$CONTENT_HASH\"
+}" "$ARCHIVIST" flow.v1.ArchivistService/StoreArtefact
+
+echo "Petition stored."
+echo ""
+
+# 3. Create the Workitem CRD.
+echo "Creating workitem $WORKITEM_ID..."
+kubectl apply -f - <<EOF
+apiVersion: flow.gideas.io/v1
+kind: Workitem
+metadata:
+  name: $WORKITEM_ID
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+EOF
+
+# 4. Bootstrap the status subresource (kubectl apply doesn't set status).
+#    Need to GET the resourceVersion first, then PUT the status.
+sleep 1
+RV=$(kubectl get workitem "$WORKITEM_ID" -o jsonpath='{.metadata.resourceVersion}')
+kubectl proxy --port=8002 &>/dev/null &
+PROXY_PID=$!
+sleep 1
+
+curl -s -X PUT "http://localhost:8002/apis/flow.gideas.io/v1/namespaces/default/workitems/$WORKITEM_ID/status" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"apiVersion\": \"flow.gideas.io/v1\",
+    \"kind\": \"Workitem\",
+    \"metadata\": {
+      \"name\": \"$WORKITEM_ID\",
+      \"namespace\": \"default\",
+      \"resourceVersion\": \"$RV\"
+    },
+    \"status\": {
+      \"phase\": \"Pending\",
+      \"currentAssignee\": \"forge\"
+    }
+  }" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Status set: phase={d[\"status\"][\"phase\"]}, assignee={d[\"status\"][\"currentAssignee\"]}')" 2>/dev/null
+
+kill $PROXY_PID 2>/dev/null
+wait $PROXY_PID 2>/dev/null || true
+
+echo ""
+echo "=== Workitem $WORKITEM_ID is live! ==="
+echo ""
+echo "Watch it with:"
+echo "  go run ./tools/haiku-watch --workitem $WORKITEM_ID --archivist localhost:50054"

@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# add-law — Write a governance law to the Librarian and activate it.
+#
+# Usage:
+#   ./tools/demo/add-law "A haiku about food must mention a specific dish"
+#   ./tools/demo/add-law "The haiku must evoke a season" 3
+#
+# Args:
+#   $1 — The law goal (plain-language rule)
+#   $2 — Desired active tier (default: 3 = Local Statute). Range 1-5.
+#
+# The law is scoped to artefact kind "text/haiku".
+# WriteLaw creates it inactive, then ApplyLifecycleAction(PROMOTE) activates
+# it (and bumps tier by 1), so we write at tier-1.
+#
+# Requires:
+#   - kubectl port-forward svc/flow-librarian 50056:50056
+#   - grpcurl installed
+set -euo pipefail
+
+GOAL="${1:?Usage: add-law <goal-text> [tier]}"
+DESIRED_TIER="${2:-3}"
+LIBRARIAN="localhost:50056"
+
+# WriteLaw creates inactive. PROMOTE activates and increments tier by 1.
+# So write at desired_tier - 1 (minimum 1).
+WRITE_TIER=$((DESIRED_TIER - 1))
+if [ "$WRITE_TIER" -lt 1 ]; then
+  WRITE_TIER=1
+fi
+
+tier_name() {
+  case $1 in
+    1) echo "Finding" ;;
+    2) echo "Ruling" ;;
+    3) echo "Local Statute" ;;
+    4) echo "State Constitution" ;;
+    5) echo "Federal Accord" ;;
+    *) echo "Tier $1" ;;
+  esac
+}
+
+echo "=== Writing Law ==="
+echo "  Goal:  $GOAL"
+echo "  Tier:  $DESIRED_TIER ($(tier_name "$DESIRED_TIER"))"
+echo "  Scope: text/haiku"
+echo ""
+
+# 1. Create the law (inactive).
+RESULT=$(grpcurl -plaintext -d "{
+  \"law\": {
+    \"goal\": $(printf '%s' "$GOAL" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+    \"tier\": $WRITE_TIER,
+    \"applies_to\": [\"text/haiku\"],
+    \"representations\": [{
+      \"type\": \"text/plain\",
+      \"content\": $(printf '%s' "$GOAL" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+    }]
+  }
+}" "$LIBRARIAN" flow.v1.LibrarianService/WriteLaw)
+
+LAW_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('lawId',''))" 2>/dev/null)
+
+if [ -z "$LAW_ID" ]; then
+  echo "ERROR: Failed to create law"
+  echo "$RESULT"
+  exit 1
+fi
+
+echo "Created (inactive): $LAW_ID"
+
+# 2. Activate via PROMOTE.
+grpcurl -plaintext -d "{
+  \"law_id\": \"$LAW_ID\",
+  \"verdict\": \"VERDICT_PROMOTE\"
+}" "$LIBRARIAN" flow.v1.LibrarianService/ApplyLifecycleAction >/dev/null
+
+echo "Activated at tier $DESIRED_TIER"
+echo ""
+
+# 3. Show all current laws for text/haiku.
+echo "=== Current Laws (text/haiku) ==="
+grpcurl -plaintext -d '{"filter":{"artefact_kind":"text/haiku"}}' \
+  "$LIBRARIAN" flow.v1.LibrarianService/QueryLaws 2>&1 | \
+  python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+laws = data.get('laws', [])
+if not laws:
+    print('  (none)')
+else:
+    tier_map = {
+        'LAW_TIER_FINDING': 'Finding',
+        'LAW_TIER_RULING': 'Ruling',
+        'LAW_TIER_LOCAL_STATUTE': 'Statute',
+        'LAW_TIER_STATE_CONSTITUTION': 'Constitution',
+        'LAW_TIER_FEDERAL_ACCORD': 'Accord',
+    }
+    for l in laws:
+        t = l.get('tier', 'LAW_TIER_UNSPECIFIED')
+        tname = tier_map.get(t, t)
+        print(f'  [{tname}] {l.get(\"goal\",\"\")}')
+        print(f'           id={l.get(\"id\",\"\")}')
+" 2>/dev/null

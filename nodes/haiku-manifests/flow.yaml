@@ -1,0 +1,177 @@
+# Haiku Foundry Cycle — Flow Configuration
+#
+# This defines the complete Foundry Cycle for haiku creation with Sort as the
+# central routing hub. Every node feeds back to Sort, which triages governance
+# state and routes accordingly.
+#
+# Topology:
+#   Forge ──[default]──→ Sort ──[quench]──→ Quench ──[default]──→ Sort
+#                         │──[appraise]──→ Appraise ──[default]──→ Sort
+#                         │──[refine]────→ Refine ──[default]───→ Sort
+#                         └──Complete() (exit)
+#
+# Sort's decision tree:
+#   1. Missing "linter" stamp?  → route to Quench
+#   2. Missing "review" stamp?  → route to Appraise
+#   3. Unresolved feedback?     → route to Refine
+#   4. All clear?               → stamp "approval", Complete()
+#
+# Artefacts:
+#   - petition (text/petition): The creative brief, pre-populated at workitem creation.
+#   - haiku (text/haiku): The governed output, must carry [linter, review, approval].
+#
+# Apply order:
+#   1. kubectl apply -f flow.yaml          (this file)
+#   2. kubectl apply -f deployments.yaml   (node pods)
+#   3. kubectl apply -f workitem.yaml      (trigger the cycle)
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: haiku
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  kind: "text/haiku"
+  stamps:
+    - linter
+    - review
+    - approval
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: petition
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  kind: "text/petition"
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryFlow
+metadata:
+  name: haiku-flow
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  entryContracts:
+    # The petition must exist when the workitem enters the flow.
+    standard-entry:
+      "text/petition": []
+  exitContracts:
+    # The haiku must carry linter, review, and approval stamps to exit.
+    standard-exit:
+      "text/haiku":
+        - linter
+        - review
+        - approval
+  governancePolicy:
+    maxVisits: 20
+    defaultTimeout: "10m"
+    maxTimeout: "30m"
+---
+# --- Node Definitions (Topology) ---
+
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: forge
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: haiku-forge:latest
+  entry: "standard-entry"
+  outputs:
+    - name: "default"
+      target: "sort"
+  capabilities:
+    - "READ:artefact/text/petition"
+    - "WRITE:artefact/text/haiku"
+    - "READ:law"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: sort
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: haiku-sort:latest
+  exit: "standard-exit"
+  outputs:
+    - name: "quench"
+      target: "quench"
+    - name: "appraise"
+      target: "appraise"
+    - name: "refine"
+      target: "refine"
+  capabilities:
+    - "READ:artefact/text/haiku"
+    - "READ:feedback"
+    - "STAMP:artefact/text/haiku/approval"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: quench
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: haiku-quench:latest
+  outputs:
+    - name: "default"
+      target: "sort"
+  capabilities:
+    - "READ:artefact/text/haiku"
+    - "STAMP:artefact/text/haiku/linter"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: appraise
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: haiku-appraise:latest
+  outputs:
+    - name: "default"
+      target: "sort"
+  capabilities:
+    - "READ:artefact/text/petition"
+    - "READ:artefact/text/haiku"
+    - "READ:law"
+    - "WRITE:feedback/new"
+    - "STAMP:artefact/text/haiku/review"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: refine
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: haiku-refine:latest
+  outputs:
+    - name: "default"
+      target: "sort"
+  capabilities:
+    - "READ:artefact/text/petition"
+    - "READ:artefact/text/haiku"
+    - "WRITE:artefact/text/haiku"
+    - "READ:feedback"
+    - "WRITE:feedback/actioned"
+    - "READ:law"

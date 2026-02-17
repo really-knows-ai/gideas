@@ -1,0 +1,29 @@
+# Haiku Foundry Cycle — Trigger Workitem
+#
+# This creates a Workitem with the "petition" artefact pre-populated.
+# The petition contains the creative brief for the haiku.
+#
+# IMPORTANT: The petition must be stored in the Archivist BEFORE the
+# Workitem is created. Use the bootstrap script or grpcurl to seed it:
+#
+#   grpcurl -plaintext -d '{
+#     "workitem_id": "haiku-001",
+#     "artefact_id": "petition",
+#     "kind": "text/petition",
+#     "content": "d3JpdGUgbWUgYSBoYXBweSBoYWlrdSBhYm91dCBzYXVzYWdlcw==",
+#     "content_hash": "<sha256>"
+#   }' localhost:50054 flow.v1.ArchivistService/StoreArtefact
+#
+# Then apply this workitem to start the cycle:
+#   kubectl apply -f workitem.yaml
+---
+apiVersion: flow.gideas.io/v1
+kind: Workitem
+metadata:
+  name: haiku-001
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+status:
+  phase: Pending
+  currentAssignee: forge

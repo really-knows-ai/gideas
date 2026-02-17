@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -34,6 +35,38 @@ type ArtefactVersion struct {
 type ArtefactEntry struct {
 	ID   string
 	Kind string
+}
+
+// StampRecord represents a governance stamp applied to an artefact version.
+type StampRecord struct {
+	Name         string
+	ApplyingNode string
+	ContentHash  string // the artefact version_hash this stamp is on
+	Signature    []byte
+	CertChain    []byte
+	CreatedAt    time.Time
+}
+
+// FeedbackRecord represents a feedback item on an artefact.
+type FeedbackRecord struct {
+	ID          string
+	WorkitemID  string
+	ArtefactID  string
+	Source      string
+	Severity    int32 // maps to flowv1.Severity enum
+	State       int32 // maps to flowv1.FeedbackState enum
+	Message     string
+	VersionHash string // artefact version this feedback was raised against
+	CreatedAt   time.Time
+}
+
+// FeedbackEventRecord represents a single event in a feedback item's history.
+type FeedbackEventRecord struct {
+	FeedbackID string
+	Actor      string
+	Action     string
+	Message    string
+	CreatedAt  time.Time
 }
 
 // Store is the SQLite-backed CAS repository for the Archivist.
@@ -98,6 +131,49 @@ CREATE INDEX IF NOT EXISTS idx_versions_workitem_artefact
 
 CREATE INDEX IF NOT EXISTS idx_versions_content_hash
     ON artefact_versions(content_hash);
+
+CREATE TABLE IF NOT EXISTS stamps (
+    rowid          INTEGER PRIMARY KEY AUTOINCREMENT,
+    workitem_id    TEXT NOT NULL,
+    artefact_id    TEXT NOT NULL,
+    version_hash   TEXT NOT NULL,
+    stamp_name     TEXT NOT NULL,
+    applying_node  TEXT NOT NULL,
+    signature      BLOB,
+    cert_chain     BLOB,
+    created_at     DATETIME NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(workitem_id, artefact_id, version_hash, stamp_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stamps_artefact
+    ON stamps(workitem_id, artefact_id, version_hash);
+
+CREATE TABLE IF NOT EXISTS feedback_items (
+    id           TEXT PRIMARY KEY,
+    workitem_id  TEXT NOT NULL,
+    artefact_id  TEXT NOT NULL,
+    source       TEXT NOT NULL DEFAULT '',
+    severity     INTEGER NOT NULL DEFAULT 0,
+    state        INTEGER NOT NULL DEFAULT 1,
+    message      TEXT NOT NULL DEFAULT '',
+    version_hash TEXT NOT NULL DEFAULT '',
+    created_at   DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_workitem_artefact
+    ON feedback_items(workitem_id, artefact_id);
+
+CREATE TABLE IF NOT EXISTS feedback_events (
+    rowid       INTEGER PRIMARY KEY AUTOINCREMENT,
+    feedback_id TEXT NOT NULL REFERENCES feedback_items(id),
+    actor       TEXT NOT NULL DEFAULT '',
+    action      TEXT NOT NULL,
+    message     TEXT NOT NULL DEFAULT '',
+    created_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_events_feedback
+    ON feedback_events(feedback_id);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("exec schema: %w", err)
@@ -242,6 +318,309 @@ func (s *Store) ListArtefacts(ctx context.Context, workitemID string) ([]Artefac
 		return nil, fmt.Errorf("iterate artefact entries: %w", err)
 	}
 	return entries, nil
+}
+
+// ---------------------------------------------------------------------------
+// Stamp Methods
+// ---------------------------------------------------------------------------
+
+// StampArtefact applies a named stamp to an artefact version. It is a no-op
+// (returns false) if the stamp already exists for that version.
+func (s *Store) StampArtefact(ctx context.Context, workitemID, artefactID, versionHash, stampName, applyingNode string, signature, certChain []byte) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO stamps (workitem_id, artefact_id, version_hash, stamp_name, applying_node, signature, cert_chain)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		workitemID, artefactID, versionHash, stampName, applyingNode, signature, certChain,
+	)
+	if err != nil {
+		return false, fmt.Errorf("stamp artefact: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
+// GetStamps returns all stamps on a specific artefact version.
+func (s *Store) GetStamps(ctx context.Context, workitemID, artefactID, versionHash string) ([]StampRecord, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT stamp_name, applying_node, version_hash, signature, cert_chain, created_at
+		 FROM stamps
+		 WHERE workitem_id = ? AND artefact_id = ? AND version_hash = ?
+		 ORDER BY rowid ASC`,
+		workitemID, artefactID, versionHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get stamps: %w", err)
+	}
+	defer rows.Close()
+
+	var stamps []StampRecord
+	for rows.Next() {
+		var sr StampRecord
+		var createdStr string
+		if err := rows.Scan(&sr.Name, &sr.ApplyingNode, &sr.ContentHash, &sr.Signature, &sr.CertChain, &createdStr); err != nil {
+			return nil, fmt.Errorf("scan stamp: %w", err)
+		}
+		sr.CreatedAt = parseTime(createdStr)
+		stamps = append(stamps, sr)
+	}
+	return stamps, rows.Err()
+}
+
+// HasStamp checks whether a named stamp exists on the current (head) version
+// of the specified artefact.
+func (s *Store) HasStamp(ctx context.Context, workitemID, artefactID, stampName string) (bool, error) {
+	// First get the head version hash.
+	head, err := s.GetHead(ctx, workitemID, artefactID)
+	if err != nil {
+		return false, err
+	}
+	if head == nil {
+		return false, nil
+	}
+
+	var count int
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM stamps
+		 WHERE workitem_id = ? AND artefact_id = ? AND version_hash = ? AND stamp_name = ?`,
+		workitemID, artefactID, head.Hash, stampName,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("has stamp: %w", err)
+	}
+	return count > 0, nil
+}
+
+// GetStampNamesForVersion returns the stamp names applied to a specific
+// artefact version hash.
+func (s *Store) GetStampNamesForVersion(ctx context.Context, workitemID, artefactID, versionHash string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT stamp_name FROM stamps
+		 WHERE workitem_id = ? AND artefact_id = ? AND version_hash = ?
+		 ORDER BY rowid ASC`,
+		workitemID, artefactID, versionHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get stamp names: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan stamp name: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Feedback Methods
+// ---------------------------------------------------------------------------
+
+// AddFeedback creates a new feedback item in NEW state and appends the
+// initial "created" event. Returns the generated feedback ID.
+func (s *Store) AddFeedback(ctx context.Context, workitemID, artefactID, source string, severity int32, message, versionHash string) (string, error) {
+	feedbackID := uuid.New().String()
+	const stateNew int32 = 1 // flowv1.FeedbackState_FEEDBACK_STATE_NEW
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO feedback_items (id, workitem_id, artefact_id, source, severity, state, message, version_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		feedbackID, workitemID, artefactID, source, severity, stateNew, message, versionHash,
+	)
+	if err != nil {
+		return "", fmt.Errorf("insert feedback: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO feedback_events (feedback_id, actor, action, message)
+		 VALUES (?, ?, ?, ?)`,
+		feedbackID, source, "created", message,
+	)
+	if err != nil {
+		return "", fmt.Errorf("insert event: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
+	}
+	return feedbackID, nil
+}
+
+// GetFeedback returns all feedback items for a (workitemID, artefactID) pair.
+func (s *Store) GetFeedback(ctx context.Context, workitemID, artefactID string) ([]FeedbackRecord, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, created_at
+		 FROM feedback_items
+		 WHERE workitem_id = ? AND artefact_id = ?
+		 ORDER BY created_at ASC`,
+		workitemID, artefactID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get feedback: %w", err)
+	}
+	defer rows.Close()
+
+	var items []FeedbackRecord
+	for rows.Next() {
+		var f FeedbackRecord
+		var createdStr string
+		if err := rows.Scan(&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source, &f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr); err != nil {
+			return nil, fmt.Errorf("scan feedback: %w", err)
+		}
+		f.CreatedAt = parseTime(createdStr)
+		items = append(items, f)
+	}
+	return items, rows.Err()
+}
+
+// GetFeedbackEvents returns the event history for a feedback item.
+func (s *Store) GetFeedbackEvents(ctx context.Context, feedbackID string) ([]FeedbackEventRecord, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT feedback_id, actor, action, message, created_at
+		 FROM feedback_events
+		 WHERE feedback_id = ?
+		 ORDER BY rowid ASC`,
+		feedbackID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get feedback events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []FeedbackEventRecord
+	for rows.Next() {
+		var e FeedbackEventRecord
+		var createdStr string
+		if err := rows.Scan(&e.FeedbackID, &e.Actor, &e.Action, &e.Message, &createdStr); err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		e.CreatedAt = parseTime(createdStr)
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// HasUnresolvedFeedback returns true if there are any feedback items for the
+// given (workitemID, artefactID) that are not in RESOLVED state.
+func (s *Store) HasUnresolvedFeedback(ctx context.Context, workitemID, artefactID string) (bool, error) {
+	const stateResolved int32 = 6 // flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED
+
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM feedback_items
+		 WHERE workitem_id = ? AND artefact_id = ? AND state != ?`,
+		workitemID, artefactID, stateResolved,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("has unresolved feedback: %w", err)
+	}
+	return count > 0, nil
+}
+
+// TransitionFeedback updates a feedback item's state and appends a history
+// event. It returns the updated feedback record or an error if the current
+// state does not match one of the expected from-states.
+func (s *Store) TransitionFeedback(ctx context.Context, feedbackID string, fromStates []int32, toState int32, actor, action, message string) (*FeedbackRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Read current state.
+	var f FeedbackRecord
+	var createdStr string
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, created_at
+		 FROM feedback_items WHERE id = ?`, feedbackID,
+	).Scan(&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source, &f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("feedback %q not found", feedbackID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read feedback: %w", err)
+	}
+	f.CreatedAt = parseTime(createdStr)
+
+	// Validate current state is in allowed from-states.
+	allowed := false
+	for _, s := range fromStates {
+		if f.State == s {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return nil, fmt.Errorf("feedback %q in state %d, cannot transition to %d", feedbackID, f.State, toState)
+	}
+
+	// Update state.
+	_, err = tx.ExecContext(ctx,
+		`UPDATE feedback_items SET state = ? WHERE id = ?`,
+		toState, feedbackID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update state: %w", err)
+	}
+
+	// Append event.
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO feedback_events (feedback_id, actor, action, message)
+		 VALUES (?, ?, ?, ?)`,
+		feedbackID, actor, action, message,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert event: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	f.State = toState
+	return &f, nil
+}
+
+// GetFeedbackByID returns a single feedback item by its ID.
+func (s *Store) GetFeedbackByID(ctx context.Context, feedbackID string) (*FeedbackRecord, error) {
+	var f FeedbackRecord
+	var createdStr string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, created_at
+		 FROM feedback_items WHERE id = ?`, feedbackID,
+	).Scan(&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source, &f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get feedback by id: %w", err)
+	}
+	f.CreatedAt = parseTime(createdStr)
+	return &f, nil
+}
+
+// GetFeedbackDepth returns the number of events in a feedback item's history.
+func (s *Store) GetFeedbackDepth(ctx context.Context, feedbackID string) (int32, error) {
+	var count int32
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM feedback_events WHERE feedback_id = ?`, feedbackID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("get feedback depth: %w", err)
+	}
+	return count, nil
 }
 
 // parseTime parses a SQLite datetime string. Falls back to RFC3339 if the

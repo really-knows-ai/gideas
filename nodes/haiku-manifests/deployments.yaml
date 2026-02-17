@@ -1,0 +1,251 @@
+# Haiku Foundry Cycle — Node Deployments
+#
+# Each node runs as a Deployment with two containers:
+#   1. The node container (user code) — runs on :50053
+#   2. The sidecar container — runs on :50051, proxies to services
+#
+# The sidecar connects to:
+#   - Operator at OPERATOR_ADDRESS (default: flow-operator:50052)
+#   - Archivist at ARCHIVIST_ADDRESS (default: flow-archivist:50054)
+#   - Librarian at LIBRARIAN_ADDRESS (default: flow-librarian:50056)
+#   - Monitor at MONITOR_ADDRESS (default: flow-monitor:50055)
+#
+# Prerequisites:
+#   - Build node images (one per node)
+#   - Build sidecar image: docker build -t flow-sidecar:latest -f sidecar/Dockerfile .
+#   - Deploy system services (operator, archivist, librarian, monitor)
+#   - Apply flow.yaml first (CRDs must exist before deployments)
+---
+# --- Forge ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haiku-forge
+  namespace: default
+  labels:
+    app.kubernetes.io/name: haiku-forge
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: haiku-forge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: haiku-forge
+        flow.gideas.io/node-name: forge
+    spec:
+      containers:
+        - name: node
+          image: haiku-forge:latest
+          ports:
+            - containerPort: 50053
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+            - name: FORGE_MODEL
+              value: "gpt-oss:120b-cloud"
+        - name: sidecar
+          image: flow-sidecar:latest
+          ports:
+            - containerPort: 50051
+          env:
+            - name: FLOW_NODE_ID
+              value: "forge"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "flow-operator:50052"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
+            - name: LIBRARIAN_ADDRESS
+              value: "flow-librarian:50056"
+            - name: MONITOR_ADDRESS
+              value: "flow-monitor:50055"
+---
+# --- Quench ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haiku-quench
+  namespace: default
+  labels:
+    app.kubernetes.io/name: haiku-quench
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: haiku-quench
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: haiku-quench
+        flow.gideas.io/node-name: quench
+    spec:
+      containers:
+        - name: node
+          image: haiku-quench:latest
+          ports:
+            - containerPort: 50053
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+        - name: sidecar
+          image: flow-sidecar:latest
+          ports:
+            - containerPort: 50051
+          env:
+            - name: FLOW_NODE_ID
+              value: "quench"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "flow-operator:50052"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
+---
+# --- Sort ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haiku-sort
+  namespace: default
+  labels:
+    app.kubernetes.io/name: haiku-sort
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: haiku-sort
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: haiku-sort
+        flow.gideas.io/node-name: sort
+    spec:
+      containers:
+        - name: node
+          image: haiku-sort:latest
+          ports:
+            - containerPort: 50053
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+        - name: sidecar
+          image: flow-sidecar:latest
+          ports:
+            - containerPort: 50051
+          env:
+            - name: FLOW_NODE_ID
+              value: "sort"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "flow-operator:50052"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
+---
+# --- Appraise ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haiku-appraise
+  namespace: default
+  labels:
+    app.kubernetes.io/name: haiku-appraise
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: haiku-appraise
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: haiku-appraise
+        flow.gideas.io/node-name: appraise
+    spec:
+      containers:
+        - name: node
+          image: haiku-appraise:latest
+          ports:
+            - containerPort: 50053
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+            - name: APPRAISE_MODEL
+              value: "kimi-k2.5:cloud"
+        - name: sidecar
+          image: flow-sidecar:latest
+          ports:
+            - containerPort: 50051
+          env:
+            - name: FLOW_NODE_ID
+              value: "appraise"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "flow-operator:50052"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
+            - name: LIBRARIAN_ADDRESS
+              value: "flow-librarian:50056"
+            - name: MONITOR_ADDRESS
+              value: "flow-monitor:50055"
+---
+# --- Refine ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haiku-refine
+  namespace: default
+  labels:
+    app.kubernetes.io/name: haiku-refine
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: haiku-refine
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: haiku-refine
+        flow.gideas.io/node-name: refine
+    spec:
+      containers:
+        - name: node
+          image: haiku-refine:latest
+          ports:
+            - containerPort: 50053
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+            - name: REFINE_MODEL
+              value: "gpt-oss:120b-cloud"
+        - name: sidecar
+          image: flow-sidecar:latest
+          ports:
+            - containerPort: 50051
+          env:
+            - name: FLOW_NODE_ID
+              value: "refine"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "flow-operator:50052"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
+            - name: LIBRARIAN_ADDRESS
+              value: "flow-librarian:50056"
+            - name: MONITOR_ADDRESS
+              value: "flow-monitor:50055"
