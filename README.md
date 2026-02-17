@@ -1,59 +1,128 @@
 # Foundry Flow
 
-Foundry Flow is a governed workflow runtime on Kubernetes that orchestrates work through adversarial cycles of creation, validation, review, and refinement. A Flow is a sovereign runtime in a single Kubernetes namespace — all state, storage, governance, and execution live within the boundary. Artefacts produced by a Flow carry cryptographic proof of every governance checkpoint they passed, and structured feedback drives iterative refinement until exit contracts are satisfied. Friction — a first-class, quantifiable signal — makes the real-time cost of governance visible at every layer.
+A governed workflow runtime on Kubernetes. Work progresses through adversarial cycles of creation, validation, review, and refinement — each step producing auditable artefacts with cryptographic proof of every governance checkpoint. Structured feedback drives iterative refinement until exit contracts are satisfied, and friction makes the real-time cost of governance visible at every layer.
 
-## Concepts
+## Repository Structure
 
-Foundry Flow operates through sovereign [Flows](specs/01-concepts/00-overview.md) that manage the lifecycle of [Workitems](specs/01-concepts/03-data-model.md) and their associated [Artefacts](specs/01-concepts/03-data-model.md). The system is built on [architectural planes](specs/01-concepts/01-architecture.md) that separate concerns between control, data, and governance. Work progresses through the [Foundry Cycle](specs/01-concepts/02-foundry-cycle.md) — an adversarial arrangement of nodes (Forge, Quench, Appraise, Sort, Refine) that use [Feedback](specs/01-concepts/03-data-model.md) and [Friction](specs/01-concepts/04-governance.md) to drive quality. All execution is governed by a multi-tiered [Legal Model](specs/01-concepts/04-governance.md) that uses laws, precedent, and judicial review to ensure compliance and auditability.
+| Directory | Description |
+|-----------|-------------|
+| `specs/` | [Technical specification](specs/README.md) — the authoritative source of truth |
+| `proto/` | Protocol Buffer definitions (the wire contract) |
+| `operator/` | Control plane — Kubebuilder controller managing Flows, Workitems, and CRDs |
+| `sidecar/` | Data plane — in-pod proxy handling identity, capability enforcement, and service routing |
+| `sdk/go/` | Go SDK for node developers |
+| `nodes/` | Standard node implementations and the Haiku demo cycle |
+| `archivist/` | System service — content-addressable artefact storage (SQLite) |
+| `librarian/` | System service — law and governance store (SQLite) |
+| `monitor/` | System service — Flow Monitor for friction and telemetry (SQLite) |
+| `tools/` | Spec linter, demo scripts, and the `haiku-watch` CLI |
 
-## Flow Runtime
+## Prerequisites
 
-The Flow runtime defines the platform: how the control plane drives work, how services manage artefact and law lifecycle, and how Flows collaborate across boundaries. Audience: operators and administrators.
+- **Go 1.25+**
+- **Docker**
+- **kubectl**
+- **A Kubernetes cluster** (Kind, Docker Desktop, or any conformant cluster)
+- **[Buf CLI](https://buf.build/docs/installation)** (only if regenerating proto code)
+- **[grpcurl](https://github.com/fullstorydev/grpcurl)** (only for the demo scripts)
 
-| Document | Description |
-|----------|-------------|
-| [Overview](specs/02-flow/00-overview.md) | Runtime composition, execution loop, and platform invariants |
-| [Operator](specs/02-flow/01-operator.md) | Control-plane authority — reconciliation, assignment, routing, exit enforcement |
-| [Workitems](specs/02-flow/02-workitem.md) | Workitem lifecycle states, ownership boundaries, and contract interactions |
-| [Nodes and External Integrations](specs/02-flow/03-nodes-external.md) | Node execution boundaries, capability model, and Assay as standard component |
-| [System Services](specs/02-flow/04-system-services.md) | Librarian, Archivist, Flow Monitor, Flow Support Services, hearing protocol |
-| [Configuration](specs/02-flow/05-configuration.md) | CRD authority model, topology, contracts, capability grants, operational knobs |
-| [Cross-Flow Collaboration](specs/02-flow/06-cross-flow.md) | Export and import lifecycle, trust topologies, treaties, law integration |
-| [Operations](specs/02-flow/07-operations.md) | Monitoring, triage, recovery, upgrade, and operational verification |
+## Getting Started
 
-## Node Runtime
+### 1. Install CRDs
 
-Nodes execute assignment-scoped work inside a Flow while the Operator retains control-plane authority. Audience: platform engineers and node implementors.
+```bash
+make -C operator install
+```
 
-| Document | Description |
-|----------|-------------|
-| [Overview](specs/03-node/00-overview.md) | Node execution boundary and assignment lifecycle |
-| [Sidecar](specs/03-node/01-sidecar.md) | Trust boundary — identity mediation, service brokering, capability enforcement |
-| [Configuration](specs/03-node/02-configuration.md) | Configuration precedence, capability resolution, timeout and concurrency |
-| [Patterns](specs/03-node/03-patterns.md) | Implementation guidance — idempotency, retries, HITL, agents, anti-patterns |
+### 2. Build container images
 
-## SDK
+From the repo root:
 
-The SDK is the programming interface between node handler code and the Flow runtime. All operations pass through the Sidecar. Audience: node developers.
+```bash
+# Operator
+docker build -t flow-operator:latest -f operator/Dockerfile .
 
-| Document | Description |
-|----------|-------------|
-| [Overview](specs/04-sdk/00-overview.md) | SDK role, execution scope, and FlowSupportService base class |
-| [Core](specs/04-sdk/01-sdk-core.md) | Handler lifecycle, routing instructions, completion semantics, error taxonomy |
-| [Artefacts](specs/04-sdk/02-sdk-artefacts.md) | Read, write, versioning, and stamp operations for governed artefacts |
-| [Legal](specs/04-sdk/03-sdk-legal.md) | Law retrieval, citation, and finding creation |
-| [Feedback](specs/04-sdk/04-sdk-feedback.md) | Feedback lifecycle, friction emission, deadlock, and contempt guard |
-| [Workitems](specs/04-sdk/05-sdk-workitems.md) | Workitem read access, local creation, and routing submission |
-| [Telemetry](specs/04-sdk/06-sdk-telemetry.md) | Friction emission, metrics, traces, and custom events |
-| [Agent](specs/04-sdk/07-sdk-agent.md) | Managed inference wrapper: FoundryAgent heartbeat, output validation, cost accounting |
+# Sidecar
+docker build -t flow-sidecar:latest -f sidecar/Dockerfile .
 
-## Reference
+# System services
+docker build -t flow-archivist:latest -f archivist/Dockerfile .
+docker build -t flow-librarian:latest -f librarian/Dockerfile .
+docker build -t flow-monitor:latest   -f monitor/Dockerfile .
 
-Quick lookup for implementors across all roles.
+# Haiku demo nodes (one image per node)
+for node in haiku-forge haiku-quench haiku-sort haiku-appraise haiku-refine; do
+  docker build -t "$node:latest" --build-arg NODE="$node" -f nodes/Dockerfile .
+done
+```
 
-| Document | Description |
-|----------|-------------|
-| [CRDs](specs/05-reference/crds.md) | All custom resources under `flow.gideas.io/v1` with full field schemas |
-| [gRPC API](specs/05-reference/grpc-api.md) | All runtime service APIs with method signatures |
-| [Error Catalogue](specs/05-reference/error-catalogue.md) | Structured error codes, categories, and caller response guidance |
-| [Glossary](specs/05-reference/glossary.md) | Canonical term definitions organised by domain |
+If using Kind, load the images into the cluster:
+
+```bash
+for img in flow-operator flow-sidecar flow-archivist flow-librarian flow-monitor \
+           haiku-forge haiku-quench haiku-sort haiku-appraise haiku-refine; do
+  kind load docker-image "$img:latest" --name <cluster-name>
+done
+```
+
+### 3. Deploy the Operator
+
+```bash
+make -C operator deploy
+```
+
+### 4. Deploy system services
+
+```bash
+kubectl apply -f archivist/deployment.yaml
+kubectl apply -f librarian/deployment.yaml
+kubectl apply -f monitor/deployment.yaml
+```
+
+### 5. Deploy the Haiku demo
+
+The Haiku demo runs a full Foundry Cycle — Forge, Quench, Appraise, Sort, Refine — producing governed haiku artefacts.
+
+```bash
+kubectl apply -f nodes/haiku-manifests/flow.yaml
+kubectl apply -f nodes/haiku-manifests/deployments.yaml
+```
+
+### 6. Seed a workitem
+
+Port-forward the Archivist and Librarian, then use the demo scripts:
+
+```bash
+kubectl port-forward svc/flow-archivist 50054:50054 &
+kubectl port-forward svc/flow-librarian 50056:50056 &
+
+# Optionally add a governance law
+./tools/demo/add-law "The haiku must evoke a season"
+
+# Create a new haiku workitem
+./tools/demo/new-haiku "write me a haiku about autumn leaves"
+```
+
+### 7. Watch it
+
+```bash
+go run ./tools/haiku-watch --workitem haiku-<id> --archivist localhost:50054
+```
+
+## Development
+
+```bash
+make build          # Build all binaries (sidecar, nodes, system services)
+make test           # Run all unit tests
+make test-all       # Including operator tests
+make proto          # Regenerate Go code from proto definitions
+make fmt            # Format
+make vet            # Vet
+make tidy           # go mod tidy across all workspace modules
+```
+
+See `make help` for the full target list.
+
+## Specification
+
+The full technical specification lives in [`specs/`](specs/README.md). Start with [Concepts](specs/01-concepts/00-overview.md), then [Architecture](specs/01-concepts/01-architecture.md).
