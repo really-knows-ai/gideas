@@ -18,7 +18,7 @@ const bufSize = 1024 * 1024
 // Spy server — captures incoming metadata for assertions
 // ---------------------------------------------------------------------------
 
-// spyServer implements the three gRPC services and records the metadata it
+// spyServer implements the gRPC services and records the metadata it
 // receives. This lets us assert that the SDK's interceptor injects the
 // correct workitem_id header.
 type spyServer struct {
@@ -26,6 +26,7 @@ type spyServer struct {
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
+	flowv1.UnimplementedFlowMonitorServiceServer
 
 	// lastMD is the metadata captured from the most recent call.
 	lastMD metadata.MD
@@ -65,6 +66,11 @@ func (s *spyServer) RecordFinding(ctx context.Context, req *flowv1.RecordFinding
 	return &flowv1.RecordFindingResponse{LawId: "finding-001"}, nil
 }
 
+func (s *spyServer) RecordTelemetry(ctx context.Context, req *flowv1.RecordTelemetryRequest) (*flowv1.RecordTelemetryResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helper — starts a bufconn gRPC server and returns a connected Client
 // ---------------------------------------------------------------------------
@@ -88,6 +94,7 @@ func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 	flowv1.RegisterOperatorServiceServer(srv, spy)
 	flowv1.RegisterArchivistServiceServer(srv, spy)
 	flowv1.RegisterLibrarianServiceServer(srv, spy)
+	flowv1.RegisterFlowMonitorServiceServer(srv, spy)
 
 	go func() {
 		if err := srv.Serve(lis); err != nil {
@@ -115,6 +122,7 @@ func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 		Operator:   flowv1.NewOperatorServiceClient(conn),
 		Archivist:  flowv1.NewArchivistServiceClient(conn),
 		Librarian:  flowv1.NewLibrarianServiceClient(conn),
+		Monitor:    flowv1.NewFlowMonitorServiceClient(conn),
 	}
 
 	t.Cleanup(func() {
@@ -295,6 +303,25 @@ func TestRecordFinding_InjectsWorkitemMetadata(t *testing.T) {
 	}
 	if lawID != "finding-001" {
 		t.Fatalf("expected law_id=finding-001, got %q", lawID)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Monitor Convenience Methods
+// ---------------------------------------------------------------------------
+
+func TestRecordTelemetry_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-telemetry-001"
+	env := setupTestEnv(t, wantID)
+
+	err := env.client.RecordTelemetry(context.Background(), "foundry.cost.llm", []byte(`{"model":"gpt-4"}`))
+	if err != nil {
+		t.Fatalf("RecordTelemetry() returned error: %v", err)
 	}
 
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
