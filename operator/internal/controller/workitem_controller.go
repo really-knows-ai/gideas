@@ -87,6 +87,11 @@ func (r *WorkitemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // reconcilePending handles Workitems in the Pending phase.
 // It uses the Dispatcher to discover a ready Pod and push the assignment.
+//
+// To prevent duplicate dispatches in a tight reconcile loop, this function
+// transitions the Workitem to "Running" BEFORE dispatching. This acts as
+// an optimistic lock: only the first reconcile to successfully claim the
+// transition will proceed to dispatch work.
 func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flowv1.Workitem) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -98,46 +103,54 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 		return ctrl.Result{}, nil
 	}
 
+	assignee := workitem.Status.CurrentAssignee
+
 	log.Info("Dispatching Workitem",
 		"name", workitem.Name,
-		"assignee", workitem.Status.CurrentAssignee,
+		"assignee", assignee,
 	)
+
+	// Claim the workitem by transitioning to Running BEFORE dispatching.
+	// This prevents duplicate dispatches: if two reconciles race, only one
+	// will succeed at this status update.
+	workitem.Status.Phase = "Running"
+	if err := r.Status().Update(ctx, workitem); err != nil {
+		// Conflict means another reconcile already claimed it — that's fine.
+		log.Info("Could not claim Workitem (likely already claimed)",
+			"name", workitem.Name,
+			"error", err.Error(),
+		)
+		return ctrl.Result{}, nil
+	}
 
 	// Use the Dispatcher to push the assignment.
 	d := dispatcher.New(r.Client, workitem.Namespace)
 
-	// For the walking skeleton, use the workitem name as both flow_id and workitem_id.
-	// In production, flow_id would come from the FoundryFlow owner reference.
-	result, err := d.Assign(
+	_, err := d.Assign(
 		ctx,
-		workitem.Status.CurrentAssignee,
+		assignee,
 		workitem.Namespace, // flow_id placeholder
 		workitem.Name,      // workitem_id
 	)
 	if err != nil {
 		log.Error(err, "Failed to assign Workitem to pod",
 			"name", workitem.Name,
-			"assignee", workitem.Status.CurrentAssignee,
+			"assignee", assignee,
 		)
-		// Return the error so the controller retries with backoff.
+		// Revert to Pending so it can be retried.
+		var fresh flowv1.Workitem
+		if getErr := r.Get(ctx, client.ObjectKeyFromObject(workitem), &fresh); getErr == nil {
+			if fresh.Status.Phase == "Running" {
+				fresh.Status.Phase = "Pending"
+				_ = r.Status().Update(ctx, &fresh)
+			}
+		}
 		return ctrl.Result{}, err
 	}
 
-	// Transition to Running.
-	workitem.Status.Phase = "Running"
-
-	// Persist the status update.
-	if err := r.Status().Update(ctx, workitem); err != nil {
-		log.Error(err, "Failed to update Workitem status to Running",
-			"name", workitem.Name,
-		)
-		return ctrl.Result{}, err
-	}
-
-	log.Info("Assigned Workitem to pod",
+	log.Info("Assigned Workitem successfully",
 		"name", workitem.Name,
-		"pod", result.PodName,
-		"ip", result.PodIP,
+		"assignee", assignee,
 	)
 
 	return ctrl.Result{}, nil
@@ -182,13 +195,28 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 
 	previousAssignee := workitem.Status.CurrentAssignee
 
-	// Apply the transition.
-	workitem.Status.Phase = result.Phase
-	workitem.Status.CurrentAssignee = result.NextAssignee
-	workitem.Status.RoutingInstruction = nil // Clear to prevent re-processing.
+	// Re-fetch the Workitem to get the latest resourceVersion before writing.
+	var fresh flowv1.Workitem
+	if err := r.Get(ctx, req.NamespacedName, &fresh); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// If the workitem has already moved past Routing, skip this update.
+	if fresh.Status.Phase != "Routing" {
+		log.Info("Workitem already advanced past Routing, skipping",
+			"name", workitem.Name,
+			"currentPhase", fresh.Status.Phase,
+		)
+		return ctrl.Result{}, nil
+	}
+
+	// Apply the transition on the fresh copy.
+	fresh.Status.Phase = result.Phase
+	fresh.Status.CurrentAssignee = result.NextAssignee
+	fresh.Status.RoutingInstruction = nil // Clear to prevent re-processing.
 
 	// Persist the status update.
-	if err := r.Status().Update(ctx, workitem); err != nil {
+	if err := r.Status().Update(ctx, &fresh); err != nil {
 		log.Error(err, "Failed to update Workitem status",
 			"name", workitem.Name,
 		)

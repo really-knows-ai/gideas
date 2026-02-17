@@ -9,4 +9,5 @@ use (
 	./operator
 	./sdk/go
 	./sidecar
+	./tools/haiku-watch
 )

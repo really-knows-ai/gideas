@@ -138,6 +138,23 @@ func (c *Client) Complete(ctx context.Context, target string) (bool, error) {
 	return resp.GetAccepted(), nil
 }
 
+// RouteToOutput submits a routing instruction that routes the workitem through
+// the named output channel of the current node. The Operator resolves the
+// output name to the target node defined in the FoundryNode CRD.
+func (c *Client) RouteToOutput(ctx context.Context, outputName string) (bool, error) {
+	resp, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
+		WorkitemId: c.workitemID,
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO_OUTPUT,
+			Target: outputName,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("flow sdk: route to output failed: %w", err)
+	}
+	return resp.GetAccepted(), nil
+}
+
 // GetArtefact retrieves the latest version of the named artefact.
 func (c *Client) GetArtefact(ctx context.Context, artefactID string) (*flowv1.GetArtefactResponse, error) {
 	resp, err := c.Archivist.GetArtefact(ctx, &flowv1.GetArtefactRequest{
@@ -164,6 +181,122 @@ func (c *Client) StoreArtefact(ctx context.Context, artefactID, kind string, con
 		return nil, fmt.Errorf("flow sdk: store artefact failed: %w", err)
 	}
 	return resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// Stamp Convenience Methods
+// ---------------------------------------------------------------------------
+
+// StampArtefact applies a named governance stamp to the current (head)
+// version of the specified artefact. The Sidecar injects cryptographic
+// identity (signature, cert_chain) — the SDK does not supply these.
+func (c *Client) StampArtefact(ctx context.Context, artefactID, stampName string) (*flowv1.StampArtefactResponse, error) {
+	resp, err := c.Archivist.StampArtefact(ctx, &flowv1.StampArtefactRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+		StampName:  stampName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: stamp artefact failed: %w", err)
+	}
+	return resp, nil
+}
+
+// GetStamps returns all stamps on the current version of the specified artefact.
+func (c *Client) GetStamps(ctx context.Context, artefactID string) ([]*flowv1.Stamp, error) {
+	resp, err := c.Archivist.GetStamps(ctx, &flowv1.GetStampsRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get stamps failed: %w", err)
+	}
+	return resp.GetStamps(), nil
+}
+
+// HasStamp checks whether the named stamp exists on the current version
+// of the specified artefact.
+func (c *Client) HasStamp(ctx context.Context, artefactID, stampName string) (bool, error) {
+	resp, err := c.Archivist.HasStamp(ctx, &flowv1.HasStampRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+		StampName:  stampName,
+	})
+	if err != nil {
+		return false, fmt.Errorf("flow sdk: has stamp failed: %w", err)
+	}
+	return resp.GetExists(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Feedback Convenience Methods
+// ---------------------------------------------------------------------------
+
+// AddFeedback creates a new feedback item on the specified artefact.
+// The feedback starts in NEW state. Returns the generated feedback ID.
+func (c *Client) AddFeedback(ctx context.Context, artefactID string, severity flowv1.Severity, message string) (string, error) {
+	resp, err := c.Archivist.AddFeedback(ctx, &flowv1.AddFeedbackRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+		Severity:   severity,
+		Message:    message,
+	})
+	if err != nil {
+		return "", fmt.Errorf("flow sdk: add feedback failed: %w", err)
+	}
+	return resp.GetFeedbackId(), nil
+}
+
+// GetFeedback returns all feedback items for the specified artefact.
+func (c *Client) GetFeedback(ctx context.Context, artefactID string) ([]*flowv1.FeedbackItem, error) {
+	resp, err := c.Archivist.GetFeedback(ctx, &flowv1.GetFeedbackRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get feedback failed: %w", err)
+	}
+	return resp.GetFeedbackItems(), nil
+}
+
+// HasUnresolvedFeedback returns true if any feedback for the artefact
+// is not in RESOLVED state.
+func (c *Client) HasUnresolvedFeedback(ctx context.Context, artefactID string) (bool, error) {
+	resp, err := c.Archivist.HasUnresolvedFeedback(ctx, &flowv1.HasUnresolvedFeedbackRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("flow sdk: has unresolved feedback failed: %w", err)
+	}
+	return resp.GetHasUnresolved(), nil
+}
+
+// ResolveFeedback transitions feedback from NEW/REJECTED to ACTIONED,
+// indicating the fix has been applied.
+func (c *Client) ResolveFeedback(ctx context.Context, feedbackID, message string) error {
+	_, err := c.Archivist.ResolveFeedback(ctx, &flowv1.ResolveFeedbackRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+		Message:    message,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: resolve feedback failed: %w", err)
+	}
+	return nil
+}
+
+// AcceptFix transitions feedback from ACTIONED to RESOLVED, indicating
+// the reviewer accepts the applied fix.
+func (c *Client) AcceptFix(ctx context.Context, feedbackID string) error {
+	_, err := c.Archivist.AcceptFix(ctx, &flowv1.AcceptFixRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: accept fix failed: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
