@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -51,7 +52,19 @@ var _ = Describe("FoundryFlow Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: flowv1.FoundryFlowSpec{
+						EntryContracts: map[string]flowv1.Contract{
+							"default": {},
+						},
+						ExitContracts: map[string]flowv1.Contract{
+							"default": {},
+						},
+						GovernancePolicy: flowv1.GovernancePolicy{
+							MaxVisits:      10,
+							DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+							MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

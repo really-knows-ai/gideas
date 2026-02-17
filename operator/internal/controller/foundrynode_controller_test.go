@@ -51,7 +51,9 @@ var _ = Describe("FoundryNode Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: flowv1.FoundryNodeSpec{
+						Image: "test-image:latest",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
