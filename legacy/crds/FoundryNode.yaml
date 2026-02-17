@@ -1,0 +1,51 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: foundrynodes.flow.gideas.io
+spec:
+  group: flow.gideas.io
+  scope: Namespaced
+  names:
+    plural: foundrynodes
+    singular: foundrynode
+    kind: FoundryNode
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                image:
+                  type: string
+                roles:
+                  type: array
+                  items:
+                    type: string
+                timeout:
+                  type: string
+                concurrency:
+                  type: integer
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                outputs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      targetRole:
+                        type: string
+                      target:
+                        type: string
+                terminalContract:
+                  type: string
+              required:
+                - image

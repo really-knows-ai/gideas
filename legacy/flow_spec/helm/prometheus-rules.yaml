@@ -1,0 +1,290 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/v1.28.0-standalone-strict/_definitions.json
+# Foundry Flow: Prometheus Alerting Rules
+# Version: 1.0.0
+# Status: Implementation Contract
+#
+# Deploy via: kubectl apply -f prometheus-rules.yaml
+# Or include in foundry-flow Helm chart under templates/
+#
+# NOTE: This is a PrometheusRule CRD from prometheus-operator.
+# Requires: https://github.com/prometheus-operator/prometheus-operator
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: foundry-flow-alerts
+  labels:
+    app: foundry-flow
+    prometheus: foundry
+spec:
+  groups:
+    # =========================================================================
+    # CRITICAL: System Health (Page Immediately)
+    # =========================================================================
+    - name: foundry.critical
+      rules:
+        # The Flow is stuck - work entering but nothing completing
+        - alert: GridlockDetected
+          expr: |
+            rate(foundry_workitem_transition_total{state="completed"}[5m]) == 0
+            AND
+            foundry_workitem_active_count > 0
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Flow {{ $labels.flow }} is gridlocked"
+            description: |
+              Work is entering the flow but nothing has completed in 5 minutes.
+              Active workitems: {{ $value }}
+              
+              Possible causes:
+              - All nodes are down or not ready
+              - Routing loop (workitems cycling between nodes)
+              - Global dependency failure (Archivist, Librarian)
+              
+              Runbook: Check `kubectl get pods -l foundry.io/flow={{ $labels.flow }}`
+
+        # Vector DB corruption - law search returning garbage
+        - alert: BrainLobotomy
+          expr: foundry_librarian_integrity_check_total{status="fail"} > 0
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Librarian integrity check FAILED"
+            description: |
+              The sqlite-vec database has failed integrity verification.
+              Law search is compromised - agents may be receiving corrupt governance data.
+              
+              IMMEDIATE ACTION REQUIRED:
+              1. Check Librarian logs: `kubectl logs -l app=librarian`
+              2. Consider rolling back to last known good snapshot
+              3. DO NOT restart without investigation - may lose Merkle chain
+              
+              Runbook: See "Librarian Recovery" in ops documentation.
+
+        # mTLS chain will break soon
+        - alert: CertExpiryImminent
+          expr: foundry_pki_cert_expiry_seconds < (86400 * 3)
+          for: 1m
+          labels:
+            severity: critical
+            team: security
+          annotations:
+            summary: "Certificate {{ $labels.subject_cn }} expires in < 3 days"
+            description: |
+              The mTLS trust chain will break when this certificate expires.
+              Days remaining: {{ $value | humanizeDuration }}
+              
+              Subject: {{ $labels.subject_cn }}
+              Issuer: {{ $labels.issuer }}
+              
+              ACTION: Rotate certificates immediately.
+              See "Certificate Rotation" runbook.
+
+    # =========================================================================
+    # ERROR: Degraded Service (On-Call Response)
+    # =========================================================================
+    - name: foundry.error
+      rules:
+        # Embedding provider is failing consistently
+        - alert: EmbeddingProviderDown
+          expr: |
+            rate(foundry_embedding_failures_total[5m]) > 0
+            AND
+            rate(foundry_embedding_success_total[5m]) == 0
+          for: 10m
+          labels:
+            severity: error
+            team: platform
+          annotations:
+            summary: "Embedding provider completely unavailable"
+            description: |
+              No successful embeddings in 10 minutes.
+              Tier 1 findings are queuing but not being indexed.
+              Tier 2/3 operations will fail with UNAVAILABLE.
+              
+              Check provider status and rate limits.
+
+        # High workitem failure rate
+        - alert: WorkitemFailureSpike
+          expr: |
+            (
+              rate(foundry_workitem_failure_total[10m]) 
+              / 
+              rate(foundry_workitem_transition_total[10m])
+            ) > 0.1
+          for: 5m
+          labels:
+            severity: error
+            team: flow-owner
+          annotations:
+            summary: "Flow {{ $labels.flow }} has >10% failure rate"
+            description: |
+              Failure reasons: {{ $labels.reason }}
+              Last failing node: {{ $labels.last_node }}
+              
+              Check node logs and recent deployments.
+
+        # Telemetry backpressure building
+        - alert: TelemetryBackpressure
+          expr: foundry_telemetry_buffer_size_bytes > 104857600  # 100MB
+          for: 5m
+          labels:
+            severity: error
+            team: platform
+          annotations:
+            summary: "Telemetry Router buffer exceeds 100MB"
+            description: |
+              The telemetry buffer is growing, indicating downstream consumers
+              (Citation Processor, Flow Monitor) cannot keep up.
+              
+              Current size: {{ $value | humanize1024 }}
+              
+              Risk: Memory exhaustion or event loss if buffer overflows.
+
+    # =========================================================================
+    # WARNING: Attention Required (Business Hours Response)
+    # =========================================================================
+    - name: foundry.warning
+      rules:
+        # Friction score anomaly
+        - alert: FrictionSpike
+          expr: |
+            rate(foundry_friction_score_total[10m]) 
+            > 
+            (avg_over_time(rate(foundry_friction_score_total[10m])[1h:1m]) * 3)
+          for: 10m
+          labels:
+            severity: warning
+            team: flow-owner
+          annotations:
+            summary: "Friction spike detected in flow {{ $labels.flow }}"
+            description: |
+              Current friction rate is 3x above the hourly average.
+              Top contributing node: {{ $labels.node }}
+              Law ID (if applicable): {{ $labels.law_id }}
+              
+              Possible causes:
+              - New law causing excessive rejections
+              - Node logic change causing feedback loops
+              - Upstream data quality issue
+
+        # Node going silent (pre-timeout warning)
+        - alert: ZombieNode
+          expr: rate(foundry_node_heartbeat_miss_total[2m]) > 5
+          for: 2m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Node {{ $labels.node }} is going silent"
+            description: |
+              Node is alive (pod running) but not heartbeating.
+              This usually precedes a timeout failure.
+              
+              Possible causes:
+              - Stuck in infinite loop
+              - Blocking on external dependency
+              - Memory pressure causing GC stalls
+              
+              Check: `kubectl logs {{ $labels.node }}`
+
+        # Assay hung jury
+        - alert: HungJury
+          expr: rate(foundry_workitem_failure_total{reason="HUNG_JURY"}[1h]) > 0
+          for: 1m
+          labels:
+            severity: warning
+            team: governance
+          annotations:
+            summary: "Assay Node produced hung jury verdict"
+            description: |
+              The AI jury could not reach consensus after max rounds.
+              Workitem has been escalated to HITL.
+              
+              This may indicate:
+              - Contradictory laws in the library
+              - Edge case requiring human judgment
+              - Juror prompt tuning needed
+
+        # HITL queue backing up
+        - alert: HITLQueueBacklog
+          expr: foundry_hitl_queue_depth > 50
+          for: 30m
+          labels:
+            severity: warning
+            team: operations
+          annotations:
+            summary: "HITL queue {{ $labels.node }} has {{ $value }} items"
+            description: |
+              Human review queue is backing up.
+              Oldest item may timeout if not addressed.
+              
+              Consider:
+              - Assigning more reviewers
+              - Checking if escalation threshold is too aggressive
+
+        # Certificate expiry warning (7 days)
+        - alert: CertExpiryWarning
+          expr: foundry_pki_cert_expiry_seconds < (86400 * 7)
+          for: 1m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Certificate {{ $labels.subject_cn }} expires in < 7 days"
+            description: |
+              Plan certificate rotation soon.
+              Days remaining: {{ $value | humanizeDuration }}
+
+        # Thrash detection
+        - alert: WorkitemThrashing
+          expr: rate(foundry_workitem_thrash_total[5m]) > 0
+          for: 1m
+          labels:
+            severity: warning
+            team: flow-owner
+          annotations:
+            summary: "Workitem thrashing detected on node {{ $labels.node }}"
+            description: |
+              A workitem visited the same node multiple times, triggering 
+              the Thrash Guard. This indicates a routing loop.
+              
+              Check the flow topology for cycles.
+
+    # =========================================================================
+    # INFO: Observability (Dashboard/SLO Tracking)
+    # =========================================================================
+    - name: foundry.recording
+      rules:
+        # Pre-aggregated throughput for dashboards
+        - record: foundry:workitem_throughput_per_minute
+          expr: rate(foundry_workitem_transition_total{state="completed"}[1m]) * 60
+
+        # Pre-aggregated failure rate for SLO
+        - record: foundry:workitem_error_rate
+          expr: |
+            rate(foundry_workitem_failure_total[5m]) 
+            / 
+            (rate(foundry_workitem_transition_total[5m]) + 0.001)
+
+        # P99 latency for SLO
+        - record: foundry:workitem_latency_p99
+          expr: histogram_quantile(0.99, rate(foundry_workitem_duration_seconds_bucket[5m]))
+
+        # Total LLM cost per hour (for billing dashboards)
+        - record: foundry:llm_cost_per_hour
+          expr: increase(foundry_cost_llm_total[1h])
+
+        # Law library health score (0-1)
+        - record: foundry:law_library_health
+          expr: |
+            1 - (
+              rate(foundry_legal_conflicts_total[1h]) 
+              / 
+              (rate(foundry_legal_citations_total[1h]) + 1)
+            )
