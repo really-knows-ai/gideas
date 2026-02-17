@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gideas/flow/monitor/internal/store/sqlite"
@@ -198,12 +199,12 @@ func formatLawIDs(ids []string) string {
 }
 
 func joinStrings(ss []string, sep string) string {
-	result := ""
+	var result strings.Builder
 	for i, s := range ss {
 		if i > 0 {
-			result += sep
+			result.WriteString(sep)
 		}
-		result += s
+		result.WriteString(s)
 	}
-	return result
+	return result.String()
 }

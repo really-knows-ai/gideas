@@ -244,13 +244,11 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Concurrent reads.
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			s.GetBlob(ctx, "hash-a")
 			s.GetHead(ctx, "wi", "art")
 			s.ListArtefacts(ctx, "wi")
-		}()
+		})
 	}
 
 	wg.Wait()

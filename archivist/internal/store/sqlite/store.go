@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -555,13 +556,7 @@ func (s *Store) TransitionFeedback(ctx context.Context, feedbackID string, fromS
 	f.CreatedAt = parseTime(createdStr)
 
 	// Validate current state is in allowed from-states.
-	allowed := false
-	for _, s := range fromStates {
-		if f.State == s {
-			allowed = true
-			break
-		}
-	}
+	allowed := slices.Contains(fromStates, f.State)
 	if !allowed {
 		return nil, fmt.Errorf("feedback %q in state %d, cannot transition to %d", feedbackID, f.State, toState)
 	}
