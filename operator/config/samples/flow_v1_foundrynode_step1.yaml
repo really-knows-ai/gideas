@@ -1,0 +1,14 @@
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+    flow.gideas.io/flow-name: basic-linear-flow
+  name: step-1
+  namespace: default
+spec:
+  image: alpine:latest
+  outputs:
+    - name: "default"
+      target: "step-2"

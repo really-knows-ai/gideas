@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -25,6 +26,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	flowv1 "github.com/gideas/flow/operator/api/v1"
+	"github.com/gideas/flow/operator/internal/controller/scheduler"
 )
 
 // WorkitemReconciler reconciles a Workitem object
@@ -36,14 +38,15 @@ type WorkitemReconciler struct {
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 //
 // The Workitem reconciler observes state changes made by the gRPC server
-// (e.g. SubmitResult updating routingInstruction and phase) and logs the
-// current state. In future iterations, this is where routing execution,
-// thrash-guard checks, and lifecycle transitions will live.
+// (e.g. SubmitResult updating routingInstruction and phase) and executes
+// the routing decision: reading the current FoundryNode's outputs to
+// determine the next destination.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
@@ -65,11 +68,68 @@ func (r *WorkitemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		"assignee", workitem.Status.CurrentAssignee,
 	)
 
-	if workitem.Status.RoutingInstruction != nil {
-		log.Info("Routing instruction detected",
+	// Only act on Workitems in the Routing phase.
+	if workitem.Status.Phase != "Routing" {
+		return ctrl.Result{}, nil
+	}
+
+	// Guard: a routing instruction must be present.
+	if workitem.Status.RoutingInstruction == nil {
+		log.Error(
+			fmt.Errorf("missing routing instruction"),
+			"Workitem is in Routing phase but has no routing instruction",
 			"name", workitem.Name,
-			"routing_type", workitem.Status.RoutingInstruction.Type,
-			"routing_target", workitem.Status.RoutingInstruction.Target,
+		)
+		return ctrl.Result{}, nil
+	}
+
+	log.Info("Routing instruction detected",
+		"name", workitem.Name,
+		"routing_type", workitem.Status.RoutingInstruction.Type,
+		"routing_target", workitem.Status.RoutingInstruction.Target,
+	)
+
+	// Execute the scheduling decision.
+	sched := scheduler.New(r.Client, req.Namespace)
+	result, err := sched.CalculateNextStep(
+		ctx,
+		workitem.Status.CurrentAssignee,
+		*workitem.Status.RoutingInstruction,
+	)
+	if err != nil {
+		log.Error(err, "Failed to calculate next step",
+			"name", workitem.Name,
+			"assignee", workitem.Status.CurrentAssignee,
+		)
+		// Return the error so the controller retries with backoff.
+		return ctrl.Result{}, err
+	}
+
+	previousAssignee := workitem.Status.CurrentAssignee
+
+	// Apply the transition.
+	workitem.Status.Phase = result.Phase
+	workitem.Status.CurrentAssignee = result.NextAssignee
+	workitem.Status.RoutingInstruction = nil // Clear to prevent re-processing.
+
+	// Persist the status update.
+	if err := r.Status().Update(ctx, &workitem); err != nil {
+		log.Error(err, "Failed to update Workitem status",
+			"name", workitem.Name,
+		)
+		return ctrl.Result{}, err
+	}
+
+	if result.Phase == "Completed" {
+		log.Info("Workitem completed",
+			"name", workitem.Name,
+			"lastNode", previousAssignee,
+		)
+	} else {
+		log.Info("Moving Workitem",
+			"name", workitem.Name,
+			"from", previousAssignee,
+			"to", result.NextAssignee,
 		)
 	}
 

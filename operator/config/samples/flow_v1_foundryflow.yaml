@@ -4,6 +4,16 @@ metadata:
   labels:
     app.kubernetes.io/name: operator
     app.kubernetes.io/managed-by: kustomize
-  name: foundryflow-sample
+  name: basic-linear-flow
+  namespace: default
 spec:
-  # TODO(user): Add fields here
+  entryContracts:
+    standard-entry:
+      document: []
+  exitContracts:
+    standard-exit:
+      document: []
+  governancePolicy:
+    maxVisits: 10
+    defaultTimeout: "1h"
+    maxTimeout: "4h"

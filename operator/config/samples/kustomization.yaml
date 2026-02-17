@@ -2,6 +2,8 @@
 resources:
 - flow_v1_foundryflow.yaml
 - flow_v1_foundrynode.yaml
+- flow_v1_foundrynode_step1.yaml
+- flow_v1_foundrynode_step2.yaml
 - flow_v1_workitem.yaml
 - flow_v1_governedartefact.yaml
 - flow_v1_law.yaml
