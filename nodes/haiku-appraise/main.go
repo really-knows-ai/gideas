@@ -2,13 +2,18 @@
 //
 // It reads the "petition" (creative brief) and "haiku" artefacts, then uses an
 // LLM (kimi-k2.5:cloud via Ollama) to review how well the haiku adheres to the
-// petition and general haiku quality standards.
+// petition and the active governance laws.
 //
-// If there is existing ACTIONED feedback (a fix was applied), Appraise checks
-// whether the fix is satisfactory and calls AcceptFix to resolve it.
+// Appraise always stamps "review" — meaning "I have appraised this version",
+// not "this version is valid". The stamp follows the same semantic as the
+// quench/linter stamp: it records inspection, not approval.
 //
-// If the haiku needs improvement, Appraise raises new feedback. If the haiku is
-// good, it stamps "review" on it (signalling subjective review passed).
+// The LLM produces zero or more feedback items. Each item either cites one or
+// more governance laws (by ID) or offers a novel observation with no citations.
+// If the LLM finds no issues, it returns an empty array and the haiku proceeds.
+//
+// If there is existing ACTIONED feedback (a fix was applied by Refine),
+// Appraise accepts it before re-reviewing.
 //
 // Always routes back to Sort.
 //
@@ -31,11 +36,10 @@ import (
 	flow "github.com/gideas/flow/sdk/go"
 )
 
-// reviewResponse is the JSON structure the LLM must return.
-type reviewResponse struct {
-	Verdict   string   `json:"verdict"`    // "approved" or "feedback"
-	Message   string   `json:"message"`    // required when verdict is "feedback"
-	CitedLaws []string `json:"cited_laws"` // law IDs referenced in the review
+// feedbackItem is the JSON structure for a single piece of LLM feedback.
+type feedbackItem struct {
+	Message   string   `json:"message"`    // specific, actionable observation
+	CitedLaws []string `json:"cited_laws"` // law IDs (empty = novel observation)
 }
 
 const (
@@ -112,9 +116,9 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	// Build law context with IDs so the LLM can cite them.
 	var lawBlock string
 	if len(laws) > 0 {
-		lawBlock = "\n## MANDATORY GOVERNANCE LAWS\n\nThe following laws are binding. The haiku MUST comply with ALL of them.\nIf any law is violated, you MUST reject the haiku and cite the violated law(s) by ID.\n\n"
+		lawBlock = "\n## GOVERNANCE LAWS\n\nThe following laws are active. The haiku MUST comply with all of them.\nIf a law is violated, cite it by ID in your feedback.\n\n"
 		for _, law := range laws {
-			lawBlock += fmt.Sprintf("- **[%s]** (Tier %d): %s\n", law.GetId(), law.GetTier(), law.GetGoal())
+			lawBlock += fmt.Sprintf("- [%s] (Tier %d): %s\n", law.GetId(), law.GetTier(), law.GetGoal())
 		}
 	}
 
@@ -130,21 +134,23 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		model = defaultModel
 	}
 
-	prompt := fmt.Sprintf(`You are a strict haiku reviewer for a governed creative pipeline.
+	prompt := fmt.Sprintf(`You are a haiku reviewer for a governed creative pipeline.
 
-Your job is to evaluate whether the haiku satisfies TWO requirements:
-1. **THE PETITION** — the original creative brief that the haiku was written to fulfil.
-2. **GOVERNANCE LAWS** — mandatory quality and style rules that all haikus must obey.
+Your job is to review the haiku and produce feedback. You are NOT approving or rejecting — you are producing observations. If you have no issues, return an empty list.
 
-Both must be satisfied. If either is violated, reject the haiku.
+Every piece of feedback must either:
+1. CITE one or more governance laws by ID — the haiku violates or insufficiently addresses the law.
+2. Offer a NOVEL observation — something not covered by any law but worth improving. Use an empty cited_laws array for these.
 
 ---
 
-## THE PETITION (primary requirement)
+## THE PETITION
+
+The haiku was written to fulfil this creative brief:
 
 > %s
 
-The haiku must faithfully address this petition's theme, subject, and mood.
+The haiku must faithfully address the petition's theme, subject, and mood.
 
 ---
 
@@ -156,26 +162,37 @@ The haiku must faithfully address this petition's theme, subject, and mood.
 
 ---
 
-## YOUR TASK
-
-Evaluate the haiku against the petition AND all governance laws.
-
-- If the haiku satisfies the petition and complies with all laws: approve it.
-- If the haiku violates the petition or any law: reject it with specific, actionable feedback.
-  When rejecting for a law violation, include the law ID(s) in "cited_laws".
-
 ## RESPONSE FORMAT
 
-Respond with ONLY a JSON object in one of these two forms:
+Respond with ONLY a JSON array of feedback items. Each item has:
+- "message": a specific, actionable observation (1-2 sentences)
+- "cited_laws": array of law IDs this feedback references (empty array if novel observation)
 
-Approved:
-{"verdict": "approved", "message": "", "cited_laws": []}
+If the haiku is excellent and you have no feedback, return an empty array: []
 
-Rejected (with feedback):
-{"verdict": "feedback", "message": "<specific actionable feedback in 1-2 sentences>", "cited_laws": ["<law_id_1>", "<law_id_2>"]}
+Examples:
 
-Output ONLY the JSON object. No markdown fences, no explanation, no other text.`,
-		petition, haiku, lawBlock, historyBlock)
+No issues:
+[]
+
+Law violation:
+[{"message": "The haiku names the season directly ('in winter') rather than evoking it through imagery.", "cited_laws": ["%s"]}]
+
+Novel observation:
+[{"message": "The final line feels rushed — consider a more contemplative closing image.", "cited_laws": []}]
+
+Multiple issues:
+[{"message": "...", "cited_laws": ["id1"]}, {"message": "...", "cited_laws": []}]
+
+Output ONLY the JSON array. No markdown fences, no explanation, no other text.`,
+		petition, haiku, lawBlock, historyBlock,
+		// Example law ID — use the first real law ID if available, otherwise a placeholder.
+		func() string {
+			if len(laws) > 0 {
+				return laws[0].GetId()
+			}
+			return "example-law-id"
+		}())
 
 	llm := ollama.New()
 	review, err := llm.Generate(ctx, model, prompt)
@@ -192,47 +209,53 @@ Output ONLY the JSON object. No markdown fences, no explanation, no other text.`
 	review = strings.TrimSuffix(review, "```")
 	review = strings.TrimSpace(review)
 
-	var result reviewResponse
-	if err := json.Unmarshal([]byte(review), &result); err != nil {
-		// Fallback: if JSON parsing fails, treat as feedback with the raw text.
-		slog.Warn("haiku-appraise: failed to parse JSON response, treating as feedback", "error", err, "raw", review)
-		result = reviewResponse{Verdict: "feedback", Message: review}
+	var items []feedbackItem
+	if err := json.Unmarshal([]byte(review), &items); err != nil {
+		// Fallback: if JSON parsing fails, treat the raw text as a single novel observation.
+		slog.Warn("haiku-appraise: failed to parse JSON response, treating as single feedback",
+			"error", err, "raw", review)
+		items = []feedbackItem{{Message: review, CitedLaws: nil}}
 	}
 
-	slog.Info("haiku-appraise: parsed review",
-		"verdict", result.Verdict,
-		"message", result.Message,
-		"cited_laws", result.CitedLaws,
-	)
+	slog.Info("haiku-appraise: parsed review", "feedback_count", len(items))
 
-	// Cite any referenced laws.
-	if len(result.CitedLaws) > 0 {
-		if err := client.Cite(ctx, result.CitedLaws...); err != nil {
-			slog.Error("haiku-appraise: failed to cite laws", "error", err, "law_ids", result.CitedLaws)
-			// Non-fatal — continue with the review verdict.
-		} else {
-			slog.Info("haiku-appraise: cited laws", "law_ids", result.CitedLaws)
-		}
+	// Always stamp "review" — means "I have appraised this version".
+	if _, err := client.StampArtefact(ctx, "haiku", "review"); err != nil {
+		return fmt.Errorf("appraise: stamp review: %w", err)
 	}
+	slog.Info("haiku-appraise: review stamp applied")
 
-	if strings.EqualFold(result.Verdict, "approved") {
-		// Haiku passes review — stamp "review" (subjective review passed).
-		if _, err := client.StampArtefact(ctx, "haiku", "review"); err != nil {
-			return fmt.Errorf("appraise: stamp review: %w", err)
-		}
-		slog.Info("haiku-appraise: review stamp applied")
-	} else {
-		// Raise feedback with the LLM's message.
-		feedback := result.Message
-		if feedback == "" {
-			feedback = "Haiku did not meet review standards."
+	// Raise each feedback item and cite referenced laws.
+	for i, item := range items {
+		if item.Message == "" {
+			continue
 		}
 
-		feedbackID, err := client.AddFeedback(ctx, "haiku", flowv1.Severity_SEVERITY_MEDIUM, feedback)
+		feedbackID, err := client.AddFeedback(ctx, "haiku", flowv1.Severity_SEVERITY_MEDIUM, item.Message)
 		if err != nil {
-			return fmt.Errorf("appraise: add feedback: %w", err)
+			return fmt.Errorf("appraise: add feedback[%d]: %w", i, err)
 		}
-		slog.Info("haiku-appraise: feedback raised", "feedback_id", feedbackID, "message", feedback)
+		slog.Info("haiku-appraise: feedback raised",
+			"index", i,
+			"feedback_id", feedbackID,
+			"message", item.Message,
+			"cited_laws", item.CitedLaws,
+		)
+
+		// Cite referenced laws.
+		if len(item.CitedLaws) > 0 {
+			if err := client.Cite(ctx, item.CitedLaws...); err != nil {
+				slog.Error("haiku-appraise: failed to cite laws",
+					"error", err, "law_ids", item.CitedLaws)
+				// Non-fatal — continue.
+			} else {
+				slog.Info("haiku-appraise: cited laws", "law_ids", item.CitedLaws)
+			}
+		}
+	}
+
+	if len(items) == 0 {
+		slog.Info("haiku-appraise: no feedback — haiku looks good")
 	}
 
 	// Always route back to Sort.
