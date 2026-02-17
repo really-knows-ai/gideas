@@ -1,0 +1,169 @@
+// Package flow provides a high-level Go SDK for Foundry Flow nodes.
+//
+// The Client wraps the generated gRPC service stubs and handles connection
+// management, workitem context injection, and convenience methods for common
+// operations. All calls are routed through the in-pod Sidecar.
+package flow
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+)
+
+const (
+	// DefaultSidecarAddress is the default gRPC endpoint for the Sidecar proxy.
+	DefaultSidecarAddress = "localhost:50051"
+
+	// EnvWorkitemID is the environment variable injected by the runtime
+	// to identify the current workitem.
+	EnvWorkitemID = "FLOW_WORKITEM_ID"
+
+	// metadataKeyWorkitemID is the gRPC metadata key used to propagate
+	// the workitem context on every outgoing call.
+	metadataKeyWorkitemID = "x-flow-workitem-id"
+)
+
+// ClientOption configures the Client.
+type ClientOption func(*clientConfig)
+
+type clientConfig struct {
+	sidecarAddr string
+}
+
+// WithSidecarAddress overrides the default Sidecar gRPC address.
+func WithSidecarAddress(addr string) ClientOption {
+	return func(c *clientConfig) {
+		c.sidecarAddr = addr
+	}
+}
+
+// Client is the primary SDK entry point for Foundry Flow nodes.
+// It wraps the generated gRPC clients and provides convenience methods.
+type Client struct {
+	conn       *grpc.ClientConn
+	workitemID string
+
+	// Raw gRPC service clients, exposed for advanced use.
+	Sidecar  flowv1.SidecarServiceClient
+	Operator flowv1.OperatorServiceClient
+	Archivist flowv1.ArchivistServiceClient
+}
+
+// NewClient connects to the Sidecar and returns a configured Client.
+//
+// It reads FLOW_WORKITEM_ID from the environment and attaches it as gRPC
+// metadata on every outgoing call. If the environment variable is not set,
+// the client still initialises but convenience methods that require a
+// workitem context will return errors.
+func NewClient(opts ...ClientOption) (*Client, error) {
+	cfg := &clientConfig{
+		sidecarAddr: DefaultSidecarAddress,
+	}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	workitemID := os.Getenv(EnvWorkitemID)
+
+	conn, err := grpc.NewClient(
+		cfg.sidecarAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(workitemContextInterceptor(workitemID)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: failed to connect to sidecar at %s: %w (is the sidecar running?)", cfg.sidecarAddr, err)
+	}
+
+	return &Client{
+		conn:       conn,
+		workitemID: workitemID,
+		Sidecar:    flowv1.NewSidecarServiceClient(conn),
+		Operator:   flowv1.NewOperatorServiceClient(conn),
+		Archivist:  flowv1.NewArchivistServiceClient(conn),
+	}, nil
+}
+
+// Close releases the underlying gRPC connection.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
+
+// WorkitemID returns the workitem ID read from the environment at init time.
+func (c *Client) WorkitemID() string {
+	return c.workitemID
+}
+
+// ---------------------------------------------------------------------------
+// Convenience Methods
+// ---------------------------------------------------------------------------
+
+// Heartbeat sends an explicit heartbeat to the Sidecar, resetting the
+// inactivity timer. Returns the acknowledged flag.
+func (c *Client) Heartbeat(ctx context.Context) (bool, error) {
+	resp, err := c.Sidecar.Heartbeat(ctx, &flowv1.HeartbeatRequest{
+		WorkitemId: c.workitemID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("flow sdk: heartbeat failed: %w", err)
+	}
+	return resp.GetAcknowledged(), nil
+}
+
+// Complete submits a routing instruction to the Operator via the Sidecar,
+// signalling that the node has finished processing. The routing type
+// ROUTING_TYPE_COMPLETE is used with the given target (which can be empty
+// for a simple completion).
+func (c *Client) Complete(ctx context.Context, target string) (bool, error) {
+	resp, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
+		WorkitemId: c.workitemID,
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
+			Target: target,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("flow sdk: complete failed: %w", err)
+	}
+	return resp.GetAccepted(), nil
+}
+
+// GetArtefact retrieves the latest version of the named artefact.
+func (c *Client) GetArtefact(ctx context.Context, artefactID string) (*flowv1.GetArtefactResponse, error) {
+	resp, err := c.Archivist.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get artefact failed: %w", err)
+	}
+	return resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor — injects workitem context into every outgoing call
+// ---------------------------------------------------------------------------
+
+func workitemContextInterceptor(workitemID string) grpc.UnaryClientInterceptor {
+	return func(
+		ctx context.Context,
+		method string,
+		req, reply any,
+		cc *grpc.ClientConn,
+		invoker grpc.UnaryInvoker,
+		opts ...grpc.CallOption,
+	) error {
+		if workitemID != "" {
+			ctx = metadata.AppendToOutgoingContext(ctx, metadataKeyWorkitemID, workitemID)
+		}
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+}
