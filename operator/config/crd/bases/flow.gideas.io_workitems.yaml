@@ -1,0 +1,100 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: workitems.flow.gideas.io
+spec:
+  group: flow.gideas.io
+  names:
+    kind: Workitem
+    listKind: WorkitemList
+    plural: workitems
+    singular: workitem
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.currentAssignee
+      name: Assignee
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Workitem is the Schema for the workitems API.
+          The Workitem CRD has no spec block. It is created by the Operator
+          and all mutable state lives in status.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          status:
+            description: status defines the state of the Workitem. All fields are
+              Operator-managed.
+            properties:
+              currentAssignee:
+                description: |-
+                  currentAssignee is the node currently processing this Workitem.
+                  Empty when Pending.
+                type: string
+              phase:
+                description: 'phase is the current lifecycle state: Pending, Running,
+                  Completed, Failed.'
+                enum:
+                - Pending
+                - Running
+                - Completed
+                - Failed
+                type: string
+              routingInstruction:
+                description: routingInstruction is the most recent routing outcome
+                  submitted by the assigned node.
+                properties:
+                  target:
+                    description: |-
+                      target is the output name (for route_to_output) or node name (for route_to).
+                      Empty for complete.
+                    type: string
+                  type:
+                    description: 'type is the routing instruction type: route_to_output,
+                      route_to, or complete.'
+                    enum:
+                    - route_to_output
+                    - route_to
+                    - complete
+                    type: string
+                required:
+                - type
+                type: object
+              thrashCounters:
+                additionalProperties:
+                  format: int32
+                  type: integer
+                description: |-
+                  thrashCounters are per-node visit counts. Hidden from nodes.
+                  The Thrash Guard triggers when the aggregate sum exceeds governancePolicy.maxVisits.
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

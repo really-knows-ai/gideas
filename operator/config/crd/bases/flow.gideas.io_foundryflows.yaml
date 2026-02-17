@@ -1,0 +1,305 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: foundryflows.flow.gideas.io
+spec:
+  group: flow.gideas.io
+  names:
+    kind: FoundryFlow
+    listKind: FoundryFlowList
+    plural: foundryflows
+    singular: foundryflow
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          FoundryFlow is the Schema for the foundryflows API.
+          It defines the executable shape of a Flow including entry/exit contracts,
+          governance policy, and cross-flow configuration.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of FoundryFlow
+            properties:
+              crossFlow:
+                description: crossFlow defines cross-flow trust and naturalisation
+                  settings.
+                properties:
+                  naturalisation:
+                    description: |-
+                      naturalisation defines the policy for naturalising imported artefacts and stamps
+                      at treaty boundaries.
+                    properties:
+                      autoNaturalise:
+                        default: true
+                        description: |-
+                          autoNaturalise controls whether imported stamps from sibling Flows are automatically
+                          authoritative after chain verification. Default true for sibling Flows.
+                        type: boolean
+                      requireLocalStamps:
+                        description: |-
+                          requireLocalStamps is a list of local stamp names that must be applied to imported
+                          artefacts during naturalisation at treaty boundaries.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  stateRootCA:
+                    description: |-
+                      stateRootCA is the PEM-encoded State Root CA certificate.
+                      Present when the Flow operates under a Governance Flow.
+                    type: string
+                type: object
+              entryContracts:
+                additionalProperties:
+                  additionalProperties:
+                    items:
+                      type: string
+                    type: array
+                  description: |-
+                    Contract is a map of artefact kind to required stamp names.
+                    Each key is a governed artefact kind. Each value is a list of required stamp names.
+                    Kind with empty list means artefacts of that kind must be present but no stamps are required.
+                    Empty map means no artefact requirements.
+                  type: object
+                description: |-
+                  entryContracts are the named entry contracts. Each contract is a map of artefact kind
+                  to required stamp names. At least one entry contract must be defined.
+                minProperties: 1
+                type: object
+              exitContracts:
+                additionalProperties:
+                  additionalProperties:
+                    items:
+                      type: string
+                    type: array
+                  description: |-
+                    Contract is a map of artefact kind to required stamp names.
+                    Each key is a governed artefact kind. Each value is a list of required stamp names.
+                    Kind with empty list means artefacts of that kind must be present but no stamps are required.
+                    Empty map means no artefact requirements.
+                  type: object
+                description: |-
+                  exitContracts are the named exit contracts. Each contract is a map of artefact kind
+                  to required stamp names.
+                type: object
+              governancePolicy:
+                description: governancePolicy defines governance thresholds and timers
+                  for this Flow.
+                properties:
+                  defaultTimeout:
+                    description: |-
+                      defaultTimeout is the default inactivity timeout for node assignments.
+                      Used as the fallback when no node-specific timeout is set in FoundryNode.
+                    type: string
+                  frictionThresholds:
+                    description: frictionThresholds are per-tier friction thresholds
+                      that trigger review hearings.
+                    properties:
+                      tier1:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: tier1 is the accumulated friction threshold for
+                          Tier 1 laws (Findings).
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      tier2:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: tier2 is the accumulated friction threshold for
+                          Tier 2 laws (Rulings).
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      tier3:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: tier3 is the accumulated friction threshold for
+                          Tier 3 laws (Local Statutes).
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      tier4:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: tier4 is the accumulated friction threshold for
+                          Tier 4 laws (State Constitutions).
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      tier5:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: tier5 is the accumulated friction threshold for
+                          Tier 5 laws (Federal Accords).
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    type: object
+                  maxTimeout:
+                    description: |-
+                      maxTimeout is the maximum inactivity timeout for node assignments.
+                      No node-specific timeout can exceed this value. Must be >= defaultTimeout.
+                    type: string
+                  maxVisits:
+                    description: |-
+                      maxVisits is the Thrash Guard budget. When the aggregate visit count across all nodes
+                      exceeds this value, the Workitem fails with THRASH_BUDGET_EXCEEDED.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  retentionPolicy:
+                    description: retentionPolicy defines retention duration for terminal
+                      Workitems before garbage collection.
+                    properties:
+                      maxAge:
+                        description: maxAge is the maximum age of terminal Workitems
+                          before garbage collection.
+                        type: string
+                    type: object
+                  reviewTTLs:
+                    description: reviewTTLs are per-tier time-to-live durations that
+                      trigger review hearings.
+                    properties:
+                      tier1:
+                        description: tier1 is the time-to-live for Tier 1 laws (Findings).
+                        type: string
+                      tier2:
+                        description: tier2 is the time-to-live for Tier 2 laws (Rulings).
+                        type: string
+                      tier3:
+                        description: tier3 is the time-to-live for Tier 3 laws (Local
+                          Statutes).
+                        type: string
+                      tier4:
+                        description: tier4 is the time-to-live for Tier 4 laws (State
+                          Constitutions).
+                        type: string
+                      tier5:
+                        description: tier5 is the time-to-live for Tier 5 laws (Federal
+                          Accords).
+                        type: string
+                    type: object
+                required:
+                - defaultTimeout
+                - maxTimeout
+                - maxVisits
+                type: object
+              importNode:
+                description: |-
+                  importNode is the name of the FoundryNode that receives cross-flow imported Workitems.
+                  Must reference an existing entry-bound node. If absent, cross-flow import is disabled.
+                type: string
+            required:
+            - entryContracts
+            - exitContracts
+            - governancePolicy
+            type: object
+          status:
+            description: status defines the observed state of FoundryFlow
+            properties:
+              conditions:
+                description: |-
+                  conditions represent the current state of the FoundryFlow resource.
+                  Standard Kubernetes conditions for reconciliation health.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              phase:
+                description: 'phase is the reconciliation state: Initialising, Ready,
+                  Degraded, Failed.'
+                enum:
+                - Initialising
+                - Ready
+                - Degraded
+                - Failed
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

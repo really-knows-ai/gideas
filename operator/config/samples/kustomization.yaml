@@ -1,0 +1,11 @@
+## Append samples of your project ##
+resources:
+- flow_v1_foundryflow.yaml
+- flow_v1_foundrynode.yaml
+- flow_v1_workitem.yaml
+- flow_v1_governedartefact.yaml
+- flow_v1_law.yaml
+- flow_v1_treaty.yaml
+- flow_v1_flowsupportservice.yaml
+- flow_v1_codificationservice.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

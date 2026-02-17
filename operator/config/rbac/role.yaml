@@ -1,0 +1,53 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - codificationservices
+  - flowsupportservices
+  - foundryflows
+  - foundrynodes
+  - governedartefacts
+  - laws
+  - treaties
+  - workitems
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - codificationservices/finalizers
+  - flowsupportservices/finalizers
+  - foundryflows/finalizers
+  - foundrynodes/finalizers
+  - governedartefacts/finalizers
+  - laws/finalizers
+  - treaties/finalizers
+  - workitems/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - codificationservices/status
+  - flowsupportservices/status
+  - foundryflows/status
+  - foundrynodes/status
+  - governedartefacts/status
+  - laws/status
+  - treaties/status
+  - workitems/status
+  verbs:
+  - get
+  - patch
+  - update

@@ -1,0 +1,114 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: laws.flow.gideas.io
+spec:
+  group: flow.gideas.io
+  names:
+    kind: Law
+    listKind: LawList
+    plural: laws
+    singular: law
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.tier
+      name: Tier
+      type: integer
+    - jsonPath: .status.version
+      name: Version
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Law is the Schema for the laws API.
+          Laws are managed by the Librarian and represent enforceable rules within a Flow.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of Law
+            properties:
+              appliesTo:
+                description: |-
+                  appliesTo lists governed artefact kinds this law applies to.
+                  Empty means global — applies to all kinds in the Flow.
+                items:
+                  type: string
+                type: array
+              goal:
+                description: |-
+                  goal is the plain-language statement of what the law enforces, stops, or ensures.
+                  The law's identity.
+                minLength: 1
+                type: string
+              representations:
+                description: |-
+                  representations are one or more typed expressions of the goal.
+                  At least one representation is required.
+                items:
+                  description: Representation is a typed expression of a law's goal.
+                  properties:
+                    content:
+                      description: content is the representation payload.
+                      type: string
+                    type:
+                      description: |-
+                        type is the MIME type identifying the representation format
+                        (e.g. text/markdown, application/smt-lib, application/python, application/rego).
+                      minLength: 1
+                      type: string
+                  required:
+                  - content
+                  - type
+                  type: object
+                minItems: 1
+                type: array
+              tier:
+                description: |-
+                  tier is the law tier: 1 (Finding), 2 (Ruling), 3 (Local Statute),
+                  4 (State Constitution), 5 (Federal Accord).
+                format: int32
+                maximum: 5
+                minimum: 1
+                type: integer
+            required:
+            - goal
+            - representations
+            - tier
+            type: object
+          status:
+            description: status defines the observed state of Law
+            properties:
+              version:
+                description: |-
+                  version is the content hash of the current law version.
+                  Any mutation to spec produces a new hash.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

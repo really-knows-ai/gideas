@@ -1,8 +1,9 @@
-go 1.22
+go 1.25.3
 
 use (
-    ./operator
-    ./sidecar
-    ./sdk/go
-    ./nodes
+	./gen
+	./nodes
+	./operator
+	./sdk/go
+	./sidecar
 )
