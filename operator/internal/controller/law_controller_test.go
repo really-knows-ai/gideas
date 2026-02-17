@@ -51,7 +51,16 @@ var _ = Describe("Law Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: flowv1.LawSpec{
+						Goal: "test goal",
+						Tier: 1,
+						Representations: []flowv1.Representation{
+							{
+								Type:    "text/markdown",
+								Content: "test content",
+							},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

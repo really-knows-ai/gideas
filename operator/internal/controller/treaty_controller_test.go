@@ -51,7 +51,11 @@ var _ = Describe("Treaty Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: flowv1.TreatySpec{
+						RemoteName: "remote-flow",
+						Direction:  "import",
+						CACert:     "test-ca-cert",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
