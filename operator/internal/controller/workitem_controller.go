@@ -39,17 +39,39 @@ type WorkitemReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Workitem object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
+//
+// The Workitem reconciler observes state changes made by the gRPC server
+// (e.g. SubmitResult updating routingInstruction and phase) and logs the
+// current state. In future iterations, this is where routing execution,
+// thrash-guard checks, and lifecycle transitions will live.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
 func (r *WorkitemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the Workitem instance.
+	var workitem flowv1.Workitem
+	if err := r.Get(ctx, req.NamespacedName, &workitem); err != nil {
+		// Workitem was deleted — nothing to reconcile.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Log the current state for observability.
+	log.Info("Reconciling Workitem",
+		"name", workitem.Name,
+		"namespace", workitem.Namespace,
+		"phase", workitem.Status.Phase,
+		"assignee", workitem.Status.CurrentAssignee,
+	)
+
+	if workitem.Status.RoutingInstruction != nil {
+		log.Info("Routing instruction detected",
+			"name", workitem.Name,
+			"routing_type", workitem.Status.RoutingInstruction.Type,
+			"routing_target", workitem.Status.RoutingInstruction.Target,
+		)
+	}
 
 	return ctrl.Result{}, nil
 }

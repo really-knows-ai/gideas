@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"net"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -35,8 +36,12 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	flowv1gen "github.com/gideas/flow/gen/flow/v1"
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/operator/internal/controller"
+	"github.com/gideas/flow/operator/internal/rpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -59,12 +64,14 @@ func main() {
 	var webhookCertPath, webhookCertName, webhookCertKey string
 	var enableLeaderElection bool
 	var probeAddr string
+	var grpcAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&grpcAddr, "grpc-bind-address", ":50052", "The address the Operator gRPC server binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -246,7 +253,41 @@ func main() {
 	}
 
 	setupLog.Info("Starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+
+	// -----------------------------------------------------------------------
+	// gRPC Server — The Brain Stem
+	// -----------------------------------------------------------------------
+	// Spin up the Operator's gRPC server so the Sidecar can forward
+	// SubmitResult (and future RPCs) to the control plane. The server
+	// runs in a goroutine and shuts down gracefully when the manager's
+	// context is cancelled.
+	grpcLis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		setupLog.Error(err, "Failed to listen for gRPC", "address", grpcAddr)
+		os.Exit(1)
+	}
+
+	grpcServer := grpc.NewServer()
+	operatorSrv := rpc.NewOperatorServer(mgr.GetClient())
+	flowv1gen.RegisterOperatorServiceServer(grpcServer, operatorSrv)
+	reflection.Register(grpcServer)
+
+	// Run the gRPC server in a goroutine. It will be stopped when the
+	// manager context signals shutdown.
+	ctx := ctrl.SetupSignalHandler()
+	go func() {
+		setupLog.Info("Operator gRPC server listening", "address", grpcLis.Addr().String())
+		if err := grpcServer.Serve(grpcLis); err != nil {
+			setupLog.Error(err, "Operator gRPC server error")
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		setupLog.Info("Shutting down Operator gRPC server")
+		grpcServer.GracefulStop()
+	}()
+
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}

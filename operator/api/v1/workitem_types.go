@@ -25,9 +25,12 @@ import (
 // It carries lifecycle state, assignment ownership, routing outcomes, and loop-detection counters.
 // The Operator is the sole mutator. Nodes interact through SDK abstractions, not CRD field paths.
 type WorkitemStatus struct {
-	// phase is the current lifecycle state: Pending, Running, Completed, Failed.
+	// phase is the current lifecycle state.
+	// Routing is a transitional state set by the gRPC server when a
+	// SubmitResult is received, signalling the reconciler to process
+	// the routing instruction.
 	// +optional
-	// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed
+	// +kubebuilder:validation:Enum=Pending;Running;Routing;Completed;Failed
 	Phase string `json:"phase,omitempty"`
 
 	// currentAssignee is the node currently processing this Workitem.

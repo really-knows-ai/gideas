@@ -56,11 +56,15 @@ spec:
                   Empty when Pending.
                 type: string
               phase:
-                description: 'phase is the current lifecycle state: Pending, Running,
-                  Completed, Failed.'
+                description: |-
+                  phase is the current lifecycle state.
+                  Routing is a transitional state set by the gRPC server when a
+                  SubmitResult is received, signalling the reconciler to process
+                  the routing instruction.
                 enum:
                 - Pending
                 - Running
+                - Routing
                 - Completed
                 - Failed
                 type: string
