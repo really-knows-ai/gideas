@@ -3,6 +3,7 @@ go 1.25.3
 use (
 	./archivist
 	./gen
+	./monitor
 	./nodes
 	./operator
 	./sdk/go

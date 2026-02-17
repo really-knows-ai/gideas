@@ -1,0 +1,89 @@
+# Flow Monitor Deployment for Foundry Flow
+#
+# The Flow Monitor is the central telemetry and friction aggregation service
+# for the Control Plane. It ingests friction events and telemetry from nodes
+# (via Sidecars) and serves friction queries for the Librarian.
+#
+# It uses a SQLite database persisted on a PVC at /data/monitor.db.
+# The service listens on port 50055 and is accessed by Sidecars and the
+# Librarian via the flow-monitor Service.
+#
+# Prerequisites:
+#   - Build monitor image: docker build -t flow-monitor:latest -f monitor/Dockerfile .
+#
+# For Kind cluster:
+#   kind load docker-image flow-monitor:latest --name <cluster>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flow-monitor-data
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-monitor
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: control-plane
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow-monitor
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-monitor
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flow-monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flow-monitor
+    spec:
+      containers:
+        - name: monitor
+          image: flow-monitor:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50055
+              protocol: TCP
+          env:
+            - name: MONITOR_PORT
+              value: "50055"
+            - name: MONITOR_DB_PATH
+              value: "/data/monitor.db"
+          volumeMounts:
+            - name: monitor-data
+              mountPath: /data
+      volumes:
+        - name: monitor-data
+          persistentVolumeClaim:
+            claimName: flow-monitor-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flow-monitor
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-monitor
+    app.kubernetes.io/part-of: foundry-flow
+spec:
+  selector:
+    app.kubernetes.io/name: flow-monitor
+  ports:
+    - name: grpc
+      port: 50055
+      targetPort: 50055
+      protocol: TCP
+  type: ClusterIP
