@@ -44,7 +44,7 @@ if (argv.length > 0) {
 } else {
   mdFiles = await glob("**/*.md", {
     cwd: repoRoot,
-    ignore: ["legacy/**", "**/node_modules/**", "tools/lint/**"],
+    ignore: ["legacy/**", "**/node_modules/**", "tools/spec-lint/**"],
     absolute: true,
   });
 }
