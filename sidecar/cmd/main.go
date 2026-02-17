@@ -4,14 +4,14 @@
 // (SidecarService, OperatorService, ArchivistService). The SidecarService
 // handles both node-facing RPCs (Heartbeat) and operator-facing RPCs
 // (AssignWork). The OperatorService is proxied to the real Operator gRPC
-// endpoint. ArchivistService remains a mock handler until its backend is
-// implemented.
+// endpoint. ArchivistService is proxied to the real Archivist when
+// ARCHIVIST_ADDRESS is set, otherwise falls back to a mock handler.
 //
 // Usage:
 //
 //	FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
 //	OPERATOR_ADDRESS=localhost:50052 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
-//	FLOW_NODE_ADDRESS=localhost:50053 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
+//	ARCHIVIST_ADDRESS=localhost:50054 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
 package main
 
 import (
@@ -37,6 +37,7 @@ const (
 	envPort                = "FLOW_SIDECAR_PORT"
 	envOperatorAddress     = "OPERATOR_ADDRESS"
 	envNodeAddress         = "FLOW_NODE_ADDRESS"
+	envArchivistAddress    = "ARCHIVIST_ADDRESS"
 )
 
 func main() {
@@ -58,11 +59,14 @@ func main() {
 	nodeAddr := os.Getenv(envNodeAddress)
 	// Defaults handled by service.NewSidecarServer if empty.
 
+	archivistAddr := os.Getenv(envArchivistAddress)
+
 	slog.Info("Sidecar starting",
 		"port", port,
 		"node_id", nodeID,
 		"operator_address", operatorAddr,
 		"node_address", nodeAddr,
+		"archivist_address", archivistAddr,
 		"phase", "brain-stem",
 	)
 
@@ -79,8 +83,22 @@ func main() {
 	sidecarSrv := service.NewSidecarServer(nodeID, nodeAddr)
 	flowv1.RegisterSidecarServiceServer(srv, sidecarSrv)
 
-	// ArchivistService remains a mock handler.
-	flowv1.RegisterArchivistServiceServer(srv, &mock.ArchivistHandler{})
+	// ArchivistService: proxy to real Archivist if address is set, otherwise mock.
+	var archivistCloser func() error
+	if archivistAddr != "" {
+		archivistProxy, err := proxy.NewArchivistProxy(archivistAddr)
+		if err != nil {
+			slog.Error("Failed to connect to Archivist", "address", archivistAddr, "error", err)
+			os.Exit(1)
+		}
+		flowv1.RegisterArchivistServiceServer(srv, archivistProxy)
+		archivistCloser = archivistProxy.Close
+		slog.Info("Archivist proxy enabled", "address", archivistAddr)
+	} else {
+		flowv1.RegisterArchivistServiceServer(srv, &mock.ArchivistHandler{})
+		archivistCloser = func() error { return nil }
+		slog.Info("Archivist mock enabled (no ARCHIVIST_ADDRESS set)")
+	}
 
 	// OperatorService is proxied to the real Operator.
 	operatorProxy, err := proxy.NewOperatorProxy(operatorAddr)
@@ -101,6 +119,7 @@ func main() {
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		srv.GracefulStop()
 		_ = operatorProxy.Close()
+		_ = archivistCloser()
 		_ = sidecarSrv.Close()
 	}()
 

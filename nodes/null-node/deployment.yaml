@@ -66,6 +66,8 @@ spec:
               value: "operator-grpc.default.svc.cluster.local:50052"
             - name: FLOW_NODE_ADDRESS
               value: "localhost:50053"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
 ---
 # FoundryNode CRD for the null-node
 apiVersion: flow.gideas.io/v1

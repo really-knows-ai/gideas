@@ -19,7 +19,7 @@ help: ## Display this help.
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: test-sdk test-sidecar ## Run all unit tests.
+test: test-sdk test-sidecar test-archivist ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -28,6 +28,10 @@ test-sdk: ## Run SDK unit tests.
 .PHONY: test-sidecar
 test-sidecar: ## Run Sidecar unit tests.
 	go test -v ./sidecar/...
+
+.PHONY: test-archivist
+test-archivist: ## Run Archivist unit tests.
+	go test -v ./archivist/...
 
 .PHONY: test-operator
 test-operator: ## Run Operator unit tests (delegates to operator/Makefile).
@@ -41,7 +45,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node ## Build all binaries.
+build: build-sidecar build-null-node build-archivist ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -50,6 +54,10 @@ build-sidecar: ## Build the Sidecar binary.
 .PHONY: build-null-node
 build-null-node: ## Build the Null Node binary.
 	go build -o bin/null-node ./nodes/null-node/cmd
+
+.PHONY: build-archivist
+build-archivist: ## Build the Archivist binary.
+	go build -o bin/archivist ./archivist/cmd
 
 .PHONY: build-operator
 build-operator: ## Build the Operator binary (delegates to operator/Makefile).
@@ -85,7 +93,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go sidecar nodes operator; do \
+	@for mod in gen sdk/go sidecar archivist nodes operator; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done

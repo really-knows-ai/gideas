@@ -50,8 +50,8 @@ type Client struct {
 	workitemID string
 
 	// Raw gRPC service clients, exposed for advanced use.
-	Sidecar  flowv1.SidecarServiceClient
-	Operator flowv1.OperatorServiceClient
+	Sidecar   flowv1.SidecarServiceClient
+	Operator  flowv1.OperatorServiceClient
 	Archivist flowv1.ArchivistServiceClient
 }
 
@@ -144,6 +144,22 @@ func (c *Client) GetArtefact(ctx context.Context, artefactID string) (*flowv1.Ge
 	})
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get artefact failed: %w", err)
+	}
+	return resp, nil
+}
+
+// StoreArtefact stores content as a named artefact. The Sidecar will compute
+// the content hash — the SDK does not need to supply it. Returns the response
+// containing the version_hash and whether this was a new version.
+func (c *Client) StoreArtefact(ctx context.Context, artefactID, kind string, content []byte) (*flowv1.StoreArtefactResponse, error) {
+	resp, err := c.Archivist.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+		WorkitemId: c.workitemID,
+		ArtefactId: artefactID,
+		Kind:       kind,
+		Content:    content,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: store artefact failed: %w", err)
 	}
 	return resp, nil
 }
