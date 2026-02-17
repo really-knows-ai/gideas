@@ -25,6 +25,7 @@ type spyServer struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
+	flowv1.UnimplementedLibrarianServiceServer
 
 	// lastMD is the metadata captured from the most recent call.
 	lastMD metadata.MD
@@ -49,6 +50,21 @@ func (s *spyServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefactRequ
 	}, nil
 }
 
+func (s *spyServer) QueryLaws(ctx context.Context, req *flowv1.QueryLawsRequest) (*flowv1.QueryLawsResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.QueryLawsResponse{Laws: []*flowv1.Law{{Id: "law-1"}}}, nil
+}
+
+func (s *spyServer) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.CiteResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.CiteResponse{Acknowledged: true}, nil
+}
+
+func (s *spyServer) RecordFinding(ctx context.Context, req *flowv1.RecordFindingRequest) (*flowv1.RecordFindingResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.RecordFindingResponse{LawId: "finding-001"}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helper — starts a bufconn gRPC server and returns a connected Client
 // ---------------------------------------------------------------------------
@@ -71,6 +87,7 @@ func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 	flowv1.RegisterSidecarServiceServer(srv, spy)
 	flowv1.RegisterOperatorServiceServer(srv, spy)
 	flowv1.RegisterArchivistServiceServer(srv, spy)
+	flowv1.RegisterLibrarianServiceServer(srv, spy)
 
 	go func() {
 		if err := srv.Serve(lis); err != nil {
@@ -97,6 +114,7 @@ func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 		Sidecar:    flowv1.NewSidecarServiceClient(conn),
 		Operator:   flowv1.NewOperatorServiceClient(conn),
 		Archivist:  flowv1.NewArchivistServiceClient(conn),
+		Librarian:  flowv1.NewLibrarianServiceClient(conn),
 	}
 
 	t.Cleanup(func() {
@@ -225,5 +243,62 @@ func TestHeartbeat_EmptyWorkitemID_NoMetadataInjected(t *testing.T) {
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
 	if len(got) != 0 {
 		t.Fatalf("expected no x-flow-workitem-id metadata when workitem ID is empty, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Librarian Convenience Methods
+// ---------------------------------------------------------------------------
+
+func TestQueryLaws_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-laws-001"
+	env := setupTestEnv(t, wantID)
+
+	laws, err := env.client.QueryLaws(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("QueryLaws() returned error: %v", err)
+	}
+	if len(laws) != 1 {
+		t.Fatalf("expected 1 law, got %d", len(laws))
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+func TestCite_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-cite-001"
+	env := setupTestEnv(t, wantID)
+
+	err := env.client.Cite(context.Background(), "law-1", "law-2")
+	if err != nil {
+		t.Fatalf("Cite() returned error: %v", err)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+func TestRecordFinding_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-finding-001"
+	env := setupTestEnv(t, wantID)
+
+	lawID, err := env.client.RecordFinding(context.Background(), "test goal", []string{"docs"}, []*flowv1.Representation{
+		{Type: "text/plain", Content: "test"},
+	})
+	if err != nil {
+		t.Fatalf("RecordFinding() returned error: %v", err)
+	}
+	if lawID != "finding-001" {
+		t.Fatalf("expected law_id=finding-001, got %q", lawID)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
 	}
 }

@@ -53,6 +53,7 @@ type Client struct {
 	Sidecar   flowv1.SidecarServiceClient
 	Operator  flowv1.OperatorServiceClient
 	Archivist flowv1.ArchivistServiceClient
+	Librarian flowv1.LibrarianServiceClient
 }
 
 // NewClient connects to the Sidecar and returns a configured Client.
@@ -86,6 +87,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		Sidecar:    flowv1.NewSidecarServiceClient(conn),
 		Operator:   flowv1.NewOperatorServiceClient(conn),
 		Archivist:  flowv1.NewArchivistServiceClient(conn),
+		Librarian:  flowv1.NewLibrarianServiceClient(conn),
 	}, nil
 }
 
@@ -162,6 +164,54 @@ func (c *Client) StoreArtefact(ctx context.Context, artefactID, kind string, con
 		return nil, fmt.Errorf("flow sdk: store artefact failed: %w", err)
 	}
 	return resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// Librarian Convenience Methods
+// ---------------------------------------------------------------------------
+
+// QueryLaws returns all laws matching the filter.
+// Pass empty strings for all laws. Pass kind for scoped+global.
+// Pass kind+repType for further filtering.
+func (c *Client) QueryLaws(ctx context.Context, kind, representationType string) ([]*flowv1.Law, error) {
+	var filter *flowv1.LawFilter
+	if kind != "" || representationType != "" {
+		filter = &flowv1.LawFilter{
+			ArtefactKind:       kind,
+			RepresentationType: representationType,
+		}
+	}
+	resp, err := c.Librarian.QueryLaws(ctx, &flowv1.QueryLawsRequest{
+		Filter: filter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: query laws failed: %w", err)
+	}
+	return resp.GetLaws(), nil
+}
+
+// Cite records usage of one or more laws.
+func (c *Client) Cite(ctx context.Context, lawIDs ...string) error {
+	_, err := c.Librarian.Cite(ctx, &flowv1.CiteRequest{
+		LawIds: lawIDs,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: cite failed: %w", err)
+	}
+	return nil
+}
+
+// RecordFinding creates a Tier 1 Finding.
+func (c *Client) RecordFinding(ctx context.Context, goal string, appliesTo []string, representations []*flowv1.Representation) (string, error) {
+	resp, err := c.Librarian.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+		Goal:            goal,
+		AppliesTo:       appliesTo,
+		Representations: representations,
+	})
+	if err != nil {
+		return "", fmt.Errorf("flow sdk: record finding failed: %w", err)
+	}
+	return resp.GetLawId(), nil
 }
 
 // ---------------------------------------------------------------------------

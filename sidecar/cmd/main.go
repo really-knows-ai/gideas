@@ -38,6 +38,8 @@ const (
 	envOperatorAddress     = "OPERATOR_ADDRESS"
 	envNodeAddress         = "FLOW_NODE_ADDRESS"
 	envArchivistAddress    = "ARCHIVIST_ADDRESS"
+	envLibrarianAddress    = "LIBRARIAN_ADDRESS"
+	envMonitorAddress      = "MONITOR_ADDRESS"
 )
 
 func main() {
@@ -60,6 +62,8 @@ func main() {
 	// Defaults handled by service.NewSidecarServer if empty.
 
 	archivistAddr := os.Getenv(envArchivistAddress)
+	librarianAddr := os.Getenv(envLibrarianAddress)
+	monitorAddr := os.Getenv(envMonitorAddress)
 
 	slog.Info("Sidecar starting",
 		"port", port,
@@ -67,6 +71,8 @@ func main() {
 		"operator_address", operatorAddr,
 		"node_address", nodeAddr,
 		"archivist_address", archivistAddr,
+		"librarian_address", librarianAddr,
+		"monitor_address", monitorAddr,
 		"phase", "brain-stem",
 	)
 
@@ -108,6 +114,22 @@ func main() {
 	}
 	flowv1.RegisterOperatorServiceServer(srv, operatorProxy)
 
+	// LibrarianService: proxy to real Librarian if address is set, otherwise skip.
+	var librarianCloser func() error
+	if librarianAddr != "" {
+		librarianProxy, err := proxy.NewLibrarianProxy(librarianAddr, monitorAddr)
+		if err != nil {
+			slog.Error("Failed to connect to Librarian", "address", librarianAddr, "error", err)
+			os.Exit(1)
+		}
+		flowv1.RegisterLibrarianServiceServer(srv, librarianProxy)
+		librarianCloser = librarianProxy.Close
+		slog.Info("Librarian proxy enabled", "address", librarianAddr, "monitor_address", monitorAddr)
+	} else {
+		librarianCloser = func() error { return nil }
+		slog.Info("Librarian proxy disabled (no LIBRARIAN_ADDRESS set)")
+	}
+
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
@@ -120,6 +142,7 @@ func main() {
 		srv.GracefulStop()
 		_ = operatorProxy.Close()
 		_ = archivistCloser()
+		_ = librarianCloser()
 		_ = sidecarSrv.Close()
 	}()
 

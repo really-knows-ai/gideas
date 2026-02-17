@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: librarian
+  labels:
+    app: librarian
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: librarian
+  template:
+    metadata:
+      labels:
+        app: librarian
+    spec:
+      containers:
+        - name: librarian
+          image: librarian:latest
+          ports:
+            - containerPort: 50056
+          env:
+            - name: LIBRARIAN_PORT
+              value: "50056"
+            - name: LIBRARIAN_DB_PATH
+              value: /data/librarian.db
+            - name: OLLAMA_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: librarian-config
+                  key: ollama-url
+                  optional: true
+            - name: OLLAMA_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: librarian-config
+                  key: ollama-model
+                  optional: true
+            - name: LIBRARIAN_SIMILARITY_THRESHOLD
+              valueFrom:
+                configMapKeyRef:
+                  name: librarian-config
+                  key: similarity-threshold
+                  optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: librarian-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: librarian
+spec:
+  type: ClusterIP
+  selector:
+    app: librarian
+  ports:
+    - port: 50056
+      targetPort: 50056
+      protocol: TCP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: librarian-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

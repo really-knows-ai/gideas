@@ -19,7 +19,7 @@ help: ## Display this help.
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: test-sdk test-sidecar test-archivist test-monitor ## Run all unit tests.
+test: test-sdk test-sidecar test-archivist test-monitor test-librarian ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -37,6 +37,10 @@ test-archivist: ## Run Archivist unit tests.
 test-monitor: ## Run Monitor unit tests.
 	CGO_ENABLED=1 go test -v ./monitor/...
 
+.PHONY: test-librarian
+test-librarian: ## Run Librarian unit tests.
+	CGO_ENABLED=1 go test -v ./librarian/...
+
 .PHONY: test-operator
 test-operator: ## Run Operator unit tests (delegates to operator/Makefile).
 	$(MAKE) -C operator test
@@ -49,7 +53,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-archivist build-monitor ## Build all binaries.
+build: build-sidecar build-null-node build-archivist build-monitor build-librarian ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -66,6 +70,10 @@ build-archivist: ## Build the Archivist binary.
 .PHONY: build-monitor
 build-monitor: ## Build the Monitor binary.
 	CGO_ENABLED=1 go build -o bin/monitor ./monitor/cmd
+
+.PHONY: build-librarian
+build-librarian: ## Build the Librarian binary.
+	CGO_ENABLED=1 go build -o bin/librarian ./librarian/cmd
 
 .PHONY: build-operator
 build-operator: ## Build the Operator binary (delegates to operator/Makefile).
@@ -101,7 +109,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go sidecar archivist monitor nodes operator; do \
+	@for mod in gen sdk/go sidecar archivist monitor librarian nodes operator; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done
