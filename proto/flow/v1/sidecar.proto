@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+// SidecarService is the internal pod proxy for node-to-runtime communication.
+// The Sidecar authenticates, injects identity context, and proxies to the
+// owning service. Nodes see SDK calls; the Sidecar handles transport.
+//
+// The Sidecar also acts as the proxy for all other services (Operator,
+// Archivist, Librarian, FlowMonitor) when called from the Node. Those
+// service definitions are not duplicated here -- the Go SDK will connect
+// to the Sidecar's port and use the respective service stubs.
+//
+// See: specs/05-reference/grpc-api.md#sidecar-mediated-sdk-paths
+service SidecarService {
+  // Resets the Sidecar's inactivity timer. Implicit heartbeats occur on
+  // every SDK call; this method provides an explicit signal for long-running
+  // computation. The Sidecar propagates activity timestamps to the Operator,
+  // throttled to avoid excessive writes.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message HeartbeatRequest {
+  string workitem_id = 1;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+}

@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "flow/v1/common.proto";
+
+// FlowMonitorService ingests telemetry, friction events, and custom events.
+// It also serves friction queries for the Librarian and Assay.
+// See: specs/05-reference/grpc-api.md#flow-monitor-api
+service FlowMonitorService {
+  // --- Ingestion Methods ---
+
+  // Records a friction event. Identity fields are Sidecar-injected for
+  // node context; caller-provided for service context.
+  rpc AddFriction(AddFrictionRequest) returns (AddFrictionResponse);
+
+  // Records a custom telemetry event. Payload is JSON-serializable, max 64 KB.
+  // The Sidecar wraps the event in a standard envelope with timestamp
+  // and trace context.
+  rpc RecordTelemetry(RecordTelemetryRequest) returns (RecordTelemetryResponse);
+
+  // --- Query Methods ---
+
+  // Returns aggregated friction data across the requested axes.
+  // Used by the Librarian for hearing threshold evaluation and by Assay
+  // for hearing evidence.
+  rpc QueryFriction(QueryFrictionRequest) returns (QueryFrictionResponse);
+}
+
+// --- Ingestion ---
+
+message AddFrictionRequest {
+  string flow_id = 1;
+  string workitem_id = 2;
+  // Optional: Sidecar-injected for node context.
+  string node_id = 3;
+  // Optional: law identifiers associated with this friction event.
+  repeated string law_ids = 4;
+  // Friction magnitude.
+  int32 magnitude = 5;
+}
+
+message AddFrictionResponse {
+  bool acknowledged = 1;
+}
+
+message RecordTelemetryRequest {
+  string flow_id = 1;
+  string node_id = 2;
+  string workitem_id = 3;
+  // Event type identifier.
+  string event_type = 4;
+  // JSON-serialized payload, max 64 KB.
+  bytes payload = 5;
+}
+
+message RecordTelemetryResponse {
+  bool acknowledged = 1;
+}
+
+// --- Query ---
+
+message QueryFrictionRequest {
+  FrictionFilter filter = 1;
+}
+
+message FrictionFilter {
+  string law_id = 1;
+  string node_id = 2;
+  string workitem_id = 3;
+  LawTier tier = 4;
+  TimeRange time_range = 5;
+}
+
+message QueryFrictionResponse {
+  repeated FrictionAggregate friction_aggregates = 1;
+}

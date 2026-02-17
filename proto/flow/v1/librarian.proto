@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "flow/v1/common.proto";
+
+// LibrarianService manages the Flow's body of law.
+// Node-facing methods are reached through the Sidecar.
+// See: specs/05-reference/grpc-api.md#librarian-api
+service LibrarianService {
+  // --- Node-Facing Methods (via Sidecar) ---
+
+  // Returns laws matching the filter. Three query modes:
+  // (1) no filter - all laws
+  // (2) artefact_kind - laws whose appliesTo includes the kind plus global laws
+  // (3) artefact_kind + representation_type - kind filter plus representation type
+  rpc QueryLaws(QueryLawsRequest) returns (QueryLawsResponse);
+
+  // Records law usage. The Sidecar wraps this as an AddFriction call
+  // with fixed citation magnitude and the specified law identifiers.
+  rpc Cite(CiteRequest) returns (CiteResponse);
+
+  // Creates a Tier 1 Finding. Write-availability-first: returns immediately
+  // with a law identifier. Indexing and duplicate detection are asynchronous.
+  rpc RecordFinding(RecordFindingRequest) returns (RecordFindingResponse);
+
+  // --- Service-Facing Methods ---
+
+  // Returns the full law object by identifier.
+  // Used by Assay for hearing evidence retrieval.
+  rpc GetLaw(GetLawRequest) returns (GetLawResponse);
+
+  // Persists a law (Tier 2 Ruling minted by Assay, Tier 3+ applied by
+  // administrator or Governance Flow).
+  rpc WriteLaw(WriteLawRequest) returns (WriteLawResponse);
+
+  // Removes a law from the active Library.
+  // History is preserved in the audit log.
+  rpc RetireLaw(RetireLawRequest) returns (RetireLawResponse);
+
+  // Receives higher-tier laws from a remote Librarian for integration.
+  // Triggers the two-stage conflict protocol.
+  rpc ReplicateLaws(ReplicateLawsRequest) returns (ReplicateLawsResponse);
+
+  // Applies the outcome of a review hearing (promote, retire, demote)
+  // to the specified law. Called by the Operator after Assay hearing completion.
+  rpc ApplyLifecycleAction(ApplyLifecycleActionRequest) returns (ApplyLifecycleActionResponse);
+}
+
+// --- Node-Facing ---
+
+message QueryLawsRequest {
+  // Optional filter. Omit for all laws.
+  LawFilter filter = 1;
+}
+
+message LawFilter {
+  // Filter by governed artefact kind.
+  string artefact_kind = 1;
+  // Further filter by representation MIME type.
+  string representation_type = 2;
+}
+
+message QueryLawsResponse {
+  repeated Law laws = 1;
+}
+
+message CiteRequest {
+  repeated string law_ids = 1;
+}
+
+message CiteResponse {
+  bool acknowledged = 1;
+}
+
+message RecordFindingRequest {
+  string goal = 1;
+  repeated string applies_to = 2;
+  // Optional initial representations.
+  repeated Representation representations = 3;
+}
+
+message RecordFindingResponse {
+  string law_id = 1;
+}
+
+// --- Service-Facing ---
+
+message GetLawRequest {
+  string law_id = 1;
+}
+
+message GetLawResponse {
+  Law law = 1;
+}
+
+message WriteLawRequest {
+  Law law = 1;
+}
+
+message WriteLawResponse {
+  string law_id = 1;
+  string version_hash = 2;
+}
+
+message RetireLawRequest {
+  string law_id = 1;
+}
+
+message RetireLawResponse {
+  bool acknowledged = 1;
+}
+
+message ReplicateLawsRequest {
+  repeated Law laws = 1;
+  string source_flow_id = 2;
+}
+
+message ReplicateLawsResponse {
+  repeated IntegrationResult integration_results = 1;
+}
+
+message ApplyLifecycleActionRequest {
+  string law_id = 1;
+  Verdict verdict = 2;
+}
+
+message ApplyLifecycleActionResponse {
+  bool acknowledged = 1;
+}

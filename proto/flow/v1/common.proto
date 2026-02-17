@@ -1,0 +1,230 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "google/protobuf/timestamp.proto";
+
+// --- Enums ---
+
+// Severity levels for feedback items.
+// Signals urgency, not authority.
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_LOW = 1;
+  SEVERITY_MEDIUM = 2;
+  SEVERITY_HIGH = 3;
+  SEVERITY_CRITICAL = 4;
+}
+
+// Feedback lifecycle states.
+// See: specs/01-concepts/03-data-model.md#feedback-lifecycle
+enum FeedbackState {
+  FEEDBACK_STATE_UNSPECIFIED = 0;
+  FEEDBACK_STATE_NEW = 1;
+  FEEDBACK_STATE_ACTIONED = 2;
+  FEEDBACK_STATE_WONT_FIX = 3;
+  FEEDBACK_STATE_REJECTED = 4;
+  FEEDBACK_STATE_DEADLOCKED = 5;
+  FEEDBACK_STATE_RESOLVED = 6;
+}
+
+// Routing instruction types returned by node handlers.
+enum RoutingType {
+  ROUTING_TYPE_UNSPECIFIED = 0;
+  ROUTING_TYPE_ROUTE_TO_OUTPUT = 1;
+  ROUTING_TYPE_ROUTE_TO = 2;
+  ROUTING_TYPE_COMPLETE = 3;
+}
+
+// Law tiers by authority.
+enum LawTier {
+  LAW_TIER_UNSPECIFIED = 0;
+  LAW_TIER_FINDING = 1;       // Tier 1
+  LAW_TIER_RULING = 2;        // Tier 2
+  LAW_TIER_LOCAL_STATUTE = 3;  // Tier 3
+  LAW_TIER_STATE_CONSTITUTION = 4; // Tier 4
+  LAW_TIER_FEDERAL_ACCORD = 5;    // Tier 5
+}
+
+// Lifecycle action verdicts applied after a review hearing.
+enum Verdict {
+  VERDICT_UNSPECIFIED = 0;
+  VERDICT_PROMOTE = 1;
+  VERDICT_RETIRE = 2;
+  VERDICT_DEMOTE = 3;
+}
+
+// --- Shared Messages ---
+
+// Structured error model used by all runtime services.
+// See: specs/05-reference/error-catalogue.md
+message Error {
+  // Stable error identifier (e.g. "INVALID_ROUTE", "CAPABILITY_DENIED").
+  // Does not change across releases.
+  string code = 1;
+
+  // Human-readable description of the failure.
+  string message = 2;
+
+  // gRPC status code.
+  int32 grpc_status = 3;
+
+  // Whether the error is transient and safe to retry with backoff.
+  bool retryable = 4;
+}
+
+// Routing instruction submitted by a node handler via SubmitResult.
+// See: specs/05-reference/crds.md#routinginstruction
+message RoutingInstruction {
+  // The routing type.
+  RoutingType type = 1;
+
+  // Output name (for ROUTE_TO_OUTPUT), node name (for ROUTE_TO),
+  // or empty (for COMPLETE).
+  string target = 2;
+}
+
+// Identity context injected by the Sidecar on every outgoing request.
+// Nodes cannot override or spoof these fields.
+// See: specs/05-reference/grpc-api.md#identity-injection
+message WorkitemContext {
+  string flow_id = 1;
+  string workitem_id = 2;
+  string node_id = 3;
+}
+
+// Reference to an artefact within a Workitem.
+message ArtefactRef {
+  string id = 1;
+  string kind = 2;
+}
+
+// A cryptographic stamp applied to an artefact version.
+// See: specs/01-concepts/03-data-model.md#passports-and-stamps
+message Stamp {
+  // Governance checkpoint name (e.g. "linter", "security-review", "approval").
+  string name = 1;
+
+  // Node that applied this stamp (for audit).
+  string applying_node = 2;
+
+  // Content hash of the artefact at stamp time.
+  string content_hash = 3;
+
+  // Cryptographic signature binding the stamp to the content.
+  bytes signature = 4;
+
+  // Certificate chain for verification.
+  bytes cert_chain = 5;
+
+  // Timestamp when the stamp was applied.
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// A single feedback item on an artefact.
+// See: specs/01-concepts/03-data-model.md#feedback
+message FeedbackItem {
+  string id = 1;
+  string source = 2;
+  Severity severity = 3;
+  FeedbackState state = 4;
+  string message = 5;
+  string linked_ruling = 6;
+  repeated FeedbackEvent history = 7;
+  Justification justification = 8;
+  string version_hash = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+// A single event in a feedback item's history.
+// Append-only investigative record of the debate.
+message FeedbackEvent {
+  string actor = 1;
+  string action = 2;
+  string message = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// Structured justification for a wont_fix refusal.
+// See: specs/01-concepts/03-data-model.md#forced-choice-justification
+message Justification {
+  oneof kind {
+    Citation citation = 1;
+    NovelArgument novel_argument = 2;
+  }
+}
+
+// "Existing law supports my position."
+message Citation {
+  repeated string citation_ids = 1;
+}
+
+// "Here is a new argument."
+message NovelArgument {
+  string argument = 1;
+}
+
+// A law object: governance rule with a clear goal.
+// See: specs/01-concepts/03-data-model.md#laws
+message Law {
+  string id = 1;
+  string goal = 2;
+  repeated Representation representations = 3;
+  LawTier tier = 4;
+  repeated string applies_to = 5;
+  string version_hash = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// A typed representation of a law's goal.
+// See: specs/05-reference/crds.md#representation
+message Representation {
+  // MIME type (e.g. "text/markdown", "application/rego").
+  string type = 1;
+  // The representation payload.
+  string content = 2;
+}
+
+// Artefact state for contract validation (service-facing).
+message ArtefactState {
+  string artefact_id = 1;
+  string kind = 2;
+  repeated string stamp_names = 3;
+  string current_version_hash = 4;
+}
+
+// Version history entry for an artefact.
+message VersionEntry {
+  string version_hash = 1;
+  string created_by = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// Aggregated friction data returned by QueryFriction.
+message FrictionAggregate {
+  string law_id = 1;
+  string node_id = 2;
+  string workitem_id = 3;
+  LawTier tier = 4;
+  double total_magnitude = 5;
+  int32 event_count = 6;
+  google.protobuf.Timestamp earliest = 7;
+  google.protobuf.Timestamp latest = 8;
+}
+
+// Time range filter.
+message TimeRange {
+  google.protobuf.Timestamp start = 1;
+  google.protobuf.Timestamp end = 2;
+}
+
+// Integration result for replicated laws.
+message IntegrationResult {
+  string law_id = 1;
+  bool accepted = 2;
+  string conflict_reason = 3;
+}
+

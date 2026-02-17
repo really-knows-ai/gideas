@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "flow/v1/common.proto";
+
+// OperatorService handles Workitem control-plane mutations.
+// Node-facing methods are reached through the Sidecar.
+// See: specs/05-reference/grpc-api.md#operator-api
+service OperatorService {
+  // --- Node-Facing Methods (via Sidecar) ---
+
+  // Submits the handler's routing instruction. The Operator validates routing
+  // guards and applies the lifecycle transition.
+  rpc SubmitResult(SubmitResultRequest) returns (SubmitResultResponse);
+
+  // Creates a new Workitem in Pending. The creating node must be entry-bound.
+  // The Operator validates the bound entry contract against artefact state.
+  rpc CreateWorkitem(CreateWorkitemRequest) returns (CreateWorkitemResponse);
+
+  // --- Service-Facing Methods ---
+
+  // Creates a review hearing Workitem for Assay processing. Called by the
+  // Librarian when friction thresholds or review TTL expiry trigger a hearing.
+  rpc CreateHearingWorkitem(CreateHearingWorkitemRequest) returns (CreateHearingWorkitemResponse);
+
+  // Assembles an export package from a completed Workitem: artefact content
+  // (scoped by exit contract), passport stamps, metadata, and provenance chain.
+  rpc ExportWorkitem(ExportWorkitemRequest) returns (ExportWorkitemResponse);
+
+  // Validates and materialises a Workitem from an export package. Verifies
+  // signatures, enforces Treaty constraints, and validates against the
+  // configured importNode's entry contract.
+  rpc ImportWorkitem(ImportWorkitemRequest) returns (ImportWorkitemResponse);
+}
+
+// --- Request/Response Messages ---
+
+// Empty request -- the Operator uses Sidecar-injected identity context.
+message CreateWorkitemRequest {}
+
+message SubmitResultRequest {
+  string workitem_id = 1;
+  RoutingInstruction routing_instruction = 2;
+}
+
+message SubmitResultResponse {
+  bool accepted = 1;
+}
+
+message CreateWorkitemResponse {
+  string workitem_id = 1;
+}
+
+message CreateHearingWorkitemRequest {
+  string law_id = 1;
+}
+
+message CreateHearingWorkitemResponse {
+  string workitem_id = 1;
+}
+
+message ExportWorkitemRequest {
+  string workitem_id = 1;
+}
+
+message ExportWorkitemResponse {
+  bytes export_package = 1;
+}
+
+message ImportWorkitemRequest {
+  bytes export_package = 1;
+  // Optional treaty name for non-sibling crossings.
+  string treaty_name = 2;
+}
+
+message ImportWorkitemResponse {
+  string workitem_id = 1;
+}

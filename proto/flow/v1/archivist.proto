@@ -1,0 +1,297 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "flow/v1/common.proto";
+
+// ArchivistService manages artefact lifecycle and provenance.
+// Node-facing methods are reached through the Sidecar.
+// See: specs/05-reference/grpc-api.md#archivist-api
+service ArchivistService {
+  // --- Service-Facing Methods ---
+
+  // Returns artefact presence and stamp state for exit contract validation.
+  // Called by the Operator's reconciliation loop.
+  rpc QueryArtefactState(QueryArtefactStateRequest) returns (QueryArtefactStateResponse);
+
+  // --- Artefact Content and Version Methods ---
+
+  // Returns the latest version's content bytes.
+  // Sidecar verifies SHA256(content) == version_hash.
+  rpc GetArtefact(GetArtefactRequest) returns (GetArtefactResponse);
+
+  // Returns content bytes for a specific version by hash.
+  rpc GetArtefactVersion(GetArtefactVersionRequest) returns (GetArtefactVersionResponse);
+
+  // Returns version history and current passport without content bytes.
+  rpc GetArtefactMetadata(GetArtefactMetadataRequest) returns (GetArtefactMetadataResponse);
+
+  // Returns all artefacts (id, kind) associated with the Workitem.
+  rpc ListArtefacts(ListArtefactsRequest) returns (ListArtefactsResponse);
+
+  // Stores content bytes and creates a version record.
+  // content_hash is Sidecar-computed, not node-supplied.
+  rpc StoreArtefact(StoreArtefactRequest) returns (StoreArtefactResponse);
+
+  // --- Stamp Methods ---
+
+  // Returns all stamps on the artefact's current version.
+  rpc GetStamps(GetStampsRequest) returns (GetStampsResponse);
+
+  // Returns whether the named stamp exists on the current version.
+  rpc HasStamp(HasStampRequest) returns (HasStampResponse);
+
+  // Applies a named stamp. signature and cert_chain are Sidecar-injected
+  // from the node's identity material.
+  rpc StampArtefact(StampArtefactRequest) returns (StampArtefactResponse);
+
+  // --- Feedback Methods ---
+
+  // Creates a feedback item in "new" state, tagged to the artefact's current
+  // version. Transparently emits AddFriction with magnitude = feedback depth.
+  rpc AddFeedback(AddFeedbackRequest) returns (AddFeedbackResponse);
+
+  // Returns all feedback items for the artefact across all versions.
+  rpc GetFeedback(GetFeedbackRequest) returns (GetFeedbackResponse);
+
+  // Returns true if any feedback item is in a non-resolved state.
+  rpc HasUnresolvedFeedback(HasUnresolvedFeedbackRequest) returns (HasUnresolvedFeedbackResponse);
+
+  // Transitions feedback from "new" or "rejected" to "actioned".
+  rpc ResolveFeedback(ResolveFeedbackRequest) returns (ResolveFeedbackResponse);
+
+  // Transitions feedback from "new" or "rejected" to "wont_fix".
+  // Requires structured justification.
+  rpc RefuseFeedback(RefuseFeedbackRequest) returns (RefuseFeedbackResponse);
+
+  // Transitions feedback from "actioned" to "resolved".
+  rpc AcceptFix(AcceptFixRequest) returns (AcceptFixResponse);
+
+  // Transitions feedback from "actioned" to "rejected".
+  rpc RejectFix(RejectFixRequest) returns (RejectFixResponse);
+
+  // Transitions feedback from "wont_fix" to "resolved".
+  rpc AcceptRefusal(AcceptRefusalRequest) returns (AcceptRefusalResponse);
+
+  // Transitions feedback from "wont_fix" to "rejected".
+  rpc RejectRefusal(RejectRefusalRequest) returns (RejectRefusalResponse);
+
+  // Returns the current history depth (number of transitions).
+  rpc GetFeedbackDepth(GetFeedbackDepthRequest) returns (GetFeedbackDepthResponse);
+
+  // Transitions feedback from "wont_fix" or "rejected" to "deadlocked".
+  // Requires WRITE:feedback/deadlocked capability.
+  rpc DeadlockFeedback(DeadlockFeedbackRequest) returns (DeadlockFeedbackResponse);
+}
+
+// --- Service-Facing ---
+
+message QueryArtefactStateRequest {
+  string workitem_id = 1;
+  repeated string artefact_kinds = 2;
+}
+
+message QueryArtefactStateResponse {
+  repeated ArtefactState artefact_states = 1;
+}
+
+// --- Artefact Content and Version ---
+
+message GetArtefactRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+}
+
+message GetArtefactResponse {
+  bytes content = 1;
+  string version_hash = 2;
+  string kind = 3;
+}
+
+message GetArtefactVersionRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+  string version_hash = 3;
+}
+
+message GetArtefactVersionResponse {
+  bytes content = 1;
+}
+
+message GetArtefactMetadataRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+}
+
+message GetArtefactMetadataResponse {
+  repeated VersionEntry version_history = 1;
+  repeated Stamp stamps = 2;
+}
+
+message ListArtefactsRequest {
+  string workitem_id = 1;
+}
+
+message ListArtefactsResponse {
+  repeated ArtefactRef artefact_refs = 1;
+}
+
+message StoreArtefactRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+  string kind = 3;
+  bytes content = 4;
+  // SHA-256 content hash, computed by the Sidecar.
+  string content_hash = 5;
+}
+
+message StoreArtefactResponse {
+  string version_hash = 1;
+  bool is_new_version = 2;
+}
+
+// --- Stamp Methods ---
+
+message GetStampsRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+}
+
+message GetStampsResponse {
+  repeated Stamp stamps = 1;
+}
+
+message HasStampRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+  string stamp_name = 3;
+}
+
+message HasStampResponse {
+  bool exists = 1;
+}
+
+message StampArtefactRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+  string stamp_name = 3;
+  // Sidecar-injected from node's identity material.
+  bytes signature = 4;
+  // Sidecar-injected certificate chain.
+  bytes cert_chain = 5;
+}
+
+message StampArtefactResponse {
+  Stamp stamp = 1;
+}
+
+// --- Feedback Methods ---
+
+message AddFeedbackRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+  Severity severity = 3;
+  string message = 4;
+  // Sidecar-resolved from the latest version at call time.
+  string version_hash = 5;
+}
+
+message AddFeedbackResponse {
+  string feedback_id = 1;
+}
+
+message GetFeedbackRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+}
+
+message GetFeedbackResponse {
+  repeated FeedbackItem feedback_items = 1;
+}
+
+message HasUnresolvedFeedbackRequest {
+  string workitem_id = 1;
+  string artefact_id = 2;
+}
+
+message HasUnresolvedFeedbackResponse {
+  bool has_unresolved = 1;
+}
+
+message ResolveFeedbackRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+  string message = 3;
+}
+
+message ResolveFeedbackResponse {
+  FeedbackItem updated_item = 1;
+}
+
+message RefuseFeedbackRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+  Justification justification = 3;
+}
+
+message RefuseFeedbackResponse {
+  FeedbackItem updated_item = 1;
+}
+
+message AcceptFixRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+}
+
+message AcceptFixResponse {
+  FeedbackItem updated_item = 1;
+}
+
+message RejectFixRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+  string message = 3;
+}
+
+message RejectFixResponse {
+  FeedbackItem updated_item = 1;
+}
+
+message AcceptRefusalRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+}
+
+message AcceptRefusalResponse {
+  FeedbackItem updated_item = 1;
+}
+
+message RejectRefusalRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+  string message = 3;
+}
+
+message RejectRefusalResponse {
+  FeedbackItem updated_item = 1;
+}
+
+message GetFeedbackDepthRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+}
+
+message GetFeedbackDepthResponse {
+  int32 depth = 1;
+}
+
+message DeadlockFeedbackRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+}
+
+message DeadlockFeedbackResponse {
+  FeedbackItem updated_item = 1;
+}
