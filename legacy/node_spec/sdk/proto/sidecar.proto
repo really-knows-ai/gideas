@@ -1,0 +1,379 @@
+// Foundry Flow: Session API (Node ↔ Sidecar)
+// Port: 35697
+// Version: 1.0.0
+// Status: Implementation Contract
+
+syntax = "proto3";
+
+package foundry.sidecar.v1;
+
+option go_package = "github.com/gideas/foundry/api/sidecar/v1;sidecarv1";
+
+import "types.proto";
+import "google/protobuf/empty.proto";
+
+// =============================================================================
+// PRODUCER API (Node → Sidecar)
+// =============================================================================
+
+service SidecarSession {
+    // -------------------------------------------------------------------------
+    // Artefact Operations
+    // -------------------------------------------------------------------------
+    
+    // Store artefact content in the Archivist
+    rpc StoreArtefact(StoreArtefactRequest) returns (StoreArtefactResponse);
+    
+    // Store artefact content via streaming (for large artefacts)
+    rpc StoreArtefactStream(stream StoreArtefactChunk) returns (StoreArtefactResponse);
+    
+    // Fetch latest version of an artefact
+    rpc FetchArtefact(FetchArtefactRequest) returns (FetchArtefactResponse);
+    
+    // Fetch artefact via streaming (for large artefacts)
+    rpc FetchArtefactStream(FetchArtefactRequest) returns (stream ArtefactChunk);
+    
+    // Fetch specific version of an artefact
+    rpc FetchArtefactVersion(FetchArtefactVersionRequest) returns (FetchArtefactResponse);
+    
+    // Get artefact metadata without content
+    rpc GetArtefactMetadata(GetArtefactMetadataRequest) returns (GetArtefactMetadataResponse);
+    
+    // Sign artefact with node's cryptographic identity
+    rpc StampArtefact(StampArtefactRequest) returns (google.protobuf.Empty);
+    
+    // Validate artefact state (present or valid)
+    rpc ValidateArtefact(ValidateArtefactRequest) returns (foundry.v1.ValidationResult);
+    
+    // -------------------------------------------------------------------------
+    // Legal Operations
+    // -------------------------------------------------------------------------
+    
+    // Create a new Tier 1 Finding
+    rpc RecordFinding(RecordFindingRequest) returns (RecordFindingResponse);
+    
+    // Search the Law Library
+    rpc SearchLibrary(SearchLibraryRequest) returns (stream foundry.v1.Law);
+    
+    // Record a citation of a law
+    rpc Cite(CiteRequest) returns (google.protobuf.Empty);
+    
+    // -------------------------------------------------------------------------
+    // Feedback Operations
+    // -------------------------------------------------------------------------
+    
+    // Create new feedback on an artefact
+    rpc AddFeedback(AddFeedbackRequest) returns (AddFeedbackResponse);
+    
+    // Mark feedback as addressed
+    rpc ResolveFeedback(ResolveFeedbackRequest) returns (google.protobuf.Empty);
+    
+    // Reject a fix attempt (appraiser role)
+    rpc RejectFix(RejectFixRequest) returns (google.protobuf.Empty);
+    
+    // Update feedback state with optional justification
+    rpc UpdateFeedbackState(UpdateFeedbackStateRequest) returns (google.protobuf.Empty);
+    
+    // -------------------------------------------------------------------------
+    // Workitem Operations
+    // -------------------------------------------------------------------------
+    
+    // Create a new workitem (proactive nodes)
+    rpc CreateWorkitem(CreateWorkitemRequest) returns (CreateWorkitemResponse);
+    
+    // Update workitem context (key-value metadata)
+    rpc UpdateContext(UpdateContextRequest) returns (google.protobuf.Empty);
+    
+    // Signal workitem completion with routing instruction
+    rpc CompleteWorkitem(CompleteWorkitemRequest) returns (google.protobuf.Empty);
+    
+    // -------------------------------------------------------------------------
+    // Telemetry Operations
+    // -------------------------------------------------------------------------
+    
+    // Emit a telemetry event
+    rpc RecordTelemetry(foundry.v1.TelemetryEvent) returns (google.protobuf.Empty);
+    
+    // Report application friction
+    rpc ReportFriction(foundry.v1.FrictionReport) returns (google.protobuf.Empty);
+    
+    // -------------------------------------------------------------------------
+    // Health Operations
+    // -------------------------------------------------------------------------
+    
+    // Signal handler is alive during long operations
+    rpc Heartbeat(google.protobuf.Empty) returns (google.protobuf.Empty);
+    
+    // -------------------------------------------------------------------------
+    // Topology Operations
+    // -------------------------------------------------------------------------
+    
+    // Query available nodes by role
+    rpc GetNodesByRole(GetNodesByRoleRequest) returns (GetNodesByRoleResponse);
+    
+    // -------------------------------------------------------------------------
+    // Cross-Flow Operations (Export/Import)
+    // -------------------------------------------------------------------------
+    
+    // Export workitem to a foreign flow (SESSION TERMINATOR)
+    // Requires: EXPORT capability, isTerminal: true
+    // On success: Workitem is marked Completed, no further logic executes
+    rpc Export(ExportRequest) returns (ExportResponse);
+    
+    // Import a foreign bundle, creating a new local workitem
+    // Requires: CREATE:workitem, WRITE:artefact/*, STAMP:artefact/* capabilities
+    // Validates bundle against configured Treaties
+    rpc Import(ImportRequest) returns (ImportResponse);
+    
+    // Inspect a bundle without importing (validation/introspection)
+    rpc InspectBundle(InspectBundleRequest) returns (InspectBundleResponse);
+}
+
+// =============================================================================
+// ARTEFACT MESSAGES
+// =============================================================================
+
+message StoreArtefactRequest {
+    string kind = 1;                          // GovernedArtefact kind
+    string name = 2;                          // Filename (e.g., "source.py")
+    bytes content = 3;                        // Raw content
+    // workitem_id implicit from session context
+}
+
+// Streaming store - for large artefacts
+message StoreArtefactChunk {
+    string kind = 1;                          // Only set on first chunk
+    string name = 2;                          // Only set on first chunk
+    bytes data = 3;                           // Chunk of content
+    bool is_last = 4;                         // True if this is the final chunk
+}
+
+message StoreArtefactResponse {
+    string kind = 1;
+    string name = 2;
+    string version = 3;                       // SHA256 hash
+}
+
+message FetchArtefactRequest {
+    string kind = 1;
+    string name = 2;                          // Optional - empty fetches by kind only
+}
+
+message FetchArtefactVersionRequest {
+    string kind = 1;
+    string name = 2;
+    string version = 3;                       // SHA256 hash
+}
+
+message FetchArtefactResponse {
+    string kind = 1;
+    string name = 2;
+    string version = 3;
+    bytes content = 4;
+}
+
+// Streaming fetch - for large artefacts
+message ArtefactChunk {
+    bytes data = 1;                           // Chunk of artefact content
+    bool is_last = 2;                         // True if this is the final chunk
+}
+
+message GetArtefactMetadataRequest {
+    string kind = 1;
+    string name = 2;                          // Optional
+}
+
+message GetArtefactMetadataResponse {
+    string kind = 1;
+    string name = 2;
+    string latest_version = 3;
+    repeated foundry.v1.ArtefactVersion versions = 4;
+    repeated foundry.v1.Stamp passport = 5;
+}
+
+message StampArtefactRequest {
+    string kind = 1;
+    foundry.v1.StampType stamp_type = 2;      // "inspection" or "approval"
+    string role = 3;                          // Optional. Required if node has multiple roles.
+    repeated foundry.v1.LawCitation laws = 4; // Required for "approval" type; ignored for "inspection"
+    // Stamps latest version. If role omitted and node has a single role,
+    // defaults to that role. If node has multiple roles and role is omitted,
+    // Sidecar returns INVALID_ARGUMENT (AMBIGUOUS_ROLE).
+    // If stamp_type is APPROVAL and laws is empty, returns INVALID_ARGUMENT (LAWS_REQUIRED).
+}
+
+message ValidateArtefactRequest {
+    string kind = 1;
+    string required_state = 2;                // "present" | "valid"
+}
+
+// =============================================================================
+// LEGAL MESSAGES
+// =============================================================================
+
+message RecordFindingRequest {
+    string statement = 1;                     // Natural language law (max 1024 chars)
+    map<string, string> labels = 2;           // Optional metadata
+}
+
+message RecordFindingResponse {
+    string law_id = 1;                        // Generated law ID
+}
+
+message SearchLibraryRequest {
+    string semantic_query = 1;                // Natural language query
+    map<string, string> labels = 2;           // Label filter (AND logic)
+    int32 tier = 3;                           // Filter by tier (0 = all)
+    int32 limit = 4;                          // Max results (default: 10, max: 100)
+}
+
+message CiteRequest {
+    string law_id = 1;
+}
+
+// =============================================================================
+// FEEDBACK MESSAGES
+// =============================================================================
+
+message AddFeedbackRequest {
+    string target = 1;                        // Artefact kind being critiqued
+    foundry.v1.Severity severity = 2;
+    string message = 3;                       // Max 1024 chars
+}
+
+message AddFeedbackResponse {
+    string feedback_id = 1;
+}
+
+message ResolveFeedbackRequest {
+    string feedback_id = 1;
+    string message = 2;                       // Resolution message
+}
+
+message RejectFixRequest {
+    string feedback_id = 1;
+    string message = 2;                       // Rejection reason
+}
+
+message UpdateFeedbackStateRequest {
+    string feedback_id = 1;
+    foundry.v1.FeedbackState state = 2;
+    foundry.v1.Justification justification = 3;  // Required for WONT_FIX
+}
+
+// =============================================================================
+// WORKITEM MESSAGES
+// =============================================================================
+
+message CreateWorkitemRequest {
+    string type = 1;                          // WorkitemType name
+    string intent = 2;                        // Human-readable purpose
+    foundry.v1.Priority priority = 3;
+    map<string, string> context = 4;          // Initial context
+    string requested_by = 5;                  // Source identifier
+    string foreign_reference = 6;             // Optional: link to foreign workitem (e.g., "flow-a:wi-123")
+}
+
+message CreateWorkitemResponse {
+    string workitem_id = 1;
+}
+
+message UpdateContextRequest {
+    map<string, string> context = 1;          // Key-value pairs to merge into status.context
+    bool overwrite = 2;                       // If true, replace entire context; if false, merge
+}
+
+message CompleteWorkitemRequest {
+    oneof result {
+        string route_to_output = 1;           // Named output from node config
+        string route_to = 2;                  // Direct node name
+        bool complete = 3;                    // Terminal completion (true)
+    }
+}
+
+// =============================================================================
+// TOPOLOGY MESSAGES
+// =============================================================================
+
+message GetNodesByRoleRequest {
+    string role = 1;
+}
+
+message GetNodesByRoleResponse {
+    repeated string node_names = 1;
+}
+
+// =============================================================================
+// CROSS-FLOW MESSAGES (Export/Import)
+// =============================================================================
+
+message ExportRequest {
+    string endpoint = 1;                      // Target Ingress URL (required)
+    string flow_id = 2;                       // Target flow ID (optional, for logging)
+    repeated string artefacts = 3;            // Artefacts to include (empty = all)
+    int32 timeout_ms = 4;                     // Override timeout (0 = default 30s)
+}
+
+message ExportResponse {
+    // Empty on success (workitem already completed)
+    // This response is only returned on failure
+}
+
+message ImportRequest {
+    oneof source {
+        bytes bundle = 1;                     // Small bundles (< 100MB) - in-memory
+        string bundle_path = 3;               // Large bundles - disk path (zero-copy handoff)
+    }
+    ImportOptions options = 2;                // Optional import configuration
+}
+
+message ImportOptions {
+    string workitem_type = 1;                 // Override type from bundle manifest
+    string intent_prefix = 2;                 // Prepend to imported intent
+    map<string, string> additional_context = 3; // Extra context fields
+}
+
+message ImportResponse {
+    string workitem_id = 1;                   // New local workitem ID
+    string source_flow = 2;                   // Source flow from bundle
+    string source_workitem_id = 3;            // Source workitem ID from bundle
+}
+
+message InspectBundleRequest {
+    oneof source {
+        bytes bundle = 1;                     // In-memory bundle
+        string bundle_path = 2;               // Disk path to bundle
+    }
+}
+
+message InspectBundleResponse {
+    string bundle_version = 1;
+    string source_flow = 2;
+    string source_workitem_id = 3;
+    string exported_at = 4;                   // ISO8601 timestamp
+    string export_node = 5;
+    string export_node_cert_fingerprint = 6;
+    bytes workitem_spec_json = 7;             // JSON-encoded original spec
+    repeated BundleArtefactEntry artefacts = 8;
+    bool signature_valid = 9;                 // Did signature verify against Treaties?
+    string treaty_name = 10;                  // Which Treaty matched (empty if none)
+}
+
+message BundleArtefactEntry {
+    string kind = 1;
+    string name = 2;
+    string hash = 3;
+    int64 size_bytes = 4;
+}
+
+// =============================================================================
+// CONSUMER API (Sidecar → Node)
+// =============================================================================
+
+service NodeRuntime {
+    // Deliver workitem for processing (async handoff)
+    rpc ProcessWorkitem(foundry.v1.Workitem) returns (google.protobuf.Empty);
+    
+    // Deliver telemetry event (for LISTEN:telemetry capability)
+    rpc DeliverTelemetry(foundry.v1.TelemetryEvent) returns (google.protobuf.Empty);
+}

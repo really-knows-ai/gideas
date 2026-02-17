@@ -1,0 +1,103 @@
+syntax = "proto3";
+package foundry.queue.v1;
+
+option go_package = "github.com/gideas/foundry/proto/queue/v1;queuev1";
+
+// QueuePeer provides inter-node communication for the Federated Queue Mesh.
+// Enabled by the QUEUE:server capability.
+service QueuePeer {
+  // ─────────────────────────────────────────────────────────────────────────
+  // Shard Operations (Internal - called by peer nodes)
+  // ─────────────────────────────────────────────────────────────────────────
+  
+  // GetLocalQueue returns items from this shard's local queue.db only.
+  // Used by peer nodes during scatter-gather aggregation.
+  rpc GetLocalQueue(QueueFilter) returns (QueueList);
+  
+  // GetItem fetches a specific item from this shard.
+  rpc GetItem(ItemRef) returns (QueueItem);
+  
+  // ─────────────────────────────────────────────────────────────────────────
+  // Mesh Operations (External - called by clients/gateways)
+  // ─────────────────────────────────────────────────────────────────────────
+  
+  // GetGlobalQueue aggregates items from ALL peers via scatter-gather.
+  // Can be called on any node in the mesh.
+  rpc GetGlobalQueue(QueueFilter) returns (QueueList);
+  
+  // ─────────────────────────────────────────────────────────────────────────
+  // Actions (Routed to Owner)
+  // ─────────────────────────────────────────────────────────────────────────
+  
+  // ClaimItem claims an item for a specific assignee.
+  // Automatically proxied to the owning shard if called on wrong node.
+  rpc ClaimItem(ClaimRequest) returns (QueueItem);
+  
+  // ReleaseItem releases a claimed item back to the queue.
+  rpc ReleaseItem(ItemRef) returns (QueueItem);
+  
+  // CompleteItem submits a decision for an item.
+  // Automatically proxied to the owning shard if called on wrong node.
+  rpc CompleteItem(Decision) returns (Result);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reference Messages
+// ─────────────────────────────────────────────────────────────────────────────
+
+message ItemRef {
+  string shard_id = 1;    // Pod identity (e.g., "hitl-0")
+  string item_id = 2;     // Workitem ID
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filter & List Messages
+// ─────────────────────────────────────────────────────────────────────────────
+
+message QueueFilter {
+  string assignee = 1;    // Filter by claimed assignee (empty = all)
+  string status = 2;      // Filter by status: waiting, claimed, deciding (empty = all)
+  int32 limit = 3;        // Max results (0 = default 100)
+  int32 offset = 4;       // Pagination offset
+}
+
+message QueueList {
+  repeated QueueItem items = 1;
+  int32 total = 2;        // Total matching items across all shards
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message QueueItem {
+  string id = 1;                    // Workitem ID
+  string shard_id = 2;              // Owning pod (e.g., "hitl-0")
+  string status = 3;                // waiting | claimed | deciding
+  string assignee = 4;              // Claimed by (empty if waiting)
+  string enqueued_at = 5;           // RFC3339 timestamp
+  string claimed_at = 6;            // RFC3339 timestamp (empty if not claimed)
+  string workitem_type = 7;         // Workitem spec.type
+  string summary = 8;               // Human-readable summary
+  bytes workitem_json = 9;          // Full workitem JSON (only in GetItem, not in list)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Action Messages
+// ─────────────────────────────────────────────────────────────────────────────
+
+message ClaimRequest {
+  ItemRef ref = 1;
+  string assignee = 2;    // Who is claiming
+}
+
+message Decision {
+  ItemRef ref = 1;
+  string output = 2;      // Output channel name (e.g., "approved", "rejected")
+  string comment = 3;     // Audit trail comment
+  bytes payload = 4;      // Optional: additional decision data (feedback items, etc.)
+}
+
+message Result {
+  bool success = 1;
+  string message = 2;     // Error message if not success
+  string shard_id = 3;    // Which shard processed the request
+}

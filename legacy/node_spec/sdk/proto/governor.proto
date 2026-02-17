@@ -1,0 +1,114 @@
+// Foundry Flow: Governor API (Operator ↔ Governor)
+// Port: 35698 (Governor endpoint only)
+// Version: 1.0.0
+// Status: Implementation Contract
+
+syntax = "proto3";
+
+package foundry.governor.v1;
+
+option go_package = "github.com/gideas/foundry/api/governor/v1;governorv1";
+
+import "types.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// GOVERNOR AUTHORITY SERVICE
+// =============================================================================
+
+service GovernorAuthority {
+    // Submit CSR during Annexation Protocol
+    rpc SignCSR(CSRRequest) returns (CSRResponse);
+    
+    // Renew operator certificate
+    rpc RenewCertificate(RenewRequest) returns (CSRResponse);
+    
+    // Revoke operator certificate
+    rpc RevokeCertificate(RevokeRequest) returns (google.protobuf.Empty);
+    
+    // Get State Root CA certificate
+    rpc GetStateRoot(google.protobuf.Empty) returns (StateRootResponse);
+}
+
+message CSRRequest {
+    string operator_id = 1;                   // e.g., "ideate-operator"
+    string namespace = 2;                     // e.g., "flow-ideate"
+    bytes csr_pem = 3;                        // PEM-encoded CSR
+    string attestation_token = 4;             // Kubernetes ServiceAccount JWT
+}
+
+message CSRResponse {
+    bytes certificate_pem = 1;                // Signed operator certificate
+    bytes state_root_pem = 2;                 // State Root CA certificate
+    google.protobuf.Timestamp expires_at = 3; // Certificate expiration
+}
+
+message RenewRequest {
+    string operator_id = 1;
+    bytes csr_pem = 2;
+    string attestation_token = 3;
+}
+
+message RevokeRequest {
+    string operator_id = 1;
+    string reason = 2;
+}
+
+message StateRootResponse {
+    bytes state_root_pem = 1;                 // State Root CA certificate
+    string state_id = 2;                      // State identifier
+}
+
+// =============================================================================
+// GOVERNOR FEDERATION SERVICE
+// =============================================================================
+
+service GovernorFederation {
+    // Synchronize law between flows
+    rpc SyncLaw(SyncLawRequest) returns (google.protobuf.Empty);
+    
+    // Query sibling flow status
+    rpc GetSiblingStatus(GetSiblingStatusRequest) returns (SiblingStatus);
+    
+    // Get operator public keys for Treaty exchange
+    rpc GetOperatorPublicKeys(GetOperatorPublicKeysRequest) returns (GetOperatorPublicKeysResponse);
+}
+
+// NOTE: InjectWorkitem has been REMOVED.
+// Cross-flow collaboration uses the Export/Import pattern instead.
+// See: flow_spec/14_cross_flow_collaboration.md
+
+message SyncLawRequest {
+    foundry.v1.Law law = 1;
+    string source_flow = 2;
+    bytes signature = 3;
+}
+
+message GetSiblingStatusRequest {
+    string flow_id = 1;
+}
+
+message SiblingStatus {
+    string flow_id = 1;
+    bool healthy = 2;
+    google.protobuf.Timestamp last_heartbeat = 3;
+    int32 active_workitems = 4;
+}
+
+message GetOperatorPublicKeysRequest {
+    string operator_id = 1;                   // Optional: filter by operator
+}
+
+message GetOperatorPublicKeysResponse {
+    repeated OperatorPublicKey operators = 1;
+}
+
+message OperatorPublicKey {
+    string operator_id = 1;
+    string namespace = 2;
+    bytes ca_certificate_pem = 3;             // Operator CA certificate (for Treaty config)
+    string fingerprint = 4;                   // SHA256 fingerprint of CA cert
+    google.protobuf.Timestamp issued_at = 5;
+    google.protobuf.Timestamp expires_at = 6;
+}

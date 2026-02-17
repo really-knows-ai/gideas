@@ -1,0 +1,260 @@
+// Foundry Flow: System Services (Sidecar ↔ Control Plane)
+// Port: 35698
+// Version: 1.0.0
+// Status: Implementation Contract
+
+syntax = "proto3";
+
+package foundry.system.v1;
+
+option go_package = "github.com/gideas/foundry/api/system/v1;systemv1";
+
+import "types.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// ARCHIVIST SERVICE
+// =============================================================================
+
+service ArchivistService {
+    // Store content (streaming for large files)
+    rpc Store(stream StoreChunk) returns (StoreReceipt);
+    
+    // Fetch content (streaming)
+    rpc Fetch(FetchRequest) returns (stream FetchChunk);
+    
+    // Prune old versions
+    rpc Prune(PruneRequest) returns (PruneResponse);
+    
+    // Stream law mutation logs (for Law Search catch-up)
+    rpc StreamLogs(StreamLogsRequest) returns (stream LawUpdate);
+    
+    // Get cold snapshot metadata
+    rpc GetSnapshotInfo(google.protobuf.Empty) returns (SnapshotInfo);
+}
+
+message StoreChunk {
+    oneof data {
+        StoreHeader header = 1;               // First chunk
+        bytes content = 2;                    // Subsequent chunks
+    }
+}
+
+message StoreHeader {
+    string namespace = 1;                     // Workitem namespace
+    string workitem_id = 2;
+    string kind = 3;
+    string name = 4;
+    string expected_hash = 5;                 // Optional pre-computed SHA256
+}
+
+message StoreReceipt {
+    string hash = 1;                          // SHA256 of stored content
+    int64 size_bytes = 2;
+}
+
+message FetchRequest {
+    string namespace = 1;
+    string workitem_id = 2;
+    string kind = 3;
+    string name = 4;
+    string version = 5;                       // Optional - empty = latest
+}
+
+message FetchChunk {
+    bytes content = 1;                        // Content chunk
+    bool is_last = 2;                         // True for final chunk
+}
+
+message PruneRequest {
+    string namespace = 1;
+    string workitem_id = 2;
+    string kind = 3;
+    int32 keep_versions = 4;                  // Keep last N versions
+}
+
+message PruneResponse {
+    int32 versions_pruned = 1;
+    int64 bytes_freed = 2;
+}
+
+message StreamLogsRequest {
+    int64 since_sequence_id = 1;              // Replay from this sequence
+}
+
+message LawUpdate {
+    int64 sequence_id = 1;                    // Strictly increasing sequence
+    string merkle_root = 2;                   // State checksum after this update
+    LawOperation operation = 3;
+    foundry.v1.Law law = 4;                   // Law state after operation
+}
+
+enum LawOperation {
+    LAW_OPERATION_UNSPECIFIED = 0;
+    LAW_OPERATION_CREATE = 1;
+    LAW_OPERATION_UPDATE = 2;
+    LAW_OPERATION_DELETE = 3;
+}
+
+message SnapshotInfo {
+    int64 sequence_id = 1;                    // Snapshot covers up to this sequence
+    string merkle_root = 2;
+    google.protobuf.Timestamp created_at = 3;
+    string location = 4;                      // Storage path
+}
+
+// =============================================================================
+// LIBRARIAN SERVICE
+// =============================================================================
+
+service LibrarianService {
+    // Create a new Tier 1 Finding
+    rpc RecordFinding(RecordFindingRequest) returns (RecordFindingResponse);
+    
+    // Search the Law Library
+    rpc Search(SearchRequest) returns (stream foundry.v1.Law);
+    
+    // Record a law citation
+    rpc Cite(CiteRequest) returns (google.protobuf.Empty);
+    
+    // Get law by ID
+    rpc GetLaw(GetLawRequest) returns (foundry.v1.Law);
+    
+    // Promote law to higher tier (internal use)
+    rpc PromoteLaw(PromoteLawRequest) returns (google.protobuf.Empty);
+    
+    // Demote law to lower tier (internal use)
+    rpc DemoteLaw(DemoteLawRequest) returns (google.protobuf.Empty);
+    
+    // Retire a law (internal use)
+    rpc RetireLaw(RetireLawRequest) returns (google.protobuf.Empty);
+    
+    // Sustain a ruling (extend expiry)
+    rpc SustainRuling(SustainRulingRequest) returns (google.protobuf.Empty);
+}
+
+message RecordFindingRequest {
+    string statement = 1;
+    map<string, string> labels = 2;
+    string created_by = 3;                    // Node name
+    string workitem_id = 4;                   // Source workitem
+}
+
+message RecordFindingResponse {
+    string law_id = 1;
+    bool was_duplicate = 2;                   // True if returned existing law
+    repeated string candidate_ids = 3;        // Similar laws if duplicate
+    repeated float similarity_scores = 4;     // Similarity to candidates
+}
+
+message SearchRequest {
+    string semantic_query = 1;
+    map<string, string> labels = 2;
+    int32 tier = 3;
+    int32 limit = 4;
+}
+
+message CiteRequest {
+    string law_id = 1;
+    string cited_by_node = 2;
+    string workitem_id = 3;
+}
+
+message GetLawRequest {
+    string law_id = 1;
+}
+
+message PromoteLawRequest {
+    string law_id = 1;
+    int32 new_tier = 2;
+}
+
+message DemoteLawRequest {
+    string law_id = 1;
+    string reason = 2;
+}
+
+message RetireLawRequest {
+    string law_id = 1;
+    string reason = 2;                        // "obsolete" | "superseded" | "invalid"
+    string superseded_by = 3;                 // Optional - replacing law
+}
+
+message SustainRulingRequest {
+    string law_id = 1;
+    string extend_duration = 2;               // Duration string (e.g., "+90d")
+}
+
+// =============================================================================
+// TELEMETRY ROUTER SERVICE
+// =============================================================================
+
+service TelemetryRouter {
+    // Record a telemetry event
+    rpc RecordTelemetry(foundry.v1.TelemetryEvent) returns (google.protobuf.Empty);
+    
+    // Subscribe to telemetry stream (for processors)
+    rpc Subscribe(SubscribeRequest) returns (stream foundry.v1.TelemetryEvent);
+}
+
+message SubscribeRequest {
+    string processor_id = 1;                  // Processor identifier
+    repeated string event_types = 2;          // Filter by event type (empty = all)
+}
+
+// =============================================================================
+// OPERATOR SERVICE (Sidecar → Operator)
+// =============================================================================
+
+service OperatorService {
+    // Report workitem result
+    rpc ReportWorkitemResult(WorkitemResultReport) returns (google.protobuf.Empty);
+    
+    // Report node health
+    rpc ReportHealth(HealthReport) returns (google.protobuf.Empty);
+    
+    // Request certificate renewal
+    rpc RequestCertRenewal(CertRenewalRequest) returns (CertRenewalResponse);
+}
+
+message WorkitemResultReport {
+    string workitem_id = 1;
+    string node_name = 2;
+    oneof result {
+        string route_to_output = 3;
+        string route_to = 4;
+        bool complete = 5;
+        WorkitemFailure failure = 6;
+    }
+}
+
+message WorkitemFailure {
+    string reason = 1;                        // Error code
+    string message = 2;                       // Human-readable message
+}
+
+message HealthReport {
+    string node_name = 1;
+    NodeHealthState state = 2;
+    google.protobuf.Timestamp timestamp = 3;
+}
+
+enum NodeHealthState {
+    NODE_HEALTH_STATE_UNSPECIFIED = 0;
+    NODE_HEALTH_STATE_STARTING = 1;
+    NODE_HEALTH_STATE_READY = 2;
+    NODE_HEALTH_STATE_BUSY = 3;
+    NODE_HEALTH_STATE_DRAINING = 4;
+    NODE_HEALTH_STATE_UNHEALTHY = 5;
+}
+
+message CertRenewalRequest {
+    string node_name = 1;
+    bytes csr_pem = 2;                        // Certificate Signing Request
+}
+
+message CertRenewalResponse {
+    bytes certificate_pem = 1;                // Signed certificate
+    bytes ca_chain_pem = 2;                   // CA certificate chain
+}
