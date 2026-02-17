@@ -6,8 +6,8 @@ Flow configuration defines runtime behaviour and is the normative source for beh
 
 Configuration is expressed through three resource types with distinct authority boundaries:
 
-- [FoundryFlow](../05-reference/crds.md) defines Flow-wide behaviour: contracts (`entryContracts`, `exitContracts`), governance policy limits, and cross-flow policy.
-- [FoundryNode](../05-reference/crds.md) defines node-local behaviour and permissions: routing outputs, capabilities, timeout budget, and entry/exit bindings (`entry`, `exit`).
+- [FoundryFlow](../05-reference/crds.md#foundryflow) defines Flow-wide behaviour: contracts (`entryContracts`, `exitContracts`), governance policy limits, and cross-flow policy.
+- [FoundryNode](../05-reference/crds.md#foundrynode) defines node-local behaviour and permissions: routing outputs, capabilities, timeout budget, and entry/exit bindings (`entry`, `exit`).
 - Support Service CRDs define per-service provided capabilities, infrastructure requirements, and deployment policy. Nodes consume Support Service capabilities via `USE:support/...` grants on their FoundryNode `capabilities` field.
 
 Behaviour precedence is deterministic:

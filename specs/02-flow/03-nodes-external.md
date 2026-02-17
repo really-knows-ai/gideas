@@ -97,6 +97,8 @@ Assay capabilities are fixed by the runtime (not configurable by the Flow Archit
 
 Assay does not write Tier 1 Findings by convention; its role is judicial, not observational.
 
+Assay's deadlock adjudication and review-hearing deliberation use the [FoundryAgent](../04-sdk/07-sdk-agent.md) pattern for jury execution. Each juror is a FoundryAgent instance that evaluates the dispute independently, producing a structured verdict. Per-juror cost accounting is automatic — each juror's inference steps emit `foundry.cost.llm` telemetry events with attribution tags (`juror`, `round`, `severity`, `feedback_id`), enabling operators to quantify deliberation cost per dispute through the [Flow Monitor](./04-system-services.md#flow-monitor-and-friction-surface).
+
 ## External Integration Nodes
 
 External integration nodes connect Flow execution to external systems (webhooks, event buses, service APIs, human workflow systems) while preserving Flow invariants.

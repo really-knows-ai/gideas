@@ -14,7 +14,7 @@ The SDK exposes law retrieval with distinct query modes:
 - **By artefact kind** — caller provides an artefact kind (e.g., `"haiku"`). Returns laws whose `appliesTo` includes the queried kind, plus all global laws (empty `appliesTo`).
 - **By artefact kind + representation type** — caller provides an artefact kind and a representation type. Same kind filter as above, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
 
-All three modes return full law objects — goal, all representations, tier, and lifecycle metadata. Filters gate which laws are included in the result; they never strip representations from returned objects. The node sees the whole law and picks the representation it uses.
+All query modes return full law objects — goal, all representations, tier, and lifecycle metadata. Filters gate which laws are included in the result; they never strip representations from returned objects. The node sees the whole law and picks the representation it uses.
 
 ### Reference Arrangement Usage
 
@@ -39,7 +39,7 @@ The Sidecar injects all identity context (`node_id`, `workitem_id`, `flow_id`) a
 
 Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events alongside all other friction. The [Librarian](../02-flow/04-system-services.md#librarian) queries the Flow Monitor for accumulated friction on individual laws to determine when friction-threshold [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol) should be triggered.
 
-Requires `READ:law` capability — a node that cannot read laws has no basis for citing them.
+Requires `WRITE:friction` capability — the underlying mechanism is friction emission through the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
 
 ## Finding Creation
 
@@ -85,13 +85,14 @@ Nodes should not assume that every law carries a specific representation type. Q
 
 ## Capability and Authorisation Semantics
 
-Legal operations map to capability requirements enforced by the [Librarian](../02-flow/04-system-services.md#librarian):
+Legal operations map to capability requirements:
 
 | Operation | Required Capability | Enforcing Service |
 |-----------|-------------------|-------------------|
 | `QueryLaws` (all modes) | `READ:law` | Librarian |
-| `Cite` | `READ:law` | Librarian (via Flow Monitor) |
 | `RecordFinding` | `WRITE:law/tier1` | Librarian |
+
+[`Cite`](./06-sdk-telemetry.md#addfriction-node-context) is not a legal operation — it is SDK sugar over [`AddFriction`](./06-sdk-telemetry.md#addfriction-node-context), which requires `WRITE:friction` and is enforced by the Sidecar. See [Friction Emission Contract](./06-sdk-telemetry.md#friction-emission-contract).
 
 Missing capabilities produce a `CAPABILITY_DENIED` error from the Librarian, forwarded through the Sidecar as a structured error. The node does not learn what capabilities it lacks — the error indicates the operation was denied, not which specific grant is missing.
 

@@ -73,11 +73,19 @@ Escalation patterns (manager/director chains, delegation, pool-based routing) ar
 
 Nodes that perform extended computation — multi-step LLM chains, complex reasoning, long-running inference — must maintain [activity signals](./01-sidecar.md#heartbeat-and-activity-tracking) within the configured timeout window.
 
-**Automatic heartbeat for inference workloads.** The FoundryAgent pattern wraps inference execution with automatic heartbeat management. During inference steps, the wrapper calls `Heartbeat()` at regular intervals, freeing the developer from manual timer management. The heartbeat interval should be well within the configured timeout to provide margin for transient delays.
+The [FoundryAgent](../04-sdk/07-sdk-agent.md) pattern is the recommended approach for all LLM-backed nodes. It wraps inference execution with three managed guarantees:
 
-**Schema-first output validation.** Agent nodes that produce structured output (JSON schemas, typed artefacts) should validate output structure before writing artefacts or returning routing instructions. Fail-fast validation catches malformed inference output before it enters the governed pipeline.
+1. **Managed Liveness** — automatic `Heartbeat()` calls at regular intervals during inference, freeing the developer from manual timer management. The heartbeat loop runs continuously while the `Infer` method executes.
+2. **Schema-First Output Validation** — structured output is validated against a declared schema before it can be written to artefacts or returned as a routing decision. Malformed inference output fails fast and never enters the governed pipeline.
+3. **Atomic Cost Accounting** — each inference step emits a `foundry.cost.llm` telemetry event immediately via `RecordTelemetry`. If the handler is interrupted, the accounting record reflects actual work performed, not batched totals.
 
-**Atomic accounting.** Each inference step that produces a billable or metered operation should record telemetry immediately rather than batching at the end of the handler. If the handler is interrupted, the accounting record reflects actual work performed.
+The [SDK Agent](../04-sdk/07-sdk-agent.md) document is the authoritative contract for FoundryAgent behaviour, including handler structure, output validation semantics, and the relationship to Assay's jury mechanism.
+
+**Manual alternative.** Nodes that perform inference without FoundryAgent must manage these concerns explicitly:
+
+- Call `Heartbeat()` at intervals well within the configured timeout during any computation that does not make SDK calls.
+- Validate structured output before writing artefacts or returning routing instructions.
+- Emit cost telemetry through `RecordTelemetry()` after each inference step rather than batching at handler exit.
 
 ## External Integration Pattern
 

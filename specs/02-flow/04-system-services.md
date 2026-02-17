@@ -54,7 +54,7 @@ The Librarian serves law queries through the [Sidecar](../03-node/01-sidecar.md)
 - **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.
 - **By artefact kind + representation type** — same kind filter, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
 
-All three modes return full law objects (goal, all representations, tier, metadata). Filters gate which laws are included in the result; they never strip representations from returned law objects.
+All query modes return full law objects (goal, all representations, tier, metadata). Filters gate which laws are included in the result; they never strip representations from returned law objects.
 
 Tier is part of legal authority, but retrieval remains one law body with one identity model — all tiers are returned together.
 
@@ -174,7 +174,7 @@ Each Codification Service is declared via its own [CodificationService CRD](../0
 Codification Services expose a single `Encode` [gRPC method](../05-reference/grpc-api.md#codification-service-api) consumed during law promotion:
 
 1. Assay renders a Promote verdict and drafts the Ruling's prose representation — the goal and its `text/markdown` content.
-2. Assay queries the Flow configuration for registered CodificationService CRDs and probes each service's `readyz` endpoint via its Sidecar. Services that are not ready are skipped.
+2. Assay discovers registered CodificationService instances through its Sidecar (the [Operator](./01-operator.md) internally manages Assay's `USE:support/<name>/encode` capability for each registered instance) and probes each service's `readyz` endpoint via its Sidecar. Services that are not ready are skipped.
 3. Assay dispatches `Encode` requests in parallel to all ready Codification Services via its Sidecar. Each request carries the full law object (goal, existing representations, tier, metadata). Each service returns a single typed representation in its declared `outputFormat`.
 4. Assay collects the results. If a Codification Service fails, Assay logs the failure and omits that representation — the Ruling proceeds without it.
 5. Assay assembles the Tier 2 Ruling as a single law object: the prose representation plus all successfully returned formal representations.

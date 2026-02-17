@@ -31,7 +31,7 @@ stateDiagram-v2
     Pending --> Running : assign()
     Running --> Pending : route()
     Running --> Completed : complete()
-    Running --> Failed : timeout()<br/>thrash()<br/>error()
+    Running --> Failed : timeout()<br/>thrash()<br/>runtime error()
     Pending --> Failed : fail()
     Completed --> [*]
     Failed --> [*]
@@ -396,6 +396,6 @@ When a node queries the [Librarian](../02-flow/04-system-services.md) for applic
 - **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.
 - **By artefact kind + representation type** — same kind filter, plus the law must have at least one representation of the requested type.
 
-All three modes return full law objects — goal, all representations, tier, and metadata. Filters gate which laws are included; they never strip representations from returned objects. The node sees the whole law and picks the representation it uses.
+All query modes return full law objects — goal, all representations, tier, and metadata. Filters gate which laws are included; they never strip representations from returned objects. The node sees the whole law and picks the representation it uses.
 
 In the [reference arrangement](./02-foundry-cycle.md), [Forge](./02-foundry-cycle.md#forge-creator) queries by artefact kind to seed its generation context with all applicable governance. [Quench](./02-foundry-cycle.md#quench-deterministic-validator) queries by kind and executable representation type to find laws it can run as deterministic checks. [Appraise](./02-foundry-cycle.md#appraise-reviewer) queries by kind and prose representation type to find laws a review panel can evaluate subjectively. Each node sees the same body of law through a different lens.
