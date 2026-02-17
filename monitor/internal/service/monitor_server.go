@@ -7,9 +7,7 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/gideas/flow/monitor/internal/store/sqlite"
@@ -41,7 +39,9 @@ func NewMonitorServer(s *sqlite.Store, idGen IDGenerator) *MonitorServer {
 
 // AddFriction validates and persists a friction event with its associated law
 // identifiers in a single transaction.
-func (m *MonitorServer) AddFriction(ctx context.Context, req *flowv1.AddFrictionRequest) (*flowv1.AddFrictionResponse, error) {
+func (m *MonitorServer) AddFriction(
+	ctx context.Context, req *flowv1.AddFrictionRequest,
+) (*flowv1.AddFrictionResponse, error) {
 	// Validate mandatory fields.
 	if req.GetFlowId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "flow_id is required")
@@ -84,7 +84,9 @@ func (m *MonitorServer) AddFriction(ctx context.Context, req *flowv1.AddFriction
 }
 
 // RecordTelemetry validates the payload size and persists a telemetry event.
-func (m *MonitorServer) RecordTelemetry(ctx context.Context, req *flowv1.RecordTelemetryRequest) (*flowv1.RecordTelemetryResponse, error) {
+func (m *MonitorServer) RecordTelemetry(
+	ctx context.Context, req *flowv1.RecordTelemetryRequest,
+) (*flowv1.RecordTelemetryResponse, error) {
 	// Validate mandatory fields.
 	if req.GetFlowId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "flow_id is required")
@@ -132,7 +134,9 @@ func (m *MonitorServer) RecordTelemetry(ctx context.Context, req *flowv1.RecordT
 
 // QueryFriction applies the FrictionFilter to the SQL store and returns
 // aggregated friction data grouped by (law_id, node_id, workitem_id).
-func (m *MonitorServer) QueryFriction(ctx context.Context, req *flowv1.QueryFrictionRequest) (*flowv1.QueryFrictionResponse, error) {
+func (m *MonitorServer) QueryFriction(
+	ctx context.Context, req *flowv1.QueryFrictionRequest,
+) (*flowv1.QueryFrictionResponse, error) {
 	filter := sqlite.FrictionFilter{}
 
 	if f := req.GetFilter(); f != nil {
@@ -188,23 +192,4 @@ func (m *MonitorServer) QueryFriction(ctx context.Context, req *flowv1.QueryFric
 	return &flowv1.QueryFrictionResponse{
 		FrictionAggregates: aggregates,
 	}, nil
-}
-
-// formatLawIDs is a helper for log output.
-func formatLawIDs(ids []string) string {
-	if len(ids) == 0 {
-		return "[]"
-	}
-	return fmt.Sprintf("[%s]", joinStrings(ids, ", "))
-}
-
-func joinStrings(ss []string, sep string) string {
-	var result strings.Builder
-	for i, s := range ss {
-		if i > 0 {
-			result.WriteString(sep)
-		}
-		result.WriteString(s)
-	}
-	return result.String()
 }

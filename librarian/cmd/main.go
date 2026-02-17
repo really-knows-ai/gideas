@@ -86,7 +86,7 @@ func main() {
 		slog.Error("Failed to initialise SQLite store", "error", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Initialise the embedder. Nil-safe if Ollama is unreachable.
 	var embedder embed.Embedder
@@ -118,7 +118,7 @@ func main() {
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		srv.GracefulStop()
-		store.Close()
+		_ = store.Close()
 	}()
 
 	slog.Info("Librarian listening", "address", lis.Addr().String())

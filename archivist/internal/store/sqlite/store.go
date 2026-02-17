@@ -86,19 +86,19 @@ func New(dsn string) (*Store, error) {
 
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 
 	// Enable foreign keys.
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	s := &Store{db: db}
 	if err := s.initSchema(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	return s, nil
@@ -265,7 +265,7 @@ func (s *Store) GetHistory(ctx context.Context, workitemID, artefactID string) (
 	if err != nil {
 		return nil, fmt.Errorf("get history: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var history []ArtefactVersion
 	for rows.Next() {
@@ -305,7 +305,7 @@ func (s *Store) ListArtefacts(ctx context.Context, workitemID string) ([]Artefac
 	if err != nil {
 		return nil, fmt.Errorf("list artefacts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var entries []ArtefactEntry
 	for rows.Next() {
@@ -327,9 +327,14 @@ func (s *Store) ListArtefacts(ctx context.Context, workitemID string) ([]Artefac
 
 // StampArtefact applies a named stamp to an artefact version. It is a no-op
 // (returns false) if the stamp already exists for that version.
-func (s *Store) StampArtefact(ctx context.Context, workitemID, artefactID, versionHash, stampName, applyingNode string, signature, certChain []byte) (bool, error) {
+func (s *Store) StampArtefact(
+	ctx context.Context,
+	workitemID, artefactID, versionHash, stampName, applyingNode string,
+	signature, certChain []byte,
+) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO stamps (workitem_id, artefact_id, version_hash, stamp_name, applying_node, signature, cert_chain)
+		`INSERT OR IGNORE INTO stamps
+		 (workitem_id, artefact_id, version_hash, stamp_name, applying_node, signature, cert_chain)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		workitemID, artefactID, versionHash, stampName, applyingNode, signature, certChain,
 	)
@@ -355,13 +360,16 @@ func (s *Store) GetStamps(ctx context.Context, workitemID, artefactID, versionHa
 	if err != nil {
 		return nil, fmt.Errorf("get stamps: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var stamps []StampRecord
 	for rows.Next() {
 		var sr StampRecord
 		var createdStr string
-		if err := rows.Scan(&sr.Name, &sr.ApplyingNode, &sr.ContentHash, &sr.Signature, &sr.CertChain, &createdStr); err != nil {
+		if err := rows.Scan(
+			&sr.Name, &sr.ApplyingNode, &sr.ContentHash,
+			&sr.Signature, &sr.CertChain, &createdStr,
+		); err != nil {
 			return nil, fmt.Errorf("scan stamp: %w", err)
 		}
 		sr.CreatedAt = parseTime(createdStr)
@@ -396,7 +404,9 @@ func (s *Store) HasStamp(ctx context.Context, workitemID, artefactID, stampName 
 
 // GetStampNamesForVersion returns the stamp names applied to a specific
 // artefact version hash.
-func (s *Store) GetStampNamesForVersion(ctx context.Context, workitemID, artefactID, versionHash string) ([]string, error) {
+func (s *Store) GetStampNamesForVersion(
+	ctx context.Context, workitemID, artefactID, versionHash string,
+) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT stamp_name FROM stamps
 		 WHERE workitem_id = ? AND artefact_id = ? AND version_hash = ?
@@ -406,7 +416,7 @@ func (s *Store) GetStampNamesForVersion(ctx context.Context, workitemID, artefac
 	if err != nil {
 		return nil, fmt.Errorf("get stamp names: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var names []string
 	for rows.Next() {
@@ -425,7 +435,11 @@ func (s *Store) GetStampNamesForVersion(ctx context.Context, workitemID, artefac
 
 // AddFeedback creates a new feedback item in NEW state and appends the
 // initial "created" event. Returns the generated feedback ID.
-func (s *Store) AddFeedback(ctx context.Context, workitemID, artefactID, source string, severity int32, message, versionHash string) (string, error) {
+func (s *Store) AddFeedback(
+	ctx context.Context,
+	workitemID, artefactID, source string,
+	severity int32, message, versionHash string,
+) (string, error) {
 	feedbackID := uuid.New().String()
 	const stateNew int32 = 1 // flowv1.FeedbackState_FEEDBACK_STATE_NEW
 
@@ -433,7 +447,7 @@ func (s *Store) AddFeedback(ctx context.Context, workitemID, artefactID, source 
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO feedback_items (id, workitem_id, artefact_id, source, severity, state, message, version_hash)
@@ -471,13 +485,16 @@ func (s *Store) GetFeedback(ctx context.Context, workitemID, artefactID string) 
 	if err != nil {
 		return nil, fmt.Errorf("get feedback: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var items []FeedbackRecord
 	for rows.Next() {
 		var f FeedbackRecord
 		var createdStr string
-		if err := rows.Scan(&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source, &f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr); err != nil {
+		if err := rows.Scan(
+			&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
+			&f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr,
+		); err != nil {
 			return nil, fmt.Errorf("scan feedback: %w", err)
 		}
 		f.CreatedAt = parseTime(createdStr)
@@ -498,7 +515,7 @@ func (s *Store) GetFeedbackEvents(ctx context.Context, feedbackID string) ([]Fee
 	if err != nil {
 		return nil, fmt.Errorf("get feedback events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []FeedbackEventRecord
 	for rows.Next() {
@@ -533,12 +550,16 @@ func (s *Store) HasUnresolvedFeedback(ctx context.Context, workitemID, artefactI
 // TransitionFeedback updates a feedback item's state and appends a history
 // event. It returns the updated feedback record or an error if the current
 // state does not match one of the expected from-states.
-func (s *Store) TransitionFeedback(ctx context.Context, feedbackID string, fromStates []int32, toState int32, actor, action, message string) (*FeedbackRecord, error) {
+func (s *Store) TransitionFeedback(
+	ctx context.Context, feedbackID string,
+	fromStates []int32, toState int32,
+	actor, action, message string,
+) (*FeedbackRecord, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Read current state.
 	var f FeedbackRecord

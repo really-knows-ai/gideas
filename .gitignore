@@ -2,3 +2,10 @@ node_modules/
 gen/
 go.work.sum
 bin/
+
+# Compiled Go binaries
+haiku-appraise
+haiku-forge
+haiku-quench
+haiku-refine
+haiku-watch

@@ -55,7 +55,7 @@ func main() {
 		slog.Error("Failed to initialise SQLite store", "error", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -78,7 +78,7 @@ func main() {
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		srv.GracefulStop()
-		store.Close()
+		_ = store.Close()
 	}()
 
 	slog.Info("Flow Monitor listening", "address", lis.Addr().String())

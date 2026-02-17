@@ -27,7 +27,7 @@ func newTestServer(t *testing.T) *LibrarianServer {
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return NewLibrarianServer(store, nil, testIDGen, 0.85)
 }
 
@@ -40,14 +40,18 @@ func TestQueryLaws_AllLaws(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed data.
-	srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+	if _, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
 		Goal:            "Law A",
 		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "a"}},
-	})
-	srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+	}); err != nil {
+		t.Fatalf("RecordFinding Law A: %v", err)
+	}
+	if _, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
 		Goal:            "Law B",
 		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "b"}},
-	})
+	}); err != nil {
+		t.Fatalf("RecordFinding Law B: %v", err)
+	}
 
 	resp, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
 	if err != nil {
@@ -62,16 +66,20 @@ func TestQueryLaws_ScopedFilter(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+	if _, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
 		Goal:            "Scoped law",
 		AppliesTo:       []string{"source-code"},
 		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "scoped"}},
-	})
-	srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+	}); err != nil {
+		t.Fatalf("RecordFinding Scoped law: %v", err)
+	}
+	if _, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
 		Goal:            "Other scope",
 		AppliesTo:       []string{"docs"},
 		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "other"}},
-	})
+	}); err != nil {
+		t.Fatalf("RecordFinding Other scope: %v", err)
+	}
 
 	resp, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{
 		Filter: &flowv1.LawFilter{ArtefactKind: "source-code"},
@@ -448,10 +456,12 @@ func TestApplyLifecycleAction_Demote(t *testing.T) {
 	})
 
 	// Promote first (T1 -> T2).
-	srv.ApplyLifecycleAction(ctx, &flowv1.ApplyLifecycleActionRequest{
+	if _, err := srv.ApplyLifecycleAction(ctx, &flowv1.ApplyLifecycleActionRequest{
 		LawId:   findResp.GetLawId(),
 		Verdict: flowv1.Verdict_VERDICT_PROMOTE,
-	})
+	}); err != nil {
+		t.Fatalf("ApplyLifecycleAction promote: %v", err)
+	}
 
 	// Now demote (T2 -> T1).
 	resp, err := srv.ApplyLifecycleAction(ctx, &flowv1.ApplyLifecycleActionRequest{

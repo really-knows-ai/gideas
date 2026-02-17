@@ -23,7 +23,7 @@ func newTestServer(t *testing.T) *ArchivistServer {
 	if err != nil {
 		t.Fatalf("failed to create test store: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return NewArchivistServer(store)
 }
 
@@ -68,7 +68,9 @@ func TestStoreArtefact_DuplicateContent(t *testing.T) {
 	}
 
 	// First store.
-	s.StoreArtefact(ctx, req)
+	if _, err := s.StoreArtefact(ctx, req); err != nil {
+		t.Fatalf("first StoreArtefact: %v", err)
+	}
 
 	// Second store with same content.
 	resp, err := s.StoreArtefact(ctx, req)
@@ -87,13 +89,15 @@ func TestStoreArtefact_UpdatedContent(t *testing.T) {
 	// Store v1.
 	v1Content := []byte("version 1")
 	v1Hash := sha256Hex(v1Content)
-	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:  "wi-1",
 		ArtefactId:  "doc",
 		Kind:        "txt",
 		Content:     v1Content,
 		ContentHash: v1Hash,
-	})
+	}); err != nil {
+		t.Fatalf("StoreArtefact v1: %v", err)
+	}
 
 	// Store v2 with different content.
 	v2Content := []byte("version 2")
@@ -123,13 +127,15 @@ func TestGetArtefact_LatestVersion(t *testing.T) {
 	content := []byte("Hello from Step 1")
 	hash := sha256Hex(content)
 
-	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:  "wi-1",
 		ArtefactId:  "greeting",
 		Kind:        "txt",
 		Content:     content,
 		ContentHash: hash,
-	})
+	}); err != nil {
+		t.Fatalf("StoreArtefact: %v", err)
+	}
 
 	resp, err := s.GetArtefact(ctx, &flowv1.GetArtefactRequest{
 		WorkitemId: "wi-1",
@@ -173,13 +179,15 @@ func TestGetArtefactVersion(t *testing.T) {
 	content := []byte("specific version")
 	hash := sha256Hex(content)
 
-	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:  "wi-1",
 		ArtefactId:  "doc",
 		Kind:        "txt",
 		Content:     content,
 		ContentHash: hash,
-	})
+	}); err != nil {
+		t.Fatalf("StoreArtefact: %v", err)
+	}
 
 	resp, err := s.GetArtefactVersion(ctx, &flowv1.GetArtefactVersionRequest{
 		WorkitemId:  "wi-1",
@@ -216,20 +224,24 @@ func TestListArtefacts(t *testing.T) {
 	s := newTestServer(t)
 	ctx := context.Background()
 
-	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:  "wi-1",
 		ArtefactId:  "doc1",
 		Kind:        "txt",
 		Content:     []byte("a"),
 		ContentHash: sha256Hex([]byte("a")),
-	})
-	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+	}); err != nil {
+		t.Fatalf("StoreArtefact doc1: %v", err)
+	}
+	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:  "wi-1",
 		ArtefactId:  "doc2",
 		Kind:        "json",
 		Content:     []byte("b"),
 		ContentHash: sha256Hex([]byte("b")),
-	})
+	}); err != nil {
+		t.Fatalf("StoreArtefact doc2: %v", err)
+	}
 
 	resp, err := s.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
 		WorkitemId: "wi-1",
@@ -248,20 +260,24 @@ func TestGetArtefactMetadata(t *testing.T) {
 
 	v1 := []byte("v1")
 	v2 := []byte("v2")
-	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:  "wi-1",
 		ArtefactId:  "doc",
 		Kind:        "txt",
 		Content:     v1,
 		ContentHash: sha256Hex(v1),
-	})
-	s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+	}); err != nil {
+		t.Fatalf("StoreArtefact v1: %v", err)
+	}
+	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:  "wi-1",
 		ArtefactId:  "doc",
 		Kind:        "txt",
 		Content:     v2,
 		ContentHash: sha256Hex(v2),
-	})
+	}); err != nil {
+		t.Fatalf("StoreArtefact v2: %v", err)
+	}
 
 	resp, err := s.GetArtefactMetadata(ctx, &flowv1.GetArtefactMetadataRequest{
 		WorkitemId: "wi-1",

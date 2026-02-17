@@ -23,7 +23,9 @@ type captureArchivistServer struct {
 	capturedMD   metadata.MD
 }
 
-func (s *captureArchivistServer) StoreArtefact(ctx context.Context, req *flowv1.StoreArtefactRequest) (*flowv1.StoreArtefactResponse, error) {
+func (s *captureArchivistServer) StoreArtefact(
+	ctx context.Context, req *flowv1.StoreArtefactRequest,
+) (*flowv1.StoreArtefactResponse, error) {
 	s.lastStoreReq = req
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		s.capturedMD = md
@@ -34,7 +36,9 @@ func (s *captureArchivistServer) StoreArtefact(ctx context.Context, req *flowv1.
 	}, nil
 }
 
-func (s *captureArchivistServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
+func (s *captureArchivistServer) GetArtefact(
+	ctx context.Context, req *flowv1.GetArtefactRequest,
+) (*flowv1.GetArtefactResponse, error) {
 	s.lastGetReq = req
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		s.capturedMD = md
@@ -61,7 +65,7 @@ func setupArchivistProxy(t *testing.T) (*ArchivistProxy, *captureArchivistServer
 	}()
 	t.Cleanup(func() {
 		srv.Stop()
-		lis.Close()
+		_ = lis.Close()
 	})
 
 	conn, err := grpc.NewClient(
@@ -74,7 +78,7 @@ func setupArchivistProxy(t *testing.T) (*ArchivistProxy, *captureArchivistServer
 	if err != nil {
 		t.Fatalf("failed to dial bufconn: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	proxy := &ArchivistProxy{
 		client: flowv1.NewArchivistServiceClient(conn),

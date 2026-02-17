@@ -41,14 +41,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"node_id", wctx.GetNodeId(),
 	)
 
-	os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
+	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
 	client, err := flow.NewClient()
 	if err != nil {
 		return fmt.Errorf("forge: create client: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
-	client.Heartbeat(ctx)
+	_, _ = client.Heartbeat(ctx)
 
 	// Read the petition (creative brief).
 	petitionResp, err := client.GetArtefact(ctx, "petition")
@@ -74,11 +74,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		model = defaultModel
 	}
 
-	prompt := fmt.Sprintf(`You are a haiku poet. Write a single haiku (three lines: 5 syllables, 7 syllables, 5 syllables) based on the following request:
+	prompt := fmt.Sprintf(`You are a haiku poet. Write a single haiku
+(three lines: 5 syllables, 7 syllables, 5 syllables) based on the
+following request:
 
 %s%s
 
-IMPORTANT: Output ONLY the three lines of the haiku, nothing else. No title, no explanation, no quotes.`, petition, lawContext)
+IMPORTANT: Output ONLY the three lines of the haiku, nothing else.
+No title, no explanation, no quotes.`, petition, lawContext)
 
 	llm := ollama.New()
 	haiku, err := llm.Generate(ctx, model, prompt)

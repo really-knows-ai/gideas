@@ -79,19 +79,19 @@ func New(dsn string) (*Store, error) {
 
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 
 	// Enable foreign keys.
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	s := &Store{db: db}
 	if err := s.initSchema(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	return s, nil
@@ -164,7 +164,7 @@ func (s *Store) AddFriction(ctx context.Context, id string, event FrictionEvent,
 		if err != nil {
 			return fmt.Errorf("prepare law insert: %w", err)
 		}
-		defer stmt.Close()
+		defer func() { _ = stmt.Close() }()
 
 		for _, lawID := range lawIDs {
 			if _, err := stmt.ExecContext(ctx, id, lawID); err != nil {
@@ -258,7 +258,7 @@ func (s *Store) QueryFriction(ctx context.Context, filter FrictionFilter) ([]Fri
 	if err != nil {
 		return nil, fmt.Errorf("query friction: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []FrictionAggregate
 	for rows.Next() {

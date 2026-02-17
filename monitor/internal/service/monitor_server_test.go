@@ -30,7 +30,7 @@ func newTestServer(t *testing.T) *MonitorServer {
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return NewMonitorServer(store, sequentialID())
 }
 
@@ -259,12 +259,16 @@ func TestQueryFriction_FilterByNode(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
+	if _, err := srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
 		FlowId: "flow-1", WorkitemId: "wi-1", NodeId: "node-a", Magnitude: 10,
-	})
-	srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
+	}); err != nil {
+		t.Fatalf("AddFriction node-a: %v", err)
+	}
+	if _, err := srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
 		FlowId: "flow-1", WorkitemId: "wi-1", NodeId: "node-b", Magnitude: 20,
-	})
+	}); err != nil {
+		t.Fatalf("AddFriction node-b: %v", err)
+	}
 
 	resp, err := srv.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
 		Filter: &flowv1.FrictionFilter{NodeId: "node-b"},
@@ -288,12 +292,16 @@ func TestQueryFriction_FilterByTimeRange(t *testing.T) {
 	// Add several friction events, then query with a time filter.
 	// Since timestamp is server-generated, we test that time filtering
 	// at minimum returns the events we just added (within the last second).
-	srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
+	if _, err := srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
 		FlowId: "flow-1", WorkitemId: "wi-1", NodeId: "node-a", Magnitude: 10,
-	})
-	srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
+	}); err != nil {
+		t.Fatalf("AddFriction 1: %v", err)
+	}
+	if _, err := srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
 		FlowId: "flow-1", WorkitemId: "wi-1", NodeId: "node-a", Magnitude: 20,
-	})
+	}); err != nil {
+		t.Fatalf("AddFriction 2: %v", err)
+	}
 
 	// Query with a time range covering "now".
 	past := time.Now().UTC().Add(-1 * time.Minute)
@@ -323,9 +331,11 @@ func TestQueryFriction_TimestampsPresent(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
+	if _, err := srv.AddFriction(ctx, &flowv1.AddFrictionRequest{
 		FlowId: "flow-1", WorkitemId: "wi-1", NodeId: "node-a", Magnitude: 10,
-	})
+	}); err != nil {
+		t.Fatalf("AddFriction: %v", err)
+	}
 
 	resp, err := srv.QueryFriction(ctx, &flowv1.QueryFrictionRequest{})
 	if err != nil {

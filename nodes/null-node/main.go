@@ -51,13 +51,13 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 
 	// Initialize the SDK client to interact with the Sidecar.
 	// Set the workitem ID from the pushed context.
-	os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
+	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
 	client, err := flow.NewClient()
 	if err != nil {
 		slog.Error("null-node: failed to create SDK client", "error", err)
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Send a Heartbeat.
 	ack, err := client.Heartbeat(ctx)

@@ -43,7 +43,10 @@ type LibrarianServer struct {
 // NewLibrarianServer returns a LibrarianServer backed by the given store.
 // The embedder may be nil; embedding operations will degrade gracefully.
 // The idGen function produces unique law identifiers.
-func NewLibrarianServer(store *sqlite.Store, embedder embed.Embedder, idGen IDGenerator, similarityThreshold float64) *LibrarianServer {
+func NewLibrarianServer(
+	store *sqlite.Store, embedder embed.Embedder,
+	idGen IDGenerator, similarityThreshold float64,
+) *LibrarianServer {
 	if similarityThreshold <= 0 {
 		similarityThreshold = 0.85
 	}
@@ -94,7 +97,9 @@ func checkCapability(ctx context.Context, required string) error {
 // ---------------------------------------------------------------------------
 
 // QueryLaws returns laws matching the filter.
-func (s *LibrarianServer) QueryLaws(ctx context.Context, req *flowv1.QueryLawsRequest) (*flowv1.QueryLawsResponse, error) {
+func (s *LibrarianServer) QueryLaws(
+	ctx context.Context, req *flowv1.QueryLawsRequest,
+) (*flowv1.QueryLawsResponse, error) {
 	// Capability check.
 	if err := checkCapability(ctx, "READ:law"); err != nil {
 		return nil, err
@@ -151,7 +156,9 @@ func (s *LibrarianServer) Cite(ctx context.Context, req *flowv1.CiteRequest) (*f
 
 // RecordFinding creates a Tier 1 Finding. Write-availability-first: returns
 // immediately with a law identifier.
-func (s *LibrarianServer) RecordFinding(ctx context.Context, req *flowv1.RecordFindingRequest) (*flowv1.RecordFindingResponse, error) {
+func (s *LibrarianServer) RecordFinding(
+	ctx context.Context, req *flowv1.RecordFindingRequest,
+) (*flowv1.RecordFindingResponse, error) {
 	// Capability check.
 	if err := checkCapability(ctx, "WRITE:law/tier1"); err != nil {
 		return nil, err
@@ -293,7 +300,9 @@ func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequ
 }
 
 // RetireLaw removes a law from the active Library.
-func (s *LibrarianServer) RetireLaw(ctx context.Context, req *flowv1.RetireLawRequest) (*flowv1.RetireLawResponse, error) {
+func (s *LibrarianServer) RetireLaw(
+	ctx context.Context, req *flowv1.RetireLawRequest,
+) (*flowv1.RetireLawResponse, error) {
 	if req.GetLawId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "law_id is required")
 	}
@@ -309,12 +318,16 @@ func (s *LibrarianServer) RetireLaw(ctx context.Context, req *flowv1.RetireLawRe
 }
 
 // ReplicateLaws is stubbed — cross-flow support is out of scope.
-func (s *LibrarianServer) ReplicateLaws(ctx context.Context, req *flowv1.ReplicateLawsRequest) (*flowv1.ReplicateLawsResponse, error) {
+func (s *LibrarianServer) ReplicateLaws(
+	ctx context.Context, req *flowv1.ReplicateLawsRequest,
+) (*flowv1.ReplicateLawsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ReplicateLaws is not implemented (cross-flow support deferred)")
 }
 
 // ApplyLifecycleAction applies the outcome of a review hearing.
-func (s *LibrarianServer) ApplyLifecycleAction(ctx context.Context, req *flowv1.ApplyLifecycleActionRequest) (*flowv1.ApplyLifecycleActionResponse, error) {
+func (s *LibrarianServer) ApplyLifecycleAction(
+	ctx context.Context, req *flowv1.ApplyLifecycleActionRequest,
+) (*flowv1.ApplyLifecycleActionResponse, error) {
 	if req.GetLawId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "law_id is required")
 	}
@@ -425,7 +438,9 @@ func (s *LibrarianServer) embedLaw(lawID, versionHash string, law sqlite.Law) {
 //  1. Load all active embeddings.
 //  2. Scope filter: skip candidates with no scope overlap unless one is global.
 //  3. Similarity filter: keep candidates above the configured threshold.
-func (s *LibrarianServer) findConflicts(ctx context.Context, lawID string, appliesTo []string, embedding []float32) []ConflictCandidate {
+func (s *LibrarianServer) findConflicts(
+	ctx context.Context, lawID string, appliesTo []string, embedding []float32,
+) []ConflictCandidate {
 	allEmbeddings, err := s.store.GetAllActiveEmbeddings(ctx)
 	if err != nil {
 		slog.Warn("Failed to load embeddings for conflict detection", "error", err)

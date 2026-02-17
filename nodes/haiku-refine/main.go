@@ -45,14 +45,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"node_id", wctx.GetNodeId(),
 	)
 
-	os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
+	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
 	client, err := flow.NewClient()
 	if err != nil {
 		return fmt.Errorf("refine: create client: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
-	client.Heartbeat(ctx)
+	_, _ = client.Heartbeat(ctx)
 
 	// Read the petition.
 	petitionResp, err := client.GetArtefact(ctx, "petition")
@@ -115,7 +115,8 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		model = defaultModel
 	}
 
-	prompt := fmt.Sprintf(`You are a haiku poet revising your work. You must address the feedback while staying true to the original request.
+	prompt := fmt.Sprintf(`You are a haiku poet revising your work. You must address
+the feedback while staying true to the original request.
 
 ORIGINAL REQUEST (petition): %s
 
@@ -124,9 +125,13 @@ CURRENT HAIKU:
 
 %s
 %s
-Write a revised haiku (three lines: EXACTLY 5 syllables, 7 syllables, 5 syllables) that addresses the feedback while remaining faithful to the petition.
+Write a revised haiku (three lines: EXACTLY 5 syllables, 7 syllables,
+5 syllables) that addresses the feedback while remaining faithful to
+the petition.
 
-IMPORTANT: Output ONLY the three lines of the haiku, nothing else. No title, no explanation, no quotes. Count syllables carefully.`, petition, haiku, feedbackText, lawContext)
+IMPORTANT: Output ONLY the three lines of the haiku, nothing else.
+No title, no explanation, no quotes. Count syllables carefully.`,
+		petition, haiku, feedbackText, lawContext)
 
 	llm := ollama.New()
 	revised, err := llm.Generate(ctx, model, prompt)

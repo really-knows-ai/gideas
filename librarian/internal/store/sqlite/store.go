@@ -78,19 +78,19 @@ func New(dsn string) (*Store, error) {
 
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 
 	// Enable foreign keys.
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	s := &Store{db: db}
 	if err := s.initSchema(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	return s, nil
@@ -313,7 +313,7 @@ func (s *Store) createLaw(ctx context.Context, id string, law Law, active bool) 
 		if err != nil {
 			return "", fmt.Errorf("prepare applies_to insert: %w", err)
 		}
-		defer stmt.Close()
+		defer func() { _ = stmt.Close() }()
 
 		for _, kind := range law.AppliesTo {
 			if _, err := stmt.ExecContext(ctx, id, kind); err != nil {
@@ -447,7 +447,7 @@ func (s *Store) UpdateLaw(ctx context.Context, id string, law Law) (string, erro
 		if err != nil {
 			return "", fmt.Errorf("prepare applies_to insert: %w", err)
 		}
-		defer stmt.Close()
+		defer func() { _ = stmt.Close() }()
 
 		for _, kind := range law.AppliesTo {
 			if _, err := stmt.ExecContext(ctx, id, kind); err != nil {
@@ -459,7 +459,8 @@ func (s *Store) UpdateLaw(ctx context.Context, id string, law Law) (string, erro
 	// Append new version. OR IGNORE handles idempotent re-inserts when
 	// content cycles back to a previously-seen hash.
 	_, err = tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO law_versions (law_id, version_hash, goal, tier, representations_json, applies_to_json, created_at)
+		`INSERT OR IGNORE INTO law_versions
+		 (law_id, version_hash, goal, tier, representations_json, applies_to_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, versionHash, law.Goal, law.Tier, repsJSON, atJSON, now,
 	)
@@ -543,7 +544,7 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 		if err != nil {
 			return nil, fmt.Errorf("query active laws: %w", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		for rows.Next() {
 			var id string
@@ -567,7 +568,7 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 		if err != nil {
 			return nil, fmt.Errorf("query scoped laws: %w", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		for rows.Next() {
 			var id string
@@ -637,7 +638,7 @@ func (s *Store) GetLawsByScope(ctx context.Context, appliesTo []string) ([]Law, 
 	if err != nil {
 		return nil, fmt.Errorf("query scoped laws: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var lawIDs []string
 	for rows.Next() {
@@ -716,7 +717,7 @@ func (s *Store) GetAllActiveEmbeddings(ctx context.Context) ([]LawEmbedding, err
 	if err != nil {
 		return nil, fmt.Errorf("query active embeddings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []LawEmbedding
 	for rows.Next() {

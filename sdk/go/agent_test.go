@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,9 +12,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/test/bufconn"
 )
 
 // ---------------------------------------------------------------------------
@@ -57,7 +54,9 @@ type recordedTelemetry struct {
 	Payload   []byte
 }
 
-func (s *agentSpyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatRequest) (*flowv1.HeartbeatResponse, error) {
+func (s *agentSpyServer) Heartbeat(
+	ctx context.Context, req *flowv1.HeartbeatRequest,
+) (*flowv1.HeartbeatResponse, error) {
 	s.heartbeatCount.Add(1)
 	s.mu.Lock()
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
@@ -65,7 +64,9 @@ func (s *agentSpyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatReq
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
-func (s *agentSpyServer) RecordTelemetry(ctx context.Context, req *flowv1.RecordTelemetryRequest) (*flowv1.RecordTelemetryResponse, error) {
+func (s *agentSpyServer) RecordTelemetry(
+	ctx context.Context, req *flowv1.RecordTelemetryRequest,
+) (*flowv1.RecordTelemetryResponse, error) {
 	s.mu.Lock()
 	s.telemetryCalls = append(s.telemetryCalls, recordedTelemetry{
 		EventType: req.GetEventType(),
@@ -98,47 +99,13 @@ type agentTestEnv struct {
 func setupAgentTestEnv(t *testing.T, workitemID string) *agentTestEnv {
 	t.Helper()
 
-	lis := bufconn.Listen(bufSize)
 	spy := &agentSpyServer{}
-
-	srv := grpc.NewServer()
-	flowv1.RegisterSidecarServiceServer(srv, spy)
-	flowv1.RegisterOperatorServiceServer(srv, spy)
-	flowv1.RegisterArchivistServiceServer(srv, spy)
-	flowv1.RegisterLibrarianServiceServer(srv, spy)
-	flowv1.RegisterFlowMonitorServiceServer(srv, spy)
-
-	go func() {
-		if err := srv.Serve(lis); err != nil {
-			// Server stopped — expected during cleanup.
-		}
-	}()
-
-	conn, err := grpc.NewClient(
-		"passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return lis.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(workitemContextInterceptor(workitemID)),
-	)
-	if err != nil {
-		t.Fatalf("failed to dial bufconn: %v", err)
-	}
-
-	client := &Client{
-		conn:       conn,
-		workitemID: workitemID,
-		Sidecar:    flowv1.NewSidecarServiceClient(conn),
-		Operator:   flowv1.NewOperatorServiceClient(conn),
-		Archivist:  flowv1.NewArchivistServiceClient(conn),
-		Librarian:  flowv1.NewLibrarianServiceClient(conn),
-		Monitor:    flowv1.NewFlowMonitorServiceClient(conn),
-	}
-
-	t.Cleanup(func() {
-		client.Close()
-		srv.GracefulStop()
+	client, srv := setupGRPCTestEnv(t, workitemID, func(s *grpc.Server) {
+		flowv1.RegisterSidecarServiceServer(s, spy)
+		flowv1.RegisterOperatorServiceServer(s, spy)
+		flowv1.RegisterArchivistServiceServer(s, spy)
+		flowv1.RegisterLibrarianServiceServer(s, spy)
+		flowv1.RegisterFlowMonitorServiceServer(s, spy)
 	})
 
 	return &agentTestEnv{client: client, spy: spy, srv: srv}
@@ -423,8 +390,8 @@ func TestAgent_Run_MultiStep(t *testing.T) {
 
 	// Verify each step has independent cost data.
 	var p1, p2 map[string]any
-	json.Unmarshal(calls[0].Payload, &p1)
-	json.Unmarshal(calls[1].Payload, &p2)
+	_ = json.Unmarshal(calls[0].Payload, &p1)
+	_ = json.Unmarshal(calls[1].Payload, &p2)
 
 	if p1["model"] != "gpt-4o" {
 		t.Fatalf("step 1: expected model=gpt-4o, got %v", p1["model"])

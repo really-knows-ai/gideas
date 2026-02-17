@@ -12,7 +12,7 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -179,12 +179,16 @@ func TestQueryFriction_FilterByNode(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Two events from different nodes.
-	s.AddFriction(ctx, "evt-1", FrictionEvent{
+	if err := s.AddFriction(ctx, "evt-1", FrictionEvent{
 		FlowID: "flow-1", WorkitemID: "wi-1", NodeID: "node-a", Magnitude: 10, Timestamp: now,
-	}, []string{"law-1"})
-	s.AddFriction(ctx, "evt-2", FrictionEvent{
+	}, []string{"law-1"}); err != nil {
+		t.Fatalf("AddFriction evt-1: %v", err)
+	}
+	if err := s.AddFriction(ctx, "evt-2", FrictionEvent{
 		FlowID: "flow-1", WorkitemID: "wi-1", NodeID: "node-b", Magnitude: 20, Timestamp: now,
-	}, []string{"law-1"})
+	}, []string{"law-1"}); err != nil {
+		t.Fatalf("AddFriction evt-2: %v", err)
+	}
 
 	results, err := s.QueryFriction(ctx, FrictionFilter{NodeID: "node-a"})
 	if err != nil {
@@ -206,15 +210,21 @@ func TestQueryFriction_FilterByTimeRange(t *testing.T) {
 	t2 := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	t3 := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
 
-	s.AddFriction(ctx, "evt-1", FrictionEvent{
+	if err := s.AddFriction(ctx, "evt-1", FrictionEvent{
 		FlowID: "flow-1", WorkitemID: "wi-1", NodeID: "node-a", Magnitude: 10, Timestamp: t1,
-	}, nil)
-	s.AddFriction(ctx, "evt-2", FrictionEvent{
+	}, nil); err != nil {
+		t.Fatalf("AddFriction evt-1: %v", err)
+	}
+	if err := s.AddFriction(ctx, "evt-2", FrictionEvent{
 		FlowID: "flow-1", WorkitemID: "wi-1", NodeID: "node-a", Magnitude: 20, Timestamp: t2,
-	}, nil)
-	s.AddFriction(ctx, "evt-3", FrictionEvent{
+	}, nil); err != nil {
+		t.Fatalf("AddFriction evt-2: %v", err)
+	}
+	if err := s.AddFriction(ctx, "evt-3", FrictionEvent{
 		FlowID: "flow-1", WorkitemID: "wi-1", NodeID: "node-a", Magnitude: 30, Timestamp: t3,
-	}, nil)
+	}, nil); err != nil {
+		t.Fatalf("AddFriction evt-3: %v", err)
+	}
 
 	// Filter for events in the first half of 2025.
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -299,12 +309,16 @@ func TestQueryFriction_TimestampBounds(t *testing.T) {
 	t1 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
 	t2 := time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC)
 
-	s.AddFriction(ctx, "evt-1", FrictionEvent{
+	if err := s.AddFriction(ctx, "evt-1", FrictionEvent{
 		FlowID: "flow-1", WorkitemID: "wi-1", NodeID: "node-a", Magnitude: 10, Timestamp: t1,
-	}, []string{"law-1"})
-	s.AddFriction(ctx, "evt-2", FrictionEvent{
+	}, []string{"law-1"}); err != nil {
+		t.Fatalf("AddFriction evt-1: %v", err)
+	}
+	if err := s.AddFriction(ctx, "evt-2", FrictionEvent{
 		FlowID: "flow-1", WorkitemID: "wi-1", NodeID: "node-a", Magnitude: 20, Timestamp: t2,
-	}, []string{"law-1"})
+	}, []string{"law-1"}); err != nil {
+		t.Fatalf("AddFriction evt-2: %v", err)
+	}
 
 	results, err := s.QueryFriction(ctx, FrictionFilter{})
 	if err != nil {

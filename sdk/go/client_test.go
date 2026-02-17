@@ -2,14 +2,11 @@ package flow
 
 import (
 	"context"
-	"net"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/test/bufconn"
 )
 
 const bufSize = 1024 * 1024
@@ -37,12 +34,16 @@ func (s *spyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatRequest)
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
-func (s *spyServer) SubmitResult(ctx context.Context, req *flowv1.SubmitResultRequest) (*flowv1.SubmitResultResponse, error) {
+func (s *spyServer) SubmitResult(
+	ctx context.Context, req *flowv1.SubmitResultRequest,
+) (*flowv1.SubmitResultResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 
-func (s *spyServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
+func (s *spyServer) GetArtefact(
+	ctx context.Context, req *flowv1.GetArtefactRequest,
+) (*flowv1.GetArtefactResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.GetArtefactResponse{
 		Content:     []byte("test-content"),
@@ -61,12 +62,16 @@ func (s *spyServer) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.
 	return &flowv1.CiteResponse{Acknowledged: true}, nil
 }
 
-func (s *spyServer) RecordFinding(ctx context.Context, req *flowv1.RecordFindingRequest) (*flowv1.RecordFindingResponse, error) {
+func (s *spyServer) RecordFinding(
+	ctx context.Context, req *flowv1.RecordFindingRequest,
+) (*flowv1.RecordFindingResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.RecordFindingResponse{LawId: "finding-001"}, nil
 }
 
-func (s *spyServer) RecordTelemetry(ctx context.Context, req *flowv1.RecordTelemetryRequest) (*flowv1.RecordTelemetryResponse, error) {
+func (s *spyServer) RecordTelemetry(
+	ctx context.Context, req *flowv1.RecordTelemetryRequest,
+) (*flowv1.RecordTelemetryResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
 }
@@ -86,48 +91,13 @@ type testEnv struct {
 func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 	t.Helper()
 
-	lis := bufconn.Listen(bufSize)
 	spy := &spyServer{}
-
-	srv := grpc.NewServer()
-	flowv1.RegisterSidecarServiceServer(srv, spy)
-	flowv1.RegisterOperatorServiceServer(srv, spy)
-	flowv1.RegisterArchivistServiceServer(srv, spy)
-	flowv1.RegisterLibrarianServiceServer(srv, spy)
-	flowv1.RegisterFlowMonitorServiceServer(srv, spy)
-
-	go func() {
-		if err := srv.Serve(lis); err != nil {
-			// Server stopped — expected during cleanup.
-		}
-	}()
-
-	// Use bufconn dialer to create an in-memory connection.
-	conn, err := grpc.NewClient(
-		"passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return lis.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(workitemContextInterceptor(workitemID)),
-	)
-	if err != nil {
-		t.Fatalf("failed to dial bufconn: %v", err)
-	}
-
-	client := &Client{
-		conn:       conn,
-		workitemID: workitemID,
-		Sidecar:    flowv1.NewSidecarServiceClient(conn),
-		Operator:   flowv1.NewOperatorServiceClient(conn),
-		Archivist:  flowv1.NewArchivistServiceClient(conn),
-		Librarian:  flowv1.NewLibrarianServiceClient(conn),
-		Monitor:    flowv1.NewFlowMonitorServiceClient(conn),
-	}
-
-	t.Cleanup(func() {
-		client.Close()
-		srv.GracefulStop()
+	client, srv := setupGRPCTestEnv(t, workitemID, func(s *grpc.Server) {
+		flowv1.RegisterSidecarServiceServer(s, spy)
+		flowv1.RegisterOperatorServiceServer(s, spy)
+		flowv1.RegisterArchivistServiceServer(s, spy)
+		flowv1.RegisterLibrarianServiceServer(s, spy)
+		flowv1.RegisterFlowMonitorServiceServer(s, spy)
 	})
 
 	return &testEnv{client: client, spy: spy, srv: srv}

@@ -12,7 +12,7 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("failed to create test store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -44,7 +44,9 @@ func TestStoreBlob_Deduplication(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.StoreBlob(ctx, "abc123", []byte("hello"))
+	if _, err := s.StoreBlob(ctx, "abc123", []byte("hello")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	isNew, err := s.StoreBlob(ctx, "abc123", []byte("different"))
 	if err != nil {
@@ -79,8 +81,12 @@ func TestAppendVersion_And_GetHead(t *testing.T) {
 	ctx := context.Background()
 
 	// Must store blobs first (foreign key constraint).
-	s.StoreBlob(ctx, "hash-v1", []byte("v1"))
-	s.StoreBlob(ctx, "hash-v2", []byte("v2"))
+	if _, err := s.StoreBlob(ctx, "hash-v1", []byte("v1")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := s.StoreBlob(ctx, "hash-v2", []byte("v2")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if err := s.AppendVersion(ctx, "wi-1", "art-1", "hash-v1", "txt"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -111,11 +117,19 @@ func TestGetHistory(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.StoreBlob(ctx, "hash-v1", []byte("v1"))
-	s.StoreBlob(ctx, "hash-v2", []byte("v2"))
+	if _, err := s.StoreBlob(ctx, "hash-v1", []byte("v1")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := s.StoreBlob(ctx, "hash-v2", []byte("v2")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	s.AppendVersion(ctx, "wi-1", "art-1", "hash-v1", "txt")
-	s.AppendVersion(ctx, "wi-1", "art-1", "hash-v2", "txt")
+	if err := s.AppendVersion(ctx, "wi-1", "art-1", "hash-v1", "txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := s.AppendVersion(ctx, "wi-1", "art-1", "hash-v2", "txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	history, err := s.GetHistory(ctx, "wi-1", "art-1")
 	if err != nil {
@@ -159,11 +173,19 @@ func TestListArtefacts(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.StoreBlob(ctx, "h1", []byte("a"))
-	s.StoreBlob(ctx, "h2", []byte("b"))
+	if _, err := s.StoreBlob(ctx, "h1", []byte("a")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := s.StoreBlob(ctx, "h2", []byte("b")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	s.AppendVersion(ctx, "wi-1", "art-1", "h1", "txt")
-	s.AppendVersion(ctx, "wi-1", "art-2", "h2", "json")
+	if err := s.AppendVersion(ctx, "wi-1", "art-1", "h1", "txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := s.AppendVersion(ctx, "wi-1", "art-2", "h2", "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	entries, err := s.ListArtefacts(ctx, "wi-1")
 	if err != nil {
@@ -188,11 +210,19 @@ func TestListArtefacts_HeadKind(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.StoreBlob(ctx, "h1", []byte("a"))
-	s.StoreBlob(ctx, "h2", []byte("b"))
+	if _, err := s.StoreBlob(ctx, "h1", []byte("a")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := s.StoreBlob(ctx, "h2", []byte("b")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	s.AppendVersion(ctx, "wi-1", "art-1", "h1", "txt")
-	s.AppendVersion(ctx, "wi-1", "art-1", "h2", "json")
+	if err := s.AppendVersion(ctx, "wi-1", "art-1", "h1", "txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := s.AppendVersion(ctx, "wi-1", "art-1", "h2", "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	entries, err := s.ListArtefacts(ctx, "wi-1")
 	if err != nil {
@@ -226,7 +256,9 @@ func TestConcurrentAccess(t *testing.T) {
 	// Pre-populate blobs for the concurrent writes.
 	for i := range 26 {
 		hash := "hash-" + string(rune('a'+i))
-		s.StoreBlob(ctx, hash, []byte("data"))
+		if _, err := s.StoreBlob(ctx, hash, []byte("data")); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -237,17 +269,17 @@ func TestConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			hash := "hash-" + string(rune('a'+i%26))
-			s.StoreBlob(ctx, hash, []byte("data"))
-			s.AppendVersion(ctx, "wi", "art", hash, "txt")
+			_, _ = s.StoreBlob(ctx, hash, []byte("data"))
+			_ = s.AppendVersion(ctx, "wi", "art", hash, "txt")
 		}(i)
 	}
 
 	// Concurrent reads.
 	for range 100 {
 		wg.Go(func() {
-			s.GetBlob(ctx, "hash-a")
-			s.GetHead(ctx, "wi", "art")
-			s.ListArtefacts(ctx, "wi")
+			_, _, _ = s.GetBlob(ctx, "hash-a")
+			_, _ = s.GetHead(ctx, "wi", "art")
+			_, _ = s.ListArtefacts(ctx, "wi")
 		})
 	}
 
@@ -270,8 +302,12 @@ func TestVersionTimestamps(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	s.StoreBlob(ctx, "h1", []byte("a"))
-	s.AppendVersion(ctx, "wi-1", "art-1", "h1", "txt")
+	if _, err := s.StoreBlob(ctx, "h1", []byte("a")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := s.AppendVersion(ctx, "wi-1", "art-1", "h1", "txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	head, err := s.GetHead(ctx, "wi-1", "art-1")
 	if err != nil {
