@@ -192,7 +192,7 @@ func main() {
 
 			// Print thrash counters if present.
 			if tc, ok := status["thrashCounters"]; ok {
-				if counters, ok := tc.(map[string]interface{}); ok && len(counters) > 0 {
+				if counters, ok := tc.(map[string]any); ok && len(counters) > 0 {
 					parts := make([]string, 0, len(counters))
 					for node, count := range counters {
 						parts = append(parts, fmt.Sprintf("%s:%v", node, count))
@@ -361,7 +361,7 @@ func fetchAndPrintHaiku(ctx context.Context, addr, workitemID string) {
 	if err == nil {
 		fmt.Println("--- ARTEFACT STATE (JSON) ---")
 		for _, as := range stateResp.GetArtefactStates() {
-			data, _ := json.MarshalIndent(map[string]interface{}{
+			data, _ := json.MarshalIndent(map[string]any{
 				"artefact_id":  as.GetArtefactId(),
 				"kind":         as.GetKind(),
 				"stamps":       as.GetStampNames(),

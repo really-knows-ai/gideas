@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -273,9 +274,7 @@ func (a *Agent) emitCostTelemetry(ctx context.Context, result *InferResult) erro
 	}
 
 	// Merge optional extra fields (provider, cached_tokens, reasoning_tokens, etc.)
-	for k, v := range result.Extra {
-		payload[k] = v
-	}
+	maps.Copy(payload, result.Extra)
 
 	data, err := json.Marshal(payload)
 	if err != nil {

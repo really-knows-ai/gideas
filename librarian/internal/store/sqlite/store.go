@@ -250,7 +250,7 @@ func decodeEmbedding(b []byte) []float32 {
 	}
 	n := len(b) / 4
 	v := make([]float32, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
 	}
 	return v

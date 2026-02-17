@@ -79,7 +79,7 @@ func checkCapability(ctx context.Context, required string) error {
 
 	// Capabilities are comma-separated.
 	for _, c := range caps {
-		for _, cap := range strings.Split(c, ",") {
+		for cap := range strings.SplitSeq(c, ",") {
 			if strings.TrimSpace(cap) == required {
 				return nil
 			}

@@ -371,7 +371,7 @@ func TestEndToEnd_FrictionAndTelemetry(t *testing.T) {
 			NodeId:     "node-a",
 			WorkitemId: "wi-1",
 			EventType:  "progress",
-			Payload:    []byte(fmt.Sprintf(`{"step": %d}`, i)),
+			Payload:    fmt.Appendf(nil, `{"step": %d}`, i),
 		})
 		if err != nil {
 			t.Fatalf("RecordTelemetry %d: %v", i, err)
