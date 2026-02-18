@@ -25,6 +25,7 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 |--------|---------|----------|-------------|
 | `SubmitResult` | `workitem_id`, `routing_instruction` | `accepted` or structured error | Submits the handler's routing instruction. The Operator validates routing guards and applies the lifecycle transition. |
 | `CreateWorkitem` | (none) | `workitem_id` or structured error | Creates a new Workitem in `Pending`. The creating node must be entry-bound. The Operator validates the bound entry contract against artefact state in the Archivist. |
+| `GetFlowTopology` | (none) | `self`, `nodes`, `exit_contract` | Returns the Flow topology visible to the calling node. Requires `READ:flow` capability. The Sidecar injects node identity; the Operator resolves the calling node's outputs, all peer nodes with capabilities, and the bound exit contract (if exit-bound). Identity comes from Sidecar-injected metadata — the request body is empty. |
 
 ### Service-Facing Methods
 
@@ -98,7 +99,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | `AcceptRefusal` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `wont_fix` to `resolved`. |
 | `RejectRefusal` | `workitem_id`, `feedback_id`, `message` | `updated_item` | Transitions feedback from `wont_fix` to `rejected`. |
 | `GetFeedbackDepth` | `workitem_id`, `feedback_id` | `depth` (integer) | Returns the current history depth (number of transitions) for the specified feedback item. |
-| `DeadlockFeedback` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from `wont_fix` or `rejected` to `deadlocked`. Requires `WRITE:feedback/deadlocked` capability. The Archivist validates capability and from-state; deadlock determination is gate node logic, not Archivist enforcement. |
+| `DeadlockFeedback` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from any non-resolved, non-deadlocked state to `deadlocked`. Requires `WRITE:feedback/deadlocked` capability. The Archivist validates capability, from-state, and contempt guard (items with `linkedRuling` cannot be deadlocked); deadlock determination is gate node logic, not Archivist enforcement. |
 
 ### Archivist Error Responses
 

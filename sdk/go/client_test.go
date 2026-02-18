@@ -41,6 +41,26 @@ func (s *spyServer) SubmitResult(
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 
+func (s *spyServer) GetFlowTopology(
+	ctx context.Context, _ *flowv1.GetFlowTopologyRequest,
+) (*flowv1.GetFlowTopologyResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.GetFlowTopologyResponse{
+		Self: &flowv1.FlowNode{
+			Name:         "test-node",
+			Capabilities: []string{"READ:flow"},
+			Outputs:      []*flowv1.FlowOutput{{Name: "next", Target: "other"}},
+		},
+		Nodes: map[string]*flowv1.FlowNode{
+			"test-node": {Name: "test-node"},
+			"other":     {Name: "other"},
+		},
+		ExitContract: map[string]*flowv1.StampRequirements{
+			"doc": {Stamps: []string{"linter", "approval"}},
+		},
+	}, nil
+}
+
 func (s *spyServer) GetArtefact(
 	ctx context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
@@ -74,6 +94,59 @@ func (s *spyServer) RecordTelemetry(
 ) (*flowv1.RecordTelemetryResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+func (s *spyServer) RefuseFeedback(
+	ctx context.Context, req *flowv1.RefuseFeedbackRequest,
+) (*flowv1.RefuseFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.RefuseFeedbackResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
+	}}, nil
+}
+
+func (s *spyServer) RejectFix(
+	ctx context.Context, req *flowv1.RejectFixRequest,
+) (*flowv1.RejectFixResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.RejectFixResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
+	}}, nil
+}
+
+func (s *spyServer) AcceptRefusal(
+	ctx context.Context, req *flowv1.AcceptRefusalRequest,
+) (*flowv1.AcceptRefusalResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.AcceptRefusalResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED,
+	}}, nil
+}
+
+func (s *spyServer) RejectRefusal(
+	ctx context.Context, req *flowv1.RejectRefusalRequest,
+) (*flowv1.RejectRefusalResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.RejectRefusalResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
+	}}, nil
+}
+
+func (s *spyServer) GetFeedbackDepth(
+	ctx context.Context, req *flowv1.GetFeedbackDepthRequest,
+) (*flowv1.GetFeedbackDepthResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.GetFeedbackDepthResponse{Depth: 5}, nil
+}
+
+func (s *spyServer) DeadlockFeedback(
+	ctx context.Context, req *flowv1.DeadlockFeedbackRequest,
+) (*flowv1.DeadlockFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.DeadlockFeedbackResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id:    req.GetFeedbackId(),
+		State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+	}}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +367,157 @@ func TestRecordTelemetry_InjectsWorkitemMetadata(t *testing.T) {
 		t.Fatalf("RecordTelemetry() returned error: %v", err)
 	}
 
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Feedback Reviewer Methods
+// ---------------------------------------------------------------------------
+
+func TestRejectFix_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-reject-fix-001"
+	env := setupTestEnv(t, wantID)
+
+	err := env.client.RejectFix(context.Background(), "fb-001", "fix is incomplete")
+	if err != nil {
+		t.Fatalf("RejectFix() returned error: %v", err)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+func TestAcceptRefusal_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-accept-refusal-001"
+	env := setupTestEnv(t, wantID)
+
+	err := env.client.AcceptRefusal(context.Background(), "fb-002")
+	if err != nil {
+		t.Fatalf("AcceptRefusal() returned error: %v", err)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+func TestRejectRefusal_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-reject-refusal-001"
+	env := setupTestEnv(t, wantID)
+
+	err := env.client.RejectRefusal(context.Background(), "fb-003", "justification is weak")
+	if err != nil {
+		t.Fatalf("RejectRefusal() returned error: %v", err)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+func TestRefuseFeedback_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-refuse-fb-001"
+	env := setupTestEnv(t, wantID)
+
+	justification := &flowv1.Justification{
+		Kind: &flowv1.Justification_Citation{
+			Citation: &flowv1.Citation{CitationIds: []string{"law-42"}},
+		},
+	}
+	err := env.client.RefuseFeedback(context.Background(), "fb-004", justification)
+	if err != nil {
+		t.Fatalf("RefuseFeedback() returned error: %v", err)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Feedback Deadlock Methods
+// ---------------------------------------------------------------------------
+
+func TestGetFeedbackDepth_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-depth-001"
+	env := setupTestEnv(t, wantID)
+
+	depth, err := env.client.GetFeedbackDepth(context.Background(), "fb-010")
+	if err != nil {
+		t.Fatalf("GetFeedbackDepth() returned error: %v", err)
+	}
+	if depth != 5 {
+		t.Fatalf("expected depth=5, got %d", depth)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+func TestDeadlockFeedback_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-deadlock-001"
+	env := setupTestEnv(t, wantID)
+
+	item, err := env.client.DeadlockFeedback(context.Background(), "fb-011")
+	if err != nil {
+		t.Fatalf("DeadlockFeedback() returned error: %v", err)
+	}
+	if item.GetId() != "fb-011" {
+		t.Fatalf("expected feedback_id=fb-011, got %q", item.GetId())
+	}
+	wantState := flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED
+	if item.GetState() != wantState {
+		t.Fatalf("expected state=%v, got %v", wantState, item.GetState())
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Topology Convenience Methods
+// ---------------------------------------------------------------------------
+
+func TestGetFlowTopology_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-topology-001"
+	env := setupTestEnv(t, wantID)
+
+	resp, err := env.client.GetFlowTopology(context.Background())
+	if err != nil {
+		t.Fatalf("GetFlowTopology() returned error: %v", err)
+	}
+
+	// Verify response content.
+	if resp.GetSelf().GetName() != "test-node" {
+		t.Fatalf("expected self.name=test-node, got %s", resp.GetSelf().GetName())
+	}
+	if len(resp.GetNodes()) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(resp.GetNodes()))
+	}
+	if len(resp.GetExitContract()) != 1 {
+		t.Fatalf("expected 1 exit contract kind, got %d", len(resp.GetExitContract()))
+	}
+	docStamps := resp.GetExitContract()["doc"]
+	if docStamps == nil {
+		t.Fatal("expected doc in exit contract")
+	}
+	if len(docStamps.GetStamps()) != 2 {
+		t.Fatalf("expected 2 stamps in doc exit contract, got %d", len(docStamps.GetStamps()))
+	}
+
+	// Verify metadata injection.
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
 	if len(got) == 0 || got[0] != wantID {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)

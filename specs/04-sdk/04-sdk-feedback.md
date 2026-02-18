@@ -42,6 +42,10 @@ stateDiagram-v2
 
     wont_fix --> resolved : AcceptRefusal()
     wont_fix --> rejected : RejectRefusal()
+    new --> deadlocked : DeadlockFeedback()
+
+    actioned --> deadlocked : DeadlockFeedback()
+
     wont_fix --> deadlocked : DeadlockFeedback()
 
     rejected --> actioned : ResolveFeedback()
@@ -63,11 +67,11 @@ stateDiagram-v2
 | `RejectFix(feedbackId, message)` | `actioned` | `rejected` | Reviewing node | `message` explaining why the fix is inadequate |
 | `AcceptRefusal(feedbackId)` | `wont_fix` | `resolved` | Reviewing node | — |
 | `RejectRefusal(feedbackId, message)` | `wont_fix` | `rejected` | Reviewing node | `message` explaining why the refusal is unjustified |
-| `DeadlockFeedback(feedbackId)` | `wont_fix`, `rejected` | `deadlocked` | Gate node | — |
+| `DeadlockFeedback(feedbackId)` | `new`, `actioned`, `wont_fix`, `rejected` | `deadlocked` | Gate node | — |
 
 The **Actor** column describes the expected role in the [reference arrangement](../01-concepts/02-foundry-cycle.md), not an enforced identity constraint. Any node holding the required `WRITE:feedback/<status>` [capability](../03-node/02-configuration.md) can call the corresponding operation. The Archivist validates the capability grant and the from-state; node identity is recorded in each `FeedbackEvent` for audit, not for access control.
 
-The gate node queries feedback depth via `GetFeedbackDepth(feedbackId)` and determines whether escalation is warranted. When the gate node decides to escalate, it calls `DeadlockFeedback(feedbackId)` to transition the feedback item to `deadlocked`, then returns a routing instruction to send the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The Archivist validates the `WRITE:feedback/deadlocked` capability and the from-state — deadlock determination is gate node logic, not Archivist enforcement. Assay renders a verdict and transitions the item to either `wont_fix` (favouring the refiner) or `rejected` (favouring the reviewer), setting the `linkedRuling` field to the Tier 2 Ruling that captures the decision.
+The gate node queries feedback depth via `GetFeedbackDepth(feedbackId)` and determines whether escalation is warranted. When the gate node decides to escalate, it calls `DeadlockFeedback(feedbackId)` to transition the feedback item to `deadlocked`, then returns a routing instruction to send the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The Archivist validates the `WRITE:feedback/deadlocked` capability, the from-state (any state except `resolved` and `deadlocked`), and the contempt guard (`linkedRuling` blocks deadlock) — deadlock determination is gate node logic, not Archivist enforcement. Assay renders a verdict and transitions the item to either `wont_fix` (favouring the refiner) or `rejected` (favouring the reviewer), setting the `linkedRuling` field to the Tier 2 Ruling that captures the decision.
 
 Each transition appends a `FeedbackEvent` to the item's history — an append-only chronological record of who acted, what action they took, and what they said.
 
@@ -110,8 +114,9 @@ Handlers should respond to post-Assay feedback items by checking `linkedRuling`.
 
 Once [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) renders a verdict and sets `linkedRuling` on a feedback item, the [Archivist](../02-flow/04-system-services.md#archivist) enforces judicial finality:
 
-- `wont_fix` with `linkedRuling` — the only valid next transition is `resolved` via `AcceptRefusal()`. The reviewing node must accept the verdict. Attempting `RejectRefusal()` returns `CONTEMPT_VIOLATION`.
-- `rejected` with `linkedRuling` — the only valid next transition is `actioned` via `ResolveFeedback()`, then to `resolved` via `AcceptFix()`. The refining node must comply with the ruling. Attempting `RefuseFeedback()` returns `CONTEMPT_VIOLATION`.
+- `wont_fix` with `linkedRuling` — the only valid next transition is `resolved` via `AcceptRefusal()`. The reviewing node must accept the verdict. Attempting `RejectRefusal()` or `DeadlockFeedback()` returns `CONTEMPT_VIOLATION`.
+- `rejected` with `linkedRuling` — the only valid next transition is `actioned` via `ResolveFeedback()`, then to `resolved` via `AcceptFix()`. The refining node must comply with the ruling. Attempting `RefuseFeedback()` or `DeadlockFeedback()` returns `CONTEMPT_VIOLATION`.
+- Any state with `linkedRuling` — `DeadlockFeedback()` is blocked regardless of the item's current state. Re-escalation of a judicially resolved dispute returns `CONTEMPT_VIOLATION`.
 
 `CONTEMPT_VIOLATION` is a permanent rejection, not a retriable error. The ruling is not a suggestion — the losing side must accept the verdict. The contempt guard is enforced by the Archivist regardless of node identity, capability grants, or topology. No node, including Assay, can override a ruling once applied to a feedback item.
 
