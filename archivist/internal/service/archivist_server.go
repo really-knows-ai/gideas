@@ -618,14 +618,19 @@ func (s *ArchivistServer) GetFeedbackDepth(
 	return &flowv1.GetFeedbackDepthResponse{Depth: depth}, nil
 }
 
-// DeadlockFeedback transitions feedback from WONT_FIX or REJECTED to DEADLOCKED.
+// DeadlockFeedback transitions feedback from any non-resolved, non-deadlocked
+// state to DEADLOCKED. The gate node calls this when feedback depth exceeds
+// the configured threshold.
 func (s *ArchivistServer) DeadlockFeedback(
 	ctx context.Context, req *flowv1.DeadlockFeedbackRequest,
 ) (*flowv1.DeadlockFeedbackResponse, error) {
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
-		[]int32{feedbackStateWontFix, feedbackStateRejected},
+		[]int32{
+			feedbackStateNew, feedbackStateActioned,
+			feedbackStateWontFix, feedbackStateRejected,
+		},
 		5, // FEEDBACK_STATE_DEADLOCKED
 		actor, "deadlocked", "",
 	)

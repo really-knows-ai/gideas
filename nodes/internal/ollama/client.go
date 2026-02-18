@@ -53,43 +53,85 @@ type generateRequest struct {
 
 // generateResponse is the JSON body returned by /api/generate (non-streaming).
 type generateResponse struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
+	Response        string `json:"response"`
+	Done            bool   `json:"done"`
+	PromptEvalCount int64  `json:"prompt_eval_count"`
+	EvalCount       int64  `json:"eval_count"`
+	TotalDuration   int64  `json:"total_duration"` // nanoseconds
+}
+
+// GenerateResult holds the LLM response text alongside token and timing
+// metadata extracted from the Ollama API response.
+type GenerateResult struct {
+	// Response is the generated text, trimmed of leading/trailing whitespace.
+	Response string
+
+	// PromptTokens is the number of tokens evaluated in the prompt
+	// (prompt_eval_count from Ollama).
+	PromptTokens int64
+
+	// OutputTokens is the number of tokens generated in the response
+	// (eval_count from Ollama).
+	OutputTokens int64
+
+	// DurationMs is the total wall-clock duration of the generation in
+	// milliseconds, converted from Ollama's nanosecond total_duration.
+	DurationMs int64
 }
 
 // Generate sends a prompt to the specified model and returns the complete
 // response text. Streaming is disabled; the full response is returned at once.
 func (c *Client) Generate(ctx context.Context, model, prompt string) (string, error) {
+	result, err := c.GenerateRich(ctx, model, prompt)
+	if err != nil {
+		return "", err
+	}
+	return result.Response, nil
+}
+
+// GenerateRich sends a prompt to the specified model and returns the complete
+// response along with token and timing metadata. Streaming is disabled;
+// the full response is returned at once.
+//
+// Use this method when you need token counts and duration for telemetry
+// (e.g. when wrapping inference in a FoundryAgent). For simple text
+// generation, use Generate instead.
+func (c *Client) GenerateRich(ctx context.Context, model, prompt string) (*GenerateResult, error) {
 	body, err := json.Marshal(generateRequest{
 		Model:  model,
 		Prompt: prompt,
 		Stream: false,
 	})
 	if err != nil {
-		return "", fmt.Errorf("ollama: marshal request: %w", err)
+		return nil, fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("ollama: create request: %w", err)
+		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("ollama: request failed: %w", err)
+		return nil, fmt.Errorf("ollama: request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ollama: unexpected status %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("ollama: unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var result generateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("ollama: decode response: %w", err)
+	var raw generateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("ollama: decode response: %w", err)
 	}
 
-	return strings.TrimSpace(result.Response), nil
+	return &GenerateResult{
+		Response:     strings.TrimSpace(raw.Response),
+		PromptTokens: raw.PromptEvalCount,
+		OutputTokens: raw.EvalCount,
+		DurationMs:   raw.TotalDuration / 1_000_000, // ns → ms
+	}, nil
 }

@@ -253,6 +253,10 @@ stateDiagram-v2
 
     wont_fix --> resolved : AcceptRefusal()
     wont_fix --> rejected : RejectRefusal()
+    new --> deadlocked : DeadlockFeedback()
+
+    actioned --> deadlocked : DeadlockFeedback()
+
     wont_fix --> deadlocked : DeadlockFeedback()
 
     rejected --> actioned : ResolveFeedback()
@@ -284,6 +288,8 @@ stateDiagram-v2
 | `wont_fix` | resolved | Reviewing node | `AcceptRefusal()` — refusal is justified |
 | `wont_fix` | rejected | Reviewing node | `RejectRefusal()` — refusal is unjustified |
 | `wont_fix` | deadlocked | Gate node | `DeadlockFeedback()` — gate node escalates when feedback depth exceeds configured threshold |
+| new | deadlocked | Gate node | `DeadlockFeedback()` — gate node escalates when feedback depth exceeds configured threshold |
+| actioned | deadlocked | Gate node | `DeadlockFeedback()` — gate node escalates when feedback depth exceeds configured threshold |
 | rejected | actioned | Refining node | `ResolveFeedback()` — complies with rejection |
 | rejected | `wont_fix` | Refining node | `RefuseFeedback()` — with structured justification |
 | rejected | deadlocked | Gate node | `DeadlockFeedback()` — gate node escalates when feedback depth exceeds configured threshold |
@@ -323,8 +329,9 @@ The threshold applies per feedback item, not per Workitem. A Workitem can have d
 
 Once Assay renders a verdict and sets a `linkedRuling` on a feedback item, that item is under judicial mandate. The [Archivist](../02-flow/04-system-services.md) enforces finality in both directions:
 
-- A `wont_fix` with a `linkedRuling` (Assay agreed with the refining node) cannot be moved to `rejected` by the reviewing node. The only valid transition is to `resolved` via `AcceptRefusal()`.
+- A `wont_fix` with a `linkedRuling` (Assay agreed with the refining node) cannot be moved to `rejected` or `deadlocked`. The only valid transition is to `resolved` via `AcceptRefusal()`.
 - A `rejected` with a `linkedRuling` (Assay agreed with the reviewing node) cannot be moved to `wont_fix` or `deadlocked`. The only valid transition is to `actioned` via `ResolveFeedback()`, followed by acceptance to `resolved`.
+- Any feedback item with a `linkedRuling` cannot be moved to `deadlocked` regardless of its current state. Re-escalation of a judicially resolved dispute is not permitted.
 
 Any other state change returns `CONTEMPT_VIOLATION`. The ruling is not a suggestion. The losing side must accept the verdict.
 

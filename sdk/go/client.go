@@ -297,6 +297,22 @@ func (c *Client) ResolveFeedback(ctx context.Context, feedbackID, message string
 	return nil
 }
 
+// RefuseFeedback transitions feedback from NEW/REJECTED to WONT_FIX,
+// indicating the refining node refuses to fix the issue. A structured
+// justification is required — either a Citation (referencing existing
+// laws) or a NovelArgument (new reasoning).
+func (c *Client) RefuseFeedback(ctx context.Context, feedbackID string, justification *flowv1.Justification) error {
+	_, err := c.Archivist.RefuseFeedback(ctx, &flowv1.RefuseFeedbackRequest{
+		WorkitemId:    c.workitemID,
+		FeedbackId:    feedbackID,
+		Justification: justification,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: refuse feedback failed: %w", err)
+	}
+	return nil
+}
+
 // AcceptFix transitions feedback from ACTIONED to RESOLVED, indicating
 // the reviewer accepts the applied fix.
 func (c *Client) AcceptFix(ctx context.Context, feedbackID string) error {
@@ -308,6 +324,94 @@ func (c *Client) AcceptFix(ctx context.Context, feedbackID string) error {
 		return fmt.Errorf("flow sdk: accept fix failed: %w", err)
 	}
 	return nil
+}
+
+// RejectFix transitions feedback from ACTIONED to REJECTED, indicating
+// the reviewer finds the applied fix inadequate. The message explains why
+// the fix is insufficient so the refining node can try again.
+func (c *Client) RejectFix(ctx context.Context, feedbackID, message string) error {
+	_, err := c.Archivist.RejectFix(ctx, &flowv1.RejectFixRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+		Message:    message,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: reject fix failed: %w", err)
+	}
+	return nil
+}
+
+// AcceptRefusal transitions feedback from WONT_FIX to RESOLVED, indicating
+// the reviewer accepts the refiner's justification for refusing the feedback.
+func (c *Client) AcceptRefusal(ctx context.Context, feedbackID string) error {
+	_, err := c.Archivist.AcceptRefusal(ctx, &flowv1.AcceptRefusalRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: accept refusal failed: %w", err)
+	}
+	return nil
+}
+
+// RejectRefusal transitions feedback from WONT_FIX to REJECTED, indicating
+// the reviewer finds the refiner's justification unjustified. The message
+// explains why the refusal is not acceptable.
+func (c *Client) RejectRefusal(ctx context.Context, feedbackID, message string) error {
+	_, err := c.Archivist.RejectRefusal(ctx, &flowv1.RejectRefusalRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+		Message:    message,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: reject refusal failed: %w", err)
+	}
+	return nil
+}
+
+// GetFeedbackDepth returns the current history depth (number of transitions)
+// for the specified feedback item.
+func (c *Client) GetFeedbackDepth(ctx context.Context, feedbackID string) (int32, error) {
+	resp, err := c.Archivist.GetFeedbackDepth(ctx, &flowv1.GetFeedbackDepthRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("flow sdk: get feedback depth failed: %w", err)
+	}
+	return resp.GetDepth(), nil
+}
+
+// DeadlockFeedback transitions feedback from any non-resolved,
+// non-deadlocked state to DEADLOCKED. Called by the gate node when
+// feedback depth exceeds the configured threshold.
+func (c *Client) DeadlockFeedback(
+	ctx context.Context, feedbackID string,
+) (*flowv1.FeedbackItem, error) {
+	resp, err := c.Archivist.DeadlockFeedback(ctx, &flowv1.DeadlockFeedbackRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: deadlock feedback failed: %w", err)
+	}
+	return resp.GetUpdatedItem(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Topology Convenience Methods
+// ---------------------------------------------------------------------------
+
+// GetFlowTopology returns the Flow topology visible to the calling node.
+// Requires READ:flow capability. The Sidecar injects node identity; the
+// Operator resolves the calling node's outputs, all peer nodes with
+// capabilities, and the bound exit contract (if exit-bound).
+func (c *Client) GetFlowTopology(ctx context.Context) (*flowv1.GetFlowTopologyResponse, error) {
+	resp, err := c.Operator.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
+	}
+	return resp, nil
 }
 
 // ---------------------------------------------------------------------------

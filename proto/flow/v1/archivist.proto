@@ -81,8 +81,8 @@ service ArchivistService {
   // Returns the current history depth (number of transitions).
   rpc GetFeedbackDepth(GetFeedbackDepthRequest) returns (GetFeedbackDepthResponse);
 
-  // Transitions feedback from "wont_fix" or "rejected" to "deadlocked".
-  // Requires WRITE:feedback/deadlocked capability.
+  // Transitions feedback from any non-resolved, non-deadlocked state to
+  // "deadlocked". Requires WRITE:feedback/deadlocked capability.
   rpc DeadlockFeedback(DeadlockFeedbackRequest) returns (DeadlockFeedbackResponse);
 }
 

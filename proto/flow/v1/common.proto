@@ -127,6 +127,9 @@ message Stamp {
 // See: specs/01-concepts/03-data-model.md#feedback
 message FeedbackItem {
   string id = 1;
+  // Node identity of the feedback creator. Populated by the Archivist from
+  // Sidecar-injected x-flow-node-id metadata. Gate nodes use this to
+  // attribute unresolved feedback to the stamp phase that generated it.
   string source = 2;
   Severity severity = 3;
   FeedbackState state = 4;

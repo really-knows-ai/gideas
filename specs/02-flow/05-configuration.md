@@ -154,6 +154,18 @@ Stamp application is write-once per artefact version hash:
 
 The reference arrangement uses `approval` as the final checkpoint applied by Sort, but `approval` is not a privileged keyword.
 
+### Topology Discovery
+
+Nodes granted `READ:flow` capability can call [`GetFlowTopology`](../05-reference/grpc-api.md#node-facing-methods-via-sidecar) to discover the Flow's runtime topology at assignment time. The response includes:
+
+- **Self** — the calling node's name, capabilities, and configured outputs.
+- **Nodes** — all peer nodes in the Flow, each with name, capabilities, and outputs.
+- **Exit contract** — the exit contract bound to the calling node (if exit-bound), as a map of artefact kind to required stamp names.
+
+Gate nodes use this information to build stamp-to-provider mappings dynamically: for each node in the topology, inspect its capabilities for `STAMP:artefact/<kind>/<stamp>` grants to determine which node can provide which stamp. Combined with the calling node's configured outputs, this enables fully dynamic routing without hardcoded node names or stamp associations.
+
+The `NODE_ORDER` environment variable (comma-separated node names, set via FoundryNode CRD container env) controls the order in which the gate evaluates stamp phases. This gives the Flow Architect explicit control over evaluation order without coupling gate logic to specific topologies.
+
 ## Reference Arrangement Defaults and Custom Topology
 
 The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement and standard recommendation for governed workflows. [Flow Architects](../05-reference/glossary.md#flow-architect) can adapt topology while preserving platform invariants.

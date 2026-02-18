@@ -16,6 +16,12 @@ service OperatorService {
   // guards and applies the lifecycle transition.
   rpc SubmitResult(SubmitResultRequest) returns (SubmitResultResponse);
 
+  // Returns the Flow topology visible to the calling node. Requires READ:flow
+  // capability. The Sidecar injects node identity; the Operator resolves the
+  // calling node's outputs, all peer nodes with capabilities, and the bound
+  // exit contract (if exit-bound).
+  rpc GetFlowTopology(GetFlowTopologyRequest) returns (GetFlowTopologyResponse);
+
   // Creates a new Workitem in Pending. The creating node must be entry-bound.
   // The Operator validates the bound entry contract against artefact state.
   rpc CreateWorkitem(CreateWorkitemRequest) returns (CreateWorkitemResponse);
@@ -78,4 +84,36 @@ message ImportWorkitemRequest {
 
 message ImportWorkitemResponse {
   string workitem_id = 1;
+}
+
+// Empty — identity comes from Sidecar-injected metadata.
+message GetFlowTopologyRequest {}
+
+message GetFlowTopologyResponse {
+  // The calling node's definition (name, capabilities, outputs).
+  FlowNode self = 1;
+  // All nodes in the flow, keyed by node name.
+  map<string, FlowNode> nodes = 2;
+  // The exit contract bound to the calling node (if exit-bound).
+  // Map of artefact kind to required stamp names.
+  // Empty if the calling node is not exit-bound.
+  map<string, StampRequirements> exit_contract = 3;
+}
+
+// A node in the flow topology.
+message FlowNode {
+  string name = 1;
+  repeated string capabilities = 2;
+  repeated FlowOutput outputs = 3;
+}
+
+// A named routing output on a node.
+message FlowOutput {
+  string name = 1;
+  string target = 2;
+}
+
+// List of required stamp names for an artefact kind in a contract.
+message StampRequirements {
+  repeated string stamps = 1;
 }

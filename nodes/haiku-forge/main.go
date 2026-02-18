@@ -5,6 +5,11 @@
 // as the "haiku" artefact (kind: text/haiku), then routed to Sort for
 // governance triage.
 //
+// Forge uses FoundryAgent to wrap the LLM call, providing:
+//   - Managed heartbeats during inference (no timeout during long generations)
+//   - JSON Schema validation of the structured output before storage
+//   - Automatic foundry.cost.llm telemetry with token counts and timing
+//
 // Environment:
 //
 //	OLLAMA_BASE_URL   — Ollama API endpoint (default: http://localhost:11434)
@@ -13,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,6 +32,23 @@ const (
 	defaultModel = "gpt-oss:120b-cloud"
 	envModel     = "FORGE_MODEL"
 )
+
+// haikuSchema is the JSON Schema for the structured output of the haiku
+// generation step. FoundryAgent validates every inference output against
+// this schema before it can enter the governed pipeline.
+var haikuSchema = []byte(`{
+	"type": "object",
+	"properties": {
+		"haiku": { "type": "string", "minLength": 1 }
+	},
+	"required": ["haiku"],
+	"additionalProperties": false
+}`)
+
+// haikuOutput is the Go representation of the schema-validated JSON output.
+type haikuOutput struct {
+	Haiku string `json:"haiku"`
+}
 
 func main() {
 	slog.Info("haiku-forge: starting")
@@ -48,8 +71,6 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
-	_, _ = client.Heartbeat(ctx)
-
 	// Read the petition (creative brief).
 	petitionResp, err := client.GetArtefact(ctx, "petition")
 	if err != nil {
@@ -68,30 +89,51 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		}
 	}
 
-	// Generate haiku via LLM.
-	model := os.Getenv(envModel)
-	if model == "" {
-		model = defaultModel
-	}
-
+	// Build the prompt input for the inference function.
 	prompt := fmt.Sprintf(`You are a haiku poet. Write a single haiku
 (three lines: 5 syllables, 7 syllables, 5 syllables) based on the
 following request:
 
 %s%s
 
-IMPORTANT: Output ONLY the three lines of the haiku, nothing else.
-No title, no explanation, no quotes.`, petition, lawContext)
+IMPORTANT: Respond with a JSON object containing a single key "haiku"
+whose value is the three-line haiku. Example:
+{"haiku": "autumn moonlight\na worm digs silently\ninto the chestnut"}
 
-	llm := ollama.New()
-	haiku, err := llm.Generate(ctx, model, prompt)
-	if err != nil {
-		return fmt.Errorf("forge: generate haiku: %w", err)
+Output ONLY the JSON object, nothing else.`, petition, lawContext)
+
+	// Resolve the model name.
+	model := os.Getenv(envModel)
+	if model == "" {
+		model = defaultModel
 	}
-	slog.Info("haiku-forge: generated haiku", "haiku", haiku)
+
+	// Create the FoundryAgent with the haiku output schema.
+	agent, err := flow.NewAgent(client, haikuSchema)
+	if err != nil {
+		return fmt.Errorf("forge: create agent: %w", err)
+	}
+
+	// Define the inference function that calls Ollama and returns
+	// structured output with cost metadata.
+	inferFn := makeInferFunc(model)
+
+	// Run inference with managed heartbeat, schema validation, and
+	// cost telemetry.
+	output, err := agent.Run(ctx, inferFn, []byte(prompt))
+	if err != nil {
+		return fmt.Errorf("forge: agent run: %w", err)
+	}
+
+	// Extract the haiku text from the validated JSON output.
+	var parsed haikuOutput
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		return fmt.Errorf("forge: unmarshal output: %w", err)
+	}
+	slog.Info("haiku-forge: generated haiku", "haiku", parsed.Haiku)
 
 	// Store the haiku artefact.
-	storeResp, err := client.StoreArtefact(ctx, "haiku", "text/haiku", []byte(haiku))
+	storeResp, err := client.StoreArtefact(ctx, "haiku", "text/haiku", []byte(parsed.Haiku))
 	if err != nil {
 		return fmt.Errorf("forge: store haiku: %w", err)
 	}
@@ -107,4 +149,25 @@ No title, no explanation, no quotes.`, petition, lawContext)
 
 	slog.Info("haiku-forge: routed to sort", "workitem_id", wctx.GetWorkitemId())
 	return nil
+}
+
+// makeInferFunc returns an InferFunc that generates a haiku via Ollama.
+// The prompt is received as the input parameter from Agent.Run.
+func makeInferFunc(model string) flow.InferFunc {
+	return func(ctx context.Context, input []byte) (*flow.InferResult, error) {
+		llm := ollama.New()
+		result, err := llm.GenerateRich(ctx, model, string(input))
+		if err != nil {
+			return nil, fmt.Errorf("ollama generate: %w", err)
+		}
+
+		return &flow.InferResult{
+			Output:       []byte(result.Response),
+			Model:        model,
+			InputTokens:  result.PromptTokens,
+			OutputTokens: result.OutputTokens,
+			DurationMs:   result.DurationMs,
+			Extra:        map[string]any{"provider": "ollama"},
+		}, nil
+	}
 }
