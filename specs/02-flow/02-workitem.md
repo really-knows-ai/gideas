@@ -91,9 +91,9 @@ Thrash failure and governance deadlock escalation are never treated as equivalen
 Workitems do not carry artefact references. The [Archivist](../02-flow/04-system-services.md#archivist) is the single source of truth for artefact-to-Workitem relationships.
 
 - Each artefact in the Archivist records the `workitem_id` it belongs to.
-- Each artefact has an `id` (unique within the Workitem) and a `kind` (immutable for a given `id`).
-- Multiple artefacts of the same `kind` are supported through distinct `id` values.
-- The Archivist enforces identity rules: existing `id` with a different `kind` is rejected as `ARTEFACT_KIND_CONFLICT`.
+- Each artefact has an `id` (unique within the Workitem) and a `governed_artefact` (immutable for a given `id`).
+- Multiple artefacts with the same `governed_artefact` are supported through distinct `id` values.
+- The Archivist enforces identity rules: existing `id` with a different `governed_artefact` is rejected as `ARTEFACT_KIND_CONFLICT`.
 
 Nodes interact with artefacts through SDK abstractions (for example, storing artefact content by `id`). The Sidecar submits requests to the Archivist, which persists content and maintains the artefact-to-Workitem association.
 
@@ -119,7 +119,7 @@ Entry admission and exit completion are Workitem boundary transitions controlled
 
 - Only nodes bound to an entry contract can admit Workitems into a Flow lifecycle.
 - Entry checks validate the bound entry contract against current artefact state in the Archivist.
-- Entry and exit contracts use the same per-kind validation shape.
+- Entry and exit contracts use the same per-name validation shape.
 - Cross-flow import admission creates Workitems in `Pending`, then Operator schedules first assignment to configured `importNode` when capacity allows.
 - Review-hearing admission uses Assay's hearing entry binding, then Operator schedules first assignment to Assay when capacity allows.
 
@@ -135,11 +135,11 @@ Exit completion is a Workitem state transition controlled by configuration and O
 
 Contract evaluation rules:
 
-- Requirements are keyed by artefact kind.
+- Requirements are keyed by governed artefact name.
 - Required stamp lists are name-based governance checkpoints.
-- Empty stamp list means presence-only for that kind.
+- Empty stamp list means presence-only for that governed artefact name.
 - Empty contract means no artefact requirements.
-- If multiple artefacts of a required kind exist, all must satisfy the requirement.
+- If multiple artefacts with a required governed artefact name exist, all must satisfy the requirement.
 
 If validation fails, completion is rejected and the Workitem does not transition to `Completed`.
 
@@ -154,12 +154,12 @@ sequenceDiagram
     SC-->>OP: completion instruction
     OP->>OP: confirm node is exit-bound
     OP->>AR: query artefact state for bound contract
-    AR-->>OP: kinds stamps feedback state
-    OP->>OP: evaluate per-kind requirements
+    AR-->>OP: governed artefact names stamps feedback state
+    OP->>OP: evaluate per-name requirements
     OP-->>SC: accept or reject completion
 ```
 
-When completion triggers cross-flow export, only artefact kinds listed in the bound exit contract are export-eligible. Empty contract completion exports metadata only.
+When completion triggers cross-flow export, only governed artefact names listed in the bound exit contract are export-eligible. Empty contract completion exports metadata only.
 
 ## No Workitem Context Bag
 
@@ -187,10 +187,10 @@ All Flow runtimes preserve these Workitem invariants:
 6. Feedback deadlock decisions are based on Archivist-backed feedback state.
 7. Artefact-to-Workitem association is Archivist-owned. The Workitem CRD carries no artefact references.
 8. Exit completion is exit-node-only and Operator-validated.
-9. Exit contract checks query the Archivist for artefact kinds and stamps.
-10. Cross-flow export scope follows bound exit-contract kind entries.
+9. Exit contract checks query the Archivist for governed artefact names and stamps.
+10. Cross-flow export scope follows bound exit-contract governed artefact name entries.
 11. Workitems expose no freeform context bag.
-12. Workitem admission is constrained by bound entry-contract kind entries.
+12. Workitem admission is constrained by bound entry-contract governed artefact name entries.
 13. Imported Workitems are created in `Pending` and first-scheduled to configured `importNode` when capacity allows.
 
 These invariants are consumed by [Flow Operator](./01-operator.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), and [Configuration Semantics](./05-configuration.md).

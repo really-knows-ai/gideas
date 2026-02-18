@@ -3,9 +3,18 @@ gen/
 go.work.sum
 bin/
 
-# Compiled Go binaries
-haiku-appraise
-haiku-forge
-haiku-quench
-haiku-refine
-haiku-watch
+# Compiled Go binaries (built in-place by `go build`)
+/haiku-appraise
+/haiku-forge
+/haiku-quench
+/haiku-refine
+/haiku-sort
+/haiku-watch
+/null-node
+nodes/*/haiku-appraise
+nodes/*/haiku-forge
+nodes/*/haiku-quench
+nodes/*/haiku-refine
+nodes/*/haiku-sort
+nodes/*/null-node
+tools/*/haiku-watch

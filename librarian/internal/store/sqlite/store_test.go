@@ -185,7 +185,7 @@ func TestQueryLaws_ScopedPlusGlobal(t *testing.T) {
 		t.Fatalf("CreateLaw law-other: %v", err)
 	}
 
-	laws, err := s.QueryLaws(ctx, QueryFilter{ArtefactKind: "source-code"})
+	laws, err := s.QueryLaws(ctx, QueryFilter{GovernedArtefact: "source-code"})
 	if err != nil {
 		t.Fatalf("QueryLaws: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestQueryLaws_RepresentationFiltering(t *testing.T) {
 	}
 
 	laws, err := s.QueryLaws(ctx, QueryFilter{
-		ArtefactKind:       "docs",
+		GovernedArtefact:   "docs",
 		RepresentationType: "text/markdown",
 	})
 	if err != nil {

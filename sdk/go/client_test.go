@@ -66,9 +66,9 @@ func (s *spyServer) GetArtefact(
 ) (*flowv1.GetArtefactResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.GetArtefactResponse{
-		Content:     []byte("test-content"),
-		VersionHash: "test-hash",
-		Kind:        "test-kind",
+		Content:          []byte("test-content"),
+		VersionHash:      "test-hash",
+		GovernedArtefact: "test-artefact",
 	}, nil
 }
 

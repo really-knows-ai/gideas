@@ -80,7 +80,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	slog.Info("haiku-forge: read petition", "petition", petition)
 
 	// Query laws for haiku governance (if any exist).
-	laws, _ := client.QueryLaws(ctx, "text/haiku", "")
+	laws, _ := client.QueryLaws(ctx, "haiku", "")
 	var lawContext string
 	if len(laws) > 0 {
 		lawContext = "\n\nApplicable governance laws:\n"
@@ -133,7 +133,7 @@ Output ONLY the JSON object, nothing else.`, petition, lawContext)
 	slog.Info("haiku-forge: generated haiku", "haiku", parsed.Haiku)
 
 	// Store the haiku artefact.
-	storeResp, err := client.StoreArtefact(ctx, "haiku", "text/haiku", []byte(parsed.Haiku))
+	storeResp, err := client.StoreArtefact(ctx, "haiku", "haiku", []byte(parsed.Haiku))
 	if err != nil {
 		return fmt.Errorf("forge: store haiku: %w", err)
 	}

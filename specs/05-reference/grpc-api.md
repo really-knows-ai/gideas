@@ -65,17 +65,17 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `QueryArtefactState` | `workitem_id`, `artefact_kinds[]` | `artefact_states[]` | Returns artefact presence and stamp state for exit contract validation. Called by the Operator's own reconciliation loop. |
+| `QueryArtefactState` | `workitem_id`, `governed_artefacts[]` | `artefact_states[]` | Returns artefact presence and stamp state for exit contract validation. Called by the Operator's own reconciliation loop. |
 
 ### Artefact Content and Version Methods
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `GetArtefact` | `workitem_id`, `artefact_id` | `content`, `version_hash`, `kind` | Returns the latest version's content bytes. Sidecar verifies `SHA256(content) == version_hash`. |
+| `GetArtefact` | `workitem_id`, `artefact_id` | `content`, `version_hash`, `governed_artefact` | Returns the latest version's content bytes. Sidecar verifies `SHA256(content) == version_hash`. |
 | `GetArtefactVersion` | `workitem_id`, `artefact_id`, `version_hash` | `content` | Returns content bytes for a specific version by hash. |
 | `GetArtefactMetadata` | `workitem_id`, `artefact_id` | `version_history[]`, `stamps[]` | Returns version history and current passport without content bytes. |
-| `ListArtefacts` | `workitem_id` | `artefact_refs[]` | Returns all artefacts (`id`, `kind`) associated with the Workitem. The Archivist is the source of truth for artefact-to-Workitem relationships. |
-| `StoreArtefact` | `workitem_id`, `artefact_id`, `kind`, `content`, `content_hash`\* | `version_hash`, `is_new_version` | Stores content bytes and creates a version record. Returns the confirmed version hash and whether a new version was created. \*`content_hash` is Sidecar-computed, not node-supplied. |
+| `ListArtefacts` | `workitem_id` | `artefact_refs[]` | Returns all artefacts (`id`, `governed_artefact`) associated with the Workitem. The Archivist is the source of truth for artefact-to-Workitem relationships. |
+| `StoreArtefact` | `workitem_id`, `artefact_id`, `governed_artefact`, `content`, `content_hash`\* | `version_hash`, `is_new_version` | Stores content bytes and creates a version record. Returns the confirmed version hash and whether a new version was created. \*`content_hash` is Sidecar-computed, not node-supplied. |
 
 ### Stamp Methods
 
@@ -83,7 +83,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 |--------|---------|----------|-------------|
 | `GetStamps` | `workitem_id`, `artefact_id` | `stamps[]` | Returns all stamps on the artefact's current version. Each stamp includes name, applying node, content hash, signature, and certificate chain. |
 | `HasStamp` | `workitem_id`, `artefact_id`, `stamp_name` | `exists` (bool) | Returns whether the named stamp exists on the current version. |
-| `StampArtefact` | `workitem_id`, `artefact_id`, `stamp_name`, `signature`\*, `cert_chain`\* | `stamp_record` | Applies a named stamp. \*`signature` and `cert_chain` are Sidecar-injected from the node's identity material. The Archivist validates: (1) `STAMP:artefact/<kind>/<stamp-name>` capability, (2) stamp has not already been applied to this version (write-once). |
+| `StampArtefact` | `workitem_id`, `artefact_id`, `stamp_name`, `signature`\*, `cert_chain`\* | `stamp_record` | Applies a named stamp. \*`signature` and `cert_chain` are Sidecar-injected from the node's identity material. The Archivist validates: (1) `STAMP:artefact/<name>/<stamp-name>` capability, (2) stamp has not already been applied to this version (write-once). |
 
 ### Feedback Methods
 
@@ -107,11 +107,11 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 |-----------|-------|-------------|
 | Missing `READ:artefact` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
 | Missing `WRITE:artefact` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
-| Missing `STAMP:artefact/<kind>/<stamp>` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
+| Missing `STAMP:artefact/<name>/<stamp>` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
 | Missing `READ:feedback` or `WRITE:feedback/<status>` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
 | Stamp already applied to this version | `STAMP_ALREADY_APPLIED` | `ALREADY_EXISTS` |
 | Content hash mismatch on read | `ARTEFACT_CORRUPTED` | `DATA_LOSS` |
-| Existing `id` with different `kind` | `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` |
+| Existing `id` with different `governed_artefact` | `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` |
 | Invalid feedback state transition | `INVALID_STATE_TRANSITION` | `FAILED_PRECONDITION` |
 | Attempt to override Assay-linked ruling | `CONTEMPT_VIOLATION` | `FAILED_PRECONDITION` |
 | Feedback ID not found | `FEEDBACK_NOT_FOUND` | `NOT_FOUND` |
@@ -127,7 +127,7 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `QueryLaws` | `filter` (optional) | `laws[]` | Returns laws matching the filter. Three modes: (1) no filter — all laws, (2) `artefact_kind` — laws whose `appliesTo` includes the kind plus global laws, (3) `artefact_kind` + `representation_type` — same kind filter plus at least one representation of the requested MIME type. All modes return full law objects. |
+| `QueryLaws` | `filter` (optional) | `laws[]` | Returns laws matching the filter. Three modes: (1) no filter — all laws, (2) `governed_artefact` — laws whose `appliesTo` includes the governed artefact plus global laws, (3) `governed_artefact` + `representation_type` — same governed artefact filter plus at least one representation of the requested MIME type. All modes return full law objects. |
 | `RecordFinding` | `goal`, `applies_to[]`, `representations[]` | `law_id` | Creates a Tier 1 Finding. Write-availability-first: returns immediately with a law identifier. Indexing and duplicate detection are asynchronous. |
 
 ### Service-Facing Methods

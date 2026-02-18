@@ -11,8 +11,8 @@ Nodes query the [Librarian](../02-flow/04-system-services.md#librarian) for appl
 The SDK exposes law retrieval with distinct query modes:
 
 - **All laws** — no filter. Returns every law in the Flow's Library.
-- **By artefact kind** — caller provides an artefact kind (e.g., `"haiku"`). Returns laws whose `appliesTo` includes the queried kind, plus all global laws (empty `appliesTo`).
-- **By artefact kind + representation type** — caller provides an artefact kind and a representation type. Same kind filter as above, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
+- **By governed artefact name** — caller provides a governed artefact name (e.g., `"haiku"`). Returns laws whose `appliesTo` includes the queried name, plus all global laws (empty `appliesTo`).
+- **By governed artefact name + representation type** — caller provides a governed artefact name and a representation type. Same name filter as above, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
 
 All query modes return full law objects — goal, all representations, tier, and lifecycle metadata. Filters gate which laws are included in the result; they never strip representations from returned objects. The node sees the whole law and picks the representation it uses.
 
@@ -20,10 +20,10 @@ All query modes return full law objects — goal, all representations, tier, and
 
 In the [reference arrangement](../01-concepts/02-foundry-cycle.md), each node type queries the Library differently:
 
-- **Forge** queries by artefact kind to seed its generation context with all applicable governance.
-- **Quench** queries by artefact kind + executable representation type to find laws it can run as deterministic checks.
-- **Appraise** queries by artefact kind + prose representation type to find laws a review panel can evaluate subjectively.
-- **Refine** queries by artefact kind to review all applicable law alongside feedback.
+- **Forge** queries by governed artefact name to seed its generation context with all applicable governance.
+- **Quench** queries by governed artefact name + executable representation type to find laws it can run as deterministic checks.
+- **Appraise** queries by governed artefact name + prose representation type to find laws a review panel can evaluate subjectively.
+- **Refine** queries by governed artefact name to review all applicable law alongside feedback.
 
 These are conventions of the reference arrangement. Any node with `READ:law` can use any query mode.
 
@@ -47,7 +47,7 @@ Nodes with the `WRITE:law/tier1` capability can record Tier 1 [Findings](../01-c
 
 | Operation | Parameters |
 |-----------|-----------|
-| `RecordFinding(goal, appliesTo, representations)` | `goal` (string) — plain-language statement of what the law enforces, stops, or ensures. `appliesTo` (`[]string`) — governed artefact kinds this law applies to; empty for global. `representations` (`[]Representation`) — at least one representation is required (typically prose). Each representation has a `type` (MIME type) and `content` (payload). |
+| `RecordFinding(goal, appliesTo, representations)` | `goal` (string) — plain-language statement of what the law enforces, stops, or ensures. `appliesTo` (`[]string`) — governed artefact names this law applies to; empty for global. `representations` (`[]Representation`) — at least one representation is required (typically prose). Each representation has a `type` (MIME type) and `content` (payload). |
 
 `RecordFinding` returns immediately with a law identifier. The write is eventually consistent — the new Finding is available for writes immediately but may not appear in `QueryLaws` results until the [Librarian](../02-flow/04-system-services.md#librarian) has indexed it. Duplicate detection is asynchronous: the Librarian runs background conflict checks against existing laws using [semantic search and LLM evaluation](../02-flow/04-system-services.md#librarian). Duplicate Findings are merged or retired without node involvement.
 
@@ -79,7 +79,7 @@ A prose representation and an executable representation of the same law enforce 
 - A validation node runs the executable representation as a deterministic check.
 - A generation node reads the prose representation to understand constraints.
 
-Nodes should not assume that every law carries a specific representation type. Query by artefact kind + representation type to find laws that have the representations the node can interpret. Laws without a matching representation are excluded from the result, not returned with empty representation lists.
+Nodes should not assume that every law carries a specific representation type. Query by governed artefact name + representation type to find laws that have the representations the node can interpret. Laws without a matching representation are excluded from the result, not returned with empty representation lists.
 
 [Governance hardening](../01-concepts/04-governance.md#precedent) adds representations over time. A prose-only Tier 1 Finding gains a formal logic representation when promoted to a Tier 2 Ruling through a [Codification Service](../02-flow/04-system-services.md#codification-services). The goal stays the same; enforceability increases. A node that runs deterministic checks can only use laws that have executable representations, and automatically picks up newly hardened laws as they gain those representations.
 

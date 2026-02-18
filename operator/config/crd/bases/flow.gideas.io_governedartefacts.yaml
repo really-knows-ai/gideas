@@ -19,7 +19,7 @@ spec:
       openAPIV3Schema:
         description: |-
           GovernedArtefact is the Schema for the governedartefacts API.
-          It registers an artefact kind and declares its stamp vocabulary.
+          It registers a governed artefact type and declares its stamp vocabulary.
         properties:
           apiVersion:
             description: |-
@@ -41,22 +41,14 @@ spec:
           spec:
             description: spec defines the desired state of GovernedArtefact
             properties:
-              kind:
-                description: |-
-                  kind is the artefact kind identifier (e.g. "petition-draft", "haiku").
-                  Unique within the Flow namespace.
-                minLength: 1
-                type: string
               stamps:
                 description: |-
-                  stamps are the stamp vocabulary — the set of stamp names meaningful for this kind
+                  stamps are the stamp vocabulary — the set of stamp names meaningful for this governed artefact
                   (e.g. ["linter", "security-review", "approval"]).
                   Entry and exit contracts select required stamps from this vocabulary.
                 items:
                   type: string
                 type: array
-            required:
-            - kind
             type: object
           status:
             description: status defines the observed state of GovernedArtefact

@@ -21,9 +21,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Contract is a map of artefact kind to required stamp names.
-// Each key is a governed artefact kind. Each value is a list of required stamp names.
-// Kind with empty list means artefacts of that kind must be present but no stamps are required.
+// Contract is a map of governed artefact name to required stamp names.
+// Each key is a governed artefact name (the metadata.name of a GovernedArtefact CR).
+// Each value is a list of required stamp names.
+// A governed artefact name with an empty list means artefacts of that type must be present but no stamps are required.
 // Empty map means no artefact requirements.
 type Contract map[string][]string
 
@@ -31,13 +32,13 @@ type Contract map[string][]string
 // The FoundryFlow CRD defines the executable shape of a Flow. The Operator
 // reconciles this resource as the source of truth for all flow-wide behavioural semantics.
 type FoundryFlowSpec struct {
-	// entryContracts are the named entry contracts. Each contract is a map of artefact kind
+	// entryContracts are the named entry contracts. Each contract is a map of governed artefact name
 	// to required stamp names. At least one entry contract must be defined.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinProperties=1
 	EntryContracts map[string]Contract `json:"entryContracts"`
 
-	// exitContracts are the named exit contracts. Each contract is a map of artefact kind
+	// exitContracts are the named exit contracts. Each contract is a map of governed artefact name
 	// to required stamp names.
 	// +kubebuilder:validation:Required
 	ExitContracts map[string]Contract `json:"exitContracts"`

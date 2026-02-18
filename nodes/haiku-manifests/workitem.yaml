@@ -9,7 +9,7 @@
 #   grpcurl -plaintext -d '{
 #     "workitem_id": "haiku-001",
 #     "artefact_id": "petition",
-#     "kind": "text/petition",
+#     "governed_artefact": "petition",
 #     "content": "d3JpdGUgbWUgYSBoYXBweSBoYWlrdSBhYm91dCBzYXVzYWdlcw==",
 #     "content_hash": "<sha256>"
 #   }' localhost:50054 flow.v1.ArchivistService/StoreArtefact

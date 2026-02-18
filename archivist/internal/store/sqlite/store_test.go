@@ -197,7 +197,7 @@ func TestListArtefacts(t *testing.T) {
 
 	found := map[string]string{}
 	for _, e := range entries {
-		found[e.ID] = e.Kind
+		found[e.ID] = e.GovernedArtefact
 	}
 	if found["art-1"] != "txt" || found["art-2"] != "json" {
 		t.Fatalf("unexpected entries: %v", found)
@@ -231,8 +231,8 @@ func TestListArtefacts_HeadKind(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
-	if entries[0].Kind != "json" {
-		t.Fatalf("expected head kind 'json', got %q", entries[0].Kind)
+	if entries[0].GovernedArtefact != "json" {
+		t.Fatalf("expected head governed artefact 'json', got %q", entries[0].GovernedArtefact)
 	}
 }
 

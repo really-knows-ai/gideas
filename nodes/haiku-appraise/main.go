@@ -227,7 +227,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"haiku", haiku,
 	)
 
-	laws, _ := client.QueryLaws(ctx, "text/haiku", "")
+	laws, _ := client.QueryLaws(ctx, "haiku", "")
 
 	existingFeedback, err := client.GetFeedback(ctx, "haiku")
 	if err != nil {

@@ -28,7 +28,7 @@ service ArchivistService {
   // Returns version history and current passport without content bytes.
   rpc GetArtefactMetadata(GetArtefactMetadataRequest) returns (GetArtefactMetadataResponse);
 
-  // Returns all artefacts (id, kind) associated with the Workitem.
+  // Returns all artefacts (id, governed artefact) associated with the Workitem.
   rpc ListArtefacts(ListArtefactsRequest) returns (ListArtefactsResponse);
 
   // Stores content bytes and creates a version record.
@@ -90,7 +90,8 @@ service ArchivistService {
 
 message QueryArtefactStateRequest {
   string workitem_id = 1;
-  repeated string artefact_kinds = 2;
+  // Filter by governed artefact names.
+  repeated string governed_artefacts = 2;
 }
 
 message QueryArtefactStateResponse {
@@ -107,7 +108,8 @@ message GetArtefactRequest {
 message GetArtefactResponse {
   bytes content = 1;
   string version_hash = 2;
-  string kind = 3;
+  // The governed artefact name (metadata.name of a GovernedArtefact CR).
+  string governed_artefact = 3;
 }
 
 message GetArtefactVersionRequest {
@@ -141,7 +143,8 @@ message ListArtefactsResponse {
 message StoreArtefactRequest {
   string workitem_id = 1;
   string artefact_id = 2;
-  string kind = 3;
+  // The governed artefact name (metadata.name of a GovernedArtefact CR).
+  string governed_artefact = 3;
   bytes content = 4;
   // SHA-256 content hash, computed by the Sidecar.
   string content_hash = 5;

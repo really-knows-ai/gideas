@@ -51,9 +51,7 @@ var _ = Describe("GovernedArtefact Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: flowv1.GovernedArtefactSpec{
-						Kind: "test-kind",
-					},
+					Spec: flowv1.GovernedArtefactSpec{},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

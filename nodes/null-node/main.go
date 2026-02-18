@@ -86,7 +86,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	slog.Info("null-node: Fetched content: "+string(getResp.GetContent()),
 		"version_hash", getResp.GetVersionHash(),
-		"kind", getResp.GetKind(),
+		"governed_artefact", getResp.GetGovernedArtefact(),
 	)
 
 	// Complete — submit routing instruction back through Sidecar -> Operator.

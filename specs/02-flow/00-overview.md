@@ -61,7 +61,7 @@ sequenceDiagram
     SC->>AR: query versions stamps feedback
     AR-->>SC: artefact state
     ND->>SC: get applicable laws
-    SC->>LB: law query by artefact kind
+    SC->>LB: law query by governed artefact name
     LB-->>SC: law representations
     ND->>SC: store artefact update
     SC->>AR: persist version and provenance
@@ -99,12 +99,12 @@ Exit completion is configuration-bound:
 - A node is an exit node only when configured with an exit contract binding.
 - Only exit nodes may call `complete()`.
 - The Operator, not the node, validates the bound contract.
-- Exit contracts are keyed by artefact kind with required stamp-name lists.
-- If multiple artefacts of a required kind exist, all must satisfy that kind's requirement.
-- A required kind with an empty stamp list means presence-only.
+- Exit contracts are keyed by governed artefact name with required stamp-name lists.
+- If multiple artefacts with a required governed artefact name exist, all must satisfy that name's requirement.
+- A required governed artefact name with an empty stamp list means presence-only.
 - A contract with no artefact entries imposes no artefact requirements.
 
-When completion triggers cross-flow export, only artefact kinds listed in the bound exit contract are exported. An empty contract exports metadata only.
+When completion triggers cross-flow export, only governed artefact names listed in the bound exit contract are exported. An empty contract exports metadata only.
 
 ## Data Ownership Boundaries
 

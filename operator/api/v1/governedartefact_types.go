@@ -21,15 +21,10 @@ import (
 )
 
 // GovernedArtefactSpec defines the desired state of GovernedArtefact.
-// The GovernedArtefact CRD registers an artefact kind and declares its stamp vocabulary.
+// The GovernedArtefact CRD registers a governed artefact type and declares its stamp vocabulary.
+// The governed artefact type is identified solely by metadata.name.
 type GovernedArtefactSpec struct {
-	// kind is the artefact kind identifier (e.g. "petition-draft", "haiku").
-	// Unique within the Flow namespace.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Kind string `json:"kind"`
-
-	// stamps are the stamp vocabulary — the set of stamp names meaningful for this kind
+	// stamps are the stamp vocabulary — the set of stamp names meaningful for this governed artefact
 	// (e.g. ["linter", "security-review", "approval"]).
 	// Entry and exit contracts select required stamps from this vocabulary.
 	// +optional
@@ -50,7 +45,7 @@ type GovernedArtefactStatus struct {
 // +kubebuilder:resource:scope=Namespaced
 
 // GovernedArtefact is the Schema for the governedartefacts API.
-// It registers an artefact kind and declares its stamp vocabulary.
+// It registers a governed artefact type and declares its stamp vocabulary.
 type GovernedArtefact struct {
 	metav1.TypeMeta `json:",inline"`
 

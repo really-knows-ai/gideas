@@ -98,7 +98,8 @@ message WorkitemContext {
 // Reference to an artefact within a Workitem.
 message ArtefactRef {
   string id = 1;
-  string kind = 2;
+  // The governed artefact name (metadata.name of a GovernedArtefact CR).
+  string governed_artefact = 2;
 }
 
 // A cryptographic stamp applied to an artefact version.
@@ -194,7 +195,8 @@ message Representation {
 // Artefact state for contract validation (service-facing).
 message ArtefactState {
   string artefact_id = 1;
-  string kind = 2;
+  // The governed artefact name (metadata.name of a GovernedArtefact CR).
+  string governed_artefact = 2;
   repeated string stamp_names = 3;
   string current_version_hash = 4;
 }

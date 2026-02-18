@@ -109,10 +109,10 @@ Deadlock-escalated governed-work Workitems remain separate from hearing Workitem
 
 ## Entry and Exit Contract Semantics
 
-Entry and exit contracts are defined per governed artefact kind. Each kind maps to a required list of stamp names.
+Entry and exit contracts are defined per governed artefact name. Each name maps to a required list of stamp names.
 
-- `{"petition-draft": ["linter", "security-review"]}` means artefacts of `petition-draft` kind must exist and carry both named stamps.
-- `{"audit-log": []}` means artefacts of `audit-log` kind must exist, with no stamp requirement.
+- `{"petition-draft": ["linter", "security-review"]}` means artefacts with governed artefact name `petition-draft` must exist and carry both named stamps.
+- `{"audit-log": []}` means artefacts with governed artefact name `audit-log` must exist, with no stamp requirement.
 - `{}` means no artefact requirements.
 
 Contract usage by boundary:
@@ -120,19 +120,19 @@ Contract usage by boundary:
 - Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `importNode` (cross-flow import), and for Assay's hearing entry binding (review-hearing processing).
 - Exit contracts gate `complete()` for exit-bound nodes.
 
-If multiple artefacts of a required kind exist, all must satisfy that kind's requirements.
+If multiple artefacts with a required governed artefact name exist, all must satisfy that name's requirements.
 
-Admission uses this same per-kind evaluation at the entry boundary.
+Admission uses this same per-name evaluation at the entry boundary.
 
-Completion succeeds only when every required kind passes validation. Otherwise completion is rejected and the Workitem does not transition to `Completed`.
+Completion succeeds only when every required governed artefact name passes validation. Otherwise completion is rejected and the Workitem does not transition to `Completed`.
 
 ```mermaid
 flowchart LR
     N["Exit node<br/>calls complete()"] --> B["Read bound contract<br/>from node config"]
-    B --> K["For each required kind<br/>evaluate all artefacts"]
+    B --> K["For each required name<br/>evaluate all artefacts"]
     K --> P{All requirements met}
     P -->|yes| Q["Mark Completed"]
-    P -->|yes| X["If configured<br/>export listed kinds"]
+    P -->|yes| X["If configured<br/>export listed names"]
     P -->|no| R["Reject completion<br/>contract violation"]
 ```
 
@@ -140,8 +140,8 @@ flowchart LR
 
 Stamp authority is configured through capability grants on FoundryNode.
 
-- Stamp grant format is `STAMP:artefact/<kind>/<stamp-name>`.
-- Grant scope is exact for artefact kind and stamp name.
+- Stamp grant format is `STAMP:artefact/<governed-artefact-name>/<stamp-name>`.
+- Grant scope is exact for governed artefact name and stamp name.
 - A node may apply only stamps it is granted.
 
 Stamp names are governance conventions chosen by the [Flow Architect](../05-reference/glossary.md#flow-architect). The platform does not attach special system semantics to names.
@@ -160,9 +160,9 @@ Nodes granted `READ:flow` capability can call [`GetFlowTopology`](../05-referenc
 
 - **Self** — the calling node's name, capabilities, and configured outputs.
 - **Nodes** — all peer nodes in the Flow, each with name, capabilities, and outputs.
-- **Exit contract** — the exit contract bound to the calling node (if exit-bound), as a map of artefact kind to required stamp names.
+- **Exit contract** — the exit contract bound to the calling node (if exit-bound), as a map of governed artefact name to required stamp names.
 
-Gate nodes use this information to build stamp-to-provider mappings dynamically: for each node in the topology, inspect its capabilities for `STAMP:artefact/<kind>/<stamp>` grants to determine which node can provide which stamp. Combined with the calling node's configured outputs, this enables fully dynamic routing without hardcoded node names or stamp associations.
+Gate nodes use this information to build stamp-to-provider mappings dynamically: for each node in the topology, inspect its capabilities for `STAMP:artefact/<governed-artefact-name>/<stamp>` grants to determine which node can provide which stamp. Combined with the calling node's configured outputs, this enables fully dynamic routing without hardcoded node names or stamp associations.
 
 The `NODE_ORDER` environment variable (comma-separated node names, set via FoundryNode CRD container env) controls the order in which the gate evaluates stamp phases. This gives the Flow Architect explicit control over evaluation order without coupling gate logic to specific topologies.
 
@@ -205,9 +205,9 @@ Cross-flow configuration defines trust relationships and authority treatment at 
 
 Treaty trust is directed. A configured edge from Flow A to Flow B does not imply Flow B to Flow A.
 
-Export scope at exit completion is constrained by bound exit-contract kinds:
+Export scope at exit completion is constrained by bound exit-contract governed artefact names:
 
-- Only artefacts whose kinds are listed in the bound exit contract are exported.
+- Only artefacts whose governed artefact names are listed in the bound exit contract are exported.
 - Empty contract exports metadata only.
 
 ## Operational Policy Knobs
@@ -247,13 +247,13 @@ All Flow configurations must preserve these invariants:
 
 1. Exit status is explicit and contract-bound.
 2. Only exit nodes can complete Workitems.
-3. Exit validation is Operator-enforced against per-kind stamp requirements.
+3. Exit validation is Operator-enforced against per-name stamp requirements.
 4. Stamp names are conventions; system semantics are capability and contract driven.
 5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
 6. Assay is mandatory and bounded to resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
 7. Cross-flow verifiability and local authority remain distinct and topology-dependent.
-8. Export scope is constrained by bound exit-contract kind entries.
-9. Workitem admission is constrained by bound entry-contract kind entries.
+8. Export scope is constrained by bound exit-contract governed artefact name entries.
+9. Workitem admission is constrained by bound entry-contract governed artefact name entries.
 10. Imported Workitems begin in `Pending` and are first-scheduled to configured `importNode` when capacity allows.
 11. Support Service capabilities are node-granted and Sidecar-mediated.
 

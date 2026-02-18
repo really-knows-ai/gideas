@@ -28,7 +28,7 @@ echo "Seeding petition into archivist..."
 grpcurl -plaintext -d "{
   \"workitem_id\": \"$WORKITEM_ID\",
   \"artefact_id\": \"petition\",
-  \"kind\": \"text/petition\",
+  \"governed_artefact\": \"petition\",
   \"content\": \"$CONTENT_B64\",
   \"content_hash\": \"$CONTENT_HASH\"
 }" "$ARCHIVIST" flow.v1.ArchivistService/StoreArtefact

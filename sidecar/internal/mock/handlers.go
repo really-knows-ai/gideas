@@ -129,9 +129,9 @@ func (h *ArchivistHandler) GetArtefact(
 		"artefact_id", req.GetArtefactId(),
 	)
 	return &flowv1.GetArtefactResponse{
-		Content:     []byte("mock-content"),
-		VersionHash: "mock-hash-000",
-		Kind:        "mock-kind",
+		Content:          []byte("mock-content"),
+		VersionHash:      "mock-hash-000",
+		GovernedArtefact: "mock-artefact",
 	}, nil
 }
 
