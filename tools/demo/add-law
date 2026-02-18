@@ -9,7 +9,7 @@
 #   $1 — The law goal (plain-language rule)
 #   $2 — Desired active tier (default: 3 = Local Statute). Range 1-5.
 #
-# The law is scoped to artefact kind "text/haiku".
+# The law is scoped to governed artefact "haiku".
 # WriteLaw creates it inactive, then ApplyLifecycleAction(PROMOTE) activates
 # it (and bumps tier by 1), so we write at tier-1.
 #
@@ -43,7 +43,7 @@ tier_name() {
 echo "=== Writing Law ==="
 echo "  Goal:  $GOAL"
 echo "  Tier:  $DESIRED_TIER ($(tier_name "$DESIRED_TIER"))"
-echo "  Scope: text/haiku"
+echo "  Scope: haiku"
 echo ""
 
 # 1. Create the law (inactive).
@@ -51,7 +51,7 @@ RESULT=$(grpcurl -plaintext -d "{
   \"law\": {
     \"goal\": $(printf '%s' "$GOAL" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
     \"tier\": $WRITE_TIER,
-    \"applies_to\": [\"text/haiku\"],
+    \"applies_to\": [\"haiku\"],
     \"representations\": [{
       \"type\": \"text/plain\",
       \"content\": $(printf '%s' "$GOAL" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
@@ -78,9 +78,9 @@ grpcurl -plaintext -d "{
 echo "Activated at tier $DESIRED_TIER"
 echo ""
 
-# 3. Show all current laws for text/haiku.
-echo "=== Current Laws (text/haiku) ==="
-grpcurl -plaintext -d '{"filter":{"artefact_kind":"text/haiku"}}' \
+# 3. Show all current laws for haiku.
+echo "=== Current Laws (haiku) ==="
+grpcurl -plaintext -d '{"filter":{"governed_artefact":"haiku"}}' \
   "$LIBRARIAN" flow.v1.LibrarianService/QueryLaws 2>&1 | \
   python3 -c "
 import sys, json

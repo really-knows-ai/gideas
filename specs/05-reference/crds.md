@@ -9,7 +9,7 @@ All custom resources use API group `flow.gideas.io/v1` and are namespace-scoped.
 | [FoundryFlow](#foundryflow) | Flow Architect / Operator | Flow-wide contracts, governance policy, cross-flow settings |
 | [FoundryNode](#foundrynode) | Flow Architect / Operator | Node-local behaviour, capabilities, routing outputs, contract bindings |
 | [Workitem](#workitem) | Operator (sole mutator) | Workitem lifecycle state, assignment, routing |
-| [GovernedArtefact](#governedartefact) | Flow Architect | Artefact kind registration and stamp vocabulary |
+| [GovernedArtefact](#governedartefact) | Flow Architect | Governed artefact registration and stamp vocabulary |
 | [Law](#law) | Librarian / Assay / nodes | Law goal, representations, tier, lifecycle metadata |
 | [Treaty](#treaty) | Flow Architect | Directed cross-flow trust policy |
 | [FlowSupportService](#flowsupportservice) | Flow Architect / Operator | Support Service capability declaration and infrastructure |
@@ -35,7 +35,7 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 
 Assay is a runtime-mandated component — the Operator provisions it without requiring a separate FoundryNode CRD. Its hearing entry and exit contracts are fixed by the runtime: the entry contract requires a single `law-reference` artefact; the exit contract requires it to still be present. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages Assay's `USE:support/<name>/encode` capability for each).
 
-The Operator also provisions a `law-reference` GovernedArtefact kind alongside Assay. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID.
+The Operator also provisions a `law-reference` GovernedArtefact alongside Assay. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID.
 
 ### Governance Policy
 
@@ -139,8 +139,8 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | Pattern | Description |
 |---------|-------------|
 | `READ:artefact` | Read artefact content and metadata. |
-| `WRITE:artefact` | Write artefact content (all kinds). |
-| `WRITE:artefact/<kind>` | Write artefact content scoped to a specific kind. |
+| `WRITE:artefact` | Write artefact content (all governed artefacts). |
+| `WRITE:artefact/<name>` | Write artefact content scoped to a specific governed artefact. |
 | `READ:law` | Query laws from the Library. |
 | `WRITE:law/tier1` | Write Tier 1 laws (Findings). |
 | `WRITE:law/tier2` | Write Tier 2 and below (Rulings, Findings). |
@@ -148,7 +148,7 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:law/tier4` | Write Tier 4 and below (State Constitutions and all lower tiers). |
 | `WRITE:law/tier5` | Write Tier 5 and below (all tiers). |
 | `WRITE:friction` | Emit friction events (`AddFriction`, `Cite`). Enforced by the Sidecar. |
-| `STAMP:artefact/<kind>/<stamp-name>` | Apply a named stamp to a specific artefact kind. Exact match on both kind and stamp name. |
+| `STAMP:artefact/<name>/<stamp-name>` | Apply a named stamp to a specific governed artefact. Exact match on both governed artefact name and stamp name. |
 | `READ:flow` | Query Flow configuration and node routing graph. Enables stamp-to-node mapping discovery. |
 | `READ:workitem` | Read Workitem state beyond the current assignment. |
 | `READ:feedback` | Read feedback items on artefacts. |
@@ -194,14 +194,13 @@ Managed by the Operator. Nodes do not write to `status` directly.
 
 ## GovernedArtefact
 
-The GovernedArtefact CRD registers an artefact kind and declares its stamp vocabulary. Detail: [Data Model](../01-concepts/03-data-model.md#governed-artefacts).
+The GovernedArtefact CRD registers a governed artefact and declares its stamp vocabulary. The governed artefact is identified by `metadata.name` (e.g. `"petition-draft"`, `"haiku"`), which must be unique within the Flow namespace. Detail: [Data Model](../01-concepts/03-data-model.md#governed-artefacts).
 
 ### `spec`
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `kind` | `string` | yes | Artefact kind identifier (e.g. `"petition-draft"`, `"haiku"`). Unique within the Flow namespace. |
-| `stamps` | `[]string` | no | Stamp vocabulary — the set of stamp names meaningful for this kind (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. |
+| `stamps` | `[]string` | no | Stamp vocabulary — the set of stamp names meaningful for this governed artefact (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. |
 
 ---
 
@@ -216,7 +215,7 @@ The Law object is managed by the [Librarian](../02-flow/04-system-services.md#li
 | `goal` | `string` | yes | Plain-language statement of what the law enforces, stops, or ensures. The law's identity. |
 | `representations` | `[]Representation` | yes | One or more typed expressions of the goal. At least one representation is required. |
 | `tier` | `integer` | yes | Law tier: `1` (Finding), `2` (Ruling), `3` (Local Statute), `4` (State Constitution), `5` (Federal Accord). |
-| `appliesTo` | `[]string` | no | Governed artefact kinds this law applies to. Empty means global — applies to all kinds in the Flow. |
+| `appliesTo` | `[]string` | no | Governed artefact names this law applies to. Empty means global — applies to all governed artefacts in the Flow. |
 
 ### Representation
 
@@ -311,7 +310,7 @@ The Operator reconciles CodificationService CRDs identically to FlowSupportServi
 
 ## Contract Shape
 
-Entry and exit contracts share the same shape. A contract is a map of artefact kind to required stamp names.
+Entry and exit contracts share the same shape. A contract is a map of governed artefact name to required stamp names.
 
 ```yaml
 # Example: exit contract requiring governed artefacts with specific stamps
@@ -325,12 +324,12 @@ approved:
 
 | Structure | Validation |
 |-----------|------------|
-| `map[string][]string` | Each key is a governed artefact kind. Each value is a list of required stamp names. |
-| Kind with stamp list | Artefacts of that kind must be present, and each artefact's passport must carry all listed stamps on its current version. |
-| Kind with empty list `[]` | Artefacts of that kind must be present. No stamps are required. |
+| `map[string][]string` | Each key is a governed artefact name (matching a GovernedArtefact's `metadata.name`). Each value is a list of required stamp names. |
+| Name with stamp list | Artefacts of that governed artefact must be present, and each artefact's passport must carry all listed stamps on its current version. |
+| Name with empty list `[]` | Artefacts of that governed artefact must be present. No stamps are required. |
 | Empty map `{}` | No artefact requirements. |
 
-If a Workitem contains multiple artefacts of a required kind, all of them must satisfy that kind's requirement.
+If a Workitem contains multiple artefacts of a required governed artefact, all of them must satisfy that governed artefact's requirement.
 
 Entry and exit contracts use the same evaluation semantics. The Operator validates the appropriate contract at the appropriate boundary — entry contracts at admission, exit contracts at completion.
 
@@ -350,17 +349,17 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 | Node timeout exceeds Flow-level `maxTimeout` | FoundryNode | `SCHEMA_VALIDATION_FAILED` |
 | `maxTimeout` is less than `defaultTimeout` | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Stamp name in a contract is not declared in the GovernedArtefact's stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
-| Duplicate artefact `id` with different `kind` for the same Workitem | Archivist | `ARTEFACT_KIND_CONFLICT` |
+| Duplicate artefact `id` with different `governed_artefact` for the same Workitem | Archivist | `ARTEFACT_KIND_CONFLICT` |
 
 ---
 
 ## CRD Invariants
 
 1. The Workitem CRD has no `spec` block. All state is Operator-managed in `status`.
-2. Artefact identity (`id` unique within Workitem, `kind` immutable for a given `id`) is enforced by the Archivist, not the Workitem CRD.
+2. Artefact identity (`id` unique within Workitem, `governed_artefact` immutable for a given `id`) is enforced by the Archivist, not the Workitem CRD.
 3. The Operator is the sole mutator of Workitem `status`.
 4. Entry and exit contracts share the same [Contract shape](#contract-shape) and evaluation semantics.
-5. Capability enforcement is exact — verb, resource, kind, and stamp name must match the grant.
+5. Capability enforcement is exact — verb, resource, governed artefact name, and stamp name must match the grant.
 6. Laws are single objects; any `spec` mutation produces a new content-hash version.
 7. Treaty trust is directed — a single CRD represents one direction of trust.
 8. Invalid configuration is rejected at admission; partial application does not occur.

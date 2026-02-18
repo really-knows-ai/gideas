@@ -14,8 +14,8 @@ service LibrarianService {
 
   // Returns laws matching the filter. Three query modes:
   // (1) no filter - all laws
-  // (2) artefact_kind - laws whose appliesTo includes the kind plus global laws
-  // (3) artefact_kind + representation_type - kind filter plus representation type
+  // (2) governed_artefact - laws whose appliesTo includes the governed artefact name, plus global laws
+  // (3) governed_artefact + representation_type - governed artefact filter plus representation type
   rpc QueryLaws(QueryLawsRequest) returns (QueryLawsResponse);
 
   // Records law usage. The Sidecar wraps this as an AddFriction call
@@ -57,8 +57,8 @@ message QueryLawsRequest {
 }
 
 message LawFilter {
-  // Filter by governed artefact kind.
-  string artefact_kind = 1;
+  // Filter by governed artefact name.
+  string governed_artefact = 1;
   // Further filter by representation MIME type.
   string representation_type = 2;
 }

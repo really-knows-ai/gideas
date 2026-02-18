@@ -82,7 +82,7 @@ func TestQueryLaws_ScopedFilter(t *testing.T) {
 	}
 
 	resp, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{
-		Filter: &flowv1.LawFilter{ArtefactKind: "source-code"},
+		Filter: &flowv1.LawFilter{GovernedArtefact: "source-code"},
 	})
 	if err != nil {
 		t.Fatalf("QueryLaws: %v", err)
@@ -100,7 +100,7 @@ func TestQueryLaws_RepresentationTypeRequiresKind(t *testing.T) {
 		Filter: &flowv1.LawFilter{RepresentationType: "text/markdown"},
 	})
 	if err == nil {
-		t.Fatal("expected error when representation_type is set without artefact_kind")
+		t.Fatal("expected error when representation_type is set without governed_artefact")
 	}
 	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", err)

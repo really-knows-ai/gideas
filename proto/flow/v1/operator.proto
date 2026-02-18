@@ -95,7 +95,7 @@ message GetFlowTopologyResponse {
   // All nodes in the flow, keyed by node name.
   map<string, FlowNode> nodes = 2;
   // The exit contract bound to the calling node (if exit-bound).
-  // Map of artefact kind to required stamp names.
+  // Map of governed artefact name to required stamp names.
   // Empty if the calling node is not exit-bound.
   map<string, StampRequirements> exit_contract = 3;
 }
@@ -113,7 +113,7 @@ message FlowOutput {
   string target = 2;
 }
 
-// List of required stamp names for an artefact kind in a contract.
+// List of required stamp names for a governed artefact in a contract.
 message StampRequirements {
   repeated string stamps = 1;
 }

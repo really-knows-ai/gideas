@@ -107,17 +107,17 @@ func (s *LibrarianServer) QueryLaws(
 
 	filter := sqlite.QueryFilter{}
 	if f := req.GetFilter(); f != nil {
-		filter.ArtefactKind = f.GetArtefactKind()
+		filter.GovernedArtefact = f.GetGovernedArtefact()
 		filter.RepresentationType = f.GetRepresentationType()
 
-		// Validate: if representation_type is set, artefact_kind must also be set.
-		if filter.RepresentationType != "" && filter.ArtefactKind == "" {
-			return nil, status.Error(codes.InvalidArgument, "representation_type requires artefact_kind")
+		// Validate: if representation_type is set, governed_artefact must also be set.
+		if filter.RepresentationType != "" && filter.GovernedArtefact == "" {
+			return nil, status.Error(codes.InvalidArgument, "representation_type requires governed_artefact")
 		}
 	}
 
 	slog.Info("QueryLaws",
-		"artefact_kind", filter.ArtefactKind,
+		"governed_artefact", filter.GovernedArtefact,
 		"representation_type", filter.RepresentationType,
 	)
 

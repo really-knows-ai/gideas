@@ -45,13 +45,13 @@ func (s *ArchivistServer) StoreArtefact(
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 	contentHash := req.GetContentHash()
-	kind := req.GetKind()
+	kind := req.GetGovernedArtefact()
 
 	slog.Info("StoreArtefact",
 		"workitem_id", workitemID,
 		"artefact_id", artefactID,
 		"content_hash", contentHash,
-		"kind", kind,
+		"governed_artefact", kind,
 	)
 
 	// Step 1: Store blob (deduplicated by hash).
@@ -131,9 +131,9 @@ func (s *ArchivistServer) GetArtefact(
 	}
 
 	return &flowv1.GetArtefactResponse{
-		Content:     data,
-		VersionHash: head.Hash,
-		Kind:        head.Kind,
+		Content:          data,
+		VersionHash:      head.Hash,
+		GovernedArtefact: head.GovernedArtefact,
 	}, nil
 }
 
@@ -224,8 +224,8 @@ func (s *ArchivistServer) ListArtefacts(
 	refs := make([]*flowv1.ArtefactRef, 0, len(entries))
 	for _, e := range entries {
 		refs = append(refs, &flowv1.ArtefactRef{
-			Id:   e.ID,
-			Kind: e.Kind,
+			Id:               e.ID,
+			GovernedArtefact: e.GovernedArtefact,
 		})
 	}
 
@@ -265,7 +265,7 @@ func (s *ArchivistServer) QueryArtefactState(
 
 		states = append(states, &flowv1.ArtefactState{
 			ArtefactId:         e.ID,
-			Kind:               e.Kind,
+			GovernedArtefact:   e.GovernedArtefact,
 			StampNames:         stampNames,
 			CurrentVersionHash: head.Hash,
 		})

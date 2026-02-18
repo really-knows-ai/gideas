@@ -85,20 +85,20 @@ Entry and exit contracts define what a Workitem must carry at lifecycle boundari
 
 Flow configuration declares both contract types on [FoundryFlow](../05-reference/crds.md) (`entryContracts`, `exitContracts`) and uses one shared shape. Workitem admission always resolves through a bound entry contract: the admitting node for local creation, configured `importNode` for cross-flow import, and Assay's hearing entry binding for review-hearing processing. A node bound to an exit contract can call `complete()` only when that contract is satisfied.
 
-Each contract is keyed by artefact kind. For each required kind, the contract lists the required stamp names:
+Each contract is keyed by governed artefact name. For each required name, the contract lists the required stamp names:
 
 | Requirement | Validation |
 |-------------|------------|
-| `[]` | Artefacts of that kind must be present (at least one version exists in the Archivist). No stamp names are required. |
-| `['stamp-a', 'stamp-b']` | Artefacts of that kind must be present and each artefact's passport must carry all listed stamp names on its current version. |
+| `[]` | Artefacts of that governed artefact name must be present (at least one version exists in the Archivist). No stamp names are required. |
+| `['stamp-a', 'stamp-b']` | Artefacts of that governed artefact name must be present and each artefact's passport must carry all listed stamp names on its current version. |
 
 A contract with no artefact keys imposes no artefact requirements.
 
-If a Workitem contains multiple artefacts of a required kind, all of them must satisfy that kind's requirement.
+If a Workitem contains multiple artefacts of a required governed artefact name, all of them must satisfy that name's requirement.
 
-Entry and exit contracts use the same requirement model. For example, an entry contract might require that artefacts of a given kind are present, while an exit contract might additionally require that specific named stamps have been applied to each artefact of that kind. A contract can also impose no artefact requirements at all — meaning the Workitem can complete without carrying governed artefacts. The contract structure is defined in the [Flow Configuration](../02-flow/05-configuration.md) and the [CRD Reference](../05-reference/crds.md).
+Entry and exit contracts use the same requirement model. For example, an entry contract might require that artefacts of a given governed artefact name are present, while an exit contract might additionally require that specific named stamps have been applied to each artefact of that name. A contract can also impose no artefact requirements at all — meaning the Workitem can complete without carrying governed artefacts. The contract structure is defined in the [Flow Configuration](../02-flow/05-configuration.md) and the [CRD Reference](../05-reference/crds.md).
 
-When exit completion triggers cross-flow export, only artefact kinds listed in the bound exit contract are exported. An empty contract exports no artefacts (metadata only).
+When exit completion triggers cross-flow export, only governed artefact names listed in the bound exit contract are exported. An empty contract exports no artefacts (metadata only).
 
 ---
 
@@ -108,7 +108,7 @@ An [artefact](./00-overview.md) is a governed output — a document, a code file
 
 Each artefact records the `workitem_id` it belongs to. The Archivist maintains the artefact-to-Workitem association — the Workitem CRD itself carries no artefact references. The Operator queries the Archivist when evaluating entry and exit contracts. This keeps the control-plane record lightweight regardless of version count, feedback depth, or stamp accumulation.
 
-The [SDK](../04-sdk/01-sdk-core.md) exposes an Artefact object that provides access to all artefact data through the [Sidecar](../03-node/01-sidecar.md). Nodes query artefacts by ID or by kind, and the SDK routes all requests to the Archivist. Nodes never interact with the Archivist directly.
+The [SDK](../04-sdk/01-sdk-core.md) exposes an Artefact object that provides access to all artefact data through the [Sidecar](../03-node/01-sidecar.md). Nodes query artefacts by ID or by governed artefact name, and the SDK routes all requests to the Archivist. Nodes never interact with the Archivist directly.
 
 ### Content Addressing and Versioning
 
@@ -121,12 +121,12 @@ The Workitem does not carry artefact references. The Archivist tracks each artef
 workitem_id: "wi-abc123"
 artefacts:
   - id: "art-001"
-    kind: "petition-draft"
+    governed_artefact: "petition-draft"
   - id: "art-002"
-    kind: "audit-log"
+    governed_artefact: "audit-log"
 ```
 
-The `id` uniquely identifies the artefact within the Workitem and is the key the Archivist uses to locate the full record. Multiple artefacts of the same kind are supported — each with its own `id`. For a given `id`, `kind` is immutable and the artefact association remains stable. Updates to that artefact produce new version hashes in the Archivist (or no-op when content is unchanged). The full version history — every prior hash, who created it, and when — is stored in the Archivist's database and queryable through the [SDK](../04-sdk/01-sdk-core.md).
+The `id` uniquely identifies the artefact within the Workitem and is the key the Archivist uses to locate the full record. Multiple artefacts of the same governed artefact name are supported — each with its own `id`. For a given `id`, `governed_artefact` is immutable and the artefact association remains stable. Updates to that artefact produce new version hashes in the Archivist (or no-op when content is unchanged). The full version history — every prior hash, who created it, and when — is stored in the Archivist's database and queryable through the [SDK](../04-sdk/01-sdk-core.md).
 
 ### Artefact Isolation
 
@@ -148,13 +148,13 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 
 ### Governed Artefacts
 
-A GovernedArtefact CRD declares the stamp vocabulary for an artefact kind — the set of stamp names that are meaningful for that kind. For example, a `petition-draft` kind might declare stamps like "linter", "security-review", "legal-review", and "approval". The CRD structure is defined in the [CRD Reference](../05-reference/crds.md).
+A GovernedArtefact CRD declares the stamp vocabulary for an artefact type — the set of stamp names that are meaningful for that governed artefact. The type is identified solely by `metadata.name` (e.g. `petition-draft`). For example, a `petition-draft` governed artefact might declare stamps like "linter", "security-review", "legal-review", and "approval". The CRD structure is defined in the [CRD Reference](../05-reference/crds.md).
 
-The `stamps` field defines which stamp names exist for this artefact kind — not which stamps are required at any particular boundary. [Entry and exit contracts](#entry-and-exit-contracts) define which of these stamps are required at each lifecycle boundary. An artefact is **present** if it exists in the Archivist, regardless of stamps.
+The `stamps` field defines which stamp names exist for this governed artefact — not which stamps are required at any particular boundary. [Entry and exit contracts](#entry-and-exit-contracts) define which of these stamps are required at each lifecycle boundary. An artefact is **present** if it exists in the Archivist, regardless of stamps.
 
 Entry and exit contracts select from the GovernedArtefact's vocabulary. A contract can require all stamps, a subset, or none (presence only with an empty list). The [Operator](../02-flow/01-operator.md) enforces contracts at boundary checks — it does not enforce the GovernedArtefact's full vocabulary as a blanket requirement.
 
-The GovernedArtefact CRD declares the stamp vocabulary — which stamp names are meaningful for a kind. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. Capability grants control which nodes can apply which stamps to which artefact kinds. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
+The GovernedArtefact CRD declares the stamp vocabulary — which stamp names are meaningful for a governed artefact. The [FoundryNode](../02-flow/03-nodes-external.md) CRD (configured by the Flow Architect) defines which nodes are authorised to apply each stamp — the supply side. Capability grants control which nodes can apply which stamps to which governed artefacts. The system treats all stamps identically; the semantic meaning of a stamp name is a convention chosen by the Flow Architect.
 
 Validation is stamp-based, not identity-based. The specific node that applied a stamp is recorded for audit, but governance checks verify that the required stamp names are present. This enables horizontal scaling — multiple nodes can be authorised to apply the same stamp (though only one can apply it per artefact version, since stamps are write-once) — and topology-aware cross-Flow trust. In sibling Flows that share a State Root, imported stamps are authoritative once the certificate chain validates. In Treaty/non-sibling crossings, imported stamps remain provenance only until the receiving Flow naturalises and applies its own local checks.
 
@@ -395,14 +395,14 @@ The full integration protocol — how higher-tier laws are pushed to Flows, how 
 
 ### Scoping
 
-Each law carries an `appliesTo` scope — a list of zero or more governed artefact kinds. A law with `appliesTo: ["haiku"]` governs haiku artefacts. A law with `appliesTo: ["haiku", "sonnet"]` governs both. An empty `appliesTo` means the law is global and applies to all artefact kinds in the Flow.
+Each law carries an `appliesTo` scope — a list of zero or more governed artefact names. A law with `appliesTo: ["haiku"]` governs haiku artefacts. A law with `appliesTo: ["haiku", "sonnet"]` governs both. An empty `appliesTo` means the law is global and applies to all governed artefacts in the Flow.
 
 When a node queries the [Librarian](../02-flow/04-system-services.md) for applicable laws:
 
 - **All laws** — no filter. Returns every law in the Flow's Library.
-- **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.
-- **By artefact kind + representation type** — same kind filter, plus the law must have at least one representation of the requested type.
+- **By governed artefact name** — returns laws whose `appliesTo` includes the queried name, plus all global laws.
+- **By governed artefact name + representation type** — same name filter, plus the law must have at least one representation of the requested type.
 
 All query modes return full law objects — goal, all representations, tier, and metadata. Filters gate which laws are included; they never strip representations from returned objects. The node sees the whole law and picks the representation it uses.
 
-In the [reference arrangement](./02-foundry-cycle.md), [Forge](./02-foundry-cycle.md#forge-creator) queries by artefact kind to seed its generation context with all applicable governance. [Quench](./02-foundry-cycle.md#quench-deterministic-validator) queries by kind and executable representation type to find laws it can run as deterministic checks. [Appraise](./02-foundry-cycle.md#appraise-reviewer) queries by kind and prose representation type to find laws a review panel can evaluate subjectively. Each node sees the same body of law through a different lens.
+In the [reference arrangement](./02-foundry-cycle.md), [Forge](./02-foundry-cycle.md#forge-creator) queries by governed artefact name to seed its generation context with all applicable governance. [Quench](./02-foundry-cycle.md#quench-deterministic-validator) queries by governed artefact name and executable representation type to find laws it can run as deterministic checks. [Appraise](./02-foundry-cycle.md#appraise-reviewer) queries by governed artefact name and prose representation type to find laws a review panel can evaluate subjectively. Each node sees the same body of law through a different lens.

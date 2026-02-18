@@ -179,8 +179,8 @@ func TestArchivistHandler_GetArtefact(t *testing.T) {
 	if resp.GetVersionHash() != "mock-hash-000" {
 		t.Fatalf("expected mock-hash-000, got %s", resp.GetVersionHash())
 	}
-	if resp.GetKind() != "mock-kind" {
-		t.Fatalf("expected mock-kind, got %s", resp.GetKind())
+	if resp.GetGovernedArtefact() != "mock-artefact" {
+		t.Fatalf("expected mock-artefact, got %s", resp.GetGovernedArtefact())
 	}
 }
 

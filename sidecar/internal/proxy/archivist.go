@@ -75,11 +75,11 @@ func (p *ArchivistProxy) StoreArtefact(
 
 	// Forward with the Sidecar-computed hash, overriding any node-supplied value.
 	resp, err := p.client.StoreArtefact(outCtx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  req.GetWorkitemId(),
-		ArtefactId:  req.GetArtefactId(),
-		Kind:        req.GetKind(),
-		Content:     req.GetContent(),
-		ContentHash: contentHash,
+		WorkitemId:       req.GetWorkitemId(),
+		ArtefactId:       req.GetArtefactId(),
+		GovernedArtefact: req.GetGovernedArtefact(),
+		Content:          req.GetContent(),
+		ContentHash:      contentHash,
 	})
 	if err != nil {
 		slog.Error("StoreArtefact forwarding failed", "error", err)

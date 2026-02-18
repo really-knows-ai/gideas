@@ -35,7 +35,7 @@ Emitted by the [Operator](../02-flow/01-operator.md) when routing, lifecycle, or
 | `INVALID_ROUTE` | `FAILED_PRECONDITION` | Routing instruction references an output name not configured on the node, or a target node that does not exist as a FoundryNode in the namespace. | Do not retry. Fix the routing logic or update node configuration. |
 | `THRASH_BUDGET_EXCEEDED` | `FAILED_PRECONDITION` | The Workitem's aggregate visit count across all nodes exceeds the configured `maxVisits` in [governance policy](./crds.md#governance-policy). The Workitem transitions to `Failed`. | Terminal for this Workitem. Investigate the routing loop. Review topology and governance policy thresholds. |
 | `TIMEOUT_EXCEEDED` | `DEADLINE_EXCEEDED` | The node's inactivity timer expired. No SDK call or explicit `Heartbeat()` was received within the configured timeout window. | The Sidecar cancels the handler context and reports the failure. The Operator transitions the Workitem per its failure policy. For long-running workloads, use explicit `Heartbeat()` calls or the FoundryAgent pattern. |
-| `CONTRACT_VIOLATION` | `FAILED_PRECONDITION` | Entry contract requirements not satisfied (at admission) or exit contract requirements not satisfied (at completion). Artefacts of a required kind are missing, or required stamps are not present on the current version. | Do not retry without addressing the missing artefacts or stamps. Route the Workitem to nodes that can provide the missing governance state. |
+| `CONTRACT_VIOLATION` | `FAILED_PRECONDITION` | Entry contract requirements not satisfied (at admission) or exit contract requirements not satisfied (at completion). Artefacts of a required governed artefact are missing, or required stamps are not present on the current version. | Do not retry without addressing the missing artefacts or stamps. Route the Workitem to nodes that can provide the missing governance state. |
 | `ASSIGNMENT_SCOPE_VIOLATION` | `FAILED_PRECONDITION` | An SDK operation attempted to access or mutate state outside the current Workitem assignment. The Sidecar rejected the request before it reached a service. | Do not retry. This indicates a bug in handler code — the handler is attempting to operate on a foreign Workitem. |
 
 ---
@@ -61,7 +61,7 @@ Emitted by the [Archivist](../02-flow/04-system-services.md#archivist) when gove
 | `STAMP_ALREADY_APPLIED` | `ALREADY_EXISTS` | The named stamp has already been applied to this artefact version. Stamps are write-once per content hash. | Do not retry — the stamp already exists. If independent sign-off is needed from different actors, define different stamp names in the [GovernedArtefact](./crds.md#governedartefact) stamp vocabulary. |
 | `INVALID_STATE_TRANSITION` | `FAILED_PRECONDITION` | The requested feedback state transition is not permitted from the item's current state. The Archivist enforces the [feedback state machine](../01-concepts/03-data-model.md#feedback-lifecycle) — only explicitly listed transitions are valid. | Do not retry. Check the feedback item's current state and use the correct transition operation. |
 | `ARTEFACT_CORRUPTED` | `DATA_LOSS` | The SHA-256 hash of retrieved artefact content does not match the stored version hash. The Sidecar detected the mismatch on read. | Do not use the content. Report the corruption through telemetry. This indicates a storage integrity issue requiring operational investigation. |
-| `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` | An operation referenced an existing artefact `id` with a different `kind` than previously established. Artefact kind is immutable for a given `id` within a Workitem. | Do not retry. The artefact `id` is already bound to a different kind. Use a different `id` for the new artefact, or use the existing kind. |
+| `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` | An operation referenced an existing artefact `id` with a different `governed_artefact` than previously established. An artefact's governed artefact is immutable for a given `id` within a Workitem. | Do not retry. The artefact `id` is already bound to a different governed artefact. Use a different `id` for the new artefact, or use the existing governed artefact. |
 
 ---
 
@@ -124,7 +124,7 @@ Emitted when a service is temporarily unreachable.
 | Write-once (`STAMP_ALREADY_APPLIED`) | No | Stamp exists. Proceed. |
 | State machine (`INVALID_STATE_TRANSITION`) | No | Check current state, use correct operation. |
 | Data integrity (`ARTEFACT_CORRUPTED`) | No | Report and investigate. |
-| Identity conflict (`ARTEFACT_KIND_CONFLICT`) | No | Use correct `id`/`kind` pairing. |
+| Identity conflict (`ARTEFACT_KIND_CONFLICT`) | No | Use correct `id`/`governed_artefact` pairing. |
 | Configuration (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) | No | Fix CRD configuration. |
 | Cross-flow trust (`TRUST_CHAIN_INVALID`, `TREATY_NOT_FOUND`, `NATURALISATION_REQUIRED`, `IMPORT_ADMISSION_FAILED`) | No | Fix trust configuration or process through local governance. |
 | Missing data (`FEEDBACK_NOT_FOUND`, `LAW_NOT_FOUND`) | No | Resource is absent. Adapt logic. |

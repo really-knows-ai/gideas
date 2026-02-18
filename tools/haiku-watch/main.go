@@ -408,10 +408,10 @@ func fetchAndPrintHaiku(ctx context.Context, addr, workitemID string) {
 		fmt.Println("--- ARTEFACT STATE (JSON) ---")
 		for _, as := range stateResp.GetArtefactStates() {
 			data, _ := json.MarshalIndent(map[string]any{
-				"artefact_id":  as.GetArtefactId(),
-				"kind":         as.GetKind(),
-				"stamps":       as.GetStampNames(),
-				"version_hash": as.GetCurrentVersionHash(),
+				"artefact_id":       as.GetArtefactId(),
+				"governed_artefact": as.GetGovernedArtefact(),
+				"stamps":            as.GetStampNames(),
+				"version_hash":      as.GetCurrentVersionHash(),
 			}, "  ", "  ")
 			fmt.Printf("  %s\n", string(data))
 		}

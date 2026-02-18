@@ -156,7 +156,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"current_haiku", haiku,
 	)
 
-	laws, _ := client.QueryLaws(ctx, "text/haiku", "")
+	laws, _ := client.QueryLaws(ctx, "haiku", "")
 
 	feedbackItems, err := client.GetFeedback(ctx, "haiku")
 	if err != nil {
@@ -218,7 +218,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	// Post-inference: store revised haiku and route back to Sort
 	// ---------------------------------------------------------------
 
-	storeResp, err := client.StoreArtefact(ctx, "haiku", "text/haiku", []byte(revised))
+	storeResp, err := client.StoreArtefact(ctx, "haiku", "haiku", []byte(revised))
 	if err != nil {
 		return fmt.Errorf("refine: store revised haiku: %w", err)
 	}

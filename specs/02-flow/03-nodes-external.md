@@ -57,8 +57,8 @@ Node authority is capability-driven and authorised at runtime service boundaries
 
 Stamp capabilities are explicit and granular:
 
-- Grant format: `STAMP:artefact/<kind>/<stamp-name>`.
-- Scope is exact for artefact kind and stamp name.
+- Grant format: `STAMP:artefact/<governed-artefact-name>/<stamp-name>`.
+- Scope is exact for governed artefact name and stamp name.
 - Stamp application is write-once per artefact version hash.
 
 Enforcement split:
@@ -82,7 +82,7 @@ Gate nodes in the reference arrangement discover stamp-provider routing targets 
 Assay participates in distinct runtime paths:
 
 - Deadlock adjudication: governed-work Workitems are *routed* to Assay (via `route_to`) by the gate node. The governed-work Workitem is already in flight — Assay adjudicates and returns it to Sort for re-evaluation in the reference arrangement.
-- Review-hearing processing: the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a *new* hearing Workitem, admitted through Assay's entry binding. Assay is both entry-bound and exit-bound for hearing Workitems. The hearing Workitem carries a single `law-reference` artefact — a built-in [GovernedArtefact](../05-reference/crds.md#governedartefact) kind provisioned by the Operator alongside Assay, whose content is a plain-text string containing the law ID under review. The governed-work Workitem that prompted the hearing is unaffected.
+- Review-hearing processing: the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a *new* hearing Workitem, admitted through Assay's entry binding. Assay is both entry-bound and exit-bound for hearing Workitems. The hearing Workitem carries a single `law-reference` artefact — a built-in [GovernedArtefact](../05-reference/crds.md#governedartefact) provisioned by the Operator alongside Assay, whose content is a plain-text string containing the law ID under review. The governed-work Workitem that prompted the hearing is unaffected.
 
 The two paths are distinguished by admission mechanism: deadlock-escalated Workitems arrive through routing; hearing Workitems arrive through entry-contract admission as new Workitems.
 
@@ -151,7 +151,7 @@ All node deployments preserve these invariants:
 5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
 6. Assay is always present and constrained to resolve/propose/appeal at its authority ceiling.
 7. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Assay entry/exit bindings.
-8. Stamp authority is capability-scoped by artefact kind and stamp name.
+8. Stamp authority is capability-scoped by governed artefact name and stamp name.
 9. Stamps are write-once per artefact version hash.
 10. Nodes admitting locally created Workitems are bound to and validated against entry contracts.
 11. External integrations preserve auditability, idempotency, and governance checks.

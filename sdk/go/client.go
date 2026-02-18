@@ -176,13 +176,13 @@ func (c *Client) GetArtefact(ctx context.Context, artefactID string) (*flowv1.Ge
 // the content hash — the SDK does not need to supply it. Returns the response
 // containing the version_hash and whether this was a new version.
 func (c *Client) StoreArtefact(
-	ctx context.Context, artefactID, kind string, content []byte,
+	ctx context.Context, artefactID, governedArtefact string, content []byte,
 ) (*flowv1.StoreArtefactResponse, error) {
 	resp, err := c.Archivist.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-		Kind:       kind,
-		Content:    content,
+		WorkitemId:       c.workitemID,
+		ArtefactId:       artefactID,
+		GovernedArtefact: governedArtefact,
+		Content:          content,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: store artefact failed: %w", err)
@@ -419,13 +419,13 @@ func (c *Client) GetFlowTopology(ctx context.Context) (*flowv1.GetFlowTopologyRe
 // ---------------------------------------------------------------------------
 
 // QueryLaws returns all laws matching the filter.
-// Pass empty strings for all laws. Pass kind for scoped+global.
-// Pass kind+repType for further filtering.
-func (c *Client) QueryLaws(ctx context.Context, kind, representationType string) ([]*flowv1.Law, error) {
+// Pass empty strings for all laws. Pass governedArtefact for scoped+global.
+// Pass governedArtefact+repType for further filtering.
+func (c *Client) QueryLaws(ctx context.Context, governedArtefact, representationType string) ([]*flowv1.Law, error) {
 	var filter *flowv1.LawFilter
-	if kind != "" || representationType != "" {
+	if governedArtefact != "" || representationType != "" {
 		filter = &flowv1.LawFilter{
-			ArtefactKind:       kind,
+			GovernedArtefact:   governedArtefact,
 			RepresentationType: representationType,
 		}
 	}

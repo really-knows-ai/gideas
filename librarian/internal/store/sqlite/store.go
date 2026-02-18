@@ -54,7 +54,7 @@ type LawEmbedding struct {
 
 // QueryFilter specifies optional axes for filtering law queries.
 type QueryFilter struct {
-	ArtefactKind       string
+	GovernedArtefact   string
 	RepresentationType string
 }
 
@@ -538,7 +538,7 @@ func (s *Store) SetTier(ctx context.Context, id string, tier int) error {
 func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error) {
 	var lawIDs []string
 
-	if filter.ArtefactKind == "" {
+	if filter.GovernedArtefact == "" {
 		// Mode 1: all active laws.
 		rows, err := s.db.QueryContext(ctx, `SELECT id FROM laws WHERE active = 1`)
 		if err != nil {
@@ -564,7 +564,7 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 			LEFT JOIN law_applies_to la ON l.id = la.law_id
 			WHERE l.active = 1
 			AND (la.artefact_kind = ? OR la.law_id IS NULL)
-		`, filter.ArtefactKind)
+		`, filter.GovernedArtefact)
 		if err != nil {
 			return nil, fmt.Errorf("query scoped laws: %w", err)
 		}

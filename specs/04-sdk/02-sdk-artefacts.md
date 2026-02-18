@@ -9,9 +9,9 @@ Each artefact on a [Workitem](../02-flow/02-workitem.md) is identified by two fi
 | Field | Behaviour |
 |-------|-----------|
 | `id` | Unique within the Workitem. Fixed once introduced — the same `id` refers to the same artefact for the Workitem's lifetime. Used as the primary key for all Archivist lookups. |
-| `kind` | Immutable for a given `id`. Matches a [GovernedArtefact](../05-reference/crds.md#governedartefact) kind declared in the Flow. Determines which [laws](./03-sdk-legal.md), [stamps](#stamp-operations), and [contract requirements](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) apply. |
+| `governedArtefact` | Immutable for a given `id`. Matches a [GovernedArtefact](../05-reference/crds.md#governedartefact) `metadata.name` declared in the Flow. Determines which [laws](./03-sdk-legal.md), [stamps](#stamp-operations), and [contract requirements](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) apply. |
 
-Multiple artefacts of the same `kind` are supported — each has a distinct `id`.
+Multiple artefacts of the same `governedArtefact` are supported — each has a distinct `id`.
 
 The [Archivist](../02-flow/04-system-services.md#archivist) is the single source of truth for artefact-to-Workitem associations. Each artefact records the `workitem_id` it belongs to. The Archivist stores full version history, stamps, and feedback, keyed by `workitem_id` and artefact `id`. This keeps the Workitem CRD small and watchable regardless of version depth or feedback volume.
 
@@ -24,7 +24,7 @@ Artefact reads are scoped to the current [assignment](./01-sdk-core.md#handler-l
 | `GetArtefact(id)` | The latest version's content bytes for the specified artefact. |
 | `GetArtefactVersion(id, versionHash)` | Content bytes for a specific version, identified by content hash. |
 | `GetArtefactMetadata(id)` | Version history list and passport (stamps) without content bytes. |
-| `ListArtefacts()` | All artefacts (`id`, `kind`) associated with the current Workitem, queried from the Archivist. |
+| `ListArtefacts()` | All artefacts (`id`, `governedArtefact`) associated with the current Workitem, queried from the Archivist. |
 
 The Sidecar verifies content integrity on fetch: `SHA256(content) == storedHash`. A hash mismatch produces an `ARTEFACT_CORRUPTED` error.
 
@@ -38,16 +38,16 @@ Artefact writes are content-addressed. Every version is identified by a SHA256 h
 
 | Operation | Behaviour |
 |-----------|-----------|
-| `StoreArtefact(id, kind, content)` | Writes content to the Archivist. For a new `id`, the Archivist creates the artefact record associated with the current Workitem. |
+| `StoreArtefact(id, governedArtefact, content)` | Writes content to the Archivist. For a new `id`, the Archivist creates the artefact record associated with the current Workitem. |
 
 Write outcomes depend on whether the `id` already exists on the Workitem:
 
 | Scenario | Outcome |
 |----------|---------|
-| New `id` | Archivist stores content, version record, and artefact-to-Workitem association (`id`, `kind`, `workitem_id`). |
-| Existing `id`, same `kind`, new content | Archivist stores a new version. Workitem reference unchanged. |
-| Existing `id`, same `kind`, identical content | No-op. Content hash matches an existing version — no new version is created. |
-| Existing `id`, different `kind` | **Rejected.** `kind` is immutable for a given `id`. Returns an identity conflict error. |
+| New `id` | Archivist stores content, version record, and artefact-to-Workitem association (`id`, `governedArtefact`, `workitem_id`). |
+| Existing `id`, same `governedArtefact`, new content | Archivist stores a new version. Workitem reference unchanged. |
+| Existing `id`, same `governedArtefact`, identical content | No-op. Content hash matches an existing version — no new version is created. |
+| Existing `id`, different `governedArtefact` | **Rejected.** `governedArtefact` is immutable for a given `id`. Returns an identity conflict error. |
 
 The Sidecar computes the content hash before sending the write to the Archivist. The node does not compute or supply hashes.
 
@@ -59,7 +59,7 @@ sequenceDiagram
     participant SC as Sidecar
     participant AR as Archivist
 
-    HD->>SC: StoreArtefact(id, kind, content)
+    HD->>SC: StoreArtefact(id, governedArtefact, content)
     SC->>SC: Compute SHA256 hash
     SC->>AR: Persist content bytes + version record + Workitem association
     AR-->>SC: Version hash confirmed
@@ -90,7 +90,7 @@ Methods that interpret stamp semantics are intentionally absent:
 |-----------|-----------|
 | `StampArtefact(id, stampName)` | Apply a named stamp to the artefact's current version. |
 
-Stamp application is capability-gated. The node must hold `STAMP:artefact/<kind>/<stamp-name>` for the artefact's kind and the specific stamp name. The stamp name must also be declared in the artefact kind's [GovernedArtefact](../05-reference/crds.md#governedartefact) stamp vocabulary — stamp names not in the vocabulary are rejected at configuration admission. The [Archivist](../02-flow/04-system-services.md#archivist) validates the capability grant and records the stamp with the applying node's identity, the artefact's current content hash, and a cryptographic signature from the Sidecar's identity material.
+Stamp application is capability-gated. The node must hold `STAMP:artefact/<governed-artefact-name>/<stamp-name>` for the artefact's governed artefact name and the specific stamp name. The stamp name must also be declared in the artefact's [GovernedArtefact](../05-reference/crds.md#governedartefact) stamp vocabulary — stamp names not in the vocabulary are rejected at configuration admission. The [Archivist](../02-flow/04-system-services.md#archivist) validates the capability grant and records the stamp with the applying node's identity, the artefact's current content hash, and a cryptographic signature from the Sidecar's identity material.
 
 Stamps are write-once per artefact version. Applying the same stamp name to the same content hash a second time — whether from the same node or a different one — produces an error. If two different nodes need to independently sign off on the same artefact, define two different stamp names.
 
@@ -104,8 +104,8 @@ Artefact operations map to capability requirements enforced by the backing servi
 |-----------|-------------------|-------------------|
 | Read operations (`GetArtefact`, `GetArtefactVersion`, `GetArtefactMetadata`) | `READ:artefact` | Archivist |
 | `ListArtefacts` | Assignment scope (implicit) | Archivist |
-| `StoreArtefact` | `WRITE:artefact` or `WRITE:artefact/<kind>` | Archivist |
-| `StampArtefact` | `STAMP:artefact/<kind>/<stamp-name>` | Archivist |
+| `StoreArtefact` | `WRITE:artefact` or `WRITE:artefact/<governed-artefact-name>` | Archivist |
+| `StampArtefact` | `STAMP:artefact/<governed-artefact-name>/<stamp-name>` | Archivist |
 | Feedback operations | See [SDK Feedback](./04-sdk-feedback.md#capability-and-error-semantics) | Archivist |
 
 Missing capabilities produce a `CAPABILITY_DENIED` error from the service. The Sidecar forwards the denial to the handler as a structured error with no state change.
@@ -118,12 +118,12 @@ Audit trails for artefact mutations — version creation, stamp application, fee
 
 ## Artefact Invariants
 
-1. `id` is unique and stable within a Workitem; `kind` is immutable for a given `id`.
+1. `id` is unique and stable within a Workitem; `governedArtefact` is immutable for a given `id`.
 2. All artefact operations are scoped to the current Workitem assignment.
 3. Content is addressed by SHA256 hash. Identical content produces no new version.
 4. New versions start with an empty passport. Stamps do not carry over.
 5. Stamps are write-once per artefact version per stamp name.
-6. Stamp application requires `STAMP:artefact/<kind>/<stamp-name>` capability.
+6. Stamp application requires `STAMP:artefact/<governed-artefact-name>/<stamp-name>` capability.
 7. The SDK does not expose methods that interpret stamp semantics (no `IsValid`, no `IsApproved`).
 8. The [Archivist](../02-flow/04-system-services.md#archivist) is the sole persistence authority for artefact provenance.
 9. The Sidecar verifies content integrity on read and computes hashes on write.

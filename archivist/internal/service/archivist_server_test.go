@@ -35,11 +35,11 @@ func TestStoreArtefact_NewVersion(t *testing.T) {
 	hash := sha256Hex(content)
 
 	resp, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "greeting",
-		Kind:        "txt",
-		Content:     content,
-		ContentHash: hash,
+		WorkitemId:       "wi-1",
+		ArtefactId:       "greeting",
+		GovernedArtefact: "txt",
+		Content:          content,
+		ContentHash:      hash,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -60,11 +60,11 @@ func TestStoreArtefact_DuplicateContent(t *testing.T) {
 	hash := sha256Hex(content)
 
 	req := &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "greeting",
-		Kind:        "txt",
-		Content:     content,
-		ContentHash: hash,
+		WorkitemId:       "wi-1",
+		ArtefactId:       "greeting",
+		GovernedArtefact: "txt",
+		Content:          content,
+		ContentHash:      hash,
 	}
 
 	// First store.
@@ -90,11 +90,11 @@ func TestStoreArtefact_UpdatedContent(t *testing.T) {
 	v1Content := []byte("version 1")
 	v1Hash := sha256Hex(v1Content)
 	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "doc",
-		Kind:        "txt",
-		Content:     v1Content,
-		ContentHash: v1Hash,
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          v1Content,
+		ContentHash:      v1Hash,
 	}); err != nil {
 		t.Fatalf("StoreArtefact v1: %v", err)
 	}
@@ -103,11 +103,11 @@ func TestStoreArtefact_UpdatedContent(t *testing.T) {
 	v2Content := []byte("version 2")
 	v2Hash := sha256Hex(v2Content)
 	resp, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "doc",
-		Kind:        "txt",
-		Content:     v2Content,
-		ContentHash: v2Hash,
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          v2Content,
+		ContentHash:      v2Hash,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -128,11 +128,11 @@ func TestGetArtefact_LatestVersion(t *testing.T) {
 	hash := sha256Hex(content)
 
 	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "greeting",
-		Kind:        "txt",
-		Content:     content,
-		ContentHash: hash,
+		WorkitemId:       "wi-1",
+		ArtefactId:       "greeting",
+		GovernedArtefact: "txt",
+		Content:          content,
+		ContentHash:      hash,
 	}); err != nil {
 		t.Fatalf("StoreArtefact: %v", err)
 	}
@@ -150,8 +150,8 @@ func TestGetArtefact_LatestVersion(t *testing.T) {
 	if resp.GetVersionHash() != hash {
 		t.Fatalf("expected version_hash=%q, got %q", hash, resp.GetVersionHash())
 	}
-	if resp.GetKind() != "txt" {
-		t.Fatalf("expected kind=txt, got %q", resp.GetKind())
+	if resp.GetGovernedArtefact() != "txt" {
+		t.Fatalf("expected governed_artefact=txt, got %q", resp.GetGovernedArtefact())
 	}
 }
 
@@ -180,11 +180,11 @@ func TestGetArtefactVersion(t *testing.T) {
 	hash := sha256Hex(content)
 
 	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "doc",
-		Kind:        "txt",
-		Content:     content,
-		ContentHash: hash,
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          content,
+		ContentHash:      hash,
 	}); err != nil {
 		t.Fatalf("StoreArtefact: %v", err)
 	}
@@ -225,20 +225,20 @@ func TestListArtefacts(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "doc1",
-		Kind:        "txt",
-		Content:     []byte("a"),
-		ContentHash: sha256Hex([]byte("a")),
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc1",
+		GovernedArtefact: "txt",
+		Content:          []byte("a"),
+		ContentHash:      sha256Hex([]byte("a")),
 	}); err != nil {
 		t.Fatalf("StoreArtefact doc1: %v", err)
 	}
 	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "doc2",
-		Kind:        "json",
-		Content:     []byte("b"),
-		ContentHash: sha256Hex([]byte("b")),
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc2",
+		GovernedArtefact: "json",
+		Content:          []byte("b"),
+		ContentHash:      sha256Hex([]byte("b")),
 	}); err != nil {
 		t.Fatalf("StoreArtefact doc2: %v", err)
 	}
@@ -261,20 +261,20 @@ func TestGetArtefactMetadata(t *testing.T) {
 	v1 := []byte("v1")
 	v2 := []byte("v2")
 	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "doc",
-		Kind:        "txt",
-		Content:     v1,
-		ContentHash: sha256Hex(v1),
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          v1,
+		ContentHash:      sha256Hex(v1),
 	}); err != nil {
 		t.Fatalf("StoreArtefact v1: %v", err)
 	}
 	if _, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "doc",
-		Kind:        "txt",
-		Content:     v2,
-		ContentHash: sha256Hex(v2),
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          v2,
+		ContentHash:      sha256Hex(v2),
 	}); err != nil {
 		t.Fatalf("StoreArtefact v2: %v", err)
 	}
@@ -301,11 +301,11 @@ func TestEndToEnd_StoreAndRetrieve(t *testing.T) {
 
 	// Step 1: Store
 	storeResp, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:  "test-workitem-001",
-		ArtefactId:  "greeting",
-		Kind:        "txt",
-		Content:     content,
-		ContentHash: hash,
+		WorkitemId:       "test-workitem-001",
+		ArtefactId:       "greeting",
+		GovernedArtefact: "txt",
+		Content:          content,
+		ContentHash:      hash,
 	})
 	if err != nil {
 		t.Fatalf("StoreArtefact failed: %v", err)

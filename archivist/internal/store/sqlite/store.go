@@ -27,15 +27,15 @@ const sqliteTimeFormat = "2006-01-02 15:04:05"
 
 // ArtefactVersion records a single version in an artefact's history.
 type ArtefactVersion struct {
-	Hash      string
-	Kind      string
-	CreatedAt time.Time
+	Hash             string
+	GovernedArtefact string
+	CreatedAt        time.Time
 }
 
 // ArtefactEntry is a summary of a single artefact for listing purposes.
 type ArtefactEntry struct {
-	ID   string
-	Kind string
+	ID               string
+	GovernedArtefact string
 }
 
 // StampRecord represents a governance stamp applied to an artefact version.
@@ -241,7 +241,7 @@ func (s *Store) GetHead(ctx context.Context, workitemID, artefactID string) (*Ar
 		 WHERE workitem_id = ? AND artefact_id = ?
 		 ORDER BY rowid DESC LIMIT 1`,
 		workitemID, artefactID,
-	).Scan(&v.Hash, &v.Kind, &createdStr)
+	).Scan(&v.Hash, &v.GovernedArtefact, &createdStr)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -271,7 +271,7 @@ func (s *Store) GetHistory(ctx context.Context, workitemID, artefactID string) (
 	for rows.Next() {
 		var v ArtefactVersion
 		var createdStr string
-		if err := rows.Scan(&v.Hash, &v.Kind, &createdStr); err != nil {
+		if err := rows.Scan(&v.Hash, &v.GovernedArtefact, &createdStr); err != nil {
 			return nil, fmt.Errorf("scan version: %w", err)
 		}
 		v.CreatedAt = parseTime(createdStr)
@@ -310,7 +310,7 @@ func (s *Store) ListArtefacts(ctx context.Context, workitemID string) ([]Artefac
 	var entries []ArtefactEntry
 	for rows.Next() {
 		var e ArtefactEntry
-		if err := rows.Scan(&e.ID, &e.Kind); err != nil {
+		if err := rows.Scan(&e.ID, &e.GovernedArtefact); err != nil {
 			return nil, fmt.Errorf("scan artefact entry: %w", err)
 		}
 		entries = append(entries, e)

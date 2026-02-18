@@ -15,7 +15,7 @@ The Operator owns control-plane state transitions and policy enforcement:
 
 The Operator does not execute node business logic and does not own artefact provenance storage. Provenance is owned by [Archivist](./04-system-services.md#archivist), and node-facing API authentication and mediation are handled by [Sidecar](../03-node/01-sidecar.md).
 
-The Operator maintains a direct service-level query path to the Archivist, distinct from the Sidecar-mediated path that nodes use. Entry and exit contract validation requires artefact kind, stamp, and feedback state that only the Archivist holds. Workitem retention and cleanup coordinate with the Archivist for artefact lifecycle management. The full inter-service contract surface is defined in [System Services](./04-system-services.md#inter-service-contracts).
+The Operator maintains a direct service-level query path to the Archivist, distinct from the Sidecar-mediated path that nodes use. Entry and exit contract validation requires governed artefact name, stamp, and feedback state that only the Archivist holds. Workitem retention and cleanup coordinate with the Archivist for artefact lifecycle management. The full inter-service contract surface is defined in [System Services](./04-system-services.md#inter-service-contracts).
 
 ## Reconciliation Surfaces
 
@@ -61,12 +61,12 @@ Workitem admission into a Flow lifecycle is entry-contract bound.
 - Local creation admission (nodes originating new Workitems) is enforced against the admitting node's bound entry contract.
 - Cross-flow import admission (receiving Flow) is enforced against configured `importNode` and its bound entry contract.
 - Review-hearing admission is enforced against Assay's bound hearing entry contract.
-- Entry and exit contracts share the same validation shape: per artefact kind, required stamp-name list, empty list as presence-only, empty contract as no artefact requirements.
+- Entry and exit contracts share the same validation shape: per governed artefact name, required stamp-name list, empty list as presence-only, empty contract as no artefact requirements.
 
 Admission outcomes:
 
 1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses configured `importNode`; review-hearing admission uses Assay hearing entry binding).
-2. Validate Workitem artefacts against per-kind requirements.
+2. Validate Workitem artefacts against per-name requirements.
 3. On success, admit Workitem into `Pending` lifecycle state.
 4. For cross-flow import, schedule first assignment to configured `importNode` when capacity allows.
 5. For review-hearing admission, schedule first assignment to Assay when capacity allows.
@@ -128,11 +128,11 @@ Exit completion is Operator-enforced and configuration-bound.
 
 Validation semantics:
 
-- Requirements are per artefact kind.
-- Stamp requirements are per kind as required stamp-name lists.
-- Empty list means presence-only for that kind.
+- Requirements are per governed artefact name.
+- Stamp requirements are per name as required stamp-name lists.
+- Empty list means presence-only for that name.
 - Empty contract means no artefact requirements.
-- If multiple artefacts of a required kind exist, all must satisfy that kind's requirements.
+- If multiple artefacts with a required governed artefact name exist, all must satisfy that name's requirements.
 
 On validation failure, completion is rejected and the Workitem does not transition to `Completed`.
 
@@ -191,7 +191,7 @@ All Flow deployments preserve these Operator invariants:
 5. Stamp-provider mappings are configuration-derived; the Operator does not hardcode node names for routing decisions.
 6. Workitem admission is entry-contract-bound and Operator-validated.
 7. Exit completion is exit-node-only and bound-contract validated by Operator.
-8. Contract checks are per artefact kind and apply to all artefacts of required kinds.
+8. Contract checks are per governed artefact name and apply to all artefacts of required names.
 9. Thrash enforcement uses aggregate visit count across all node assignments.
 10. Trust issuance and accession participation remain Operator responsibilities at control-plane boundary.
 11. Operator-originated audit and telemetry emissions are mandatory runtime outputs.

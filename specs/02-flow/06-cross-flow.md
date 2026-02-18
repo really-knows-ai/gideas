@@ -98,8 +98,8 @@ Treaties are receiver-enforced policy boundaries for non-sibling collaboration.
 
 Export scope is constrained by exit contract semantics.
 
-- Only artefact kinds listed in the bound exit contract are export-eligible.
-- Kinds omitted from the contract are not exported.
+- Only governed artefact names listed in the bound exit contract are export-eligible.
+- Names omitted from the contract are not exported.
 - An empty contract exports metadata only.
 
 This behaviour is consistent with exit-completion semantics in [Workitems](./02-workitem.md) and [Configuration Semantics](./05-configuration.md).
@@ -113,7 +113,7 @@ An export package contains:
 | Component | Description |
 |-----------|-------------|
 | Workitem metadata | Identifier, provenance chain (parent Workitem references). |
-| Artefact content | Content bytes for each artefact kind listed in the bound exit contract. Kinds not listed are excluded. |
+| Artefact content | Content bytes for each governed artefact name listed in the bound exit contract. Names not listed are excluded. |
 | Passport stamps | All stamps on exported artefacts — the full provenance record. |
 | Package signature | The source Flow's Operator signs the package using the Flow's identity material. |
 | Certificate chain | The Operator's certificate chain, rooted in the Flow's CA (or the State Root CA for sibling Flows). |
@@ -208,7 +208,7 @@ All cross-flow deployments preserve these invariants:
 4. Sibling/shared-root imports can be immediately authoritative after valid chain verification.
 5. Treaty/non-sibling imports require naturalisation for local authority.
 6. Treaty trust edges are directed; bidirectional exchange requires two treaties.
-7. Bound exit-contract kind entries constrain export scope.
+7. Bound exit-contract governed artefact name entries constrain export scope.
 8. Empty exit contracts export metadata only.
 9. Higher-tier law integration uses semantic search plus LLM contradiction evaluation.
 10. Tier 3 integration conflicts support grace-period semantics before forced integration.

@@ -65,7 +65,7 @@ Exit contract validation happens after the SDK call, within the [Operator](../02
 
 All governance decisions are made in a single, authoritative location — the Operator — and never duplicated in node code.
 
-When exit completion triggers [cross-flow export](../02-flow/06-cross-flow.md), only artefact kinds listed in the bound exit contract are exported. An empty contract exports metadata only.
+When exit completion triggers [cross-flow export](../02-flow/06-cross-flow.md), only governed artefact names listed in the bound exit contract are exported. An empty contract exports metadata only.
 
 ## Heartbeat and Activity Tracking
 
@@ -103,7 +103,7 @@ SDK errors fall into categories based on where they originate.
 | [Contempt violation](./04-sdk-feedback.md#contempt-guard-behaviour) | `CONTEMPT_VIOLATION` |
 | Invalid routing instruction | Unresolvable output or target |
 | Non-exit `Complete()` | Node not bound to exit contract |
-| Artefact identity conflict | Existing `id` with different `kind` |
+| Artefact identity conflict | Existing `id` with different `governedArtefact` |
 | Service unavailable | Transient unavailability error |
 
 Error classification utilities:

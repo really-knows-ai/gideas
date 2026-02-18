@@ -17,8 +17,8 @@
 #   4. All clear?               → stamp "approval", Complete()
 #
 # Artefacts:
-#   - petition (text/petition): The creative brief, pre-populated at workitem creation.
-#   - haiku (text/haiku): The governed output, must carry [linter, review, approval].
+#   - petition: The creative brief, pre-populated at workitem creation.
+#   - haiku: The governed output, must carry [linter, review, approval].
 #
 # Apply order:
 #   1. kubectl apply -f flow.yaml          (this file)
@@ -33,7 +33,6 @@ metadata:
   labels:
     app.kubernetes.io/part-of: haiku-flow
 spec:
-  kind: "text/haiku"
   stamps:
     - linter
     - review
@@ -47,7 +46,6 @@ metadata:
   labels:
     app.kubernetes.io/part-of: haiku-flow
 spec:
-  kind: "text/petition"
   stamps: []
 ---
 apiVersion: flow.gideas.io/v1
@@ -61,11 +59,11 @@ spec:
   entryContracts:
     # The petition must exist when the workitem enters the flow.
     standard-entry:
-      "text/petition": []
+      "petition": []
   exitContracts:
     # The haiku must carry linter, review, and approval stamps to exit.
     standard-exit:
-      "text/haiku":
+      "haiku":
         - linter
         - review
         - approval
@@ -91,8 +89,8 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
-    - "READ:artefact/text/petition"
-    - "WRITE:artefact/text/haiku"
+    - "READ:artefact/petition"
+    - "WRITE:artefact/haiku"
     - "READ:law"
 ---
 apiVersion: flow.gideas.io/v1
@@ -114,9 +112,9 @@ spec:
     - name: "refine"
       target: "refine"
   capabilities:
-    - "READ:artefact/text/haiku"
+    - "READ:artefact/haiku"
     - "READ:feedback"
-    - "STAMP:artefact/text/haiku/approval"
+    - "STAMP:artefact/haiku/approval"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
@@ -132,8 +130,8 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
-    - "READ:artefact/text/haiku"
-    - "STAMP:artefact/text/haiku/linter"
+    - "READ:artefact/haiku"
+    - "STAMP:artefact/haiku/linter"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
@@ -149,11 +147,11 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
-    - "READ:artefact/text/petition"
-    - "READ:artefact/text/haiku"
+    - "READ:artefact/petition"
+    - "READ:artefact/haiku"
     - "READ:law"
     - "WRITE:feedback/new"
-    - "STAMP:artefact/text/haiku/review"
+    - "STAMP:artefact/haiku/review"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
@@ -169,9 +167,9 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
-    - "READ:artefact/text/petition"
-    - "READ:artefact/text/haiku"
-    - "WRITE:artefact/text/haiku"
+    - "READ:artefact/petition"
+    - "READ:artefact/haiku"
+    - "WRITE:artefact/haiku"
     - "READ:feedback"
     - "WRITE:feedback/actioned"
     - "READ:law"

@@ -44,9 +44,9 @@ func (s *captureArchivistServer) GetArtefact(
 		s.capturedMD = md
 	}
 	return &flowv1.GetArtefactResponse{
-		Content:     []byte("test-content"),
-		VersionHash: "test-hash",
-		Kind:        "txt",
+		Content:          []byte("test-content"),
+		VersionHash:      "test-hash",
+		GovernedArtefact: "txt",
 	}, nil
 }
 
@@ -95,11 +95,11 @@ func TestArchivistProxy_StoreArtefact_ComputesHash(t *testing.T) {
 	expectedHash := fmt.Sprintf("%x", sha256.Sum256(content))
 
 	resp, err := proxy.StoreArtefact(context.Background(), &flowv1.StoreArtefactRequest{
-		WorkitemId:  "wi-1",
-		ArtefactId:  "greeting",
-		Kind:        "txt",
-		Content:     content,
-		ContentHash: "node-supplied-hash-should-be-ignored",
+		WorkitemId:       "wi-1",
+		ArtefactId:       "greeting",
+		GovernedArtefact: "txt",
+		Content:          content,
+		ContentHash:      "node-supplied-hash-should-be-ignored",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -121,10 +121,10 @@ func TestArchivistProxy_StoreArtefact_ForwardsFields(t *testing.T) {
 
 	content := []byte("data")
 	_, err := proxy.StoreArtefact(context.Background(), &flowv1.StoreArtefactRequest{
-		WorkitemId: "wi-2",
-		ArtefactId: "report",
-		Kind:       "json",
-		Content:    content,
+		WorkitemId:       "wi-2",
+		ArtefactId:       "report",
+		GovernedArtefact: "json",
+		Content:          content,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -136,8 +136,8 @@ func TestArchivistProxy_StoreArtefact_ForwardsFields(t *testing.T) {
 	if capture.lastStoreReq.GetArtefactId() != "report" {
 		t.Fatalf("expected artefact_id=report, got %q", capture.lastStoreReq.GetArtefactId())
 	}
-	if capture.lastStoreReq.GetKind() != "json" {
-		t.Fatalf("expected kind=json, got %q", capture.lastStoreReq.GetKind())
+	if capture.lastStoreReq.GetGovernedArtefact() != "json" {
+		t.Fatalf("expected governed_artefact=json, got %q", capture.lastStoreReq.GetGovernedArtefact())
 	}
 	if string(capture.lastStoreReq.GetContent()) != "data" {
 		t.Fatalf("expected content=data, got %q", string(capture.lastStoreReq.GetContent()))

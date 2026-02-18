@@ -83,7 +83,7 @@
 : A governed output — a document, code file, data model, or anything a Flow produces. Versioned, content-addressed, and stored in the Archivist. The Workitem CRD carries no artefact references — the Archivist maintains artefact-to-Workitem associations by `workitem_id`. Version history, stamps, and feedback live in the Archivist. Detail: [Data Model](../01-concepts/03-data-model.md#artefacts).
 
 **artefact kind**
-: A classification string (e.g. `"haiku"`, `"python-source"`) declared by a GovernedArtefact CRD. Artefact kind determines which stamp vocabulary applies, which laws are scoped to it (via `appliesTo`), and which contract requirements reference it.
+: A classification string (e.g. `"haiku"`, `"python-source"`) identified by a GovernedArtefact CRD's `metadata.name`. The governed artefact name determines which stamp vocabulary applies, which laws are scoped to it (via `appliesTo`), and which contract requirements reference it.
 
 **content hash**
 : The SHA-256 hash of an artefact's raw content bytes. Serves as the version identifier. Identical content produces the same hash (deduplication); changed content produces a new hash (fresh governance). Stamps are bound to a specific content hash.
@@ -98,7 +98,7 @@
 : A quantitative signal measuring governance cost. Purely additive — callers emit a magnitude and the Flow Monitor aggregates. Generated transparently by feedback (magnitude = depth), Assay jury rounds (magnitude = depth ^ (round + 1)), and HITL escalation (magnitude = depth ^ (rounds * 2)). Nodes may also emit friction voluntarily via `AddFriction`. Detail: [Conceptual Overview](../01-concepts/00-overview.md#friction), [Data Model](../01-concepts/03-data-model.md#friction).
 
 **governed artefact**
-: An artefact kind registered via a GovernedArtefact CRD. The CRD declares the stamp vocabulary — which stamp names are meaningful for that kind. Entry and exit contracts select from this vocabulary. Detail: [Data Model](../01-concepts/03-data-model.md#governed-artefacts).
+: An artefact type registered via a GovernedArtefact CRD, identified by `metadata.name`. The CRD declares the stamp vocabulary — which stamp names are meaningful for that governed artefact. Entry and exit contracts select from this vocabulary. Detail: [Data Model](../01-concepts/03-data-model.md#governed-artefacts).
 
 **HITL** (Human-in-the-Loop)
 : Any point where the system pauses for a human decision. Tier 3 law conflicts, Assay deadlock escalations, and Governance Flow ratification all produce HITL notifications. Human intervention is the final authority when automated governance reaches its ceiling.
@@ -110,7 +110,7 @@
 : A named governance checkpoint on an artefact's passport. Records the stamp name, the applying node, the content hash, and a cryptographic signature with certificate chain. Stamps are write-once per artefact version — a second application of the same stamp name to the same version is rejected. Detail: [Conceptual Overview](../01-concepts/00-overview.md#stamps), [Data Model](../01-concepts/03-data-model.md#passports-and-stamps).
 
 **stamp vocabulary**
-: The set of stamp names declared by a GovernedArtefact CRD as meaningful for an artefact kind (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. The platform attaches no built-in semantics to any stamp name.
+: The set of stamp names declared by a GovernedArtefact CRD as meaningful for that governed artefact (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. The platform attaches no built-in semantics to any stamp name.
 
 **version**
 : A specific snapshot of an artefact's content, identified by its content hash. The Archivist maintains the full version history. When content changes, a new version is created; existing stamps remain with the old version and the new version starts with no stamps.
@@ -126,7 +126,7 @@
 : The mechanism by which Assay escalates conflicts involving Tier 4 or Tier 5 laws to the Governance Flow via the Librarian. Assay cannot directly modify laws above its judicial tier. Detail: [Governance](../01-concepts/04-governance.md#escalation-across-boundaries).
 
 **`appliesTo`**
-: A field on each law listing zero or more governed artefact kinds the law applies to (e.g. `["haiku"]`, `["haiku", "sonnet"]`). An empty list means the law is global — it applies to all artefact kinds in the Flow. Law conflict detection is scoped by `appliesTo`. Detail: [Data Model](../01-concepts/03-data-model.md#scoping), [CRD Reference](./crds.md#law), [SDK Legal](../04-sdk/03-sdk-legal.md).
+: A field on each law listing zero or more governed artefact names the law applies to (e.g. `["haiku"]`, `["haiku", "sonnet"]`). An empty list means the law is global — it applies to all governed artefacts in the Flow. Law conflict detection is scoped by `appliesTo`. Detail: [Data Model](../01-concepts/03-data-model.md#scoping), [CRD Reference](./crds.md#law), [SDK Legal](../04-sdk/03-sdk-legal.md).
 
 **citation**
 : Recording usage of a law during Workitem processing. `Cite` is syntactic sugar around `AddFriction` — each call emits a low-magnitude friction event attributed to the cited law. Detail: [SDK Legal](../04-sdk/03-sdk-legal.md#citation).
@@ -162,7 +162,7 @@
 : See **review hearing** below.
 
 **law**
-: A governance rule with a goal and one or more representations. Persisted as a [Law CRD](./crds.md#law) with a `spec` containing `goal`, `representations`, `tier`, and `appliesTo`, and a `status` containing the content-hash `version`. A single object (not a group of linked objects). Any mutation to any part produces a new version identified by content hash. Scoped to artefact kinds via `appliesTo`. Detail: [Data Model](../01-concepts/03-data-model.md#laws).
+: A governance rule with a goal and one or more representations. Persisted as a [Law CRD](./crds.md#law) with a `spec` containing `goal`, `representations`, `tier`, and `appliesTo`, and a `status` containing the content-hash `version`. A single object (not a group of linked objects). Any mutation to any part produces a new version identified by content hash. Scoped to governed artefacts via `appliesTo`. Detail: [Data Model](../01-concepts/03-data-model.md#laws).
 
 **law integration**
 : The protocol by which higher-tier laws are integrated into a Flow's Library. A two-stage process: semantic search (vector similarity) followed by LLM conflict evaluation. Resolution depends on the tier of conflicting local laws. Detail: [Governance](../01-concepts/04-governance.md#law-integration-protocol), [Cross-Flow](../02-flow/06-cross-flow.md).
@@ -236,13 +236,13 @@
 : A FoundryNode CRD field (`entry`) that references a named entry contract on the FoundryFlow. Nodes with entry bindings serve as admission points: local Workitem creation, cross-flow import (via `importNode`), and review-hearing intake. Detail: [Configuration](../02-flow/05-configuration.md).
 
 **entry contract**
-: A named set of artefact-kind requirements that a Workitem must satisfy for admission. Defined on the FoundryFlow CRD (`entryContracts`). Enforced at local creation, cross-flow import, and review-hearing intake. Uses the same shape as exit contracts. Detail: [Data Model](../01-concepts/03-data-model.md#entry-and-exit-contracts), [Configuration](../02-flow/05-configuration.md).
+: A named set of governed-artefact requirements that a Workitem must satisfy for admission. Defined on the FoundryFlow CRD (`entryContracts`). Enforced at local creation, cross-flow import, and review-hearing intake. Uses the same shape as exit contracts. Detail: [Data Model](../01-concepts/03-data-model.md#entry-and-exit-contracts), [Configuration](../02-flow/05-configuration.md).
 
 **exit binding**
 : A FoundryNode CRD field (`exit`) that references a named exit contract on the FoundryFlow. Only nodes with exit bindings can call `complete()`. The binding is fixed in configuration — the node does not choose which contract to validate. Detail: [Configuration](../02-flow/05-configuration.md).
 
 **exit contract**
-: A named set of artefact-kind requirements that a Workitem must satisfy for completion. Defined on the FoundryFlow CRD (`exitContracts`). Enforced by the Operator when an exit node calls `complete()`. When completion triggers cross-flow export, only artefact kinds listed in the contract are exported. Detail: [Data Model](../01-concepts/03-data-model.md#entry-and-exit-contracts), [Configuration](../02-flow/05-configuration.md).
+: A named set of governed-artefact requirements that a Workitem must satisfy for completion. Defined on the FoundryFlow CRD (`exitContracts`). Enforced by the Operator when an exit node calls `complete()`. When completion triggers cross-flow export, only governed artefacts listed in the contract are exported. Detail: [Data Model](../01-concepts/03-data-model.md#entry-and-exit-contracts), [Configuration](../02-flow/05-configuration.md).
 
 **import node**
 : The node designated in the FoundryFlow CRD (`importNode`) as the entry point for cross-flow imported Workitems. Must reference a FoundryNode bound to an entry contract. Imported Workitems are created in `Pending` and first-scheduled to this node when capacity allows. Detail: [Configuration](../02-flow/05-configuration.md), [Cross-Flow](../02-flow/06-cross-flow.md).

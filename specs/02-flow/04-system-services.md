@@ -46,13 +46,13 @@ The Librarian is the law lifecycle service for a Flow.
 
 ### Retrieval and Serving
 
-Each law carries an `appliesTo` field — a list of zero or more governed artefact kinds. An empty `appliesTo` means the law is global and applies to all artefact kinds in the Flow.
+Each law carries an `appliesTo` field — a list of zero or more governed artefact names. An empty `appliesTo` means the law is global and applies to all governed artefact names in the Flow.
 
 The Librarian serves law queries through the [Sidecar](../03-node/01-sidecar.md) (for nodes) and direct service-to-service gRPC (for system actors). Three query modes are supported:
 
 - **All laws** — no filter. Returns every law in the Flow's Library.
-- **By artefact kind** — returns laws whose `appliesTo` includes the queried kind, plus all global laws.
-- **By artefact kind + representation type** — same kind filter, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
+- **By governed artefact name** — returns laws whose `appliesTo` includes the queried name, plus all global laws.
+- **By governed artefact name + representation type** — same name filter, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
 
 All query modes return full law objects (goal, all representations, tier, metadata). Filters gate which laws are included in the result; they never strip representations from returned law objects.
 
@@ -216,7 +216,7 @@ Hearings are implemented as a protocol across services and runtime actors, not a
 
 Hearing processing uses standard Workitems with explicit governed artefacts and contract bindings. No hearing-specific Workitem subtype or `spec.type` discriminator is introduced.
 
-Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact kind provisioned by the Operator alongside Assay with an empty stamp vocabulary. The `law-reference` artefact's content is a plain-text string containing the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
+Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact provisioned by the Operator alongside Assay with an empty stamp vocabulary. The `law-reference` artefact's content is a plain-text string containing the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
 
 Assay writes its verdict directly to the Library as a Tier 2 Ruling (for Tier 1 promotion) or petitions HITL via the Librarian (for Tier 2 promotion to Tier 3). Assay's output is a law in the Library, not a stamp on an artefact. After Assay calls `complete()`, the Operator notifies the Librarian via `ApplyLifecycleAction` to apply the verdict outcome (promote, retire, or demote) to the original law.
 

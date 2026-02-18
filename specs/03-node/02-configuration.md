@@ -43,10 +43,10 @@ Capability strings define what actions a node may request through [SDK](../04-sd
 
 The capability grammar follows a `VERB:RESOURCE[/QUALIFIER]` pattern:
 
-- `READ:artefact`, `WRITE:artefact`, `WRITE:artefact/<kind>` — artefact access. `WRITE:artefact` grants write access to all kinds; `WRITE:artefact/<kind>` scopes to a specific kind. See [SDK Artefacts](../04-sdk/02-sdk-artefacts.md#capability-gated-actions) for the specific SDK operations each capability enables.
+- `READ:artefact`, `WRITE:artefact`, `WRITE:artefact/<governed-artefact-name>` — artefact access. `WRITE:artefact` grants write access to all governed artefact names; `WRITE:artefact/<governed-artefact-name>` scopes to a specific governed artefact name. See [SDK Artefacts](../04-sdk/02-sdk-artefacts.md#capability-gated-actions) for the specific SDK operations each capability enables.
 - `READ:law`, `WRITE:law/tier1` through `WRITE:law/tier5` — law access. Each tier grant is a ceiling: `WRITE:law/tier2` authorises writes at Tier 2 and below.
 - `WRITE:friction` — friction emission. Required for `AddFriction` and its convenience wrapper [`Cite`](../04-sdk/03-sdk-legal.md#citation). Enforced by the Sidecar before forwarding to the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
-- `STAMP:artefact/<kind>/<stamp-name>` — stamp authority scoped to a specific artefact kind and stamp name.
+- `STAMP:artefact/<governed-artefact-name>/<stamp-name>` — stamp authority scoped to a specific governed artefact name and stamp name.
 - `READ:flow` — topology discovery, enabling a node to query stamp-to-node mappings at runtime.
 - `READ:workitem` — Workitem state access beyond the current assignment.
 - `READ:feedback` — feedback read access on artefacts.
@@ -126,7 +126,7 @@ The Operator validates configuration at admission time and rejects invalid confi
 
 Rejected configurations produce structured errors suitable for operational triage and audit. Partial application is never attempted — a FoundryNode with invalid configuration is not reconciled.
 
-Runtime denial (as opposed to admission rejection) occurs when a valid configuration encounters unexpected state: a routing target that existed at configuration time becomes unavailable, or a capability grant references an artefact kind that no [GovernedArtefact CRD](../05-reference/crds.md#governedartefact) defines. These are operational failures, not configuration errors.
+Runtime denial (as opposed to admission rejection) occurs when a valid configuration encounters unexpected state: a routing target that existed at configuration time becomes unavailable, or a capability grant references a governed artefact name that no [GovernedArtefact CRD](../05-reference/crds.md#governedartefact) defines. These are operational failures, not configuration errors.
 
 ## Rollout and Configuration Evolution
 
@@ -145,8 +145,8 @@ Behavioural changes are applied through configuration evolution (CRD updates), n
 1. Node behaviour is subordinate to Flow-level invariants; node configuration cannot override FoundryFlow constraints.
 2. Exit status is explicit through `exit` binding — never inferred from topology shape or output absence.
 3. Entry admission and exit completion are contract-bound; contracts are fixed by binding, not chosen at runtime.
-4. Capability enforcement is exact by verb, resource, kind, and name.
-5. Stamp authority is capability-scoped (`STAMP:artefact/<kind>/<stamp-name>`) and write-once per artefact version.
+4. Capability enforcement is exact by verb, resource, governed artefact name, and stamp name.
+5. Stamp authority is capability-scoped (`STAMP:artefact/<governed-artefact-name>/<stamp-name>`) and write-once per artefact version.
 6. Import intake starts at configured `importNode`, which must exist and be entry-bound.
 7. Timeout measures inactivity, not total execution time.
 8. Invalid configuration is rejected at admission; partial application does not occur.
