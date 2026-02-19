@@ -163,7 +163,7 @@ metadata:
     app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: haiku-refine:latest
+  image: refine:latest
   outputs:
     - name: "default"
       target: "sort"
