@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 )
 
@@ -41,9 +43,9 @@ type appraiseSpy struct {
 
 	// Feedback operation records.
 	AcceptedFixes    []string            // feedback IDs accepted
-	RejectedFixes    map[string]string   // feedback ID → rejection message
+	RejectedFixes    map[string]string   // feedback ID -> rejection message
 	AcceptedRefusals []string            // feedback IDs accepted
-	RejectedRefusals map[string]string   // feedback ID → rejection message
+	RejectedRefusals map[string]string   // feedback ID -> rejection message
 	AddedFeedback    []addedFeedbackItem // feedback items raised
 	StampedArtefacts []string            // artefact stamps applied
 	RoutedOutputs    []string            // output names routed to
@@ -51,6 +53,11 @@ type appraiseSpy struct {
 
 	// Librarian operation records.
 	RecordedFindings []recordedFinding // findings minted via RecordFinding
+
+	// Configurable responses for artefact reads.
+	ArtefactContents map[string]string      // artefact ID -> content
+	FeedbackItems    []*flowv1.FeedbackItem // feedback items returned by GetFeedback
+	Laws             []*flowv1.Law          // laws returned by QueryLaws
 }
 
 type addedFeedbackItem struct {
@@ -69,6 +76,10 @@ func newAppraiseSpy() *appraiseSpy {
 	return &appraiseSpy{
 		RejectedFixes:    make(map[string]string),
 		RejectedRefusals: make(map[string]string),
+		ArtefactContents: map[string]string{
+			"petition": "test-petition",
+			"haiku":    "test-content",
+		},
 	}
 }
 
@@ -100,15 +111,20 @@ func (s *appraiseSpy) SubmitResult(
 func (s *appraiseSpy) GetArtefact(
 	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
+	content := "test-content"
+	if s.ArtefactContents != nil {
+		if c, ok := s.ArtefactContents[req.GetArtefactId()]; ok {
+			content = c
+		}
+	}
 	return &flowv1.GetArtefactResponse{
-		Content:          []byte("test-content"),
-		VersionHash:      "test-hash",
-		GovernedArtefact: "haiku",
+		Content:     []byte(content),
+		VersionHash: "test-hash",
 	}, nil
 }
 
 func (s *appraiseSpy) StoreArtefact(
-	_ context.Context, req *flowv1.StoreArtefactRequest,
+	_ context.Context, _ *flowv1.StoreArtefactRequest,
 ) (*flowv1.StoreArtefactResponse, error) {
 	return &flowv1.StoreArtefactResponse{
 		VersionHash:  "new-hash",
@@ -128,9 +144,7 @@ func (s *appraiseSpy) StampArtefact(
 func (s *appraiseSpy) GetFeedback(
 	_ context.Context, _ *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
-	// Default: no existing feedback. Tests can override via a custom spy
-	// or by injecting feedback items into the handler flow directly.
-	return &flowv1.GetFeedbackResponse{FeedbackItems: nil}, nil
+	return &flowv1.GetFeedbackResponse{FeedbackItems: s.FeedbackItems}, nil
 }
 
 func (s *appraiseSpy) AddFeedback(
@@ -199,7 +213,7 @@ func (s *appraiseSpy) RejectRefusal(
 func (s *appraiseSpy) QueryLaws(
 	_ context.Context, _ *flowv1.QueryLawsRequest,
 ) (*flowv1.QueryLawsResponse, error) {
-	return &flowv1.QueryLawsResponse{Laws: nil}, nil
+	return &flowv1.QueryLawsResponse{Laws: s.Laws}, nil
 }
 
 func (s *appraiseSpy) Cite(
@@ -234,4 +248,85 @@ func (s *appraiseSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+// newSpyClient creates a flow.Client backed by a local gRPC server with
+// the appraiseSpy registered for all five service interfaces.
+func newSpyClient(t *testing.T, spy *appraiseSpy) *flow.Client {
+	t.Helper()
+
+	lis, err := newLocalListener()
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	srv := newSpyGRPCServer(spy)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.GracefulStop() })
+
+	client, err := flow.NewClient(flow.WithSidecarAddress(lis.Addr().String()))
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	return client
+}
+
+// defaultTestConfig returns a standard appraiseConfig for tests.
+func defaultTestConfig() *appraiseConfig {
+	return &appraiseConfig{
+		InputArtefact:    "petition",
+		ReviewArtefact:   "haiku",
+		GovernedArtefact: "haiku",
+		StampName:        "review",
+		Model:            "test-model",
+	}
+}
+
+// mockProvider implements flow.Provider for test isolation.
+type mockProvider struct {
+	mu sync.Mutex
+
+	output *flow.InferOutput
+	err    error
+
+	capturedModel  string
+	capturedSystem string
+	capturedQuery  []byte
+
+	// For parallel tests: per-call responses keyed by call index.
+	outputs []*flow.InferOutput
+	callIdx int
+}
+
+func (m *mockProvider) Infer(
+	_ context.Context, model, systemPrompt string, queryPrompt []byte,
+) (*flow.InferOutput, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.capturedModel = model
+	m.capturedSystem = systemPrompt
+	m.capturedQuery = queryPrompt
+
+	if m.outputs != nil && m.callIdx < len(m.outputs) {
+		out := m.outputs[m.callIdx]
+		m.callIdx++
+		return out, m.err
+	}
+	return m.output, m.err
+}
+
+// defaultCost returns a standard CostMetadata for tests.
+func defaultCost() *flow.CostMetadata {
+	return &flow.CostMetadata{
+		Model:        "test-model",
+		InputTokens:  10,
+		OutputTokens: 5,
+		DurationMs:   100,
+	}
 }

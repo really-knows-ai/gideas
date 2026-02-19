@@ -38,3 +38,19 @@ data:
   node-config.yaml: |
     nodeOrder: "quench,appraise"
     deadlockThreshold: 3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: appraise-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: appraise
+    app.kubernetes.io/part-of: haiku-flow
+data:
+  node-config.yaml: |
+    inputArtefact: "petition"
+    reviewArtefact: "haiku"
+    governedArtefact: "haiku"
+    stampName: "review"
+    model: "kimi-k2.5:cloud"
