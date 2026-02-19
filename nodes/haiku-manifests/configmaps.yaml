@@ -13,6 +13,22 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: forge-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: forge
+    app.kubernetes.io/part-of: haiku-flow
+data:
+  node-config.yaml: |
+    inputArtefact: "petition"
+    outputArtefact: "haiku"
+    governedArtefact: "haiku"
+    model: "gpt-oss:120b-cloud"
+    outputField: "haiku"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: sort-config
   namespace: default
   labels:

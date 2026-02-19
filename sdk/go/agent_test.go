@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"text/template"
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -30,6 +31,39 @@ const validHaikuSchema = `{
 }`
 
 const invalidSchemaJSON = `{not valid json`
+
+const testModel = "test-model"
+
+// ---------------------------------------------------------------------------
+// Mock Provider
+// ---------------------------------------------------------------------------
+
+// mockProvider implements Provider for testing.
+type mockProvider struct {
+	output *InferOutput
+	err    error
+
+	// capturedModel, capturedSystem, capturedQuery record the last Infer call.
+	capturedModel  string
+	capturedSystem string
+	capturedQuery  []byte
+
+	// delay simulates a slow provider call for heartbeat testing.
+	delay time.Duration
+}
+
+func (m *mockProvider) Infer(
+	ctx context.Context, model, systemPrompt string, queryPrompt []byte,
+) (*InferOutput, error) {
+	m.capturedModel = model
+	m.capturedSystem = systemPrompt
+	m.capturedQuery = queryPrompt
+
+	if m.delay > 0 {
+		time.Sleep(m.delay)
+	}
+	return m.output, m.err
+}
 
 // ---------------------------------------------------------------------------
 // Agent spy server — captures telemetry calls
@@ -111,16 +145,48 @@ func setupAgentTestEnv(t *testing.T, workitemID string) *agentTestEnv {
 	return &agentTestEnv{client: client, spy: spy, srv: srv}
 }
 
+// simpleQueryTemplate returns a template that just outputs {{.Input}}.
+func simpleQueryTemplate(t *testing.T) *template.Template {
+	t.Helper()
+	tmpl, err := template.New("query").Parse("{{.Input}}")
+	if err != nil {
+		t.Fatalf("failed to parse query template: %v", err)
+	}
+	return tmpl
+}
+
+// newTestAgent creates a FoundryAgent with a mock provider for testing.
+func newTestAgent(t *testing.T, env *agentTestEnv, provider Provider) *Agent {
+	t.Helper()
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(provider),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+		WithHeartbeatInterval(time.Hour), // effectively disable heartbeat
+	)
+	if err != nil {
+		t.Fatalf("NewAgent() error: %v", err)
+	}
+	return agent
+}
+
 // ---------------------------------------------------------------------------
 // Tests — Construction
 // ---------------------------------------------------------------------------
 
-func TestNewAgent_ValidSchema(t *testing.T) {
+func TestNewAgent_ValidConstruction(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-001")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema))
+	mp := &mockProvider{}
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(mp),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+	)
 	if err != nil {
-		t.Fatalf("NewAgent() with valid schema returned error: %v", err)
+		t.Fatalf("NewAgent() with valid options returned error: %v", err)
 	}
 	if agent == nil {
 		t.Fatal("NewAgent() returned nil agent")
@@ -130,7 +196,13 @@ func TestNewAgent_ValidSchema(t *testing.T) {
 func TestNewAgent_InvalidSchemaJSON(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-002")
 
-	_, err := NewAgent(env.client, []byte(invalidSchemaJSON))
+	mp := &mockProvider{}
+	_, err := NewAgent(env.client,
+		WithSchema([]byte(invalidSchemaJSON)),
+		WithProvider(mp),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+	)
 	if err == nil {
 		t.Fatal("NewAgent() with invalid JSON should return error")
 	}
@@ -140,7 +212,12 @@ func TestNewAgent_InvalidSchemaJSON(t *testing.T) {
 }
 
 func TestNewAgent_NilClient(t *testing.T) {
-	_, err := NewAgent(nil, []byte(validHaikuSchema))
+	_, err := NewAgent(nil,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(&mockProvider{}),
+		WithModel(testModel),
+		WithQueryTemplate(template.Must(template.New("q").Parse("{{.Input}}"))),
+	)
 	if err == nil {
 		t.Fatal("NewAgent() with nil client should return error")
 	}
@@ -149,10 +226,79 @@ func TestNewAgent_NilClient(t *testing.T) {
 	}
 }
 
-func TestNewAgent_DefaultHeartbeatInterval(t *testing.T) {
+func TestNewAgent_NilProvider(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-003")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema))
+	_, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+	)
+	if err == nil {
+		t.Fatal("NewAgent() with nil provider should return error")
+	}
+	if !strings.Contains(err.Error(), "provider must not be nil") {
+		t.Fatalf("expected 'provider must not be nil' in error, got: %v", err)
+	}
+}
+
+func TestNewAgent_MissingSchema(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-agent-004")
+
+	_, err := NewAgent(env.client,
+		WithProvider(&mockProvider{}),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+	)
+	if err == nil {
+		t.Fatal("NewAgent() with nil schema should return error")
+	}
+	if !strings.Contains(err.Error(), "schema must not be nil") {
+		t.Fatalf("expected 'schema must not be nil' in error, got: %v", err)
+	}
+}
+
+func TestNewAgent_MissingModel(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-agent-005")
+
+	_, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(&mockProvider{}),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+	)
+	if err == nil {
+		t.Fatal("NewAgent() with empty model should return error")
+	}
+	if !strings.Contains(err.Error(), "model must not be empty") {
+		t.Fatalf("expected 'model must not be empty' in error, got: %v", err)
+	}
+}
+
+func TestNewAgent_MissingQueryTemplate(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-agent-006")
+
+	_, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(&mockProvider{}),
+		WithModel(testModel),
+	)
+	if err == nil {
+		t.Fatal("NewAgent() with nil query template should return error")
+	}
+	if !strings.Contains(err.Error(), "query template must not be nil") {
+		t.Fatalf("expected 'query template must not be nil' in error, got: %v", err)
+	}
+}
+
+func TestNewAgent_DefaultHeartbeatInterval(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-agent-007")
+
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(&mockProvider{}),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+	)
 	if err != nil {
 		t.Fatalf("NewAgent() returned error: %v", err)
 	}
@@ -163,15 +309,81 @@ func TestNewAgent_DefaultHeartbeatInterval(t *testing.T) {
 }
 
 func TestNewAgent_CustomHeartbeatInterval(t *testing.T) {
-	env := setupAgentTestEnv(t, "wid-agent-004")
+	env := setupAgentTestEnv(t, "wid-agent-008")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(5*time.Second))
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(&mockProvider{}),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+		WithHeartbeatInterval(5*time.Second),
+	)
 	if err != nil {
 		t.Fatalf("NewAgent() returned error: %v", err)
 	}
 	if agent.cfg.heartbeatInterval != 5*time.Second {
 		t.Fatalf("expected heartbeat interval 5s, got %v", agent.cfg.heartbeatInterval)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Run: Template Rendering
+// ---------------------------------------------------------------------------
+
+func TestAgent_Run_TemplateRendering(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-tmpl-001")
+
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: []byte(`{"haiku": "test haiku"}`),
+			Cost: &CostMetadata{
+				Model:        testModel,
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   100,
+			},
+		},
+	}
+
+	tmpl := template.Must(template.New("query").Parse(
+		"Write a haiku about {{.Topic}} with style {{.Style}}"))
+
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(mp),
+		WithModel(testModel),
+		WithQueryTemplate(tmpl),
+		WithSystemPrompt("You are a haiku poet."),
+		WithHeartbeatInterval(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent() error: %v", err)
+	}
+
+	data := struct {
+		Topic string
+		Style string
+	}{Topic: "autumn", Style: "classical"}
+
+	_, err = agent.Run(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	// Verify the query prompt was rendered correctly.
+	expectedQuery := "Write a haiku about autumn with style classical"
+	if string(mp.capturedQuery) != expectedQuery {
+		t.Fatalf("query mismatch:\ngot:  %q\nwant: %q", string(mp.capturedQuery), expectedQuery)
+	}
+
+	// Verify the system prompt was passed through.
+	if mp.capturedSystem != "You are a haiku poet." {
+		t.Fatalf("system prompt mismatch: got %q", mp.capturedSystem)
+	}
+
+	// Verify the model was passed through.
+	if mp.capturedModel != testModel {
+		t.Fatalf("model mismatch: got %q", mp.capturedModel)
 	}
 }
 
@@ -182,25 +394,23 @@ func TestNewAgent_CustomHeartbeatInterval(t *testing.T) {
 func TestAgent_Run_OutputValidation_Pass(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-val-pass")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(time.Hour)) // long interval to avoid heartbeat noise
-	if err != nil {
-		t.Fatalf("NewAgent() error: %v", err)
-	}
-
 	validOutput := []byte(`{"haiku": "autumn moonlight"}`)
 
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return &InferResult{
-			Output:       validOutput,
-			Model:        "test-model",
-			InputTokens:  10,
-			OutputTokens: 5,
-			DurationMs:   100,
-		}, nil
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: validOutput,
+			Cost: &CostMetadata{
+				Model:        testModel,
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   100,
+			},
+		},
 	}
 
-	got, err := agent.Run(context.Background(), infer, []byte("write a haiku"))
+	agent := newTestAgent(t, env, mp)
+
+	got, err := agent.Run(context.Background(), struct{ Input string }{Input: "write a haiku"})
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
@@ -212,26 +422,24 @@ func TestAgent_Run_OutputValidation_Pass(t *testing.T) {
 func TestAgent_Run_OutputValidation_Fail(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-val-fail")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(time.Hour))
-	if err != nil {
-		t.Fatalf("NewAgent() error: %v", err)
-	}
-
 	// Output missing required "haiku" field.
 	invalidOutput := []byte(`{"title": "not a haiku"}`)
 
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return &InferResult{
-			Output:       invalidOutput,
-			Model:        "test-model",
-			InputTokens:  10,
-			OutputTokens: 5,
-			DurationMs:   100,
-		}, nil
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: invalidOutput,
+			Cost: &CostMetadata{
+				Model:        testModel,
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   100,
+			},
+		},
 	}
 
-	_, err = agent.Run(context.Background(), infer, []byte("write a haiku"))
+	agent := newTestAgent(t, env, mp)
+
+	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "write a haiku"})
 	if err == nil {
 		t.Fatal("Run() should return error for invalid output")
 	}
@@ -249,23 +457,21 @@ func TestAgent_Run_OutputValidation_Fail(t *testing.T) {
 func TestAgent_Run_OutputNotJSON(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-val-notjson")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(time.Hour))
-	if err != nil {
-		t.Fatalf("NewAgent() error: %v", err)
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: []byte("this is not JSON"),
+			Cost: &CostMetadata{
+				Model:        testModel,
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   100,
+			},
+		},
 	}
 
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return &InferResult{
-			Output:       []byte("this is not JSON"),
-			Model:        "test-model",
-			InputTokens:  10,
-			OutputTokens: 5,
-			DurationMs:   100,
-		}, nil
-	}
+	agent := newTestAgent(t, env, mp)
 
-	_, err = agent.Run(context.Background(), infer, []byte("input"))
+	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
 		t.Fatal("Run() should return error for non-JSON output")
 	}
@@ -281,24 +487,22 @@ func TestAgent_Run_OutputNotJSON(t *testing.T) {
 func TestAgent_Run_CostTelemetry(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-cost-001")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(time.Hour))
-	if err != nil {
-		t.Fatalf("NewAgent() error: %v", err)
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: []byte(`{"haiku": "test haiku"}`),
+			Cost: &CostMetadata{
+				Model:        "gpt-4o",
+				InputTokens:  150,
+				OutputTokens: 30,
+				DurationMs:   2500,
+				Extra:        map[string]any{"provider": "openai", "cached_tokens": int64(50)},
+			},
+		},
 	}
 
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return &InferResult{
-			Output:       []byte(`{"haiku": "test haiku"}`),
-			Model:        "gpt-4o",
-			InputTokens:  150,
-			OutputTokens: 30,
-			DurationMs:   2500,
-			Extra:        map[string]any{"provider": "openai", "cached_tokens": int64(50)},
-		}, nil
-	}
+	agent := newTestAgent(t, env, mp)
 
-	_, err = agent.Run(context.Background(), infer, []byte("input"))
+	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
@@ -341,6 +545,30 @@ func TestAgent_Run_CostTelemetry(t *testing.T) {
 	}
 }
 
+func TestAgent_Run_NilCostMetadata(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-cost-nil")
+
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: []byte(`{"haiku": "test haiku"}`),
+			Cost:   nil, // Provider doesn't report costs.
+		},
+	}
+
+	agent := newTestAgent(t, env, mp)
+
+	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	// No telemetry should be emitted when Cost is nil.
+	calls := env.spy.getTelemetryCalls()
+	if len(calls) != 0 {
+		t.Fatalf("expected no telemetry calls when Cost is nil, got %d", len(calls))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests — Run: Multi-Step Accounting
 // ---------------------------------------------------------------------------
@@ -348,38 +576,35 @@ func TestAgent_Run_CostTelemetry(t *testing.T) {
 func TestAgent_Run_MultiStep(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-multi-001")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(time.Hour))
-	if err != nil {
-		t.Fatalf("NewAgent() error: %v", err)
-	}
+	mp := &mockProvider{}
 
-	// First inference step — generate.
-	infer1 := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return &InferResult{
-			Output:       []byte(`{"haiku": "first draft"}`),
+	agent := newTestAgent(t, env, mp)
+
+	// First step.
+	mp.output = &InferOutput{
+		Output: []byte(`{"haiku": "first draft"}`),
+		Cost: &CostMetadata{
 			Model:        "gpt-4o",
 			InputTokens:  100,
 			OutputTokens: 20,
 			DurationMs:   1000,
-		}, nil
+		},
+	}
+	if _, err := agent.Run(context.Background(), struct{ Input string }{Input: "generate"}); err != nil {
+		t.Fatalf("Run() step 1 error: %v", err)
 	}
 
-	// Second inference step — revise.
-	infer2 := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return &InferResult{
-			Output:       []byte(`{"haiku": "revised draft"}`),
+	// Second step.
+	mp.output = &InferOutput{
+		Output: []byte(`{"haiku": "revised draft"}`),
+		Cost: &CostMetadata{
 			Model:        "gpt-4o-mini",
 			InputTokens:  200,
 			OutputTokens: 25,
 			DurationMs:   800,
-		}, nil
+		},
 	}
-
-	if _, err := agent.Run(context.Background(), infer1, []byte("generate")); err != nil {
-		t.Fatalf("Run() step 1 error: %v", err)
-	}
-	if _, err := agent.Run(context.Background(), infer2, []byte("revise")); err != nil {
+	if _, err := agent.Run(context.Background(), struct{ Input string }{Input: "revise"}); err != nil {
 		t.Fatalf("Run() step 2 error: %v", err)
 	}
 
@@ -414,27 +639,33 @@ func TestAgent_Run_MultiStep(t *testing.T) {
 func TestAgent_Run_HeartbeatDuringInference(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-hb-001")
 
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: []byte(`{"haiku": "slow inference"}`),
+			Cost: &CostMetadata{
+				Model:        testModel,
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   120,
+			},
+		},
+		delay: 120 * time.Millisecond,
+	}
+
 	// Use a very short heartbeat interval to trigger multiple beats
 	// during a simulated slow inference.
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(20*time.Millisecond))
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(mp),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+		WithHeartbeatInterval(20*time.Millisecond),
+	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
 
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		// Simulate a slow inference call.
-		time.Sleep(120 * time.Millisecond)
-		return &InferResult{
-			Output:       []byte(`{"haiku": "slow inference"}`),
-			Model:        "test-model",
-			InputTokens:  10,
-			OutputTokens: 5,
-			DurationMs:   120,
-		}, nil
-	}
-
-	_, err = agent.Run(context.Background(), infer, []byte("input"))
+	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
@@ -449,24 +680,31 @@ func TestAgent_Run_HeartbeatDuringInference(t *testing.T) {
 func TestAgent_Run_HeartbeatStopsAfterInfer(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-hb-stop")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(10*time.Millisecond))
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: []byte(`{"haiku": "done"}`),
+			Cost: &CostMetadata{
+				Model:        testModel,
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   50,
+			},
+		},
+		delay: 50 * time.Millisecond,
+	}
+
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(mp),
+		WithModel(testModel),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+		WithHeartbeatInterval(10*time.Millisecond),
+	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
 
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		time.Sleep(50 * time.Millisecond)
-		return &InferResult{
-			Output:       []byte(`{"haiku": "done"}`),
-			Model:        "test-model",
-			InputTokens:  10,
-			OutputTokens: 5,
-			DurationMs:   50,
-		}, nil
-	}
-
-	_, err = agent.Run(context.Background(), infer, []byte("input"))
+	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
@@ -488,56 +726,83 @@ func TestAgent_Run_HeartbeatStopsAfterInfer(t *testing.T) {
 // Tests — Run: Error Handling
 // ---------------------------------------------------------------------------
 
-func TestAgent_Run_InferError(t *testing.T) {
+func TestAgent_Run_ProviderError(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-err-001")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(time.Hour))
-	if err != nil {
-		t.Fatalf("NewAgent() error: %v", err)
+	providerErr := errors.New("LLM provider unavailable")
+	mp := &mockProvider{
+		output: nil,
+		err:    providerErr,
 	}
 
-	inferErr := errors.New("LLM provider unavailable")
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return nil, inferErr
-	}
+	agent := newTestAgent(t, env, mp)
 
-	_, err = agent.Run(context.Background(), infer, []byte("input"))
+	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
-		t.Fatal("Run() should return error when infer fails")
+		t.Fatal("Run() should return error when provider fails")
 	}
-	if !strings.Contains(err.Error(), "infer failed") {
-		t.Fatalf("expected 'infer failed' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "provider infer failed") {
+		t.Fatalf("expected 'provider infer failed' in error, got: %v", err)
 	}
-	if !errors.Is(err, inferErr) {
-		t.Fatalf("expected error to wrap original infer error")
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("expected error to wrap original provider error")
 	}
 
 	// No validation or telemetry should have been attempted.
 	calls := env.spy.getTelemetryCalls()
 	if len(calls) != 0 {
-		t.Fatalf("expected no telemetry calls when infer fails, got %d", len(calls))
+		t.Fatalf("expected no telemetry calls when provider fails, got %d", len(calls))
 	}
 }
 
 func TestAgent_Run_NilResult(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-err-nil")
 
-	agent, err := NewAgent(env.client, []byte(validHaikuSchema),
-		WithHeartbeatInterval(time.Hour))
+	mp := &mockProvider{
+		output: nil,
+		err:    nil,
+	}
+
+	agent := newTestAgent(t, env, mp)
+
+	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
+	if err == nil {
+		t.Fatal("Run() should return error when provider returns nil result")
+	}
+	if !strings.Contains(err.Error(), "nil result") {
+		t.Fatalf("expected 'nil result' in error, got: %v", err)
+	}
+}
+
+func TestAgent_Run_TemplateRenderError(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-err-tmpl")
+
+	mp := &mockProvider{
+		output: &InferOutput{
+			Output: []byte(`{"haiku": "test"}`),
+			Cost:   nil,
+		},
+	}
+
+	// Template that references a method that doesn't exist on the data type.
+	badTmpl := template.Must(template.New("query").Parse("{{.NonExistentMethod}}"))
+
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithProvider(mp),
+		WithModel(testModel),
+		WithQueryTemplate(badTmpl),
+		WithHeartbeatInterval(time.Hour),
+	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
 
-	infer := func(ctx context.Context, input []byte) (*InferResult, error) {
-		return nil, nil
-	}
-
-	_, err = agent.Run(context.Background(), infer, []byte("input"))
+	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
-		t.Fatal("Run() should return error when infer returns nil result")
+		t.Fatal("Run() should return error when template rendering fails")
 	}
-	if !strings.Contains(err.Error(), "nil result") {
-		t.Fatalf("expected 'nil result' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "query template render failed") {
+		t.Fatalf("expected 'query template render failed' in error, got: %v", err)
 	}
 }

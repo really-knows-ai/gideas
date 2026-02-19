@@ -25,8 +25,10 @@ The "Walking Skeleton" and reference components.
 ├── operator/           # The Control Plane (Kubebuilder Controller)
 ├── sidecar/            # The Data Plane (Runtime Host & Proxy)
 ├── sdk/                # Node Development Kits
-│   └── go/             # Go SDK Core
+│   └── go/             # Go SDK Core (Provider abstraction, FoundryAgent)
 ├── nodes/              # Standard Node Implementations
+│   ├── forge/          # Content Generation Node (concrete ForgeAgent)
+│   ├── sort/           # Governance Triage Node
 │   └── null-node/      # Verification Node (Phase 1)
 ├── proto/              # Protocol Buffer Definitions (The Contract)
 ├── charts/             # Helm Charts for deployment
@@ -54,3 +56,7 @@ These two steps are non-negotiable. A change without tests or with lint violatio
 2. **Make Work Auditable** — Every action becomes an immutable, traceable record.
 3. **Make the Cost Visible** — Friction is a first-class, quantifiable signal.
 4. **Quality is Fixed, Cost is Variable** — The standard is non-negotiable; the system measures the cost of achieving it.
+
+## Compatibility Policy
+
+This is a greenfield project. There are no backward compatibility obligations. Breaking API changes are acceptable and preferred over accumulating backward-compat debt. Do not deprecate -- remove.

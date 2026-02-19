@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"net"
+	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 )
 
@@ -48,4 +50,27 @@ func (s *noopSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+// newSpyClient creates a flow.Client backed by a local gRPC server with
+// no-op implementations of all five service interfaces.
+func newSpyClient(t *testing.T) *flow.Client {
+	t.Helper()
+
+	lis, err := newLocalListener()
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	srv := newSpyGRPCServer()
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.GracefulStop() })
+
+	client, err := flow.NewClient(flow.WithSidecarAddress(lis.Addr().String()))
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	return client
 }
