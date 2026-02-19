@@ -7,18 +7,18 @@
 //  1. Call GetFlowTopology() to discover self, peer nodes, and exit contract.
 //  2. Build stamp-provider maps from node capabilities.
 //  3. Check for deadlock FIRST (scans all feedback items).
-//  4. Walk NODE_ORDER: for each provider node, check its stamps in order.
+//  4. Walk nodeOrder: for each provider node, check its stamps in order.
 //     If a stamp is present but the provider left unresolved feedback → refine.
 //     If a stamp is missing → route to provider via self's output.
 //  5. Apply any stamps Sort itself can provide from the exit contract.
 //  6. All governance satisfied → Complete().
 //
-// Environment:
+// Configuration (YAML via NODE_CONFIG_PATH, default /etc/foundry/node-config.yaml):
 //
-//	NODE_ORDER          — comma-separated node names defining stamp-checking
-//	                      order. e.g. "quench,appraise". Required.
-//	DEADLOCK_THRESHOLD  — feedback depth at which items are escalated to Assay.
-//	                      Default: 3.
+//	nodeOrder:          comma-separated node names defining stamp-checking
+//	                    order. e.g. "quench,appraise". Required.
+//	deadlockThreshold:  feedback depth at which items are escalated to Assay.
+//	                    Default: 3.
 package main
 
 import (
@@ -27,16 +27,16 @@ import (
 	"log/slog"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
 const (
-	// defaultDeadlockThreshold is the fallback when DEADLOCK_THRESHOLD is
-	// unset or invalid. Should come from FoundryNode CRD container env.
+	// defaultDeadlockThreshold is the fallback when deadlockThreshold is
+	// unset or invalid in the config file.
 	defaultDeadlockThreshold int32 = 3
 
 	// outputAssay is the well-known output name for escalation to Assay.
@@ -47,16 +47,36 @@ const (
 	outputRefine = "refine"
 )
 
+// sortConfig holds Sort's runtime configuration, loaded from a YAML file.
+type sortConfig struct {
+	// NodeOrder is a comma-separated list of node names defining the order
+	// in which stamps are checked. e.g. "quench,appraise".
+	NodeOrder string `yaml:"nodeOrder"`
+
+	// DeadlockThreshold is the feedback depth at which items are escalated
+	// to Assay. Zero or negative values fall back to defaultDeadlockThreshold.
+	DeadlockThreshold int32 `yaml:"deadlockThreshold"`
+}
+
+// threshold returns the effective deadlock threshold, applying the default
+// when the configured value is not a valid positive integer.
+func (c *sortConfig) threshold() int32 {
+	if c.DeadlockThreshold < 1 {
+		return defaultDeadlockThreshold
+	}
+	return c.DeadlockThreshold
+}
+
 func main() {
-	slog.Info("haiku-sort: starting")
+	slog.Info("sort: starting")
 	if err := flow.Start(handler); err != nil {
-		slog.Error("haiku-sort: server failed", "error", err)
+		slog.Error("sort: server failed", "error", err)
 		os.Exit(1)
 	}
 }
 
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("haiku-sort: received assignment",
+	slog.Info("sort: received assignment",
 		"workitem_id", wctx.GetWorkitemId(),
 		"node_id", wctx.GetNodeId(),
 	)
@@ -68,16 +88,21 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
-	return handleSort(ctx, client)
+	cfg, err := nodeconfig.Load[sortConfig](nodeconfig.Path())
+	if err != nil {
+		return fmt.Errorf("sort: load config: %w", err)
+	}
+
+	return handleSort(ctx, client, cfg)
 }
 
 // handleSort contains the Sort gate logic, separated from the handler
 // boilerplate for testability.
-func handleSort(ctx context.Context, client *flow.Client) error {
+func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error {
 	_, _ = client.Heartbeat(ctx)
 
-	threshold := readDeadlockThreshold()
-	nodeOrder := parseNodeOrder(os.Getenv("NODE_ORDER"))
+	threshold := cfg.threshold()
+	nodeOrder := parseNodeOrder(cfg.NodeOrder)
 
 	// ── Step 0: Discover topology ─────────────────────────────────────
 	topology, err := client.GetFlowTopology(ctx)
@@ -104,7 +129,7 @@ func handleSort(ctx context.Context, client *flow.Client) error {
 			return err
 		}
 		if deadlocked {
-			slog.Info("haiku-sort: routing to assay (deadlocked feedback)",
+			slog.Info("sort: routing to assay (deadlocked feedback)",
 				"artefact_kind", kind)
 			_, err = client.RouteToOutput(ctx, outputAssay)
 			if err != nil {
@@ -113,7 +138,7 @@ func handleSort(ctx context.Context, client *flow.Client) error {
 			return nil
 		}
 
-		// ── Step 2: Check stamps in NODE_ORDER ────────────────────────
+		// ── Step 2: Check stamps in nodeOrder ─────────────────────────
 		for _, nodeName := range nodeOrder {
 			stamps := stampsProvidedBy(nodeName, kind, stampProviders)
 			for _, stamp := range stamps {
@@ -128,7 +153,7 @@ func handleSort(ctx context.Context, client *flow.Client) error {
 						return err
 					}
 					if unresolvedFromProvider {
-						slog.Info("haiku-sort: routing to refine (unresolved feedback from provider)",
+						slog.Info("sort: routing to refine (unresolved feedback from provider)",
 							"artefact_kind", kind,
 							"provider", nodeName,
 							"stamp", stamp)
@@ -144,7 +169,7 @@ func handleSort(ctx context.Context, client *flow.Client) error {
 					if !ok {
 						return fmt.Errorf("sort: no output route to provider %q for stamp %q", nodeName, stamp)
 					}
-					slog.Info("haiku-sort: routing to provider (missing stamp)",
+					slog.Info("sort: routing to provider (missing stamp)",
 						"artefact_kind", kind,
 						"provider", nodeName,
 						"stamp", stamp,
@@ -158,12 +183,12 @@ func handleSort(ctx context.Context, client *flow.Client) error {
 			}
 		}
 
-		// ── Step 3: All stamps from NODE_ORDER present ────────────────
+		// ── Step 3: All stamps from nodeOrder present ─────────────────
 		// Apply any stamps Sort itself can provide.
 		myStamps := stampsProvidedBy(selfNode.GetName(), kind, stampProviders)
 		for _, stamp := range myStamps {
 			if containsString(requiredStamps, stamp) {
-				slog.Info("haiku-sort: stamping artefact",
+				slog.Info("sort: stamping artefact",
 					"artefact_kind", kind,
 					"stamp", stamp)
 				if _, err := client.StampArtefact(ctx, kind, stamp); err != nil {
@@ -174,7 +199,7 @@ func handleSort(ctx context.Context, client *flow.Client) error {
 	}
 
 	// ── Step 4: All governance satisfied → complete ───────────────────
-	slog.Info("haiku-sort: all governance requirements met, completing workitem")
+	slog.Info("sort: all governance requirements met, completing workitem")
 	if _, err := client.Complete(ctx, ""); err != nil {
 		return fmt.Errorf("sort: complete: %w", err)
 	}
@@ -287,7 +312,7 @@ func checkDeadlock(
 
 		// Already deadlocked from a prior cycle — route to Assay.
 		if item.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
-			slog.Info("haiku-sort: found deadlocked feedback item",
+			slog.Info("sort: found deadlocked feedback item",
 				"feedback_id", item.GetId())
 			return true, nil
 		}
@@ -299,7 +324,7 @@ func checkDeadlock(
 		}
 
 		if depth >= threshold {
-			slog.Info("haiku-sort: deadlocking feedback item",
+			slog.Info("sort: deadlocking feedback item",
 				"feedback_id", item.GetId(),
 				"depth", depth,
 				"threshold", threshold)
@@ -314,9 +339,8 @@ func checkDeadlock(
 	return false, nil
 }
 
-// parseNodeOrder parses the NODE_ORDER environment variable value
-// (comma-separated node names) into a string slice. Empty or whitespace
-// entries are discarded.
+// parseNodeOrder parses a comma-separated node order string into a string
+// slice. Empty or whitespace entries are discarded.
 func parseNodeOrder(raw string) []string {
 	if raw == "" {
 		return nil
@@ -330,23 +354,6 @@ func parseNodeOrder(raw string) []string {
 		}
 	}
 	return result
-}
-
-// readDeadlockThreshold reads the DEADLOCK_THRESHOLD environment variable.
-// Returns defaultDeadlockThreshold if unset or not a valid positive integer.
-func readDeadlockThreshold() int32 {
-	raw := os.Getenv("DEADLOCK_THRESHOLD")
-	if raw == "" {
-		return defaultDeadlockThreshold
-	}
-	v, err := strconv.ParseInt(raw, 10, 32)
-	if err != nil || v < 1 {
-		slog.Warn("haiku-sort: invalid DEADLOCK_THRESHOLD, using default",
-			"value", raw,
-			"default", defaultDeadlockThreshold)
-		return defaultDeadlockThreshold
-	}
-	return int32(v)
 }
 
 // containsString returns true if the slice contains the target string.

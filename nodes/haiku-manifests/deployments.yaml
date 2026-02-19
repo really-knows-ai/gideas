@@ -112,30 +112,34 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: haiku-sort
+  name: sort
   namespace: default
   labels:
-    app.kubernetes.io/name: haiku-sort
+    app.kubernetes.io/name: sort
     app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: haiku-sort
+      app.kubernetes.io/name: sort
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: haiku-sort
+        app.kubernetes.io/name: sort
         flow.gideas.io/node-name: sort
     spec:
       containers:
         - name: node
-          image: haiku-sort:latest
+          image: sort:latest
           ports:
             - containerPort: 50053
           env:
             - name: FLOW_NODE_PORT
               value: "50053"
+          volumeMounts:
+            - name: node-config
+              mountPath: /etc/foundry
+              readOnly: true
         - name: sidecar
           image: flow-sidecar:latest
           ports:
@@ -149,6 +153,10 @@ spec:
               value: "flow-operator:50052"
             - name: ARCHIVIST_ADDRESS
               value: "flow-archivist:50054"
+      volumes:
+        - name: node-config
+          configMap:
+            name: sort-config
 ---
 # --- Appraise ---
 apiVersion: apps/v1

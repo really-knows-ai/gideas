@@ -1,10 +1,10 @@
-# Multi-target Dockerfile for haiku nodes and null-node.
+# Multi-target Dockerfile for Foundry Flow nodes.
 #
 # Build with --build-arg NODE=<node-dir> to select which node to build.
-# The NODE arg is the directory name under nodes/ (e.g., haiku-forge, haiku-sort).
+# The NODE arg is the directory name under nodes/ (e.g., forge, sort, null-node).
 #
 # Example:
-#   docker build -t haiku-forge:latest --build-arg NODE=haiku-forge -f nodes/Dockerfile .
+#   docker build -t sort:latest --build-arg NODE=sort -f nodes/Dockerfile .
 FROM golang:1.25 AS builder
 ARG NODE
 

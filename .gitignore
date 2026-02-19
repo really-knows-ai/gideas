@@ -8,13 +8,13 @@ bin/
 /haiku-forge
 /haiku-quench
 /haiku-refine
-/haiku-sort
+/sort
 /haiku-watch
 /null-node
 nodes/*/haiku-appraise
 nodes/*/haiku-forge
 nodes/*/haiku-quench
 nodes/*/haiku-refine
-nodes/*/haiku-sort
+nodes/*/sort
 nodes/*/null-node
 tools/*/haiku-watch

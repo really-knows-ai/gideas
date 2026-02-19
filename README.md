@@ -51,7 +51,7 @@ docker build -t flow-librarian:latest -f librarian/Dockerfile .
 docker build -t flow-monitor:latest   -f monitor/Dockerfile .
 
 # Haiku demo nodes (one image per node)
-for node in haiku-forge haiku-quench haiku-sort haiku-appraise haiku-refine; do
+for node in haiku-forge haiku-quench sort haiku-appraise haiku-refine; do
   docker build -t "$node:latest" --build-arg NODE="$node" -f nodes/Dockerfile .
 done
 ```
@@ -60,7 +60,7 @@ If using Kind, load the images into the cluster:
 
 ```bash
 for img in flow-operator flow-sidecar flow-archivist flow-librarian flow-monitor \
-           haiku-forge haiku-quench haiku-sort haiku-appraise haiku-refine; do
+           haiku-forge haiku-quench sort haiku-appraise haiku-refine; do
   kind load docker-image "$img:latest" --name <cluster-name>
 done
 ```
@@ -85,6 +85,7 @@ The Haiku demo runs a full Foundry Cycle — Forge, Quench, Appraise, Sort, Refi
 
 ```bash
 kubectl apply -f nodes/haiku-manifests/flow.yaml
+kubectl apply -f nodes/haiku-manifests/configmaps.yaml
 kubectl apply -f nodes/haiku-manifests/deployments.yaml
 ```
 
