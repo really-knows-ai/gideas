@@ -13,6 +13,7 @@ PLAN.md
 TODO.md
 
 # Compiled Go binaries (built in-place by `go build`)
+/appraise
 /forge
 /haiku-appraise
 /haiku-forge
@@ -21,6 +22,7 @@ TODO.md
 /sort
 /haiku-watch
 /null-node
+nodes/*/appraise
 nodes/*/forge
 nodes/*/haiku-appraise
 nodes/*/haiku-forge

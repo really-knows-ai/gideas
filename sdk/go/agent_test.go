@@ -156,12 +156,11 @@ func simpleQueryTemplate(t *testing.T) *template.Template {
 }
 
 // newTestAgent creates a FoundryAgent with a mock provider for testing.
-func newTestAgent(t *testing.T, env *agentTestEnv, provider Provider) *Agent {
+func newTestAgent(t *testing.T, env *agentTestEnv, mp *mockProvider) *Agent {
 	t.Helper()
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(provider),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, mp)),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(time.Hour), // effectively disable heartbeat
 	)
@@ -181,8 +180,7 @@ func TestNewAgent_ValidConstruction(t *testing.T) {
 	mp := &mockProvider{}
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(mp),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, mp)),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err != nil {
@@ -199,8 +197,7 @@ func TestNewAgent_InvalidSchemaJSON(t *testing.T) {
 	mp := &mockProvider{}
 	_, err := NewAgent(env.client,
 		WithSchema([]byte(invalidSchemaJSON)),
-		WithProvider(mp),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, mp)),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err == nil {
@@ -214,8 +211,7 @@ func TestNewAgent_InvalidSchemaJSON(t *testing.T) {
 func TestNewAgent_NilClient(t *testing.T) {
 	_, err := NewAgent(nil,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(&mockProvider{}),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, &mockProvider{})),
 		WithQueryTemplate(template.Must(template.New("q").Parse("{{.Input}}"))),
 	)
 	if err == nil {
@@ -226,19 +222,18 @@ func TestNewAgent_NilClient(t *testing.T) {
 	}
 }
 
-func TestNewAgent_NilProvider(t *testing.T) {
+func TestNewAgent_NilModel(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-003")
 
 	_, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(testModel),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err == nil {
-		t.Fatal("NewAgent() with nil provider should return error")
+		t.Fatal("NewAgent() with nil model should return error")
 	}
-	if !strings.Contains(err.Error(), "provider must not be nil") {
-		t.Fatalf("expected 'provider must not be nil' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "model must not be nil") {
+		t.Fatalf("expected 'model must not be nil' in error, got: %v", err)
 	}
 }
 
@@ -246,8 +241,7 @@ func TestNewAgent_MissingSchema(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-004")
 
 	_, err := NewAgent(env.client,
-		WithProvider(&mockProvider{}),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, &mockProvider{})),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err == nil {
@@ -258,29 +252,12 @@ func TestNewAgent_MissingSchema(t *testing.T) {
 	}
 }
 
-func TestNewAgent_MissingModel(t *testing.T) {
+func TestNewAgent_MissingQueryTemplate(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-005")
 
 	_, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(&mockProvider{}),
-		WithQueryTemplate(simpleQueryTemplate(t)),
-	)
-	if err == nil {
-		t.Fatal("NewAgent() with empty model should return error")
-	}
-	if !strings.Contains(err.Error(), "model must not be empty") {
-		t.Fatalf("expected 'model must not be empty' in error, got: %v", err)
-	}
-}
-
-func TestNewAgent_MissingQueryTemplate(t *testing.T) {
-	env := setupAgentTestEnv(t, "wid-agent-006")
-
-	_, err := NewAgent(env.client,
-		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(&mockProvider{}),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, &mockProvider{})),
 	)
 	if err == nil {
 		t.Fatal("NewAgent() with nil query template should return error")
@@ -295,8 +272,7 @@ func TestNewAgent_DefaultHeartbeatInterval(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(&mockProvider{}),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, &mockProvider{})),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err != nil {
@@ -313,8 +289,7 @@ func TestNewAgent_CustomHeartbeatInterval(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(&mockProvider{}),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, &mockProvider{})),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(5*time.Second),
 	)
@@ -350,8 +325,7 @@ func TestAgent_Run_TemplateRendering(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(mp),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, mp)),
 		WithQueryTemplate(tmpl),
 		WithSystemPrompt("You are a haiku poet."),
 		WithHeartbeatInterval(time.Hour),
@@ -656,8 +630,7 @@ func TestAgent_Run_HeartbeatDuringInference(t *testing.T) {
 	// during a simulated slow inference.
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(mp),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, mp)),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(20*time.Millisecond),
 	)
@@ -695,8 +668,7 @@ func TestAgent_Run_HeartbeatStopsAfterInfer(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(mp),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, mp)),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(10*time.Millisecond),
 	)
@@ -789,8 +761,7 @@ func TestAgent_Run_TemplateRenderError(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithProvider(mp),
-		WithModel(testModel),
+		WithModel(NewModel(testModel, mp)),
 		WithQueryTemplate(badTmpl),
 		WithHeartbeatInterval(time.Hour),
 	)

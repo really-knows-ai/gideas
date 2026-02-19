@@ -34,8 +34,7 @@ type AgentOption func(*agentConfig)
 type agentConfig struct {
 	heartbeatInterval time.Duration
 	schema            []byte
-	provider          Provider
-	model             string
+	model             *Model
 	systemPrompt      string
 	queryTemplate     *template.Template
 }
@@ -57,18 +56,11 @@ func WithSchema(schema []byte) AgentOption {
 	}
 }
 
-// WithProvider sets the LLM provider for inference dispatch.
-func WithProvider(p Provider) AgentOption {
+// WithModel sets the Model for inference dispatch. The Model binds a model
+// identifier to a Provider; the Agent never references either directly.
+func WithModel(m *Model) AgentOption {
 	return func(c *agentConfig) {
-		c.provider = p
-	}
-}
-
-// WithModel sets the model identifier passed to the provider on each
-// inference call.
-func WithModel(model string) AgentOption {
-	return func(c *agentConfig) {
-		c.model = model
+		c.model = m
 	}
 }
 
@@ -108,8 +100,7 @@ func WithQueryTemplate(tmpl *template.Template) AgentOption {
 type Agent struct {
 	client        *Client
 	schema        *jsonschema.Schema
-	provider      Provider
-	model         string
+	model         *Model
 	systemPrompt  string
 	queryTemplate *template.Template
 	cfg           agentConfig
@@ -118,9 +109,8 @@ type Agent struct {
 // NewAgent creates a FoundryAgent with functional options.
 //
 // Required options:
+//   - WithModel: Model binding a model identifier to a provider
 //   - WithSchema: JSON Schema bytes for output validation
-//   - WithProvider: LLM provider for inference dispatch
-//   - WithModel: model identifier
 //   - WithQueryTemplate: query prompt template
 //
 // The Client must already be connected (via NewClient). The Agent uses the
@@ -138,14 +128,11 @@ func NewAgent(client *Client, opts ...AgentOption) (*Agent, error) {
 		o(&cfg)
 	}
 
-	if cfg.provider == nil {
-		return nil, fmt.Errorf("flow agent: provider must not be nil (use WithProvider)")
+	if cfg.model == nil {
+		return nil, fmt.Errorf("flow agent: model must not be nil (use WithModel)")
 	}
 	if cfg.schema == nil {
 		return nil, fmt.Errorf("flow agent: schema must not be nil (use WithSchema)")
-	}
-	if cfg.model == "" {
-		return nil, fmt.Errorf("flow agent: model must not be empty (use WithModel)")
 	}
 	if cfg.queryTemplate == nil {
 		return nil, fmt.Errorf("flow agent: query template must not be nil (use WithQueryTemplate)")
@@ -160,7 +147,6 @@ func NewAgent(client *Client, opts ...AgentOption) (*Agent, error) {
 	return &Agent{
 		client:        client,
 		schema:        compiled,
-		provider:      cfg.provider,
 		model:         cfg.model,
 		systemPrompt:  cfg.systemPrompt,
 		queryTemplate: cfg.queryTemplate,
@@ -172,7 +158,7 @@ func NewAgent(client *Client, opts ...AgentOption) (*Agent, error) {
 //
 //  1. Renders the query prompt from the template with templateData.
 //  2. Starts a heartbeat goroutine at the configured interval.
-//  3. Calls provider.Infer(ctx, model, systemPrompt, renderedQuery).
+//  3. Calls model.Infer(ctx, systemPrompt, renderedQuery).
 //  4. Stops the heartbeat goroutine.
 //  5. Validates the output against the declared JSON Schema.
 //  6. Emits a foundry.cost.llm telemetry event with cost metadata.
@@ -202,7 +188,7 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	go a.heartbeatLoop(hbCtx)
 
 	// 3. Execute the provider's inference logic.
-	result, err := a.provider.Infer(ctx, a.model, a.systemPrompt, queryBuf.Bytes())
+	result, err := a.model.Infer(ctx, a.systemPrompt, queryBuf.Bytes())
 
 	// 4. Stop heartbeat (deferred cancel fires).
 	hbCancel()

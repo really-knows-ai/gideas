@@ -72,8 +72,8 @@ func forgeOutputSchema(outputField string) []byte {
 	return b
 }
 
-// NewForgeAgent creates a ForgeAgent with the given client, provider, and config.
-func NewForgeAgent(client *flow.Client, provider flow.Provider, cfg *forgeConfig) (*ForgeAgent, error) {
+// NewForgeAgent creates a ForgeAgent with the given client, model, and config.
+func NewForgeAgent(client *flow.Client, model *flow.Model, cfg *forgeConfig) (*ForgeAgent, error) {
 	// 1. Render system prompt with config params.
 	sysTmpl, err := template.New("system").Parse(forgeSystemPromptTemplate)
 	if err != nil {
@@ -99,11 +99,10 @@ func NewForgeAgent(client *flow.Client, provider flow.Provider, cfg *forgeConfig
 	// 3. Generate output schema.
 	schemaBytes := forgeOutputSchema(cfg.OutputField)
 
-	// 4. Create flow.Agent with schema, provider, model, prompts.
+	// 4. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithProvider(provider),
-		flow.WithModel(cfg.Model),
+		flow.WithModel(model),
 		flow.WithSystemPrompt(systemPrompt),
 		flow.WithQueryTemplate(queryTmpl),
 	)

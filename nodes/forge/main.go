@@ -68,9 +68,10 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("forge: load config: %w", err)
 	}
 
-	// Create provider and agent.
+	// Create provider, model, and agent.
 	provider := flow.NewOllamaProvider()
-	agent, err := NewForgeAgent(client, provider, cfg)
+	model := flow.NewModel(cfg.Model, provider)
+	agent, err := NewForgeAgent(client, model, cfg)
 	if err != nil {
 		return fmt.Errorf("forge: create agent: %w", err)
 	}
