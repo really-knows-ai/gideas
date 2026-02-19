@@ -475,7 +475,7 @@ func mintRuling(
 
 	if codified != nil && codified.HasDeterministic {
 		// Mint law group with subjective + deterministic
-		return mintLawGroup(ctx, client, codified, targetArtefact)
+		return mintLawGroup(ctx, client, inferFn, item, codified, targetArtefact)
 	}
 
 	// Mint single text/markdown ruling
@@ -514,6 +514,8 @@ func mintRuling(
 func mintLawGroup(
 	ctx context.Context,
 	client *flow.Client,
+	inferFn flow.InferFunc,
+	item *flowv1.FeedbackItem,
 	codified *codificationOutput,
 	targetArtefact string,
 ) error {
@@ -561,6 +563,13 @@ func mintLawGroup(
 	}
 
 	slog.Info("assay: deterministic law minted", "law_id", resp2.GetLawId())
+
+	// Resolve the feedback item with reference to the law group
+	if err := client.ResolveFeedback(ctx, item.GetId(),
+		fmt.Sprintf("Resolved by Tier 2 Ruling group %s (laws: %s, %s)", 
+			groupID, resp1.GetLawId(), resp2.GetLawId())); err != nil {
+		return fmt.Errorf("resolve feedback: %w", err)
+	}
 
 	return nil
 }
