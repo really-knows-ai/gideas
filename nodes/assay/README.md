@@ -4,13 +4,13 @@
 
 The `assay` node is a generic judicial resolution mechanism for Foundry Flow that autonomously resolves deadlocked feedback disputes via jury deliberation and mints binding Tier 2 Rulings.
 
-This is a **core built-in node**, not specific to any particular artefact type. It can adjudicate disputes for any governed artefact in the system.
+This is a **core built-in node**, not specific to any particular artefact type. It automatically discovers all artefacts in the workitem's exit contract and adjudicates the **first disputed feedback item** it finds across any artefact.
 
 ## Architecture
 
 The node follows the standard Foundry Flow node pattern using `flow.Start()` with a push-based handler model, similar to `haiku-appraise` and `null-node`.
 
-The artefact to adjudicate is configured via the `ASSAY_TARGET_ARTEFACT` environment variable, making it reusable across different workflows.
+The artefact to adjudicate is **automatically discovered** by examining all artefacts in the workitem's exit contract and selecting the first one with a deadlocked feedback item.
 
 ### Key Components
 
@@ -25,15 +25,26 @@ The artefact to adjudicate is configured via the `ASSAY_TARGET_ARTEFACT` environ
 
 ### Phase 1: Triage
 
-- Retrieves all feedback items for the configured target artefact
-- Filters for items in `FEEDBACK_STATE_DEADLOCKED` state
-- Fails fast if no deadlocked items exist (nothing to adjudicate)
+- Gets the flow topology to discover all artefacts in the exit contract
+- Searches each artefact for feedback items in `FEEDBACK_STATE_DEADLOCKED` state
+- Selects the **first** deadlocked feedback item found (that artefact becomes the case)
+- Fails fast if no deadlocked items exist across any artefact (nothing to adjudicate)
 
 ```go
-targetArtefact := getEnvOrDefault(envTargetArtefact, defaultTargetArtefact)
-disputedItems := filterDeadlocked(feedback)
-if len(disputedItems) == 0 {
-    return fmt.Errorf("assay: no deadlocked feedback items found")
+topology, _ := client.GetFlowTopology(ctx)
+exitContract := topology.GetExitContract()
+
+// Search all artefacts for first deadlocked feedback
+for artefactKind := range exitContract {
+    feedback, _ := client.GetFeedback(ctx, artefactKind)
+    for _, fb := range feedback {
+        if fb.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
+            // Found our case!
+            disputedItem = fb
+            targetArtefact = artefactKind
+            break
+        }
+    }
 }
 ```
 
@@ -154,26 +165,8 @@ Environment variables:
 - `OLLAMA_BASE_URL`: Ollama API endpoint (default: http://localhost:11434)
 - `ASSAY_MODEL`: Model name (default: kimi-k2.5:cloud)
 - `ASSAY_MAX_ROUNDS`: Maximum deliberation rounds (default: 3)
-- `ASSAY_TARGET_ARTEFACT`: Artefact ID to adjudicate (default: "haiku")
 
-### Example Configuration for Different Artefacts
-
-```yaml
-# For haiku pipeline
-env:
-  - name: ASSAY_TARGET_ARTEFACT
-    value: "haiku"
-
-# For documentation pipeline
-env:
-  - name: ASSAY_TARGET_ARTEFACT
-    value: "documentation"
-
-# For code pipeline
-env:
-  - name: ASSAY_TARGET_ARTEFACT
-    value: "source-code"
-```
+The node **automatically discovers** which artefact to adjudicate by searching all artefacts in the workitem's exit contract for the first deadlocked feedback item.
 
 ## Routing
 

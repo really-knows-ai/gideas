@@ -5,8 +5,10 @@
 //
 // Assay operates in four phases:
 //
-//  1. Triage — Identifies disputed feedback items (DEADLOCKED state) from
-//     the workitem. If no deadlocked items exist, the workitem fails.
+//  1. Triage — Discovers all artefacts in the workitem's exit contract and
+//     finds the FIRST disputed feedback item (DEADLOCKED state) across any
+//     artefact. That artefact becomes the case. If no deadlocked items exist,
+//     the workitem fails.
 //
 //  2. Empanel — Creates a jury of FoundryAgent instances. Jury size is
 //     determined by the severity of the dispute: 3 for low/medium, 5 for
@@ -36,7 +38,6 @@
 //	OLLAMA_BASE_URL      — Ollama API endpoint (default: http://localhost:11434)
 //	ASSAY_MODEL          — Model name (default: kimi-k2.5:cloud)
 //	ASSAY_MAX_ROUNDS     — Maximum deliberation rounds (default: 3)
-//	ASSAY_TARGET_ARTEFACT — Artefact ID to adjudicate (default: "haiku")
 package main
 
 import (
@@ -55,13 +56,11 @@ import (
 )
 
 const (
-	defaultModel         = "kimi-k2.5:cloud"
-	defaultMaxRounds     = 3
-	defaultTargetArtefact = "haiku"
+	defaultModel     = "kimi-k2.5:cloud"
+	defaultMaxRounds = 3
 
-	envModel          = "ASSAY_MODEL"
-	envMaxRounds      = "ASSAY_MAX_ROUNDS"
-	envTargetArtefact = "ASSAY_TARGET_ARTEFACT"
+	envModel     = "ASSAY_MODEL"
+	envMaxRounds = "ASSAY_MAX_ROUNDS"
 
 	// Consensus thresholds
 	thresholdSimpleMajority = 0.51  // >50%
@@ -156,24 +155,57 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return handleRetirementHearing(ctx, client, wctx)
 	}
 
-	// Determine target artefact
-	targetArtefact := getEnvOrDefault(envTargetArtefact, defaultTargetArtefact)
-
 	// ---------------------------------------------------------------
-	// Phase 1: Triage — Identify disputed feedback items
+	// Phase 1: Triage — Find first disputed feedback across all artefacts
 	// ---------------------------------------------------------------
 
-	feedback, err := client.GetFeedback(ctx, targetArtefact)
+	// Get topology to discover all artefacts
+	topology, err := client.GetFlowTopology(ctx)
 	if err != nil {
-		return fmt.Errorf("assay: get feedback: %w", err)
+		return fmt.Errorf("assay: get flow topology: %w", err)
 	}
 
-	disputedItems := filterDeadlocked(feedback)
-	if len(disputedItems) == 0 {
-		return fmt.Errorf("assay: no deadlocked feedback items found")
+	exitContract := topology.GetExitContract()
+	if len(exitContract) == 0 {
+		return fmt.Errorf("assay: no artefacts in exit contract")
 	}
 
-	slog.Info("assay: triaged disputes", "count", len(disputedItems), "artefact", targetArtefact)
+	// Search all artefacts for the first deadlocked feedback item
+	var disputedItem *flowv1.FeedbackItem
+	var targetArtefact string
+
+	for artefactKind := range exitContract {
+		feedback, err := client.GetFeedback(ctx, artefactKind)
+		if err != nil {
+			slog.Warn("assay: failed to get feedback",
+				"artefact", artefactKind,
+				"error", err)
+			continue
+		}
+
+		// Look for first deadlocked item
+		for _, fb := range feedback {
+			if fb.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
+				disputedItem = fb
+				targetArtefact = artefactKind
+				break
+			}
+		}
+
+		if disputedItem != nil {
+			break
+		}
+	}
+
+	if disputedItem == nil {
+		return fmt.Errorf("assay: no deadlocked feedback items found across any artefact")
+	}
+
+	slog.Info("assay: found disputed case",
+		"feedback_id", disputedItem.GetId(),
+		"artefact", targetArtefact,
+		"severity", disputedItem.GetSeverity().String(),
+	)
 
 	// Resolve the model and max rounds
 	model := getEnvOrDefault(envModel, defaultModel)
@@ -182,13 +214,11 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	inferFn := makeInferFunc(model)
 
 	// ---------------------------------------------------------------
-	// Phase 2-4: Process each disputed item through deliberation
+	// Phase 2-4: Process the disputed item through deliberation
 	// ---------------------------------------------------------------
 
-	for _, item := range disputedItems {
-		if err := processDispute(ctx, client, inferFn, item, maxRounds, targetArtefact); err != nil {
-			return fmt.Errorf("assay: process dispute %s: %w", item.GetId(), err)
-		}
+	if err := processDispute(ctx, client, inferFn, disputedItem, maxRounds, targetArtefact); err != nil {
+		return fmt.Errorf("assay: process dispute %s: %w", disputedItem.GetId(), err)
 	}
 
 	// ---------------------------------------------------------------
