@@ -444,7 +444,7 @@ func mintRuling(
 				Content: statement,
 			},
 		},
-		Tier:      flowv1.LawTier_LAW_TIER_TIER2,
+		Tier:      flowv1.LawTier_LAW_TIER_RULING,
 		AppliesTo: []string{"haiku"},
 	}
 
@@ -486,7 +486,7 @@ func mintLawGroup(
 				Content: codified.Subjective,
 			},
 		},
-		Tier:      flowv1.LawTier_LAW_TIER_TIER2,
+		Tier:      flowv1.LawTier_LAW_TIER_RULING,
 		AppliesTo: []string{"haiku"},
 		// Note: group field doesn't exist in proto, using only representations
 	}
@@ -507,7 +507,7 @@ func mintLawGroup(
 				Content: codified.Deterministic,
 			},
 		},
-		Tier:      flowv1.LawTier_LAW_TIER_TIER2,
+		Tier:      flowv1.LawTier_LAW_TIER_RULING,
 		AppliesTo: []string{"haiku"},
 	}
 
