@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -15,6 +14,14 @@ import (
 // ---------------------------------------------------------------------------
 // Test helper — spins up a real ephemeral TCP server with the sortSpy
 // ---------------------------------------------------------------------------
+
+// defaultConfig returns a sortConfig matching the reference arrangement.
+func defaultConfig() *sortConfig {
+	return &sortConfig{
+		NodeOrder:         "quench,appraise",
+		DeadlockThreshold: 3,
+	}
+}
 
 func setupSortTest(t *testing.T, spy *sortSpy) *flow.Client {
 	t.Helper()
@@ -38,8 +45,6 @@ func setupSortTest(t *testing.T, spy *sortSpy) *flow.Client {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	t.Setenv(flow.EnvWorkitemID, "test-workitem")
-	// Default NODE_ORDER for the reference arrangement.
-	t.Setenv("NODE_ORDER", "quench,appraise")
 	client, err := flow.NewClient(
 		flow.WithSidecarAddress(lis.Addr().String()),
 	)
@@ -57,10 +62,10 @@ func setupSortTest(t *testing.T, spy *sortSpy) *flow.Client {
 
 func TestSort_RoutesToQuench_MissingLinterStamp(t *testing.T) {
 	spy := newSortSpy()
-	// linter stamp absent (default false) — quench is first in NODE_ORDER.
+	// linter stamp absent (default false) — quench is first in nodeOrder.
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -78,7 +83,7 @@ func TestSort_RoutesToRefine_UnresolvedFeedbackFromProvider(t *testing.T) {
 	}
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -93,7 +98,7 @@ func TestSort_RoutesToAppraise_MissingReviewStamp(t *testing.T) {
 	// review stamp absent (default false), no feedback from quench
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -109,7 +114,7 @@ func TestSort_StampsApprovalAndCompletes(t *testing.T) {
 	// No unresolved feedback from any provider.
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -137,7 +142,7 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_WontFix(t *testing.T) {
 	spy.FeedbackDepths["fb-1"] = 4 // default threshold is 3
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -158,7 +163,7 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_Rejected(t *testing.T) {
 	spy.FeedbackDepths["fb-2"] = 3 // threshold = 3, depth >= threshold
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -179,7 +184,7 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_New(t *testing.T) {
 	spy.FeedbackDepths["fb-3"] = 5
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -200,7 +205,7 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_Actioned(t *testing.T) {
 	spy.FeedbackDepths["fb-4"] = 10
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -221,7 +226,7 @@ func TestSort_RoutesToAssay_AlreadyDeadlocked(t *testing.T) {
 	// No depth needed — already deadlocked.
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -245,7 +250,7 @@ func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 	spy.FeedbackDepths["fb-hot"] = 5
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -268,7 +273,7 @@ func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 	spy.FeedbackDepths["fb-6"] = 2 // below default threshold of 3
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -291,7 +296,7 @@ func TestSort_ResolvedItemsSkippedInDeadlockScan(t *testing.T) {
 	spy.FeedbackDepths["fb-done"] = 99 // would deadlock if not skipped
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -315,7 +320,7 @@ func TestSort_FirstDeadlockedItemWins(t *testing.T) {
 	spy.FeedbackDepths["fb-b"] = 10
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -326,10 +331,10 @@ func TestSort_FirstDeadlockedItemWins(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Environment variable threshold tests
+// Configuration threshold tests
 // ---------------------------------------------------------------------------
 
-func TestSort_CustomThresholdFromEnv(t *testing.T) {
+func TestSort_CustomThreshold(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -338,10 +343,13 @@ func TestSort_CustomThresholdFromEnv(t *testing.T) {
 	spy.FeedbackDepths["fb-7"] = 4
 
 	// Threshold=5: depth 4 is below → should NOT deadlock.
-	t.Setenv("DEADLOCK_THRESHOLD", "5")
+	cfg := &sortConfig{
+		NodeOrder:         "quench,appraise",
+		DeadlockThreshold: 5,
+	}
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, cfg); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -355,27 +363,6 @@ func TestSort_CustomThresholdFromEnv(t *testing.T) {
 	}
 }
 
-func TestSort_InvalidThresholdDefaultsTo3(t *testing.T) {
-	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-8", State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED},
-	}
-	spy.FeedbackDepths["fb-8"] = 3 // exactly at default threshold
-
-	t.Setenv("DEADLOCK_THRESHOLD", "abc")
-	client := setupSortTest(t, spy)
-
-	if err := handleSort(context.Background(), client); err != nil {
-		t.Fatalf("handleSort() error: %v", err)
-	}
-
-	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-8" {
-		t.Fatalf("expected fb-8 deadlocked at default threshold, got %v",
-			spy.DeadlockedIDs)
-	}
-}
-
 func TestSort_ZeroThresholdDefaultsTo3(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
@@ -385,55 +372,48 @@ func TestSort_ZeroThresholdDefaultsTo3(t *testing.T) {
 	}
 	spy.FeedbackDepths["fb-9"] = 2
 
-	t.Setenv("DEADLOCK_THRESHOLD", "0")
+	// Zero threshold → default 3 used → depth 2 below threshold.
+	cfg := &sortConfig{
+		NodeOrder:         "quench,appraise",
+		DeadlockThreshold: 0,
+	}
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, cfg); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
 	// 0 is invalid → default 3 used → depth 2 below threshold.
 	if len(spy.DeadlockedIDs) != 0 {
-		t.Fatalf("expected no deadlocking with invalid threshold=0, got %v",
+		t.Fatalf("expected no deadlocking with zero threshold (default=3), got %v",
 			spy.DeadlockedIDs)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// readDeadlockThreshold unit tests
+// sortConfig.threshold() unit tests
 // ---------------------------------------------------------------------------
 
-func TestReadDeadlockThreshold(t *testing.T) {
+func TestSortConfig_Threshold(t *testing.T) {
 	tests := []struct {
-		name   string
-		envVal string
-		want   int32
+		name  string
+		value int32
+		want  int32
 	}{
-		{"unset returns default", "", defaultDeadlockThreshold},
-		{"valid integer", "5", 5},
-		{"minimum value", "1", 1},
-		{"large value", "100", 100},
-		{"non-numeric defaults", "abc", defaultDeadlockThreshold},
-		{"zero defaults", "0", defaultDeadlockThreshold},
-		{"negative defaults", "-1", defaultDeadlockThreshold},
-		{"float defaults", "2.5", defaultDeadlockThreshold},
+		{"zero returns default", 0, defaultDeadlockThreshold},
+		{"valid integer", 5, 5},
+		{"minimum value", 1, 1},
+		{"large value", 100, 100},
+		{"negative defaults", -1, defaultDeadlockThreshold},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.envVal == "" {
-				// Ensure the variable is absent for this subtest.
-				t.Setenv("DEADLOCK_THRESHOLD", "")
-				if err := os.Unsetenv("DEADLOCK_THRESHOLD"); err != nil {
-					t.Fatalf("unsetenv: %v", err)
-				}
-			} else {
-				t.Setenv("DEADLOCK_THRESHOLD", tt.envVal)
-			}
-			got := readDeadlockThreshold()
+			cfg := &sortConfig{DeadlockThreshold: tt.value}
+			got := cfg.threshold()
 			if got != tt.want {
-				t.Fatalf("readDeadlockThreshold() = %d, want %d",
-					got, tt.want)
+				t.Fatalf("sortConfig{DeadlockThreshold: %d}.threshold() = %d, want %d",
+					tt.value, got, tt.want)
 			}
 		})
 	}
@@ -520,7 +500,7 @@ func TestSort_RoutesToRefine_FeedbackFromAppraise(t *testing.T) {
 	}
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -540,7 +520,7 @@ func TestSort_ResolvedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	}
 	client := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -565,7 +545,7 @@ func TestSort_DeadlockedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	client := setupSortTest(t, spy)
 
 	// This test will hit the deadlock check first and route to assay.
-	if err := handleSort(context.Background(), client); err != nil {
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -579,7 +559,7 @@ func TestSort_Error_GetFlowTopologyFails(t *testing.T) {
 	spy.GetFlowTopologyErr = fmt.Errorf("topology unavailable")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from GetFlowTopology failure")
 	}
@@ -594,7 +574,7 @@ func TestSort_Error_HasStampFails(t *testing.T) {
 	spy.HasStampErr = fmt.Errorf("stamp service down")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from HasStamp failure")
 	}
@@ -605,7 +585,7 @@ func TestSort_Error_GetFeedbackFails(t *testing.T) {
 	spy.GetFeedbackErr = fmt.Errorf("feedback list failed")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from GetFeedback failure")
 	}
@@ -620,7 +600,7 @@ func TestSort_Error_GetFeedbackDepthFails(t *testing.T) {
 	spy.GetFeedbackDepthErr = fmt.Errorf("depth lookup failed")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from GetFeedbackDepth failure")
 	}
@@ -636,7 +616,7 @@ func TestSort_Error_DeadlockFeedbackFails(t *testing.T) {
 	spy.DeadlockFeedbackErr = fmt.Errorf("deadlock transition failed")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from DeadlockFeedback failure")
 	}
@@ -648,7 +628,7 @@ func TestSort_Error_RouteToOutputFails(t *testing.T) {
 	spy.RouteToOutputErr = fmt.Errorf("routing failed")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from RouteToOutput failure")
 	}
@@ -661,7 +641,7 @@ func TestSort_Error_StampArtefactFails(t *testing.T) {
 	spy.StampArtefactErr = fmt.Errorf("stamp write failed")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from StampArtefact failure")
 	}
@@ -674,7 +654,7 @@ func TestSort_Error_CompleteFails(t *testing.T) {
 	spy.CompleteErr = fmt.Errorf("completion rejected")
 	client := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client)
+	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from Complete failure")
 	}

@@ -22,8 +22,9 @@
 #
 # Apply order:
 #   1. kubectl apply -f flow.yaml          (this file)
-#   2. kubectl apply -f deployments.yaml   (node pods)
-#   3. kubectl apply -f workitem.yaml      (trigger the cycle)
+#   2. kubectl apply -f configmaps.yaml    (node configuration)
+#   3. kubectl apply -f deployments.yaml   (node pods)
+#   4. kubectl apply -f workitem.yaml      (trigger the cycle)
 ---
 apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
@@ -102,7 +103,7 @@ metadata:
     app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: haiku-sort:latest
+  image: sort:latest
   exit: "standard-exit"
   outputs:
     - name: "quench"
