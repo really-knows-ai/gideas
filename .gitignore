@@ -10,6 +10,7 @@ bin/
 
 # Session plans and scratch files
 PLAN.md
+*_PLAN.md
 TODO.md
 
 # Compiled Go binaries (built in-place by `go build`)
@@ -19,6 +20,7 @@ TODO.md
 /haiku-forge
 /haiku-quench
 /haiku-refine
+/refine
 /sort
 /haiku-watch
 /null-node
@@ -26,6 +28,7 @@ nodes/*/appraise
 nodes/*/forge
 nodes/*/haiku-quench
 nodes/*/haiku-refine
+nodes/*/refine
 nodes/*/sort
 nodes/*/null-node
 tools/*/haiku-watch

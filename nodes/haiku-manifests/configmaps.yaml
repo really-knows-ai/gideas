@@ -54,3 +54,19 @@ data:
     governedArtefact: "haiku"
     stampName: "review"
     model: "kimi-k2.5:cloud"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: refine-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: refine
+    app.kubernetes.io/part-of: haiku-flow
+data:
+  node-config.yaml: |
+    inputArtefact: "petition"
+    outputArtefact: "haiku"
+    governedArtefact: "haiku"
+    outputField: "haiku"
+    model: "gpt-oss:120b-cloud"

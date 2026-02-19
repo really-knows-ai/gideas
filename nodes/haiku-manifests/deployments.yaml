@@ -224,25 +224,25 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: haiku-refine
+  name: refine
   namespace: default
   labels:
-    app.kubernetes.io/name: haiku-refine
+    app.kubernetes.io/name: refine
     app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: haiku-refine
+      app.kubernetes.io/name: refine
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: haiku-refine
+        app.kubernetes.io/name: refine
         flow.gideas.io/node-name: refine
     spec:
       containers:
         - name: node
-          image: haiku-refine:latest
+          image: refine:latest
           ports:
             - containerPort: 50053
           env:
@@ -250,8 +250,10 @@ spec:
               value: "50053"
             - name: OLLAMA_BASE_URL
               value: "http://ollama:11434"
-            - name: REFINE_MODEL
-              value: "gpt-oss:120b-cloud"
+          volumeMounts:
+            - name: node-config
+              mountPath: /etc/foundry
+              readOnly: true
         - name: sidecar
           image: flow-sidecar:latest
           ports:
@@ -269,3 +271,7 @@ spec:
               value: "flow-librarian:50056"
             - name: MONITOR_ADDRESS
               value: "flow-monitor:50055"
+      volumes:
+        - name: node-config
+          configMap:
+            name: refine-config

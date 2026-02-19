@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 )
 
@@ -27,9 +29,9 @@ func newSpyGRPCServer(spy *refineSpy) *grpc.Server {
 	return srv
 }
 
-// refineSpy captures calls to feedback and artefact operations for test assertions.
-// It embeds all unimplemented servers and overrides the methods the
-// refine handler calls.
+// refineSpy captures calls to feedback and artefact operations for test
+// assertions. It embeds all unimplemented servers and overrides the methods
+// the refine handler calls.
 type refineSpy struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
@@ -38,6 +40,11 @@ type refineSpy struct {
 	flowv1.UnimplementedFlowMonitorServiceServer
 
 	mu sync.Mutex
+
+	// Configurable responses for artefact reads.
+	ArtefactContents map[string]string      // artefact ID → content
+	FeedbackItems    []*flowv1.FeedbackItem // feedback items returned by GetFeedback
+	Laws             []*flowv1.Law          // laws returned by QueryLaws
 
 	// Feedback operation records.
 	ResolvedFeedback map[string]string                // feedback ID → resolve message
@@ -56,6 +63,10 @@ type storedArtefact struct {
 
 func newRefineSpy() *refineSpy {
 	return &refineSpy{
+		ArtefactContents: map[string]string{
+			"petition": "test-petition",
+			"haiku":    "test-content",
+		},
 		ResolvedFeedback: make(map[string]string),
 		RefusedFeedback:  make(map[string]*flowv1.Justification),
 	}
@@ -86,13 +97,20 @@ func (s *refineSpy) SubmitResult(
 // Archivist methods
 // ---------------------------------------------------------------------------
 
+const testContent = "test-content"
+
 func (s *refineSpy) GetArtefact(
-	_ context.Context, _ *flowv1.GetArtefactRequest,
+	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
+	content := testContent
+	if s.ArtefactContents != nil {
+		if c, ok := s.ArtefactContents[req.GetArtefactId()]; ok {
+			content = c
+		}
+	}
 	return &flowv1.GetArtefactResponse{
-		Content:          []byte("test-content"),
-		VersionHash:      "test-hash",
-		GovernedArtefact: "haiku",
+		Content:     []byte(content),
+		VersionHash: "test-hash",
 	}, nil
 }
 
@@ -115,8 +133,7 @@ func (s *refineSpy) StoreArtefact(
 func (s *refineSpy) GetFeedback(
 	_ context.Context, _ *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
-	// Default: no feedback. Tests inject items via triageFeedback directly.
-	return &flowv1.GetFeedbackResponse{FeedbackItems: nil}, nil
+	return &flowv1.GetFeedbackResponse{FeedbackItems: s.FeedbackItems}, nil
 }
 
 func (s *refineSpy) ResolveFeedback(
@@ -155,7 +172,7 @@ func (s *refineSpy) HasUnresolvedFeedback(
 func (s *refineSpy) QueryLaws(
 	_ context.Context, _ *flowv1.QueryLawsRequest,
 ) (*flowv1.QueryLawsResponse, error) {
-	return &flowv1.QueryLawsResponse{Laws: nil}, nil
+	return &flowv1.QueryLawsResponse{Laws: s.Laws}, nil
 }
 
 func (s *refineSpy) Cite(
@@ -178,4 +195,85 @@ func (s *refineSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+// newSpyClient creates a flow.Client backed by a local gRPC server with
+// the refineSpy registered for all five service interfaces.
+func newSpyClient(t *testing.T, spy *refineSpy) *flow.Client {
+	t.Helper()
+
+	lis, err := newLocalListener()
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	srv := newSpyGRPCServer(spy)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.GracefulStop() })
+
+	client, err := flow.NewClient(flow.WithSidecarAddress(lis.Addr().String()))
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	return client
+}
+
+// defaultTestConfig returns a standard refineConfig for tests.
+func defaultTestConfig() *refineConfig {
+	return &refineConfig{
+		InputArtefact:    "petition",
+		OutputArtefact:   "haiku",
+		GovernedArtefact: "haiku",
+		OutputField:      "haiku",
+		Model:            "test-model",
+	}
+}
+
+// mockProvider implements flow.Provider for test isolation.
+type mockProvider struct {
+	mu sync.Mutex
+
+	output *flow.InferOutput
+	err    error
+
+	capturedModel  string
+	capturedSystem string
+	capturedQuery  []byte
+
+	// For parallel tests: per-call responses keyed by call index.
+	outputs []*flow.InferOutput
+	callIdx int
+}
+
+func (m *mockProvider) Infer(
+	_ context.Context, model, systemPrompt string, queryPrompt []byte,
+) (*flow.InferOutput, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.capturedModel = model
+	m.capturedSystem = systemPrompt
+	m.capturedQuery = queryPrompt
+
+	if m.outputs != nil && m.callIdx < len(m.outputs) {
+		out := m.outputs[m.callIdx]
+		m.callIdx++
+		return out, m.err
+	}
+	return m.output, m.err
+}
+
+// defaultCost returns a standard CostMetadata for tests.
+func defaultCost() *flow.CostMetadata {
+	return &flow.CostMetadata{
+		Model:        "test-model",
+		InputTokens:  10,
+		OutputTokens: 5,
+		DurationMs:   100,
+	}
 }
