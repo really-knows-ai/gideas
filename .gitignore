@@ -3,7 +3,17 @@ gen/
 go.work.sum
 bin/
 
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Session plans and scratch files
+PLAN.md
+TODO.md
+
 # Compiled Go binaries (built in-place by `go build`)
+/forge
 /haiku-appraise
 /haiku-forge
 /haiku-quench
@@ -11,6 +21,7 @@ bin/
 /sort
 /haiku-watch
 /null-node
+nodes/*/forge
 nodes/*/haiku-appraise
 nodes/*/haiku-forge
 nodes/*/haiku-quench

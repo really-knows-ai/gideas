@@ -84,7 +84,7 @@ metadata:
     app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: haiku-forge:latest
+  image: forge:latest
   entry: "standard-entry"
   outputs:
     - name: "default"

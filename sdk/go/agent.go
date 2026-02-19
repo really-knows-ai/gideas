@@ -1,11 +1,13 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
+	"text/template"
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -31,6 +33,11 @@ type AgentOption func(*agentConfig)
 
 type agentConfig struct {
 	heartbeatInterval time.Duration
+	schema            []byte
+	provider          Provider
+	model             string
+	systemPrompt      string
+	queryTemplate     *template.Template
 }
 
 // WithHeartbeatInterval overrides the default heartbeat interval for managed
@@ -41,49 +48,56 @@ func WithHeartbeatInterval(d time.Duration) AgentOption {
 	}
 }
 
-// InferFunc is the developer's inference logic. It receives a context and
-// input data, and returns an InferResult containing the structured output
-// and cost metadata for telemetry emission.
-//
-// The context carries a cancellation signal tied to the Agent's lifecycle.
-// Input is the raw bytes the caller passes to Agent.Run.
-type InferFunc func(ctx context.Context, input []byte) (*InferResult, error)
+// WithSchema sets the JSON Schema bytes for output validation.
+// The schema is compiled at construction time; malformed schemas are caught
+// early rather than at inference time.
+func WithSchema(schema []byte) AgentOption {
+	return func(c *agentConfig) {
+		c.schema = schema
+	}
+}
 
-// InferResult holds inference output and cost metadata.
-//
-// Output must be JSON that conforms to the schema declared at Agent
-// construction time. Cost fields are emitted as a foundry.cost.llm
-// telemetry event after successful validation.
-type InferResult struct {
-	// Output is the structured JSON inference output. It is validated against
-	// the Agent's output schema before being returned to the caller.
-	Output []byte
+// WithProvider sets the LLM provider for inference dispatch.
+func WithProvider(p Provider) AgentOption {
+	return func(c *agentConfig) {
+		c.provider = p
+	}
+}
 
-	// Model is the model identifier used for the inference call (required).
-	Model string
+// WithModel sets the model identifier passed to the provider on each
+// inference call.
+func WithModel(model string) AgentOption {
+	return func(c *agentConfig) {
+		c.model = model
+	}
+}
 
-	// InputTokens is the number of tokens in the inference input.
-	InputTokens int64
+// WithSystemPrompt sets the system prompt, rendered once at construction
+// time with config/constructor params (artefact names, role instructions, etc.).
+func WithSystemPrompt(prompt string) AgentOption {
+	return func(c *agentConfig) {
+		c.systemPrompt = prompt
+	}
+}
 
-	// OutputTokens is the number of tokens in the inference output.
-	OutputTokens int64
-
-	// DurationMs is the wall-clock duration of the inference call in milliseconds.
-	DurationMs int64
-
-	// Extra contains optional additional cost fields (e.g. "provider",
-	// "cached_tokens", "reasoning_tokens"). These are merged into the
-	// foundry.cost.llm telemetry payload alongside the standard fields.
-	Extra map[string]any
+// WithQueryTemplate sets the query prompt template, rendered per Run() call
+// with runtime data (petition text, laws, feedback items, etc.).
+func WithQueryTemplate(tmpl *template.Template) AgentOption {
+	return func(c *agentConfig) {
+		c.queryTemplate = tmpl
+	}
 }
 
 // Agent is the SDK's managed inference wrapper (FoundryAgent).
 //
-// It wraps existing SDK operations — Heartbeat() and RecordTelemetry() — into
-// a managed lifecycle around the developer's inference logic, providing three
-// behavioural guarantees:
+// It owns the full inference pipeline: provider dispatch, prompt rendering,
+// heartbeat lifecycle, schema validation, and cost telemetry. Concrete agents
+// (defined per-node) extend it with their specific schema, system prompt,
+// query prompt template, and typed Run() interface.
 //
-//  1. Managed Liveness — automatic Heartbeat() calls during Infer execution.
+// The Agent provides three behavioural guarantees:
+//
+//  1. Managed Liveness — automatic Heartbeat() calls during provider execution.
 //  2. Schema-First Output Validation — output validated against a JSON Schema
 //     declared at construction time before it can affect artefact state or routing.
 //  3. Atomic Cost Accounting — a foundry.cost.llm telemetry event emitted per
@@ -92,21 +106,27 @@ type InferResult struct {
 // FoundryAgent introduces no new gRPC surface. It is the recommended pattern
 // for all LLM-backed nodes.
 type Agent struct {
-	client *Client
-	schema *jsonschema.Schema
-	cfg    agentConfig
+	client        *Client
+	schema        *jsonschema.Schema
+	provider      Provider
+	model         string
+	systemPrompt  string
+	queryTemplate *template.Template
+	cfg           agentConfig
 }
 
-// NewAgent creates a FoundryAgent with a compiled output schema.
+// NewAgent creates a FoundryAgent with functional options.
 //
-// The schema parameter must be valid JSON Schema bytes (Draft 2020-12, Draft 7,
-// etc.). The schema is compiled at construction time so malformed schemas are
-// caught early rather than at inference time.
+// Required options:
+//   - WithSchema: JSON Schema bytes for output validation
+//   - WithProvider: LLM provider for inference dispatch
+//   - WithModel: model identifier
+//   - WithQueryTemplate: query prompt template
 //
 // The Client must already be connected (via NewClient). The Agent uses the
 // Client's Heartbeat() and RecordTelemetry() methods for managed liveness
 // and cost accounting.
-func NewAgent(client *Client, schema []byte, opts ...AgentOption) (*Agent, error) {
+func NewAgent(client *Client, opts ...AgentOption) (*Agent, error) {
 	if client == nil {
 		return nil, fmt.Errorf("flow agent: client must not be nil")
 	}
@@ -118,73 +138,104 @@ func NewAgent(client *Client, schema []byte, opts ...AgentOption) (*Agent, error
 		o(&cfg)
 	}
 
+	if cfg.provider == nil {
+		return nil, fmt.Errorf("flow agent: provider must not be nil (use WithProvider)")
+	}
+	if cfg.schema == nil {
+		return nil, fmt.Errorf("flow agent: schema must not be nil (use WithSchema)")
+	}
+	if cfg.model == "" {
+		return nil, fmt.Errorf("flow agent: model must not be empty (use WithModel)")
+	}
+	if cfg.queryTemplate == nil {
+		return nil, fmt.Errorf("flow agent: query template must not be nil (use WithQueryTemplate)")
+	}
+
 	// Compile the JSON Schema at construction time.
-	compiled, err := compileSchema(schema)
+	compiled, err := compileSchema(cfg.schema)
 	if err != nil {
 		return nil, fmt.Errorf("flow agent: invalid output schema: %w", err)
 	}
 
 	return &Agent{
-		client: client,
-		schema: compiled,
-		cfg:    cfg,
+		client:        client,
+		schema:        compiled,
+		provider:      cfg.provider,
+		model:         cfg.model,
+		systemPrompt:  cfg.systemPrompt,
+		queryTemplate: cfg.queryTemplate,
+		cfg:           cfg,
 	}, nil
 }
 
 // Run executes a single inference step with full lifecycle management:
 //
-//  1. Starts a heartbeat goroutine at the configured interval.
-//  2. Calls the provided InferFunc with the input.
-//  3. Stops the heartbeat goroutine.
-//  4. Validates the output against the declared JSON Schema.
-//  5. Emits a foundry.cost.llm telemetry event with cost metadata.
-//  6. Returns the validated output bytes.
+//  1. Renders the query prompt from the template with templateData.
+//  2. Starts a heartbeat goroutine at the configured interval.
+//  3. Calls provider.Infer(ctx, model, systemPrompt, renderedQuery).
+//  4. Stops the heartbeat goroutine.
+//  5. Validates the output against the declared JSON Schema.
+//  6. Emits a foundry.cost.llm telemetry event with cost metadata.
+//  7. Prompt injection detection (stub/no-op for now).
+//  8. Returns the validated output bytes.
 //
 // Multiple calls to Run within a single handler invocation are supported.
 // Each call independently manages heartbeat, validates output, and emits
 // cost telemetry — preserving per-step accounting granularity.
 //
-// If the InferFunc returns an error, Run returns it immediately without
+// If the provider returns an error, Run returns it immediately without
 // attempting validation or telemetry emission.
 //
 // If output validation fails, Run returns a structured error and does not
 // emit cost telemetry. Malformed inference output never enters the governed
 // pipeline.
-func (a *Agent) Run(ctx context.Context, infer InferFunc, input []byte) ([]byte, error) {
-	// 1. Start managed heartbeat loop.
+func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
+	// 1. Render query prompt from template.
+	var queryBuf bytes.Buffer
+	if err := a.queryTemplate.Execute(&queryBuf, templateData); err != nil {
+		return nil, fmt.Errorf("flow agent: query template render failed: %w", err)
+	}
+
+	// 2. Start managed heartbeat loop.
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
 	go a.heartbeatLoop(hbCtx)
 
-	// 2. Execute the developer's inference logic.
-	result, err := infer(ctx, input)
+	// 3. Execute the provider's inference logic.
+	result, err := a.provider.Infer(ctx, a.model, a.systemPrompt, queryBuf.Bytes())
 
-	// 3. Stop heartbeat (deferred cancel fires).
+	// 4. Stop heartbeat (deferred cancel fires).
 	hbCancel()
 
 	if err != nil {
-		return nil, fmt.Errorf("flow agent: infer failed: %w", err)
+		return nil, fmt.Errorf("flow agent: provider infer failed: %w", err)
 	}
 	if result == nil {
-		return nil, fmt.Errorf("flow agent: infer returned nil result")
+		return nil, fmt.Errorf("flow agent: provider returned nil result")
 	}
 
-	// 4. Validate output against the declared schema.
+	// 5. Validate output against the declared schema.
 	if err := a.validateOutput(result.Output); err != nil {
 		return nil, fmt.Errorf("flow agent: output validation failed: %w", err)
 	}
 
-	// 5. Emit foundry.cost.llm telemetry.
-	if err := a.emitCostTelemetry(ctx, result); err != nil {
-		// Telemetry failures are logged but do not fail work execution
-		// (spec: "Telemetry failures do not block or fail work execution").
-		slog.Warn("flow agent: cost telemetry emission failed (non-blocking)",
-			"error", err,
-			"model", result.Model,
-		)
+	// 6. Emit foundry.cost.llm telemetry.
+	if result.Cost != nil {
+		if err := a.emitCostTelemetry(ctx, result.Cost); err != nil {
+			// Telemetry failures are logged but do not fail work execution
+			// (spec: "Telemetry failures do not block or fail work execution").
+			slog.Warn("flow agent: cost telemetry emission failed (non-blocking)",
+				"error", err,
+				"model", a.model,
+			)
+		}
 	}
 
-	// 6. Return validated output.
+	// 7. Prompt injection detection — stub/no-op.
+	// TODO: Evaluate Go libraries and integrate real detection.
+	// Hook point: after template rendering, after provider call, before return.
+
+	// 8. Return validated output.
 	return result.Output, nil
 }
 
@@ -265,16 +316,16 @@ func formatValidationError(err error) error {
 // ---------------------------------------------------------------------------
 
 // emitCostTelemetry records a foundry.cost.llm event via RecordTelemetry.
-func (a *Agent) emitCostTelemetry(ctx context.Context, result *InferResult) error {
+func (a *Agent) emitCostTelemetry(ctx context.Context, cost *CostMetadata) error {
 	payload := map[string]any{
-		"model":         result.Model,
-		"input_tokens":  result.InputTokens,
-		"output_tokens": result.OutputTokens,
-		"duration_ms":   result.DurationMs,
+		"model":         cost.Model,
+		"input_tokens":  cost.InputTokens,
+		"output_tokens": cost.OutputTokens,
+		"duration_ms":   cost.DurationMs,
 	}
 
 	// Merge optional extra fields (provider, cached_tokens, reasoning_tokens, etc.)
-	maps.Copy(payload, result.Extra)
+	maps.Copy(payload, cost.Extra)
 
 	data, err := json.Marshal(payload)
 	if err != nil {
