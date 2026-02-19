@@ -38,7 +38,8 @@ func (m *mockProvider) Infer(
 func newTestForgeAgent(t *testing.T, mp *mockProvider, cfg *forgeConfig) *ForgeAgent {
 	t.Helper()
 	client := newSpyClient(t)
-	agent, err := NewForgeAgent(client, mp, cfg)
+	model := flow.NewModel(cfg.Model, mp)
+	agent, err := NewForgeAgent(client, model, cfg)
 	if err != nil {
 		t.Fatalf("NewForgeAgent() failed: %v", err)
 	}
