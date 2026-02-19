@@ -168,25 +168,25 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: haiku-appraise
+  name: appraise
   namespace: default
   labels:
-    app.kubernetes.io/name: haiku-appraise
+    app.kubernetes.io/name: appraise
     app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: haiku-appraise
+      app.kubernetes.io/name: appraise
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: haiku-appraise
+        app.kubernetes.io/name: appraise
         flow.gideas.io/node-name: appraise
     spec:
       containers:
         - name: node
-          image: haiku-appraise:latest
+          image: appraise:latest
           ports:
             - containerPort: 50053
           env:
@@ -194,8 +194,10 @@ spec:
               value: "50053"
             - name: OLLAMA_BASE_URL
               value: "http://ollama:11434"
-            - name: APPRAISE_MODEL
-              value: "kimi-k2.5:cloud"
+          volumeMounts:
+            - name: node-config
+              mountPath: /etc/foundry
+              readOnly: true
         - name: sidecar
           image: flow-sidecar:latest
           ports:
@@ -213,6 +215,10 @@ spec:
               value: "flow-librarian:50056"
             - name: MONITOR_ADDRESS
               value: "flow-monitor:50055"
+      volumes:
+        - name: node-config
+          configMap:
+            name: appraise-config
 ---
 # --- Refine ---
 apiVersion: apps/v1

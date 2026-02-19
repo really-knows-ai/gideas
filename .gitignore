@@ -24,8 +24,6 @@ TODO.md
 /null-node
 nodes/*/appraise
 nodes/*/forge
-nodes/*/haiku-appraise
-nodes/*/haiku-forge
 nodes/*/haiku-quench
 nodes/*/haiku-refine
 nodes/*/sort
