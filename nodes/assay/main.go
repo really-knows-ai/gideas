@@ -5,9 +5,9 @@
 //
 // Assay operates in four phases:
 //
-//  1. Triage — Discovers all artefacts in the workitem's exit contract and
-//     finds the FIRST disputed feedback item (DEADLOCKED state) across any
-//     artefact. That artefact becomes the case. If no deadlocked items exist,
+//  1. Triage — Lists all artefacts on the workitem and finds the FIRST
+//     disputed feedback item (DEADLOCKED state) across any artefact.
+//     That artefact becomes the case. If no deadlocked items exist,
 //     the workitem fails.
 //
 //  2. Empanel — Creates a jury of FoundryAgent instances. Jury size is
@@ -159,26 +159,29 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	// Phase 1: Triage — Find first disputed feedback across all artefacts
 	// ---------------------------------------------------------------
 
-	// Get topology to discover all artefacts
-	topology, err := client.GetFlowTopology(ctx)
+	// List all artefacts on the workitem
+	artefactsResp, err := client.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+		WorkitemId: wctx.GetWorkitemId(),
+	})
 	if err != nil {
-		return fmt.Errorf("assay: get flow topology: %w", err)
+		return fmt.Errorf("assay: list artefacts: %w", err)
 	}
 
-	exitContract := topology.GetExitContract()
-	if len(exitContract) == 0 {
-		return fmt.Errorf("assay: no artefacts in exit contract")
+	artefactRefs := artefactsResp.GetArtefactRefs()
+	if len(artefactRefs) == 0 {
+		return fmt.Errorf("assay: no artefacts on workitem")
 	}
 
 	// Search all artefacts for the first deadlocked feedback item
 	var disputedItem *flowv1.FeedbackItem
 	var targetArtefact string
 
-	for artefactKind := range exitContract {
-		feedback, err := client.GetFeedback(ctx, artefactKind)
+	for _, artefactRef := range artefactRefs {
+		artefactID := artefactRef.GetId()
+		feedback, err := client.GetFeedback(ctx, artefactID)
 		if err != nil {
 			slog.Warn("assay: failed to get feedback",
-				"artefact", artefactKind,
+				"artefact", artefactID,
 				"error", err)
 			continue
 		}
@@ -187,7 +190,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		for _, fb := range feedback {
 			if fb.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
 				disputedItem = fb
-				targetArtefact = artefactKind
+				targetArtefact = artefactID
 				break
 			}
 		}

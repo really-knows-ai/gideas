@@ -4,13 +4,13 @@
 
 The `assay` node is a generic judicial resolution mechanism for Foundry Flow that autonomously resolves deadlocked feedback disputes via jury deliberation and mints binding Tier 2 Rulings.
 
-This is a **core built-in node**, not specific to any particular artefact type. It automatically discovers all artefacts in the workitem's exit contract and adjudicates the **first disputed feedback item** it finds across any artefact.
+This is a **core built-in node**, not specific to any particular artefact type. It automatically lists all artefacts on the workitem and adjudicates the **first disputed feedback item** it finds across any artefact.
 
 ## Architecture
 
 The node follows the standard Foundry Flow node pattern using `flow.Start()` with a push-based handler model, similar to `haiku-appraise` and `null-node`.
 
-The artefact to adjudicate is **automatically discovered** by examining all artefacts in the workitem's exit contract and selecting the first one with a deadlocked feedback item.
+The artefact to adjudicate is **automatically discovered** by listing all artefacts on the workitem via `ListArtefacts` and selecting the first one with a deadlocked feedback item.
 
 ### Key Components
 
@@ -25,23 +25,24 @@ The artefact to adjudicate is **automatically discovered** by examining all arte
 
 ### Phase 1: Triage
 
-- Gets the flow topology to discover all artefacts in the exit contract
+- Calls `ListArtefacts` to get all artefacts on the workitem
 - Searches each artefact for feedback items in `FEEDBACK_STATE_DEADLOCKED` state
 - Selects the **first** deadlocked feedback item found (that artefact becomes the case)
 - Fails fast if no deadlocked items exist across any artefact (nothing to adjudicate)
 
 ```go
-topology, _ := client.GetFlowTopology(ctx)
-exitContract := topology.GetExitContract()
+artefactsResp, _ := client.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+    WorkitemId: wctx.GetWorkitemId(),
+})
 
 // Search all artefacts for first deadlocked feedback
-for artefactKind := range exitContract {
-    feedback, _ := client.GetFeedback(ctx, artefactKind)
+for _, artefactRef := range artefactsResp.GetArtefactRefs() {
+    feedback, _ := client.GetFeedback(ctx, artefactRef.GetId())
     for _, fb := range feedback {
         if fb.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
             // Found our case!
             disputedItem = fb
-            targetArtefact = artefactKind
+            targetArtefact = artefactRef.GetId()
             break
         }
     }
@@ -166,7 +167,11 @@ Environment variables:
 - `ASSAY_MODEL`: Model name (default: kimi-k2.5:cloud)
 - `ASSAY_MAX_ROUNDS`: Maximum deliberation rounds (default: 3)
 
-The node **automatically discovers** which artefact to adjudicate by searching all artefacts in the workitem's exit contract for the first deadlocked feedback item.
+The node **automatically discovers** which artefact to adjudicate by listing all artefacts on the workitem and searching for the first deadlocked feedback item.
+
+## Deployment
+
+The assay node is a **built-in core node** that should be deployed automatically with the Foundry Flow system. It does not require configuration or enablement by the Flow Architect - it is simply available as part of the core infrastructure.
 
 ## Routing
 
