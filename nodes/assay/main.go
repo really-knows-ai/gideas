@@ -1,4 +1,4 @@
-// Assay is the judicial resolution node of the Haiku Foundry Cycle.
+// Assay is the generic judicial resolution node for Foundry Flow.
 //
 // It resolves deadlocked feedback disputes via autonomous jury deliberation
 // and mints binding Tier 2 Rulings to prevent recurrence.
@@ -33,9 +33,10 @@
 //
 // Environment:
 //
-//	OLLAMA_BASE_URL     — Ollama API endpoint (default: http://localhost:11434)
-//	ASSAY_MODEL         — Model name (default: kimi-k2.5:cloud)
-//	ASSAY_MAX_ROUNDS    — Maximum deliberation rounds (default: 3)
+//	OLLAMA_BASE_URL      — Ollama API endpoint (default: http://localhost:11434)
+//	ASSAY_MODEL          — Model name (default: kimi-k2.5:cloud)
+//	ASSAY_MAX_ROUNDS     — Maximum deliberation rounds (default: 3)
+//	ASSAY_TARGET_ARTEFACT — Artefact ID to adjudicate (default: "haiku")
 package main
 
 import (
@@ -54,11 +55,13 @@ import (
 )
 
 const (
-	defaultModel     = "kimi-k2.5:cloud"
-	defaultMaxRounds = 3
+	defaultModel         = "kimi-k2.5:cloud"
+	defaultMaxRounds     = 3
+	defaultTargetArtefact = "haiku"
 
-	envModel     = "ASSAY_MODEL"
-	envMaxRounds = "ASSAY_MAX_ROUNDS"
+	envModel          = "ASSAY_MODEL"
+	envMaxRounds      = "ASSAY_MAX_ROUNDS"
+	envTargetArtefact = "ASSAY_TARGET_ARTEFACT"
 
 	// Consensus thresholds
 	thresholdSimpleMajority = 0.51  // >50%
@@ -124,9 +127,9 @@ type codificationOutput struct {
 // ---------------------------------------------------------------------------
 
 func main() {
-	slog.Info("haiku-assay: starting")
+	slog.Info("assay: starting")
 	if err := flow.Start(handler); err != nil {
-		slog.Error("haiku-assay: server failed", "error", err)
+		slog.Error("assay: server failed", "error", err)
 		os.Exit(1)
 	}
 }
@@ -136,7 +139,7 @@ func main() {
 // ---------------------------------------------------------------------------
 
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("haiku-assay: received assignment",
+	slog.Info("assay: received assignment",
 		"workitem_id", wctx.GetWorkitemId(),
 		"node_id", wctx.GetNodeId(),
 	)
@@ -153,11 +156,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return handleRetirementHearing(ctx, client, wctx)
 	}
 
+	// Determine target artefact
+	targetArtefact := getEnvOrDefault(envTargetArtefact, defaultTargetArtefact)
+
 	// ---------------------------------------------------------------
 	// Phase 1: Triage — Identify disputed feedback items
 	// ---------------------------------------------------------------
 
-	feedback, err := client.GetFeedback(ctx, "haiku")
+	feedback, err := client.GetFeedback(ctx, targetArtefact)
 	if err != nil {
 		return fmt.Errorf("assay: get feedback: %w", err)
 	}
@@ -167,7 +173,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("assay: no deadlocked feedback items found")
 	}
 
-	slog.Info("haiku-assay: triaged disputes", "count", len(disputedItems))
+	slog.Info("assay: triaged disputes", "count", len(disputedItems), "artefact", targetArtefact)
 
 	// Resolve the model and max rounds
 	model := getEnvOrDefault(envModel, defaultModel)
@@ -180,7 +186,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	// ---------------------------------------------------------------
 
 	for _, item := range disputedItems {
-		if err := processDispute(ctx, client, inferFn, item, maxRounds); err != nil {
+		if err := processDispute(ctx, client, inferFn, item, maxRounds, targetArtefact); err != nil {
 			return fmt.Errorf("assay: process dispute %s: %w", item.GetId(), err)
 		}
 	}
@@ -193,7 +199,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("assay: route to resolved: %w", err)
 	}
 
-	slog.Info("haiku-assay: completed", "workitem_id", wctx.GetWorkitemId())
+	slog.Info("assay: completed", "workitem_id", wctx.GetWorkitemId())
 	return nil
 }
 
@@ -250,11 +256,12 @@ func processDispute(
 	inferFn flow.InferFunc,
 	item *flowv1.FeedbackItem,
 	maxRounds int,
+	targetArtefact string,
 ) error {
 	jurySize := determineJurySize(item.GetSeverity())
 	threshold := determineConsensusThreshold(item.GetSeverity())
 
-	slog.Info("haiku-assay: empaneling jury",
+	slog.Info("assay: empaneling jury",
 		"feedback_id", item.GetId(),
 		"severity", item.GetSeverity().String(),
 		"jury_size", jurySize,
@@ -262,38 +269,38 @@ func processDispute(
 	)
 
 	// Get artefact context
-	haikuResp, err := client.GetArtefact(ctx, "haiku")
+	artefactResp, err := client.GetArtefact(ctx, targetArtefact)
 	if err != nil {
-		return fmt.Errorf("get haiku: %w", err)
+		return fmt.Errorf("get artefact: %w", err)
 	}
-	haiku := string(haikuResp.GetContent())
+	artefactContent := string(artefactResp.GetContent())
 
 	// Deliberate for up to maxRounds
 	for round := 1; round <= maxRounds; round++ {
-		slog.Info("haiku-assay: deliberation round",
+		slog.Info("assay: deliberation round",
 			"feedback_id", item.GetId(),
 			"round", round,
 		)
 
 		verdict, consensus, err := deliberateRound(
-			ctx, client, inferFn, item, haiku, jurySize, threshold)
+			ctx, client, inferFn, item, artefactContent, targetArtefact, jurySize, threshold)
 		if err != nil {
 			return fmt.Errorf("deliberation round %d: %w", round, err)
 		}
 
 		if consensus {
 			// Consensus reached — execute verdict
-			return executeVerdict(ctx, client, inferFn, item, verdict)
+			return executeVerdict(ctx, client, inferFn, item, verdict, targetArtefact)
 		}
 
-		slog.Info("haiku-assay: no consensus",
+		slog.Info("assay: no consensus",
 			"feedback_id", item.GetId(),
 			"round", round,
 		)
 	}
 
 	// Hung jury — escalate to HITL
-	slog.Warn("haiku-assay: hung jury, escalating",
+	slog.Warn("assay: hung jury, escalating",
 		"feedback_id", item.GetId(),
 		"max_rounds", maxRounds,
 	)
@@ -306,7 +313,8 @@ func deliberateRound(
 	client *flow.Client,
 	inferFn flow.InferFunc,
 	item *flowv1.FeedbackItem,
-	haiku string,
+	artefactContent string,
+	targetArtefact string,
 	jurySize int,
 	threshold float64,
 ) (string, bool, error) {
@@ -315,7 +323,7 @@ func deliberateRound(
 		return "", false, fmt.Errorf("create agent: %w", err)
 	}
 
-	prompt := buildDeliberationPrompt(item, haiku)
+	prompt := buildDeliberationPrompt(item, artefactContent, targetArtefact)
 
 	// Run parallel juror votes
 	type voteResult struct {
@@ -354,12 +362,12 @@ func deliberateRound(
 		voteCounts[r.output.Verdict]++
 	}
 
-	slog.Info("haiku-assay: vote tally", "votes", voteCounts)
+	slog.Info("assay: vote tally", "votes", voteCounts)
 
 	// Check for consensus
 	for verdict, count := range voteCounts {
 		if float64(count)/float64(jurySize) >= threshold {
-			slog.Info("haiku-assay: consensus reached",
+			slog.Info("assay: consensus reached",
 				"verdict", verdict,
 				"votes", count,
 				"total", jurySize,
@@ -382,8 +390,9 @@ func executeVerdict(
 	inferFn flow.InferFunc,
 	item *flowv1.FeedbackItem,
 	verdict string,
+	targetArtefact string,
 ) error {
-	slog.Info("haiku-assay: executing verdict",
+	slog.Info("assay: executing verdict",
 		"feedback_id", item.GetId(),
 		"verdict", verdict,
 	)
@@ -391,11 +400,11 @@ func executeVerdict(
 	switch verdict {
 	case verdictResolve:
 		// Mint Tier 2 Ruling to resolve the dispute
-		return mintRuling(ctx, client, inferFn, item, "resolve")
+		return mintRuling(ctx, client, inferFn, item, "resolve", targetArtefact)
 
 	case verdictReject:
 		// Mint Tier 2 Ruling to reject the feedback
-		return mintRuling(ctx, client, inferFn, item, "reject")
+		return mintRuling(ctx, client, inferFn, item, "reject", targetArtefact)
 
 	case verdictConflict:
 		// Cannot be resolved — escalate to HITL
@@ -413,11 +422,12 @@ func mintRuling(
 	inferFn flow.InferFunc,
 	item *flowv1.FeedbackItem,
 	resolution string,
+	targetArtefact string,
 ) error {
 	// Generate ruling statement based on feedback discussion
 	statement := generateRulingStatement(item, resolution)
 
-	slog.Info("haiku-assay: minting ruling",
+	slog.Info("assay: minting ruling",
 		"feedback_id", item.GetId(),
 		"statement", statement,
 	)
@@ -425,14 +435,14 @@ func mintRuling(
 	// Attempt codification
 	codified, err := codifyStatement(ctx, client, inferFn, statement)
 	if err != nil {
-		slog.Warn("haiku-assay: codification failed, using text-only",
+		slog.Warn("assay: codification failed, using text-only",
 			"error", err)
 		codified = nil
 	}
 
 	if codified != nil && codified.HasDeterministic {
 		// Mint law group with subjective + deterministic
-		return mintLawGroup(ctx, client, codified)
+		return mintLawGroup(ctx, client, codified, targetArtefact)
 	}
 
 	// Mint single text/markdown ruling
@@ -445,7 +455,7 @@ func mintRuling(
 			},
 		},
 		Tier:      flowv1.LawTier_LAW_TIER_RULING,
-		AppliesTo: []string{"haiku"},
+		AppliesTo: []string{targetArtefact},
 	}
 
 	resp, err := client.Librarian.WriteLaw(ctx, &flowv1.WriteLawRequest{Law: law})
@@ -453,7 +463,7 @@ func mintRuling(
 		return fmt.Errorf("write law: %w", err)
 	}
 
-	slog.Info("haiku-assay: ruling minted",
+	slog.Info("assay: ruling minted",
 		"law_id", resp.GetLawId(),
 		"version_hash", resp.GetVersionHash(),
 	)
@@ -472,10 +482,11 @@ func mintLawGroup(
 	ctx context.Context,
 	client *flow.Client,
 	codified *codificationOutput,
+	targetArtefact string,
 ) error {
 	groupID := fmt.Sprintf("lg-%d", os.Getpid()) // Simple group ID generation
 
-	slog.Info("haiku-assay: minting law group", "group_id", groupID)
+	slog.Info("assay: minting law group", "group_id", groupID)
 
 	// Mint subjective law
 	subjectiveLaw := &flowv1.Law{
@@ -487,7 +498,7 @@ func mintLawGroup(
 			},
 		},
 		Tier:      flowv1.LawTier_LAW_TIER_RULING,
-		AppliesTo: []string{"haiku"},
+		AppliesTo: []string{targetArtefact},
 		// Note: group field doesn't exist in proto, using only representations
 	}
 
@@ -496,7 +507,7 @@ func mintLawGroup(
 		return fmt.Errorf("write subjective law: %w", err)
 	}
 
-	slog.Info("haiku-assay: subjective law minted", "law_id", resp1.GetLawId())
+	slog.Info("assay: subjective law minted", "law_id", resp1.GetLawId())
 
 	// Mint deterministic law
 	deterministicLaw := &flowv1.Law{
@@ -508,7 +519,7 @@ func mintLawGroup(
 			},
 		},
 		Tier:      flowv1.LawTier_LAW_TIER_RULING,
-		AppliesTo: []string{"haiku"},
+		AppliesTo: []string{targetArtefact},
 	}
 
 	resp2, err := client.Librarian.WriteLaw(ctx, &flowv1.WriteLawRequest{Law: deterministicLaw})
@@ -516,7 +527,7 @@ func mintLawGroup(
 		return fmt.Errorf("write deterministic law: %w", err)
 	}
 
-	slog.Info("haiku-assay: deterministic law minted", "law_id", resp2.GetLawId())
+	slog.Info("assay: deterministic law minted", "law_id", resp2.GetLawId())
 
 	return nil
 }
@@ -565,7 +576,7 @@ func generateRulingStatement(item *flowv1.FeedbackItem, resolution string) strin
 
 // escalateToHITL routes to the HITL node for human intervention.
 func escalateToHITL(ctx context.Context, client *flow.Client) error {
-	slog.Info("haiku-assay: escalating to HITL")
+	slog.Info("assay: escalating to HITL")
 	_, err := client.RouteToOutput(ctx, "escalate")
 	if err != nil {
 		return fmt.Errorf("route to escalate: %w", err)
@@ -588,7 +599,7 @@ func handleRetirementHearing(
 	client *flow.Client,
 	wctx *flowv1.WorkitemContext,
 ) error {
-	slog.Info("haiku-assay: processing retirement hearing")
+	slog.Info("assay: processing retirement hearing")
 	// Retirement hearing logic would go here
 	// For now, just complete
 	_, err := client.Complete(ctx, "")
@@ -599,16 +610,16 @@ func handleRetirementHearing(
 // Prompt Builders
 // ---------------------------------------------------------------------------
 
-func buildDeliberationPrompt(item *flowv1.FeedbackItem, haiku string) string {
+func buildDeliberationPrompt(item *flowv1.FeedbackItem, artefactContent string, targetArtefact string) string {
 	var historyBlock strings.Builder
 	for _, ev := range item.GetHistory() {
 		historyBlock.WriteString(fmt.Sprintf("- [%s] %s: %s\n",
 			ev.GetAction(), ev.GetActor(), ev.GetMessage()))
 	}
 
-	return fmt.Sprintf(`You are a juror in a haiku review dispute.
+	return fmt.Sprintf(`You are a juror in a %s review dispute.
 
-## THE HAIKU
+## THE ARTEFACT
 
 %s
 
@@ -643,14 +654,15 @@ Verdicts:
 - "conflict": Irreconcilable conflict requiring human intervention
 
 Output ONLY the JSON object, nothing else.`,
-		haiku,
+		targetArtefact,
+		artefactContent,
 		item.GetMessage(),
 		item.GetSeverity().String(),
 		historyBlock.String())
 }
 
 func buildCodificationPrompt(statement string) string {
-	return fmt.Sprintf(`You are a governance analyst for a haiku review pipeline.
+	return fmt.Sprintf(`You are a governance analyst for a software quality pipeline.
 
 ## THE STATEMENT
 

@@ -1,12 +1,16 @@
-# Haiku-Assay Node Implementation
+# Assay Node Implementation
 
 ## Overview
 
-The `haiku-assay` node is a judicial resolution mechanism for the Foundry Flow that autonomously resolves deadlocked feedback disputes via jury deliberation and mints binding Tier 2 Rulings.
+The `assay` node is a generic judicial resolution mechanism for Foundry Flow that autonomously resolves deadlocked feedback disputes via jury deliberation and mints binding Tier 2 Rulings.
+
+This is a **core built-in node**, not specific to any particular artefact type. It can adjudicate disputes for any governed artefact in the system.
 
 ## Architecture
 
 The node follows the standard Foundry Flow node pattern using `flow.Start()` with a push-based handler model, similar to `haiku-appraise` and `null-node`.
+
+The artefact to adjudicate is configured via the `ASSAY_TARGET_ARTEFACT` environment variable, making it reusable across different workflows.
 
 ### Key Components
 
@@ -21,11 +25,12 @@ The node follows the standard Foundry Flow node pattern using `flow.Start()` wit
 
 ### Phase 1: Triage
 
-- Retrieves all feedback items for the "haiku" artefact
+- Retrieves all feedback items for the configured target artefact
 - Filters for items in `FEEDBACK_STATE_DEADLOCKED` state
 - Fails fast if no deadlocked items exist (nothing to adjudicate)
 
 ```go
+targetArtefact := getEnvOrDefault(envTargetArtefact, defaultTargetArtefact)
 disputedItems := filterDeadlocked(feedback)
 if len(disputedItems) == 0 {
     return fmt.Errorf("assay: no deadlocked feedback items found")
@@ -149,6 +154,26 @@ Environment variables:
 - `OLLAMA_BASE_URL`: Ollama API endpoint (default: http://localhost:11434)
 - `ASSAY_MODEL`: Model name (default: kimi-k2.5:cloud)
 - `ASSAY_MAX_ROUNDS`: Maximum deliberation rounds (default: 3)
+- `ASSAY_TARGET_ARTEFACT`: Artefact ID to adjudicate (default: "haiku")
+
+### Example Configuration for Different Artefacts
+
+```yaml
+# For haiku pipeline
+env:
+  - name: ASSAY_TARGET_ARTEFACT
+    value: "haiku"
+
+# For documentation pipeline
+env:
+  - name: ASSAY_TARGET_ARTEFACT
+    value: "documentation"
+
+# For code pipeline
+env:
+  - name: ASSAY_TARGET_ARTEFACT
+    value: "source-code"
+```
 
 ## Routing
 
