@@ -12,7 +12,7 @@ Nodes are execution actors in the data plane. Control-plane authority remains wi
 - Nodes do not mutate Workitem lifecycle fields directly.
 - Nodes admitting new Workitems through local creation must be bound to an entry contract.
 - Cross-flow import admission targets configured `importNode`, which must be entry-bound.
-- Runtime-triggered review-hearing admission targets Assay's mandatory hearing entry binding.
+- Runtime-triggered review-hearing admission targets the Tribunal's mandatory hearing entry binding.
 
 Every node, including externally integrated nodes, runs inside the same control and governance contract.
 
@@ -75,29 +75,45 @@ From the platform's perspective, reference-arrangement node names (Forge, Quench
 
 Gate nodes in the reference arrangement discover stamp-provider routing targets from Flow configuration and capability grants — they do not hardcode provider node names. Deadlocked feedback is unresolved by state, so gate implementations must treat deadlock as a special-case branch when evaluating unresolved-feedback predicates. The `approval` stamp is a reference-arrangement convention, not a privileged platform keyword.
 
-## Assay as Standard Component
+## The Judiciary — Standard Subsystem
 
-[Assay](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component) is a standard component in every Flow. It is routable as a node and cannot be omitted from the runtime.
+The [Judiciary](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem) is a standard subsystem in every Flow. It comprises three nodes and two core services, all Operator-provisioned. It is routable and cannot be omitted from the runtime.
 
-Assay participates in distinct runtime paths:
+### Judiciary Nodes
 
-- Deadlock adjudication: governed-work Workitems are *routed* to Assay (via `route_to`) by the gate node. The governed-work Workitem is already in flight — Assay adjudicates and returns it to Sort for re-evaluation in the reference arrangement.
-- Review-hearing processing: the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a *new* hearing Workitem, admitted through Assay's entry binding. Assay is both entry-bound and exit-bound for hearing Workitems. The hearing Workitem carries a single `law-reference` artefact — a built-in [GovernedArtefact](../05-reference/crds.md#governedartefact) provisioned by the Operator alongside Assay, whose content is a plain-text string containing the law ID under review. The governed-work Workitem that prompted the hearing is unaffected.
+**[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver)** — resolves deadlocked feedback disputes. Governed-work Workitems are *routed* to the Arbiter (via `route_to`) by the gate node. The governed-work Workitem is already in flight — the Arbiter adjudicates via the [Jury](./04-system-services.md#jury), drafts a ruling via the [Clerk](./04-system-services.md#clerk), and returns the Workitem to Sort for re-evaluation in the reference arrangement.
 
-The two paths are distinguished by admission mechanism: deadlock-escalated Workitems arrive through routing; hearing Workitems arrive through entry-contract admission as new Workitems.
+**[Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-hearing-conductor)** — conducts review hearings. The [Librarian](./04-system-services.md#librarian) triggers creation of a *new* hearing Workitem, admitted through the Tribunal's entry binding. The Tribunal is both entry-bound and exit-bound for hearing Workitems. The hearing Workitem carries a single `law-reference` artefact — a built-in [GovernedArtefact](../05-reference/crds.md#governedartefact) provisioned by the Operator alongside the Tribunal, whose content is a plain-text string containing the law ID under review. The governed-work Workitem that prompted the hearing is unaffected.
 
-Assay capabilities are fixed by the runtime (not configurable by the Flow Architect):
+**[Advocate](../01-concepts/02-foundry-cycle.md#advocate-human-escalation)** — the Judiciary's human-in-the-loop escalation point. Receives hung jury escalations, Tier 3 proposals for human ratification, and Tier 4-5 appeals. The Advocate uses the SDK's [HITL pattern](../04-sdk/08-sdk-hitl.md) to expose a queue interface for human reviewers.
 
-- `WRITE:law/tier2` — resolve Tier 1-2 conflicts and mint Tier 2 Rulings.
+The two primary paths are distinguished by admission mechanism: deadlock-escalated Workitems arrive at the Arbiter through routing; hearing Workitems arrive at the Tribunal through entry-contract admission as new Workitems.
+
+### Judiciary Node Capabilities
+
+Arbiter and Tribunal capabilities are fixed by the runtime (not configurable by the Flow Architect):
+
+- `WRITE:law/tier2` — resolve Tier 1-2 conflicts and mint Tier 2 Rulings via the Clerk.
 - `READ:law` — query the Library for law context.
 - Friction queries, feedback resolution, and stamp application for hearing artefacts.
-- `USE:support/<name>/encode` — access to all registered [CodificationService](../05-reference/crds.md#codificationservice) instances (the Operator internally manages these grants).
-- Propose Tier 3 changes for human ratification.
-- Appeal Tier 4-5 conflicts to Governance Flow authorities.
+- Propose Tier 3 changes for human ratification (routed to Advocate).
+- Appeal Tier 4-5 conflicts to Governance Flow authorities (routed to Advocate).
 
-Assay does not write Tier 1 Findings by convention; its role is judicial, not observational.
+The Arbiter and Tribunal do not write Tier 1 Findings by convention; their role is judicial, not observational.
 
-Assay's deadlock adjudication and review-hearing deliberation use the [FoundryAgent](../04-sdk/07-sdk-agent.md) pattern for jury execution. Each juror is a FoundryAgent instance that evaluates the dispute independently, producing a structured verdict. Per-juror cost accounting is automatic — each juror's inference steps emit `foundry.cost.llm` telemetry events with attribution tags (`juror`, `round`, `severity`, `feedback_id`), enabling operators to quantify deliberation cost per dispute through the [Flow Monitor](./04-system-services.md#flow-monitor-and-friction-surface).
+Advocate capabilities are fixed by the runtime:
+
+- `READ:law` — query the Library for law context.
+- `QUEUE:server` — enables the HITL queue interface and Federated Queue Mesh.
+- Petition HITL for Tier 3 ratification.
+- File appeals to the Governance Flow via the Librarian for Tier 4-5 conflicts.
+
+### Judiciary Services
+
+The Judiciary is supported by two core services (see [System Services](./04-system-services.md)):
+
+- **[Jury](./04-system-services.md#jury)** — multi-agent deliberation engine. Runs parallel [FoundryAgent](../04-sdk/07-sdk-agent.md) instances as jurors, collects votes, applies the configured consensus strategy, and returns a structured verdict. Per-juror cost accounting is automatic — each juror's inference steps emit `foundry.cost.llm` telemetry events with attribution tags (`juror`, `round`, `severity`, `feedback_id`).
+- **[Clerk](./04-system-services.md#clerk)** — law drafting and codification coordination. Drafts prose representations, discovers and dispatches to registered [Codification Services](./04-system-services.md#codification-services) via the Sidecar, assembles the final law with all representations, and persists it via `WriteLaw`. The Clerk has `USE:support/<name>/encode` access to all registered CodificationService instances (the Operator internally manages these grants).
 
 ## External Integration Nodes
 
@@ -126,7 +142,7 @@ Node boundary failures are classified and handled distinctly:
 - **Execution failure**: node returns explicit failure or exits abnormally.
 - **Timeout failure**: assignment exceeds configured node timeout budget.
 - **Routing failure**: returned instruction is invalid or unresolvable.
-- **Governance deadlock**: feedback dispute exceeds deadlock threshold and is escalated to Assay.
+- **Governance deadlock**: feedback dispute exceeds deadlock threshold and is escalated to the Arbiter.
 
 Retries and backoff may be configured operationally, but retries do not bypass capability checks, routing guards, or exit-contract validation.
 
@@ -149,8 +165,8 @@ All node deployments preserve these invariants:
 3. Routing outcomes are limited to `route_to_output`, `route_to`, or `complete`.
 4. Law writing is capability-gated; nodes without a `WRITE:law/tierN` capability grant cannot write laws.
 5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
-6. Assay is always present and constrained to resolve/propose/appeal at its authority ceiling.
-7. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Assay entry/exit bindings.
+6. The Judiciary is always present: Arbiter, Tribunal, and Advocate nodes are Operator-provisioned and constrained to resolve/propose/appeal at their authority ceiling.
+7. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Tribunal entry/exit bindings.
 8. Stamp authority is capability-scoped by governed artefact name and stamp name.
 9. Stamps are write-once per artefact version hash.
 10. Nodes admitting locally created Workitems are bound to and validated against entry contracts.

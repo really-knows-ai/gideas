@@ -82,7 +82,7 @@ Thrash and deadlock are distinct mechanisms with different sources and outcomes.
 - **Feedback deadlock** is governance dispute detection on artefact feedback history.
   - Source of truth: Archivist feedback records via SDK queries.
   - Enforcement actor: gate node routing logic under configured deadlock threshold policy (the reference [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node in the standard arrangement).
-  - Outcome: Workitem routes to [Assay](./03-nodes-external.md#assay-as-standard-component) for adjudication.
+  - Outcome: Workitem routes to the [Arbiter](./03-nodes-external.md#the-judiciary--standard-subsystem) for adjudication.
 
 Thrash failure and governance deadlock escalation are never treated as equivalent transitions.
 
@@ -121,7 +121,7 @@ Entry admission and exit completion are Workitem boundary transitions controlled
 - Entry checks validate the bound entry contract against current artefact state in the Archivist.
 - Entry and exit contracts use the same per-name validation shape.
 - Cross-flow import admission creates Workitems in `Pending`, then Operator schedules first assignment to configured `importNode` when capacity allows.
-- Review-hearing admission uses Assay's hearing entry binding, then Operator schedules first assignment to Assay when capacity allows.
+- Review-hearing admission uses the Tribunal's hearing entry binding, then Operator schedules first assignment to the Tribunal when capacity allows.
 
 ## Exit Completion Interaction
 
@@ -131,7 +131,7 @@ Exit completion is a Workitem state transition controlled by configuration and O
 - Exit binding is fixed in node configuration.
 - The node does not choose a contract at runtime.
 - Operator validates the bound exit contract against current artefact state in the Archivist.
-- In the reference arrangement, governed artefact completion is user-configured through Sort, while review-hearing Workitems complete through Assay's hearing exit binding.
+- In the reference arrangement, governed artefact completion is user-configured through Sort, while review-hearing Workitems complete through the Tribunal's hearing exit binding.
 
 Contract evaluation rules:
 

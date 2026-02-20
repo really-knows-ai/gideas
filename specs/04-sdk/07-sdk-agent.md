@@ -1,6 +1,6 @@
 # SDK Agent
 
-FoundryAgent is the SDK's managed wrapper for inference workloads. It automates heartbeat management, validates structured output against a declared schema, and emits cost telemetry atomically per inference step. FoundryAgent is the recommended pattern for all LLM-backed nodes and the runtime powering [Assay's](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component) multi-agent jury mechanism.
+FoundryAgent is the SDK's managed wrapper for inference workloads. It automates heartbeat management, validates structured output against a declared schema, and emits cost telemetry atomically per inference step. FoundryAgent is the recommended pattern for all LLM-backed nodes and the runtime powering the [Jury](../02-flow/04-system-services.md#jury) service's multi-agent deliberation mechanism.
 
 ## FoundryAgent Runtime Role
 
@@ -101,9 +101,9 @@ Multiple inference steps within a single assignment are supported. Each step ind
 
 Nodes that perform inference without FoundryAgent must manage [`Heartbeat()`](./01-sdk-core.md#heartbeat-and-activity-tracking) calls manually, validate output explicitly, and emit cost telemetry through direct [`RecordTelemetry()`](./06-sdk-telemetry.md) calls. The [Long-Running and Agent Patterns](../03-node/03-patterns.md#long-running-and-agent-patterns) section describes the manual alternative.
 
-## Relationship to Assay Jury
+## Relationship to the Jury Service
 
-[Assay's](../01-concepts/02-foundry-cycle.md#assay-judiciary--standard-component) multi-agent deliberation uses FoundryAgent instances as jurors. Each juror is a FoundryAgent that evaluates a dispute or hearing independently, producing a structured verdict output validated against Assay's verdict schema.
+The [Jury](../02-flow/04-system-services.md#jury) service's multi-agent deliberation uses FoundryAgent instances as jurors. Each juror is a FoundryAgent that evaluates a dispute or hearing independently, producing a structured verdict output validated against the Jury's verdict schema.
 
 Cost accounting per juror is automatic. Each juror's `foundry.cost.llm` events carry attribution tags that link the cost to the specific deliberation context:
 
@@ -116,7 +116,7 @@ Cost accounting per juror is automatic. Each juror's `foundry.cost.llm` events c
 
 These tags are included in the `RecordTelemetry` payload alongside the standard cost fields. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates jury costs per juror, per round, and per dispute — enabling operators to quantify the cost of judicial deliberation and identify expensive dispute patterns.
 
-Parallel juror execution is managed by Assay internally. Each juror's FoundryAgent instance maintains its own heartbeat loop and cost accounting independently. The jury mechanism does not require special SDK surface — it is a composition of FoundryAgent instances within Assay's handler.
+Parallel juror execution is managed by the Jury service internally. Each juror's FoundryAgent instance maintains its own heartbeat loop and cost accounting independently. The jury mechanism does not require special SDK surface — it is a composition of FoundryAgent instances within the Jury service's deliberation engine.
 
 ## FoundryAgent Invariants
 
@@ -126,4 +126,4 @@ Parallel juror execution is managed by Assay internally. Each juror's FoundryAge
 4. FoundryAgent introduces no new gRPC surface. It wraps existing `Heartbeat()` and `RecordTelemetry()` calls.
 5. The `Infer` method is the sole developer extension point. Heartbeat, validation, and cost accounting are wrapper-managed.
 6. Multiple inference steps within a single assignment are independently accounted and heartbeat-managed.
-7. Assay jurors are FoundryAgent instances. Per-juror cost attribution is automatic through telemetry tags.
+7. Jury service jurors are FoundryAgent instances. Per-juror cost attribution is automatic through telemetry tags.

@@ -10,8 +10,11 @@ All runtime services expose gRPC APIs. Node-originated calls are mediated by the
 | [Archivist](#archivist-api) | Artefact content, versions, stamps, feedback | Sidecar (on behalf of nodes), Operator |
 | [Librarian](#librarian-api) | Law storage, retrieval, integration, hearing triggers | Sidecar (on behalf of nodes), Operator |
 | [Flow Monitor](#flow-monitor-api) | Friction, telemetry, metrics, traces, audit | Sidecar (on behalf of nodes), Librarian, all services |
+| [Jury](#jury-api) | Multi-agent deliberation engine | Arbiter, Tribunal (via Sidecar) |
+| [Clerk](#clerk-api) | Law drafting and codification coordination | Arbiter, Tribunal (via Sidecar) |
 | [Sidecar](#sidecar-mediated-sdk-paths) | Authentication proxy, identity injection, local validation | Node handlers (via SDK) |
 | [Support Services](#support-service-api) | Pluggable capabilities (e.g. codification) | Sidecar (on behalf of nodes), system services |
+| [QueuePeer](#queuepeer-api) | Federated Queue Mesh inter-pod communication | HITL node replicas (peer-to-peer) |
 
 ---
 
@@ -31,7 +34,7 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `CreateHearingWorkitem` | `law_id` | `workitem_id` | Creates a review hearing Workitem for Assay processing. The Operator creates a `law-reference` artefact from the supplied `law_id` and admits the Workitem via Assay's bound hearing entry contract. Called by the Librarian when friction thresholds or review TTL expiry trigger a review hearing. |
+| `CreateHearingWorkitem` | `law_id` | `workitem_id` | Creates a review hearing Workitem for [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) processing. The Operator creates a `law-reference` artefact from the supplied `law_id` and admits the Workitem via the Tribunal's bound hearing entry contract. Called by the Librarian when friction thresholds or review TTL expiry trigger a review hearing. |
 | `ExportWorkitem` | `workitem_id` | `export_package` | Assembles an export package from the completed Workitem: artefact content (scoped by exit contract), passport stamps, Workitem metadata, and provenance chain. The Operator signs the package with the Flow's identity material and includes the certificate chain. |
 | `ImportWorkitem` | `export_package`, `treaty_name?` | `workitem_id` or structured error | Validates and materialises a Workitem from an export package. Verifies the package signature against the certificate chain (State Root for siblings, Treaty `caCert` for non-siblings), enforces `allowedSubjects` and `maxBundleSize` from the Treaty if applicable, validates the materialised Workitem against the configured `importNode`'s entry contract, and creates the Workitem in `Pending`. |
 
@@ -113,7 +116,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | Content hash mismatch on read | `ARTEFACT_CORRUPTED` | `DATA_LOSS` |
 | Existing `id` with different `governed_artefact` | `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` |
 | Invalid feedback state transition | `INVALID_STATE_TRANSITION` | `FAILED_PRECONDITION` |
-| Attempt to override Assay-linked ruling | `CONTEMPT_VIOLATION` | `FAILED_PRECONDITION` |
+| Attempt to override a judicially-linked ruling | `CONTEMPT_VIOLATION` | `FAILED_PRECONDITION` |
 | Feedback ID not found | `FEEDBACK_NOT_FOUND` | `NOT_FOUND` |
 | Message exceeds 1024 characters | `MESSAGE_TOO_LONG` | `INVALID_ARGUMENT` |
 
@@ -134,11 +137,11 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `GetLaw` | `law_id` | `law` | Returns the full law object by identifier. Used by Assay for hearing evidence retrieval. |
-| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling minted by Assay, Tier 3+ applied by administrator or Governance Flow). During hearing processing, the law is created in an inactive state pending hearing completion. |
+| `GetLaw` | `law_id` | `law` | Returns the full law object by identifier. Used by Judiciary nodes for hearing evidence retrieval. |
+| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling minted by the [Clerk](../02-flow/04-system-services.md#clerk), Tier 3+ applied by administrator or Governance Flow). During hearing processing, the law is created in an inactive state pending hearing completion. |
 | `RetireLaw` | `law_id` | `acknowledged` | Removes a law from the active Library. History is preserved in the audit log. |
 | `ReplicateLaws` | `laws[]`, `source_flow_id` | `integration_results[]` | Receives higher-tier laws from a remote Librarian for integration. Triggers the two-stage conflict protocol. |
-| `ApplyLifecycleAction` | `law_id`, `verdict` | `acknowledged` | Applies the outcome of a review hearing (promote, retire, demote) to the specified law. Called by the Operator after Assay hearing completion. This action activates any law created during the hearing. |
+| `ApplyLifecycleAction` | `law_id`, `verdict` | `acknowledged` | Applies the outcome of a review hearing (promote, retire, demote) to the specified law. Called by the Operator after Tribunal hearing completion. This action activates any law created during the hearing. |
 
 ### Librarian Error Responses
 
@@ -156,7 +159,7 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 
 ## Flow Monitor API
 
-The Flow Monitor API ingests telemetry, friction events, and custom events. It also serves friction queries for the Librarian and Assay.
+The Flow Monitor API ingests telemetry, friction events, and custom events. It also serves friction queries for the Librarian and Judiciary nodes.
 
 ### Ingestion Methods
 
@@ -169,7 +172,7 @@ The Flow Monitor API ingests telemetry, friction events, and custom events. It a
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `QueryFriction` | `filter` (by `law_id`, `node_id`, `workitem_id`, `tier`, `time_range`) | `friction_aggregates[]` | Returns aggregated friction data across the requested axes. Used by the Librarian for hearing threshold evaluation and by Assay for hearing evidence. |
+| `QueryFriction` | `filter` (by `law_id`, `node_id`, `workitem_id`, `tier`, `time_range`) | `friction_aggregates[]` | Returns aggregated friction data across the requested axes. Used by the Librarian for hearing threshold evaluation and by the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) for hearing evidence. |
 
 ### Flow Monitor Error Responses
 
@@ -234,6 +237,105 @@ The Sidecar catches invalid requests early. The owning service makes authoritati
 | Request targets a Workitem outside the current assignment | `ASSIGNMENT_SCOPE_VIOLATION` | `FAILED_PRECONDITION` |
 | Identity material expired or invalid | `IDENTITY_EXPIRED` | `UNAUTHENTICATED` |
 | Node inactivity timer exceeded | `TIMEOUT_EXCEEDED` | `DEADLINE_EXCEEDED` |
+
+---
+
+## Jury API
+
+The [Jury](../02-flow/04-system-services.md#jury) is a core service that manages multi-agent deliberation. It is consumed by the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (deadlock adjudication) and [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (review hearings) through Sidecar-mediated calls.
+
+### Deliberation Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `Deliberate` | `case_evidence`, `consensus_strategy`, `juror_profiles`, `max_rounds` | `verdict` | Empanels parallel FoundryAgent instances as jurors, runs blind voting with optional deliberation rounds, applies consensus strategy, and returns a structured verdict. |
+
+### Deliberate Request
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `case_evidence` | `CaseEvidence` | yes | Feedback history, artefact content, applicable laws, and friction data for the case under deliberation. |
+| `consensus_strategy` | `string` | yes | `SimpleMajority` (>50%), `SuperMajority` (>=66%), or `Unanimity` (100%). |
+| `juror_profiles` | `[]JurorProfile` | yes | Configuration for each juror instance (model, system prompt, evaluation criteria). |
+| `max_rounds` | `integer` | no | Maximum deliberation rounds. Each round after the first feeds peer arguments back to jurors. Default 1. |
+
+### Deliberate Response (Verdict)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `outcome` | `string` | The verdict outcome (e.g., `favour_refiner`, `favour_reviewer`, `promote`, `retire`, `demote`, `escalate`). |
+| `justifications` | `[]Justification` | Per-juror justification with reasoning and confidence score. |
+| `confidence` | `float` | Aggregate confidence score. |
+| `rounds_used` | `integer` | Number of deliberation rounds executed. |
+| `hung` | `bool` | Whether the jury failed to reach consensus within `max_rounds`. |
+
+### Jury Error Responses
+
+| Condition | Error | gRPC Status |
+|-----------|-------|-------------|
+| Jury service unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
+| Hung jury (consensus not reached) | `JURY_HUNG` | `FAILED_PRECONDITION` |
+| Juror inference failure | `JURY_INFERENCE_FAILED` | `INTERNAL` |
+
+---
+
+## Clerk API
+
+The [Clerk](../02-flow/04-system-services.md#clerk) is a core service that handles law drafting and codification. It is consumed by the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) and [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) through Sidecar-mediated calls.
+
+### Drafting Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `DraftLaw` | `verdict`, `goal`, `tier`, `applies_to` | `law` | Drafts a prose representation, discovers and dispatches to all ready Codification Services in parallel, assembles the final law with prose + successfully returned formal representations, and calls `WriteLaw` on the Librarian to persist. |
+
+### DraftLaw Request
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `verdict` | `Verdict` | yes | The Jury's verdict providing the decision basis for the law. |
+| `goal` | `string` | yes | Plain-language statement of what the law enforces, stops, or ensures. |
+| `tier` | `integer` | yes | Law tier (typically `2` for Rulings). |
+| `applies_to` | `[]string` | no | Governed artefact names. Empty for global. |
+
+### DraftLaw Response
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `law_id` | `string` | Identifier of the persisted law. |
+| `version_hash` | `string` | Content hash of the new law version. |
+| `representations` | `[]Representation` | The representations successfully assembled (prose + any codified). |
+| `codification_failures` | `[]string` | Codification Service names that failed or were unavailable (logged, not blocking). |
+
+### Clerk Error Responses
+
+| Condition | Error | gRPC Status |
+|-----------|-------|-------------|
+| Clerk service unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
+| Librarian WriteLaw failed | `LAW_WRITE_FAILED` | `INTERNAL` |
+
+---
+
+## QueuePeer API
+
+The QueuePeer gRPC service enables inter-pod communication within the [Federated Queue Mesh](../04-sdk/08-sdk-hitl.md#federated-queue-mesh). It is used by HITL node replicas for scatter-gather reads and proxy writes.
+
+### Peer Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `GetLocalQueue` | `filter` | `items[]` | Returns queue items from the local shard's `queue.db`. Used by scatter-gather reads. |
+| `ClaimItem` | `item_id` | `item` or error | Claims a `waiting` item on the local shard. Returns `409` if already claimed. |
+| `ReleaseItem` | `item_id` | `item` | Releases a `claimed` item back to `waiting` on the local shard. |
+| `CompleteItem` | `item_id`, `decision` | `acknowledged` | Marks an item as `decided` on the local shard with the provided decision. |
+
+### QueuePeer Error Responses
+
+| Condition | Error | gRPC Status |
+|-----------|-------|-------------|
+| Peer unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
+| Item not found on this shard | `QUEUE_ITEM_NOT_FOUND` | `NOT_FOUND` |
+| Item already claimed | `QUEUE_ITEM_ALREADY_CLAIMED` | `ALREADY_EXISTS` |
 
 ---
 

@@ -84,18 +84,18 @@ Exit status is explicit and configuration-bound. A node is an exit node only whe
 
 Exit status is not inferred from empty outputs.
 
-In the reference arrangement, [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) is the only user-configured exit node for governed artefact processing. [Assay](./03-nodes-external.md#assay-as-standard-component) is runtime-mandated and uses dedicated hearing entry/exit bindings for review-hearing processing.
+In the reference arrangement, [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) is the only user-configured exit node for governed artefact processing. The [Tribunal](./03-nodes-external.md#the-judiciary--standard-subsystem) is runtime-mandated and uses dedicated hearing entry/exit bindings for review-hearing processing.
 
-## Assay Hearing Bindings
+## Tribunal Hearing Bindings
 
-Review-hearing processing is configured through mandatory Assay bindings:
+Review-hearing processing is configured through mandatory Tribunal bindings:
 
-- Assay is entry-bound for hearing admission.
-- Assay is exit-bound for hearing completion.
+- The Tribunal is entry-bound for hearing admission.
+- The Tribunal is exit-bound for hearing completion.
 - Hearing Workitems are standard Workitems carrying a `law-reference` artefact — the law ID under review.
 - Hearing processing does not introduce `WorkitemType`, `spec.type`, or type-gated admission.
 
-Deadlock-escalated governed-work Workitems remain separate from hearing Workitems and continue through Sort after Assay adjudication in the reference arrangement.
+Deadlock-escalated governed-work Workitems remain separate from hearing Workitems and continue through Sort after Arbiter adjudication in the reference arrangement.
 
 ## Import Node Semantics
 
@@ -117,7 +117,7 @@ Entry and exit contracts are defined per governed artefact name. Each name maps 
 
 Contract usage by boundary:
 
-- Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `importNode` (cross-flow import), and for Assay's hearing entry binding (review-hearing processing).
+- Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `importNode` (cross-flow import), and for the Tribunal's hearing entry binding (review-hearing processing).
 - Exit contracts gate `complete()` for exit-bound nodes.
 
 If multiple artefacts with a required governed artefact name exist, all must satisfy that name's requirements.
@@ -180,7 +180,7 @@ Reference arrangement expectations:
 
 Custom topologies can split, merge, or replace these responsibilities. Runtime semantics remain invariant-driven.
 
-[Assay](./03-nodes-external.md) is always present as a standard runtime component and cannot be omitted.
+The [Judiciary](./03-nodes-external.md#the-judiciary--standard-subsystem) is always present as a standard runtime subsystem and cannot be omitted.
 
 ## Support Service Configuration
 
@@ -192,7 +192,7 @@ Flow Support Services are declared via dedicated CRDs that define provided capab
 - Support Services must implement standard `healthz`/`readyz` endpoints.
 - Nodes consume Support Service capabilities via `USE:support/<service>/<capability>` grants on their FoundryNode `capabilities` field, following the same capability-grant pattern as stamp and law capabilities.
 
-Assay discovers available Codification Services from Flow configuration. Other nodes discover Support Services through their granted capabilities.
+The Clerk discovers available Codification Services from Flow configuration. Other nodes discover Support Services through their granted capabilities.
 
 Support Service CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 
@@ -250,7 +250,7 @@ All Flow configurations must preserve these invariants:
 3. Exit validation is Operator-enforced against per-name stamp requirements.
 4. Stamp names are conventions; system semantics are capability and contract driven.
 5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
-6. Assay is mandatory and bounded to resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
+6. The Judiciary is mandatory and bounded to resolve Tier 1-2, propose Tier 3, appeal Tier 4-5.
 7. Cross-flow verifiability and local authority remain distinct and topology-dependent.
 8. Export scope is constrained by bound exit-contract governed artefact name entries.
 9. Workitem admission is constrained by bound entry-contract governed artefact name entries.

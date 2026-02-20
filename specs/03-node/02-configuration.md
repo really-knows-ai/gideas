@@ -67,11 +67,11 @@ Entry and exit bindings connect a node to named [contracts](../02-flow/05-config
 
 - Local Workitem creation admits through the creating node's entry binding.
 - Cross-flow import admits through the configured [`importNode`](../02-flow/05-configuration.md#import-node-semantics), which must be entry-bound.
-- Review-hearing admission uses [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component)'s hearing entry binding.
+- Review-hearing admission uses the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem)'s hearing entry binding.
 
 **Exit binding** (`exit`) connects a node to a named exit contract and grants `complete()` eligibility. Only exit-bound nodes may call `complete()` — non-exit nodes that attempt completion receive a synchronous error. When an exit node calls `complete()`, the [Operator validates](../02-flow/01-operator.md#exit-contract-enforcement) the Workitem against the bound exit contract. The node does not choose which contract to validate.
 
-In the [reference arrangement](../01-concepts/02-foundry-cycle.md), Sort is the user-configured exit node for governed artefact processing, and Assay is runtime-mandated as the exit node for review-hearing processing. Custom topologies can bind any node as an exit node provided the contract and capability configuration is consistent.
+In the [reference arrangement](../01-concepts/02-foundry-cycle.md), Sort is the user-configured exit node for governed artefact processing, and the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is runtime-mandated as the exit node for review-hearing processing. Custom topologies can bind any node as an exit node provided the contract and capability configuration is consistent.
 
 Contract references must resolve. A node binding that references a contract name not defined in the FoundryFlow CRD is rejected at configuration admission.
 

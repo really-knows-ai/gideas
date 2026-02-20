@@ -241,7 +241,7 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 				{Name: "quench", Target: "quench"},
 				{Name: "appraise", Target: "appraise"},
 				{Name: "refine", Target: "refine"},
-				{Name: "assay", Target: "assay"},
+				{Name: "arbiter", Target: "arbiter"},
 			},
 			Capabilities: []string{
 				"READ:flow",

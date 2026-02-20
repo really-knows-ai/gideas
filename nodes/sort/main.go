@@ -17,7 +17,7 @@
 //
 //	nodeOrder:          comma-separated node names defining stamp-checking
 //	                    order. e.g. "quench,appraise". Required.
-//	deadlockThreshold:  feedback depth at which items are escalated to Assay.
+//	deadlockThreshold:  feedback depth at which items are escalated to the Arbiter.
 //	                    Default: 3.
 package main
 
@@ -39,9 +39,9 @@ const (
 	// unset or invalid in the config file.
 	defaultDeadlockThreshold int32 = 3
 
-	// outputAssay is the well-known output name for escalation to Assay.
-	// This is the one convention Sort retains — the assay output name.
-	outputAssay = "assay"
+	// outputArbiter is the well-known output name for escalation to the Arbiter.
+	// This is the one convention Sort retains — the arbiter output name.
+	outputArbiter = "arbiter"
 
 	// outputRefine is the well-known output name for routing to refinement.
 	outputRefine = "refine"
@@ -54,7 +54,7 @@ type sortConfig struct {
 	NodeOrder string `yaml:"nodeOrder"`
 
 	// DeadlockThreshold is the feedback depth at which items are escalated
-	// to Assay. Zero or negative values fall back to defaultDeadlockThreshold.
+	// to the Arbiter. Zero or negative values fall back to defaultDeadlockThreshold.
 	DeadlockThreshold int32 `yaml:"deadlockThreshold"`
 }
 
@@ -129,11 +129,11 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 			return err
 		}
 		if deadlocked {
-			slog.Info("sort: routing to assay (deadlocked feedback)",
+			slog.Info("sort: routing to arbiter (deadlocked feedback)",
 				"artefact_kind", kind)
-			_, err = client.RouteToOutput(ctx, outputAssay)
+			_, err = client.RouteToOutput(ctx, outputArbiter)
 			if err != nil {
-				return fmt.Errorf("sort: route to assay: %w", err)
+				return fmt.Errorf("sort: route to arbiter: %w", err)
 			}
 			return nil
 		}
@@ -293,7 +293,7 @@ func hasUnresolvedFeedbackFrom(
 // specified artefact kind.
 //
 // For each non-resolved feedback item:
-//   - If already DEADLOCKED → return true (route to Assay, no state change).
+//   - If already DEADLOCKED → return true (route to Arbiter, no state change).
 //   - If depth >= threshold → call DeadlockFeedback(), return true.
 //
 // First match wins — one routing decision per Sort invocation.
@@ -310,7 +310,7 @@ func checkDeadlock(
 			continue
 		}
 
-		// Already deadlocked from a prior cycle — route to Assay.
+		// Already deadlocked from a prior cycle — route to Arbiter.
 		if item.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
 			slog.Info("sort: found deadlocked feedback item",
 				"feedback_id", item.GetId())

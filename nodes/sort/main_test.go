@@ -133,7 +133,7 @@ func TestSort_StampsApprovalAndCompletes(t *testing.T) {
 // Deadlock detection tests
 // ---------------------------------------------------------------------------
 
-func TestSort_RoutesToAssay_DepthExceedsThreshold_WontFix(t *testing.T) {
+func TestSort_RoutesToArbiter_DepthExceedsThreshold_WontFix(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -149,12 +149,12 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_WontFix(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-1" {
 		t.Fatalf("expected fb-1 deadlocked, got %v", spy.DeadlockedIDs)
 	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAssay {
-		t.Fatalf("expected route to assay, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
 	}
 }
 
-func TestSort_RoutesToAssay_DepthExceedsThreshold_Rejected(t *testing.T) {
+func TestSort_RoutesToArbiter_DepthExceedsThreshold_Rejected(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -170,12 +170,12 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_Rejected(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-2" {
 		t.Fatalf("expected fb-2 deadlocked, got %v", spy.DeadlockedIDs)
 	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAssay {
-		t.Fatalf("expected route to assay, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
 	}
 }
 
-func TestSort_RoutesToAssay_DepthExceedsThreshold_New(t *testing.T) {
+func TestSort_RoutesToArbiter_DepthExceedsThreshold_New(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -191,12 +191,12 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_New(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-3" {
 		t.Fatalf("expected fb-3 deadlocked, got %v", spy.DeadlockedIDs)
 	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAssay {
-		t.Fatalf("expected route to assay, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
 	}
 }
 
-func TestSort_RoutesToAssay_DepthExceedsThreshold_Actioned(t *testing.T) {
+func TestSort_RoutesToArbiter_DepthExceedsThreshold_Actioned(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -212,12 +212,12 @@ func TestSort_RoutesToAssay_DepthExceedsThreshold_Actioned(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-4" {
 		t.Fatalf("expected fb-4 deadlocked, got %v", spy.DeadlockedIDs)
 	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAssay {
-		t.Fatalf("expected route to assay, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
 	}
 }
 
-func TestSort_RoutesToAssay_AlreadyDeadlocked(t *testing.T) {
+func TestSort_RoutesToArbiter_AlreadyDeadlocked(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -234,8 +234,8 @@ func TestSort_RoutesToAssay_AlreadyDeadlocked(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no DeadlockFeedback calls, got %v", spy.DeadlockedIDs)
 	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAssay {
-		t.Fatalf("expected route to assay, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -254,12 +254,12 @@ func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	// Should route to assay (deadlock), not refine.
+	// Should route to arbiter (deadlock), not refine.
 	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-hot" {
 		t.Fatalf("expected fb-hot deadlocked, got %v", spy.DeadlockedIDs)
 	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAssay {
-		t.Fatalf("expected route to assay, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -544,13 +544,13 @@ func TestSort_DeadlockedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	}
 	client := setupSortTest(t, spy)
 
-	// This test will hit the deadlock check first and route to assay.
+	// This test will hit the deadlock check first and route to arbiter.
 	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAssay {
-		t.Fatalf("expected route to assay, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
 	}
 }
 

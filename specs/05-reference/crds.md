@@ -10,7 +10,7 @@ All custom resources use API group `flow.gideas.io/v1` and are namespace-scoped.
 | [FoundryNode](#foundrynode) | Flow Architect / Operator | Node-local behaviour, capabilities, routing outputs, contract bindings |
 | [Workitem](#workitem) | Operator (sole mutator) | Workitem lifecycle state, assignment, routing |
 | [GovernedArtefact](#governedartefact) | Flow Architect | Governed artefact registration and stamp vocabulary |
-| [Law](#law) | Librarian / Assay / nodes | Law goal, representations, tier, lifecycle metadata |
+| [Law](#law) | Librarian / Judiciary / nodes | Law goal, representations, tier, lifecycle metadata |
 | [Treaty](#treaty) | Flow Architect | Directed cross-flow trust policy |
 | [FlowSupportService](#flowsupportservice) | Flow Architect / Operator | Support Service capability declaration and infrastructure |
 | [CodificationService](#codificationservice) | Flow Architect / Operator | Codification Service: output format declaration and deployment |
@@ -31,11 +31,28 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 | `governancePolicy` | `GovernancePolicy` | yes | Governance thresholds and timers. See [governance policy](#governance-policy). |
 | `crossFlow` | `CrossFlowConfig` | no | Cross-flow trust and naturalisation settings. See [cross-flow configuration](#cross-flow-configuration). |
 
-### Assay
+### The Judiciary
 
-Assay is a runtime-mandated component — the Operator provisions it without requiring a separate FoundryNode CRD. Its hearing entry and exit contracts are fixed by the runtime: the entry contract requires a single `law-reference` artefact; the exit contract requires it to still be present. Its capabilities are fixed by the runtime (not configurable by the Flow Architect) and include `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, feedback resolution, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages Assay's `USE:support/<name>/encode` capability for each).
+The Judiciary is a runtime-mandated subsystem — the Operator provisions it without requiring separate FoundryNode CRDs. It comprises three nodes and two core services:
 
-The Operator also provisions a `law-reference` GovernedArtefact alongside Assay. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID.
+**Judiciary Nodes:**
+
+| Node | Role | Provisioning |
+|---|---|---|
+| **Arbiter** | Resolves deadlocked feedback disputes. Invokes the Jury for deliberation, uses the Clerk to draft rulings, resolves feedback with `linkedRuling`, routes back to Sort. | Operator-provisioned |
+| **Tribunal** | Conducts review hearings on laws. Receives hearing Workitems, invokes the Jury for deliberation, uses the Clerk (promote) or routes to Advocate (escalate). | Operator-provisioned |
+| **Advocate** | Human escalation point. Receives hung jury escalations and Tier 3+ proposals. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `QUEUE:server` capability. | Operator-provisioned |
+
+**Judiciary Services:**
+
+| Service | Role | Provisioning |
+|---|---|---|
+| **Jury** | Multi-agent deliberation engine. Runs parallel FoundryAgent instances, collects votes, applies consensus strategy, returns structured verdict. | Operator-provisioned |
+| **Clerk** | Law drafting and codification coordination. Drafts prose, dispatches to Codification Services, assembles law, calls WriteLaw. | Operator-provisioned |
+
+The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, feedback resolution capabilities, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages their `USE:support/<name>/encode` capability for each). The Advocate holds `QUEUE:server` and `spec.storage` for HITL queue persistence, and is deployed as a StatefulSet with a Headless Service.
+
+The Operator also provisions a `law-reference` GovernedArtefact alongside the Tribunal. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The Tribunal's hearing entry contract requires a single `law-reference` artefact; its hearing exit contract requires it to still be present.
 
 ### Governance Policy
 
@@ -58,7 +75,7 @@ The Operator also provisions a `law-reference` GovernedArtefact alongside Assay.
 | `tier4` | `float` | no | Accumulated friction threshold for Tier 4 laws (State Constitutions). |
 | `tier5` | `float` | no | Accumulated friction threshold for Tier 5 laws (Federal Accords). |
 
-When a law's accumulated friction crosses its tier's configured threshold, the Librarian triggers a review hearing. For Tiers 1-2, Assay adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
+When a law's accumulated friction crosses its tier's configured threshold, the Librarian triggers a review hearing. For Tiers 1-2, the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
 
 ### ReviewTTLs
 
@@ -70,7 +87,7 @@ When a law's accumulated friction crosses its tier's configured threshold, the L
 | `tier4` | `duration` | no | Time-to-live for Tier 4 laws (State Constitutions). |
 | `tier5` | `duration` | no | Time-to-live for Tier 5 laws (Federal Accords). |
 
-When a law's age exceeds its tier's configured TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Like friction thresholds, Tiers 1-2 hearings are adjudicated by Assay; Tiers 3-5 produce petitions.
+When a law's age exceeds its tier's configured TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Like friction thresholds, Tiers 1-2 hearings are adjudicated by the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem); Tiers 3-5 produce petitions.
 
 ### RetentionPolicy
 
@@ -159,6 +176,7 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:feedback/resolved` | Transition feedback to `resolved` (`AcceptFix`, `AcceptRefusal`). |
 | `WRITE:feedback/deadlocked` | Transition feedback to `deadlocked` (`DeadlockFeedback`). |
 | `USE:support/<service>/<capability>` | Invoke a specific Flow Support Service capability. |
+| `QUEUE:server` | Enables HITL queue features: persistent queue, REST API, Federated Queue Mesh. Requires `spec.storage`. Triggers StatefulSet deployment and Headless Service creation. See [SDK HITL](../04-sdk/08-sdk-hitl.md). |
 
 Some operations (such as `ListArtefacts` — listing artefacts associated with the assigned Workitem via the Archivist) are implicitly available to all nodes by virtue of the assignment scope and do not require explicit capability grants.
 
@@ -206,7 +224,7 @@ The GovernedArtefact CRD registers a governed artefact and declares its stamp vo
 
 ## Law
 
-The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by Assay (with `WRITE:law/tier2`); Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Governance Flow and Federation. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
+The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by the [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) via the [Clerk](../02-flow/04-system-services.md#clerk) (with `WRITE:law/tier2`); Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Governance Flow and Federation. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
 
 ### `spec`
 
@@ -304,7 +322,7 @@ The CodificationService shares the base deployment fields of FlowSupportService 
 | `availableReplicas` | `integer` | Current number of ready replicas. |
 | `conditions` | `[]Condition` | Standard Kubernetes conditions. |
 
-The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator internally manages Assay's `USE:support/<name>/encode` capability for each registered CodificationService instance. Other nodes that need direct access to a Codification Service require an explicit `USE:support/<name>/encode` grant on their FoundryNode `capabilities`.
+The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator internally manages the Judiciary's `USE:support/<name>/encode` capability for each registered CodificationService instance. Other nodes that need direct access to a Codification Service require an explicit `USE:support/<name>/encode` grant on their FoundryNode `capabilities`.
 
 ---
 

@@ -225,7 +225,7 @@ func (s *LibrarianServer) GetLaw(ctx context.Context, req *flowv1.GetLawRequest)
 	return &flowv1.GetLawResponse{Law: storeLawToProto(law)}, nil
 }
 
-// WriteLaw persists a law (Tier 2+ Ruling minted by Assay, or higher-tier
+// WriteLaw persists a law (Tier 2+ Ruling minted by the Clerk, or higher-tier
 // by administrator).
 func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequest) (*flowv1.WriteLawResponse, error) {
 	protoLaw := req.GetLaw()
