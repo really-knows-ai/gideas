@@ -12,7 +12,7 @@ The system service that manages artefact lifecycle data — version history, pas
 
 ### Advocate
 
-The Judiciary's HITL (Human-in-the-Loop) node. Receives hung jury escalations from the Arbiter, Tier 3 proposals from the Tribunal for human ratification, and Tier 4-5 appeals. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `QUEUE:server` capability to expose a persistent queue for human decision. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [SDK HITL](../04-sdk/08-sdk-hitl.md).
+The Judiciary's HITL (Human-in-the-Loop) node. Receives hung jury escalations from the Arbiter, Tier 3 proposals from the Tribunal for human ratification, and Tier 4-5 appeals. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability to expose a persistent queue for human decision. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [SDK HITL](../04-sdk/08-sdk-hitl.md).
 
 ### Assay
 
@@ -168,7 +168,7 @@ The collection of stamps on a specific artefact version. Tracks which governance
 
 ### QueueManager
 
-The SDK interface for HITL queue operations. Provides `Enqueue`, `GetGlobalQueue`, `GetLocalQueue`, `Claim`, `Release`, `Complete`, and `GetPeers` methods. Available to nodes with the `QUEUE:server` capability. Handles local persistence, peer communication, and proxy routing transparently via the Federated Queue Mesh. Detail: [SDK HITL](../04-sdk/08-sdk-hitl.md#queuemanager-interface).
+The SDK interface for HITL queue operations. Provides `Enqueue`, `GetGlobalQueue`, `GetLocalQueue`, `Claim`, `Release`, `Complete`, and `GetPeers` methods. Available to nodes with the `USE:queue/server` capability. Handles local persistence, peer communication, and proxy routing transparently via the Federated Queue Mesh. Detail: [SDK HITL](../04-sdk/08-sdk-hitl.md#queuemanager-interface).
 
 ### stamp
 

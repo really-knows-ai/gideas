@@ -41,7 +41,7 @@ The Judiciary is a runtime-mandated subsystem — the Operator provisions it wit
 |---|---|---|
 | **Arbiter** | Resolves deadlocked feedback disputes. Invokes the Jury for deliberation, uses the Clerk to draft rulings, resolves feedback with `linkedRuling`, routes back to Sort. | Operator-provisioned |
 | **Tribunal** | Conducts review hearings on laws. Receives hearing Workitems, invokes the Jury for deliberation, uses the Clerk (promote) or routes to Advocate (escalate). | Operator-provisioned |
-| **Advocate** | Human escalation point. Receives hung jury escalations and Tier 3+ proposals. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `QUEUE:server` capability. | Operator-provisioned |
+| **Advocate** | Human escalation point. Receives hung jury escalations and Tier 3+ proposals. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. | Operator-provisioned |
 
 **Judiciary Services:**
 
@@ -50,7 +50,7 @@ The Judiciary is a runtime-mandated subsystem — the Operator provisions it wit
 | **Jury** | Multi-agent deliberation engine. Runs parallel FoundryAgent instances, collects votes, applies consensus strategy, returns structured verdict. | Operator-provisioned |
 | **Clerk** | Law drafting and codification coordination. Drafts prose, dispatches to Codification Services, assembles law, calls WriteLaw. | Operator-provisioned |
 
-The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, feedback resolution capabilities, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages their `USE:support/<name>/encode` capability for each). The Advocate holds `QUEUE:server` and `spec.storage` for HITL queue persistence, and is deployed as a StatefulSet with a Headless Service.
+The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, feedback resolution capabilities, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages their `USE:support/<name>/encode` capability for each). The Advocate holds `USE:queue/server` and `spec.storage` for HITL queue persistence, and is deployed as a StatefulSet with a Headless Service.
 
 The Operator also provisions a `law-reference` GovernedArtefact alongside the Tribunal. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The Tribunal's hearing entry contract requires a single `law-reference` artefact; its hearing exit contract requires it to still be present.
 
@@ -176,7 +176,7 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:feedback/resolved` | Transition feedback to `resolved` (`AcceptFix`, `AcceptRefusal`). |
 | `WRITE:feedback/deadlocked` | Transition feedback to `deadlocked` (`DeadlockFeedback`). |
 | `USE:support/<service>/<capability>` | Invoke a specific Flow Support Service capability. |
-| `QUEUE:server` | Enables HITL queue features: persistent queue, REST API, Federated Queue Mesh. Requires `spec.storage`. Triggers StatefulSet deployment and Headless Service creation. See [SDK HITL](../04-sdk/08-sdk-hitl.md). |
+| `USE:queue/server` | Enables HITL queue features: persistent queue, REST API, Federated Queue Mesh. Requires `spec.storage`. Triggers StatefulSet deployment and Headless Service creation. See [SDK HITL](../04-sdk/08-sdk-hitl.md). |
 
 Some operations (such as `ListArtefacts` — listing artefacts associated with the assigned Workitem via the Archivist) are implicitly available to all nodes by virtue of the assignment scope and do not require explicit capability grants.
 

@@ -70,7 +70,7 @@ Human decision points are modelled as explicit runtime states within the assignm
 
 Escalation patterns (manager/director chains, delegation, pool-based routing) are built on top of the basic HITL pattern by composing queue management with routing logic.
 
-The SDK provides the [`QUEUE:server` capability and HITL pattern](../04-sdk/08-sdk-hitl.md) — a managed infrastructure for queue persistence, REST API exposure, federated queue mesh, and escalation chains. The Judiciary's [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is a concrete HITL node using this SDK pattern. User-defined HITL nodes compose the same SDK pattern with domain-specific logic.
+The SDK provides the [`USE:queue/server` capability and HITL pattern](../04-sdk/08-sdk-hitl.md) — a managed infrastructure for queue persistence, REST API exposure, federated queue mesh, and escalation chains. The Judiciary's [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is a concrete HITL node using this SDK pattern. User-defined HITL nodes compose the same SDK pattern with domain-specific logic.
 
 ## Long-Running and Agent Patterns
 

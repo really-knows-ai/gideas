@@ -62,7 +62,7 @@ The SDK is organised into domain-specific surfaces, each backed by a runtime ser
 | [Workitems](./05-sdk-workitems.md) | Read state, create locally, inspect | Operator (via Sidecar) | Assignment-scoped access, snapshot semantics |
 | [Telemetry](./06-sdk-telemetry.md) | Friction, metrics, traces, custom events | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
 | [Agent](./07-sdk-agent.md) | Managed inference wrapper | Operator + Flow Monitor (via Sidecar) | Automatic heartbeat, schema validation, atomic cost accounting |
-| [HITL](./08-sdk-hitl.md) | Queue management, REST API, Federated Queue Mesh | Node-local (queue) + Operator (via Sidecar) | `QUEUE:server` capability, persistent queue, escalation |
+| [HITL](./08-sdk-hitl.md) | Queue management, REST API, Federated Queue Mesh | Node-local (queue) + Operator (via Sidecar) | `USE:queue/server` capability, persistent queue, escalation |
 
 All surfaces share the same trust model: SDK calls transit the Sidecar, which authenticates and proxies to the authoritative service.
 

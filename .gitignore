@@ -12,6 +12,7 @@ bin/
 PLAN.md
 *_PLAN.md
 TODO.md
+REVIEW.md
 
 # Compiled Go binaries (built in-place by `go build`)
 /appraise
