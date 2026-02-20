@@ -35,6 +35,14 @@ func (f *fakeSidecarClient) AssignWork(_ context.Context, req *flowv1gen.AssignW
 	return f.returnAck, nil
 }
 
+func (f *fakeSidecarClient) PauseTimer(_ context.Context, _ *flowv1gen.PauseTimerRequest, _ ...grpc.CallOption) (*flowv1gen.PauseTimerResponse, error) {
+	return nil, fmt.Errorf("not implemented in test")
+}
+
+func (f *fakeSidecarClient) ResumeTimer(_ context.Context, _ *flowv1gen.ResumeTimerRequest, _ ...grpc.CallOption) (*flowv1gen.ResumeTimerResponse, error) {
+	return nil, fmt.Errorf("not implemented in test")
+}
+
 // newDialFunc returns a DialFunc that always returns the given fake client.
 func newDialFunc(fakeClient *fakeSidecarClient) func(string) (flowv1gen.SidecarServiceClient, func() error, error) {
 	return func(addr string) (flowv1gen.SidecarServiceClient, func() error, error) {

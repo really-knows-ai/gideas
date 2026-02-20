@@ -6,7 +6,7 @@ The Judiciary's [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standa
 
 ## HITL Runtime Role
 
-An HITL node parks a Workitem in a persistent queue while awaiting a human decision. The Workitem remains assigned to the HITL node — it holds assignment ownership and maintains [heartbeat](../03-node/01-sidecar.md#heartbeat-and-activity-tracking) signals to prevent inactivity timeout. When a human provides a decision through the REST API, the node records the decision on governed artefacts through [SDK operations](./02-sdk-artefacts.md), then returns a routing instruction based on the decision.
+An HITL node parks a Workitem in a persistent queue while awaiting a human decision. The Workitem remains assigned to the HITL node — it holds assignment ownership and [pauses the Sidecar's inactivity timer](../03-node/01-sidecar.md#heartbeat-and-activity-tracking) to prevent timeout while the item is queued. When a human provides a decision through the REST API, the item is removed from the queue, the node resumes the timer, records the decision on governed artefacts through [SDK operations](./02-sdk-artefacts.md), then returns a routing instruction based on the decision.
 
 ```mermaid
 sequenceDiagram
@@ -19,11 +19,12 @@ sequenceDiagram
     OP->>SC: Assign Workitem
     SC->>ND: Invoke handler
     ND->>DB: Enqueue (status: waiting)
-    ND->>SC: Heartbeat loop
+    ND->>SC: PauseTimer
     HU->>ND: POST /queue/{id}/claim
     ND->>DB: Update status: claimed
     HU->>ND: POST /queue/{id}/decide
-    ND->>DB: Update status: decided
+    ND->>DB: Delete item from queue
+    ND->>SC: ResumeTimer
     ND->>SC: SDK operations (record decision on artefacts)
     ND-->>SC: route_to_output (based on decision)
     SC-->>OP: Routing instruction
@@ -53,7 +54,7 @@ The SDK provides a `QueueManager` interface for nodes using `USE:queue/server`. 
 ```go
 type QueueManager interface {
     // Enqueue adds an item to the local shard's queue.
-    Enqueue(ctx context.Context, workitemID string, payload interface{}) (string, error)
+    Enqueue(ctx context.Context, workitemID string) error
 
     // GetGlobalQueue returns items from all shards via scatter-gather.
     GetGlobalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error)
@@ -61,14 +62,17 @@ type QueueManager interface {
     // GetLocalQueue returns items from this shard only.
     GetLocalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error)
 
+    // GetItem returns a single queue item by Workitem ID. Checks local shard first, then fans out to peers.
+    GetItem(ctx context.Context, workitemID string) (*QueueItem, error)
+
     // Claim marks an item as claimed. Proxied to the owning shard if remote.
-    Claim(ctx context.Context, itemID string) (*QueueItem, error)
+    Claim(ctx context.Context, workitemID string) (*QueueItem, error)
 
     // Release unclaims an item. Proxied to the owning shard if remote.
-    Release(ctx context.Context, itemID string) (*QueueItem, error)
+    Release(ctx context.Context, workitemID string) (*QueueItem, error)
 
-    // Complete marks an item as decided with a result. Proxied to the owning shard if remote.
-    Complete(ctx context.Context, itemID string, result interface{}) error
+    // Complete removes a claimed item from the queue (decision made). Proxied to the owning shard if remote.
+    Complete(ctx context.Context, workitemID string) error
 
     // GetPeers returns currently connected peer shard IDs.
     GetPeers(ctx context.Context) ([]string, error)
@@ -76,6 +80,8 @@ type QueueManager interface {
 ```
 
 The QueueManager is available to the node handler when the `USE:queue/server` capability is declared. All queue operations are node-local — the [Sidecar](../03-node/01-sidecar.md) does not mediate the QueueManager or the human-facing REST API. The Sidecar mediates the SDK calls the node makes after receiving human input (artefact writes, feedback transitions, routing instructions).
+
+The queue stores no domain-specific data. Artefact content, feedback, and decisions are managed through existing SDK surfaces (Archivist, Librarian). The queue tracks parking state only — which Workitems are waiting and whether someone has claimed one for review.
 
 ## REST API Contract
 
@@ -87,36 +93,63 @@ HITL nodes expose a standard HTTP API for external tooling (dashboards, CLIs, mo
 |---|---|---|
 | `GET` | `/queue` | List items in the queue. Supports `status` filter (`waiting`, `claimed`), `limit`, and `offset` for pagination. Scatter-gather across all mesh peers. |
 | `GET` | `/queue/{id}` | Get full detail for a specific queue item by Workitem ID. |
-| `POST` | `/queue/{id}/claim` | Claim an item for review. Transitions `waiting` to `claimed`. Returns `409 Conflict` if already claimed. |
-| `POST` | `/queue/{id}/decide` | Submit a decision. Transitions `claimed` to `decided`. The request body is domain-specific (output channel name, decision payload). |
+| `POST` | `/queue/{id}/claim` | Claim an item for review. Transitions `waiting` to `claimed`. |
+| `POST` | `/queue/{id}/decide` | Signal that a decision has been made. Removes the item from the queue. No request body — the decision is expressed through SDK operations (artefact writes, feedback, routing). |
 | `POST` | `/queue/{id}/release` | Release a claimed item back to `waiting`. |
+
+### Error Responses
+
+All error responses use a standard JSON envelope with a stable error code from the [Error Catalogue](../05-reference/error-catalogue.md):
+
+```json
+{
+  "error": {
+    "code": "QUEUE_ITEM_NOT_FOUND",
+    "message": "queue item not found"
+  }
+}
+```
+
+| Endpoint | HTTP Status | Error Code | Condition |
+|---|---|---|---|
+| `GET /queue/{id}` | 404 | `QUEUE_ITEM_NOT_FOUND` | Item does not exist on any shard. |
+| `POST /queue/{id}/claim` | 404 | `QUEUE_ITEM_NOT_FOUND` | Item does not exist. |
+| `POST /queue/{id}/claim` | 409 | `QUEUE_ITEM_ALREADY_CLAIMED` | Item is already in `claimed` state. |
+| `POST /queue/{id}/claim` | 503 | `QUEUE_UNAVAILABLE` | Owning shard is unreachable. |
+| `POST /queue/{id}/decide` | 404 | `QUEUE_ITEM_NOT_FOUND` | Item does not exist. |
+| `POST /queue/{id}/decide` | 409 | `QUEUE_ITEM_INVALID_STATE` | Item is not in `claimed` state. |
+| `POST /queue/{id}/decide` | 503 | `QUEUE_UNAVAILABLE` | Owning shard is unreachable. |
+| `POST /queue/{id}/release` | 404 | `QUEUE_ITEM_NOT_FOUND` | Item does not exist. |
+| `POST /queue/{id}/release` | 409 | `QUEUE_ITEM_INVALID_STATE` | Item is not in `claimed` state. |
+| `POST /queue/{id}/release` | 503 | `QUEUE_UNAVAILABLE` | Owning shard is unreachable. |
 
 ### State Engine Model
 
-The HITL node is a mechanical queue that tracks status transitions. Human identity, assignment mapping, and audit trail correlation are the Dashboard/BFF's responsibility.
+The HITL node is a mechanical queue that tracks parking state. Human identity, assignment mapping, and audit trail correlation are the Dashboard/BFF's responsibility. The queue stores no domain-specific data — artefact content, feedback, and decisions flow through existing SDK surfaces.
 
 ```mermaid
 stateDiagram-v2
     [*] --> waiting : Enqueue
     waiting --> claimed : POST /claim
     claimed --> waiting : POST /release
-    claimed --> decided : POST /decide
-    decided --> [*]
+    claimed --> [*] : POST /decide (deletes item)
 ```
 
 | State | Description |
 |---|---|
 | `waiting` | Item is in the queue, available for claim. |
 | `claimed` | Item is locked for review. The Dashboard tracks who claimed it. |
-| `decided` | Human decision has been submitted. The handler unblocks and routes. |
+
+When a decision is made (`POST /decide`), the item is deleted from the queue. The handler unblocks and performs SDK operations (artefact writes, feedback transitions, routing instructions) based on the human's decision.
 
 The separation of concerns is strict:
 
 | Concern | Owner |
 |---|---|
-| Queue state (`waiting`, `claimed`, `decided`) | HITL Node (QueueManager, SQLite) |
+| Queue parking state (`waiting`, `claimed`, removal) | HITL Node (QueueManager, SQLite) |
 | Human identity (who claimed, who decided) | Dashboard/BFF (external IdP) |
 | Assignment mapping (which human has which item) | Dashboard/BFF (its own database) |
+| Domain-specific decisions (artefact content, feedback) | SDK operations (Archivist, Librarian) |
 | Audit trail with identity correlation | Dashboard/BFF |
 
 ## Persistence
@@ -127,23 +160,18 @@ The SDK manages a SQLite database at `{storage.mountPath}/queue.db`. The schema 
 
 ```sql
 CREATE TABLE hitl_queue (
-    id TEXT PRIMARY KEY,
+    workitem_id TEXT PRIMARY KEY,
     shard_id TEXT NOT NULL,
-    workitem_id TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
     status TEXT DEFAULT 'waiting',
     enqueued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    claimed_at TIMESTAMP,
-    decided_at TIMESTAMP,
-    decision_json TEXT
+    claimed_at TIMESTAMP
 );
 
 CREATE INDEX idx_status ON hitl_queue(status);
 CREATE INDEX idx_shard ON hitl_queue(shard_id);
-CREATE INDEX idx_workitem ON hitl_queue(workitem_id);
 ```
 
-The `shard_id` is the pod's stable identity from the StatefulSet (e.g., `review-queue-0`). REST API clients operate on Workitem IDs — shard identity is a transport-layer detail handled by the QueueManager.
+The `shard_id` is the pod's stable identity from the StatefulSet (e.g., `review-queue-0`). A Workitem is queued exactly once — the Workitem ID serves as the primary key. REST API clients operate on Workitem IDs — shard identity is a transport-layer detail handled by the QueueManager. The queue stores no domain-specific payload or decision data — these flow through existing SDK surfaces (Archivist for artefacts, feedback; Librarian for laws). When a decision is made, the row is deleted.
 
 ## Federated Queue Mesh
 
@@ -224,7 +252,7 @@ The mesh uses a `QueuePeer` gRPC service for inter-pod communication:
 | `GetLocalQueue` | Returns items from the local shard's `queue.db`. |
 | `ClaimItem` | Claims an item on the local shard. |
 | `ReleaseItem` | Releases a claimed item on the local shard. |
-| `CompleteItem` | Marks an item as decided on the local shard. |
+| `CompleteItem` | Deletes a claimed item from the local shard (decision made). |
 
 Telemetry events for peer lifecycle:
 
@@ -253,30 +281,32 @@ The Sidecar does not mediate the human-facing REST API. The Sidecar mediates the
 
 ## Escalation Patterns
 
-HITL escalation is built on routing topology — it uses the same `timeout` output mechanism as any other node. No special escalation infrastructure exists.
+HITL escalation is node-driven. The HITL node pauses the Sidecar's inactivity timer while items are queued and manages its own escalation deadlines. When a queue item exceeds the node's configured escalation deadline without a human decision, the node resumes the timer and routes the Workitem to the configured escalation output. No special escalation infrastructure exists — escalation uses standard routing outputs.
 
-### Timeout Escalation Chain
+### Deadline Escalation Chain
 
-Each HITL node in an escalation chain has a `timeout` output pointing to the next level:
+Each HITL node in an escalation chain has a `timeout` output pointing to the next level and a configured escalation deadline:
 
 ```text
-manager-review (timeout: 2h)
+manager-review (escalation_deadline: 2h)
   ├── timeout -> director-review
   ├── approved -> next-stage
   └── rejected -> ...
 
-director-review (timeout: 4h)
+director-review (escalation_deadline: 4h)
   ├── timeout -> vp-review
   ├── approved -> next-stage
   └── rejected -> ...
 
-vp-review (timeout: 8h)
+vp-review (escalation_deadline: 8h)
   ├── approved -> next-stage
   └── rejected -> ...
   (no timeout output — terminal escalation)
 ```
 
-Each escalation resets the deadline to the new node's configured [timeout](../03-node/02-configuration.md#timeout-and-execution-budget). The final node in the chain has no `timeout` output — the Workitem fails on timeout if no decision is made.
+Each escalation resets the deadline to the new node's configured value. The final node in the chain has no `timeout` output — the Workitem fails if no decision is made within the deadline.
+
+The escalation deadline is node-managed, not Sidecar-managed. The HITL node's handler polls the queue for items that have exceeded their deadline and routes them to the `timeout` output. The Sidecar's inactivity timer is paused for the duration — it does not participate in escalation timing.
 
 ### Delegate Pattern
 
@@ -288,7 +318,6 @@ kind: FoundryNode
 metadata:
   name: alice-review
 spec:
-  timeout: "8h"
   outputs:
     - name: "approved"
       target: "next-stage"
@@ -305,7 +334,6 @@ kind: FoundryNode
 metadata:
   name: assigned-reviewer
 spec:
-  timeout: "4h"
   outputs:
     - name: "approved"
       target: "next-stage"
@@ -322,17 +350,15 @@ HITL nodes emit telemetry events through [`RecordTelemetry()`](./06-sdk-telemetr
 | `foundry.hitl.enqueued` | Workitem enters queue | `workitemId`, `nodeId`, `queueDepth` |
 | `foundry.hitl.claimed` | Item claimed | `workitemId`, `waitTime` |
 | `foundry.hitl.released` | Item unclaimed | `workitemId`, `claimDuration` |
-| `foundry.hitl.decided` | Decision submitted | `workitemId`, `output`, `decisionTime` |
-| `foundry.hitl.escalated` | Timeout triggered escalation | `workitemId`, `fromNode`, `toNode`, `waitTime` |
-| `foundry.hitl.timeout_failed` | Timeout with no escalation route | `workitemId`, `nodeId`, `waitTime` |
+| `foundry.hitl.decided` | Item removed from queue (decision made) | `workitemId`, `decisionTime` |
 | `foundry.hitl.peer_joined` | New mesh peer discovered | `peerId`, `peerCount` |
 | `foundry.hitl.peer_left` | Mesh peer connection lost | `peerId`, `peerCount`, `reason` |
 
-Telemetry tracks status transitions. The consuming layer (Dashboard/BFF) correlates decisions with human identity.
+Telemetry tracks status transitions. The consuming layer (Dashboard/BFF) correlates decisions with human identity. Deadline-driven routing (e.g., routing to a `timeout` output when a queue item exceeds its escalation deadline) is standard routing — it is observable through existing routing telemetry and does not require HITL-specific escalation events.
 
 ### Friction
 
-HITL escalation emits friction at magnitude `depth ^ (rounds * 2)`, where `depth` is the feedback item's history depth and `rounds` is the number of deliberation rounds that preceded escalation. This makes human intervention the most expensive governance signal, creating a natural pressure to resolve disputes through automated deliberation before reaching human review.
+HITL involvement emits friction at magnitude `depth ^ (rounds * 2)`, where `depth` is the feedback item's history depth and `rounds` is the number of deliberation rounds that preceded human review. This makes human intervention the most expensive governance signal, creating a natural pressure to resolve disputes through automated deliberation before reaching human review. Friction emission is the responsibility of the node that routes to the HITL node (e.g., the Arbiter), not the HITL node itself.
 
 ## Advocate: Judiciary HITL Node
 
@@ -351,9 +377,10 @@ For Tier 3 proposals, the human ratifies or rejects the proposed law change. For
 2. `USE:queue/server` triggers StatefulSet deployment and Headless Service creation.
 3. The HITL REST API is node-owned. The Sidecar does not mediate human-facing traffic.
 4. The Sidecar mediates SDK calls the node makes after receiving human input.
-5. The HITL node is a state engine — it tracks queue status transitions. Human identity and assignment mapping are Dashboard/BFF responsibilities.
-6. Persistence uses SDK-managed SQLite at `{storage.mountPath}/queue.db`.
-7. The Federated Queue Mesh provides scatter-gather reads and proxy writes across scaled replicas with no centralised database.
-8. Partial mesh availability is preferred over total outage.
-9. Escalation chains use standard `timeout` outputs — no special escalation infrastructure.
-10. Telemetry events are emitted for all queue state transitions and mesh peer lifecycle changes.
+5. The HITL node is a parking lot — it tracks which Workitems are waiting and whether someone has claimed one. Human identity, assignment mapping, and domain-specific decisions are external concerns.
+6. The queue stores no domain-specific data. Artefact content, feedback, and decisions flow through existing SDK surfaces.
+7. Persistence uses SDK-managed SQLite at `{storage.mountPath}/queue.db`. Decision = deletion from queue.
+8. The Federated Queue Mesh provides scatter-gather reads and proxy writes across scaled replicas with no centralised database.
+9. Partial mesh availability is preferred over total outage.
+10. Escalation is node-driven via queue deadline checks and standard routing outputs — no special escalation infrastructure.
+11. Telemetry events are emitted for queue state transitions and mesh peer lifecycle changes.

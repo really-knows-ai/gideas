@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+// QueuePeerService is the inter-pod gRPC service for the Federated Queue Mesh.
+// Each HITL node replica runs a QueuePeerService server alongside its
+// NodeService on the same gRPC port. Peers discover each other via headless
+// service DNS and use this service for scatter-gather reads and proxy writes.
+//
+// See: specs/04-sdk/08-sdk-hitl.md
+service QueuePeerService {
+  // Returns queue items from this shard's local queue.db.
+  // Used by scatter-gather reads to collect items across all shards.
+  rpc GetLocalQueue(GetLocalQueueRequest) returns (GetLocalQueueResponse);
+
+  // Claims a waiting item on the local shard.
+  // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist on this shard.
+  // Returns QUEUE_ITEM_ALREADY_CLAIMED if the item is already claimed.
+  rpc ClaimItem(ClaimItemRequest) returns (ClaimItemResponse);
+
+  // Releases a claimed item back to waiting on the local shard.
+  // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+  // Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+  rpc ReleaseItem(ReleaseItemRequest) returns (ReleaseItemResponse);
+
+  // Deletes a claimed item from the local shard (decision made).
+  // The queue is a parking lot — decided items are removed, not marked.
+  // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+  // Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+  rpc CompleteItem(CompleteItemRequest) returns (CompleteItemResponse);
+}
+
+// GetLocalQueueRequest specifies filtering and pagination for queue list queries.
+message GetLocalQueueRequest {
+  // Filter by status: "waiting", "claimed", or empty for all.
+  string status = 1;
+  // Maximum number of items to return. 0 = default 100.
+  int32 limit = 2;
+  // Pagination offset.
+  int32 offset = 3;
+}
+
+// GetLocalQueueResponse is a paginated list of queue items.
+message GetLocalQueueResponse {
+  repeated QueueItem items = 1;
+  int32 total = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+// QueueItem represents a Workitem parked in the HITL queue.
+// The Workitem ID is the primary key — there is a 1:1 mapping between
+// queue entries and Workitems. The queue stores parking state only;
+// domain-specific data lives in artefacts/feedback via the Archivist.
+message QueueItem {
+  // Primary key — the Workitem this queue entry tracks.
+  string workitem_id = 1;
+  // Owning pod identity (e.g., "review-queue-0").
+  string shard_id = 2;
+  // Queue status: "waiting" or "claimed".
+  string status = 3;
+  // RFC3339 timestamp when the item was enqueued.
+  string enqueued_at = 4;
+  // RFC3339 timestamp when the item was claimed. Empty if not claimed.
+  string claimed_at = 5;
+}
+
+message ClaimItemRequest {
+  string workitem_id = 1;
+}
+
+message ClaimItemResponse {
+  QueueItem item = 1;
+}
+
+message ReleaseItemRequest {
+  string workitem_id = 1;
+}
+
+message ReleaseItemResponse {
+  QueueItem item = 1;
+}
+
+message CompleteItemRequest {
+  string workitem_id = 1;
+}
+
+message CompleteItemResponse {
+  bool acknowledged = 1;
+}

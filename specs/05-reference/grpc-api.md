@@ -229,6 +229,8 @@ The Sidecar catches invalid requests early. The owning service makes authoritati
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `Heartbeat` | `workitem_id` | `acknowledged` | Resets the Sidecar's inactivity timer. Implicit heartbeats occur on every SDK call; this method provides an explicit signal for long-running computation. The Sidecar propagates activity timestamps to the Operator, throttled to avoid excessive writes. |
+| `PauseTimer` | `workitem_id` | `acknowledged` | Suspends the Sidecar's inactivity timer for the specified Workitem assignment. The timer remains suspended until `ResumeTimer` is called or the handler returns. Used by [HITL nodes](../04-sdk/08-sdk-hitl.md) to park Workitems while awaiting external input without triggering timeout. The Workitem remains in `Running` state — this is a Sidecar-local mechanism. |
+| `ResumeTimer` | `workitem_id` | `acknowledged` | Resumes the Sidecar's inactivity timer after a `PauseTimer` call. The timer resets to the full timeout window on resume. |
 
 ### Sidecar Error Responses
 
@@ -325,15 +327,16 @@ The QueuePeer gRPC service enables inter-pod communication within the [Federated
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `GetLocalQueue` | `filter` | `items[]` | Returns queue items from the local shard's `queue.db`. Used by scatter-gather reads. |
-| `ClaimItem` | `item_id` | `item` or error | Claims a `waiting` item on the local shard. Returns `409` if already claimed. |
-| `ReleaseItem` | `item_id` | `item` | Releases a `claimed` item back to `waiting` on the local shard. |
-| `CompleteItem` | `item_id`, `decision` | `acknowledged` | Marks an item as `decided` on the local shard with the provided decision. |
+| `ClaimItem` | `workitem_id` | `item` or error | Claims a `waiting` item on the local shard. Returns `QUEUE_ITEM_ALREADY_CLAIMED` if already claimed. |
+| `ReleaseItem` | `workitem_id` | `item` | Releases a `claimed` item back to `waiting` on the local shard. |
+| `CompleteItem` | `workitem_id` | `acknowledged` | Deletes a `claimed` item from the local shard (decision made). |
 
 ### QueuePeer Error Responses
 
 | Condition | Error | gRPC Status |
 |-----------|-------|-------------|
-| Peer unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
+| Owning shard unavailable | `QUEUE_UNAVAILABLE` | `UNAVAILABLE` |
+| Invalid state transition (e.g., release or complete on a non-claimed item) | `QUEUE_ITEM_INVALID_STATE` | `FAILED_PRECONDITION` |
 | Item not found on this shard | `QUEUE_ITEM_NOT_FOUND` | `NOT_FOUND` |
 | Item already claimed | `QUEUE_ITEM_ALREADY_CLAIMED` | `ALREADY_EXISTS` |
 
