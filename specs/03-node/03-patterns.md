@@ -44,15 +44,15 @@ Gate nodes evaluate governance state and route accordingly. In the [reference ar
 
 The reference arrangement gate decision order:
 
-1. **Deadlocked feedback** (dispute depth exceeds configured threshold) — route toward [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) for judicial review. Deadlock must be checked first because deadlocked items route to Assay, not to refinement.
+1. **Deadlocked feedback** (dispute depth exceeds configured threshold) — route toward the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) for judicial review. Deadlock must be checked first because deadlocked items route to the Arbiter, not to refinement.
 2. **Stamp evaluation in configured order** — for each stamp phase (ordered by `NODE_ORDER` env var), check whether the stamp is present. If the stamp is present but the providing node left unresolved feedback (identified via `FeedbackItem.source`), route to refinement. If the stamp is missing, route to the providing node via the gate's configured output.
 3. **All governance satisfied** (all stamps present, no per-phase unresolved feedback) — apply any stamps the gate itself can provide (discovered from its own `STAMP` capabilities and the exit contract), call `complete()`, and let the Operator validate the bound [exit contract](../02-flow/05-configuration.md#exit-node-semantics).
 
 Gate nodes discover stamp-to-node mappings at runtime via [`GetFlowTopology`](../05-reference/grpc-api.md#node-facing-methods-via-sidecar) (requires `READ:flow` capability). The response provides all peer nodes with their capabilities and outputs, enabling the gate to build provider maps dynamically. The `NODE_ORDER` environment variable (set via FoundryNode CRD container env) controls the evaluation order of stamp phases, giving the Flow Architect explicit sequencing control without coupling gate logic to specific topologies.
 
-Deadlocked feedback is a special case of unresolved feedback. Gate implementations must check for deadlock before evaluating stamp phases, because deadlocked items route to Assay rather than to refinement. The SDK provides feedback-depth queries and `FeedbackItem.source` to support per-phase feedback attribution.
+Deadlocked feedback is a special case of unresolved feedback. Gate implementations must check for deadlock before evaluating stamp phases, because deadlocked items route to the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) rather than to refinement. The SDK provides feedback-depth queries and `FeedbackItem.source` to support per-phase feedback attribution.
 
-**Contempt Guard awareness.** After Assay renders a verdict with a linked ruling, that verdict is binding. The [Contempt Guard](../01-concepts/03-data-model.md#contempt-guard) enforced by the Archivist prevents nodes from refusing feedback that carries a linked ruling. Gate implementations that route based on feedback state must account for the possibility that a previously deadlocked item has been resolved by Assay and now carries a binding ruling — the normal refinement path applies, and the refining node cannot mark it `wont_fix`.
+**Contempt Guard awareness.** After the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) renders a verdict with a linked ruling, that verdict is binding. The [Contempt Guard](../01-concepts/03-data-model.md#contempt-guard) enforced by the Archivist prevents nodes from refusing feedback that carries a linked ruling. Gate implementations that route based on feedback state must account for the possibility that a previously deadlocked item has been resolved by the Arbiter and now carries a binding ruling — the normal refinement path applies, and the refining node cannot mark it `wont_fix`.
 
 **Stamp-provider discovery is configuration-driven.** Gate nodes do not hardcode which node provides which stamp. They call [`GetFlowTopology`](../05-reference/grpc-api.md#node-facing-methods-via-sidecar) (via `READ:flow` capability) to discover stamp-to-node mappings from node capabilities at runtime. This preserves topology freedom — a Flow Architect can reassign stamp authority without modifying gate logic.
 
@@ -70,6 +70,8 @@ Human decision points are modelled as explicit runtime states within the assignm
 
 Escalation patterns (manager/director chains, delegation, pool-based routing) are built on top of the basic HITL pattern by composing queue management with routing logic.
 
+The SDK provides the [`QUEUE:server` capability and HITL pattern](../04-sdk/08-sdk-hitl.md) — a managed infrastructure for queue persistence, REST API exposure, federated queue mesh, and escalation chains. The Judiciary's [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is a concrete HITL node using this SDK pattern. User-defined HITL nodes compose the same SDK pattern with domain-specific logic.
+
 ## Long-Running and Agent Patterns
 
 Nodes that perform extended computation — multi-step LLM chains, complex reasoning, long-running inference — must maintain [activity signals](./01-sidecar.md#heartbeat-and-activity-tracking) within the configured timeout window.
@@ -80,7 +82,7 @@ The [FoundryAgent](../04-sdk/07-sdk-agent.md) pattern is the recommended approac
 2. **Schema-First Output Validation** — structured output is validated against a declared schema before it can be written to artefacts or returned as a routing decision. Malformed inference output fails fast and never enters the governed pipeline.
 3. **Atomic Cost Accounting** — each inference step emits a `foundry.cost.llm` telemetry event immediately via `RecordTelemetry`. If the handler is interrupted, the accounting record reflects actual work performed, not batched totals.
 
-The [SDK Agent](../04-sdk/07-sdk-agent.md) document is the authoritative contract for FoundryAgent behaviour, including handler structure, output validation semantics, and the relationship to Assay's jury mechanism.
+The [SDK Agent](../04-sdk/07-sdk-agent.md) document is the authoritative contract for FoundryAgent behaviour, including handler structure, output validation semantics, and the relationship to the [Jury](../02-flow/04-system-services.md#jury) service's deliberation mechanism.
 
 **Manual alternative.** Nodes that perform inference without FoundryAgent must manage these concerns explicitly:
 

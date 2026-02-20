@@ -153,32 +153,33 @@ Retired laws are removed from active CRD state while preserving full history in 
 Integration-time law conflict handling and runtime dispute escalation are distinct paths.
 
 - **Integration-time conflicts** are handled by the law integration protocol above.
-- **Runtime conflicts** discovered during Workitem processing route to [Assay](./03-nodes-external.md) for judicial review.
+- **Runtime conflicts** discovered during Workitem processing route to the [Judiciary](./03-nodes-external.md#the-judiciary--standard-subsystem) for judicial review.
 
-Assay authority remains bounded across boundaries:
+Judiciary authority remains bounded across boundaries:
 
-- Resolve at Tier 2 by minting rulings.
-- Propose Tier 3 changes for human ratification.
-- Appeal Tier 4-5 conflicts through governance channels.
+- Resolve at Tier 2 by minting rulings via the Clerk.
+- Propose Tier 3 changes for human ratification via the Advocate.
+- Appeal Tier 4-5 conflicts through the Advocate to governance channels.
 
 Runtime conflict outcomes are tier-pair specific and align with [Governance](../01-concepts/04-governance.md):
 
 | Conflict tier combination | Runtime outcome |
 |---------------------------|-----------------|
-| Tier 1 vs Tier 2 | Assay deliberates with supremacy weighting, mints a new Tier 2 Ruling that consolidates the surviving position, and retires the originals. |
-| Tier 1 vs Tier 1, Tier 2 vs Tier 2 | Assay mints a new Tier 2 Ruling that consolidates the conflicting laws and retires the originals. |
-| Tier 1-2 vs Tier 3 | The lower-tier law retires. If the conflict exposes ambiguity or a gap in Tier 3, Assay petitions HITL with a proposed clarification or amendment. |
-| Tier 3 vs Tier 3 | Assay drafts a consolidated Tier 3 proposal and petitions HITL. If rejected, the conflict persists — every future Workitem that hits the same conflict generates another HITL escalation and more friction until the humans act. |
-| Tier 4 or Tier 5 involvement | Assay files an appeal through the Librarian to Governance Flow authorities. Tier 4 can be repealed or amended by Governance Flow; Tier 5 appeals escalate to the relevant Federal authority. |
+| Tier 1 vs Tier 2 | The Arbiter deliberates via the Jury with supremacy weighting, mints a new Tier 2 Ruling via the Clerk that consolidates the surviving position, and retires the originals. |
+| Tier 1 vs Tier 1, Tier 2 vs Tier 2 | The Arbiter mints a new Tier 2 Ruling via the Clerk that consolidates the conflicting laws and retires the originals. |
+| Tier 1-2 vs Tier 3 | The lower-tier law retires. If the conflict exposes ambiguity or a gap in Tier 3, the Arbiter routes to the Advocate to petition HITL with a proposed clarification or amendment. |
+| Tier 3 vs Tier 3 | The Arbiter drafts a consolidated Tier 3 proposal and routes to the Advocate to petition HITL. If rejected, the conflict persists — every future Workitem that hits the same conflict generates another HITL escalation and more friction until the humans act. |
+| Tier 4 or Tier 5 involvement | The Advocate files an appeal through the Librarian to Governance Flow authorities. Tier 4 can be repealed or amended by Governance Flow; Tier 5 appeals escalate to the relevant Federal authority. |
 
-Supremacy heavily informs outcomes, but does not bypass Assay deliberation in runtime disputes.
+Supremacy heavily informs outcomes, but does not bypass Judiciary deliberation in runtime disputes.
 
 ```mermaid
 flowchart TD
-    RT["Runtime conflict"] --> AS["Assay"]
-    AS -->|"Tier 1-2"| RS["Resolve locally"]
-    AS -->|"Tier 3"| PR["Propose to HITL"]
-    AS -->|"Tier 4-5"| AP["Appeal to Governance Flow"]
+    RT["Runtime conflict"] --> ARB["Arbiter"]
+    ARB -->|"Tier 1-2"| RS["Resolve locally<br/>via Clerk"]
+    ARB -->|"Tier 3+"| ADV["Advocate"]
+    ADV -->|"Tier 3"| PR["Propose to HITL"]
+    ADV -->|"Tier 4-5"| AP["Appeal to Governance Flow"]
 
     LI["Incoming higher-tier law"] --> IP["Integration protocol"]
     IP --> T12["Retire conflicting Tier 1-2"]
@@ -212,7 +213,7 @@ All cross-flow deployments preserve these invariants:
 8. Empty exit contracts export metadata only.
 9. Higher-tier law integration uses semantic search plus LLM contradiction evaluation.
 10. Tier 3 integration conflicts support grace-period semantics before forced integration.
-11. Runtime law conflicts route through Assay judicial process.
+11. Runtime law conflicts route through the Judiciary's judicial process.
 12. Cross-flow events are audit-visible and retry-safe.
 13. Successful imports create `Pending` Workitems and first-schedule them to configured `importNode` when capacity allows.
 

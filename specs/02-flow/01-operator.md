@@ -60,16 +60,16 @@ Workitem admission into a Flow lifecycle is entry-contract bound.
 
 - Local creation admission (nodes originating new Workitems) is enforced against the admitting node's bound entry contract.
 - Cross-flow import admission (receiving Flow) is enforced against configured `importNode` and its bound entry contract.
-- Review-hearing admission is enforced against Assay's bound hearing entry contract.
+- Review-hearing admission is enforced against the Tribunal's bound hearing entry contract.
 - Entry and exit contracts share the same validation shape: per governed artefact name, required stamp-name list, empty list as presence-only, empty contract as no artefact requirements.
 
 Admission outcomes:
 
-1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses configured `importNode`; review-hearing admission uses Assay hearing entry binding).
+1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses configured `importNode`; review-hearing admission uses Tribunal hearing entry binding).
 2. Validate Workitem artefacts against per-name requirements.
 3. On success, admit Workitem into `Pending` lifecycle state.
 4. For cross-flow import, schedule first assignment to configured `importNode` when capacity allows.
-5. For review-hearing admission, schedule first assignment to Assay when capacity allows.
+5. For review-hearing admission, schedule first assignment to the Tribunal when capacity allows.
 6. On failure, reject admission with structured contract-validation errors.
 
 ## Routing and Guard Evaluation
@@ -97,7 +97,7 @@ Completion-specific rules:
 
 - `complete` is accepted only from an exit node bound to a named exit contract.
 - Non-exit completion attempts are rejected.
-- In the reference arrangement, governed artefact completion is user-configured through Sort, while review-hearing completion is runtime-mandated through Assay's hearing exit binding.
+- In the reference arrangement, governed artefact completion is user-configured through Sort, while review-hearing completion is runtime-mandated through the Tribunal's hearing exit binding.
 
 Sort behaviour for missing stamps is configuration-driven. Sort discovers missing-stamp provider targets from Flow configuration and capability grants. The Operator validates route legality and guard compliance before transition application.
 
@@ -155,7 +155,7 @@ Operator failure behaviour is deterministic and explicit.
 - **Invalid route**: unresolvable or invalid instruction -> reject transition and apply failure policy.
 - **Node unavailability**: no eligible node or repeated assignment failure -> retry according to policy, then fail when budget is exhausted.
 
-Thrash and governance deadlock are separate mechanisms. Thrash is infrastructure loop failure; governance deadlock routes to [Assay](./03-nodes-external.md#assay-as-standard-component) through Sort logic.
+Thrash and governance deadlock are separate mechanisms. Thrash is infrastructure loop failure; governance deadlock routes to the [Arbiter](./03-nodes-external.md#the-judiciary--standard-subsystem) through Sort logic.
 
 Recovery policy can tune retry budgets and backoff strategy, but it cannot violate lifecycle invariants or exit enforcement rules.
 

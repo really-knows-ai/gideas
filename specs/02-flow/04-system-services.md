@@ -76,7 +76,7 @@ Integration outcomes follow tiered supremacy semantics:
 
 The Librarian owns all hearing trigger emission for law lifecycle events. It monitors two signals and triggers review hearings by requesting Workitem creation through the Operator.
 
-**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a law's friction crosses its tier's configured threshold, the Librarian triggers a review hearing. Thresholds are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [configuration](./05-configuration.md). For Tiers 1-2, Assay adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
+**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a law's friction crosses its tier's configured threshold, the Librarian triggers a review hearing. Thresholds are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [configuration](./05-configuration.md). For Tiers 1-2, the [Tribunal](./03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the [Advocate](./03-nodes-external.md#the-judiciary--standard-subsystem).
 
 **Review-TTL-expiry triggers:** When a law's age exceeds its tier's configured review TTL (from the FoundryFlow's [governance policy](./05-configuration.md)), the Librarian triggers a review hearing. The law remains active during the hearing — expiry is the trigger, not a demotion event.
 
@@ -136,9 +136,66 @@ Three SDK operations emit friction transparently as mandatory side effects:
 
 - [`Cite(law_ids)`](../04-sdk/03-sdk-legal.md#citation) emits a fixed low magnitude attributed to the cited laws.
 - [`AddFeedback`](../04-sdk/04-sdk-feedback.md#feedback-friction) emits magnitude equal to the feedback depth for that item (1, 2, ..., n).
-- [Assay jury rounds](../01-concepts/04-governance.md#judicial-review-assay) emit magnitude = depth ^ (round + 1) per round; HITL escalation emits depth ^ (rounds * 2).
+- [Jury deliberation rounds](../01-concepts/04-governance.md#judicial-review) emit magnitude = depth ^ (round + 1) per round; HITL escalation via the Advocate emits depth ^ (rounds * 2).
 
 These mandatory emissions ensure that governance cost is captured regardless of node implementation choices. Nodes may also call `AddFriction` directly for domain-specific costs.
+
+## Jury
+
+The Jury is the multi-agent deliberation engine for the [Judiciary](./03-nodes-external.md#the-judiciary--standard-subsystem). It is an Operator-provisioned core service — always present in every Flow.
+
+The Jury runs parallel [FoundryAgent](../04-sdk/07-sdk-agent.md) instances as jurors, collects structured votes, applies a configured consensus strategy, and returns a verdict. It is consumed by the [Arbiter](./03-nodes-external.md#the-judiciary--standard-subsystem) (for deadlock disputes) and the [Tribunal](./03-nodes-external.md#the-judiciary--standard-subsystem) (for review hearings) through Sidecar-mediated gRPC calls.
+
+### Deliberation Protocol
+
+The Jury exposes a `Deliberate` gRPC method. The calling node (Arbiter or Tribunal) constructs a case file containing the dispute evidence and submits it to the Jury. The Jury then:
+
+1. Selects juror profiles from the configured jury policy (based on dispute severity).
+2. Constructs per-juror FoundryAgent instances with the appropriate system prompts and output schemas.
+3. Executes all jurors in parallel — each produces an independent structured verdict.
+4. Counts votes against the configured consensus strategy (`SimpleMajority`, `SuperMajority`, or `Unanimity`).
+5. If consensus is reached, synthesises the justifications into a verdict and returns it.
+6. If hung, and rounds remain under `maxRounds`, re-executes with peer arguments from the prior round.
+7. If hung after `maxRounds`, returns a hung-jury verdict — the calling node escalates to the Advocate.
+
+### Cost Accounting
+
+Per-juror cost accounting is automatic. Each juror's FoundryAgent instance emits `foundry.cost.llm` telemetry events with attribution tags: `juror`, `round`, `severity`, `feedback_id`. The Jury also emits friction per round with magnitude = depth ^ (round + 1), attributed to the disputed laws.
+
+### Configuration
+
+Jury policy is configured in the FoundryFlow governance policy:
+
+- `consensusStrategy`: `SimpleMajority`, `SuperMajority`, or `Unanimity` (configurable per severity).
+- `maxRounds`: maximum deliberation rounds before hung-jury escalation.
+- `juryProfiles`: named juror configurations (system prompt, model) matched to dispute severity.
+
+## Clerk
+
+The Clerk is the law drafting and codification service for the [Judiciary](./03-nodes-external.md#the-judiciary--standard-subsystem). It is an Operator-provisioned core service — always present in every Flow.
+
+The Clerk handles the mechanical process of creating, codifying, and persisting laws. It is consumed by the Arbiter and Tribunal (after a verdict is reached) and separates judicial decision-making (what the law says) from legal drafting (how the law is recorded).
+
+### Drafting and Codification
+
+When a Promote verdict is rendered, the Clerk:
+
+1. Drafts the Ruling's prose representation from the verdict justification — the goal and its `text/markdown` content.
+2. Discovers registered [Codification Services](#codification-services) through its Sidecar and probes readiness.
+3. Dispatches `Encode` requests in parallel to all ready Codification Services.
+4. Collects results — failed or unavailable services are logged and their representations omitted.
+5. Assembles the law as a single object: prose representation plus all successfully returned formal representations.
+6. Persists the law via `WriteLaw` to the Librarian.
+
+For Retire or Demote verdicts, the Clerk calls `RetireLaw` or modifies the law's tier via the Librarian without codification.
+
+### Capabilities
+
+The Clerk's capabilities are fixed by the runtime:
+
+- `WRITE:law/tier2` — persist Tier 2 Rulings on behalf of the Arbiter and Tribunal.
+- `READ:law` — query existing laws for context during drafting.
+- `USE:support/<name>/encode` — access to all registered CodificationService instances (Operator-managed).
 
 ## Flow Support Services
 
@@ -146,7 +203,7 @@ Flow Support Services are optional containers deployed by the Flow Architect tha
 
 Support Services do not process Workitems — they expose gRPC capabilities consumed by nodes and system services through different access paths:
 
-- Nodes consume Support Services through [Sidecar](../03-node/01-sidecar.md) mediation, preserving the platform invariant that nodes never call services directly. Assay is a node and accesses Support Services through its Sidecar.
+- Nodes consume Support Services through [Sidecar](../03-node/01-sidecar.md) mediation, preserving the platform invariant that nodes never call services directly. Judiciary nodes (Arbiter, Tribunal, Advocate) are nodes and access Support Services through their Sidecars.
 - System services discover and consume Support Services via the Flow configuration and direct service-to-service gRPC.
 
 Support Services are declared via their own CRD, which specifies:
@@ -169,44 +226,44 @@ CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 
 Codification Services are a Flow Support Service specialisation for governance hardening. They translate a [law](../01-concepts/03-data-model.md#laws)'s natural-language goal into formal representations — formal logic, executable validators, policy-as-code — increasing enforceability without changing the law's intent.
 
-Each Codification Service is declared via its own [CodificationService CRD](../05-reference/crds.md#codificationservice), which specifies exactly one `outputFormat` — the MIME type of the representation the service produces (e.g., `application/smt-lib` for formal logic, `application/rego` for policy-as-code). The Operator manages CodificationService deployments identically to other Support Services and internally manages Assay's access to each registered instance.
+Each Codification Service is declared via its own [CodificationService CRD](../05-reference/crds.md#codificationservice), which specifies exactly one `outputFormat` — the MIME type of the representation the service produces (e.g., `application/smt-lib` for formal logic, `application/rego` for policy-as-code). The Operator manages CodificationService deployments identically to other Support Services and internally manages the Clerk's access to each registered instance.
 
 Codification Services expose a single `Encode` [gRPC method](../05-reference/grpc-api.md#codification-service-api) consumed during law promotion:
 
-1. Assay renders a Promote verdict and drafts the Ruling's prose representation — the goal and its `text/markdown` content.
-2. Assay discovers registered CodificationService instances through its Sidecar (the [Operator](./01-operator.md) internally manages Assay's `USE:support/<name>/encode` capability for each registered instance) and probes each service's `readyz` endpoint via its Sidecar. Services that are not ready are skipped.
-3. Assay dispatches `Encode` requests in parallel to all ready Codification Services via its Sidecar. Each request carries the full law object (goal, existing representations, tier, metadata). Each service returns a single typed representation in its declared `outputFormat`.
-4. Assay collects the results. If a Codification Service fails, Assay logs the failure and omits that representation — the Ruling proceeds without it.
-5. Assay assembles the Tier 2 Ruling as a single law object: the prose representation plus all successfully returned formal representations.
+1. The Clerk receives a law-drafting request from the Arbiter or Tribunal (after a Promote verdict) and drafts the Ruling's prose representation — the goal and its `text/markdown` content.
+2. The Clerk discovers registered CodificationService instances through its Sidecar (the [Operator](./01-operator.md) internally manages the Clerk's `USE:support/<name>/encode` capability for each registered instance) and probes each service's `readyz` endpoint. Services that are not ready are skipped.
+3. The Clerk dispatches `Encode` requests in parallel to all ready Codification Services. Each request carries the full law object (goal, existing representations, tier, metadata). Each service returns a single typed representation in its declared `outputFormat`.
+4. The Clerk collects the results. If a Codification Service fails, the Clerk logs the failure and omits that representation — the Ruling proceeds without it.
+5. The Clerk assembles the Tier 2 Ruling as a single law object: the prose representation plus all successfully returned formal representations.
 
-Assay decides what the ruling says; each Codification Service translates the goal into its declared formal syntax.
+The Judiciary (via the Clerk) decides what the ruling says; each Codification Service translates the goal into its declared formal syntax.
 
-Flow Architects deploy zero or more CodificationService CRDs. Each declares exactly one `outputFormat` — `codify-smt` outputs `application/smt-lib`, `codify-rego` outputs `application/rego`. If no CodificationService is registered or none are ready at the time of promotion, Assay mints rulings with prose representations only — governance hardening through codification is optional, not a platform requirement.
+Flow Architects deploy zero or more CodificationService CRDs. Each declares exactly one `outputFormat` — `codify-smt` outputs `application/smt-lib`, `codify-rego` outputs `application/rego`. If no CodificationService is registered or none are ready at the time of promotion, the Clerk mints rulings with prose representations only — governance hardening through codification is optional, not a platform requirement.
 
 ```mermaid
 sequenceDiagram
-    participant AS as Assay
+    participant CL as Clerk
     participant SC as Sidecar
     participant CSa as Codification Service A
     participant CSb as Codification Service B
     participant LB as Librarian
 
-    AS->>AS: draft prose representation
-    AS->>SC: discover registered CodificationServices
-    SC-->>AS: [CSa (ready), CSb (ready)]
+    CL->>CL: draft prose representation
+    CL->>SC: discover registered CodificationServices
+    SC-->>CL: [CSa (ready), CSb (ready)]
     par codify in parallel
-        AS->>SC: Encode(law) -> CSa
+        CL->>SC: Encode(law) -> CSa
         SC->>CSa: Encode
         CSa-->>SC: representation (application/smt-lib)
-        SC-->>AS: representation
+        SC-->>CL: representation
     and
-        AS->>SC: Encode(law) -> CSb
+        CL->>SC: Encode(law) -> CSb
         SC->>CSb: Encode
         CSb-->>SC: representation (application/rego)
-        SC-->>AS: representation
+        SC-->>CL: representation
     end
-    AS->>AS: assemble Ruling<br/>(prose + formal representations)
-    AS->>SC: WriteLaw
+    CL->>CL: assemble Ruling<br/>(prose + formal representations)
+    CL->>SC: WriteLaw
     SC->>LB: persist Tier 2 Ruling
 ```
 
@@ -216,57 +273,62 @@ Hearings are implemented as a protocol across services and runtime actors, not a
 
 Hearing processing uses standard Workitems with explicit governed artefacts and contract bindings. No hearing-specific Workitem subtype or `spec.type` discriminator is introduced.
 
-Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact provisioned by the Operator alongside Assay with an empty stamp vocabulary. The `law-reference` artefact's content is a plain-text string containing the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. Assay retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
+Hearing Workitems carry a single `law-reference` artefact — a built-in GovernedArtefact provisioned by the Operator alongside the Tribunal with an empty stamp vocabulary. The `law-reference` artefact's content is a plain-text string containing the law ID under review. The hearing entry contract requires this artefact to be present; the hearing exit contract requires only that it is still present. The Tribunal retrieves all other context — law content, friction data, citation history — from the Librarian and Flow Monitor via standard SDK calls.
 
-Assay writes its verdict directly to the Library as a Tier 2 Ruling (for Tier 1 promotion) or petitions HITL via the Librarian (for Tier 2 promotion to Tier 3). Assay's output is a law in the Library, not a stamp on an artefact. After Assay calls `complete()`, the Operator notifies the Librarian via `ApplyLifecycleAction` to apply the verdict outcome (promote, retire, or demote) to the original law.
+The Tribunal writes its verdict through the [Clerk](#clerk): directly to the Library as a Tier 2 Ruling (for Tier 1 promotion), or routes to the [Advocate](./03-nodes-external.md#the-judiciary--standard-subsystem) for HITL petition (for Tier 2 promotion to Tier 3). The Judiciary's output is a law in the Library, not a stamp on an artefact. After the Tribunal calls `complete()`, the Operator notifies the Librarian via `ApplyLifecycleAction` to apply the verdict outcome (promote, retire, or demote) to the original law.
 
 Trigger ownership is consolidated in the Librarian:
 
-- Friction-threshold trigger (all tiers) -> Librarian queries Flow Monitor, detects threshold crossing. For Tiers 1-2, Assay adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
+- Friction-threshold trigger (all tiers) -> Librarian queries Flow Monitor, detects threshold crossing. For Tiers 1-2, the Tribunal adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the Advocate.
 - Review-TTL-expiry trigger -> Librarian detects law age exceeding tier's configured review TTL. The law remains active during the hearing.
 
 Execution and adjudication path:
 
 1. Librarian requests hearing Workitem creation through the Operator, supplying the `lawId`.
-2. Operator admits and assigns the hearing Workitem to Assay using Assay's bound hearing entry contract.
-3. Assay retrieves the law's friction data from the Flow Monitor (via Sidecar) and legal context from the Librarian.
-4. Assay issues a tier-appropriate verdict.
-5. For a **Promote** verdict, Assay drafts the prose representation and codifies formal representations in parallel via registered [Codification Services](#codification-services). Services that are not ready or that fail are skipped with logging. For Retire or Demote verdicts, this step is skipped.
-6. Assay writes the new law to the Librarian (via `WriteLaw`) and calls `complete()`. The law is created in a pending state and remains inactive until ratification.
-7. Operator validates Assay's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions, activating the new law.
+2. Operator admits and assigns the hearing Workitem to the Tribunal using the Tribunal's bound hearing entry contract.
+3. The Tribunal retrieves the law's friction data from the Flow Monitor (via Sidecar) and legal context from the Librarian.
+4. The Tribunal invokes the [Jury](#jury) for deliberation and issues a tier-appropriate verdict.
+5. For a **Promote** verdict, the Tribunal delegates to the [Clerk](#clerk), which drafts the prose representation and codifies formal representations in parallel via registered [Codification Services](#codification-services). Services that are not ready or that fail are skipped with logging. For Retire or Demote verdicts, this step is skipped.
+6. The Clerk writes the new law to the Librarian (via `WriteLaw`) and the Tribunal calls `complete()`. The law is created in a pending state and remains inactive until ratification.
+7. Operator validates the Tribunal's bound hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions, activating the new law.
 
 ```mermaid
 sequenceDiagram
     participant LB as Librarian
     participant OP as Operator
-    participant AS as Assay
+    participant TB as Tribunal
+    participant JR as Jury
+    participant CL as Clerk
     participant SC as Sidecar
     participant FM as Flow Monitor
     participant CS as Codification Services
 
     LB->>OP: create hearing Workitem (lawId)
-    OP->>AS: assign hearing via entry binding
-    AS->>SC: query friction for law
+    OP->>TB: assign hearing via entry binding
+    TB->>SC: query friction for law
     SC->>FM: friction query (by law_id)
     FM-->>SC: friction data
-    SC-->>AS: friction data
-    AS->>SC: query law context
+    SC-->>TB: friction data
+    TB->>SC: query law context
     SC->>LB: law context request
     LB-->>SC: law versions and tiers
-    SC-->>AS: law versions and tiers
-    AS->>AS: render verdict
+    SC-->>TB: law versions and tiers
+    TB->>JR: deliberate (case file)
+    JR-->>TB: verdict
     opt Promote verdict
-        AS->>AS: draft prose representation
-        AS->>SC: discover ready CodificationServices
-        SC-->>AS: ready services
-        AS->>SC: Encode(law) to ready services
+        TB->>CL: draft and codify law
+        CL->>CL: draft prose representation
+        CL->>SC: discover ready CodificationServices
+        SC-->>CL: ready services
+        CL->>SC: Encode(law) to ready services
         SC->>CS: Encode requests (parallel)
         CS-->>SC: representations
-        SC-->>AS: representations
-        AS->>AS: assemble law with all representations
+        SC-->>CL: representations
+        CL->>CL: assemble law with all representations
+        CL->>SC: WriteLaw
+        SC->>LB: persist new law
     end
-    AS->>SC: WriteLaw + complete()
-    SC->>LB: persist new law
+    TB->>SC: complete()
     SC-->>OP: complete()
     OP->>OP: validate hearing exit contract
     OP->>LB: apply lifecycle action
@@ -277,7 +339,7 @@ Review hearing verdicts are tier-specific:
 - **Tier 1 under review:** `Promote` (mint Tier 2 Ruling) or `Retire`.
 - **Tier 2 under review:** `Promote` (petition HITL for Tier 3 Local Statute), `Retire`, or `Demote` (drop to Tier 1 Finding).
 
-Assay considers the law's accumulated friction and goal when rendering verdicts. Hearings produce a decisive outcome.
+The Tribunal considers the law's accumulated friction and goal when rendering verdicts. Hearings produce a decisive outcome.
 
 ## Backup and Recovery Boundaries
 
@@ -312,8 +374,8 @@ Core call paths are stable:
 - Sidecar <-> Flow Monitor: friction emission, friction queries, and telemetry signals.
 - Librarian -> Flow Monitor: friction queries for law lifecycle threshold evaluation.
 - Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
-- Assay (via Sidecar) <-> Codification Services: encode requests during law promotion.
-- Assay (via Sidecar) <-> Flow Monitor: friction queries for hearing evidence.
+- Clerk (via Sidecar) <-> Codification Services: encode requests during law promotion.
+- Tribunal (via Sidecar) <-> Flow Monitor: friction queries for hearing evidence.
 - Services -> Flow Monitor: metrics, traces, and audit events.
 
 Contract failures must return structured errors aligned with [Error Catalogue](../05-reference/error-catalogue.md).
@@ -326,7 +388,7 @@ Service outages degrade behaviour predictably:
 - Librarian unavailable: law retrieval and law lifecycle actions fail closed. Hearing trigger evaluation pauses until the Librarian recovers.
 - LLM contradiction evaluator unavailable: higher-tier law activation pauses in queued state; integration retries with backoff and raises operational alerts.
 - Flow Monitor unavailable: processing continues, but observability coverage degrades, friction queries return errors, and hearing threshold evaluation is blocked until recovery. Alerting is raised.
-- Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; Assay proceeds with whatever representations succeeded (prose at minimum).
+- Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; the Clerk proceeds with whatever representations succeeded (prose at minimum).
 
 Fail-open behaviour is prohibited for governance integrity paths.
 
@@ -339,8 +401,8 @@ All deployments preserve these service invariants:
 3. Laws are single objects with one goal and multiple representations under whole-law versioning.
 4. Friction-threshold hearing triggers are emitted by the Librarian based on Flow Monitor queries.
 5. Review-TTL-expiry hearing triggers are emitted by the Librarian.
-6. Assay evidence retrieval includes friction data from the Flow Monitor.
-7. Hearing adjudication remains an Assay responsibility, not a service-local shortcut.
+6. Tribunal evidence retrieval includes friction data from the Flow Monitor.
+7. Hearing adjudication remains a Tribunal responsibility, not a service-local shortcut.
 8. Friction is first-class and queryable by source attribution.
 9. Backup ownership boundaries are explicit between services and cluster administration.
 10. Cross-flow law integration preserves tiered supremacy, grace-period semantics, and audit continuity.

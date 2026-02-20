@@ -29,10 +29,10 @@ service LibrarianService {
   // --- Service-Facing Methods ---
 
   // Returns the full law object by identifier.
-  // Used by Assay for hearing evidence retrieval.
+  // Used by the Judiciary (Tribunal, Arbiter) for hearing evidence retrieval.
   rpc GetLaw(GetLawRequest) returns (GetLawResponse);
 
-  // Persists a law (Tier 2 Ruling minted by Assay, Tier 3+ applied by
+  // Persists a law (Tier 2 Ruling minted by the Clerk, Tier 3+ applied by
   // administrator or Governance Flow).
   rpc WriteLaw(WriteLawRequest) returns (WriteLawResponse);
 
@@ -45,7 +45,7 @@ service LibrarianService {
   rpc ReplicateLaws(ReplicateLawsRequest) returns (ReplicateLawsResponse);
 
   // Applies the outcome of a review hearing (promote, retire, demote)
-  // to the specified law. Called by the Operator after Assay hearing completion.
+  // to the specified law. Called by the Operator after Tribunal hearing completion.
   rpc ApplyLifecycleAction(ApplyLifecycleActionRequest) returns (ApplyLifecycleActionResponse);
 }
 

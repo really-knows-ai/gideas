@@ -28,7 +28,7 @@ service OperatorService {
 
   // --- Service-Facing Methods ---
 
-  // Creates a review hearing Workitem for Assay processing. Called by the
+  // Creates a review hearing Workitem for Tribunal processing. Called by the
   // Librarian when friction thresholds or review TTL expiry trigger a hearing.
   rpc CreateHearingWorkitem(CreateHearingWorkitemRequest) returns (CreateHearingWorkitemResponse);
 

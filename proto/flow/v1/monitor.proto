@@ -7,7 +7,7 @@ option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
 import "flow/v1/common.proto";
 
 // FlowMonitorService ingests telemetry, friction events, and custom events.
-// It also serves friction queries for the Librarian and Assay.
+// It also serves friction queries for the Librarian and the Judiciary.
 // See: specs/05-reference/grpc-api.md#flow-monitor-api
 service FlowMonitorService {
   // --- Ingestion Methods ---
@@ -24,8 +24,8 @@ service FlowMonitorService {
   // --- Query Methods ---
 
   // Returns aggregated friction data across the requested axes.
-  // Used by the Librarian for hearing threshold evaluation and by Assay
-  // for hearing evidence.
+  // Used by the Librarian for hearing threshold evaluation and by the
+  // Tribunal for hearing evidence.
   rpc QueryFriction(QueryFrictionRequest) returns (QueryFrictionResponse);
 }
 

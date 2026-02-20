@@ -20,7 +20,7 @@ flowchart TD
 
     subgraph gov["Governance Plane"]
         direction LR
-        Librarian ~~~ Assay[Assay Node]
+        Librarian ~~~ Judiciary["Judiciary<br/>(Arbiter, Tribunal, Advocate)"]
     end
 
     subgraph fed["Federation Plane"]
@@ -89,7 +89,7 @@ The legal lifecycle. The Governance Plane manages the discovery, enforcement, an
 
 The [Librarian](../02-flow/04-system-services.md#librarian) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to nodes that query for applicable governance. The Librarian also monitors law usage through [friction](./00-overview.md#friction) data: when nodes cite laws during processing, each citation generates a friction event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the Librarian queries the accumulated friction to drive law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and to identify laws that generate disproportionate resistance.
 
-The [Assay node](./02-foundry-cycle.md#assay-judiciary--standard-component) provides judicial review. When feedback deadlocks — the same point argued back and forth beyond a threshold — Assay deliberates the dispute and issues a binding ruling. Precedent accumulates in the Library, and future Workitems are governed by it.
+The [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) provides judicial review. It is a standard runtime subsystem comprising three nodes — [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver) (deadlock resolution), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) (review hearings), [Advocate](./02-foundry-cycle.md#advocate-human-escalation) (human escalation) — and two core services — [Jury](../02-flow/04-system-services.md#jury) (multi-agent deliberation) and [Clerk](../02-flow/04-system-services.md#clerk) (law drafting and codification). When feedback deadlocks — the same point argued back and forth beyond a threshold — the Arbiter deliberates the dispute via the Jury and issues a binding ruling drafted by the Clerk. Precedent accumulates in the Library, and future Workitems are governed by it.
 
 Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from the Flow's own legislative authority. Tiers 4 and 5 arrive from the [Governance Flow](./04-governance.md), synchronised into each Flow's Library as organisational and federal policy. The Library stores all tiers with equal indifference; nodes query and interpret them the same way regardless of origin.
 
@@ -118,7 +118,7 @@ Each concern in the system maps to exactly one plane. When a node executes work,
 | Routing decisions | Control | Flow Operator |
 | Artefact lifecycle | Data | Archivist |
 | Law lifecycle | Governance | Librarian |
-| Dispute resolution | Governance | Assay node |
+| Dispute resolution | Governance | Judiciary (Arbiter, Tribunal, Advocate) |
 | Authentication | Security | Sidecar |
 | Cryptographic stamps | Security | Sidecar |
 | Telemetry, audit, and friction | Control | Flow Monitor |

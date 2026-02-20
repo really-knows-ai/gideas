@@ -36,7 +36,7 @@ A **[law](./03-data-model.md#laws)** is a governance rule with a textual **goal*
 
 The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. [Flow Architects](../05-reference/glossary.md#flow-architect) adapt it to their context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
 
-Assay is the exception — it is a standard runtime component present in every Flow, not a swappable reference implementation.
+The Judiciary is the exception — it is a standard runtime subsystem present in every Flow, not a swappable reference implementation. It comprises three nodes ([Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor), [Advocate](./02-foundry-cycle.md#advocate-human-escalation)) and two core services ([Jury](../02-flow/04-system-services.md#jury), [Clerk](../02-flow/04-system-services.md#clerk)).
 
 The standard library provides configurable reference implementations for each role as container images. The platform enforces behaviour through capabilities and configuration, not node names.
 
@@ -59,12 +59,12 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Source | Lifecycle |
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
-| 2 | **Ruling** | Assay node | Binding precedent. Minted when disputes are resolved. |
+| 2 | **Ruling** | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (Arbiter and Tribunal nodes, via the Clerk service) | Binding precedent. Minted when disputes are resolved. |
 | 3 | **Local Statute** | [Flow Architect](../05-reference/glossary.md#flow-architect) | Local policy. Human-administered or via local legislative cycle. |
 | 4 | **State Constitution** | [Governance Flow](./04-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
 | 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
 
-Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it accumulates [friction](./03-data-model.md#friction) attributed to it. When that friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md#librarian) triggers a review hearing that can promote it to a Tier 2 Ruling through the Assay node. Laws that generate disproportionate friction surface for review — the system makes the cost of its own governance visible.
+Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it accumulates [friction](./03-data-model.md#friction) attributed to it. When that friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md#librarian) triggers a review hearing that can promote it to a Tier 2 Ruling through the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) node. Laws that generate disproportionate friction surface for review — the system makes the cost of its own governance visible.
 
 The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through specialised [translation services](../02-flow/04-system-services.md#codification-services). Authority increases through the tier system; enforceability increases through representation.
 
@@ -124,9 +124,9 @@ An artefact that exits a Flow carries cryptographic proof of every governance ch
 
 ## Friction
 
-Friction is systemic heat. As Workitems move through a Flow, they generate friction everywhere they touch — bumping into nodes, bouncing off laws, looping through rework cycles, waiting on reviewers, escalating to the judiciary. Every interaction has a cost, and the system tracks it.
+Friction is systemic heat. As Workitems move through a Flow, they generate friction everywhere they touch — bumping into nodes, bouncing off laws, looping through rework cycles, waiting on reviewers, escalating to the Judiciary. Every interaction has a cost, and the system tracks it.
 
-The system captures where and why heat builds up. A Workitem that flows smoothly generates low friction. One that thrashes — looping between Refine and Sort, escalating to Assay, timing out on a human reviewer — generates high friction. Every friction event is tagged to its source: which node, which Workitem, which laws.
+The system captures where and why heat builds up. A Workitem that flows smoothly generates low friction. One that thrashes — looping between Refine and Sort, escalating to the Arbiter, timing out on a human reviewer — generates high friction. Every friction event is tagged to its source: which node, which Workitem, which laws.
 
 ```mermaid
 flowchart LR
@@ -139,7 +139,7 @@ flowchart LR
         direction LR
         F2[Forge] --> Q2[Quench] --> S2[Sort]
         S2 -->|feedback| R2[Refine] --> Q2
-        S2 -->|deadlock| A2[Assay] --> S2
+        S2 -->|deadlock| A2[Arbiter] --> S2
     end
 ```
 

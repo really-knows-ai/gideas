@@ -52,8 +52,8 @@ stateDiagram-v2
     rejected --> wont_fix : RefuseFeedback()<br/>with Justification
     rejected --> deadlocked : DeadlockFeedback()
 
-    deadlocked --> wont_fix : Assay verdict<br/>(favours refiner;<br/>linkedRuling set)
-    deadlocked --> rejected : Assay verdict<br/>(favours reviewer;<br/>linkedRuling set)
+    deadlocked --> wont_fix : Arbiter verdict<br/>(favours refiner;<br/>linkedRuling set)
+    deadlocked --> rejected : Arbiter verdict<br/>(favours reviewer;<br/>linkedRuling set)
 
     resolved --> [*]
 ```
@@ -71,7 +71,7 @@ stateDiagram-v2
 
 The **Actor** column describes the expected role in the [reference arrangement](../01-concepts/02-foundry-cycle.md), not an enforced identity constraint. Any node holding the required `WRITE:feedback/<status>` [capability](../03-node/02-configuration.md) can call the corresponding operation. The Archivist validates the capability grant and the from-state; node identity is recorded in each `FeedbackEvent` for audit, not for access control.
 
-The gate node queries feedback depth via `GetFeedbackDepth(feedbackId)` and determines whether escalation is warranted. When the gate node decides to escalate, it calls `DeadlockFeedback(feedbackId)` to transition the feedback item to `deadlocked`, then returns a routing instruction to send the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The Archivist validates the `WRITE:feedback/deadlocked` capability, the from-state (any state except `resolved` and `deadlocked`), and the contempt guard (`linkedRuling` blocks deadlock) — deadlock determination is gate node logic, not Archivist enforcement. Assay renders a verdict and transitions the item to either `wont_fix` (favouring the refiner) or `rejected` (favouring the reviewer), setting the `linkedRuling` field to the Tier 2 Ruling that captures the decision.
+The gate node queries feedback depth via `GetFeedbackDepth(feedbackId)` and determines whether escalation is warranted. When the gate node decides to escalate, it calls `DeadlockFeedback(feedbackId)` to transition the feedback item to `deadlocked`, then returns a routing instruction to send the Workitem to the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem). The Archivist validates the `WRITE:feedback/deadlocked` capability, the from-state (any state except `resolved` and `deadlocked`), and the contempt guard (`linkedRuling` blocks deadlock) — deadlock determination is gate node logic, not Archivist enforcement. The Arbiter invokes the [Jury](../02-flow/04-system-services.md#jury) for deliberation and uses the [Clerk](../02-flow/04-system-services.md#clerk) to draft a Tier 2 Ruling, then transitions the item to either `wont_fix` (favouring the refiner) or `rejected` (favouring the reviewer), setting the `linkedRuling` field to the Ruling that captures the decision.
 
 Each transition appends a `FeedbackEvent` to the item's history — an append-only chronological record of who acted, what action they took, and what they said.
 
@@ -97,28 +97,28 @@ Every refusal creates a traceable governance record — either a link to existin
 
 The forced-choice structure prevents drive-by refusals. A node cannot dismiss feedback without either pointing to governance that supports its position or articulating a new principle for the record.
 
-## Deadlock and Assay Interaction
+## Deadlock and Arbiter Interaction
 
-When the gate node determines that a feedback item's history depth warrants escalation, it calls `DeadlockFeedback(feedbackId)` to transition the item to `deadlocked`, then returns a routing instruction to send the Workitem to [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component). The threshold applies per feedback item, not per Workitem — a Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
+When the gate node determines that a feedback item's history depth warrants escalation, it calls `DeadlockFeedback(feedbackId)` to transition the item to `deadlocked`, then returns a routing instruction to send the Workitem to the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem). The threshold applies per feedback item, not per Workitem — a Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.
 
-Assay examines the investigative history, deliberates, and renders a verdict:
+The Arbiter invokes the [Jury](../02-flow/04-system-services.md#jury) service for multi-agent deliberation, examines the investigative history, and renders a verdict:
 
-- **Verdict favours refiner** — Assay sets the feedback state to `wont_fix` with `linkedRuling` pointing to the Tier 2 Ruling that captures the decision. The reviewing node must call `AcceptRefusal()`.
-- **Verdict favours reviewer** — Assay sets the feedback state to `rejected` with `linkedRuling` pointing to the Tier 2 Ruling. The refining node must call `ResolveFeedback()` to comply.
+- **Verdict favours refiner** — the Arbiter sets the feedback state to `wont_fix` with `linkedRuling` pointing to the Tier 2 Ruling (drafted by the [Clerk](../02-flow/04-system-services.md#clerk)) that captures the decision. The reviewing node must call `AcceptRefusal()`.
+- **Verdict favours reviewer** — the Arbiter sets the feedback state to `rejected` with `linkedRuling` pointing to the Tier 2 Ruling. The refining node must call `ResolveFeedback()` to comply.
 
-In both cases, [Assay jury friction](../01-concepts/03-data-model.md#friction) is emitted: each deliberation round produces friction at magnitude `depth ^ (round + 1)`. If Assay itself deadlocks and escalates to human intervention, a single friction event is emitted at magnitude `depth ^ (rounds * 2)`.
+In both cases, [Jury deliberation friction](../01-concepts/03-data-model.md#friction) is emitted: each deliberation round produces friction at magnitude `depth ^ (round + 1)`. If the Jury deadlocks (hung jury) and the Arbiter escalates to the [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) for human intervention, a single friction event is emitted at magnitude `depth ^ (rounds * 2)`.
 
-Handlers should respond to post-Assay feedback items by checking `linkedRuling`. A non-empty `linkedRuling` means judicial mandate is in effect and the [contempt guard](#contempt-guard-behaviour) constrains available transitions.
+Handlers should respond to post-Arbiter feedback items by checking `linkedRuling`. A non-empty `linkedRuling` means judicial mandate is in effect and the [contempt guard](#contempt-guard-behaviour) constrains available transitions.
 
 ## Contempt Guard Behaviour
 
-Once [Assay](../02-flow/03-nodes-external.md#assay-as-standard-component) renders a verdict and sets `linkedRuling` on a feedback item, the [Archivist](../02-flow/04-system-services.md#archivist) enforces judicial finality:
+Once the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) renders a verdict and sets `linkedRuling` on a feedback item, the [Archivist](../02-flow/04-system-services.md#archivist) enforces judicial finality:
 
 - `wont_fix` with `linkedRuling` — the only valid next transition is `resolved` via `AcceptRefusal()`. The reviewing node must accept the verdict. Attempting `RejectRefusal()` or `DeadlockFeedback()` returns `CONTEMPT_VIOLATION`.
 - `rejected` with `linkedRuling` — the only valid next transition is `actioned` via `ResolveFeedback()`, then to `resolved` via `AcceptFix()`. The refining node must comply with the ruling. Attempting `RefuseFeedback()` or `DeadlockFeedback()` returns `CONTEMPT_VIOLATION`.
 - Any state with `linkedRuling` — `DeadlockFeedback()` is blocked regardless of the item's current state. Re-escalation of a judicially resolved dispute returns `CONTEMPT_VIOLATION`.
 
-`CONTEMPT_VIOLATION` is a permanent rejection, not a retriable error. The ruling is not a suggestion — the losing side must accept the verdict. The contempt guard is enforced by the Archivist regardless of node identity, capability grants, or topology. No node, including Assay, can override a ruling once applied to a feedback item.
+`CONTEMPT_VIOLATION` is a permanent rejection, not a retriable error. The ruling is not a suggestion — the losing side must accept the verdict. The contempt guard is enforced by the Archivist regardless of node identity, capability grants, or topology. No node, including the Judiciary nodes, can override a ruling once applied to a feedback item.
 
 ## Store and Link Pattern
 

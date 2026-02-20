@@ -15,7 +15,7 @@ The Flow runtime defines the platform: how the control plane drives work, how se
 | [Overview](02-flow/00-overview.md) | Runtime composition, execution loop, and platform invariants |
 | [Operator](02-flow/01-operator.md) | Control-plane authority — reconciliation, assignment, routing, exit enforcement |
 | [Workitems](02-flow/02-workitem.md) | Workitem lifecycle states, ownership boundaries, and contract interactions |
-| [Nodes and External Integrations](02-flow/03-nodes-external.md) | Node execution boundaries, capability model, and Assay as standard component |
+| [Nodes and External Integrations](02-flow/03-nodes-external.md) | Node execution boundaries, capability model, and the Judiciary as standard subsystem |
 | [System Services](02-flow/04-system-services.md) | Librarian, Archivist, Flow Monitor, Flow Support Services, hearing protocol |
 | [Configuration](02-flow/05-configuration.md) | CRD authority model, topology, contracts, capability grants, operational knobs |
 | [Cross-Flow Collaboration](02-flow/06-cross-flow.md) | Export and import lifecycle, trust topologies, treaties, law integration |
@@ -46,6 +46,7 @@ The SDK is the programming interface between node handler code and the Flow runt
 | [Workitems](04-sdk/05-sdk-workitems.md) | Workitem read access, local creation, and routing submission |
 | [Telemetry](04-sdk/06-sdk-telemetry.md) | Friction emission, metrics, traces, and custom events |
 | [Agent](04-sdk/07-sdk-agent.md) | Managed inference wrapper: FoundryAgent heartbeat, output validation, cost accounting |
+| [HITL](04-sdk/08-sdk-hitl.md) | Human-in-the-Loop: queue management, REST API, Federated Queue Mesh, escalation |
 
 ## Reference
 
