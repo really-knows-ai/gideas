@@ -125,6 +125,32 @@ func (c *Client) Heartbeat(ctx context.Context) (bool, error) {
 	return resp.GetAcknowledged(), nil
 }
 
+// PauseTimer suspends the Sidecar's inactivity timer for the current
+// Workitem assignment. The timer remains suspended until ResumeTimer is
+// called or the handler returns. Used by HITL nodes to park Workitems
+// while awaiting human decisions without triggering timeout.
+func (c *Client) PauseTimer(ctx context.Context) error {
+	_, err := c.Sidecar.PauseTimer(ctx, &flowv1.PauseTimerRequest{
+		WorkitemId: c.workitemID,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: pause timer failed: %w", err)
+	}
+	return nil
+}
+
+// ResumeTimer resumes the Sidecar's inactivity timer after a PauseTimer call.
+// The timer resets to the full timeout window on resume.
+func (c *Client) ResumeTimer(ctx context.Context) error {
+	_, err := c.Sidecar.ResumeTimer(ctx, &flowv1.ResumeTimerRequest{
+		WorkitemId: c.workitemID,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: resume timer failed: %w", err)
+	}
+	return nil
+}
+
 // Complete submits a routing instruction to the Operator via the Sidecar,
 // signalling that the node has finished processing. The routing type
 // ROUTING_TYPE_COMPLETE is used with the given target (which can be empty

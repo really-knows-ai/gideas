@@ -67,6 +67,7 @@ Emitted by the [Archivist](../02-flow/04-system-services.md#archivist) when gove
 | `LAW_WRITE_FAILED` | `INTERNAL` | The [Clerk](../02-flow/04-system-services.md#clerk) service failed to persist a law via the Librarian's `WriteLaw` method. | The Clerk may retry internally. Persistent failures block the ruling from being recorded. |
 | `QUEUE_ITEM_NOT_FOUND` | `NOT_FOUND` | A queue operation referenced an item that does not exist on the target shard. | Verify the item ID. The item may have been decided or may reside on a different shard. |
 | `QUEUE_ITEM_ALREADY_CLAIMED` | `ALREADY_EXISTS` | An attempt to claim a queue item that is already in `claimed` state. | The item is already claimed. Wait for it to be released or decided. |
+| `QUEUE_ITEM_INVALID_STATE` | `FAILED_PRECONDITION` | A queue state transition was attempted from an invalid state. For example, deciding or releasing an item that is not in `claimed` state. | Check the item's current state and use the correct operation. |
 | `QUEUE_UNAVAILABLE` | `UNAVAILABLE` | The HITL queue or its owning shard is unreachable. | Retry with backoff. The shard may be temporarily down. Items on unavailable shards become visible when the shard recovers. |
 
 ---
@@ -133,7 +134,7 @@ Emitted when a service is temporarily unreachable.
 | Identity conflict (`ARTEFACT_KIND_CONFLICT`) | No | Use correct `id`/`governed_artefact` pairing. |
 | Jury deliberation (`JURY_HUNG`, `JURY_INFERENCE_FAILED`) | No | Handled internally by the Arbiter. Hung jury escalates to the Advocate. |
 | Clerk (`LAW_WRITE_FAILED`) | Possibly | Clerk may retry internally. Persistent failure blocks ruling. |
-| Queue (`QUEUE_ITEM_NOT_FOUND`, `QUEUE_ITEM_ALREADY_CLAIMED`) | No | Verify item state. |
+| Queue (`QUEUE_ITEM_NOT_FOUND`, `QUEUE_ITEM_ALREADY_CLAIMED`, `QUEUE_ITEM_INVALID_STATE`) | No | Verify item state. |
 | Queue availability (`QUEUE_UNAVAILABLE`) | Yes | Retry with backoff. Shard may recover. |
 | Configuration (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) | No | Fix CRD configuration. |
 | Cross-flow trust (`TRUST_CHAIN_INVALID`, `TREATY_NOT_FOUND`, `NATURALISATION_REQUIRED`, `IMPORT_ADMISSION_FAILED`) | No | Fix trust configuration or process through local governance. |

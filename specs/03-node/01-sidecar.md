@@ -93,6 +93,8 @@ The Sidecar tracks node activity through complementary mechanisms:
 
 **Explicit heartbeat.** For long-running operations where no SDK calls occur for extended periods (complex reasoning, multi-step inference, blocking external calls), the node calls `Heartbeat()` through the SDK to reset the activity timer.
 
+**Timer pause.** For nodes that park a Workitem while awaiting external input (human decisions, asynchronous callbacks), the node calls `PauseTimer()` through the SDK to suspend the inactivity timer entirely. The timer remains suspended until the node calls `ResumeTimer()` or the handler returns. While paused, no heartbeat signals are required. This is a Sidecar-local mechanism — the Workitem remains in `Running` state and the Operator is unaware of the pause. The [HITL pattern](../04-sdk/08-sdk-hitl.md) uses timer pause to park Workitems while awaiting human decisions; escalation deadlines are managed by the node's own queue logic, not by the Sidecar's inactivity timer.
+
 The activity timer drives inactivity timeout enforcement. The timeout window is determined by the node's configured timeout value (from [FoundryNode](./02-configuration.md#timeout-and-execution-budget)), falling back to the Flow-level default, and finally to a system fallback. The timer measures idle time, not total execution time — an operation that runs for an hour with regular heartbeats completes without timeout.
 
 When the inactivity timer expires:
@@ -182,7 +184,7 @@ External integration does not change Flow runtime authority boundaries. Authenti
 6. Governance-integrity failures fail closed; no fail-open path exists.
 7. Sidecar does not own control-plane persistence; Operator remains final authority.
 8. Health and readiness are infrastructure signals, independent from Workitem timeout enforcement.
-9. Activity tracking uses implicit (SDK call) and explicit (heartbeat) signals with inactivity-based timeout semantics.
+9. Activity tracking uses implicit (SDK call), explicit (heartbeat), and pause/resume signals with inactivity-based timeout semantics.
 10. External business service calls bypass the Sidecar; authenticated runtime operations do not.
 11. Flow Support Service access is Sidecar-mediated for nodes, using the same trust boundary as system service calls.
 12. Telemetry from the Sidecar is transport-level observability; governance audit events are service-owned.

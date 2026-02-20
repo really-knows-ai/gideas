@@ -23,6 +23,18 @@ service SidecarService {
   // throttled to avoid excessive writes.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 
+  // Suspends the Sidecar's inactivity timer for the specified Workitem
+  // assignment. The timer remains suspended until ResumeTimer is called or
+  // the handler returns. Used by HITL nodes to park Workitems while awaiting
+  // external input without triggering timeout. The Workitem remains in
+  // Running state — this is a Sidecar-local mechanism.
+  // See: specs/04-sdk/08-sdk-hitl.md
+  rpc PauseTimer(PauseTimerRequest) returns (PauseTimerResponse);
+
+  // Resumes the Sidecar's inactivity timer after a PauseTimer call. The
+  // timer resets to the full timeout window on resume.
+  rpc ResumeTimer(ResumeTimerRequest) returns (ResumeTimerResponse);
+
   // Called by the Operator to push a work assignment to this specific
   // Sidecar/Pod. The Sidecar validates the request and forwards it to
   // the co-located User Code container via the NodeService.Process RPC.
@@ -34,6 +46,22 @@ message HeartbeatRequest {
 }
 
 message HeartbeatResponse {
+  bool acknowledged = 1;
+}
+
+message PauseTimerRequest {
+  string workitem_id = 1;
+}
+
+message PauseTimerResponse {
+  bool acknowledged = 1;
+}
+
+message ResumeTimerRequest {
+  string workitem_id = 1;
+}
+
+message ResumeTimerResponse {
   bool acknowledged = 1;
 }
 

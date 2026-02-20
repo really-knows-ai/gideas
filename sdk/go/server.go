@@ -32,13 +32,24 @@ type Handler func(ctx context.Context, workitemCtx *flowv1.WorkitemContext) erro
 type StartOption func(*startConfig)
 
 type startConfig struct {
-	port string
+	port         string
+	queueManager *queueManagerImpl
 }
 
 // WithNodePort overrides the default SDK server listen port.
 func WithNodePort(port string) StartOption {
 	return func(c *startConfig) {
 		c.port = port
+	}
+}
+
+// WithQueueManager configures the SDK server with a HITL QueueManager.
+// When provided, Start() will initialise the queue store, mesh, and HTTP
+// server, and register the QueuePeerService on the gRPC server alongside
+// NodeService.
+func WithQueueManager(qm *queueManagerImpl) StartOption {
+	return func(c *startConfig) {
+		c.queueManager = qm
 	}
 }
 
@@ -74,6 +85,16 @@ func Start(handler Handler, opts ...StartOption) error {
 	srv := grpc.NewServer()
 	nodeServer := &nodeServiceServer{handler: handler}
 	flowv1.RegisterNodeServiceServer(srv, nodeServer)
+
+	// If a QueueManager is configured, start it and register its gRPC service.
+	if cfg.queueManager != nil {
+		if err := cfg.queueManager.Start(context.Background()); err != nil {
+			_ = lis.Close()
+			return fmt.Errorf("flow sdk: failed to start queue manager: %w", err)
+		}
+		cfg.queueManager.RegisterGRPC(srv)
+	}
+
 	reflection.Register(srv)
 
 	// Graceful shutdown on SIGTERM/SIGINT.
@@ -82,6 +103,9 @@ func Start(handler Handler, opts ...StartOption) error {
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down SDK server", "signal", sig)
+		if cfg.queueManager != nil {
+			_ = cfg.queueManager.Stop()
+		}
 		srv.GracefulStop()
 	}()
 

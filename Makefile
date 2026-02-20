@@ -23,7 +23,7 @@ test: test-sdk test-sidecar test-archivist test-monitor test-librarian ## Run al
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
-	go test -v ./sdk/go/...
+	CGO_ENABLED=1 go test -v ./sdk/go/...
 
 .PHONY: test-sidecar
 test-sidecar: ## Run Sidecar unit tests.
@@ -31,7 +31,7 @@ test-sidecar: ## Run Sidecar unit tests.
 
 .PHONY: test-archivist
 test-archivist: ## Run Archivist unit tests.
-	go test -v ./archivist/...
+	CGO_ENABLED=1 go test -v ./archivist/...
 
 .PHONY: test-monitor
 test-monitor: ## Run Monitor unit tests.
@@ -65,7 +65,7 @@ build-null-node: ## Build the Null Node binary.
 
 .PHONY: build-archivist
 build-archivist: ## Build the Archivist binary.
-	go build -o bin/archivist ./archivist/cmd
+	CGO_ENABLED=1 go build -o bin/archivist ./archivist/cmd
 
 .PHONY: build-monitor
 build-monitor: ## Build the Monitor binary.
