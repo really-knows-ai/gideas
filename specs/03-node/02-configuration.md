@@ -52,6 +52,7 @@ The capability grammar follows a `VERB:RESOURCE[/QUALIFIER]` pattern:
 - `READ:feedback` — feedback read access on artefacts.
 - `WRITE:feedback/<status>` — feedback write access scoped to a target status. Each feedback state transition requires its own capability grant: `WRITE:feedback/new`, `WRITE:feedback/actioned`, `WRITE:feedback/wont_fix`, `WRITE:feedback/rejected`, `WRITE:feedback/resolved`, `WRITE:feedback/deadlocked`.
 - `USE:support/<service>/<capability>` — access to a specific [Flow Support Service](../02-flow/04-system-services.md#flow-support-services) capability.
+- `USE:queue/server` — enables [HITL queue features](../04-sdk/08-sdk-hitl.md): persistent queue, REST API, Federated Queue Mesh. Requires `spec.storage`. Triggers StatefulSet deployment and Headless Service creation.
 
 Enforcement is exact. A node granted `STAMP:artefact/petition-draft/linter` can stamp `linter` on `petition-draft` artefacts. It cannot stamp `security-review` on `petition-draft` artefacts, and it cannot stamp `linter` on `audit-log` artefacts. Missing grants produce deterministic denial with structured errors — the node receives a permission error, not a silent no-op.
 

@@ -104,7 +104,7 @@ The Arbiter and Tribunal do not write Tier 1 Findings by convention; their role 
 Advocate capabilities are fixed by the runtime:
 
 - `READ:law` — query the Library for law context.
-- `QUEUE:server` — enables the HITL queue interface and Federated Queue Mesh.
+- `USE:queue/server` — enables the HITL queue interface and Federated Queue Mesh.
 - Petition HITL for Tier 3 ratification.
 - File appeals to the Governance Flow via the Librarian for Tier 4-5 conflicts.
 

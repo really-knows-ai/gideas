@@ -1,6 +1,6 @@
 # SDK HITL
 
-The HITL (Human-in-the-Loop) SDK surface provides managed infrastructure for nodes that require human decisions during Workitem processing. Any node can become an HITL node by declaring the `QUEUE:server` [capability](../03-node/02-configuration.md#capability-grants) and configuring persistent storage. The SDK provides queue management, REST API exposure, persistence, and the Federated Queue Mesh for horizontal scaling.
+The HITL (Human-in-the-Loop) SDK surface provides managed infrastructure for nodes that require human decisions during Workitem processing. Any node can become an HITL node by declaring the `USE:queue/server` [capability](../03-node/02-configuration.md#capability-grants) and configuring persistent storage. The SDK provides queue management, REST API exposure, persistence, and the Federated Queue Mesh for horizontal scaling.
 
 The Judiciary's [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is a concrete HITL node for judicial escalation. User-defined HITL nodes compose the same SDK pattern with domain-specific decision logic.
 
@@ -29,26 +29,26 @@ sequenceDiagram
     SC-->>OP: Routing instruction
 ```
 
-## `QUEUE:server` Capability
+## `USE:queue/server` Capability
 
-The `QUEUE:server` capability enables HITL features on a node. When declared, the [Operator](../02-flow/01-operator.md) applies specific provisioning:
+The `USE:queue/server` capability enables HITL features on a node. When declared, the [Operator](../02-flow/01-operator.md) applies specific provisioning:
 
 | Operator action | Description |
 |---|---|
 | **StatefulSet deployment** | Deploys the node as a StatefulSet (not ReplicaSet), providing stable pod identity for DNS-based peer discovery. |
 | **Headless Service** | Creates a Headless Service (no ClusterIP) for the node, enabling pod-level DNS resolution. |
-| **Storage validation** | Rejects nodes declaring `QUEUE:server` without `spec.storage`. Persistent storage is required for queue durability. |
+| **Storage validation** | Rejects nodes declaring `USE:queue/server` without `spec.storage`. Persistent storage is required for queue durability. |
 
 The Operator validates at admission time:
 
 | Condition | Result |
 |---|---|
-| `QUEUE:server` without `spec.storage` | Rejected — `SCHEMA_VALIDATION_FAILED` |
-| `QUEUE:server` with `spec.storage` | StatefulSet deployment, Headless Service created |
+| `USE:queue/server` without `spec.storage` | Rejected — `SCHEMA_VALIDATION_FAILED` |
+| `USE:queue/server` with `spec.storage` | StatefulSet deployment, Headless Service created |
 
 ## QueueManager Interface
 
-The SDK provides a `QueueManager` interface for nodes using `QUEUE:server`. The QueueManager handles local persistence, peer communication, and proxy routing transparently.
+The SDK provides a `QueueManager` interface for nodes using `USE:queue/server`. The QueueManager handles local persistence, peer communication, and proxy routing transparently.
 
 ```go
 type QueueManager interface {
@@ -75,7 +75,7 @@ type QueueManager interface {
 }
 ```
 
-The QueueManager is available to the node handler when the `QUEUE:server` capability is declared. All queue operations are node-local — the [Sidecar](../03-node/01-sidecar.md) does not mediate the QueueManager or the human-facing REST API. The Sidecar mediates the SDK calls the node makes after receiving human input (artefact writes, feedback transitions, routing instructions).
+The QueueManager is available to the node handler when the `USE:queue/server` capability is declared. All queue operations are node-local — the [Sidecar](../03-node/01-sidecar.md) does not mediate the QueueManager or the human-facing REST API. The Sidecar mediates the SDK calls the node makes after receiving human input (artefact writes, feedback transitions, routing instructions).
 
 ## REST API Contract
 
@@ -347,8 +347,8 @@ For Tier 3 proposals, the human ratifies or rejects the proposed law change. For
 
 ## HITL SDK Invariants
 
-1. `QUEUE:server` capability requires `spec.storage`. The Operator rejects nodes declaring the capability without storage.
-2. `QUEUE:server` triggers StatefulSet deployment and Headless Service creation.
+1. `USE:queue/server` capability requires `spec.storage`. The Operator rejects nodes declaring the capability without storage.
+2. `USE:queue/server` triggers StatefulSet deployment and Headless Service creation.
 3. The HITL REST API is node-owned. The Sidecar does not mediate human-facing traffic.
 4. The Sidecar mediates SDK calls the node makes after receiving human input.
 5. The HITL node is a state engine — it tracks queue status transitions. Human identity and assignment mapping are Dashboard/BFF responsibilities.
