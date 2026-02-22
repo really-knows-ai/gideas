@@ -37,4 +37,7 @@ nodes/*/hitl-sort
 nodes/*/refine
 nodes/*/sort
 nodes/*/null-node
+nodes/*/arbiter
+nodes/*/tribunal
+nodes/*/advocate
 tools/*/haiku-watch
