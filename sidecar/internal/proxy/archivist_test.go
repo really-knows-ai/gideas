@@ -50,6 +50,21 @@ func (s *captureArchivistServer) GetArtefact(
 	}, nil
 }
 
+func (s *captureArchivistServer) LinkRuling(
+	ctx context.Context, req *flowv1.LinkRulingRequest,
+) (*flowv1.LinkRulingResponse, error) {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		s.capturedMD = md
+	}
+	return &flowv1.LinkRulingResponse{
+		UpdatedItem: &flowv1.FeedbackItem{
+			Id:           req.GetFeedbackId(),
+			LinkedRuling: req.GetLawId(),
+			State:        flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+		},
+	}, nil
+}
+
 func setupArchivistProxy(t *testing.T) (*ArchivistProxy, *captureArchivistServer) {
 	t.Helper()
 
@@ -179,6 +194,48 @@ func TestArchivistProxy_PropagatesMetadata(t *testing.T) {
 
 	vals := capture.capturedMD.Get("x-flow-workitem-id")
 	if len(vals) != 1 || vals[0] != "wi-meta-test" {
+		t.Fatalf("expected metadata propagation, got %v", vals)
+	}
+}
+
+func TestArchivistProxy_LinkRuling_Passthrough(t *testing.T) {
+	proxy, _ := setupArchivistProxy(t)
+
+	resp, err := proxy.LinkRuling(context.Background(), &flowv1.LinkRulingRequest{
+		WorkitemId: "wi-1",
+		FeedbackId: "fb-1",
+		LawId:      "law-001",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	item := resp.GetUpdatedItem()
+	if item.GetId() != "fb-1" {
+		t.Fatalf("expected id=fb-1 in response, got %q", item.GetId())
+	}
+	if item.GetLinkedRuling() != "law-001" {
+		t.Fatalf("expected linked_ruling=law-001, got %q", item.GetLinkedRuling())
+	}
+}
+
+func TestArchivistProxy_LinkRuling_PropagatesMetadata(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", "wi-ruling-test")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.LinkRuling(ctx, &flowv1.LinkRulingRequest{
+		WorkitemId: "wi-1",
+		FeedbackId: "fb-1",
+		LawId:      "law-001",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vals := capture.capturedMD.Get("x-flow-workitem-id")
+	if len(vals) != 1 || vals[0] != "wi-ruling-test" {
 		t.Fatalf("expected metadata propagation, got %v", vals)
 	}
 }

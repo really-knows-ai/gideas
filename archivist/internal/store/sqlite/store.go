@@ -50,15 +50,16 @@ type StampRecord struct {
 
 // FeedbackRecord represents a feedback item on an artefact.
 type FeedbackRecord struct {
-	ID          string
-	WorkitemID  string
-	ArtefactID  string
-	Source      string
-	Severity    int32 // maps to flowv1.Severity enum
-	State       int32 // maps to flowv1.FeedbackState enum
-	Message     string
-	VersionHash string // artefact version this feedback was raised against
-	CreatedAt   time.Time
+	ID           string
+	WorkitemID   string
+	ArtefactID   string
+	Source       string
+	Severity     int32 // maps to flowv1.Severity enum
+	State        int32 // maps to flowv1.FeedbackState enum
+	Message      string
+	VersionHash  string // artefact version this feedback was raised against
+	LinkedRuling string // law ID of judiciary ruling, empty if none
+	CreatedAt    time.Time
 }
 
 // FeedbackEventRecord represents a single event in a feedback item's history.
@@ -150,15 +151,16 @@ CREATE INDEX IF NOT EXISTS idx_stamps_artefact
     ON stamps(workitem_id, artefact_id, version_hash);
 
 CREATE TABLE IF NOT EXISTS feedback_items (
-    id           TEXT PRIMARY KEY,
-    workitem_id  TEXT NOT NULL,
-    artefact_id  TEXT NOT NULL,
-    source       TEXT NOT NULL DEFAULT '',
-    severity     INTEGER NOT NULL DEFAULT 0,
-    state        INTEGER NOT NULL DEFAULT 1,
-    message      TEXT NOT NULL DEFAULT '',
-    version_hash TEXT NOT NULL DEFAULT '',
-    created_at   DATETIME NOT NULL DEFAULT (datetime('now'))
+    id             TEXT PRIMARY KEY,
+    workitem_id    TEXT NOT NULL,
+    artefact_id    TEXT NOT NULL,
+    source         TEXT NOT NULL DEFAULT '',
+    severity       INTEGER NOT NULL DEFAULT 0,
+    state          INTEGER NOT NULL DEFAULT 1,
+    message        TEXT NOT NULL DEFAULT '',
+    version_hash   TEXT NOT NULL DEFAULT '',
+    linked_ruling  TEXT NOT NULL DEFAULT '',
+    created_at     DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedback_workitem_artefact
@@ -476,7 +478,7 @@ func (s *Store) AddFeedback(
 // GetFeedback returns all feedback items for a (workitemID, artefactID) pair.
 func (s *Store) GetFeedback(ctx context.Context, workitemID, artefactID string) ([]FeedbackRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, created_at
+		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, linked_ruling, created_at
 		 FROM feedback_items
 		 WHERE workitem_id = ? AND artefact_id = ?
 		 ORDER BY created_at ASC`,
@@ -493,7 +495,8 @@ func (s *Store) GetFeedback(ctx context.Context, workitemID, artefactID string) 
 		var createdStr string
 		if err := rows.Scan(
 			&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
-			&f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr,
+			&f.Severity, &f.State, &f.Message, &f.VersionHash,
+			&f.LinkedRuling, &createdStr,
 		); err != nil {
 			return nil, fmt.Errorf("scan feedback: %w", err)
 		}
@@ -565,9 +568,14 @@ func (s *Store) TransitionFeedback(
 	var f FeedbackRecord
 	var createdStr string
 	err = tx.QueryRowContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, created_at
+		`SELECT id, workitem_id, artefact_id, source, severity, state,
+		        message, version_hash, linked_ruling, created_at
 		 FROM feedback_items WHERE id = ?`, feedbackID,
-	).Scan(&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source, &f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr)
+	).Scan(
+		&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
+		&f.Severity, &f.State, &f.Message, &f.VersionHash,
+		&f.LinkedRuling, &createdStr,
+	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("feedback %q not found", feedbackID)
 	}
@@ -614,9 +622,14 @@ func (s *Store) GetFeedbackByID(ctx context.Context, feedbackID string) (*Feedba
 	var f FeedbackRecord
 	var createdStr string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, created_at
+		`SELECT id, workitem_id, artefact_id, source, severity, state,
+		        message, version_hash, linked_ruling, created_at
 		 FROM feedback_items WHERE id = ?`, feedbackID,
-	).Scan(&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source, &f.Severity, &f.State, &f.Message, &f.VersionHash, &createdStr)
+	).Scan(
+		&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
+		&f.Severity, &f.State, &f.Message, &f.VersionHash,
+		&f.LinkedRuling, &createdStr,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -637,6 +650,68 @@ func (s *Store) GetFeedbackDepth(ctx context.Context, feedbackID string) (int32,
 		return 0, fmt.Errorf("get feedback depth: %w", err)
 	}
 	return count, nil
+}
+
+// LinkRuling atomically sets the linked_ruling field on a feedback item.
+// It validates that the feedback is in DEADLOCKED state (5) and that no
+// ruling is already linked (contempt guard). Returns the updated record.
+func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string) (*FeedbackRecord, error) {
+	const stateDeadlocked int32 = 5 // flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Read current feedback.
+	var f FeedbackRecord
+	var createdStr string
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, workitem_id, artefact_id, source, severity, state,
+		        message, version_hash, linked_ruling, created_at
+		 FROM feedback_items WHERE id = ?`, feedbackID,
+	).Scan(
+		&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
+		&f.Severity, &f.State, &f.Message, &f.VersionHash,
+		&f.LinkedRuling, &createdStr,
+	)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("feedback %q not found", feedbackID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read feedback: %w", err)
+	}
+	f.CreatedAt = parseTime(createdStr)
+
+	// Validate state is DEADLOCKED.
+	if f.State != stateDeadlocked {
+		return nil, fmt.Errorf(
+			"feedback %q in state %d, must be DEADLOCKED (%d) to link ruling",
+			feedbackID, f.State, stateDeadlocked,
+		)
+	}
+
+	// Contempt guard: block if linked_ruling already set.
+	if f.LinkedRuling != "" {
+		return nil, fmt.Errorf("feedback %q already has linked ruling %q (contempt guard)", feedbackID, f.LinkedRuling)
+	}
+
+	// Set linked_ruling.
+	_, err = tx.ExecContext(ctx,
+		`UPDATE feedback_items SET linked_ruling = ? WHERE id = ?`,
+		lawID, feedbackID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update linked_ruling: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	f.LinkedRuling = lawID
+	return &f, nil
 }
 
 // parseTime parses a SQLite datetime string. Falls back to RFC3339 if the

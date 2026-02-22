@@ -55,6 +55,8 @@ type Client struct {
 	Archivist flowv1.ArchivistServiceClient
 	Librarian flowv1.LibrarianServiceClient
 	Monitor   flowv1.FlowMonitorServiceClient
+	Jury      flowv1.JuryServiceClient
+	Clerk     flowv1.ClerkServiceClient
 }
 
 // NewClient connects to the Sidecar and returns a configured Client.
@@ -93,6 +95,8 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		Archivist:  flowv1.NewArchivistServiceClient(conn),
 		Librarian:  flowv1.NewLibrarianServiceClient(conn),
 		Monitor:    flowv1.NewFlowMonitorServiceClient(conn),
+		Jury:       flowv1.NewJuryServiceClient(conn),
+		Clerk:      flowv1.NewClerkServiceClient(conn),
 	}, nil
 }
 
@@ -511,6 +515,113 @@ func (c *Client) RecordTelemetry(ctx context.Context, eventType string, payload 
 		return fmt.Errorf("flow sdk: record telemetry failed: %w", err)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Jury Convenience Methods
+// ---------------------------------------------------------------------------
+
+// Deliberate conducts a multi-agent deliberation via the Jury service.
+// The caller frames the question and assembles evidence; the Jury empanels
+// jurors, runs voting rounds, and returns the verdict.
+func (c *Client) Deliberate(
+	ctx context.Context,
+	question, evidence string,
+	allowedOutcomes []string,
+	strategy flowv1.ConsensusStrategy,
+	maxRounds, jurySize int32,
+) (*flowv1.DeliberateResponse, error) {
+	resp, err := c.Jury.Deliberate(ctx, &flowv1.DeliberateRequest{
+		Question:          question,
+		Evidence:          evidence,
+		AllowedOutcomes:   allowedOutcomes,
+		ConsensusStrategy: strategy,
+		MaxRounds:         maxRounds,
+		JurySize:          jurySize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: deliberate failed: %w", err)
+	}
+	return resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// Clerk Convenience Methods
+// ---------------------------------------------------------------------------
+
+// DraftLaw requests the Clerk to draft a law from a jury verdict and persist
+// it via the Librarian. For retire verdicts, retires the law. For demote
+// verdicts, writes the law at a lower tier.
+func (c *Client) DraftLaw(
+	ctx context.Context,
+	verdict *flowv1.DeliberateResponse,
+	goal string,
+	tier int32,
+	appliesTo []string,
+) (*flowv1.DraftLawResponse, error) {
+	resp, err := c.Clerk.DraftLaw(ctx, &flowv1.DraftLawRequest{
+		Verdict:   verdict,
+		Goal:      goal,
+		Tier:      tier,
+		AppliesTo: appliesTo,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: draft law failed: %w", err)
+	}
+	return resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// LinkRuling Convenience Method
+// ---------------------------------------------------------------------------
+
+// LinkRuling atomically links a judiciary ruling to a deadlocked feedback
+// item, enabling the contempt guard. The feedback must be in DEADLOCKED
+// state and must not already have a linked ruling.
+func (c *Client) LinkRuling(ctx context.Context, feedbackID, lawID string) (*flowv1.FeedbackItem, error) {
+	resp, err := c.Archivist.LinkRuling(ctx, &flowv1.LinkRulingRequest{
+		WorkitemId: c.workitemID,
+		FeedbackId: feedbackID,
+		LawId:      lawID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: link ruling failed: %w", err)
+	}
+	return resp.GetUpdatedItem(), nil
+}
+
+// ---------------------------------------------------------------------------
+// QueryFriction Convenience Method
+// ---------------------------------------------------------------------------
+
+// QueryFriction returns aggregated friction data from the Flow Monitor.
+// Used by judiciary nodes to gather evidence for hearings.
+func (c *Client) QueryFriction(
+	ctx context.Context, filter *flowv1.FrictionFilter,
+) ([]*flowv1.FrictionAggregate, error) {
+	resp, err := c.Monitor.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
+		Filter: filter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: query friction failed: %w", err)
+	}
+	return resp.GetFrictionAggregates(), nil
+}
+
+// ---------------------------------------------------------------------------
+// GetLaw Convenience Method
+// ---------------------------------------------------------------------------
+
+// GetLaw returns the full law object by identifier from the Librarian.
+// Used by judiciary nodes for hearing evidence retrieval.
+func (c *Client) GetLaw(ctx context.Context, lawID string) (*flowv1.Law, error) {
+	resp, err := c.Librarian.GetLaw(ctx, &flowv1.GetLawRequest{
+		LawId: lawID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get law failed: %w", err)
+	}
+	return resp.GetLaw(), nil
 }
 
 // ---------------------------------------------------------------------------
