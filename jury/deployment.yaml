@@ -1,0 +1,65 @@
+# Jury Deployment for Foundry Flow
+#
+# The Jury is the deliberation engine of the Judiciary — a standalone gRPC
+# service that empanels diverse AI jurors to reach consensus on governed
+# questions.
+#
+# It listens on port 50057 and is accessed by Sidecars via the
+# flow-jury Service.
+#
+# Prerequisites:
+#   - Build jury image: docker build -t flow-jury:latest -f jury/Dockerfile .
+#
+# For Kind cluster:
+#   kind load docker-image flow-jury:latest --name <cluster>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow-jury
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-jury
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: judiciary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flow-jury
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flow-jury
+    spec:
+      containers:
+        - name: jury
+          image: flow-jury:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50057
+              protocol: TCP
+          env:
+            - name: JURY_PORT
+              value: "50057"
+            - name: JURY_MODEL
+              value: "kimi-k2.5:cloud"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flow-jury
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-jury
+    app.kubernetes.io/part-of: foundry-flow
+spec:
+  selector:
+    app.kubernetes.io/name: flow-jury
+  ports:
+    - name: grpc
+      port: 50057
+      targetPort: 50057
+      protocol: TCP
+  type: ClusterIP
