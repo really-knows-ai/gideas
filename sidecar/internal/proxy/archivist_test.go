@@ -4,14 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"net"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/test/bufconn"
 )
 
 // captureArchivistServer captures the StoreArtefact request to verify
@@ -68,32 +65,10 @@ func (s *captureArchivistServer) LinkRuling(
 func setupArchivistProxy(t *testing.T) (*ArchivistProxy, *captureArchivistServer) {
 	t.Helper()
 
-	lis := bufconn.Listen(1024 * 1024)
-	srv := grpc.NewServer()
 	capture := &captureArchivistServer{}
-	flowv1.RegisterArchivistServiceServer(srv, capture)
-
-	go func() {
-		if err := srv.Serve(lis); err != nil {
-			t.Logf("bufconn server error: %v", err)
-		}
-	}()
-	t.Cleanup(func() {
-		srv.Stop()
-		_ = lis.Close()
+	conn := dialBufconn(t, func(srv *grpc.Server) {
+		flowv1.RegisterArchivistServiceServer(srv, capture)
 	})
-
-	conn, err := grpc.NewClient(
-		"passthrough:///bufconn",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return lis.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("failed to dial bufconn: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
 
 	proxy := &ArchivistProxy{
 		client: flowv1.NewArchivistServiceClient(conn),

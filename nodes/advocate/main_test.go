@@ -136,6 +136,7 @@ func TestAdvocate_TribunalHung_Promote(t *testing.T) {
 		LawID:        "law-001",
 		LawGoal:      "Haiku must have kigo",
 		LawAppliesTo: []string{"haiku"},
+		LawTier:      int32(flowv1.LawTier_LAW_TIER_RULING),
 		Choices:      []string{"promote", "retire", "demote"},
 	}
 
@@ -195,6 +196,7 @@ func TestAdvocate_TribunalHung_RetireAndDemote(t *testing.T) {
 				LawID:        "law-" + tt.name,
 				LawGoal:      "Test " + tt.name,
 				LawAppliesTo: []string{"haiku"},
+				LawTier:      int32(flowv1.LawTier_LAW_TIER_RULING),
 				Choices:      []string{"promote", "retire", "demote"},
 			}
 
@@ -509,18 +511,21 @@ func TestAdvocate_Error_NoChoices(t *testing.T) {
 
 func TestTierForTribunalChoice(t *testing.T) {
 	tests := []struct {
-		choice string
-		want   int32
+		choice       string
+		originalTier int32
+		want         int32
 	}{
-		{"promote", int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE)},
-		{"demote", int32(flowv1.LawTier_LAW_TIER_FINDING)},
-		{"retire", int32(flowv1.LawTier_LAW_TIER_RULING)},
+		{"promote", int32(flowv1.LawTier_LAW_TIER_RULING), int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE)},
+		{"promote", int32(flowv1.LawTier_LAW_TIER_FINDING), int32(flowv1.LawTier_LAW_TIER_RULING)},
+		{"demote", int32(flowv1.LawTier_LAW_TIER_RULING), int32(flowv1.LawTier_LAW_TIER_FINDING)},
+		{"retire", int32(flowv1.LawTier_LAW_TIER_RULING), int32(flowv1.LawTier_LAW_TIER_RULING)},
+		{"retire", int32(flowv1.LawTier_LAW_TIER_FINDING), int32(flowv1.LawTier_LAW_TIER_FINDING)},
 	}
 	for _, tt := range tests {
-		t.Run(tt.choice, func(t *testing.T) {
-			got := tierForTribunalChoice(tt.choice)
+		t.Run(fmt.Sprintf("%s_tier%d", tt.choice, tt.originalTier), func(t *testing.T) {
+			got := tierForTribunalChoice(tt.choice, tt.originalTier)
 			if got != tt.want {
-				t.Fatalf("tierForTribunalChoice(%q) = %d, want %d", tt.choice, got, tt.want)
+				t.Fatalf("tierForTribunalChoice(%q, %d) = %d, want %d", tt.choice, tt.originalTier, got, tt.want)
 			}
 		})
 	}

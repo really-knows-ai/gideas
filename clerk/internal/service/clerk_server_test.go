@@ -9,7 +9,9 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // ---------------------------------------------------------------------------
@@ -270,6 +272,9 @@ func TestDraftLaw_DemoteBelowTier1(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when demoting below tier 1")
 	}
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("status code = %v, want %v", got, codes.InvalidArgument)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +331,9 @@ func TestDraftLaw_ValidationErrors(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Errorf("status code = %v, want %v", got, codes.InvalidArgument)
+			}
 		})
 	}
 }
@@ -347,6 +355,9 @@ func TestDraftLaw_LibrarianWriteError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from Librarian failure")
 	}
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("status code = %v, want %v", got, codes.Internal)
+	}
 	if !strings.Contains(err.Error(), "librarian unavailable") {
 		t.Errorf("error = %q, want to contain %q", err.Error(), "librarian unavailable")
 	}
@@ -365,6 +376,9 @@ func TestDraftLaw_LibrarianRetireError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from Librarian retire failure")
 	}
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("status code = %v, want %v", got, codes.Internal)
+	}
 	if !strings.Contains(err.Error(), "retire failed") {
 		t.Errorf("error = %q, want to contain %q", err.Error(), "retire failed")
 	}
@@ -381,6 +395,9 @@ func TestDraftLaw_NoLibrarian(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when librarian is nil")
+	}
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Errorf("status code = %v, want %v", got, codes.Unavailable)
 	}
 }
 

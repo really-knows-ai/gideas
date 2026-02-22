@@ -13,6 +13,8 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Librarian defines the subset of LibrarianServiceClient used by the Clerk.
@@ -48,17 +50,17 @@ func (s *ClerkServer) DraftLaw(
 ) (*flowv1.DraftLawResponse, error) {
 	// Validate request.
 	if req.GetVerdict() == nil {
-		return nil, fmt.Errorf("clerk: verdict is required")
+		return nil, status.Errorf(codes.InvalidArgument, "clerk: verdict is required")
 	}
 	if req.GetGoal() == "" {
-		return nil, fmt.Errorf("clerk: goal is required")
+		return nil, status.Errorf(codes.InvalidArgument, "clerk: goal is required")
 	}
 	tier := req.GetTier()
 	if tier < 1 || tier > 5 {
-		return nil, fmt.Errorf("clerk: tier must be between 1 and 5")
+		return nil, status.Errorf(codes.InvalidArgument, "clerk: tier must be between 1 and 5")
 	}
 	if s.librarian == nil {
-		return nil, fmt.Errorf("clerk: librarian client not configured")
+		return nil, status.Errorf(codes.Unavailable, "clerk: librarian client not configured")
 	}
 
 	verdict := req.GetVerdict()
@@ -103,7 +105,7 @@ func (s *ClerkServer) handleDraft(
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("clerk: write law: %w", err)
+		return nil, status.Errorf(codes.Internal, "clerk: write law: %v", err)
 	}
 
 	slog.Info("clerk: law drafted",
@@ -135,7 +137,7 @@ func (s *ClerkServer) handleRetire(
 		LawId: lawID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("clerk: retire law: %w", err)
+		return nil, status.Errorf(codes.Internal, "clerk: retire law: %v", err)
 	}
 
 	slog.Info("clerk: law retired", "law_id", lawID)
@@ -159,7 +161,7 @@ func (s *ClerkServer) handleDemote(
 
 	newTier := req.GetTier() - 1
 	if newTier < 1 {
-		return nil, fmt.Errorf("clerk: cannot demote below tier 1")
+		return nil, status.Errorf(codes.InvalidArgument, "clerk: cannot demote below tier 1")
 	}
 
 	writeResp, err := s.librarian.WriteLaw(ctx, &flowv1.WriteLawRequest{
@@ -171,7 +173,7 @@ func (s *ClerkServer) handleDemote(
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("clerk: write law (demote): %w", err)
+		return nil, status.Errorf(codes.Internal, "clerk: write law (demote): %v", err)
 	}
 
 	slog.Info("clerk: law demoted",

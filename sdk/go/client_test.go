@@ -24,6 +24,8 @@ type spyServer struct {
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
 	flowv1.UnimplementedFlowMonitorServiceServer
+	flowv1.UnimplementedJuryServiceServer
+	flowv1.UnimplementedClerkServiceServer
 
 	// lastMD is the metadata captured from the most recent call.
 	lastMD metadata.MD
@@ -149,6 +151,56 @@ func (s *spyServer) DeadlockFeedback(
 	}}, nil
 }
 
+func (s *spyServer) Deliberate(
+	ctx context.Context, req *flowv1.DeliberateRequest,
+) (*flowv1.DeliberateResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.DeliberateResponse{
+		Outcome:    req.GetAllowedOutcomes()[0],
+		RoundsUsed: 1,
+		Hung:       false,
+	}, nil
+}
+
+func (s *spyServer) DraftLaw(
+	ctx context.Context, req *flowv1.DraftLawRequest,
+) (*flowv1.DraftLawResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.DraftLawResponse{
+		LawId:       "law-drafted-001",
+		VersionHash: "abc123",
+	}, nil
+}
+
+func (s *spyServer) LinkRuling(
+	ctx context.Context, req *flowv1.LinkRulingRequest,
+) (*flowv1.LinkRulingResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.LinkRulingResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id:           req.GetFeedbackId(),
+		State:        req.GetTargetState(),
+		LinkedRuling: req.GetLawId(),
+	}}, nil
+}
+
+func (s *spyServer) QueryFriction(
+	ctx context.Context, req *flowv1.QueryFrictionRequest,
+) (*flowv1.QueryFrictionResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.QueryFrictionResponse{
+		FrictionAggregates: []*flowv1.FrictionAggregate{{LawId: "law-friction-001"}},
+	}, nil
+}
+
+func (s *spyServer) GetLaw(
+	ctx context.Context, req *flowv1.GetLawRequest,
+) (*flowv1.GetLawResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.GetLawResponse{
+		Law: &flowv1.Law{Id: req.GetLawId(), Goal: "test goal"},
+	}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helper — starts a bufconn gRPC server and returns a connected Client
 // ---------------------------------------------------------------------------
@@ -171,6 +223,8 @@ func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 		flowv1.RegisterArchivistServiceServer(s, spy)
 		flowv1.RegisterLibrarianServiceServer(s, spy)
 		flowv1.RegisterFlowMonitorServiceServer(s, spy)
+		flowv1.RegisterJuryServiceServer(s, spy)
+		flowv1.RegisterClerkServiceServer(s, spy)
 	})
 
 	return &testEnv{client: client, spy: spy, srv: srv}
@@ -518,6 +572,157 @@ func TestGetFlowTopology_InjectsWorkitemMetadata(t *testing.T) {
 	}
 
 	// Verify metadata injection.
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Jury Convenience Methods
+// ---------------------------------------------------------------------------
+
+func TestDeliberate_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-deliberate-001"
+	env := setupTestEnv(t, wantID)
+
+	resp, err := env.client.Deliberate(
+		context.Background(),
+		"Should the fix be accepted?",
+		"## Evidence\nSome evidence here.",
+		[]string{"accept", "reject"},
+		flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY,
+		3, 5,
+	)
+	if err != nil {
+		t.Fatalf("Deliberate() returned error: %v", err)
+	}
+	if resp.GetOutcome() != "accept" {
+		t.Fatalf("expected outcome=accept, got %q", resp.GetOutcome())
+	}
+	if resp.GetRoundsUsed() != 1 {
+		t.Fatalf("expected rounds_used=1, got %d", resp.GetRoundsUsed())
+	}
+	if resp.GetHung() {
+		t.Fatal("expected hung=false, got true")
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Clerk Convenience Methods
+// ---------------------------------------------------------------------------
+
+func TestDraftLaw_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-draftlaw-001"
+	env := setupTestEnv(t, wantID)
+
+	verdict := &flowv1.DeliberateResponse{
+		Outcome:    "promote",
+		RoundsUsed: 2,
+	}
+	resp, err := env.client.DraftLaw(
+		context.Background(),
+		verdict, "enforce consistent naming", 2, []string{"docs"},
+	)
+	if err != nil {
+		t.Fatalf("DraftLaw() returned error: %v", err)
+	}
+	if resp.GetLawId() != "law-drafted-001" {
+		t.Fatalf("expected law_id=law-drafted-001, got %q", resp.GetLawId())
+	}
+	if resp.GetVersionHash() != "abc123" {
+		t.Fatalf("expected version_hash=abc123, got %q", resp.GetVersionHash())
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — LinkRuling Convenience Method
+// ---------------------------------------------------------------------------
+
+func TestLinkRuling_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-linkruling-001"
+	env := setupTestEnv(t, wantID)
+
+	item, err := env.client.LinkRuling(
+		context.Background(), "fb-dead-001", "law-ruling-001",
+		flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
+	)
+	if err != nil {
+		t.Fatalf("LinkRuling() returned error: %v", err)
+	}
+	if item.GetId() != "fb-dead-001" {
+		t.Fatalf("expected feedback_id=fb-dead-001, got %q", item.GetId())
+	}
+	if item.GetLinkedRuling() != "law-ruling-001" {
+		t.Fatalf("expected linked_ruling=law-ruling-001, got %q", item.GetLinkedRuling())
+	}
+	wantState := flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX
+	if item.GetState() != wantState {
+		t.Fatalf("expected state=%v, got %v", wantState, item.GetState())
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — QueryFriction Convenience Method
+// ---------------------------------------------------------------------------
+
+func TestQueryFriction_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-friction-001"
+	env := setupTestEnv(t, wantID)
+
+	aggregates, err := env.client.QueryFriction(
+		context.Background(), &flowv1.FrictionFilter{LawId: "law-friction-001"},
+	)
+	if err != nil {
+		t.Fatalf("QueryFriction() returned error: %v", err)
+	}
+	if len(aggregates) != 1 {
+		t.Fatalf("expected 1 aggregate, got %d", len(aggregates))
+	}
+	if aggregates[0].GetLawId() != "law-friction-001" {
+		t.Fatalf("expected law_id=law-friction-001, got %q", aggregates[0].GetLawId())
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — GetLaw Convenience Method
+// ---------------------------------------------------------------------------
+
+func TestGetLaw_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-getlaw-001"
+	env := setupTestEnv(t, wantID)
+
+	law, err := env.client.GetLaw(context.Background(), "law-getlaw-001")
+	if err != nil {
+		t.Fatalf("GetLaw() returned error: %v", err)
+	}
+	if law.GetId() != "law-getlaw-001" {
+		t.Fatalf("expected law_id=law-getlaw-001, got %q", law.GetId())
+	}
+	if law.GetGoal() != "test goal" {
+		t.Fatalf("expected goal=test goal, got %q", law.GetGoal())
+	}
+
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
 	if len(got) == 0 || got[0] != wantID {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)

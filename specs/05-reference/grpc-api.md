@@ -103,6 +103,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | `RejectRefusal` | `workitem_id`, `feedback_id`, `message` | `updated_item` | Transitions feedback from `wont_fix` to `rejected`. |
 | `GetFeedbackDepth` | `workitem_id`, `feedback_id` | `depth` (integer) | Returns the current history depth (number of transitions) for the specified feedback item. |
 | `DeadlockFeedback` | `workitem_id`, `feedback_id` | `updated_item` | Transitions feedback from any non-resolved, non-deadlocked state to `deadlocked`. Requires `WRITE:feedback/deadlocked` capability. The Archivist validates capability, from-state, and contempt guard (items with `linkedRuling` cannot be deadlocked); deadlock determination is gate node logic, not Archivist enforcement. |
+| `LinkRuling` | `workitem_id`, `feedback_id`, `law_id`, `target_state` | `updated_item` | Links a judiciary ruling to a deadlocked feedback item, atomically setting `linked_ruling` and transitioning the feedback to `target_state` (`wont_fix` or `rejected`). Requires `WRITE:feedback/link-ruling` capability. Enforces contempt guard: feedback must be in `deadlocked` state and must not already have a linked ruling. Records a `link_ruling` feedback event for audit trail continuity. |
 
 ### Archivist Error Responses
 
@@ -244,39 +245,39 @@ The Sidecar catches invalid requests early. The owning service makes authoritati
 
 ## Jury API
 
-The [Jury](../02-flow/04-system-services.md#jury) is a core service that manages multi-agent deliberation. It is consumed by the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (deadlock adjudication) and [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (review hearings) through Sidecar-mediated calls.
+The [Jury](../02-flow/04-system-services.md#jury) is a generic deliberation engine. It receives a question (string) and evidence (markdown bundle) — not domain-specific structured data. The calling node (Arbiter or Tribunal) is responsible for framing the question and assembling evidence. This keeps the Jury reusable with no Foundry-domain coupling. It is consumed through Sidecar-mediated calls.
 
 ### Deliberation Methods
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `Deliberate` | `case_evidence`, `consensus_strategy`, `juror_profiles`, `max_rounds` | `verdict` | Empanels parallel FoundryAgent instances as jurors, runs blind voting with optional deliberation rounds, applies consensus strategy, and returns a structured verdict. |
+| `Deliberate` | `question`, `evidence`, `allowed_outcomes`, `consensus_strategy`, `max_rounds`, `jury_size` | `DeliberateResponse` | Empanels a diverse panel of FoundryAgent jurors, runs blind voting with optional deliberation rounds feeding anonymised peer arguments, applies the consensus strategy, and returns the outcome with per-juror justifications. A hung jury is a valid outcome (`hung=true`), not an error. |
 
 ### Deliberate Request
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `case_evidence` | `CaseEvidence` | yes | Feedback history, artefact content, applicable laws, and friction data for the case under deliberation. |
-| `consensus_strategy` | `string` | yes | `SimpleMajority` (>50%), `SuperMajority` (>=66%), or `Unanimity` (100%). |
-| `juror_profiles` | `[]JurorProfile` | yes | Configuration for each juror instance (model, system prompt, evaluation criteria). |
-| `max_rounds` | `integer` | no | Maximum deliberation rounds. Each round after the first feeds peer arguments back to jurors. Default 1. |
+| `question` | `string` | yes | What the jury is deliberating. Framed by the calling node (e.g., "Should the reviewer's feedback be upheld, or should the refiner's refusal stand?"). |
+| `evidence` | `string` | yes | Structured markdown evidence bundle assembled by the calling node (feedback history, artefact excerpts, cited laws, friction summary). |
+| `allowed_outcomes` | `repeated string` | yes | Valid vote values (e.g., `["favour_refiner", "favour_reviewer"]`). The Jury builds the output JSON Schema dynamically from these values, ensuring juror votes are always valid outcomes. |
+| `consensus_strategy` | `ConsensusStrategy` | yes | `SIMPLE_MAJORITY` (>50%), `SUPER_MAJORITY` (>=66%), or `UNANIMITY` (100%). Proto enum. |
+| `max_rounds` | `int32` | yes | Maximum deliberation rounds before declaring a hung jury. Each round after the first feeds anonymised peer arguments back to jurors. |
+| `jury_size` | `int32` | yes | Number of jurors to empanel from the pool. The Jury owns juror construction — 5 distinct personality types with different judicial philosophies. Callers specify count, not profiles. If `jury_size <= 5`, each type appears at most once. |
 
-### Deliberate Response (Verdict)
+### Deliberate Response
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `outcome` | `string` | The verdict outcome (e.g., `favour_refiner`, `favour_reviewer`, `promote`, `retire`, `demote`, `escalate`). |
-| `justifications` | `[]Justification` | Per-juror justification with reasoning and confidence score. |
-| `confidence` | `float` | Aggregate confidence score. |
-| `rounds_used` | `integer` | Number of deliberation rounds executed. |
-| `hung` | `bool` | Whether the jury failed to reach consensus within `max_rounds`. |
+| `outcome` | `string` | The winning outcome (one of `allowed_outcomes`). Empty if `hung` is true. |
+| `justifications` | `repeated JurorJustification` | Per-juror vote and reasoning from the final round. Each entry contains `juror_id` (opaque, e.g., `"textualist-0"`), `outcome` (the juror's vote), and `reasoning` (the juror's justification). No numerical confidence — confidence is reflected structurally (hung vs. unanimous). |
+| `rounds_used` | `int32` | Number of deliberation rounds executed. |
+| `hung` | `bool` | `true` if consensus was not reached after `max_rounds`. A hung jury is a valid response, not an error — the calling node decides how to handle it (e.g., escalate to Advocate). |
 
 ### Jury Error Responses
 
 | Condition | Error | gRPC Status |
 |-----------|-------|-------------|
 | Jury service unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
-| Hung jury (consensus not reached) | `JURY_HUNG` | `FAILED_PRECONDITION` |
 | Juror inference failure | `JURY_INFERENCE_FAILED` | `INTERNAL` |
 
 ---

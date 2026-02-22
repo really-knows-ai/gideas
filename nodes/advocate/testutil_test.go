@@ -69,8 +69,9 @@ type advocateSpy struct {
 }
 
 type linkRulingRecord struct {
-	FeedbackID string
-	LawID      string
+	FeedbackID  string
+	LawID       string
+	TargetState flowv1.FeedbackState
 }
 
 type draftLawRecord struct {
@@ -238,13 +239,14 @@ func (s *advocateSpy) LinkRuling(
 		return nil, s.LinkRulingErr
 	}
 	s.LinkedRulings = append(s.LinkedRulings, linkRulingRecord{
-		FeedbackID: req.GetFeedbackId(),
-		LawID:      req.GetLawId(),
+		FeedbackID:  req.GetFeedbackId(),
+		LawID:       req.GetLawId(),
+		TargetState: req.GetTargetState(),
 	})
 	return &flowv1.LinkRulingResponse{
 		UpdatedItem: &flowv1.FeedbackItem{
 			Id:           req.GetFeedbackId(),
-			State:        flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			State:        req.GetTargetState(),
 			LinkedRuling: req.GetLawId(),
 		},
 	}, nil

@@ -13,12 +13,28 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
+)
+
+// Sentinel errors for LinkRuling validation failures. These allow callers
+// to distinguish error conditions using errors.Is and map to appropriate
+// gRPC status codes.
+var (
+	// ErrFeedbackNotFound is returned when the requested feedback item
+	// does not exist.
+	ErrFeedbackNotFound = errors.New("feedback not found")
+	// ErrFeedbackNotDeadlocked is returned when the feedback item is not
+	// in the DEADLOCKED state required for linking a ruling.
+	ErrFeedbackNotDeadlocked = errors.New("feedback not in DEADLOCKED state")
+	// ErrContemptGuard is returned when the feedback item already has a
+	// linked ruling, preventing a second ruling from being attached.
+	ErrContemptGuard = errors.New("ruling already linked (contempt guard)")
 )
 
 // sqliteTimeFormat is the format used to store and retrieve timestamps in
@@ -652,11 +668,22 @@ func (s *Store) GetFeedbackDepth(ctx context.Context, feedbackID string) (int32,
 	return count, nil
 }
 
-// LinkRuling atomically sets the linked_ruling field on a feedback item.
-// It validates that the feedback is in DEADLOCKED state (5) and that no
-// ruling is already linked (contempt guard). Returns the updated record.
-func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string) (*FeedbackRecord, error) {
+// LinkRuling atomically sets the linked_ruling field on a feedback item and
+// transitions it to the target state. It validates that the feedback is in
+// DEADLOCKED state (5), that no ruling is already linked (contempt guard),
+// and that the target state is a valid terminal state (WONT_FIX=3 or
+// REJECTED=4). A feedback event is appended for audit trail. Returns the
+// updated record.
+func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string, targetState int32) (*FeedbackRecord, error) {
 	const stateDeadlocked int32 = 5 // flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED
+	const stateWontFix int32 = 3    // flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX
+	const stateRejected int32 = 4   // flowv1.FeedbackState_FEEDBACK_STATE_REJECTED
+
+	// Validate target state.
+	if targetState != stateWontFix && targetState != stateRejected {
+		return nil, fmt.Errorf("invalid target_state %d: must be WONT_FIX (%d) or REJECTED (%d)",
+			targetState, stateWontFix, stateRejected)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -677,7 +704,7 @@ func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string) (*Feed
 		&f.LinkedRuling, &createdStr,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("feedback %q not found", feedbackID)
+		return nil, fmt.Errorf("feedback %q: %w", feedbackID, ErrFeedbackNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read feedback: %w", err)
@@ -687,23 +714,35 @@ func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string) (*Feed
 	// Validate state is DEADLOCKED.
 	if f.State != stateDeadlocked {
 		return nil, fmt.Errorf(
-			"feedback %q in state %d, must be DEADLOCKED (%d) to link ruling",
-			feedbackID, f.State, stateDeadlocked,
+			"feedback %q in state %d, must be DEADLOCKED (%d): %w",
+			feedbackID, f.State, stateDeadlocked, ErrFeedbackNotDeadlocked,
 		)
 	}
 
 	// Contempt guard: block if linked_ruling already set.
 	if f.LinkedRuling != "" {
-		return nil, fmt.Errorf("feedback %q already has linked ruling %q (contempt guard)", feedbackID, f.LinkedRuling)
+		return nil, fmt.Errorf("feedback %q already has linked ruling %q: %w",
+			feedbackID, f.LinkedRuling, ErrContemptGuard)
 	}
 
-	// Set linked_ruling.
+	// Atomically set linked_ruling and transition state.
 	_, err = tx.ExecContext(ctx,
-		`UPDATE feedback_items SET linked_ruling = ? WHERE id = ?`,
-		lawID, feedbackID,
+		`UPDATE feedback_items SET linked_ruling = ?, state = ? WHERE id = ?`,
+		lawID, targetState, feedbackID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("update linked_ruling: %w", err)
+		return nil, fmt.Errorf("update linked_ruling and state: %w", err)
+	}
+
+	// Append feedback event for audit trail.
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO feedback_events (feedback_id, actor, action, message)
+		 VALUES (?, ?, ?, ?)`,
+		feedbackID, "judiciary", "link_ruling",
+		fmt.Sprintf("Linked ruling %s", lawID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert link_ruling event: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -711,6 +750,7 @@ func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string) (*Feed
 	}
 
 	f.LinkedRuling = lawID
+	f.State = targetState
 	return &f, nil
 }
 

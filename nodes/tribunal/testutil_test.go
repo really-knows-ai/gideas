@@ -61,10 +61,16 @@ type tribunalSpy struct {
 	CompleteErr      error
 
 	// Recorded operations for assertions.
-	RoutedOutputs   []string
-	Completed       bool
-	DeliberateCalls []deliberateRecord
-	DraftLawCalls   []draftLawRecord
+	RoutedOutputs      []string
+	Completed          bool
+	DeliberateCalls    []deliberateRecord
+	DraftLawCalls      []draftLawRecord
+	StoreArtefactCalls []storeArtefactRecord
+}
+
+type storeArtefactRecord struct {
+	ArtefactID string
+	Content    []byte
 }
 
 type deliberateRecord struct {
@@ -180,6 +186,21 @@ func (s *tribunalSpy) GetArtefact(
 	}
 	return &flowv1.GetArtefactResponse{
 		Content: s.LawReferenceContent,
+	}, nil
+}
+
+func (s *tribunalSpy) StoreArtefact(
+	_ context.Context, req *flowv1.StoreArtefactRequest,
+) (*flowv1.StoreArtefactResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.StoreArtefactCalls = append(s.StoreArtefactCalls, storeArtefactRecord{
+		ArtefactID: req.GetArtefactId(),
+		Content:    req.GetContent(),
+	})
+	return &flowv1.StoreArtefactResponse{
+		VersionHash:  "mock-hash",
+		IsNewVersion: true,
 	}, nil
 }
 

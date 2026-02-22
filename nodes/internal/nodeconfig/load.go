@@ -10,7 +10,9 @@ package nodeconfig
 import (
 	"fmt"
 	"os"
+	"strings"
 
+	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"gopkg.in/yaml.v3"
 )
 
@@ -51,4 +53,22 @@ func Load[T any](path string) (*T, error) {
 		return nil, fmt.Errorf("nodeconfig: parse %s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// ParseConsensusStrategy converts a config string to the protobuf enum.
+// Recognised values (case-insensitive, whitespace-trimmed):
+//
+//	"SUPER_MAJORITY" -> CONSENSUS_STRATEGY_SUPER_MAJORITY
+//	"UNANIMITY"      -> CONSENSUS_STRATEGY_UNANIMITY
+//
+// All other values (including empty) default to SIMPLE_MAJORITY.
+func ParseConsensusStrategy(s string) flowv1.ConsensusStrategy {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "SUPER_MAJORITY":
+		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SUPER_MAJORITY
+	case "UNANIMITY":
+		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_UNANIMITY
+	default:
+		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY
+	}
 }
