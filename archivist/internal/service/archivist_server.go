@@ -9,6 +9,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
@@ -645,18 +646,21 @@ func (s *ArchivistServer) DeadlockFeedback(
 }
 
 // LinkRuling atomically links a judiciary ruling to a deadlocked feedback
-// item, enabling the contempt guard. The feedback must be in DEADLOCKED
-// state and must not already have a linked ruling.
+// item, transitioning it to the specified terminal state and enabling the
+// contempt guard. The feedback must be in DEADLOCKED state and must not
+// already have a linked ruling. The target_state must be WONT_FIX or REJECTED.
 func (s *ArchivistServer) LinkRuling(
 	ctx context.Context, req *flowv1.LinkRulingRequest,
 ) (*flowv1.LinkRulingResponse, error) {
 	feedbackID := req.GetFeedbackId()
 	lawID := req.GetLawId()
+	targetState := req.GetTargetState()
 
 	slog.Info("LinkRuling",
 		"workitem_id", req.GetWorkitemId(),
 		"feedback_id", feedbackID,
 		"law_id", lawID,
+		"target_state", targetState.String(),
 	)
 
 	if feedbackID == "" {
@@ -665,10 +669,21 @@ func (s *ArchivistServer) LinkRuling(
 	if lawID == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "law_id is required")
 	}
+	if targetState == flowv1.FeedbackState_FEEDBACK_STATE_UNSPECIFIED {
+		return nil, status.Errorf(codes.InvalidArgument, "target_state is required (must be WONT_FIX or REJECTED)")
+	}
 
-	record, err := s.store.LinkRuling(ctx, feedbackID, lawID)
+	record, err := s.store.LinkRuling(ctx, feedbackID, lawID, int32(targetState))
 	if err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "link ruling: %v", err)
+		switch {
+		case errors.Is(err, sqlite.ErrFeedbackNotFound):
+			return nil, status.Errorf(codes.NotFound, "link ruling: %v", err)
+		case errors.Is(err, sqlite.ErrFeedbackNotDeadlocked),
+			errors.Is(err, sqlite.ErrContemptGuard):
+			return nil, status.Errorf(codes.FailedPrecondition, "link ruling: %v", err)
+		default:
+			return nil, status.Errorf(codes.Internal, "link ruling: %v", err)
+		}
 	}
 
 	return &flowv1.LinkRulingResponse{

@@ -27,6 +27,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -67,7 +68,7 @@ type arbiterConfig struct {
 
 // strategy returns the effective consensus strategy enum.
 func (c *arbiterConfig) strategy() flowv1.ConsensusStrategy {
-	return parseConsensusStrategy(c.ConsensusStrategy)
+	return nodeconfig.ParseConsensusStrategy(c.ConsensusStrategy)
 }
 
 // maxRounds returns the effective max rounds, applying the default when unset.
@@ -164,6 +165,22 @@ func handleArbiter(ctx context.Context, client *flow.Client, cfg *arbiterConfig)
 			slog.Info("arbiter: hung jury, escalating to advocate",
 				"artefact_kind", kind,
 				"rounds_used", verdict.GetRoundsUsed())
+
+			// Write advocate-context artefact for the Advocate node.
+			advCtx := map[string]any{
+				"type":          "arbiter-hung",
+				"artefact_kind": kind,
+				"feedback_ids":  feedbackIDs(deadlockedItems),
+				"choices":       []string{"favour_refiner", "favour_reviewer"},
+			}
+			advCtxJSON, err := json.Marshal(advCtx)
+			if err != nil {
+				return fmt.Errorf("arbiter: marshal advocate-context: %w", err)
+			}
+			if _, err := client.StoreArtefact(ctx, "advocate-context", "", advCtxJSON); err != nil {
+				return fmt.Errorf("arbiter: store advocate-context: %w", err)
+			}
+
 			_, err = client.RouteToOutput(ctx, outputAdvocate)
 			if err != nil {
 				return fmt.Errorf("arbiter: route to advocate: %w", err)
@@ -186,8 +203,14 @@ func handleArbiter(ctx context.Context, client *flow.Client, cfg *arbiterConfig)
 			"artefact_kind", kind)
 
 		// Link ruling to each deadlocked feedback item.
+		// Determine terminal state: favour_refiner → WONT_FIX (refusal stands),
+		// favour_reviewer → REJECTED (reviewer's feedback upheld, refiner must act).
+		targetState := flowv1.FeedbackState_FEEDBACK_STATE_REJECTED
+		if verdict.GetOutcome() == "favour_refiner" {
+			targetState = flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX
+		}
 		for _, item := range deadlockedItems {
-			if _, err := client.LinkRuling(ctx, item.GetId(), lawResp.GetLawId()); err != nil {
+			if _, err := client.LinkRuling(ctx, item.GetId(), lawResp.GetLawId(), targetState); err != nil {
 				return fmt.Errorf("arbiter: link ruling to feedback %s: %w", item.GetId(), err)
 			}
 		}
@@ -327,14 +350,11 @@ func synthesizeGoal(
 		artefactKind, first.GetId(), first.GetSource(), verdict.GetOutcome())
 }
 
-// parseConsensusStrategy converts a config string to the protobuf enum.
-func parseConsensusStrategy(s string) flowv1.ConsensusStrategy {
-	switch strings.ToUpper(strings.TrimSpace(s)) {
-	case "SUPER_MAJORITY":
-		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SUPER_MAJORITY
-	case "UNANIMITY":
-		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_UNANIMITY
-	default:
-		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY
+// feedbackIDs extracts the IDs from a slice of feedback items.
+func feedbackIDs(items []*flowv1.FeedbackItem) []string {
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.GetId()
 	}
+	return ids
 }

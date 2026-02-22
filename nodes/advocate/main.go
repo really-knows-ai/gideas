@@ -73,6 +73,7 @@ type advocateContext struct {
 	Choices      []string       `json:"choices"`
 	LawGoal      string         `json:"law_goal,omitempty"`
 	LawAppliesTo []string       `json:"law_applies_to,omitempty"`
+	LawTier      int32          `json:"law_tier,omitempty"`
 }
 
 func main() {
@@ -243,8 +244,13 @@ func applyArbiterHungDecision(
 		"choice", choice)
 
 	// Link ruling to each deadlocked feedback item.
+	// Determine terminal state: favour_refiner → WONT_FIX, favour_reviewer → REJECTED.
+	targetState := flowv1.FeedbackState_FEEDBACK_STATE_REJECTED
+	if choice == "favour_refiner" {
+		targetState = flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX
+	}
 	for _, fbID := range advCtx.FeedbackIDs {
-		if _, err := client.LinkRuling(ctx, fbID, lawResp.GetLawId()); err != nil {
+		if _, err := client.LinkRuling(ctx, fbID, lawResp.GetLawId(), targetState); err != nil {
 			return fmt.Errorf("advocate: link ruling to feedback %s: %w", fbID, err)
 		}
 	}
@@ -271,7 +277,7 @@ func applyTribunalHungDecision(
 		},
 	}
 
-	tier := tierForTribunalChoice(choice)
+	tier := tierForTribunalChoice(choice, advCtx.LawTier)
 	_, err := client.DraftLaw(ctx, verdict, advCtx.LawGoal, tier, advCtx.LawAppliesTo)
 	if err != nil {
 		return fmt.Errorf("advocate: draft law (tribunal-hung, choice=%s): %w", choice, err)
@@ -322,15 +328,16 @@ func applyTribunalPromoteDecision(
 	return nil
 }
 
-// tierForTribunalChoice maps a tribunal hearing choice to the DraftLaw tier.
-func tierForTribunalChoice(choice string) int32 {
+// tierForTribunalChoice maps a tribunal hearing choice to the DraftLaw tier
+// using the original law tier from the advocate context.
+func tierForTribunalChoice(choice string, originalTier int32) int32 {
 	switch choice {
 	case "promote":
-		return int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE)
+		return originalTier + 1
 	case "demote":
-		return int32(flowv1.LawTier_LAW_TIER_FINDING)
-	default: // "retire" or anything else — keep current tier
-		return int32(flowv1.LawTier_LAW_TIER_RULING)
+		return originalTier - 1
+	default: // "retire" — pass the original tier through to the Clerk
+		return originalTier
 	}
 }
 

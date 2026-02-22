@@ -438,32 +438,6 @@ func TestArbiter_Error_LinkRulingFails(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parseConsensusStrategy unit tests
-// ---------------------------------------------------------------------------
-
-func TestParseConsensusStrategy(t *testing.T) {
-	tests := []struct {
-		input string
-		want  flowv1.ConsensusStrategy
-	}{
-		{"", flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY},
-		{"SIMPLE_MAJORITY", flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY},
-		{"SUPER_MAJORITY", flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SUPER_MAJORITY},
-		{"UNANIMITY", flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_UNANIMITY},
-		{"  super_majority  ", flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SUPER_MAJORITY},
-		{"unknown", flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY},
-	}
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("input=%q", tt.input), func(t *testing.T) {
-			got := parseConsensusStrategy(tt.input)
-			if got != tt.want {
-				t.Fatalf("parseConsensusStrategy(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Config defaults tests
 // ---------------------------------------------------------------------------
 

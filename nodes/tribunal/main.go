@@ -33,6 +33,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -70,7 +71,7 @@ type tribunalConfig struct {
 }
 
 func (c *tribunalConfig) strategy() flowv1.ConsensusStrategy {
-	return parseConsensusStrategy(c.ConsensusStrategy)
+	return nodeconfig.ParseConsensusStrategy(c.ConsensusStrategy)
 }
 
 func (c *tribunalConfig) maxRounds() int32 {
@@ -183,6 +184,24 @@ func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfi
 			"law_id", lawID,
 			"tier", int32(tier),
 			"rounds_used", verdict.GetRoundsUsed())
+
+		// Write advocate-context artefact for the Advocate node.
+		advCtx := map[string]any{
+			"type":           "tribunal-hung",
+			"law_id":         law.GetId(),
+			"law_goal":       law.GetGoal(),
+			"law_applies_to": law.GetAppliesTo(),
+			"law_tier":       int32(tier),
+			"choices":        allowedOutcomes,
+		}
+		advCtxJSON, err := json.Marshal(advCtx)
+		if err != nil {
+			return fmt.Errorf("tribunal: marshal advocate-context: %w", err)
+		}
+		if _, err := client.StoreArtefact(ctx, "advocate-context", "", advCtxJSON); err != nil {
+			return fmt.Errorf("tribunal: store advocate-context: %w", err)
+		}
+
 		_, err = client.RouteToOutput(ctx, outputAdvocate)
 		if err != nil {
 			return fmt.Errorf("tribunal: route to advocate: %w", err)
@@ -237,7 +256,25 @@ func applyVerdict(
 		// Tier 2 promote → Route to Advocate for Tier 3 HITL ratification.
 		slog.Info("tribunal: tier 2 promote, escalating to advocate for ratification",
 			"law_id", law.GetId())
-		_, err := client.RouteToOutput(ctx, outputAdvocate)
+
+		// Write advocate-context artefact for the Advocate node.
+		advCtx := map[string]any{
+			"type":           "tribunal-promote",
+			"law_id":         law.GetId(),
+			"law_goal":       law.GetGoal(),
+			"law_applies_to": law.GetAppliesTo(),
+			"law_tier":       int32(tier),
+			"choices":        []string{"accept", "reject"},
+		}
+		advCtxJSON, err := json.Marshal(advCtx)
+		if err != nil {
+			return fmt.Errorf("tribunal: marshal advocate-context (promote): %w", err)
+		}
+		if _, err := client.StoreArtefact(ctx, "advocate-context", "", advCtxJSON); err != nil {
+			return fmt.Errorf("tribunal: store advocate-context (promote): %w", err)
+		}
+
+		_, err = client.RouteToOutput(ctx, outputAdvocate)
 		if err != nil {
 			return fmt.Errorf("tribunal: route to advocate (promote ruling): %w", err)
 		}
@@ -327,16 +364,4 @@ func assembleHearingEvidence(
 	}
 
 	return b.String()
-}
-
-// parseConsensusStrategy converts a config string to the protobuf enum.
-func parseConsensusStrategy(s string) flowv1.ConsensusStrategy {
-	switch strings.ToUpper(strings.TrimSpace(s)) {
-	case "SUPER_MAJORITY":
-		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SUPER_MAJORITY
-	case "UNANIMITY":
-		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_UNANIMITY
-	default:
-		return flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY
-	}
 }

@@ -576,13 +576,17 @@ func (c *Client) DraftLaw(
 // ---------------------------------------------------------------------------
 
 // LinkRuling atomically links a judiciary ruling to a deadlocked feedback
-// item, enabling the contempt guard. The feedback must be in DEADLOCKED
-// state and must not already have a linked ruling.
-func (c *Client) LinkRuling(ctx context.Context, feedbackID, lawID string) (*flowv1.FeedbackItem, error) {
+// item, transitioning it to the specified terminal state and enabling the
+// contempt guard. The feedback must be in DEADLOCKED state and must not
+// already have a linked ruling. The targetState must be WONT_FIX or REJECTED.
+func (c *Client) LinkRuling(
+	ctx context.Context, feedbackID, lawID string, targetState flowv1.FeedbackState,
+) (*flowv1.FeedbackItem, error) {
 	resp, err := c.Archivist.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-		LawId:      lawID,
+		WorkitemId:  c.workitemID,
+		FeedbackId:  feedbackID,
+		LawId:       lawID,
+		TargetState: targetState,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: link ruling failed: %w", err)

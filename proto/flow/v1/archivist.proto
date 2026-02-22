@@ -312,6 +312,9 @@ message LinkRulingRequest {
   string feedback_id = 2;
   // Librarian-assigned law ID of the ruling to link.
   string law_id = 3;
+  // Terminal state to transition the feedback to. Must be WONT_FIX (3) or
+  // REJECTED (4). The store atomically sets linked_ruling and state.
+  FeedbackState target_state = 4;
 }
 
 message LinkRulingResponse {

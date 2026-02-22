@@ -75,16 +75,23 @@ type arbiterSpy struct {
 	RouteToOutputErr   error
 
 	// Recorded operations for assertions.
-	RoutedOutputs   []string
-	LinkedRulings   []linkRulingRecord
-	DeliberateCalls []deliberateRecord
-	DraftLawCalls   []draftLawRecord
-	Completed       bool
+	RoutedOutputs      []string
+	LinkedRulings      []linkRulingRecord
+	DeliberateCalls    []deliberateRecord
+	DraftLawCalls      []draftLawRecord
+	StoreArtefactCalls []storeArtefactRecord
+	Completed          bool
+}
+
+type storeArtefactRecord struct {
+	ArtefactID string
+	Content    []byte
 }
 
 type linkRulingRecord struct {
-	FeedbackID string
-	LawID      string
+	FeedbackID  string
+	LawID       string
+	TargetState flowv1.FeedbackState
 }
 
 type deliberateRecord struct {
@@ -229,6 +236,21 @@ func (s *arbiterSpy) GetArtefact(
 	}, nil
 }
 
+func (s *arbiterSpy) StoreArtefact(
+	_ context.Context, req *flowv1.StoreArtefactRequest,
+) (*flowv1.StoreArtefactResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.StoreArtefactCalls = append(s.StoreArtefactCalls, storeArtefactRecord{
+		ArtefactID: req.GetArtefactId(),
+		Content:    req.GetContent(),
+	})
+	return &flowv1.StoreArtefactResponse{
+		VersionHash:  "mock-hash",
+		IsNewVersion: true,
+	}, nil
+}
+
 func (s *arbiterSpy) GetFeedback(
 	_ context.Context, _ *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
@@ -249,13 +271,14 @@ func (s *arbiterSpy) LinkRuling(
 		return nil, s.LinkRulingErr
 	}
 	s.LinkedRulings = append(s.LinkedRulings, linkRulingRecord{
-		FeedbackID: req.GetFeedbackId(),
-		LawID:      req.GetLawId(),
+		FeedbackID:  req.GetFeedbackId(),
+		LawID:       req.GetLawId(),
+		TargetState: req.GetTargetState(),
 	})
 	return &flowv1.LinkRulingResponse{
 		UpdatedItem: &flowv1.FeedbackItem{
 			Id:           req.GetFeedbackId(),
-			State:        flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			State:        req.GetTargetState(),
 			LinkedRuling: req.GetLawId(),
 		},
 	}, nil

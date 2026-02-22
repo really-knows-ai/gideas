@@ -335,9 +335,12 @@ func TestEndToEnd_StoreAndRetrieve(t *testing.T) {
 // transitions it to DEADLOCKED state. Returns the feedback ID.
 func createDeadlockedFeedback(
 	t *testing.T, s *ArchivistServer,
-	ctx context.Context, workitemID, artefactID string,
+	ctx context.Context,
 ) string {
 	t.Helper()
+
+	const workitemID = "wi-1"
+	const artefactID = "doc"
 
 	// Store an artefact so feedback has something to reference.
 	content := []byte("test content")
@@ -381,12 +384,13 @@ func TestLinkRuling_Success(t *testing.T) {
 	s := newTestServer(t)
 	ctx := context.Background()
 
-	feedbackID := createDeadlockedFeedback(t, s, ctx, "wi-1", "doc")
+	feedbackID := createDeadlockedFeedback(t, s, ctx)
 
 	resp, err := s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: feedbackID,
-		LawId:      "law-001",
+		WorkitemId:  "wi-1",
+		FeedbackId:  feedbackID,
+		LawId:       "law-001",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err != nil {
 		t.Fatalf("LinkRuling: unexpected error: %v", err)
@@ -396,8 +400,33 @@ func TestLinkRuling_Success(t *testing.T) {
 	if item.GetLinkedRuling() != "law-001" {
 		t.Fatalf("expected linked_ruling=law-001, got %q", item.GetLinkedRuling())
 	}
-	if item.GetState() != flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
-		t.Fatalf("expected state=DEADLOCKED, got %v", item.GetState())
+	if item.GetState() != flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX {
+		t.Fatalf("expected state=WONT_FIX, got %v", item.GetState())
+	}
+}
+
+func TestLinkRuling_Success_Rejected(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+
+	feedbackID := createDeadlockedFeedback(t, s, ctx)
+
+	resp, err := s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
+		WorkitemId:  "wi-1",
+		FeedbackId:  feedbackID,
+		LawId:       "law-002",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
+	})
+	if err != nil {
+		t.Fatalf("LinkRuling: unexpected error: %v", err)
+	}
+
+	item := resp.GetUpdatedItem()
+	if item.GetLinkedRuling() != "law-002" {
+		t.Fatalf("expected linked_ruling=law-002, got %q", item.GetLinkedRuling())
+	}
+	if item.GetState() != flowv1.FeedbackState_FEEDBACK_STATE_REJECTED {
+		t.Fatalf("expected state=REJECTED, got %v", item.GetState())
 	}
 }
 
@@ -432,9 +461,10 @@ func TestLinkRuling_NotDeadlocked(t *testing.T) {
 
 	// LinkRuling should fail — feedback is in NEW state, not DEADLOCKED.
 	_, err = s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: addResp.GetFeedbackId(),
-		LawId:      "law-001",
+		WorkitemId:  "wi-1",
+		FeedbackId:  addResp.GetFeedbackId(),
+		LawId:       "law-001",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err == nil {
 		t.Fatal("expected error for non-DEADLOCKED feedback")
@@ -449,13 +479,14 @@ func TestLinkRuling_ContemptGuard(t *testing.T) {
 	s := newTestServer(t)
 	ctx := context.Background()
 
-	feedbackID := createDeadlockedFeedback(t, s, ctx, "wi-1", "doc")
+	feedbackID := createDeadlockedFeedback(t, s, ctx)
 
 	// First LinkRuling succeeds.
 	_, err := s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: feedbackID,
-		LawId:      "law-001",
+		WorkitemId:  "wi-1",
+		FeedbackId:  feedbackID,
+		LawId:       "law-001",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err != nil {
 		t.Fatalf("first LinkRuling: unexpected error: %v", err)
@@ -463,9 +494,10 @@ func TestLinkRuling_ContemptGuard(t *testing.T) {
 
 	// Second LinkRuling should fail — contempt guard.
 	_, err = s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: feedbackID,
-		LawId:      "law-002",
+		WorkitemId:  "wi-1",
+		FeedbackId:  feedbackID,
+		LawId:       "law-002",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err == nil {
 		t.Fatal("expected error for contempt guard violation")
@@ -481,16 +513,17 @@ func TestLinkRuling_FeedbackNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: "nonexistent",
-		LawId:      "law-001",
+		WorkitemId:  "wi-1",
+		FeedbackId:  "nonexistent",
+		LawId:       "law-001",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err == nil {
 		t.Fatal("expected error for nonexistent feedback")
 	}
 	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", err)
+	if !ok || st.Code() != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", err)
 	}
 }
 
@@ -500,9 +533,10 @@ func TestLinkRuling_MissingFields(t *testing.T) {
 
 	// Empty feedback_id.
 	_, err := s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: "",
-		LawId:      "law-001",
+		WorkitemId:  "wi-1",
+		FeedbackId:  "",
+		LawId:       "law-001",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err == nil {
 		t.Fatal("expected error for empty feedback_id")
@@ -514,12 +548,27 @@ func TestLinkRuling_MissingFields(t *testing.T) {
 
 	// Empty law_id.
 	_, err = s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: "fb-1",
-		LawId:      "",
+		WorkitemId:  "wi-1",
+		FeedbackId:  "fb-1",
+		LawId:       "",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err == nil {
 		t.Fatal("expected error for empty law_id")
+	}
+	st, ok = status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+
+	// Missing target_state (UNSPECIFIED).
+	_, err = s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
+		WorkitemId: "wi-1",
+		FeedbackId: "fb-1",
+		LawId:      "law-001",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing target_state")
 	}
 	st, ok = status.FromError(err)
 	if !ok || st.Code() != codes.InvalidArgument {
@@ -531,13 +580,14 @@ func TestLinkRuling_VisibleInGetFeedback(t *testing.T) {
 	s := newTestServer(t)
 	ctx := context.Background()
 
-	feedbackID := createDeadlockedFeedback(t, s, ctx, "wi-1", "doc")
+	feedbackID := createDeadlockedFeedback(t, s, ctx)
 
 	// Link ruling.
 	_, err := s.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId: "wi-1",
-		FeedbackId: feedbackID,
-		LawId:      "law-001",
+		WorkitemId:  "wi-1",
+		FeedbackId:  feedbackID,
+		LawId:       "law-001",
+		TargetState: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 	})
 	if err != nil {
 		t.Fatalf("LinkRuling: %v", err)
