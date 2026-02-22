@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "flow/v1/common.proto";
+import "flow/v1/jury.proto";
+
+// ClerkService drafts law representations from jury verdicts.
+// Initially produces text/markdown prose only; the codification_failures
+// field is present for future CodificationService integration.
+// See: specs/05-reference/grpc-api.md#clerk-api
+service ClerkService {
+  // Drafts a law from a jury verdict and persists it via the Librarian.
+  // For retire verdicts, retires the law. For demote verdicts, writes
+  // the law at a lower tier.
+  rpc DraftLaw(DraftLawRequest) returns (DraftLawResponse);
+}
+
+// --- Messages ---
+
+message DraftLawRequest {
+  // The jury's deliberation result.
+  DeliberateResponse verdict = 1;
+
+  // The goal statement for the law being drafted.
+  string goal = 2;
+
+  // The tier at which to draft the law.
+  int32 tier = 3;
+
+  // Governed artefact names this law applies to.
+  repeated string applies_to = 4;
+}
+
+message DraftLawResponse {
+  // Librarian-assigned law identifier.
+  string law_id = 1;
+
+  // Content-addressable hash of the law version.
+  string version_hash = 2;
+
+  // Drafted representations (initially text/markdown only).
+  repeated Representation representations = 3;
+
+  // Codification failures from CodificationService dispatch.
+  // Always empty initially; ready for future integration.
+  repeated string codification_failures = 4;
+}
