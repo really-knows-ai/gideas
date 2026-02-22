@@ -225,3 +225,10 @@ func (p *ArchivistProxy) DeadlockFeedback(
 ) (*flowv1.DeadlockFeedbackResponse, error) {
 	return p.client.DeadlockFeedback(propagateMetadata(ctx), req)
 }
+
+// LinkRuling forwards to the Archivist (passthrough).
+func (p *ArchivistProxy) LinkRuling(
+	ctx context.Context, req *flowv1.LinkRulingRequest,
+) (*flowv1.LinkRulingResponse, error) {
+	return p.client.LinkRuling(propagateMetadata(ctx), req)
+}

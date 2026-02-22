@@ -461,14 +461,15 @@ func (s *ArchivistServer) GetFeedback(
 		}
 
 		items = append(items, &flowv1.FeedbackItem{
-			Id:          r.ID,
-			Source:      r.Source,
-			Severity:    flowv1.Severity(r.Severity),
-			State:       flowv1.FeedbackState(r.State),
-			Message:     r.Message,
-			VersionHash: r.VersionHash,
-			History:     protoEvents,
-			CreatedAt:   timestamppb.New(r.CreatedAt),
+			Id:           r.ID,
+			Source:       r.Source,
+			Severity:     flowv1.Severity(r.Severity),
+			State:        flowv1.FeedbackState(r.State),
+			Message:      r.Message,
+			LinkedRuling: r.LinkedRuling,
+			VersionHash:  r.VersionHash,
+			History:      protoEvents,
+			CreatedAt:    timestamppb.New(r.CreatedAt),
 		})
 	}
 
@@ -643,6 +644,38 @@ func (s *ArchivistServer) DeadlockFeedback(
 	}, nil
 }
 
+// LinkRuling atomically links a judiciary ruling to a deadlocked feedback
+// item, enabling the contempt guard. The feedback must be in DEADLOCKED
+// state and must not already have a linked ruling.
+func (s *ArchivistServer) LinkRuling(
+	ctx context.Context, req *flowv1.LinkRulingRequest,
+) (*flowv1.LinkRulingResponse, error) {
+	feedbackID := req.GetFeedbackId()
+	lawID := req.GetLawId()
+
+	slog.Info("LinkRuling",
+		"workitem_id", req.GetWorkitemId(),
+		"feedback_id", feedbackID,
+		"law_id", lawID,
+	)
+
+	if feedbackID == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "feedback_id is required")
+	}
+	if lawID == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "law_id is required")
+	}
+
+	record, err := s.store.LinkRuling(ctx, feedbackID, lawID)
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "link ruling: %v", err)
+	}
+
+	return &flowv1.LinkRulingResponse{
+		UpdatedItem: feedbackRecordToProto(record),
+	}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -667,12 +700,13 @@ func feedbackRecordToProto(r *sqlite.FeedbackRecord) *flowv1.FeedbackItem {
 		return nil
 	}
 	return &flowv1.FeedbackItem{
-		Id:          r.ID,
-		Source:      r.Source,
-		Severity:    flowv1.Severity(r.Severity),
-		State:       flowv1.FeedbackState(r.State),
-		Message:     r.Message,
-		VersionHash: r.VersionHash,
-		CreatedAt:   timestamppb.New(r.CreatedAt),
+		Id:           r.ID,
+		Source:       r.Source,
+		Severity:     flowv1.Severity(r.Severity),
+		State:        flowv1.FeedbackState(r.State),
+		Message:      r.Message,
+		LinkedRuling: r.LinkedRuling,
+		VersionHash:  r.VersionHash,
+		CreatedAt:    timestamppb.New(r.CreatedAt),
 	}
 }
