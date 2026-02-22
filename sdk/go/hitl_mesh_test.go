@@ -328,7 +328,7 @@ func TestQueueMesh_ProxyRelease_Remote(t *testing.T) {
 	}
 }
 
-func TestQueueMesh_ProxyComplete_Remote(t *testing.T) {
+func TestQueueMesh_ProxyDecide_Remote(t *testing.T) {
 	ctx := context.Background()
 
 	shard0 := newMeshTestShard(t, "shard-0")
@@ -340,9 +340,9 @@ func TestQueueMesh_ProxyComplete_Remote(t *testing.T) {
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
 
-	err := mesh.routeComplete(ctx, "wi-remote")
+	err := mesh.routeDecide(ctx, "wi-remote", "")
 	if err != nil {
-		t.Fatalf("routeComplete failed: %v", err)
+		t.Fatalf("routeDecide failed: %v", err)
 	}
 
 	// Verify item is deleted from shard-1.

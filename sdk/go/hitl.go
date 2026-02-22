@@ -61,9 +61,18 @@ type QueueManager interface {
 	// The release is routed to the owning shard if the item is remote.
 	Release(ctx context.Context, workitemID string) (*QueueItem, error)
 
-	// Complete deletes a "claimed" item from the queue. The decision itself
-	// is expressed through normal SDK operations performed by the handler.
-	Complete(ctx context.Context, workitemID string) error
+	// Decide deletes a "claimed" item from the queue and records the human's
+	// routing choice. The choice is delivered to WaitForDecision callers.
+	// Pass an empty string when no choice is needed (e.g. hitl-appraise).
+	Decide(ctx context.Context, workitemID, choice string) error
+
+	// WaitForDecision blocks until Decide is called for the given Workitem.
+	// Returns the choice string passed to Decide (may be empty), or the
+	// context error if the context is cancelled before a decision is made.
+	// Returns ErrQueueItemNotFound if the Workitem was never enqueued via
+	// this QueueManager instance.
+	// Returns ("", nil) when unblocked by Stop().
+	WaitForDecision(ctx context.Context, workitemID string) (string, error)
 
 	// GetPeers returns the addresses of currently connected mesh peers.
 	GetPeers(ctx context.Context) ([]string, error)

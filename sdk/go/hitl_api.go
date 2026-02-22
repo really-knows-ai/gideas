@@ -3,6 +3,7 @@ package flow
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 )
@@ -18,9 +19,10 @@ type apiErrorDetail struct {
 	Message string `json:"message"`
 }
 
-// newHITLRouter returns an http.Handler with the HITL REST API routes.
+// newHITLRouter returns an *http.ServeMux with the HITL REST API routes.
 // Uses Go 1.22+ enhanced routing with method+pattern matching.
-func newHITLRouter(qm QueueManager) http.Handler {
+// Callers may add additional routes to the returned mux before serving.
+func newHITLRouter(qm QueueManager) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /queue", handleListQueue(qm))
 	mux.HandleFunc("GET /queue/{id}", handleGetItem(qm))
@@ -92,12 +94,26 @@ func handleClaim(qm QueueManager) http.HandlerFunc {
 }
 
 // handleDecide signals that a decision has been made. The item is deleted
-// from the queue. No request body is required — the decision itself is
-// expressed through normal SDK operations.
+// from the queue. An optional JSON body {"choice": "..."} carries the
+// human's routing choice. Empty body or missing field sends an empty choice.
+// Malformed JSON returns 400.
 func handleDecide(qm QueueManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		err := qm.Complete(r.Context(), id)
+
+		var choice string
+		if r.ContentLength != 0 {
+			var body struct {
+				Choice string `json:"choice"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+				writeAPIError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body: "+err.Error())
+				return
+			}
+			choice = body.Choice
+		}
+
+		err := qm.Decide(r.Context(), id, choice)
 		if err != nil {
 			writeQueueError(w, err)
 			return

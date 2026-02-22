@@ -3,7 +3,14 @@ package flow
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
+	"time"
+
+	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 // ---------------------------------------------------------------------------
@@ -83,15 +90,15 @@ func TestQueueManager_FullCycle(t *testing.T) {
 		t.Fatalf("expected claimed, got %s", item.Status)
 	}
 
-	// Complete (decide).
-	if err := qm.Complete(ctx, "wi-cycle"); err != nil {
-		t.Fatalf("Complete failed: %v", err)
+	// Decide.
+	if err := qm.Decide(ctx, "wi-cycle", ""); err != nil {
+		t.Fatalf("Decide failed: %v", err)
 	}
 
 	// Verify item is gone.
 	_, err = qm.GetItem(ctx, "wi-cycle")
 	if !errors.Is(err, ErrQueueItemNotFound) {
-		t.Fatalf("expected ErrQueueItemNotFound after complete, got %v", err)
+		t.Fatalf("expected ErrQueueItemNotFound after decide, got %v", err)
 	}
 }
 
@@ -229,5 +236,275 @@ func TestQueueManager_GetPeers(t *testing.T) {
 	}
 	if len(peers) != 2 {
 		t.Fatalf("expected 2 peers, got %d", len(peers))
+	}
+}
+
+func TestQueueManager_WaitForDecision_UnblocksOnDecide(t *testing.T) {
+	qm := newTestManager(t)
+	ctx := context.Background()
+
+	if err := qm.Enqueue(ctx, "wi-wait"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	if _, err := qm.Claim(ctx, "wi-wait"); err != nil {
+		t.Fatalf("Claim failed: %v", err)
+	}
+
+	// WaitForDecision in a goroutine.
+	done := make(chan error, 1)
+	go func() {
+		_, err := qm.WaitForDecision(ctx, "wi-wait")
+		done <- err
+	}()
+
+	// Give WaitForDecision time to enter the select.
+	time.Sleep(50 * time.Millisecond)
+
+	if err := qm.Decide(ctx, "wi-wait", ""); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("WaitForDecision returned error: %v", err)
+	}
+}
+
+func TestQueueManager_WaitForDecision_ContextCancelled(t *testing.T) {
+	qm := newTestManager(t)
+	ctx := context.Background()
+
+	if err := qm.Enqueue(ctx, "wi-cancel"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := qm.WaitForDecision(cancelCtx, "wi-cancel")
+		done <- err
+	}()
+
+	cancel()
+
+	err := <-done
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestQueueManager_WaitForDecision_UnknownWorkitem(t *testing.T) {
+	qm := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := qm.WaitForDecision(ctx, "nonexistent")
+	if !errors.Is(err, ErrQueueItemNotFound) {
+		t.Fatalf("expected ErrQueueItemNotFound, got %v", err)
+	}
+}
+
+func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
+	ctx := context.Background()
+
+	// --- Pod A: the owning shard that enqueues and waits. ---
+	storeA, err := newQueueStore(":memory:", "shard-A")
+	if err != nil {
+		t.Fatalf("storeA failed: %v", err)
+	}
+	t.Cleanup(func() { _ = storeA.close() })
+
+	qmA := &queueManagerImpl{
+		store:   storeA,
+		shardID: "shard-A",
+	}
+
+	// Create the peer server with the onDecide callback wired to qmA.decisions.
+	peerA := &queuePeerServer{
+		store: storeA,
+		onDecide: func(workitemID, choice string) {
+			if ch, ok := qmA.decisions.LoadAndDelete(workitemID); ok {
+				ch.(chan string) <- choice
+			}
+		},
+	}
+
+	// Start a bufconn gRPC server for Pod A.
+	lisA := bufconn.Listen(1024 * 1024)
+	srvA := grpc.NewServer()
+	flowv1.RegisterQueuePeerServiceServer(srvA, peerA)
+	go func() { _ = srvA.Serve(lisA) }()
+	t.Cleanup(func() { srvA.GracefulStop() })
+
+	// Wire qmA's mesh (no peers from A's perspective — it's the local shard).
+	meshA := newQueueMesh(storeA, "shard-A", &staticResolver{}, "50053", nil)
+	qmA.mesh = meshA
+
+	// --- Pod B: the remote shard that receives the decide request. ---
+	storeB, err := newQueueStore(":memory:", "shard-B")
+	if err != nil {
+		t.Fatalf("storeB failed: %v", err)
+	}
+	t.Cleanup(func() { _ = storeB.close() })
+
+	// Pod B's mesh can reach Pod A via bufconn.
+	meshB := newQueueMesh(storeB, "shard-B", &staticResolver{}, "50053", nil)
+	connA, err := grpc.NewClient(
+		"passthrough:///shard-A",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lisA.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("failed to connect to shard-A: %v", err)
+	}
+	t.Cleanup(func() { _ = connA.Close() })
+	meshB.peers["shard-A"] = flowv1.NewQueuePeerServiceClient(connA)
+
+	qmB := &queueManagerImpl{
+		store:   storeB,
+		mesh:    meshB,
+		shardID: "shard-B",
+	}
+
+	// --- Test: Pod A enqueues, Pod B decides, Pod A's WaitForDecision unblocks. ---
+
+	// Pod A enqueues and claims.
+	if err := qmA.Enqueue(ctx, "wi-cross"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	if _, err := qmA.Claim(ctx, "wi-cross"); err != nil {
+		t.Fatalf("Claim failed: %v", err)
+	}
+
+	// Pod A starts waiting.
+	waitErr := make(chan error, 1)
+	go func() {
+		_, err := qmA.WaitForDecision(ctx, "wi-cross")
+		waitErr <- err
+	}()
+
+	// Give WaitForDecision time to enter the select.
+	time.Sleep(50 * time.Millisecond)
+
+	// Pod B decides — this will route through the mesh to Pod A's gRPC server,
+	// which calls onDecide and sends on the channel.
+	if err := qmB.Decide(ctx, "wi-cross", ""); err != nil {
+		t.Fatalf("remote Decide failed: %v", err)
+	}
+
+	// Pod A's WaitForDecision should unblock.
+	select {
+	case err := <-waitErr:
+		if err != nil {
+			t.Fatalf("WaitForDecision returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitForDecision did not unblock within 5s after cross-shard Decide")
+	}
+}
+
+func TestQueueManager_WaitForDecision_UnblocksOnStop(t *testing.T) {
+	qm := newTestManager(t)
+	ctx := context.Background()
+
+	if err := qm.Enqueue(ctx, "wi-stop"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	// Start WaitForDecision in a goroutine.
+	waitErr := make(chan error, 1)
+	go func() {
+		_, err := qm.WaitForDecision(ctx, "wi-stop")
+		waitErr <- err
+	}()
+
+	// Give WaitForDecision time to enter the select.
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop the manager — should close all decision channels.
+	if err := qm.Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	select {
+	case err := <-waitErr:
+		if err != nil {
+			t.Fatalf("WaitForDecision returned error after Stop: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitForDecision did not unblock within 5s after Stop")
+	}
+}
+
+func TestQueueManager_WaitForDecision_ReturnsChoice(t *testing.T) {
+	qm := newTestManager(t)
+	ctx := context.Background()
+
+	if err := qm.Enqueue(ctx, "wi-choice"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	if _, err := qm.Claim(ctx, "wi-choice"); err != nil {
+		t.Fatalf("Claim failed: %v", err)
+	}
+
+	type result struct {
+		choice string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		choice, err := qm.WaitForDecision(ctx, "wi-choice")
+		done <- result{choice: choice, err: err}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if err := qm.Decide(ctx, "wi-choice", "approve"); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("WaitForDecision returned error: %v", r.err)
+	}
+	if r.choice != "approve" {
+		t.Fatalf("expected choice=approve, got %q", r.choice)
+	}
+}
+
+func TestQueueManager_WaitForDecision_EmptyChoiceOnStop(t *testing.T) {
+	qm := newTestManager(t)
+	ctx := context.Background()
+
+	if err := qm.Enqueue(ctx, "wi-stop-choice"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	type result struct {
+		choice string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		choice, err := qm.WaitForDecision(ctx, "wi-stop-choice")
+		done <- result{choice: choice, err: err}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if err := qm.Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("expected nil error on Stop, got: %v", r.err)
+		}
+		if r.choice != "" {
+			t.Fatalf("expected empty choice on Stop, got %q", r.choice)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitForDecision did not unblock within 5s after Stop")
 	}
 }
