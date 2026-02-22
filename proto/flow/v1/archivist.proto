@@ -84,6 +84,12 @@ service ArchivistService {
   // Transitions feedback from any non-resolved, non-deadlocked state to
   // "deadlocked". Requires WRITE:feedback/deadlocked capability.
   rpc DeadlockFeedback(DeadlockFeedbackRequest) returns (DeadlockFeedbackResponse);
+
+  // Links a judiciary ruling to a deadlocked feedback item.
+  // Atomically sets linked_ruling, enabling the contempt guard.
+  // Fails if the feedback is not in DEADLOCKED state or already has a
+  // linked ruling.
+  rpc LinkRuling(LinkRulingRequest) returns (LinkRulingResponse);
 }
 
 // --- Service-Facing ---
@@ -296,5 +302,18 @@ message DeadlockFeedbackRequest {
 }
 
 message DeadlockFeedbackResponse {
+  FeedbackItem updated_item = 1;
+}
+
+// --- LinkRuling ---
+
+message LinkRulingRequest {
+  string workitem_id = 1;
+  string feedback_id = 2;
+  // Librarian-assigned law ID of the ruling to link.
+  string law_id = 3;
+}
+
+message LinkRulingResponse {
   FeedbackItem updated_item = 1;
 }
