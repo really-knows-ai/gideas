@@ -159,7 +159,7 @@ func TestQueueStore_Release_NotClaimed(t *testing.T) {
 	}
 }
 
-func TestQueueStore_Complete_HappyPath(t *testing.T) {
+func TestQueueStore_Decide_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -170,8 +170,8 @@ func TestQueueStore_Complete_HappyPath(t *testing.T) {
 		t.Fatalf("claim failed: %v", err)
 	}
 
-	if err := s.complete(ctx, testWorkitemID); err != nil {
-		t.Fatalf("complete failed: %v", err)
+	if err := s.decide(ctx, testWorkitemID); err != nil {
+		t.Fatalf("decide failed: %v", err)
 	}
 
 	// Verify item is deleted.
@@ -181,7 +181,7 @@ func TestQueueStore_Complete_HappyPath(t *testing.T) {
 	}
 }
 
-func TestQueueStore_Complete_NotClaimed(t *testing.T) {
+func TestQueueStore_Decide_NotClaimed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -189,7 +189,7 @@ func TestQueueStore_Complete_NotClaimed(t *testing.T) {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
-	err := s.complete(ctx, testWorkitemID)
+	err := s.decide(ctx, testWorkitemID)
 	if !errors.Is(err, ErrQueueItemInvalidState) {
 		t.Fatalf("expected ErrQueueItemInvalidState, got %v", err)
 	}

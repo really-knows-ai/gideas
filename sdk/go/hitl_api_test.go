@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -279,5 +280,44 @@ func TestHITLAPI_Release_NotClaimed(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHITLAPI_Decide_WithChoice(t *testing.T) {
+	const choiceID = "wi-choice-api"
+	qm := newTestQueueManager(t)
+	ctx := context.Background()
+	_ = qm.Enqueue(ctx, choiceID)
+	_, _ = qm.Claim(ctx, choiceID)
+
+	// Start a waiter so we can verify the choice flows through.
+	type result struct {
+		choice string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		choice, err := qm.WaitForDecision(ctx, choiceID)
+		done <- result{choice: choice, err: err}
+	}()
+
+	body, _ := json.Marshal(map[string]string{"choice": "approve"})
+	router := newHITLRouter(qm)
+	req := httptest.NewRequest(http.MethodPost, "/queue/"+choiceID+"/decide",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("WaitForDecision returned error: %v", r.err)
+	}
+	if r.choice != "approve" {
+		t.Fatalf("expected choice=approve, got %q", r.choice)
 	}
 }

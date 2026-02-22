@@ -194,22 +194,22 @@ func (s *queueStore) release(ctx context.Context, workitemID string) (*QueueItem
 	return s.getByID(ctx, workitemID)
 }
 
-// complete deletes a "claimed" item from the queue (decision made).
-func (s *queueStore) complete(ctx context.Context, workitemID string) error {
+// decide deletes a "claimed" item from the queue (decision made).
+func (s *queueStore) decide(ctx context.Context, workitemID string) error {
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM hitl_queue WHERE workitem_id = ? AND status = 'claimed'`,
 		workitemID,
 	)
 	if err != nil {
-		return fmt.Errorf("complete: %w", err)
+		return fmt.Errorf("decide: %w", err)
 	}
 
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("complete rows affected: %w", err)
+		return fmt.Errorf("decide rows affected: %w", err)
 	}
 	if n == 0 {
-		return s.diagnoseStateFailure(ctx, workitemID, "complete")
+		return s.diagnoseStateFailure(ctx, workitemID, "decide")
 	}
 	return nil
 }

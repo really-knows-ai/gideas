@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -32,6 +33,7 @@ type queueManagerConfig struct {
 	peerResolver PeerResolver
 	apiPort      string
 	peerPort     string
+	customRoutes func(mux *http.ServeMux)
 }
 
 // WithStoragePath sets the directory for queue.db.
@@ -78,15 +80,24 @@ func WithPeerPort(port string) QueueManagerOption {
 	return func(c *queueManagerConfig) { c.peerPort = port }
 }
 
+// WithCustomRoutes registers additional HTTP routes on the QueueManager's
+// REST API mux. The provided function is called after the standard HITL
+// routes are registered, so it can add node-specific endpoints (e.g. GET
+// /choices for hitl-sort) on the same server without forking the SDK.
+func WithCustomRoutes(fn func(mux *http.ServeMux)) QueueManagerOption {
+	return func(c *queueManagerConfig) { c.customRoutes = fn }
+}
+
 // queueManagerImpl is the concrete QueueManager wiring store + mesh + REST API.
 type queueManagerImpl struct {
-	store   *queueStore
-	mesh    *queueMesh
-	client  *Client
-	shardID string
-	apiPort string
-	httpSrv *http.Server
-	peer    *queuePeerServer
+	store     *queueStore
+	mesh      *queueMesh
+	client    *Client
+	shardID   string
+	apiPort   string
+	httpSrv   *http.Server
+	peer      *queuePeerServer
+	decisions sync.Map // workitemID → chan string
 }
 
 // NewQueueManager creates a new QueueManager. Call Start() to initialise
@@ -195,15 +206,28 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 	}
 
 	qm.mesh = newQueueMesh(store, qm.shardID, resolver, cfg.peerPort, qm.emitTelemetry)
-	qm.peer = &queuePeerServer{store: store}
+	qm.peer = &queuePeerServer{
+		store: store,
+		onDecide: func(workitemID, choice string) {
+			// Signal any local WaitForDecision callers. Uses LoadAndDelete
+			// so double-signaling from both queueManagerImpl.Decide() and
+			// the gRPC handler is safe — the second call is a no-op.
+			if ch, ok := qm.decisions.LoadAndDelete(workitemID); ok {
+				ch.(chan string) <- choice
+			}
+		},
+	}
 
 	qm.mesh.start(ctx)
 
 	// Start HTTP server.
-	router := newHITLRouter(qm)
+	mux := newHITLRouter(qm)
+	if cfg.customRoutes != nil {
+		cfg.customRoutes(mux)
+	}
 	qm.httpSrv = &http.Server{
 		Addr:    ":" + qm.apiPort,
-		Handler: router,
+		Handler: mux,
 	}
 	go func() {
 		slog.Info("flow hitl: REST API listening", "port", qm.apiPort)
@@ -216,12 +240,23 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 }
 
 // Stop gracefully shuts down the HTTP server, mesh, and store.
+// Any goroutines blocked on WaitForDecision are unblocked (returning nil).
 func (qm *queueManagerImpl) Stop() error {
 	if qm.httpSrv != nil {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = qm.httpSrv.Shutdown(shutCtx)
 	}
+	// Unblock any WaitForDecision callers and drain the decisions map.
+	qm.decisions.Range(func(key, value any) bool {
+		ch := value.(chan string)
+		select {
+		case ch <- "":
+		default:
+		}
+		qm.decisions.Delete(key)
+		return true
+	})
 	if qm.mesh != nil {
 		_ = qm.mesh.stop()
 	}
@@ -250,6 +285,8 @@ func (qm *queueManagerImpl) Enqueue(ctx context.Context, workitemID string) erro
 	if err := qm.store.enqueue(ctx, workitemID); err != nil {
 		return err
 	}
+	// Create a decision channel so WaitForDecision can block.
+	qm.decisions.Store(workitemID, make(chan string, 1))
 	depth, _ := qm.store.countByStatus(ctx, nil)
 	qm.emitTelemetry(ctx, "foundry.hitl.enqueued", map[string]any{
 		"workitemId": workitemID,
@@ -306,11 +343,15 @@ func (qm *queueManagerImpl) Release(ctx context.Context, workitemID string) (*Qu
 	return item, nil
 }
 
-func (qm *queueManagerImpl) Complete(ctx context.Context, workitemID string) error {
-	// Capture enqueued_at before complete for telemetry.
+func (qm *queueManagerImpl) Decide(ctx context.Context, workitemID, choice string) error {
+	// Capture enqueued_at before decide for telemetry.
 	existing, _ := qm.mesh.routeGetItem(ctx, workitemID)
-	if err := qm.mesh.routeComplete(ctx, workitemID); err != nil {
+	if err := qm.mesh.routeDecide(ctx, workitemID, choice); err != nil {
 		return err
+	}
+	// Signal any WaitForDecision callers.
+	if ch, ok := qm.decisions.LoadAndDelete(workitemID); ok {
+		ch.(chan string) <- choice
 	}
 	decisionTime := time.Duration(0)
 	if existing != nil {
@@ -325,6 +366,22 @@ func (qm *queueManagerImpl) Complete(ctx context.Context, workitemID string) err
 
 func (qm *queueManagerImpl) GetPeers(_ context.Context) ([]string, error) {
 	return qm.mesh.getPeers(), nil
+}
+
+func (qm *queueManagerImpl) WaitForDecision(ctx context.Context, workitemID string) (string, error) {
+	v, ok := qm.decisions.Load(workitemID)
+	if !ok {
+		return "", ErrQueueItemNotFound
+	}
+	ch := v.(chan string)
+	select {
+	case choice := <-ch:
+		return choice, nil
+	case <-ctx.Done():
+		// Clean up the orphaned channel so it doesn't leak in the map.
+		qm.decisions.Delete(workitemID)
+		return "", ctx.Err()
+	}
 }
 
 // emitTelemetry sends a telemetry event via the Client. Non-blocking — failures

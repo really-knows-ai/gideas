@@ -29,7 +29,7 @@ service QueuePeerService {
   // The queue is a parking lot — decided items are removed, not marked.
   // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
   // Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
-  rpc CompleteItem(CompleteItemRequest) returns (CompleteItemResponse);
+  rpc DecideItem(DecideItemRequest) returns (DecideItemResponse);
 }
 
 // GetLocalQueueRequest specifies filtering and pagination for queue list queries.
@@ -83,10 +83,13 @@ message ReleaseItemResponse {
   QueueItem item = 1;
 }
 
-message CompleteItemRequest {
+message DecideItemRequest {
   string workitem_id = 1;
+  // The human's routing choice. Empty string if no choice is associated
+  // (e.g. hitl-appraise which uses a fixed output).
+  string choice = 2;
 }
 
-message CompleteItemResponse {
+message DecideItemResponse {
   bool acknowledged = 1;
 }

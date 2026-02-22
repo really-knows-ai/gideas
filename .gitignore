@@ -13,6 +13,7 @@ PLAN.md
 *_PLAN.md
 TODO.md
 REVIEW.md
+HITL_SORT.md
 
 # Compiled Go binaries (built in-place by `go build`)
 /appraise
@@ -21,6 +22,8 @@ REVIEW.md
 /haiku-forge
 /haiku-quench
 /haiku-refine
+/hitl-appraise
+/hitl-sort
 /refine
 /sort
 /haiku-watch
@@ -29,6 +32,8 @@ nodes/*/appraise
 nodes/*/forge
 nodes/*/haiku-quench
 nodes/*/haiku-refine
+nodes/*/hitl-appraise
+nodes/*/hitl-sort
 nodes/*/refine
 nodes/*/sort
 nodes/*/null-node

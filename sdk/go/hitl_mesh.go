@@ -349,10 +349,10 @@ func (m *queueMesh) routeRelease(ctx context.Context, workitemID string) (*Queue
 	return &qi, nil
 }
 
-// routeComplete completes an item (deletes it), routing to the owning shard if remote.
-func (m *queueMesh) routeComplete(ctx context.Context, workitemID string) error {
+// routeDecide decides an item (deletes it), routing to the owning shard if remote.
+func (m *queueMesh) routeDecide(ctx context.Context, workitemID, choice string) error {
 	// Try local first.
-	err := m.store.complete(ctx, workitemID)
+	err := m.store.decide(ctx, workitemID)
 	if err == nil {
 		return nil
 	}
@@ -369,7 +369,7 @@ func (m *queueMesh) routeComplete(ctx context.Context, workitemID string) error 
 	peerCtx, cancel := context.WithTimeout(ctx, peerTimeout)
 	defer cancel()
 
-	_, err = client.CompleteItem(peerCtx, &flowv1.CompleteItemRequest{WorkitemId: workitemID})
+	_, err = client.DecideItem(peerCtx, &flowv1.DecideItemRequest{WorkitemId: workitemID, Choice: choice})
 	if err != nil {
 		return mapGRPCError(err)
 	}
@@ -428,7 +428,8 @@ func (m *queueMesh) findOwner(ctx context.Context, workitemID string) (flowv1.Qu
 // delegating to the local queueStore.
 type queuePeerServer struct {
 	flowv1.UnimplementedQueuePeerServiceServer
-	store *queueStore
+	store    *queueStore
+	onDecide func(workitemID, choice string) // signals local WaitForDecision when a remote peer triggers DecideItem
 }
 
 func (s *queuePeerServer) GetLocalQueue(
@@ -481,13 +482,18 @@ func (s *queuePeerServer) ReleaseItem(
 	return &flowv1.ReleaseItemResponse{Item: queueItemToProto(*item)}, nil
 }
 
-func (s *queuePeerServer) CompleteItem(
-	ctx context.Context, req *flowv1.CompleteItemRequest,
-) (*flowv1.CompleteItemResponse, error) {
-	if err := s.store.complete(ctx, req.GetWorkitemId()); err != nil {
+func (s *queuePeerServer) DecideItem(
+	ctx context.Context, req *flowv1.DecideItemRequest,
+) (*flowv1.DecideItemResponse, error) {
+	if err := s.store.decide(ctx, req.GetWorkitemId()); err != nil {
 		return nil, storeErrorToGRPC(err)
 	}
-	return &flowv1.CompleteItemResponse{Acknowledged: true}, nil
+	// Signal any local WaitForDecision callers. This handles the cross-shard
+	// case where a remote peer proxies DecideItem to the owning shard.
+	if s.onDecide != nil {
+		s.onDecide(req.GetWorkitemId(), req.GetChoice())
+	}
+	return &flowv1.DecideItemResponse{Acknowledged: true}, nil
 }
 
 // --- Proto conversion helpers ---
