@@ -44,7 +44,15 @@ The human role that designs and configures a Flow — defining topology, capabil
 
 ### Flow Monitor
 
-The system service that ingests telemetry, friction events, metrics, traces, and audit records. Provides queryable aggregation of friction data across any axis (per-node, per-law, per-tier, per-topology-path). Detail: [System Services](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
+A stateless pipeline adapter that subscribes to the Flow Event Bus's telemetry and audit channels and exports signals to external observability systems: metrics via a `/metrics` endpoint for Prometheus scraping, and audit events as JSON Lines to stdout for log pipeline consumption. The Flow Monitor does not persist events, aggregate friction, or serve query APIs — friction aggregation is owned by the [Friction Ledger](#friction-ledger). Detail: [System Services](../02-flow/04-system-services.md#flow-monitor).
+
+### Friction Ledger
+
+The system service that subscribes to friction events on the Flow Event Bus, maintains running friction aggregates (per-law, per-node, per-tier, per-topology-path) in SQLite, evaluates hearing thresholds, and publishes threshold-crossing signals to the friction channel. Serves `QueryFriction` as a direct gRPC API for point-to-point friction queries. Detail: [System Services](../02-flow/04-system-services.md#friction-ledger).
+
+### Flow Event Bus
+
+The durable event distribution service in the Control Plane. Receives events from producers, persists them to a SQLite append-only log, and fans them out to all active subscribers across three channels: telemetry, audit, and friction. Detail: [System Services](../02-flow/04-system-services.md#flow-event-bus).
 
 ### Flow Support Service
 
@@ -144,7 +152,7 @@ The number of actions in a single feedback item's history. The gate node uses fe
 
 ### friction
 
-A quantitative signal measuring governance cost. Purely additive — callers emit a magnitude and the Flow Monitor aggregates. Generated transparently by feedback (magnitude = depth), [Jury](#jury) deliberation rounds (magnitude = depth ^ (round + 1)), and HITL escalation (magnitude = depth ^ (rounds * 2)). Nodes may also emit friction voluntarily via `AddFriction`. Detail: [Conceptual Overview](../01-concepts/00-overview.md#friction), [Data Model](../01-concepts/03-data-model.md#friction).
+A quantitative signal measuring governance cost. Purely additive — callers emit a magnitude and the Friction Ledger aggregates. Generated transparently by feedback (magnitude = depth), [Jury](#jury) deliberation rounds (magnitude = depth ^ (round + 1)), and HITL escalation (magnitude = depth ^ (rounds * 2)). Nodes may also emit friction voluntarily via `AddFriction`. Detail: [Conceptual Overview](../01-concepts/00-overview.md#friction), [Data Model](../01-concepts/03-data-model.md#friction).
 
 ### governed artefact
 

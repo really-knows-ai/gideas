@@ -30,6 +30,7 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 | `importNode` | `string` | no | Name of the FoundryNode that receives cross-flow imported Workitems. Must reference an existing entry-bound node. If absent, cross-flow import is disabled. |
 | `governancePolicy` | `GovernancePolicy` | yes | Governance thresholds and timers. See [governance policy](#governance-policy). |
 | `crossFlow` | `CrossFlowConfig` | no | Cross-flow trust and naturalisation settings. See [cross-flow configuration](#cross-flow-configuration). |
+| `eventBus` | `EventBusConfig` | no | Flow Event Bus configuration. See [Event Bus configuration](#event-bus-configuration). |
 
 ### The Judiciary
 
@@ -108,6 +109,25 @@ When a law's age exceeds its tier's configured TTL, the Librarian triggers a rev
 |-------|------|----------|-------------|
 | `autoNaturalise` | `bool` | no | When `true`, imported stamps from sibling Flows are automatically authoritative after chain verification. Default `true` for sibling Flows. |
 | `requireLocalStamps` | `[]string` | no | List of local stamp names that must be applied to imported artefacts during naturalisation at treaty boundaries. |
+
+### Event Bus Configuration
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `retention` | `EventBusRetention` | no | Per-channel retention configuration. |
+
+### EventBusRetention
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `telemetryDuration` | `string` | no | Duration-based retention for telemetry channel (e.g. `"24h"`). |
+| `telemetrySize` | `string` | no | Size-based retention for telemetry channel (e.g. `"100MB"`). |
+| `auditDuration` | `string` | no | Duration-based retention for audit channel (e.g. `"168h"`). |
+| `auditSize` | `string` | no | Size-based retention for audit channel (e.g. `"1GB"`). |
+| `frictionDuration` | `string` | no | Duration-based retention for friction channel (e.g. `"72h"`). |
+| `frictionSize` | `string` | no | Size-based retention for friction channel (e.g. `"100MB"`). |
+
+When both duration and size are specified for a channel, the Event Bus evicts when either limit is exceeded (whichever triggers first). Duration limits use Go `time.Duration` format. Size limits use byte-count strings with unit suffix (e.g. `100MB`, `1GB`).
 
 ### `status`
 

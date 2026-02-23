@@ -341,7 +341,7 @@ Feedback messages are capped at 1024 characters. For detailed analysis that exce
 
 ### Friction
 
-The [feedback](./00-overview.md) lifecycle generates [friction](./00-overview.md#friction) transparently. Every `AddFeedback` call emits a friction event through the [SDK](../04-sdk/06-sdk-telemetry.md) with magnitude equal to the feedback depth for that item — the first feedback emits 1, the second emits 2, the nth emits n. Nodes do not control this emission; it is a mandatory side effect recorded by the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
+The [feedback](./00-overview.md) lifecycle generates [friction](./00-overview.md#friction) transparently. Every `AddFeedback` call emits a friction event through the [SDK](../04-sdk/06-sdk-telemetry.md) with magnitude equal to the feedback depth for that item — the first feedback emits 1, the second emits 2, the nth emits n. Nodes do not control this emission; it is a mandatory side effect published to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus).
 
 Friction compounds as governance escalates:
 

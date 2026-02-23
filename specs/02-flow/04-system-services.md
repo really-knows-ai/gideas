@@ -132,6 +132,10 @@ This is the query surface for friction data, used by:
 The Friction Ledger is Operator-provisioned — always present in every Flow. It is Control Plane
 infrastructure, not a FlowSupportService.
 
+### Recovery
+
+The Friction Ledger persists its last-seen Event Bus sequence number alongside its aggregation data in its SQLite store. On startup, it resumes Event Bus subscription from the persisted checkpoint. If the checkpoint is missing or the sequence is beyond the Event Bus retention window, it starts from the earliest available event.
+
 ## Librarian
 
 The Librarian is the law lifecycle service for a Flow.
@@ -223,7 +227,7 @@ Flow Monitor is a pipeline adapter that subscribes to the Flow Event Bus's telem
 - Metrics from Operator, Sidecars, nodes, and services — exported via a `/metrics` endpoint for Prometheus scraping.
 - Audit event stream for governance-relevant state transitions — emitted as JSON Lines to stdout for log pipeline consumption (Logstash, ELK, or equivalent).
 
-The Flow Monitor does not persist events or serve query APIs. It is a stateless pipeline adapter. Long-term metrics are queryable through Prometheus; long-term audit records are queryable through the log pipeline.
+The Flow Monitor does not persist events or serve query APIs. It is a stateless pipeline adapter. It may persist a lightweight replay checkpoint (last-seen sequence number per channel) to avoid delivery gaps across restarts; this is not an event store. Long-term metrics are queryable through Prometheus; long-term audit records are queryable through the log pipeline.
 
 ## Jury
 
@@ -433,6 +437,8 @@ Service backup scope is explicit:
 - Librarian embedded stores and indexes: service-owned backup process.
 - Archivist SQLite provenance store: service-owned backup process.
 - Archivist blob store (PVC-backed or object storage): service-owned backup and restore process consistent with storage backend.
+- Flow Event Bus SQLite log: service-owned backup process. Backup scope includes all events within the configured retention window. The Event Bus is a durable delivery layer, not a long-term store — downstream consumers (Prometheus, log pipelines) own long-term retention.
+- Friction Ledger SQLite aggregation store and subscriber checkpoint: service-owned backup process. Backup scope includes the full aggregation state and the last-seen Event Bus sequence number.
 
 Infrastructure-owned scope remains external to services:
 
@@ -441,10 +447,14 @@ Infrastructure-owned scope remains external to services:
 Recovery ordering must preserve referential integrity:
 
 1. Restore control-plane CRDs (infrastructure domain).
-2. Restore Librarian stores.
-3. Restore Archivist SQLite provenance.
-4. Restore Archivist blob content.
-5. Reconcile and verify provenance references and governance continuity.
+2. Restore Flow Event Bus stores.
+3. Restore Friction Ledger stores.
+4. Restore Librarian stores.
+5. Restore Archivist SQLite provenance.
+6. Restore Archivist blob content.
+7. Reconcile and verify provenance references and governance continuity.
+
+The Event Bus must be restored and available before the Friction Ledger starts, because the Friction Ledger replays from its persisted checkpoint on startup. The Flow Monitor has no persistence to restore (aside from its optional replay checkpoint file, which is ephemeral and reconstructable).
 
 Detailed runbooks are specified in [Operations](./07-operations.md).
 
@@ -502,6 +512,6 @@ All deployments preserve these service invariants:
 13. The Flow Event Bus is durable. Events are persisted to SQLite before fan-out. Retention is per-channel and operator-configurable.
 14. Audit events are published by the authoritative service, not by nodes.
 15. The Friction Ledger is the sole aggregation and query surface for friction data.
-16. The Flow Monitor is a stateless pipeline adapter. It does not persist events or serve query APIs.
+16. The Flow Monitor is a stateless pipeline adapter. It does not persist events or serve query APIs. It may persist a lightweight replay checkpoint (last-seen sequence number per channel) to avoid delivery gaps across restarts; this is not an event store.
 
 Node-facing implications of these services are detailed in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Telemetry](../04-sdk/06-sdk-telemetry.md).

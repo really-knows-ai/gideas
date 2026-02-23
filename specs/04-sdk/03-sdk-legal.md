@@ -37,9 +37,9 @@ The SDK surface accepts a single parameter:
 
 The Sidecar injects all identity context (`node_id`, `workitem_id`, `flow_id`) and the fixed citation magnitude. The node cannot override the magnitude — the signal is frequency of use, not caller-weighted importance.
 
-Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events alongside all other friction. The [Librarian](../02-flow/04-system-services.md#librarian) queries the Flow Monitor for accumulated friction on individual laws to determine when friction-threshold [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol) should be triggered.
+Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates these events alongside all other friction. The [Librarian](../02-flow/04-system-services.md#librarian) queries the Friction Ledger for accumulated friction on individual laws to determine when friction-threshold [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol) should be triggered.
 
-Requires `WRITE:friction` capability — the underlying mechanism is friction emission through the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
+Requires `WRITE:friction` capability — the underlying mechanism is friction emission through the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus).
 
 ## Finding Creation
 

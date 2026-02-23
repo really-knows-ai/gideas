@@ -170,6 +170,12 @@ The Sidecar emits operational telemetry as a mandatory runtime output:
 
 Governance audit events — the authoritative record of what changed and why — are emitted by the service that accepted, rejected, or applied the change. The Sidecar's telemetry is transport-level observability; the Archivist's audit events are provenance-level truth.
 
+### Telemetry Buffering
+
+The Sidecar maintains two independent bounded buffers for outgoing telemetry: a high-priority buffer for friction events (governance cost signals) and a normal-priority buffer for custom telemetry events. The drain goroutine services the high-priority buffer first. When the normal-priority buffer fills, the oldest normal-priority events are dropped. Friction events are never dropped until the high-priority buffer is also exhausted. The Sidecar emits a `dropped_telemetry_total` counter metric when events are dropped, enabling operators to detect telemetry loss and tune buffer sizes.
+
+When the Flow Event Bus is unavailable, the Sidecar retries publishing with exponential backoff. Events remain in the buffer during retry. Friction events from `AddFeedback` are never silently dropped — the Sidecar buffers and retries until delivery succeeds or the buffer is exhausted.
+
 ## External Service Integration
 
 Node code may call external business services (APIs, databases, third-party platforms) directly over the data-plane network path. The Sidecar does not intercept or proxy external traffic. Network segmentation for external access is an infrastructure concern delegated to Kubernetes NetworkPolicies and service mesh configuration.

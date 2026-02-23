@@ -6,7 +6,7 @@ Foundry Flow is a governed workflow runtime on Kubernetes. It orchestrates work 
 
 All agents are fallible — human, AI, or deterministic. The framework provides a safety harness: trust intent, verify execution. Competent actors are protected from systemic complexity and their own blind spots. Every action, decision, and review becomes an immutable, traceable record. If it happened, there is a record.
 
-Governance has a measurable cost. Friction is a first-class, quantifiable signal exposing the real-time cost of governance — whether the actors are human, AI, or both. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates that cost as actionable data.
+Governance has a measurable cost. Friction is a first-class, quantifiable signal exposing the real-time cost of governance — whether the actors are human, AI, or both. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates that cost as actionable data.
 
 Work cannot leave a Flow until its artefacts carry the required stamps. The quality standard is non-negotiable. What the framework measures is the cost of achieving it. If that cost is too high, the system — the laws, the topology, the nodes — needs to change.
 
@@ -143,4 +143,4 @@ flowchart LR
     end
 ```
 
-This gives organisations a quantifiable, real-time signal for dysfunction. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates friction data and tags it to its source — laws, nodes, topology paths — so it can be queried across every dimension. Which laws generate the most heat? Which nodes are bottlenecks? Where in the topology do Workitems thrash? Governance cost becomes data — quantified, attributable, and actionable. How friction feeds back into governance — surfacing costly laws for review, driving amendment pressure — is covered in [Governance](./04-governance.md#friction-as-governance-signal).
+This gives organisations a quantifiable, real-time signal for dysfunction. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates friction data and tags it to its source — laws, nodes, topology paths — so it can be queried across every dimension. Which laws generate the most heat? Which nodes are bottlenecks? Where in the topology do Workitems thrash? Governance cost becomes data — quantified, attributable, and actionable. How friction feeds back into governance — surfacing costly laws for review, driving amendment pressure — is covered in [Governance](./04-governance.md#friction-as-governance-signal).
