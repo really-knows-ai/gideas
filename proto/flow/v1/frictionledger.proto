@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "flow/v1/common.proto";
+
+// FrictionLedgerService is the sole aggregation and query surface for
+// friction data. It subscribes to the Event Bus telemetry channel for
+// friction events, persists them, evaluates thresholds, and serves
+// aggregated friction queries.
+//
+// See: specs/02-flow/04-system-services.md (Service Invariant #15)
+service FrictionLedgerService {
+  // Returns aggregated friction data across the requested axes.
+  // Used by the Librarian for hearing threshold evaluation and by the
+  // Tribunal for hearing evidence.
+  rpc QueryFriction(LedgerQueryFrictionRequest) returns (LedgerQueryFrictionResponse);
+}
+
+// LedgerQueryFrictionRequest wraps a filter for the query RPC.
+// Prefixed with "Ledger" to avoid collision with monitor.proto during
+// the transition period. The monitor.proto copies are removed in Phase 3.
+message LedgerQueryFrictionRequest {
+  LedgerFrictionFilter filter = 1;
+}
+
+// LedgerFrictionFilter specifies optional axes for filtering friction queries.
+message LedgerFrictionFilter {
+  string law_id = 1;
+  string node_id = 2;
+  string workitem_id = 3;
+  LawTier tier = 4;
+  TimeRange time_range = 5;
+}
+
+// LedgerQueryFrictionResponse returns aggregated friction data.
+message LedgerQueryFrictionResponse {
+  repeated FrictionAggregate friction_aggregates = 1;
+}

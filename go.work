@@ -4,6 +4,7 @@ use (
 	./archivist
 	./clerk
 	./eventbus
+	./frictionledger
 	./gen
 	./jury
 	./librarian
