@@ -2,7 +2,7 @@
 // gRPC service that empanels diverse AI jurors to reach consensus on governed
 // questions.
 //
-// It listens on port 50057 (configurable via JURY_PORT) and implements the
+// It listens on port 50059 (configurable via JURY_PORT) and implements the
 // JuryService.Deliberate RPC. Each deliberation empanels a configurable number
 // of jurors with distinct judicial philosophies, runs multi-round blind voting,
 // and applies the requested consensus strategy.
@@ -10,7 +10,7 @@
 // Usage:
 //
 //	go run ./jury/cmd/main.go
-//	JURY_PORT=50057 JURY_MODEL=kimi-k2.5:cloud go run ./jury/cmd/main.go
+//	JURY_PORT=50059 JURY_MODEL=kimi-k2.5:cloud go run ./jury/cmd/main.go
 package main
 
 import (
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	defaultPort  = "50057"
+	defaultPort  = "50059"
 	defaultModel = "kimi-k2.5:cloud"
 
 	envPort    = "JURY_PORT"

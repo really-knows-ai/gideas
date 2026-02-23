@@ -3,6 +3,7 @@ go 1.25.3
 use (
 	./archivist
 	./clerk
+	./eventbus
 	./gen
 	./jury
 	./librarian
