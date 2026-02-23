@@ -54,11 +54,11 @@ func newDialFunc(fakeClient *fakeSidecarClient) func(string) (flowv1gen.SidecarS
 // Helper: create a ready Pod
 // ---------------------------------------------------------------------------
 
-func readyPod(name, namespace, nodeName, podIP string) *corev1.Pod {
+func readyPod(name, nodeName, podIP string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: namespace,
+			Namespace: "default",
 			Labels: map[string]string{
 				LabelNodeName: nodeName,
 			},
@@ -76,11 +76,11 @@ func readyPod(name, namespace, nodeName, podIP string) *corev1.Pod {
 	}
 }
 
-func notReadyPod(name, namespace, nodeName, podIP string) *corev1.Pod {
+func notReadyPod(name, nodeName, podIP string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: namespace,
+			Namespace: "default",
 			Labels: map[string]string{
 				LabelNodeName: nodeName,
 			},
@@ -100,7 +100,7 @@ func TestAssign_Success(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
-	pod := readyPod("step2-pod-abc", "default", "step-2", "10.0.0.5")
+	pod := readyPod("step2-pod-abc", "step-2", "10.0.0.5")
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pod).
@@ -148,7 +148,7 @@ func TestAssign_NoReadyPods(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
-	pod := notReadyPod("step2-pod-pending", "default", "step-2", "10.0.0.6")
+	pod := notReadyPod("step2-pod-pending", "step-2", "10.0.0.6")
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pod).
@@ -182,7 +182,7 @@ func TestAssign_PodRejected(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
-	pod := readyPod("step2-pod-xyz", "default", "step-2", "10.0.0.7")
+	pod := readyPod("step2-pod-xyz", "step-2", "10.0.0.7")
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pod).
@@ -209,7 +209,7 @@ func TestAssign_DialFailure(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
-	pod := readyPod("step2-pod-dial", "default", "step-2", "10.0.0.8")
+	pod := readyPod("step2-pod-dial", "step-2", "10.0.0.8")
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pod).
@@ -234,7 +234,7 @@ func TestAssign_gRPCError(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
-	pod := readyPod("step2-pod-grpc", "default", "step-2", "10.0.0.9")
+	pod := readyPod("step2-pod-grpc", "step-2", "10.0.0.9")
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pod).
@@ -261,10 +261,10 @@ func TestDiscoverReadyPods_FiltersCorrectly(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
-	ready1 := readyPod("pod-ready-1", "default", "step-2", "10.0.0.1")
-	ready2 := readyPod("pod-ready-2", "default", "step-2", "10.0.0.2")
-	pending := notReadyPod("pod-pending", "default", "step-2", "10.0.0.3")
-	otherNode := readyPod("pod-other", "default", "step-3", "10.0.0.4")
+	ready1 := readyPod("pod-ready-1", "step-2", "10.0.0.1")
+	ready2 := readyPod("pod-ready-2", "step-2", "10.0.0.2")
+	pending := notReadyPod("pod-pending", "step-2", "10.0.0.3")
+	otherNode := readyPod("pod-other", "step-3", "10.0.0.4")
 
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).

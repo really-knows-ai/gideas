@@ -9,7 +9,9 @@ All runtime services expose gRPC APIs. Node-originated calls are mediated by the
 | [Operator](#operator-api) | Workitem lifecycle, routing, assignment, entry/exit contract enforcement | Sidecar (on behalf of nodes) |
 | [Archivist](#archivist-api) | Artefact content, versions, stamps, feedback | Sidecar (on behalf of nodes), Operator |
 | [Librarian](#librarian-api) | Law storage, retrieval, integration, hearing triggers | Sidecar (on behalf of nodes), Operator |
-| [Flow Monitor](#flow-monitor-api) | Friction, telemetry, metrics, traces, audit | Sidecar (on behalf of nodes), Librarian, all services |
+| [Flow Monitor](#flow-monitor-api) | Pipeline adapter for metrics export (Prometheus) and audit log emission (stdout) | Subscribes to Flow Event Bus |
+| [Flow Event Bus](#flow-event-bus-api) | Durable event distribution across telemetry, audit, and friction channels | Sidecar (publish), all services (publish/subscribe) |
+| [Friction Ledger](#friction-ledger-api) | Friction aggregation, threshold evaluation, friction queries | Sidecar (on behalf of nodes), Librarian, Friction Ledger publishes to Bus |
 | [Jury](#jury-api) | Multi-agent deliberation engine | Arbiter, Tribunal (via Sidecar) |
 | [Clerk](#clerk-api) | Law drafting and codification coordination | Arbiter, Tribunal (via Sidecar) |
 | [Sidecar](#sidecar-mediated-sdk-paths) | Authentication proxy, identity injection, local validation | Node handlers (via SDK) |
@@ -160,20 +162,9 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 
 ## Flow Monitor API
 
-The Flow Monitor API ingests telemetry, friction events, and custom events. It also serves friction queries for the Librarian and Judiciary nodes.
+The Flow Monitor subscribes to the Flow Event Bus's telemetry and audit channels. It does not expose ingestion or query gRPC methods. Its outputs are: a `/metrics` endpoint for Prometheus scraping (telemetry channel data) and JSON Lines emitted to stdout for log pipeline consumption (audit channel data).
 
-### Ingestion Methods
-
-| Method | Request | Response | Description |
-|--------|---------|----------|-------------|
-| `AddFriction` | `flow_id`, `workitem_id`, `node_id?`, `law_ids[]?`, `magnitude` | `acknowledged` | Records a friction event. Requires `WRITE:friction` capability. Identity fields are Sidecar-injected for node context; caller-provided for service context. [`Cite`](../04-sdk/03-sdk-legal.md#citation) is SDK-level sugar that calls `AddFriction` with a fixed citation magnitude and law attribution. |
-| `RecordTelemetry` | `flow_id`, `node_id`, `workitem_id`, `event_type`, `payload` | `acknowledged` | Records a custom telemetry event. Payload is JSON-serializable, max 64 KB. The Sidecar wraps the event in a standard envelope with timestamp and trace context. |
-
-### Query Methods
-
-| Method | Request | Response | Description |
-|--------|---------|----------|-------------|
-| `QueryFriction` | `filter` (by `law_id`, `node_id`, `workitem_id`, `tier`, `time_range`) | `friction_aggregates[]` | Returns aggregated friction data across the requested axes. Used by the Librarian for hearing threshold evaluation and by the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) for hearing evidence. |
+The Flow Monitor is a stateless pipeline adapter. It does not persist events, serve query APIs, or accept direct ingestion calls. Event buffering and delivery guarantees are Flow Event Bus concerns.
 
 ### Flow Monitor Error Responses
 
@@ -181,7 +172,74 @@ The Flow Monitor API ingests telemetry, friction events, and custom events. It a
 |-----------|-------|-------------|
 | Flow Monitor unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
 
-Telemetry ingestion is non-blocking. If the Flow Monitor is degraded, `AddFriction` and `RecordTelemetry` calls from nodes return without error — the Sidecar buffers events and drops the oldest under sustained backpressure. Friction events take priority over custom telemetry in buffer contention.
+---
+
+## Flow Event Bus API
+
+The Flow Event Bus distributes runtime events across three channels. Producers publish events;
+consumers subscribe to filtered streams. All events are persisted to a SQLite append-only log
+before fan-out.
+
+### Publish Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `Publish` | `channel`, `event` | `acknowledged`, `sequence` | Publishes an event to the specified channel (`TELEMETRY`, `AUDIT`, or `FRICTION`). Write-ahead — the producer receives acknowledgement with the assigned sequence number after the event is persisted to the log. |
+
+### Subscribe Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `Subscribe` | `channel`, `filter`, `last_sequence?` | `stream FlowEvent` | Opens a server-side stream of events matching the channel and optional filter. If `last_sequence` is provided, the Bus replays events from that sequence number (if still within the retention window) before switching to live delivery. The stream remains open until the client disconnects. Filters support event type and law_id for telemetry channel events. |
+
+### Event Shape
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_id` | `string` | Unique event identifier. |
+| `sequence` | `uint64` | Monotonically increasing sequence number within the channel. Used for replay positioning. |
+| `channel` | `EventChannel` | `TELEMETRY`, `AUDIT`, or `FRICTION`. |
+| `event_type` | `string` | Event type identifier (e.g. `friction`, `foundry.cost.llm`, `audit.artefact.stamped`, `friction.threshold_crossed`). |
+| `flow_id` | `string` | Flow identifier. |
+| `node_id` | `string` | Emitting node (empty for service-originated events). |
+| `workitem_id` | `string` | Associated Workitem (empty for law-lifecycle audit events). |
+| `timestamp` | `Timestamp` | Event timestamp. |
+| `attributes` | `map<string, string>` | Event-specific key-value attributes. For friction events: `law_ids` (comma-separated), `magnitude`. For audit events: `action`, `resource_id`. For threshold-crossing events: `law_id`, `tier`, `accumulated_friction`, `threshold`. |
+| `payload` | `bytes` | Optional structured payload (max 64 KB). |
+
+### Subscribe Filter
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_type` | `string` | Optional: filter to specific event type. |
+| `law_id` | `string` | Optional: filter to events attributed to a specific law. |
+
+### Flow Event Bus Error Responses
+
+| Condition | Error | gRPC Status |
+|-----------|-------|-------------|
+| Flow Event Bus unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
+| Requested sequence number is beyond retention window | `SEQUENCE_EXPIRED` | `OUT_OF_RANGE` |
+
+---
+
+## Friction Ledger API
+
+The Friction Ledger aggregates friction events and serves friction queries. Node-facing methods
+are reached through the Sidecar. The Librarian and other services use direct service-to-service
+gRPC.
+
+### Query Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `QueryFriction` | `filter` (by `law_id`, `node_id`, `workitem_id`, `tier`, `time_range`) | `friction_aggregates[]` | Returns aggregated friction data across the requested axes. Used by the Tribunal for hearing evidence and by the Librarian for catch-up on startup/reconnection. |
+
+### Friction Ledger Error Responses
+
+| Condition | Error | gRPC Status |
+|-----------|-------|-------------|
+| Friction Ledger unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
 
 ---
 
@@ -389,5 +447,5 @@ All Support Services implement:
 5. Telemetry ingestion failures do not block or fail work execution.
 6. State-mutating operations return structured errors with no state change on rejection.
 7. gRPC status codes map to error categories: `PERMISSION_DENIED` for capability failures, `FAILED_PRECONDITION` for guard violations, `NOT_FOUND` for missing resources, `ALREADY_EXISTS` for write-once violations, `UNAVAILABLE` for transient service failures, `INVALID_ARGUMENT` for malformed input, `DATA_LOSS` for integrity failures, `DEADLINE_EXCEEDED` for timeout failures, `UNAUTHENTICATED` for identity failures.
-8. Inter-service calls (Operator-Archivist, Librarian-Flow Monitor) use the same error model as node-facing calls.
+8. Inter-service calls (Operator-Archivist, Librarian-Friction Ledger) use the same error model as node-facing calls.
 9. Configuration errors (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) are caught at CRD admission time and do not appear in runtime gRPC responses. See [Error Catalogue](./error-catalogue.md#configuration-and-validation-errors).

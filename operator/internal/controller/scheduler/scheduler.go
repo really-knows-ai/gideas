@@ -2,8 +2,16 @@
 //
 // The Scheduler resolves the next destination for a Workitem by reading
 // the current FoundryNode's outputs and matching them against the
-// RoutingInstruction. It is a pure decision-maker: it reads CRD state
-// and returns the next assignee and phase, but never mutates resources.
+// RoutingInstruction. It enforces the spec-defined guard evaluation order:
+//
+//  1. Instruction shape validity
+//  2. Routing target or exit eligibility validity
+//  3. Timeout and thrash guard compliance
+//  4. Lifecycle transition application
+//
+// The Scheduler is a pure decision-maker: it reads CRD state, queries
+// artefact state for contract validation, and returns the next assignee
+// and phase. It never mutates resources directly.
 package scheduler
 
 import (
@@ -14,6 +22,35 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// ArtefactQuerier queries the Archivist for artefact state.
+// The Operator uses this to validate exit contracts against current
+// artefact presence and stamp state.
+type ArtefactQuerier interface {
+	// QueryArtefactState returns artefact presence and stamp state for the
+	// given workitem, filtered by governed artefact names.
+	QueryArtefactState(ctx context.Context, workitemID string, governedArtefacts []string) ([]ArtefactState, error)
+}
+
+// ArtefactState represents a single artefact's state for contract validation.
+type ArtefactState struct {
+	ArtefactID       string
+	GovernedArtefact string
+	StampNames       []string
+}
+
+// GuardError represents a guard pipeline failure with a stable error code.
+// The controller uses the Code field to populate WorkitemStatus.FailureReason.
+type GuardError struct {
+	// Code is the stable error identifier (e.g. INVALID_ROUTE, THRASH_BUDGET_EXCEEDED).
+	Code string
+	// Message is the human-readable description.
+	Message string
+}
+
+func (e *GuardError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
 
 // Result holds the outcome of a scheduling decision.
 type Result struct {
@@ -29,6 +66,7 @@ type Result struct {
 type Scheduler struct {
 	Client    client.Client
 	Namespace string
+	Querier   ArtefactQuerier
 }
 
 // New returns a Scheduler wired to the given Kubernetes client and namespace.
@@ -38,21 +76,24 @@ func New(c client.Client, namespace string) *Scheduler {
 
 // CalculateNextStep determines where a Workitem should go next.
 //
-// It fetches the FoundryNode CRD for the current assignee and resolves
-// the routing instruction against that node's outputs.
+// It enforces the spec-defined guard evaluation order:
+//  1. Instruction shape validity (type is valid, target is present).
+//  2. Routing target or exit eligibility (output resolution, target existence, exit-bound + contract).
+//  3. Thrash guard compliance (aggregate visit count vs maxVisits).
+//  4. Returns the lifecycle transition result.
 //
-// Routing rules:
-//   - complete: The node must have Spec.Exit set (exit-bound). Returns
-//     Phase="Completed", NextAssignee="".
-//   - route_to_output: Matches instruction.Target against the node's
-//     Outputs[].Name. Defaults to "default" if target is empty.
-//     Returns Phase="Pending", NextAssignee=Output.Target.
-//   - route_to: Direct routing to a named node (bypasses output lookup).
-//     Returns Phase="Pending", NextAssignee=instruction.Target.
+// Parameters:
+//   - currentAssignee: the node currently processing the Workitem.
+//   - instruction: the routing instruction submitted by the node.
+//   - workitem: the Workitem being routed (for thrash counter state).
+//   - flow: the FoundryFlow (for maxVisits and exit contracts). May be nil to
+//     skip thrash/contract checks (for backward compatibility in tests).
 func (s *Scheduler) CalculateNextStep(
 	ctx context.Context,
 	currentAssignee string,
 	instruction flowv1.RoutingInstruction,
+	workitem *flowv1.Workitem,
+	flow *flowv1.FoundryFlow,
 ) (*Result, error) {
 	// 1. Fetch the FoundryNode CRD for the current assignee.
 	var node flowv1.FoundryNode
@@ -64,31 +105,73 @@ func (s *Scheduler) CalculateNextStep(
 		return nil, fmt.Errorf("failed to fetch FoundryNode %q: %w", currentAssignee, err)
 	}
 
-	// 2. Dispatch on instruction type.
+	// 2. Dispatch on instruction type (guards 1 + 2: shape + target validity).
 	switch instruction.Type {
 	case "complete":
-		return s.handleComplete(&node)
+		return s.handleComplete(ctx, &node, workitem, flow)
 
 	case "route_to_output":
-		return s.handleRouteToOutput(&node, instruction.Target)
+		result, err := s.handleRouteToOutput(&node, instruction.Target)
+		if err != nil {
+			return nil, err
+		}
+		// Guard 3: Thrash check before applying transition.
+		if err := s.checkThrashGuard(workitem, flow); err != nil {
+			return nil, err
+		}
+		return result, nil
 
 	case "route_to":
-		return s.handleRouteTo(instruction.Target)
+		result, err := s.handleRouteTo(ctx, instruction.Target)
+		if err != nil {
+			return nil, err
+		}
+		// Guard 3: Thrash check before applying transition.
+		if err := s.checkThrashGuard(workitem, flow); err != nil {
+			return nil, err
+		}
+		return result, nil
 
 	default:
-		return nil, fmt.Errorf("unknown routing instruction type %q", instruction.Type)
+		return nil, &GuardError{
+			Code:    "INVALID_ROUTE",
+			Message: fmt.Sprintf("unknown routing instruction type %q", instruction.Type),
+		}
 	}
 }
 
 // handleComplete processes a "complete" instruction.
 // The node must be exit-bound (Spec.Exit != "") to accept completion.
-func (s *Scheduler) handleComplete(node *flowv1.FoundryNode) (*Result, error) {
+// If a FoundryFlow is provided, the bound exit contract is validated
+// against artefact state via the Archivist.
+func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode, workitem *flowv1.Workitem, flow *flowv1.FoundryFlow) (*Result, error) {
 	if node.Spec.Exit == "" {
-		return nil, fmt.Errorf(
-			"node %q received 'complete' instruction but has no exit contract",
-			node.Name,
-		)
+		return nil, &GuardError{
+			Code:    "EXIT_NOT_BOUND",
+			Message: fmt.Sprintf("node %q received 'complete' instruction but has no exit contract", node.Name),
+		}
 	}
+
+	// Validate exit contract against artefact state if flow and querier are available.
+	if flow != nil && s.Querier != nil && workitem != nil {
+		contract, ok := flow.Spec.ExitContracts[node.Spec.Exit]
+		if !ok {
+			return nil, &GuardError{
+				Code:    "CONTRACT_VIOLATION",
+				Message: fmt.Sprintf("exit contract %q not found on flow", node.Spec.Exit),
+			}
+		}
+
+		if err := s.validateContract(ctx, workitem.Name, contract); err != nil {
+			return nil, err
+		}
+	}
+
+	// Thrash check for completion path.
+	if err := s.checkThrashGuard(workitem, flow); err != nil {
+		return nil, err
+	}
+
 	return &Result{
 		NextAssignee: "",
 		Phase:        "Completed",
@@ -111,22 +194,116 @@ func (s *Scheduler) handleRouteToOutput(node *flowv1.FoundryNode, target string)
 		}
 	}
 
-	return nil, fmt.Errorf(
-		"node %q has no output named %q (available: %v)",
-		node.Name, target, outputNames(node.Spec.Outputs),
-	)
+	return nil, &GuardError{
+		Code:    "INVALID_ROUTE",
+		Message: fmt.Sprintf("node %q has no output named %q (available: %v)", node.Name, target, outputNames(node.Spec.Outputs)),
+	}
 }
 
 // handleRouteTo processes a direct "route_to" instruction.
-// The target must be non-empty.
-func (s *Scheduler) handleRouteTo(target string) (*Result, error) {
+// The target must be non-empty and must reference an existing FoundryNode CRD.
+func (s *Scheduler) handleRouteTo(ctx context.Context, target string) (*Result, error) {
 	if target == "" {
-		return nil, fmt.Errorf("route_to instruction requires a non-empty target")
+		return nil, &GuardError{
+			Code:    "INVALID_ROUTE",
+			Message: "route_to instruction requires a non-empty target",
+		}
 	}
+
+	// Validate the target node exists.
+	var targetNode flowv1.FoundryNode
+	key := types.NamespacedName{
+		Namespace: s.Namespace,
+		Name:      target,
+	}
+	if err := s.Client.Get(ctx, key, &targetNode); err != nil {
+		return nil, &GuardError{
+			Code:    "INVALID_ROUTE",
+			Message: fmt.Sprintf("target node %q does not exist: %v", target, err),
+		}
+	}
+
 	return &Result{
 		NextAssignee: target,
 		Phase:        "Pending",
 	}, nil
+}
+
+// checkThrashGuard verifies that the aggregate visit count does not exceed
+// the flow's maxVisits budget. Returns a GuardError if the budget is exceeded.
+func (s *Scheduler) checkThrashGuard(workitem *flowv1.Workitem, flow *flowv1.FoundryFlow) error {
+	if workitem == nil || flow == nil {
+		return nil
+	}
+
+	var aggregate int32
+	for _, count := range workitem.Status.ThrashCounters {
+		aggregate += count
+	}
+
+	if aggregate >= flow.Spec.GovernancePolicy.MaxVisits {
+		return &GuardError{
+			Code:    "THRASH_BUDGET_EXCEEDED",
+			Message: fmt.Sprintf("aggregate visit count %d exceeds maxVisits %d", aggregate, flow.Spec.GovernancePolicy.MaxVisits),
+		}
+	}
+
+	return nil
+}
+
+// validateContract checks that all artefact requirements in a contract are
+// satisfied by the current artefact state from the Archivist.
+func (s *Scheduler) validateContract(ctx context.Context, workitemID string, contract flowv1.Contract) error {
+	if len(contract) == 0 {
+		return nil // Empty contract means no requirements.
+	}
+
+	// Collect governed artefact names from the contract.
+	governedNames := make([]string, 0, len(contract))
+	for name := range contract {
+		governedNames = append(governedNames, name)
+	}
+
+	// Query the Archivist for artefact state.
+	states, err := s.Querier.QueryArtefactState(ctx, workitemID, governedNames)
+	if err != nil {
+		return fmt.Errorf("failed to query artefact state: %w", err)
+	}
+
+	// Group artefacts by governed artefact name.
+	byName := make(map[string][]ArtefactState)
+	for _, state := range states {
+		byName[state.GovernedArtefact] = append(byName[state.GovernedArtefact], state)
+	}
+
+	// Validate each contract requirement.
+	for name, requiredStamps := range contract {
+		artefacts, exists := byName[name]
+		if !exists || len(artefacts) == 0 {
+			return &GuardError{
+				Code:    "CONTRACT_VIOLATION",
+				Message: fmt.Sprintf("no artefacts of governed type %q found", name),
+			}
+		}
+
+		// All artefacts of the required type must carry all required stamps.
+		for _, artefact := range artefacts {
+			stampSet := make(map[string]bool, len(artefact.StampNames))
+			for _, s := range artefact.StampNames {
+				stampSet[s] = true
+			}
+			for _, required := range requiredStamps {
+				if !stampSet[required] {
+					return &GuardError{
+						Code:    "CONTRACT_VIOLATION",
+						Message: fmt.Sprintf("artefact %q (type %q) missing required stamp %q", artefact.ArtefactID, name, required),
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // outputNames extracts the names from a slice of outputs for error messages.

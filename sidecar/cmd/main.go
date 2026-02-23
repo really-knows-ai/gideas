@@ -1,11 +1,11 @@
 // Sidecar is the in-pod gRPC proxy for Foundry Flow nodes.
 //
 // It listens on a single port and multiplexes all Flow services
-// (SidecarService, OperatorService, ArchivistService). The SidecarService
+// (SidecarService, OperatorService, ArchivistService, LibrarianService,
+// JuryService, ClerkService, FlowMonitorService). The SidecarService
 // handles both node-facing RPCs (Heartbeat) and operator-facing RPCs
-// (AssignWork). The OperatorService is proxied to the real Operator gRPC
-// endpoint. ArchivistService is proxied to the real Archivist when
-// ARCHIVIST_ADDRESS is set, otherwise falls back to a mock handler.
+// (AssignWork). Other services are proxied to their real gRPC endpoints
+// when the corresponding address environment variable is set.
 //
 // Usage:
 //
@@ -42,6 +42,7 @@ const (
 	envMonitorAddress      = "MONITOR_ADDRESS"
 	envJuryAddress         = "JURY_ADDRESS"
 	envClerkAddress        = "CLERK_ADDRESS"
+	envCapabilities        = "FLOW_CAPABILITIES"
 )
 
 func main() {
@@ -68,6 +69,7 @@ func main() {
 	monitorAddr := os.Getenv(envMonitorAddress)
 	juryAddr := os.Getenv(envJuryAddress)
 	clerkAddr := os.Getenv(envClerkAddress)
+	capabilities := os.Getenv(envCapabilities)
 
 	slog.Info("Sidecar starting",
 		"port", port,
@@ -79,6 +81,7 @@ func main() {
 		"monitor_address", monitorAddr,
 		"jury_address", juryAddr,
 		"clerk_address", clerkAddr,
+		"capabilities", capabilities,
 		"phase", "brain-stem",
 	)
 
@@ -88,11 +91,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := grpc.NewServer()
+	// Create the SidecarServer first so we can wire its session store
+	// into the identity injection interceptor.
+	sidecarSrv := service.NewSidecarServer(nodeID, nodeAddr)
+
+	// The identity interceptor enriches incoming metadata with
+	// authoritative flow_id, workitem_id, and node_id from the active
+	// assignment session. This ensures that all proxied RPCs carry the
+	// correct identity context regardless of what the node SDK sends.
+	// See: specs/05-reference/grpc-api.md#identity-injection
+	srv := grpc.NewServer(
+		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, capabilities)),
+	)
 
 	// Register service handlers.
 	// SidecarService handles Heartbeat (node-facing) and AssignWork (operator-facing).
-	sidecarSrv := service.NewSidecarServer(nodeID, nodeAddr)
 	flowv1.RegisterSidecarServiceServer(srv, sidecarSrv)
 
 	// ArchivistService: proxy to real Archivist if address is set, otherwise mock.
@@ -168,6 +181,22 @@ func main() {
 		slog.Info("Clerk proxy disabled (no CLERK_ADDRESS set)")
 	}
 
+	// FlowMonitorService: proxy to real Monitor if address is set, otherwise skip.
+	var monitorCloser func() error
+	if monitorAddr != "" {
+		monitorProxy, err := proxy.NewMonitorProxy(monitorAddr)
+		if err != nil {
+			slog.Error("Failed to connect to Monitor", "address", monitorAddr, "error", err)
+			os.Exit(1)
+		}
+		flowv1.RegisterFlowMonitorServiceServer(srv, monitorProxy)
+		monitorCloser = monitorProxy.Close
+		slog.Info("Monitor proxy enabled", "address", monitorAddr)
+	} else {
+		monitorCloser = func() error { return nil }
+		slog.Info("Monitor proxy disabled (no MONITOR_ADDRESS set)")
+	}
+
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
@@ -183,6 +212,7 @@ func main() {
 		_ = librarianCloser()
 		_ = juryCloser()
 		_ = clerkCloser()
+		_ = monitorCloser()
 		_ = sidecarSrv.Close()
 	}()
 

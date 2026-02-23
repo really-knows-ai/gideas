@@ -15,7 +15,8 @@ flowchart LR
     SC --> AR["Archivist<br/>artefact provenance"]
     SC --> LB["Librarian<br/>law lifecycle"]
     SC --> SS["Support Services<br/>pluggable capabilities"]
-    SC --> FM["Flow Monitor<br/>telemetry"]
+    SC --> EB["Flow Event Bus<br/>event distribution"]
+    SC --> FL["Friction Ledger<br/>friction queries"]
 ```
 
 ## Identity and Trust Mediation
@@ -40,7 +41,7 @@ When a Workitem is assigned to a node, the Sidecar receives the assignment conte
 
 ## Service Brokering
 
-The Sidecar brokers requests to five categories of runtime service. Each path has a distinct authority owner:
+The Sidecar brokers requests to six categories of runtime service. Each path has a distinct authority owner:
 
 | Target service | Sidecar role | Authority owner |
 |---|---|---|
@@ -48,7 +49,8 @@ The Sidecar brokers requests to five categories of runtime service. Each path ha
 | [Archivist](../02-flow/04-system-services.md#archivist) | Proxy artefact, feedback, and stamp operations | Archivist authorises based on capability and Workitem scope |
 | [Librarian](../02-flow/04-system-services.md#librarian) | Proxy law retrieval and write operations | Librarian authorises based on capability grants |
 | [Flow Support Services](../02-flow/04-system-services.md#flow-support-services) | Proxy capability-gated requests to Flow-Architect-deployed services | Support Service validates capability grants |
-| [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) | Emit telemetry, metrics, and friction signals | Flow Monitor ingests |
+| [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) | Publish telemetry, metrics, and friction signals | Flow Event Bus persists and distributes |
+| [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) | Proxy friction queries | Friction Ledger serves aggregated friction data |
 
 The Sidecar never transfers control-plane ownership to node code. Routing instructions and Workitem mutations are submitted as requests — the Operator decides whether to accept them. Artefact provenance operations are submitted as requests — the Archivist decides whether to persist them.
 
@@ -164,7 +166,7 @@ The Sidecar emits operational telemetry as a mandatory runtime output:
 - Mediation outcomes (success, rejection, error) for every brokered request.
 - Transport-level metrics (latency, throughput, connection state).
 - Activity tracking signals for Operator visibility.
-- Node-originated telemetry and friction reports forwarded to the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
+- Node-originated telemetry and friction reports published to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus)'s telemetry channel.
 
 Governance audit events — the authoritative record of what changed and why — are emitted by the service that accepted, rejected, or applied the change. The Sidecar's telemetry is transport-level observability; the Archivist's audit events are provenance-level truth.
 

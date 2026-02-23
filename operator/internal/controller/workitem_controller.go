@@ -18,9 +18,13 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -30,33 +34,59 @@ import (
 	"github.com/gideas/flow/operator/internal/controller/scheduler"
 )
 
-// WorkitemReconciler reconciles a Workitem object
+// Workitem lifecycle phase constants.
+const (
+	wiPhasePending   = "Pending"
+	wiPhaseRunning   = "Running"
+	wiPhaseRouting   = "Routing"
+	wiPhaseCompleted = "Completed"
+	// wiPhaseFailed uses the package-level phaseFailed from foundrynode_controller.go.
+)
+
+// nowFunc is a function variable for the current time.
+// Tests can override this to produce deterministic timestamps.
+var nowFunc = metav1.Now
+
+// WorkitemReconciler reconciles a Workitem object.
+//
+// It enforces the spec-defined guard evaluation order for routing transitions:
+//  1. Instruction shape validity
+//  2. Routing target or exit eligibility validity (including exit contract validation)
+//  3. Timeout and thrash guard compliance
+//  4. Lifecycle transition application
 type WorkitemReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// ArtefactQuerier is used by the scheduler to validate exit contracts
+	// against artefact state in the Archivist. May be nil in tests or when
+	// the Archivist is not yet available (contract validation is skipped).
+	ArtefactQuerier scheduler.ArtefactQuerier
 }
 
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems/finalizers,verbs=update
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundryflows,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 //
-// The Workitem reconciler handles two phases:
+// The Workitem reconciler handles three phases:
 //
 //  1. Pending — The Workitem has a currentAssignee but no Pod is processing it.
-//     The reconciler uses the Dispatcher to discover a ready Pod and push the
-//     assignment via gRPC, then transitions to Running.
+//     The reconciler increments the thrash counter, records assignedAt, and uses
+//     the Dispatcher to push the assignment via gRPC, then transitions to Running.
 //
-//  2. Routing — The gRPC server has written a routingInstruction and set the
-//     phase to Routing. The reconciler executes the scheduling decision to
-//     determine the next destination.
+//  2. Running — The Workitem is assigned to a Pod. The reconciler checks for
+//     timeout expiry and requeues with the remaining timeout duration.
 //
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
+//  3. Routing — The gRPC server has written a routingInstruction and set the
+//     phase to Routing. The reconciler executes the full guard pipeline
+//     (instruction validity, target resolution, contract validation, thrash guard)
+//     to determine the next destination.
 func (r *WorkitemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -76,17 +106,71 @@ func (r *WorkitemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	)
 
 	switch workitem.Status.Phase {
-	case "Pending":
+	case wiPhasePending:
 		return r.reconcilePending(ctx, &workitem)
-	case "Routing":
+	case wiPhaseRunning:
+		return r.reconcileRunning(ctx, req, &workitem)
+	case wiPhaseRouting:
 		return r.reconcileRouting(ctx, req, &workitem)
 	default:
 		return ctrl.Result{}, nil
 	}
 }
 
+// resolveFlow fetches the FoundryFlow CRD that owns this Workitem.
+// It looks up the flow name from the Workitem's flow label, falling back
+// to listing flows in the namespace.
+func (r *WorkitemReconciler) resolveFlow(ctx context.Context, workitem *flowv1.Workitem) (*flowv1.FoundryFlow, error) {
+	// Try the label first (set by CreateWorkitem/ImportWorkitem).
+	flowName := ""
+	if workitem.Labels != nil {
+		flowName = workitem.Labels["flow.gideas.io/flow"]
+	}
+
+	if flowName != "" {
+		var flow flowv1.FoundryFlow
+		key := types.NamespacedName{Namespace: workitem.Namespace, Name: flowName}
+		if err := r.Get(ctx, key, &flow); err != nil {
+			return nil, fmt.Errorf("failed to fetch FoundryFlow %q: %w", flowName, err)
+		}
+		return &flow, nil
+	}
+
+	// Fallback: find the first flow in the namespace.
+	var flowList flowv1.FoundryFlowList
+	if err := r.List(ctx, &flowList, client.InNamespace(workitem.Namespace)); err != nil {
+		return nil, fmt.Errorf("failed to list FoundryFlows: %w", err)
+	}
+	if len(flowList.Items) == 0 {
+		return nil, fmt.Errorf("no FoundryFlow found in namespace %q", workitem.Namespace)
+	}
+	return &flowList.Items[0], nil
+}
+
+// resolveTimeout returns the effective timeout duration for the given node
+// assignment, applying the flow's governance policy rules:
+//   - Node-specific timeout takes precedence if set and within maxTimeout.
+//   - Falls back to defaultTimeout.
+//   - Node timeout is capped at maxTimeout.
+func resolveTimeout(node *flowv1.FoundryNode, flow *flowv1.FoundryFlow) time.Duration {
+	policy := flow.Spec.GovernancePolicy
+	defaultTimeout := policy.DefaultTimeout.Duration
+	maxTimeout := policy.MaxTimeout.Duration
+
+	if node != nil && node.Spec.Timeout != nil {
+		nodeTimeout := node.Spec.Timeout.Duration
+		if nodeTimeout > maxTimeout {
+			return maxTimeout
+		}
+		return nodeTimeout
+	}
+
+	return defaultTimeout
+}
+
 // reconcilePending handles Workitems in the Pending phase.
-// It uses the Dispatcher to discover a ready Pod and push the assignment.
+// It increments the thrash counter, records assignedAt, and uses the
+// Dispatcher to discover a ready Pod and push the assignment.
 //
 // To prevent duplicate dispatches in a tight reconcile loop, this function
 // transitions the Workitem to "Running" BEFORE dispatching. This acts as
@@ -105,15 +189,49 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 
 	assignee := workitem.Status.CurrentAssignee
 
+	// Resolve the FoundryFlow for thrash guard enforcement.
+	flow, err := r.resolveFlow(ctx, workitem)
+	if err != nil {
+		log.Error(err, "Failed to resolve FoundryFlow",
+			"name", workitem.Name,
+		)
+		return ctrl.Result{}, err
+	}
+
+	// Increment the thrash counter for the target node.
+	if workitem.Status.ThrashCounters == nil {
+		workitem.Status.ThrashCounters = make(map[string]int32)
+	}
+	workitem.Status.ThrashCounters[assignee]++
+
+	// Check thrash guard BEFORE dispatching. If the budget is already
+	// exceeded, fail the Workitem immediately instead of wasting a dispatch.
+	var aggregate int32
+	for _, count := range workitem.Status.ThrashCounters {
+		aggregate += count
+	}
+	if aggregate > flow.Spec.GovernancePolicy.MaxVisits {
+		log.Info("Thrash budget exceeded, failing Workitem",
+			"name", workitem.Name,
+			"aggregate", aggregate,
+			"maxVisits", flow.Spec.GovernancePolicy.MaxVisits,
+		)
+		return r.failWorkitem(ctx, workitem, "THRASH_BUDGET_EXCEEDED")
+	}
+
 	log.Info("Dispatching Workitem",
 		"name", workitem.Name,
 		"assignee", assignee,
+		"thrashCounter", workitem.Status.ThrashCounters[assignee],
 	)
 
-	// Claim the workitem by transitioning to Running BEFORE dispatching.
-	// This prevents duplicate dispatches: if two reconciles race, only one
-	// will succeed at this status update.
-	workitem.Status.Phase = "Running"
+	// Record the assignment timestamp and claim the workitem by
+	// transitioning to Running BEFORE dispatching. This prevents
+	// duplicate dispatches: if two reconciles race, only one will
+	// succeed at this status update.
+	now := nowFunc()
+	workitem.Status.Phase = wiPhaseRunning
+	workitem.Status.AssignedAt = &now
 	if err := r.Status().Update(ctx, workitem); err != nil {
 		// Conflict means another reconcile already claimed it — that's fine.
 		log.Info("Could not claim Workitem (likely already claimed)",
@@ -126,7 +244,7 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 	// Use the Dispatcher to push the assignment.
 	d := dispatcher.New(r.Client, workitem.Namespace)
 
-	_, err := d.Assign(
+	_, err = d.Assign(
 		ctx,
 		assignee,
 		workitem.Namespace, // flow_id placeholder
@@ -140,8 +258,9 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 		// Revert to Pending so it can be retried.
 		var fresh flowv1.Workitem
 		if getErr := r.Get(ctx, client.ObjectKeyFromObject(workitem), &fresh); getErr == nil {
-			if fresh.Status.Phase == "Running" {
-				fresh.Status.Phase = "Pending"
+			if fresh.Status.Phase == wiPhaseRunning {
+				fresh.Status.Phase = wiPhasePending
+				fresh.Status.AssignedAt = nil
 				_ = r.Status().Update(ctx, &fresh)
 			}
 		}
@@ -153,11 +272,73 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 		"assignee", assignee,
 	)
 
+	// Requeue after the timeout period to check for inactivity timeout.
+	var node flowv1.FoundryNode
+	nodeKey := types.NamespacedName{Namespace: workitem.Namespace, Name: assignee}
+	timeout := flow.Spec.GovernancePolicy.DefaultTimeout.Duration
+	if getErr := r.Get(ctx, nodeKey, &node); getErr == nil {
+		timeout = resolveTimeout(&node, flow)
+	}
+
+	if timeout > 0 {
+		return ctrl.Result{RequeueAfter: timeout}, nil
+	}
+
 	return ctrl.Result{}, nil
 }
 
+// reconcileRunning checks for timeout expiry on Running Workitems.
+// If the assignment has exceeded the configured timeout, the Workitem
+// transitions to Failed with TIMEOUT_EXCEEDED.
+func (r *WorkitemReconciler) reconcileRunning(ctx context.Context, req ctrl.Request, workitem *flowv1.Workitem) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	// Resolve the FoundryFlow for timeout configuration.
+	flow, err := r.resolveFlow(ctx, workitem)
+	if err != nil {
+		log.Error(err, "Failed to resolve FoundryFlow for timeout check",
+			"name", workitem.Name,
+		)
+		return ctrl.Result{}, err
+	}
+
+	// Resolve the effective timeout for this node.
+	var node flowv1.FoundryNode
+	nodeKey := types.NamespacedName{Namespace: req.Namespace, Name: workitem.Status.CurrentAssignee}
+	timeout := flow.Spec.GovernancePolicy.DefaultTimeout.Duration
+	if getErr := r.Get(ctx, nodeKey, &node); getErr == nil {
+		timeout = resolveTimeout(&node, flow)
+	}
+
+	// If no timeout configured (zero duration), skip timeout enforcement.
+	if timeout <= 0 {
+		return ctrl.Result{}, nil
+	}
+
+	// Check timeout expiry.
+	if workitem.Status.AssignedAt != nil {
+		elapsed := nowFunc().Sub(workitem.Status.AssignedAt.Time)
+		if elapsed >= timeout {
+			log.Info("Workitem assignment timed out",
+				"name", workitem.Name,
+				"assignee", workitem.Status.CurrentAssignee,
+				"elapsed", elapsed,
+				"timeout", timeout,
+			)
+			return r.failWorkitem(ctx, workitem, "TIMEOUT_EXCEEDED")
+		}
+
+		// Requeue for the remaining timeout window.
+		remaining := timeout - elapsed
+		return ctrl.Result{RequeueAfter: remaining}, nil
+	}
+
+	// No assignedAt — requeue after the full timeout to check again.
+	return ctrl.Result{RequeueAfter: timeout}, nil
+}
+
 // reconcileRouting handles Workitems in the Routing phase.
-// It executes the scheduling decision based on the routing instruction.
+// It executes the full guard pipeline via the scheduler.
 func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Request, workitem *flowv1.Workitem) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -177,18 +358,54 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 		"routing_target", workitem.Status.RoutingInstruction.Target,
 	)
 
-	// Execute the scheduling decision.
+	// Resolve the FoundryFlow for guard evaluation.
+	flow, err := r.resolveFlow(ctx, workitem)
+	if err != nil {
+		log.Error(err, "Failed to resolve FoundryFlow for routing",
+			"name", workitem.Name,
+		)
+		return ctrl.Result{}, err
+	}
+
+	// Execute the scheduling decision with full guard pipeline.
 	sched := scheduler.New(r.Client, req.Namespace)
+	sched.Querier = r.ArtefactQuerier
+
 	result, err := sched.CalculateNextStep(
 		ctx,
 		workitem.Status.CurrentAssignee,
 		*workitem.Status.RoutingInstruction,
+		workitem,
+		flow,
 	)
 	if err != nil {
-		log.Error(err, "Failed to calculate next step",
-			"name", workitem.Name,
-			"assignee", workitem.Status.CurrentAssignee,
-		)
+		// Check if this is a guard failure that should fail the Workitem.
+		var guardErr *scheduler.GuardError
+		if errors.As(err, &guardErr) {
+			// Terminal guard failures: thrash budget exceeded transitions
+			// the Workitem to Failed. Other guard errors (INVALID_ROUTE,
+			// EXIT_NOT_BOUND, CONTRACT_VIOLATION) are rejected — the
+			// Workitem stays in its current state and the error is returned
+			// to the caller.
+			if guardErr.Code == "THRASH_BUDGET_EXCEEDED" {
+				log.Info("Guard failure, failing Workitem",
+					"name", workitem.Name,
+					"code", guardErr.Code,
+					"message", guardErr.Message,
+				)
+				return r.failWorkitem(ctx, workitem, guardErr.Code)
+			}
+
+			log.Error(err, "Guard failure, rejecting routing instruction",
+				"name", workitem.Name,
+				"code", guardErr.Code,
+			)
+		} else {
+			log.Error(err, "Failed to calculate next step",
+				"name", workitem.Name,
+				"assignee", workitem.Status.CurrentAssignee,
+			)
+		}
 		// Return the error so the controller retries with backoff.
 		return ctrl.Result{}, err
 	}
@@ -202,7 +419,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 	}
 
 	// If the workitem has already moved past Routing, skip this update.
-	if fresh.Status.Phase != "Routing" {
+	if fresh.Status.Phase != wiPhaseRouting {
 		log.Info("Workitem already advanced past Routing, skipping",
 			"name", workitem.Name,
 			"currentPhase", fresh.Status.Phase,
@@ -214,6 +431,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 	fresh.Status.Phase = result.Phase
 	fresh.Status.CurrentAssignee = result.NextAssignee
 	fresh.Status.RoutingInstruction = nil // Clear to prevent re-processing.
+	fresh.Status.AssignedAt = nil         // Clear for next assignment.
 
 	// Persist the status update.
 	if err := r.Status().Update(ctx, &fresh); err != nil {
@@ -223,7 +441,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	if result.Phase == "Completed" {
+	if result.Phase == wiPhaseCompleted {
 		log.Info("Workitem completed",
 			"name", workitem.Name,
 			"lastNode", previousAssignee,
@@ -235,6 +453,43 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 			"to", result.NextAssignee,
 		)
 	}
+
+	return ctrl.Result{}, nil
+}
+
+// failWorkitem transitions a Workitem to the Failed phase with a structured
+// failure reason.
+func (r *WorkitemReconciler) failWorkitem(ctx context.Context, workitem *flowv1.Workitem, reason string) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	// Re-fetch for latest resourceVersion.
+	var fresh flowv1.Workitem
+	if err := r.Get(ctx, client.ObjectKeyFromObject(workitem), &fresh); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Only transition if not already terminal.
+	if fresh.Status.Phase == wiPhaseCompleted || fresh.Status.Phase == phaseFailed {
+		return ctrl.Result{}, nil
+	}
+
+	fresh.Status.Phase = phaseFailed
+	fresh.Status.FailureReason = reason
+	fresh.Status.RoutingInstruction = nil
+	fresh.Status.AssignedAt = nil
+
+	if err := r.Status().Update(ctx, &fresh); err != nil {
+		log.Error(err, "Failed to transition Workitem to Failed",
+			"name", workitem.Name,
+			"reason", reason,
+		)
+		return ctrl.Result{}, err
+	}
+
+	log.Info("Workitem failed",
+		"name", workitem.Name,
+		"reason", reason,
+	)
 
 	return ctrl.Result{}, nil
 }

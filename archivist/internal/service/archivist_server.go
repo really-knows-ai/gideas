@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"strings"
 
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -32,6 +34,86 @@ func NewArchivistServer(s *sqlite.Store) *ArchivistServer {
 	return &ArchivistServer{store: s}
 }
 
+// ---------------------------------------------------------------------------
+// Capability enforcement
+// ---------------------------------------------------------------------------
+
+const (
+	metadataKeyCapabilities = "x-flow-capabilities"
+	metadataKeyNodeID       = "x-flow-node-id"
+)
+
+// isNodeOriginatedCall returns true when the request carries a Sidecar-injected
+// node identity, meaning it is a node-originated call through the Sidecar
+// proxy layer. System-to-system calls (Operator, Librarian, etc.) do not
+// carry this header and are not subject to capability enforcement.
+func isNodeOriginatedCall(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+	return len(md.Get(metadataKeyNodeID)) > 0
+}
+
+// capabilitiesFromContext reads the comma-separated capability grants from
+// gRPC metadata injected by the Sidecar.
+func capabilitiesFromContext(ctx context.Context) []string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil
+	}
+	var caps []string
+	for _, c := range md.Get(metadataKeyCapabilities) {
+		for cap := range strings.SplitSeq(c, ",") {
+			if s := strings.TrimSpace(cap); s != "" {
+				caps = append(caps, s)
+			}
+		}
+	}
+	return caps
+}
+
+// hasCapability checks whether the capability list contains the given
+// capability string. The check is exact.
+func hasCapability(caps []string, required string) bool {
+	return slices.Contains(caps, required)
+}
+
+// checkCapability enforces deny-by-default capability gating for
+// node-originated requests. System-to-system calls (no x-flow-node-id)
+// pass through unconditionally.
+//
+// Per spec (specs/05-reference/grpc-api.md, API Invariant #3):
+// "Capability enforcement is performed by the owning service."
+func checkCapability(ctx context.Context, required string) error {
+	if !isNodeOriginatedCall(ctx) {
+		return nil // System call — no capability check.
+	}
+	caps := capabilitiesFromContext(ctx)
+	if hasCapability(caps, required) {
+		return nil
+	}
+	return status.Errorf(codes.PermissionDenied,
+		"CAPABILITY_DENIED: missing required capability %q", required)
+}
+
+// checkCapabilityAny checks that at least one of the required capabilities is
+// present. Used for operations like StoreArtefact where either a broad
+// WRITE:artefact or a scoped WRITE:artefact/<name> grant suffices.
+func checkCapabilityAny(ctx context.Context, required ...string) error {
+	if !isNodeOriginatedCall(ctx) {
+		return nil
+	}
+	caps := capabilitiesFromContext(ctx)
+	for _, r := range required {
+		if hasCapability(caps, r) {
+			return nil
+		}
+	}
+	return status.Errorf(codes.PermissionDenied,
+		"CAPABILITY_DENIED: missing required capability (one of %v)", required)
+}
+
 // StoreArtefact persists content and creates a version record.
 //
 // The content_hash is Sidecar-computed (not node-supplied). Logic:
@@ -47,6 +129,11 @@ func (s *ArchivistServer) StoreArtefact(
 	artefactID := req.GetArtefactId()
 	contentHash := req.GetContentHash()
 	kind := req.GetGovernedArtefact()
+
+	// Capability gate: WRITE:artefact or WRITE:artefact/<governed_artefact>.
+	if err := checkCapabilityAny(ctx, "WRITE:artefact", "WRITE:artefact/"+kind); err != nil {
+		return nil, err
+	}
 
 	slog.Info("StoreArtefact",
 		"workitem_id", workitemID,
@@ -104,6 +191,11 @@ func (s *ArchivistServer) StoreArtefact(
 func (s *ArchivistServer) GetArtefact(
 	ctx context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
+	// Capability gate: READ:artefact.
+	if err := checkCapability(ctx, "READ:artefact"); err != nil {
+		return nil, err
+	}
+
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -142,6 +234,11 @@ func (s *ArchivistServer) GetArtefact(
 func (s *ArchivistServer) GetArtefactVersion(
 	ctx context.Context, req *flowv1.GetArtefactVersionRequest,
 ) (*flowv1.GetArtefactVersionResponse, error) {
+	// Capability gate: READ:artefact.
+	if err := checkCapability(ctx, "READ:artefact"); err != nil {
+		return nil, err
+	}
+
 	versionHash := req.GetVersionHash()
 
 	slog.Info("GetArtefactVersion", "version_hash", versionHash)
@@ -164,6 +261,11 @@ func (s *ArchivistServer) GetArtefactVersion(
 func (s *ArchivistServer) GetArtefactMetadata(
 	ctx context.Context, req *flowv1.GetArtefactMetadataRequest,
 ) (*flowv1.GetArtefactMetadataResponse, error) {
+	// Capability gate: READ:artefact.
+	if err := checkCapability(ctx, "READ:artefact"); err != nil {
+		return nil, err
+	}
+
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -297,7 +399,7 @@ func (s *ArchivistServer) StampArtefact(
 		"stamp_name", stampName,
 	)
 
-	// Resolve head version.
+	// Resolve head version (needed for both capability check and stamp).
 	head, err := s.store.GetHead(ctx, workitemID, artefactID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get head: %v", err)
@@ -305,6 +407,12 @@ func (s *ArchivistServer) StampArtefact(
 	if head == nil {
 		return nil, status.Errorf(codes.NotFound,
 			"artefact %q not found for workitem %q", artefactID, workitemID)
+	}
+
+	// Capability gate: STAMP:artefact/<governed_artefact>/<stamp_name>.
+	// Enforcement is exact per spec (specs/03-node/02-configuration.md).
+	if err := checkCapability(ctx, "STAMP:artefact/"+head.GovernedArtefact+"/"+stampName); err != nil {
+		return nil, err
 	}
 
 	// Extract applying_node from gRPC metadata if available.
@@ -341,6 +449,11 @@ func (s *ArchivistServer) StampArtefact(
 func (s *ArchivistServer) GetStamps(
 	ctx context.Context, req *flowv1.GetStampsRequest,
 ) (*flowv1.GetStampsResponse, error) {
+	// Capability gate: READ:artefact.
+	if err := checkCapability(ctx, "READ:artefact"); err != nil {
+		return nil, err
+	}
+
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -374,6 +487,11 @@ func (s *ArchivistServer) GetStamps(
 
 // HasStamp checks whether the named stamp exists on the current version.
 func (s *ArchivistServer) HasStamp(ctx context.Context, req *flowv1.HasStampRequest) (*flowv1.HasStampResponse, error) {
+	// Capability gate: READ:artefact.
+	if err := checkCapability(ctx, "READ:artefact"); err != nil {
+		return nil, err
+	}
+
 	exists, err := s.store.HasStamp(ctx, req.GetWorkitemId(), req.GetArtefactId(), req.GetStampName())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "has stamp: %v", err)
@@ -398,6 +516,11 @@ const (
 func (s *ArchivistServer) AddFeedback(
 	ctx context.Context, req *flowv1.AddFeedbackRequest,
 ) (*flowv1.AddFeedbackResponse, error) {
+	// Capability gate: WRITE:feedback/new.
+	if err := checkCapability(ctx, "WRITE:feedback/new"); err != nil {
+		return nil, err
+	}
+
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 	source := extractNodeID(ctx)
@@ -436,6 +559,11 @@ func (s *ArchivistServer) AddFeedback(
 func (s *ArchivistServer) GetFeedback(
 	ctx context.Context, req *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
+	// Capability gate: READ:feedback.
+	if err := checkCapability(ctx, "READ:feedback"); err != nil {
+		return nil, err
+	}
+
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
@@ -482,6 +610,11 @@ func (s *ArchivistServer) GetFeedback(
 func (s *ArchivistServer) HasUnresolvedFeedback(
 	ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest,
 ) (*flowv1.HasUnresolvedFeedbackResponse, error) {
+	// Capability gate: READ:feedback.
+	if err := checkCapability(ctx, "READ:feedback"); err != nil {
+		return nil, err
+	}
+
 	has, err := s.store.HasUnresolvedFeedback(ctx, req.GetWorkitemId(), req.GetArtefactId())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "has unresolved feedback: %v", err)
@@ -493,6 +626,11 @@ func (s *ArchivistServer) HasUnresolvedFeedback(
 func (s *ArchivistServer) ResolveFeedback(
 	ctx context.Context, req *flowv1.ResolveFeedbackRequest,
 ) (*flowv1.ResolveFeedbackResponse, error) {
+	// Capability gate: WRITE:feedback/actioned.
+	if err := checkCapability(ctx, "WRITE:feedback/actioned"); err != nil {
+		return nil, err
+	}
+
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
@@ -513,6 +651,11 @@ func (s *ArchivistServer) ResolveFeedback(
 func (s *ArchivistServer) RefuseFeedback(
 	ctx context.Context, req *flowv1.RefuseFeedbackRequest,
 ) (*flowv1.RefuseFeedbackResponse, error) {
+	// Capability gate: WRITE:feedback/wont_fix.
+	if err := checkCapability(ctx, "WRITE:feedback/wont_fix"); err != nil {
+		return nil, err
+	}
+
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
@@ -533,6 +676,11 @@ func (s *ArchivistServer) RefuseFeedback(
 func (s *ArchivistServer) AcceptFix(
 	ctx context.Context, req *flowv1.AcceptFixRequest,
 ) (*flowv1.AcceptFixResponse, error) {
+	// Capability gate: WRITE:feedback/resolved.
+	if err := checkCapability(ctx, "WRITE:feedback/resolved"); err != nil {
+		return nil, err
+	}
+
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
@@ -553,6 +701,11 @@ func (s *ArchivistServer) AcceptFix(
 func (s *ArchivistServer) RejectFix(
 	ctx context.Context, req *flowv1.RejectFixRequest,
 ) (*flowv1.RejectFixResponse, error) {
+	// Capability gate: WRITE:feedback/rejected.
+	if err := checkCapability(ctx, "WRITE:feedback/rejected"); err != nil {
+		return nil, err
+	}
+
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
@@ -573,6 +726,11 @@ func (s *ArchivistServer) RejectFix(
 func (s *ArchivistServer) AcceptRefusal(
 	ctx context.Context, req *flowv1.AcceptRefusalRequest,
 ) (*flowv1.AcceptRefusalResponse, error) {
+	// Capability gate: WRITE:feedback/resolved.
+	if err := checkCapability(ctx, "WRITE:feedback/resolved"); err != nil {
+		return nil, err
+	}
+
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
@@ -593,6 +751,11 @@ func (s *ArchivistServer) AcceptRefusal(
 func (s *ArchivistServer) RejectRefusal(
 	ctx context.Context, req *flowv1.RejectRefusalRequest,
 ) (*flowv1.RejectRefusalResponse, error) {
+	// Capability gate: WRITE:feedback/rejected.
+	if err := checkCapability(ctx, "WRITE:feedback/rejected"); err != nil {
+		return nil, err
+	}
+
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
@@ -613,6 +776,11 @@ func (s *ArchivistServer) RejectRefusal(
 func (s *ArchivistServer) GetFeedbackDepth(
 	ctx context.Context, req *flowv1.GetFeedbackDepthRequest,
 ) (*flowv1.GetFeedbackDepthResponse, error) {
+	// Capability gate: READ:feedback.
+	if err := checkCapability(ctx, "READ:feedback"); err != nil {
+		return nil, err
+	}
+
 	depth, err := s.store.GetFeedbackDepth(ctx, req.GetFeedbackId())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get feedback depth: %v", err)
@@ -626,6 +794,11 @@ func (s *ArchivistServer) GetFeedbackDepth(
 func (s *ArchivistServer) DeadlockFeedback(
 	ctx context.Context, req *flowv1.DeadlockFeedbackRequest,
 ) (*flowv1.DeadlockFeedbackResponse, error) {
+	// Capability gate: WRITE:feedback/deadlocked.
+	if err := checkCapability(ctx, "WRITE:feedback/deadlocked"); err != nil {
+		return nil, err
+	}
+
 	actor := extractNodeID(ctx)
 
 	record, err := s.store.TransitionFeedback(ctx, req.GetFeedbackId(),
@@ -652,6 +825,11 @@ func (s *ArchivistServer) DeadlockFeedback(
 func (s *ArchivistServer) LinkRuling(
 	ctx context.Context, req *flowv1.LinkRulingRequest,
 ) (*flowv1.LinkRulingResponse, error) {
+	// Capability gate: WRITE:feedback/link-ruling.
+	if err := checkCapability(ctx, "WRITE:feedback/link-ruling"); err != nil {
+		return nil, err
+	}
+
 	feedbackID := req.GetFeedbackId()
 	lawID := req.GetLawId()
 	targetState := req.GetTargetState()

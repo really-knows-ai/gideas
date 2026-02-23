@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -32,19 +33,19 @@ import (
 
 var _ = Describe("FlowSupportService Controller", func() {
 	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+		const resourceName = "test-support-svc"
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
-		flowsupportservice := &flowv1.FlowSupportService{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind FlowSupportService")
-			err := k8sClient.Get(ctx, typeNamespacedName, flowsupportservice)
+			var existing flowv1.FlowSupportService
+			err := k8sClient.Get(ctx, typeNamespacedName, &existing)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &flowv1.FlowSupportService{
 					ObjectMeta: metav1.ObjectMeta{
@@ -61,15 +62,22 @@ var _ = Describe("FlowSupportService Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &flowv1.FlowSupportService{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance FlowSupportService")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			// Clean up the owned Deployment.
+			deploy := &appsv1.Deployment{}
+			err = k8sClient.Get(ctx, typeNamespacedName, deploy)
+			if err == nil {
+				Expect(k8sClient.Delete(ctx, deploy)).To(Succeed())
+			}
 		})
-		It("should successfully reconcile the resource", func() {
+
+		It("should create a Deployment and set status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &FlowSupportServiceReconciler{
 				Client: k8sClient,
@@ -80,8 +88,17 @@ var _ = Describe("FlowSupportService Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("Verifying the Deployment was created")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &deploy)).To(Succeed())
+			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("test-image:latest"))
+
+			By("Verifying the status was updated")
+			var svc flowv1.FlowSupportService
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &svc)).To(Succeed())
+			Expect(svc.Status.Phase).NotTo(BeEmpty())
 		})
 	})
 })

@@ -31,20 +31,20 @@ import (
 )
 
 var _ = Describe("Law Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	Context("When reconciling a valid resource", func() {
+		const resourceName = "test-law"
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
-		law := &flowv1.Law{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Law")
-			err := k8sClient.Get(ctx, typeNamespacedName, law)
+			var existing flowv1.Law
+			err := k8sClient.Get(ctx, typeNamespacedName, &existing)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &flowv1.Law{
 					ObjectMeta: metav1.ObjectMeta{
@@ -52,12 +52,12 @@ var _ = Describe("Law Controller", func() {
 						Namespace: "default",
 					},
 					Spec: flowv1.LawSpec{
-						Goal: "test goal",
+						Goal: "All code must pass linting",
 						Tier: 1,
 						Representations: []flowv1.Representation{
 							{
 								Type:    "text/markdown",
-								Content: "test content",
+								Content: "All code must pass linting before review",
 							},
 						},
 					},
@@ -67,7 +67,6 @@ var _ = Describe("Law Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &flowv1.Law{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -75,7 +74,8 @@ var _ = Describe("Law Controller", func() {
 			By("Cleanup the specific resource instance Law")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
+
+		It("should compute a version hash and set Ready condition", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &LawReconciler{
 				Client: k8sClient,
@@ -86,8 +86,12 @@ var _ = Describe("Law Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("Verifying the version hash was computed")
+			var law flowv1.Law
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &law)).To(Succeed())
+			Expect(law.Status.Version).NotTo(BeEmpty())
+			Expect(law.Status.Version).To(HaveLen(16)) // 8 bytes hex-encoded
 		})
 	})
 })

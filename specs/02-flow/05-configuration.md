@@ -218,6 +218,21 @@ Configuration exposes policy limits that bound runtime behaviour:
 - Thrash limits for aggregate Workitem visit budgets.
 - Retention windows for completed and failed Workitems.
 - Review TTL expiry and friction threshold values driving review hearing triggers.
+- Flow Event Bus per-channel retention windows.
+
+### Flow Event Bus Retention
+
+The Flow Event Bus maintains per-channel configurable retention windows. Events within the retention window are available for subscriber replay; events beyond the window are evicted. The mechanism is per-channel and operator-configurable in the FoundryFlow configuration resource:
+
+```yaml
+eventBus:
+  retention:
+    telemetry: <duration or size>
+    audit: <duration or size>
+    friction: <duration or size>
+```
+
+The exact field names and value formats are implementation-defined; the spec establishes that retention is per-channel and operator-configurable. Audit channels will typically have longer retention than telemetry channels. The Bus is a reliable delivery layer, not a long-term storage layer — long-term retention is downstream (Prometheus for metrics, log pipeline for audit records).
 
 These policies are behavioural inputs to Operator and service runtime logic and must be deterministic under reconciliation.
 

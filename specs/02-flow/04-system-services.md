@@ -6,9 +6,11 @@ System services provide the runtime substrate for law lifecycle, artefact lifecy
 
 Each service owns one primary concern:
 
+- **Flow Event Bus**: durable event distribution across telemetry, audit, and friction channels.
+- **Friction Ledger**: friction aggregation, threshold evaluation, and friction query surface.
 - **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (friction-threshold and review-TTL-expiry).
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
-- **Flow Monitor**: telemetry aggregation, friction signal surfacing, and audit stream integration.
+- **Flow Monitor**: pipeline adapter for metrics export (Prometheus) and audit log emission (JSON Lines to stdout).
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
 - **Flow Support Services**: optional, Flow-Architect-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the worked example in this spec.
 
@@ -21,17 +23,114 @@ flowchart TD
 
     SC["Sidecar"] --> LB
     SC --> AR
+    SC --> EB["Flow Event Bus"]
+    SC --> FL["Friction Ledger"]
 
     SC --> SS["Support Services<br/>(Flow Architect deployed)"]
 
-    LB --> FM["Flow Monitor"]
-    AR --> FM
-    OP --> FM
+    EB --> FL
+    EB --> FM["Flow Monitor"]
+    FL --> EB
 
-    SS --> FM
+    EB --> LB
 
     LB <-->|"law sync and appeals"| XFL["Cross-flow Librarian"]
 ```
+
+## Flow Event Bus
+
+The Flow Event Bus is a durable event distribution service in the Control Plane. It receives
+events from producers, persists them to a SQLite append-only log, and fans them out to all
+active subscribers.
+
+### Channels
+
+The Bus operates three channels:
+
+- **Telemetry channel**: friction events, custom telemetry events, metrics, traces, and cost
+  accounting signals. Produced by Sidecars (on behalf of nodes) and by system services.
+  Subscribers: Friction Ledger (friction aggregation), Flow Monitor (metrics export), future
+  operational dashboards.
+
+- **Audit channel**: authoritative state transition records emitted by the service that
+  accepted, rejected, or applied a mutation. The Archivist publishes artefact version creation,
+  stamp application, and feedback transitions. The Operator publishes lifecycle transitions,
+  routing decisions, and contract evaluations. The Librarian publishes law creation, retirement,
+  and integration events. Subscribers: Flow Monitor (JSON Lines to stdout for log pipeline),
+  future compliance tooling.
+
+- **Friction channel**: aggregated friction signals published by the Friction Ledger.
+  Threshold-crossing alerts indicate that a law's accumulated friction has crossed its tier's
+  configured hearing threshold. Subscribers: Librarian (reactive hearing triggers).
+
+### Persistence and Retention
+
+The Bus persists all events to a SQLite append-only log before fan-out. Each channel has a
+configurable retention window. Events within the retention window are available for subscriber
+replay; events beyond the window are evicted. Retention windows are configured per channel in
+the FoundryFlow configuration resource.
+
+The Bus is a reliable delivery layer, not a long-term storage layer. Long-term retention is
+downstream: Prometheus for metrics and friction time-series, log pipeline for audit records.
+
+### Publish and Subscribe Semantics
+
+- **Publish** is write-ahead. The producer receives an acknowledgement when the Bus has
+  persisted the event to its log and accepted it for distribution.
+- **Subscribe** opens a server-side stream filtered by channel and optional event attributes.
+  The subscriber receives events as they are published. If the subscriber falls behind, the Bus
+  applies backpressure per subscriber — slow subscribers do not block fast ones.
+- **Replay**: reconnecting subscribers provide a last-seen sequence number. The Bus replays
+  events from that point if they are still within the channel's retention window. Beyond the
+  window, the subscriber must catch up from its downstream store.
+
+### Deployment
+
+The Flow Event Bus is Operator-provisioned — always present in every Flow alongside the
+Operator, Friction Ledger, and Flow Monitor. It is not a FlowSupportService; it is Control
+Plane infrastructure.
+
+## Friction Ledger
+
+The Friction Ledger is the friction aggregation and threshold evaluation service. It subscribes
+to friction events on the Flow Event Bus's telemetry channel, maintains running totals per law,
+per node, and per tier, and publishes threshold-crossing signals to the friction channel.
+
+### Aggregation
+
+The Friction Ledger maintains running friction aggregates in SQLite:
+
+- Per-law totals — used for hearing threshold evaluation.
+- Per-node totals — used for operational analysis.
+- Per-tier totals — used for governance-level analysis.
+- Per-topology-path totals — used for routing cost analysis.
+
+Aggregation is post-hoc. The Ledger receives raw friction events and computes aggregates across
+whatever axes are needed. Callers emit a magnitude and optional law attribution; the Ledger does
+the rest.
+
+### Threshold-Crossing Signals
+
+When a law's accumulated friction crosses its tier's configured hearing threshold, the Friction
+Ledger publishes a threshold-crossing event to the Flow Event Bus's friction channel. This event
+includes the law identifier, the tier, the accumulated friction, and the threshold that was
+crossed.
+
+The Librarian subscribes to the friction channel and triggers review hearings reactively in
+response to these signals.
+
+### QueryFriction API
+
+The Friction Ledger serves `QueryFriction` as a direct gRPC API for point-to-point queries.
+This is the query surface for friction data, used by:
+
+- The Tribunal (via Sidecar) for hearing evidence retrieval.
+- The Librarian (direct service-to-service) for catch-up on startup or reconnection.
+
+### Deployment
+
+The Friction Ledger is Operator-provisioned — always present in every Flow. It is Control Plane
+infrastructure, not a FlowSupportService.
 
 ## Librarian
 
@@ -76,7 +175,7 @@ Integration outcomes follow tiered supremacy semantics:
 
 The Librarian owns all hearing trigger emission for law lifecycle events. It monitors two signals and triggers review hearings by requesting Workitem creation through the Operator.
 
-**Friction-threshold triggers:** The Librarian periodically queries the [Flow Monitor](#flow-monitor-and-friction-surface) for accumulated friction attributed to individual laws. When a law's friction crosses its tier's configured threshold, the Librarian triggers a review hearing. Thresholds are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [configuration](./05-configuration.md). For Tiers 1-2, the [Tribunal](./03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the [Advocate](./03-nodes-external.md#the-judiciary--standard-subsystem).
+**Friction-threshold triggers:** The Librarian subscribes to the [Friction Ledger](#friction-ledger)'s threshold-crossing signals on the Flow Event Bus's friction channel. When a threshold-crossing event is received for a law, the Librarian triggers a review hearing. On startup or reconnection, the Librarian queries the Friction Ledger's `QueryFriction` API to determine whether any laws have crossed their thresholds during the disconnection window. Thresholds are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [configuration](./05-configuration.md). For Tiers 1-2, the [Tribunal](./03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the [Advocate](./03-nodes-external.md#the-judiciary--standard-subsystem).
 
 **Review-TTL-expiry triggers:** When a law's age exceeds its tier's configured review TTL (from the FoundryFlow's [governance policy](./05-configuration.md)), the Librarian triggers a review hearing. The law remains active during the hearing — expiry is the trigger, not a demotion event.
 
@@ -117,28 +216,14 @@ flowchart LR
 - Query and write operations enforce capability boundaries configured in FoundryNode.
 - The [Flow Operator](./01-operator.md) maintains a direct service-level query path to the Archivist for exit contract validation and Workitem lifecycle coordination — this is distinct from the Sidecar-mediated path that nodes use.
 
-## Flow Monitor and Friction Surface
+## Flow Monitor
 
-Flow Monitor aggregates runtime observability signals:
+Flow Monitor is a pipeline adapter that subscribes to the Flow Event Bus's telemetry and audit channels and exports signals to external observability systems:
 
-- Metrics from Operator, Sidecars, nodes, and services.
-- Traces for assignment, routing, service calls, and completion paths.
-- Audit event stream for governance-relevant state transitions.
+- Metrics from Operator, Sidecars, nodes, and services — exported via a `/metrics` endpoint for Prometheus scraping.
+- Audit event stream for governance-relevant state transitions — emitted as JSON Lines to stdout for log pipeline consumption (Logstash, ELK, or equivalent).
 
-Friction is a first-class signal:
-
-- Friction events carry a magnitude and are purely additive — every emission adds to the total. Aggregation and analysis happen post-hoc.
-- Each event is attributed to a Workitem and the emitting node. Callers may optionally tag one or more law identifiers to attribute friction to specific governance rules.
-- The Flow Monitor aggregates friction data across multiple axes: per-node, per-law, per-tier, and per-topology-path.
-- Friction is not optional instrumentation; it is a mandatory runtime output surface.
-
-Three SDK operations emit friction transparently as mandatory side effects:
-
-- [`Cite(law_ids)`](../04-sdk/03-sdk-legal.md#citation) emits a fixed low magnitude attributed to the cited laws.
-- [`AddFeedback`](../04-sdk/04-sdk-feedback.md#feedback-friction) emits magnitude equal to the feedback depth for that item (1, 2, ..., n).
-- [Jury deliberation rounds](../01-concepts/04-governance.md#judicial-review) emit magnitude = depth ^ (round + 1) per round; HITL escalation via the Advocate emits depth ^ (rounds * 2).
-
-These mandatory emissions ensure that governance cost is captured regardless of node implementation choices. Nodes may also call `AddFriction` directly for domain-specific costs.
+The Flow Monitor does not persist events or serve query APIs. It is a stateless pipeline adapter. Long-term metrics are queryable through Prometheus; long-term audit records are queryable through the log pipeline.
 
 ## Jury
 
@@ -279,14 +364,14 @@ The Tribunal writes its verdict through the [Clerk](#clerk): directly to the Lib
 
 Trigger ownership is consolidated in the Librarian:
 
-- Friction-threshold trigger (all tiers) -> Librarian queries Flow Monitor, detects threshold crossing. For Tiers 1-2, the Tribunal adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the Advocate.
+- Friction-threshold trigger (all tiers) -> Librarian subscribes to friction channel, receives threshold-crossing signal from Friction Ledger. For Tiers 1-2, the Tribunal adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the Advocate.
 - Review-TTL-expiry trigger -> Librarian detects law age exceeding tier's configured review TTL. The law remains active during the hearing.
 
 Execution and adjudication path:
 
 1. Librarian requests hearing Workitem creation through the Operator, supplying the `lawId`.
 2. Operator admits and assigns the hearing Workitem to the Tribunal using the Tribunal's bound hearing entry contract.
-3. The Tribunal retrieves the law's friction data from the Flow Monitor (via Sidecar) and legal context from the Librarian.
+3. The Tribunal retrieves the law's friction data from the Friction Ledger (via Sidecar) and legal context from the Librarian.
 4. The Tribunal invokes the [Jury](#jury) for deliberation and issues a tier-appropriate verdict.
 5. For a **Promote** verdict, the Tribunal delegates to the [Clerk](#clerk), which drafts the prose representation and codifies formal representations in parallel via registered [Codification Services](#codification-services). Services that are not ready or that fail are skipped with logging. For Retire or Demote verdicts, this step is skipped.
 6. The Clerk writes the new law to the Librarian (via `WriteLaw`) and the Tribunal calls `complete()`. The law is created in a pending state and remains inactive until ratification.
@@ -300,14 +385,14 @@ sequenceDiagram
     participant JR as Jury
     participant CL as Clerk
     participant SC as Sidecar
-    participant FM as Flow Monitor
+    participant FL as Friction Ledger
     participant CS as Codification Services
 
     LB->>OP: create hearing Workitem (lawId)
     OP->>TB: assign hearing via entry binding
     TB->>SC: query friction for law
-    SC->>FM: friction query (by law_id)
-    FM-->>SC: friction data
+    SC->>FL: friction query (by law_id)
+    FL-->>SC: friction data
     SC-->>TB: friction data
     TB->>SC: query law context
     SC->>LB: law context request
@@ -371,12 +456,16 @@ Core call paths are stable:
 - Operator <-> Archivist: completion validation queries and artefact presence checks.
 - Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
 - Sidecar <-> Librarian: law retrieval and legal-context queries.
-- Sidecar <-> Flow Monitor: friction emission, friction queries, and telemetry signals.
-- Librarian -> Flow Monitor: friction queries for law lifecycle threshold evaluation.
+- Sidecar -> Flow Event Bus: friction emission and telemetry signals (publish to telemetry channel).
+- Services -> Flow Event Bus: audit events (publish to audit channel).
+- Flow Event Bus -> Friction Ledger: friction events (telemetry channel subscription).
+- Friction Ledger -> Flow Event Bus: threshold-crossing signals (publish to friction channel).
+- Flow Event Bus -> Librarian: threshold-crossing signals (friction channel subscription).
+- Librarian -> Friction Ledger: QueryFriction for catch-up on startup/reconnection.
+- Tribunal (via Sidecar) -> Friction Ledger: friction queries for hearing evidence.
+- Flow Event Bus -> Flow Monitor: telemetry and audit channel subscriptions for metrics export and audit log emission.
 - Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
 - Clerk (via Sidecar) <-> Codification Services: encode requests during law promotion.
-- Tribunal (via Sidecar) <-> Flow Monitor: friction queries for hearing evidence.
-- Services -> Flow Monitor: metrics, traces, and audit events.
 
 Contract failures must return structured errors aligned with [Error Catalogue](../05-reference/error-catalogue.md).
 
@@ -387,7 +476,9 @@ Service outages degrade behaviour predictably:
 - Archivist unavailable: artefact mutation and provenance queries fail closed; Workitems cannot progress through affected steps.
 - Librarian unavailable: law retrieval and law lifecycle actions fail closed. Hearing trigger evaluation pauses until the Librarian recovers.
 - LLM contradiction evaluator unavailable: higher-tier law activation pauses in queued state; integration retries with backoff and raises operational alerts.
-- Flow Monitor unavailable: processing continues, but observability coverage degrades, friction queries return errors, and hearing threshold evaluation is blocked until recovery. Alerting is raised.
+- Flow Monitor unavailable: metrics export and audit log emission pause. Friction aggregation and hearing threshold evaluation are unaffected (those are Friction Ledger-owned). Alerting is raised.
+- Flow Event Bus unavailable: event distribution pauses. Sidecars buffer events locally and retry. Friction Ledger's `QueryFriction` continues to serve from persisted aggregation data. Hearing threshold evaluation is paused for new events but the Librarian's subscription will replay missed events within the retention window on Bus recovery.
+- Friction Ledger unavailable: friction aggregation pauses. Raw friction events accumulate in the Bus's telemetry channel log within the retention window. On Friction Ledger recovery, it replays from its last-seen sequence number. Threshold-crossing signals are delayed but not lost. `QueryFriction` calls from the Tribunal return errors; hearing evidence retrieval is blocked until recovery.
 - Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; the Clerk proceeds with whatever representations succeeded (prose at minimum).
 
 Fail-open behaviour is prohibited for governance integrity paths.
@@ -399,14 +490,18 @@ All deployments preserve these service invariants:
 1. Archivist is the source of truth for artefact provenance beyond raw bytes.
 2. Workitem CRD carries no artefact references. Artefact-to-Workitem associations are Archivist-owned.
 3. Laws are single objects with one goal and multiple representations under whole-law versioning.
-4. Friction-threshold hearing triggers are emitted by the Librarian based on Flow Monitor queries.
+4. Friction-threshold hearing triggers are evaluated reactively by the Librarian via Friction Ledger threshold-crossing signals on the Flow Event Bus's friction channel.
 5. Review-TTL-expiry hearing triggers are emitted by the Librarian.
-6. Tribunal evidence retrieval includes friction data from the Flow Monitor.
+6. Tribunal evidence retrieval includes friction data from the Friction Ledger.
 7. Hearing adjudication remains a Tribunal responsibility, not a service-local shortcut.
 8. Friction is first-class and queryable by source attribution.
 9. Backup ownership boundaries are explicit between services and cluster administration.
 10. Cross-flow law integration preserves tiered supremacy, grace-period semantics, and audit continuity.
 11. Flow Support Services are optional, Flow-Architect-deployed, and do not process Workitems.
 12. Codification Services are optional; their absence degrades governance hardening to prose-only rulings.
+13. The Flow Event Bus is durable. Events are persisted to SQLite before fan-out. Retention is per-channel and operator-configurable.
+14. Audit events are published by the authoritative service, not by nodes.
+15. The Friction Ledger is the sole aggregation and query surface for friction data.
+16. The Flow Monitor is a stateless pipeline adapter. It does not persist events or serve query APIs.
 
 Node-facing implications of these services are detailed in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Telemetry](../04-sdk/06-sdk-telemetry.md).

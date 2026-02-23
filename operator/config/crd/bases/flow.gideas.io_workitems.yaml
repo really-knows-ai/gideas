@@ -50,10 +50,22 @@ spec:
             description: status defines the state of the Workitem. All fields are
               Operator-managed.
             properties:
+              assignedAt:
+                description: |-
+                  assignedAt records when the current assignment began.
+                  Set when the Workitem transitions to Running. Used for timeout enforcement.
+                format: date-time
+                type: string
               currentAssignee:
                 description: |-
                   currentAssignee is the node currently processing this Workitem.
                   Empty when Pending.
+                type: string
+              failureReason:
+                description: |-
+                  failureReason records why the Workitem transitioned to Failed.
+                  Stable error codes from the error catalogue (e.g. THRASH_BUDGET_EXCEEDED,
+                  TIMEOUT_EXCEEDED, CONTRACT_VIOLATION, INVALID_ROUTE).
                 type: string
               phase:
                 description: |-
