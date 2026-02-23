@@ -46,6 +46,17 @@ type WorkitemStatus struct {
 	// The Thrash Guard triggers when the aggregate sum exceeds governancePolicy.maxVisits.
 	// +optional
 	ThrashCounters map[string]int32 `json:"thrashCounters,omitempty"`
+
+	// assignedAt records when the current assignment began.
+	// Set when the Workitem transitions to Running. Used for timeout enforcement.
+	// +optional
+	AssignedAt *metav1.Time `json:"assignedAt,omitempty"`
+
+	// failureReason records why the Workitem transitioned to Failed.
+	// Stable error codes from the error catalogue (e.g. THRASH_BUDGET_EXCEEDED,
+	// TIMEOUT_EXCEEDED, CONTRACT_VIOLATION, INVALID_ROUTE).
+	// +optional
+	FailureReason string `json:"failureReason,omitempty"`
 }
 
 // RoutingInstruction represents a routing outcome submitted by the assigned node.

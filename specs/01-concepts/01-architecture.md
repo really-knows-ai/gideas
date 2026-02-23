@@ -15,7 +15,7 @@ flowchart TD
 
     subgraph ctrl["Control Plane"]
         direction LR
-        Operator[Flow Operator] ~~~ Monitor[Flow Monitor]
+        Operator[Flow Operator] ~~~ EventBus[Flow Event Bus] ~~~ FrictionLedger[Friction Ledger] ~~~ Monitor[Flow Monitor]
     end
 
     subgraph gov["Governance Plane"]
@@ -59,7 +59,7 @@ A Flow is deployed as a single unit. One deployment creates one namespace, insta
 
 Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operator.md) is the Control Plane's central component — a state router that watches [Workitem](./03-data-model.md#workitems) CRDs, assigns them to [nodes](../03-node/00-overview.md), and validates the bound exit contract at the exit boundary. The [Thrash Guard](./03-data-model.md#thrash-guard) is part of the Operator's assignment logic — it tracks per-node visit counts on each Workitem and fails any Workitem whose total visit count across all nodes exceeds the configured threshold, enforcing a maximum visit budget per Workitem.
 
-The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates telemetry from all components — metrics, distributed traces, audit events, and [friction](./00-overview.md) reports.
+The [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) distributes runtime events across three channels — telemetry, audit, and friction — enabling reactive consumption by any subscribing component. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) subscribes to friction events on the telemetry channel, aggregates them, and publishes threshold-crossing signals to the friction channel. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor) subscribes to the Flow Event Bus's telemetry and audit channels and exports metrics for Prometheus scraping and audit events as JSON Lines for log pipeline consumption.
 
 The Control Plane's scope is routing decisions. It reads state and moves Workitems; nodes do the rest.
 
@@ -87,7 +87,7 @@ Every service call requires valid credentials regardless of network path.
 
 The legal lifecycle. The Governance Plane manages the discovery, enforcement, and evolution of [law](./03-data-model.md#laws) within the Flow.
 
-The [Librarian](../02-flow/04-system-services.md#librarian) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to nodes that query for applicable governance. The Librarian also monitors law usage through [friction](./00-overview.md#friction) data: when nodes cite laws during processing, each citation generates a friction event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the Librarian queries the accumulated friction to drive law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and to identify laws that generate disproportionate resistance.
+The [Librarian](../02-flow/04-system-services.md#librarian) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to nodes that query for applicable governance. The Librarian also monitors law usage through [friction](./00-overview.md#friction) data: when nodes cite laws during processing, each citation generates a friction event attributed to that law. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates these events and publishes threshold-crossing signals to the Flow Event Bus's friction channel. The Librarian subscribes to the friction channel to drive law promotion (a heavily-cited Tier 1 Finding can be promoted to a Tier 2 Ruling) and to identify laws that generate disproportionate resistance. The Librarian reacts to threshold-crossing events rather than polling for friction data.
 
 The [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) provides judicial review. It is a standard runtime subsystem comprising three nodes — [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver) (deadlock resolution), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) (review hearings), [Advocate](./02-foundry-cycle.md#advocate-human-escalation) (human escalation) — and two core services — [Jury](../02-flow/04-system-services.md#jury) (multi-agent deliberation) and [Clerk](../02-flow/04-system-services.md#clerk) (law drafting and codification). When feedback deadlocks — the same point argued back and forth beyond a threshold — the Arbiter deliberates the dispute via the Jury and issues a binding ruling drafted by the Clerk. Precedent accumulates in the Library, and future Workitems are governed by it.
 
@@ -121,7 +121,9 @@ Each concern in the system maps to exactly one plane. When a node executes work,
 | Dispute resolution | Governance | Judiciary (Arbiter, Tribunal, Advocate) |
 | Authentication | Security | Sidecar |
 | Cryptographic stamps | Security | Sidecar |
-| Telemetry, audit, and friction | Control | Flow Monitor |
+| Event distribution | Control | Flow Event Bus |
+| Friction aggregation and threshold signals | Control | Friction Ledger |
+| Metrics export and audit pipeline | Control | Flow Monitor |
 | Cross-flow transfer | Federation | Export / Import |
 | Tier 4/5 law authority | Federation | Governance Flow |
 | Configuration and deployment | Management | CRDs, deployment tooling |
@@ -162,11 +164,13 @@ Artefact content lives in the Archivist as content-addressed blobs. The Workitem
 |-------|---------|------|----------------|
 | State | CRDs | Workitems, Laws, FoundryFlow config, FoundryNode config | Watch-driven, strongly consistent |
 | Governance Query | Embedded database — Librarian | Embeddings | Analytical, vector similarity search |
-| Telemetry | Metrics pipeline — Flow Monitor | Friction events, workitem lifecycle metrics, node health | Time-series queries, alerting |
+| Telemetry | Pipeline adapter — Flow Monitor | Prometheus metrics endpoint, audit JSON Lines to stdout | Prometheus scraping, log pipeline ingestion |
+| Event distribution | SQLite append-only log — Flow Event Bus | Events within per-channel retention window | Publish/subscribe with bounded replay |
+| Friction aggregation | SQLite — Friction Ledger | Running friction totals per law, node, tier | Direct gRPC queries, threshold-crossing events via friction channel |
 | Artefact Provenance | Embedded database — Archivist | Artefact version history, passport stamps, feedback | Relational queries, lifecycle tracking |
 | Blobs | Content-addressed store — Archivist | Artefact content (raw bytes) | Content-addressed read/write |
 
-CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Flow Monitor aggregates friction events from nodes and services into time-series metrics and emits audit events for log aggregation — friction data is queryable through dashboards across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). The Librarian queries the Flow Monitor for law-attributed friction to evaluate promotion thresholds and review-TTL-expiry hearing triggers. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
+CRDs provide the watch-driven consistency the Operator needs for state transitions. The Librarian's embedded database provides the query capabilities needed for law embeddings and similarity search. The Flow Event Bus distributes runtime events durably across three channels (telemetry, audit, friction) with SQLite-backed persistence and per-channel configurable retention. The Friction Ledger subscribes to friction events on the telemetry channel, aggregates them, and publishes threshold-crossing signals to the friction channel. The Flow Monitor subscribes to the telemetry and audit channels and serves as the pipeline adapter — exporting metrics via a `/metrics` endpoint for Prometheus scraping and emitting audit events as JSON Lines to stdout for log pipeline consumption. The Librarian subscribes to the Friction Ledger's threshold-crossing signals on the friction channel. The Tribunal and Librarian query the Friction Ledger's `QueryFriction` API for point-to-point friction data retrieval. Friction is queryable through the Friction Ledger's `QueryFriction` API and through Prometheus for long-term time-series analysis. The Archivist's database stores all artefact provenance — version history, stamps, and feedback — as a single queryable layer. The Archivist's content-addressed store holds raw content bytes where they are cheap and durable.
 
 ### Zero-Trust Security
 

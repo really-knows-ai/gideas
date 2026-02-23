@@ -1,6 +1,6 @@
 # SDK Telemetry
 
-The telemetry SDK surface provides friction emission, custom telemetry events, and operational signal APIs. All telemetry flows through the [Sidecar](../03-node/01-sidecar.md) to the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface), which aggregates and exposes the signals for operational use.
+The telemetry SDK surface provides friction emission, custom telemetry events, and operational signal APIs. All telemetry flows through the [Sidecar](../03-node/01-sidecar.md) to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus), which distributes events to subscribers including the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) (for friction aggregation) and the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor) (for metrics export and audit log emission).
 
 ## Telemetry Surface Overview
 
@@ -8,17 +8,17 @@ The SDK emits distinct signal classes:
 
 | Signal | Purpose | Destination |
 |--------|---------|-------------|
-| Friction | Quantitative governance cost attributed to laws, nodes, and Workitems | Flow Monitor |
-| Metrics | Counters, gauges, and histograms for operational observability | Flow Monitor |
-| Traces | Distributed trace spans for request-path analysis | Flow Monitor |
-| Custom events | Structured domain-specific events emitted by handler code | Flow Monitor |
+| Friction | Quantitative governance cost attributed to laws, nodes, and Workitems | Flow Event Bus (telemetry channel) |
+| Metrics | Counters, gauges, and histograms for operational observability | Flow Event Bus (telemetry channel) |
+| Traces | Distributed trace spans for request-path analysis | Flow Event Bus (telemetry channel) |
+| Custom events | Structured domain-specific events emitted by handler code | Flow Event Bus (telemetry channel) |
 
 Custom telemetry events are emitted through `RecordTelemetry(eventType, payload)`:
 
 - `eventType` (string) — identifies the event kind. Use the `foundry.` namespace prefix with sub-namespaces: `foundry.node.*` for node-level events, `foundry.business.*` for domain-specific events, `foundry.debug.*` for diagnostic events.
 - `payload` (structured data) — JSON-serializable event data, maximum 64 KB.
 
-The Sidecar wraps every telemetry event in a standard envelope before forwarding to the Flow Monitor:
+The Sidecar wraps every telemetry event in a standard envelope before publishing to the Flow Event Bus's telemetry channel:
 
 | Envelope Field | Source |
 |----------------|--------|
@@ -28,21 +28,21 @@ The Sidecar wraps every telemetry event in a standard envelope before forwarding
 | `workitem_id` | Current assignment |
 | `trace_id` | Distributed trace context |
 
-Telemetry emission is non-blocking. The call returns immediately; delivery to the Flow Monitor is asynchronous. The handler does not wait for acknowledgement.
+Telemetry emission is non-blocking. The call returns immediately; delivery to the Flow Event Bus is asynchronous. The handler does not wait for acknowledgement.
 
 ## Friction Emission Contract
 
-Friction is additive. Callers emit a magnitude and optional law attribution; the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates the raw events post-hoc across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). There is no caller-side operation selection — every emission adds to the total.
+Friction is additive. Callers emit a magnitude and optional law attribution; the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates the raw events post-hoc across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). There is no caller-side operation selection — every emission adds to the total.
 
-[`Cite(law_ids)`](./03-sdk-legal.md#citation) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Librarian](../02-flow/04-system-services.md#librarian) uses to evaluate friction-threshold hearing triggers.
+[`Cite(law_ids)`](./03-sdk-legal.md#citation) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) uses to evaluate hearing thresholds and publish threshold-crossing signals to the Librarian.
 
 [`AddFeedback`](./04-sdk-feedback.md#feedback-friction) transparently emits `AddFriction` with magnitude equal to the feedback depth for that item. The first feedback on an item emits 1, the second 2, the nth n. This escalating cost signal makes the adversarial loop's price visible before deadlock.
 
-These wrappers are additive contributions to the same friction stream. `Cite` records law usage. `AddFeedback` records governance debate cost. Both flow through the same `AddFriction` pipeline and are aggregated by the Flow Monitor alongside any direct `AddFriction` calls nodes make.
+These wrappers are additive contributions to the same friction stream. `Cite` records law usage. `AddFeedback` records governance debate cost. Both flow through the same `AddFriction` pipeline and are aggregated by the Friction Ledger alongside any direct `AddFriction` calls nodes make.
 
 ### AddFriction: Node Context
 
-`AddFriction` requires the `WRITE:friction` [capability](../03-node/02-configuration.md#capability-model). The Sidecar enforces this before forwarding to the Flow Monitor. [`Cite`](./03-sdk-legal.md#citation) inherits this requirement — it is sugar over `AddFriction`.
+`AddFriction` requires the `WRITE:friction` [capability](../03-node/02-configuration.md#capability-model). The Sidecar enforces this before publishing to the Flow Event Bus. [`Cite`](./03-sdk-legal.md#citation) inherits this requirement — it is sugar over `AddFriction`.
 
 When called from a node handler, the Sidecar automatically injects identity context. The node SDK surface accepts only semantic data:
 
@@ -99,7 +99,7 @@ The `foundry.cost.llm` event type is the standard convention for recording LLM i
 
 The expected payload includes `model` (model identifier), `input_tokens`, `output_tokens`, and `duration_ms`. Implementations may include additional fields (e.g. `provider`, `cached_tokens`). The payload follows standard custom event conventions: structured, JSON-serializable, subject to the 64 KB limit, and wrapped in the Sidecar's identity envelope.
 
-Atomic per-step emission — rather than batching at handler exit — ensures that interrupted handlers produce accurate cost records reflecting actual work performed. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events for per-node, per-model, and per-Workitem cost analysis. See [SDK Agent](./07-sdk-agent.md#atomic-cost-accounting) for the full contract.
+Atomic per-step emission — rather than batching at handler exit — ensures that interrupted handlers produce accurate cost records reflecting actual work performed. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor) exports these events via `/metrics` for Prometheus-based per-node, per-model, and per-Workitem cost analysis. See [SDK Agent](./07-sdk-agent.md#atomic-cost-accounting) for the full contract.
 
 ## Service and Sidecar Signal Relationship
 
@@ -117,10 +117,10 @@ Node telemetry supplements service audit with business context — why a routing
 
 ## Failure and Backpressure Behaviour
 
-Telemetry failures are non-blocking. If the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) is degraded or unreachable:
+Telemetry failures are non-blocking. If the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) is degraded or unreachable:
 
 - `AddFriction`, `Cite`, and `RecordTelemetry` calls return without error. The SDK logs a warning internally.
-- Friction events from `AddFeedback` are still emitted by the SDK; if the Flow Monitor cannot receive them, they are lost for that emission. The feedback state transition itself (persisted by the Archivist) is unaffected.
+- Friction events from `AddFeedback` are still emitted by the SDK; if the Flow Event Bus cannot receive them, the Sidecar buffers them locally and retries. The feedback state transition itself (persisted by the Archivist) is unaffected.
 - Work execution never fails because telemetry delivery failed.
 
 The Sidecar maintains a bounded internal buffer for outgoing telemetry. If the buffer fills due to sustained backpressure, the oldest events are dropped. The Sidecar emits a counter metric for dropped events so operators can detect telemetry loss.
@@ -144,6 +144,6 @@ Guidance:
 3. The Sidecar injects identity context for node-originated telemetry. Nodes cannot spoof attribution.
 4. Telemetry failures do not block or fail work execution.
 5. Custom telemetry events are capped at 64 KB per payload.
-6. The Flow Monitor aggregates friction post-hoc. Callers do not control aggregation axes.
+6. The Friction Ledger aggregates friction post-hoc via Flow Event Bus subscription. Callers do not control aggregation axes.
 7. Authoritative mutation audit is service-owned. Node telemetry supplements but does not replace service audit.
 8. Friction events take priority over custom telemetry in buffer contention.

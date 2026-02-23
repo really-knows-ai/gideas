@@ -111,7 +111,7 @@ func TestQueryLaws_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Set metadata with capabilities that DON'T include READ:law.
-	md := metadata.Pairs(metadataKeyCapabilities, "WRITE:law/tier1")
+	md := metadata.Pairs(metadataKeyCapabilities, "WRITE:law/tier1", metadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
@@ -233,7 +233,7 @@ func TestRecordFinding_NoRepresentations(t *testing.T) {
 func TestRecordFinding_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
 
-	md := metadata.Pairs(metadataKeyCapabilities, "READ:law")
+	md := metadata.Pairs(metadataKeyCapabilities, "READ:law", metadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
@@ -245,6 +245,57 @@ func TestRecordFinding_CapabilityDenied(t *testing.T) {
 	}
 	if s, ok := status.FromError(err); !ok || s.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+// TestRecordFinding_NodeCallNoCapabilities_Denied verifies deny-by-default:
+// a node-originated call with no capabilities header is denied.
+func TestRecordFinding_NodeCallNoCapabilities_Denied(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Node identity present but no capabilities.
+	md := metadata.Pairs(metadataKeyNodeID, "node-1")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+		Goal:            "test",
+		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "x"}},
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for node call with no capabilities")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+// TestQueryLaws_NodeCallNoCapabilities_Denied verifies deny-by-default
+// for node calls to QueryLaws.
+func TestQueryLaws_NodeCallNoCapabilities_Denied(t *testing.T) {
+	srv := newTestServer(t)
+
+	md := metadata.Pairs(metadataKeyNodeID, "node-1")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for node call with no capabilities")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+// TestQueryLaws_SystemCall_BypassesEnforcement verifies system-to-system
+// calls (no node identity) pass through without capability checks.
+func TestQueryLaws_SystemCall_BypassesEnforcement(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	// Should succeed — no node identity means system call.
+	_, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
+	if err != nil {
+		t.Fatalf("system call should bypass capability enforcement, got %v", err)
 	}
 }
 

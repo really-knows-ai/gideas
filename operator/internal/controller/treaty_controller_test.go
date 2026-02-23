@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -31,20 +32,20 @@ import (
 )
 
 var _ = Describe("Treaty Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	Context("When reconciling with invalid CA cert", func() {
+		const resourceName = "test-treaty"
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
-		treaty := &flowv1.Treaty{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind Treaty")
-			err := k8sClient.Get(ctx, typeNamespacedName, treaty)
+			By("creating a Treaty with an invalid CA cert")
+			var existing flowv1.Treaty
+			err := k8sClient.Get(ctx, typeNamespacedName, &existing)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &flowv1.Treaty{
 					ObjectMeta: metav1.ObjectMeta{
@@ -54,7 +55,7 @@ var _ = Describe("Treaty Controller", func() {
 					Spec: flowv1.TreatySpec{
 						RemoteName: "remote-flow",
 						Direction:  "import",
-						CACert:     "test-ca-cert",
+						CACert:     "not-a-valid-pem",
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -62,7 +63,6 @@ var _ = Describe("Treaty Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &flowv1.Treaty{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -70,7 +70,8 @@ var _ = Describe("Treaty Controller", func() {
 			By("Cleanup the specific resource instance Treaty")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
+
+		It("should set Ready=False for invalid PEM", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &TreatyReconciler{
 				Client: k8sClient,
@@ -81,8 +82,15 @@ var _ = Describe("Treaty Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("Verifying the Ready condition is False")
+			var treaty flowv1.Treaty
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &treaty)).To(Succeed())
+
+			readyCond := meta.FindStatusCondition(treaty.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal("CACertInvalid"))
 		})
 	})
 })

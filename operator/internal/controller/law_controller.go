@@ -18,7 +18,12 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,7 +32,12 @@ import (
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 )
 
-// LawReconciler reconciles a Law object
+// LawReconciler reconciles a Law object.
+//
+// Responsibilities:
+//   - Compute a content hash from the spec and store it in status.version.
+//   - Validate structural invariants (goal, representations, tier).
+//   - Set status conditions reflecting reconciliation health.
 type LawReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -36,22 +46,106 @@ type LawReconciler struct {
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=laws,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=laws/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=laws/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts,verbs=get;list;watch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Law object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
+// Reconcile computes the content hash for the Law spec and validates structural invariants.
 func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the Law instance.
+	var law flowv1.Law
+	if err := r.Get(ctx, req.NamespacedName, &law); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-	return ctrl.Result{}, nil
+	log.Info("Reconciling Law",
+		"name", law.Name,
+		"namespace", law.Namespace,
+		"tier", law.Spec.Tier,
+	)
+
+	// Validate appliesTo references against GovernedArtefacts.
+	if err := r.validateAppliesTo(ctx, &law); err != nil {
+		r.setCondition(&law, "Ready", metav1.ConditionFalse, "ValidationFailed", err.Error())
+		return ctrl.Result{}, r.persistStatus(ctx, &law)
+	}
+
+	// Compute content hash from spec.
+	version, err := r.computeVersion(&law)
+	if err != nil {
+		r.setCondition(&law, "Ready", metav1.ConditionFalse, "HashFailed", err.Error())
+		return ctrl.Result{}, r.persistStatus(ctx, &law)
+	}
+
+	law.Status.Version = version
+	r.setCondition(&law, "Ready", metav1.ConditionTrue, "Reconciled",
+		fmt.Sprintf("Law version %s computed", version))
+
+	return ctrl.Result{}, r.persistStatus(ctx, &law)
+}
+
+// validateAppliesTo checks that appliesTo entries reference existing GovernedArtefacts.
+func (r *LawReconciler) validateAppliesTo(ctx context.Context, law *flowv1.Law) error {
+	if len(law.Spec.AppliesTo) == 0 {
+		return nil // Global law — applies to all.
+	}
+
+	var artefacts flowv1.GovernedArtefactList
+	if err := r.List(ctx, &artefacts, client.InNamespace(law.Namespace)); err != nil {
+		return fmt.Errorf("could not list GovernedArtefacts: %w", err)
+	}
+
+	known := make(map[string]bool)
+	for _, ga := range artefacts.Items {
+		known[ga.Name] = true
+	}
+
+	for _, name := range law.Spec.AppliesTo {
+		if !known[name] {
+			return fmt.Errorf("appliesTo references unknown GovernedArtefact %q", name)
+		}
+	}
+
+	return nil
+}
+
+// computeVersion computes a SHA-256 content hash from the law spec.
+func (r *LawReconciler) computeVersion(law *flowv1.Law) (string, error) {
+	data, err := json.Marshal(law.Spec)
+	if err != nil {
+		return "", fmt.Errorf("could not marshal law spec: %w", err)
+	}
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash[:8]), nil
+}
+
+// setCondition sets a condition on the law's status (in memory only).
+func (r *LawReconciler) setCondition(
+	law *flowv1.Law,
+	condType string,
+	status metav1.ConditionStatus,
+	reason, message string,
+) {
+	meta.SetStatusCondition(&law.Status.Conditions, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		ObservedGeneration: law.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
+}
+
+// persistStatus re-fetches the Law and persists status updates.
+func (r *LawReconciler) persistStatus(ctx context.Context, law *flowv1.Law) error {
+	var fresh flowv1.Law
+	if err := r.Get(ctx, client.ObjectKeyFromObject(law), &fresh); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	fresh.Status.Version = law.Status.Version
+	fresh.Status.Conditions = law.Status.Conditions
+
+	return r.Status().Update(ctx, &fresh)
 }
 
 // SetupWithManager sets up the controller with the Manager.

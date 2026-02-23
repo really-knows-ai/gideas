@@ -64,23 +64,27 @@ func NewLibrarianServer(
 
 const (
 	metadataKeyCapabilities = "x-flow-capabilities"
+	metadataKeyNodeID       = "x-flow-node-id"
 )
 
-// checkCapability parses the x-flow-capabilities metadata header and
-// verifies that the required capability is present.
+// checkCapability enforces deny-by-default capability gating for
+// node-originated requests. System-to-system calls (no x-flow-node-id)
+// pass through unconditionally.
+//
+// Per spec (specs/05-reference/grpc-api.md, API Invariant #3):
+// "Capability enforcement is performed by the owning service."
 func checkCapability(ctx context.Context, required string) error {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		// No metadata at all — allow for service-facing calls.
-		return nil
+		return nil // No metadata — system call.
 	}
-	caps := md.Get(metadataKeyCapabilities)
-	if len(caps) == 0 {
-		// No capability header — allow (capabilities not enforced yet).
-		return nil
+	nodeIDs := md.Get(metadataKeyNodeID)
+	if len(nodeIDs) == 0 {
+		return nil // No node identity — system call.
 	}
 
-	// Capabilities are comma-separated.
+	// Node-originated call: capability must be present.
+	caps := md.Get(metadataKeyCapabilities)
 	for _, c := range caps {
 		for cap := range strings.SplitSeq(c, ",") {
 			if strings.TrimSpace(cap) == required {
@@ -89,7 +93,8 @@ func checkCapability(ctx context.Context, required string) error {
 		}
 	}
 
-	return status.Errorf(codes.PermissionDenied, "missing required capability: %s", required)
+	return status.Errorf(codes.PermissionDenied,
+		"CAPABILITY_DENIED: missing required capability %q", required)
 }
 
 // ---------------------------------------------------------------------------

@@ -632,6 +632,12 @@ func (c *Client) GetLaw(ctx context.Context, lawID string) (*flowv1.Law, error) 
 // Interceptor — injects workitem context into every outgoing call
 // ---------------------------------------------------------------------------
 
+// workitemContextInterceptor attaches x-flow-workitem-id to every outgoing
+// gRPC call. This value is used by the Sidecar's identity injection
+// interceptor as a session lookup key. The Sidecar overwrites all identity
+// metadata (flow_id, workitem_id, node_id) with authoritative values from
+// the active assignment session before forwarding to upstream services.
+// See: specs/05-reference/grpc-api.md#identity-injection
 func workitemContextInterceptor(workitemID string) grpc.UnaryClientInterceptor {
 	return func(
 		ctx context.Context,

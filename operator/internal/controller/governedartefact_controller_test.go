@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -31,34 +32,35 @@ import (
 )
 
 var _ = Describe("GovernedArtefact Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	Context("When reconciling a valid resource", func() {
+		const resourceName = "test-artefact"
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
-		governedartefact := &flowv1.GovernedArtefact{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind GovernedArtefact")
-			err := k8sClient.Get(ctx, typeNamespacedName, governedartefact)
+			var existing flowv1.GovernedArtefact
+			err := k8sClient.Get(ctx, typeNamespacedName, &existing)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &flowv1.GovernedArtefact{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: flowv1.GovernedArtefactSpec{},
+					Spec: flowv1.GovernedArtefactSpec{
+						Stamps: []string{"linter", "security-review", "approval"},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &flowv1.GovernedArtefact{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -66,7 +68,8 @@ var _ = Describe("GovernedArtefact Controller", func() {
 			By("Cleanup the specific resource instance GovernedArtefact")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
+
+		It("should set Ready=True with valid stamp vocabulary", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &GovernedArtefactReconciler{
 				Client: k8sClient,
@@ -77,8 +80,75 @@ var _ = Describe("GovernedArtefact Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("Verifying the Ready condition is True")
+			var ga flowv1.GovernedArtefact
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &ga)).To(Succeed())
+
+			readyCond := meta.FindStatusCondition(ga.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(readyCond.Reason).To(Equal("Reconciled"))
+		})
+	})
+
+	Context("When stamp vocabulary has duplicates", func() {
+		const resourceName = "test-artefact-dup"
+
+		ctx := context.Background()
+
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: "default",
+		}
+
+		BeforeEach(func() {
+			By("creating a GovernedArtefact with duplicate stamps")
+			var existing flowv1.GovernedArtefact
+			err := k8sClient.Get(ctx, typeNamespacedName, &existing)
+			if err != nil && errors.IsNotFound(err) {
+				resource := &flowv1.GovernedArtefact{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      resourceName,
+						Namespace: "default",
+					},
+					Spec: flowv1.GovernedArtefactSpec{
+						Stamps: []string{"linter", "linter"},
+					},
+				}
+				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			resource := &flowv1.GovernedArtefact{}
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Cleanup the specific resource instance GovernedArtefact")
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		})
+
+		It("should set Ready=False for duplicate stamps", func() {
+			By("Reconciling the invalid resource")
+			controllerReconciler := &GovernedArtefactReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the Ready condition is False")
+			var ga flowv1.GovernedArtefact
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &ga)).To(Succeed())
+
+			readyCond := meta.FindStatusCondition(ga.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal("DuplicateStamp"))
 		})
 	})
 })

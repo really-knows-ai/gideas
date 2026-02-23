@@ -1,8 +1,8 @@
 // Package proxy implements forwarding handlers that relay gRPC calls
 // from the Sidecar to the real cluster services. Each handler wraps a
-// generated gRPC client and propagates identity metadata
-// (x-flow-workitem-id) from the incoming server context to the outgoing
-// client context.
+// generated gRPC client and propagates Sidecar-injected identity metadata
+// (x-flow-flow-id, x-flow-workitem-id, x-flow-node-id) from the incoming
+// server context to the outgoing client context.
 package proxy
 
 import (
@@ -109,10 +109,24 @@ func (p *OperatorProxy) ImportWorkitem(
 	return p.client.ImportWorkitem(outCtx, req)
 }
 
+// GetFlowTopology forwards the topology discovery request to the Operator.
+// Identity metadata (flow_id, node_id) is propagated from the incoming
+// Sidecar-enriched context so the Operator can resolve the calling node's
+// view of the flow topology.
+func (p *OperatorProxy) GetFlowTopology(
+	ctx context.Context, req *flowv1.GetFlowTopologyRequest,
+) (*flowv1.GetFlowTopologyResponse, error) {
+	outCtx := propagateMetadata(ctx)
+	slog.Info("Forwarding GetFlowTopology to Operator")
+	return p.client.GetFlowTopology(outCtx, req)
+}
+
 // propagateMetadata copies incoming gRPC metadata from the server context
-// to outgoing metadata on a new client context. This is the critical bridge
-// that carries the Sidecar-injected identity (x-flow-workitem-id) from the
-// Node's request to the Operator.
+// to outgoing metadata on a new client context. The identity injection
+// interceptor (service.IdentityInterceptor) enriches the incoming metadata
+// with authoritative x-flow-flow-id, x-flow-workitem-id, and x-flow-node-id
+// before this function is called, so all proxied requests carry the complete
+// Sidecar-injected identity context.
 func propagateMetadata(ctx context.Context) context.Context {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {

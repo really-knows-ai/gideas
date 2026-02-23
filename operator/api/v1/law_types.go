@@ -68,6 +68,12 @@ type LawStatus struct {
 	// Any mutation to spec produces a new hash.
 	// +optional
 	Version string `json:"version,omitempty"`
+
+	// conditions represent the current state of the Law resource.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

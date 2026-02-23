@@ -18,7 +18,13 @@ package controller
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,7 +33,12 @@ import (
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 )
 
-// TreatyReconciler reconciles a Treaty object
+// TreatyReconciler reconciles a Treaty object.
+//
+// Responsibilities:
+//   - Validate trust material (PEM-encoded CA certificate).
+//   - Validate directionality (import or export).
+//   - Set status conditions reflecting validation health.
 type TreatyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -37,19 +48,92 @@ type TreatyReconciler struct {
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=treaties/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=treaties/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Treaty object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
+// Reconcile validates the Treaty trust material and directionality,
+// then updates the status conditions accordingly.
 func (r *TreatyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the Treaty instance.
+	var treaty flowv1.Treaty
+	if err := r.Get(ctx, req.NamespacedName, &treaty); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	log.Info("Reconciling Treaty",
+		"name", treaty.Name,
+		"namespace", treaty.Namespace,
+		"remote", treaty.Spec.RemoteName,
+		"direction", treaty.Spec.Direction,
+	)
+
+	// Validate the PEM-encoded CA certificate.
+	if err := r.validateCACert(&treaty); err != nil {
+		return r.setCondition(ctx, &treaty, metav1.ConditionFalse,
+			"CACertInvalid", err.Error())
+	}
+
+	// All validations passed.
+	return r.setCondition(ctx, &treaty, metav1.ConditionTrue,
+		"Reconciled", fmt.Sprintf("Treaty with remote %q (%s) validated", treaty.Spec.RemoteName, treaty.Spec.Direction))
+}
+
+// validateCACert parses and validates the PEM-encoded CA certificate.
+func (r *TreatyReconciler) validateCACert(treaty *flowv1.Treaty) error {
+	block, _ := pem.Decode([]byte(treaty.Spec.CACert))
+	if block == nil {
+		return fmt.Errorf("caCert is not valid PEM")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("caCert could not be parsed as X.509: %w", err)
+	}
+
+	if !cert.IsCA {
+		return fmt.Errorf("caCert is not a CA certificate")
+	}
+
+	return nil
+}
+
+// setCondition updates the Ready status condition on the Treaty and persists it.
+func (r *TreatyReconciler) setCondition(
+	ctx context.Context,
+	treaty *flowv1.Treaty,
+	status metav1.ConditionStatus,
+	reason, message string,
+) (ctrl.Result, error) {
+	newCondition := metav1.Condition{
+		Type:               conditionReady,
+		Status:             status,
+		ObservedGeneration: treaty.Generation,
+		Reason:             reason,
+		Message:            message,
+	}
+
+	// Check if condition already matches to avoid unnecessary writes.
+	existing := meta.FindStatusCondition(treaty.Status.Conditions, conditionReady)
+	if existing != nil &&
+		existing.Status == status &&
+		existing.Reason == reason &&
+		existing.Message == message &&
+		existing.ObservedGeneration == treaty.Generation {
+		return ctrl.Result{}, nil
+	}
+
+	// Re-fetch to get latest resourceVersion.
+	var fresh flowv1.Treaty
+	if err := r.Get(ctx, client.ObjectKeyFromObject(treaty), &fresh); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	meta.SetStatusCondition(&fresh.Status.Conditions, newCondition)
+
+	if !equality.Semantic.DeepEqual(fresh.Status.Conditions, treaty.Status.Conditions) {
+		if err := r.Status().Update(ctx, &fresh); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	return ctrl.Result{}, nil
 }
