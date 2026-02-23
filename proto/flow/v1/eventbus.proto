@@ -15,6 +15,7 @@ enum EventChannel {
   EVENT_CHANNEL_TELEMETRY = 1;
   EVENT_CHANNEL_AUDIT = 2;
   EVENT_CHANNEL_FRICTION = 3;
+  EVENT_CHANNEL_WORKITEM = 4;
 }
 
 // --- Messages ---
@@ -52,6 +53,11 @@ message FlowEvent {
 
   // Optional binary payload (max 64 KB).
   bytes payload = 11;
+
+  // Parent Workitem ID if the associated Workitem is a child (empty for root
+  // Workitems and non-Workitem events). Present on WORKITEM channel events
+  // for filtering.
+  string parent_workitem_id = 12;
 }
 
 // --- Request / Response ---
@@ -88,6 +94,11 @@ message SubscribeFilter {
   // Match events whose comma-separated law_ids attribute contains
   // this value as an exact element.
   string law_id = 2;
+
+  // Match events for child Workitems of a specific parent. Used with the
+  // WORKITEM channel to observe child lifecycle events during fan-out/fan-in
+  // processing.
+  string parent_workitem_id = 3;
 }
 
 // --- Service ---

@@ -120,24 +120,25 @@ Decisions made during planning that inform the implementation:
 
 ### Checklist
 
-- [ ] **`proto/flow/v1/operator.proto`** -- New RPCs
+- [x] **`proto/flow/v1/operator.proto`** -- New RPCs
   - Add `CreateChildWorkitem` RPC (empty request, returns `child_workitem_id`)
   - Add `RouteChild` RPC (`child_workitem_id` + `routing_instruction`, returns `accepted`)
   - Add `GetChildren` RPC (empty request, returns `repeated ChildWorkitemStatus`)
   - Define `ChildWorkitemStatus` message: `workitem_id`, `phase`, `current_assignee`, `repeated ArtefactRef artefacts`
 
-- [ ] **`proto/flow/v1/archivist.proto`** -- Cross-Workitem reads
+- [x] **`proto/flow/v1/archivist.proto`** -- Cross-Workitem reads
   - Add optional `target_workitem_id` field to `GetArtefactRequest`
   - Add optional `target_workitem_id` field to `ListArtefactsRequest` (if it exists)
 
-- [ ] **`proto/flow/v1/eventbus.proto`** -- WORKITEM channel
+- [x] **`proto/flow/v1/eventbus.proto`** -- WORKITEM channel
   - Add `WORKITEM` to `EventChannel` enum
+  - Add `parent_workitem_id` to `FlowEvent` message
   - Add `parent_workitem_id` to `SubscribeFilter`
 
-- [ ] **`proto/flow/v1/clerk.proto`** -- Codification response (future use)
+- [x] **`proto/flow/v1/clerk.proto`** -- Codification response (future use)
   - Add `repeated string codification_declines` field to `DraftLawResponse`
 
-- [ ] **Generate Go code** -- Run proto generation for all updated `.proto` files
+- [x] **Generate Go code** -- Run proto generation for all updated `.proto` files
 
 ---
 
@@ -374,7 +375,7 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1: Spec Updates | Complete | All 8 spec files updated, lint clean |
-| Phase 2: Proto Changes | Not Started | |
+| Phase 2: Proto Changes | Complete | All 4 proto files updated, Go code generated, all tests pass |
 | Phase 3: CRD Type Changes | Not Started | |
 | Phase 4: Operator -- Child Workitem RPCs | Not Started | |
 | Phase 5: Operator -- NodeGroup Validation | Not Started | |

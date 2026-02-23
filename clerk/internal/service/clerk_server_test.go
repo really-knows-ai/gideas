@@ -147,8 +147,8 @@ func TestDraftLaw_NormalDraft(t *testing.T) {
 	if !strings.Contains(rep.GetContent(), "Refiners must cite") {
 		t.Error("representation content should contain the goal")
 	}
-	if len(resp.GetCodificationFailures()) != 0 {
-		t.Errorf("codification_failures = %v, want empty", resp.GetCodificationFailures())
+	if len(resp.GetCodificationDeclines()) != 0 {
+		t.Errorf("codification_declines = %v, want empty", resp.GetCodificationDeclines())
 	}
 
 	// Verify Librarian was called correctly.
