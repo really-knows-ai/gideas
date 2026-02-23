@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,6 +51,8 @@ type FoundryFlowReconciler struct {
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=foundryflows/finalizers,verbs=update
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile validates the FoundryFlow configuration, checks referential integrity,
 // and transitions the Flow phase to Ready when all constraints are met.
@@ -96,7 +100,13 @@ func (r *FoundryFlowReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			metav1.ConditionFalse, "TopologyValidationFailed", err.Error())
 	}
 
-	// All validations passed — transition to Ready.
+	// Reconcile control-plane infrastructure (Event Bus, Friction Ledger, Flow Monitor).
+	if err := r.reconcileInfrastructure(ctx, &flow); err != nil {
+		return r.setPhaseAndCondition(ctx, &flow, phaseDegraded,
+			metav1.ConditionFalse, "InfraReconcileFailed", err.Error())
+	}
+
+	// All validations passed and infrastructure reconciled — transition to Ready.
 	return r.setPhaseAndCondition(ctx, &flow, phaseReady,
 		metav1.ConditionTrue, "Reconciled", "Flow configuration is valid and reconciled")
 }
@@ -267,6 +277,8 @@ func (r *FoundryFlowReconciler) setPhaseAndCondition(
 func (r *FoundryFlowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&flowv1.FoundryFlow{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
 		Named("foundryflow").
 		Complete(r)
 }

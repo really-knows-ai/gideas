@@ -52,6 +52,11 @@ type FoundryFlowSpec struct {
 	// +kubebuilder:validation:Required
 	GovernancePolicy GovernancePolicy `json:"governancePolicy"`
 
+	// eventBusConfig defines Event Bus per-channel retention settings.
+	// When omitted, the Event Bus uses its built-in defaults.
+	// +optional
+	EventBusConfig *EventBusConfig `json:"eventBusConfig,omitempty"`
+
 	// crossFlow defines cross-flow trust and naturalisation settings.
 	// +optional
 	CrossFlow *CrossFlowConfig `json:"crossFlow,omitempty"`
@@ -142,6 +147,49 @@ type RetentionPolicy struct {
 	// maxAge is the maximum age of terminal Workitems before garbage collection.
 	// +optional
 	MaxAge *metav1.Duration `json:"maxAge,omitempty"`
+}
+
+// EventBusConfig defines Event Bus configuration for a Flow.
+// The Operator passes these settings as env vars to the Event Bus Deployment.
+type EventBusConfig struct {
+	// retention defines per-channel retention windows for the Event Bus.
+	// +optional
+	Retention EventBusRetention `json:"retention,omitempty"`
+}
+
+// EventBusRetention defines per-channel retention windows.
+// Both duration-based and size-based limits are supported.
+// When both are specified, the Event Bus evicts when either limit is exceeded.
+type EventBusRetention struct {
+	// telemetryDuration is the retention window for the telemetry channel.
+	// Go duration string (e.g. "24h", "168h").
+	// +optional
+	TelemetryDuration string `json:"telemetryDuration,omitempty"`
+
+	// telemetrySize is the maximum total payload size for the telemetry channel.
+	// Byte-count string with unit suffix (e.g. "100MB", "1GB").
+	// +optional
+	TelemetrySize string `json:"telemetrySize,omitempty"`
+
+	// auditDuration is the retention window for the audit channel.
+	// Go duration string (e.g. "168h").
+	// +optional
+	AuditDuration string `json:"auditDuration,omitempty"`
+
+	// auditSize is the maximum total payload size for the audit channel.
+	// Byte-count string with unit suffix (e.g. "1GB").
+	// +optional
+	AuditSize string `json:"auditSize,omitempty"`
+
+	// frictionDuration is the retention window for the friction channel.
+	// Go duration string (e.g. "72h").
+	// +optional
+	FrictionDuration string `json:"frictionDuration,omitempty"`
+
+	// frictionSize is the maximum total payload size for the friction channel.
+	// Byte-count string with unit suffix (e.g. "100MB").
+	// +optional
+	FrictionSize string `json:"frictionSize,omitempty"`
 }
 
 // CrossFlowConfig defines cross-flow trust and naturalisation settings.
