@@ -222,17 +222,20 @@ Configuration exposes policy limits that bound runtime behaviour:
 
 ### Flow Event Bus Retention
 
-The Flow Event Bus maintains per-channel configurable retention windows. Events within the retention window are available for subscriber replay; events beyond the window are evicted. The mechanism is per-channel and operator-configurable in the FoundryFlow configuration resource:
+The Flow Event Bus maintains per-channel configurable retention limits. Events within the retention window are available for subscriber replay; events beyond the window are evicted. Each channel supports both duration-based and size-based retention limits. When both are specified, the Event Bus evicts when either limit is exceeded (whichever triggers first). Duration limits use Go `time.Duration` format. Size limits use byte-count strings with unit suffix (e.g. `100MB`, `1GB`).
 
 ```yaml
 eventBus:
   retention:
-    telemetry: <duration or size>
-    audit: <duration or size>
-    friction: <duration or size>
+    telemetryDuration: "24h"
+    telemetrySize: "100MB"
+    auditDuration: "168h"
+    auditSize: "1GB"
+    frictionDuration: "72h"
+    frictionSize: "100MB"
 ```
 
-The exact field names and value formats are implementation-defined; the spec establishes that retention is per-channel and operator-configurable. Audit channels will typically have longer retention than telemetry channels. The Bus is a reliable delivery layer, not a long-term storage layer — long-term retention is downstream (Prometheus for metrics, log pipeline for audit records).
+Audit channels will typically have longer retention than telemetry channels. The Bus is a reliable delivery layer, not a long-term storage layer — long-term retention is downstream (Prometheus for metrics, log pipeline for audit records). See [CRD Reference](../05-reference/crds.md#event-bus-configuration) for the full field specification.
 
 These policies are behavioural inputs to Operator and service runtime logic and must be deterministic under reconciliation.
 

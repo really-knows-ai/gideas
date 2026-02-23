@@ -10,7 +10,7 @@ The magnitude equals the feedback depth for that item on that artefact. The firs
 
 This creates a naturally escalating cost signal. Early feedback is cheap. Repeated rounds of disagreement on the same item become progressively more expensive, making the cost of the adversarial loop visible before it reaches deadlock.
 
-The friction emission is transparent and mandatory — nodes cannot suppress it. The node's `AddFeedback` call succeeds or fails on its own merits; the friction event is a side effect recorded by the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface).
+The friction emission is transparent and mandatory — nodes cannot suppress it. The node's `AddFeedback` call succeeds or fails on its own merits; the friction event is a side effect published to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus).
 
 ## Feedback Query Surfaces
 

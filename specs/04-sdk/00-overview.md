@@ -44,7 +44,9 @@ The SDK expresses intent. It does not persist state, enforce governance, or make
 | Operator | Workitem lifecycle persistence. Routing guard evaluation. Entry and exit contract enforcement. |
 | [Archivist](../02-flow/04-system-services.md#archivist) | Artefact provenance persistence. Stamp authorisation (capability + write-once). Feedback state machine enforcement. Contempt guard. |
 | [Librarian](../02-flow/04-system-services.md#librarian) | Law storage and retrieval. Law write authorisation. Integration and conflict detection. |
-| [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) | Telemetry and friction event ingestion. |
+| [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) | Durable event distribution (telemetry, audit, friction channels). |
+| [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) | Friction aggregation and threshold evaluation. |
+| [Flow Monitor](../02-flow/04-system-services.md#flow-monitor) | Metrics export and audit log emission. |
 | Support Services | Capability-specific authorisation for pluggable operations. |
 
 Node containers hold no Flow runtime credentials. The Sidecar holds identity material and attaches it to outgoing requests. This strict separation prevents credential leakage into node code and guarantees that all runtime attribution is Sidecar-authoritative.

@@ -162,9 +162,9 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 
 ## Flow Monitor API
 
-The Flow Monitor subscribes to the Flow Event Bus's telemetry and audit channels. It does not expose ingestion or query gRPC methods. Its outputs are: a `/metrics` endpoint for Prometheus scraping (telemetry channel data) and JSON Lines emitted to stdout for log pipeline consumption (audit channel data).
+The Flow Monitor exposes no gRPC service definition and accepts no direct gRPC calls. It is an internal subscriber of the Flow Event Bus (telemetry and audit channels) and exposes only an HTTP `/metrics` endpoint for Prometheus scraping and JSON Lines on stdout for audit log pipelines.
 
-The Flow Monitor is a stateless pipeline adapter. It does not persist events, serve query APIs, or accept direct ingestion calls. Event buffering and delivery guarantees are Flow Event Bus concerns.
+The Flow Monitor is a stateless pipeline adapter. It does not persist events, serve query APIs, or accept direct ingestion calls. It may persist a lightweight replay checkpoint (last-seen sequence number per channel) to avoid delivery gaps across restarts; this is not an event store. Event buffering and delivery guarantees are Flow Event Bus concerns.
 
 ### Flow Monitor Error Responses
 
@@ -204,6 +204,7 @@ before fan-out.
 | `node_id` | `string` | Emitting node (empty for service-originated events). |
 | `workitem_id` | `string` | Associated Workitem (empty for law-lifecycle audit events). |
 | `timestamp` | `Timestamp` | Event timestamp. |
+| `trace_id` | `string` | Distributed trace context identifier. Injected by the Sidecar from the active trace. Empty if tracing is not configured. |
 | `attributes` | `map<string, string>` | Event-specific key-value attributes. For friction events: `law_ids` (comma-separated), `magnitude`. For audit events: `action`, `resource_id`. For threshold-crossing events: `law_id`, `tier`, `accumulated_friction`, `threshold`. |
 | `payload` | `bytes` | Optional structured payload (max 64 KB). |
 
@@ -212,7 +213,7 @@ before fan-out.
 | Field | Type | Description |
 |-------|------|-------------|
 | `event_type` | `string` | Optional: filter to specific event type. |
-| `law_id` | `string` | Optional: filter to events attributed to a specific law. |
+| `law_id` | `string` | Optional: filter to events attributed to a specific law. For events carrying a comma-separated `law_ids` attribute (e.g. friction events), the filter matches if the filter value appears as an exact element after splitting on commas — not a substring match. |
 
 ### Flow Event Bus Error Responses
 
@@ -291,6 +292,15 @@ The Sidecar catches invalid requests early. The owning service makes authoritati
 | `PauseTimer` | `workitem_id` | `acknowledged` | Suspends the Sidecar's inactivity timer for the specified Workitem assignment. The timer remains suspended until `ResumeTimer` is called or the handler returns. Used by [HITL nodes](../04-sdk/08-sdk-hitl.md) to park Workitems while awaiting external input without triggering timeout. The Workitem remains in `Running` state — this is a Sidecar-local mechanism. |
 | `ResumeTimer` | `workitem_id` | `acknowledged` | Resumes the Sidecar's inactivity timer after a `PauseTimer` call. The timer resets to the full timeout window on resume. |
 
+### Sidecar-Mediated Telemetry
+
+These methods were previously on `FlowMonitorService`. They now live on `SidecarService` because the Sidecar is the translation boundary that wraps SDK calls into FlowEvent publishes to the Flow Event Bus.
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `AddFriction` | `magnitude` (double), `law_ids` (repeated string) | `acknowledged` | Enforces `WRITE:friction` capability. Injects Sidecar-authoritative identity (`flow_id`, `workitem_id`, `node_id`). Wraps as a FlowEvent and publishes to the Flow Event Bus friction channel. Non-blocking from the caller's perspective. |
+| `RecordTelemetry` | `event_type` (string), `payload` (bytes, max 64 KB) | `acknowledged` | Injects Sidecar-authoritative identity (`flow_id`, `workitem_id`, `node_id`). Wraps as a FlowEvent and publishes to the Flow Event Bus telemetry channel. Non-blocking from the caller's perspective. |
+
 ### Sidecar Error Responses
 
 | Condition | Error | gRPC Status |
@@ -298,6 +308,8 @@ The Sidecar catches invalid requests early. The owning service makes authoritati
 | Request targets a Workitem outside the current assignment | `ASSIGNMENT_SCOPE_VIOLATION` | `FAILED_PRECONDITION` |
 | Identity material expired or invalid | `IDENTITY_EXPIRED` | `UNAUTHENTICATED` |
 | Node inactivity timer exceeded | `TIMEOUT_EXCEEDED` | `DEADLINE_EXCEEDED` |
+| Missing `WRITE:friction` capability (AddFriction) | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
+| Payload exceeds 64 KB (RecordTelemetry) | `PAYLOAD_TOO_LARGE` | `INVALID_ARGUMENT` |
 
 ---
 
@@ -449,3 +461,22 @@ All Support Services implement:
 7. gRPC status codes map to error categories: `PERMISSION_DENIED` for capability failures, `FAILED_PRECONDITION` for guard violations, `NOT_FOUND` for missing resources, `ALREADY_EXISTS` for write-once violations, `UNAVAILABLE` for transient service failures, `INVALID_ARGUMENT` for malformed input, `DATA_LOSS` for integrity failures, `DEADLINE_EXCEEDED` for timeout failures, `UNAUTHENTICATED` for identity failures.
 8. Inter-service calls (Operator-Archivist, Librarian-Friction Ledger) use the same error model as node-facing calls.
 9. Configuration errors (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) are caught at CRD admission time and do not appear in runtime gRPC responses. See [Error Catalogue](./error-catalogue.md#configuration-and-validation-errors).
+
+---
+
+## Default Service Ports
+
+These are the default port assignments for the reference implementation. All gRPC services use plaintext transport in the reference implementation; production deployments should use mTLS.
+
+| Service | Port | Protocol |
+|---------|------|----------|
+| Sidecar | 50051 | gRPC |
+| Operator | 50052 | gRPC |
+| NodeService (SDK server) | 50053 | gRPC |
+| Archivist | 50054 | gRPC |
+| Flow Event Bus | 50056 | gRPC |
+| Friction Ledger | 50057 | gRPC |
+| Librarian | 50058 | gRPC |
+| Jury | 50059 | gRPC |
+| Clerk | 50060 | gRPC |
+| Flow Monitor | 2112 | HTTP (`/metrics`) |

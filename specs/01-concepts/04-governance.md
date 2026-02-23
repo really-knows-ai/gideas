@@ -23,7 +23,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 ### Organic Discovery (Tiers 1–2)
 
-Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They decay if unused. Nodes that use a law [cite](../04-sdk/03-sdk-legal.md#citation) it through the SDK, which records a low-magnitude [friction](./00-overview.md#friction) event attributed to that law. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events, and the [Librarian](../02-flow/04-system-services.md) periodically queries the accumulated friction on each law.
+Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They decay if unused. Nodes that use a law [cite](../04-sdk/03-sdk-legal.md#citation) it through the SDK, which records a low-magnitude [friction](./00-overview.md#friction) event attributed to that law. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates these events, and the [Librarian](../02-flow/04-system-services.md) periodically queries the accumulated friction on each law.
 
 Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate friction that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding's friction crosses a configurable threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) node.
 
@@ -76,7 +76,7 @@ Promotion is also where governance can harden in *form*, not just authority. Whe
 
 ### Decay and Retirement
 
-All law tiers can be subject to review. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. The Tribunal evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface)) and the law's goal — and renders a tier-specific verdict:
+All law tiers can be subject to review. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. The Tribunal evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger)) and the law's goal — and renders a tier-specific verdict:
 
 **Tier 1 Finding — review hearing:**
 
@@ -296,7 +296,7 @@ The governance implication at Treaty boundaries is **naturalisation**: when a [W
 
 ## Friction as Governance Signal
 
-Friction is governance's economic conscience. The system emits friction transparently at every governance touchpoint: each law [citation](../04-sdk/03-sdk-legal.md#citation) records a small signal, each round of [feedback](./03-data-model.md#feedback) escalates the cost, and judicial and human escalation compound it exponentially. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates these events post-hoc across whatever axes operators need. The friction signal reflects the real cost of the governance each Workitem encountered.
+Friction is governance's economic conscience. The system emits friction transparently at every governance touchpoint: each law [citation](../04-sdk/03-sdk-legal.md#citation) records a small signal, each round of [feedback](./03-data-model.md#feedback) escalates the cost, and judicial and human escalation compound it exponentially. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates these events post-hoc across whatever axes operators need. The friction signal reflects the real cost of the governance each Workitem encountered.
 
 Friction data is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
 

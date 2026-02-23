@@ -114,7 +114,7 @@ Cost accounting per juror is automatic. Each juror's `foundry.cost.llm` events c
 | `severity` | Severity level of the dispute or hearing |
 | `feedback_id` | The feedback item under dispute (for deadlock adjudication) |
 
-These tags are included in the `RecordTelemetry` payload alongside the standard cost fields. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor-and-friction-surface) aggregates jury costs per juror, per round, and per dispute — enabling operators to quantify the cost of judicial deliberation and identify expensive dispute patterns.
+These tags are included in the `RecordTelemetry` payload alongside the standard cost fields. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates jury costs per juror, per round, and per dispute — enabling operators to quantify the cost of judicial deliberation and identify expensive dispute patterns.
 
 Parallel juror execution is managed by the Jury service internally. Each juror's FoundryAgent instance maintains its own heartbeat loop and cost accounting independently. The jury mechanism does not require special SDK surface — it is a composition of FoundryAgent instances within the Jury service's deliberation engine.
 
