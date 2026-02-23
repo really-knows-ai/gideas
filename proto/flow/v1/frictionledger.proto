@@ -16,18 +16,16 @@ service FrictionLedgerService {
   // Returns aggregated friction data across the requested axes.
   // Used by the Librarian for hearing threshold evaluation and by the
   // Tribunal for hearing evidence.
-  rpc QueryFriction(LedgerQueryFrictionRequest) returns (LedgerQueryFrictionResponse);
+  rpc QueryFriction(QueryFrictionRequest) returns (QueryFrictionResponse);
 }
 
-// LedgerQueryFrictionRequest wraps a filter for the query RPC.
-// Prefixed with "Ledger" to avoid collision with monitor.proto during
-// the transition period. The monitor.proto copies are removed in Phase 3.
-message LedgerQueryFrictionRequest {
-  LedgerFrictionFilter filter = 1;
+// QueryFrictionRequest wraps a filter for the query RPC.
+message QueryFrictionRequest {
+  FrictionFilter filter = 1;
 }
 
-// LedgerFrictionFilter specifies optional axes for filtering friction queries.
-message LedgerFrictionFilter {
+// FrictionFilter specifies optional axes for filtering friction queries.
+message FrictionFilter {
   string law_id = 1;
   string node_id = 2;
   string workitem_id = 3;
@@ -35,7 +33,7 @@ message LedgerFrictionFilter {
   TimeRange time_range = 5;
 }
 
-// LedgerQueryFrictionResponse returns aggregated friction data.
-message LedgerQueryFrictionResponse {
+// QueryFrictionResponse returns aggregated friction data.
+message QueryFrictionResponse {
   repeated FrictionAggregate friction_aggregates = 1;
 }

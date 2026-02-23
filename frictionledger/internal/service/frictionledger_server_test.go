@@ -239,7 +239,7 @@ func TestQueryFriction_Empty(t *testing.T) {
 	h := newTestHarness(t, nil)
 
 	resp, err := h.ledgerClient.QueryFriction(context.Background(),
-		&flowv1.LedgerQueryFrictionRequest{})
+		&flowv1.QueryFrictionRequest{})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)
 	}
@@ -266,8 +266,8 @@ func TestQueryFriction_DirectStore(t *testing.T) {
 		t.Fatalf("AddFriction: %v", err)
 	}
 
-	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.LedgerQueryFrictionRequest{
-		Filter: &flowv1.LedgerFrictionFilter{LawId: "law-1"},
+	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
+		Filter: &flowv1.FrictionFilter{LawId: "law-1"},
 	})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)
@@ -303,8 +303,8 @@ func TestQueryFriction_FilterByNode(t *testing.T) {
 		t.Fatalf("AddFriction: %v", err)
 	}
 
-	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.LedgerQueryFrictionRequest{
-		Filter: &flowv1.LedgerFrictionFilter{NodeId: "node-b"},
+	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
+		Filter: &flowv1.FrictionFilter{NodeId: "node-b"},
 	})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)
@@ -341,8 +341,8 @@ func TestQueryFriction_FilterByTimeRange(t *testing.T) {
 
 	start := t1
 	end := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.LedgerQueryFrictionRequest{
-		Filter: &flowv1.LedgerFrictionFilter{
+	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
+		Filter: &flowv1.FrictionFilter{
 			TimeRange: &flowv1.TimeRange{
 				Start: timestamppb.New(start),
 				End:   timestamppb.New(end),
@@ -373,7 +373,7 @@ func TestQueryFriction_TimestampsPresent(t *testing.T) {
 		t.Fatalf("AddFriction: %v", err)
 	}
 
-	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.LedgerQueryFrictionRequest{})
+	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.QueryFrictionRequest{})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)
 	}
@@ -407,8 +407,8 @@ func TestSubscription_ProcessesFrictionEvents(t *testing.T) {
 
 	h.waitForCheckpoint(t, 2)
 
-	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.LedgerQueryFrictionRequest{
-		Filter: &flowv1.LedgerFrictionFilter{LawId: "law-1"},
+	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
+		Filter: &flowv1.FrictionFilter{LawId: "law-1"},
 	})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)
@@ -438,7 +438,7 @@ func TestSubscription_MultipleLaws(t *testing.T) {
 
 	h.waitForCheckpoint(t, 1)
 
-	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.LedgerQueryFrictionRequest{})
+	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.QueryFrictionRequest{})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)
 	}
@@ -645,8 +645,8 @@ func TestProcessEvent_InvalidMagnitude(t *testing.T) {
 	// The good event should still be processed despite the bad one.
 	h.waitForCheckpoint(t, 2)
 
-	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.LedgerQueryFrictionRequest{
-		Filter: &flowv1.LedgerFrictionFilter{LawId: "law-1"},
+	resp, err := h.ledgerClient.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
+		Filter: &flowv1.FrictionFilter{LawId: "law-1"},
 	})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)

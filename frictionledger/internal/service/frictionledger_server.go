@@ -108,11 +108,11 @@ func (s *FrictionLedgerServer) StartSubscription(client flowv1.FlowEventBusServi
 	go s.subscriptionLoop()
 }
 
-// QueryFriction applies the LedgerFrictionFilter to the SQL store and returns
+// QueryFriction applies the FrictionFilter to the SQL store and returns
 // aggregated friction data grouped by (law_id, node_id, workitem_id).
 func (s *FrictionLedgerServer) QueryFriction(
-	ctx context.Context, req *flowv1.LedgerQueryFrictionRequest,
-) (*flowv1.LedgerQueryFrictionResponse, error) {
+	ctx context.Context, req *flowv1.QueryFrictionRequest,
+) (*flowv1.QueryFrictionResponse, error) {
 	filter := sqlite.FrictionFilter{}
 
 	if f := req.GetFilter(); f != nil {
@@ -163,7 +163,7 @@ func (s *FrictionLedgerServer) QueryFriction(
 
 	slog.Info("QueryFriction result", "aggregate_count", len(aggregates))
 
-	return &flowv1.LedgerQueryFrictionResponse{
+	return &flowv1.QueryFrictionResponse{
 		FrictionAggregates: aggregates,
 	}, nil
 }

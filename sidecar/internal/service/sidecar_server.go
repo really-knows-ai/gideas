@@ -15,13 +15,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/sidecar/internal/buffer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -33,8 +36,9 @@ const (
 
 // SidecarServer implements the flowv1.SidecarServiceServer interface.
 // It manages per-Workitem assignment sessions with inactivity timers
-// and handles Heartbeat, PauseTimer, ResumeTimer (node-facing) and
-// AssignWork (operator-facing).
+// and handles Heartbeat, PauseTimer, ResumeTimer (node-facing),
+// AssignWork (operator-facing), and AddFriction/RecordTelemetry
+// (telemetry ingestion via Event Bus).
 type SidecarServer struct {
 	flowv1.UnimplementedSidecarServiceServer
 
@@ -47,6 +51,10 @@ type SidecarServer struct {
 	// Timeout is the inactivity timeout for assignments. Falls back to
 	// DefaultTimeout if zero.
 	Timeout time.Duration
+
+	// TelemetryBuffer is the async priority buffer for telemetry events.
+	// If nil, AddFriction and RecordTelemetry return errors.
+	TelemetryBuffer *buffer.TelemetryBuffer
 
 	// sessions tracks active Workitem assignments by workitem_id.
 	mu       sync.Mutex
@@ -301,4 +309,127 @@ func (s *SidecarServer) ensureNodeConnection() error {
 	s.nodeConn = conn
 	s.nodeClient = flowv1.NewNodeServiceClient(conn)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry Ingestion — AddFriction and RecordTelemetry
+// ---------------------------------------------------------------------------
+
+// AddFriction enforces the WRITE:friction capability gate, injects
+// Sidecar-authoritative identity, and submits the friction event to the
+// async telemetry buffer with HIGH priority for delivery to the Event Bus.
+//
+// Per spec (specs/03-node/02-configuration.md), WRITE:friction is the one
+// capability enforced by the Sidecar rather than the owning service.
+func (s *SidecarServer) AddFriction(
+	ctx context.Context, req *flowv1.AddFrictionRequest,
+) (*flowv1.AddFrictionResponse, error) {
+	if s.TelemetryBuffer == nil {
+		return nil, status.Error(codes.Unavailable,
+			"telemetry buffer not configured — Event Bus not available")
+	}
+
+	// WRITE:friction is Sidecar-enforced (spec exception).
+	if err := checkCapability(ctx, "WRITE:friction"); err != nil {
+		return nil, err
+	}
+
+	flowID, workitemID, nodeID := extractIdentityFromMD(ctx)
+
+	slog.Info("AddFriction: submitting to telemetry buffer",
+		"flow_id", flowID,
+		"workitem_id", workitemID,
+		"node_id", nodeID,
+		"magnitude", req.GetMagnitude(),
+	)
+
+	s.TelemetryBuffer.Submit(buffer.Event{
+		Priority:   buffer.PriorityHigh,
+		FlowID:     flowID,
+		WorkitemID: workitemID,
+		NodeID:     nodeID,
+		LawIDs:     req.GetLawIds(),
+		Magnitude:  float64(req.GetMagnitude()),
+	})
+
+	return &flowv1.AddFrictionResponse{Acknowledged: true}, nil
+}
+
+// RecordTelemetry injects Sidecar-authoritative identity and submits the
+// telemetry event to the async buffer with NORMAL priority for delivery
+// to the Event Bus.
+func (s *SidecarServer) RecordTelemetry(
+	ctx context.Context, req *flowv1.RecordTelemetryRequest,
+) (*flowv1.RecordTelemetryResponse, error) {
+	if s.TelemetryBuffer == nil {
+		return nil, status.Error(codes.Unavailable,
+			"telemetry buffer not configured — Event Bus not available")
+	}
+
+	flowID, workitemID, nodeID := extractIdentityFromMD(ctx)
+
+	slog.Info("RecordTelemetry: submitting to telemetry buffer",
+		"flow_id", flowID,
+		"workitem_id", workitemID,
+		"node_id", nodeID,
+		"event_type", req.GetEventType(),
+	)
+
+	s.TelemetryBuffer.Submit(buffer.Event{
+		Priority:   buffer.PriorityNormal,
+		FlowID:     flowID,
+		WorkitemID: workitemID,
+		NodeID:     nodeID,
+		EventType:  req.GetEventType(),
+		Payload:    req.GetPayload(),
+	})
+
+	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+// checkCapability is the Sidecar-side capability gate for WRITE:friction.
+// It reads x-flow-capabilities and x-flow-node-id from incoming gRPC metadata.
+// If x-flow-node-id is absent (system-to-system call), the check passes.
+// If x-flow-node-id is present (node-originated), the required capability
+// must be present in x-flow-capabilities or the request is denied.
+func checkCapability(ctx context.Context, required string) error {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil // No metadata — system call.
+	}
+	nodeIDs := md.Get("x-flow-node-id")
+	if len(nodeIDs) == 0 {
+		return nil // No node identity — system call.
+	}
+
+	caps := md.Get("x-flow-capabilities")
+	for _, c := range caps {
+		for cap := range strings.SplitSeq(c, ",") {
+			if strings.TrimSpace(cap) == required {
+				return nil
+			}
+		}
+	}
+
+	return status.Errorf(codes.PermissionDenied,
+		"CAPABILITY_DENIED: missing required capability %q", required)
+}
+
+// extractIdentityFromMD extracts Sidecar-injected identity from incoming
+// gRPC metadata.
+func extractIdentityFromMD(ctx context.Context) (flowID, workitemID, nodeID string) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return
+	}
+	if vals := md.Get("x-flow-flow-id"); len(vals) > 0 {
+		flowID = vals[0]
+	}
+	if vals := md.Get("x-flow-workitem-id"); len(vals) > 0 {
+		workitemID = vals[0]
+	}
+	if vals := md.Get("x-flow-node-id"); len(vals) > 0 {
+		nodeID = vals[0]
+	}
+	return
 }

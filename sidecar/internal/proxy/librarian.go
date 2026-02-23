@@ -18,21 +18,21 @@ const (
 )
 
 // LibrarianProxy implements flowv1.LibrarianServiceServer by forwarding
-// calls to the real Librarian gRPC endpoint. For Cite, it also emits an
-// AddFriction call to the Flow Monitor with fixed citation magnitude.
+// calls to the real Librarian gRPC endpoint. For Cite, it also emits a
+// friction event to the Event Bus via the EventBusProxy.
 type LibrarianProxy struct {
 	flowv1.UnimplementedLibrarianServiceServer
 	client        flowv1.LibrarianServiceClient
-	monitorClient flowv1.FlowMonitorServiceClient
+	eventBusProxy *EventBusProxy
 	conn          *grpc.ClientConn
-	monitorConn   *grpc.ClientConn
-	magnitude     int32
+	magnitude     float64
 }
 
-// NewLibrarianProxy dials the Librarian and Monitor gRPC endpoints and
-// returns a proxy handler ready to be registered on the Sidecar's gRPC
-// server. If monitorAddr is empty, friction emission on Cite is skipped.
-func NewLibrarianProxy(librarianAddr, monitorAddr string) (*LibrarianProxy, error) {
+// NewLibrarianProxy dials the Librarian gRPC endpoint and returns a proxy
+// handler ready to be registered on the Sidecar's gRPC server. The
+// eventBusProxy is used to publish friction events on Cite calls; if nil,
+// friction emission is skipped.
+func NewLibrarianProxy(librarianAddr string, eventBusProxy *EventBusProxy) (*LibrarianProxy, error) {
 	conn, err := grpc.NewClient(
 		librarianAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -41,48 +41,26 @@ func NewLibrarianProxy(librarianAddr, monitorAddr string) (*LibrarianProxy, erro
 		return nil, err
 	}
 
-	p := &LibrarianProxy{
-		client:    flowv1.NewLibrarianServiceClient(conn),
-		conn:      conn,
-		magnitude: citationMagnitude(),
-	}
-
-	if monitorAddr != "" {
-		monitorConn, err := grpc.NewClient(
-			monitorAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			_ = conn.Close()
-			return nil, err
-		}
-		p.monitorClient = flowv1.NewFlowMonitorServiceClient(monitorConn)
-		p.monitorConn = monitorConn
-	}
-
-	return p, nil
+	return &LibrarianProxy{
+		client:        flowv1.NewLibrarianServiceClient(conn),
+		eventBusProxy: eventBusProxy,
+		conn:          conn,
+		magnitude:     citationMagnitude(),
+	}, nil
 }
 
-// Close releases the underlying gRPC connections.
+// Close releases the underlying gRPC connection.
 func (p *LibrarianProxy) Close() error {
-	var firstErr error
-	if p.monitorConn != nil {
-		if err := p.monitorConn.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
 	if p.conn != nil {
-		if err := p.conn.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		return p.conn.Close()
 	}
-	return firstErr
+	return nil
 }
 
-func citationMagnitude() int32 {
+func citationMagnitude() float64 {
 	if s := os.Getenv(envCitationFrictionMagnitude); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v > 0 {
-			return int32(v)
+		if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
+			return v
 		}
 	}
 	return defaultCitationFrictionMagnitude
@@ -99,8 +77,8 @@ func (p *LibrarianProxy) QueryLaws(
 	return p.client.QueryLaws(propagateMetadata(ctx), req)
 }
 
-// Cite forwards to the Librarian and then emits an AddFriction call to the
-// Flow Monitor with fixed citation magnitude.
+// Cite forwards to the Librarian and then emits a friction event to the
+// Event Bus via the EventBusProxy with fixed citation magnitude.
 func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.CiteResponse, error) {
 	outCtx := propagateMetadata(ctx)
 
@@ -110,19 +88,18 @@ func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*fl
 		return nil, err
 	}
 
-	// Emit friction to Monitor.
-	if p.monitorClient != nil {
+	// Emit friction to Event Bus.
+	if p.eventBusProxy != nil {
 		flowID, workitemID, nodeID := extractIdentityFromMetadata(ctx)
 
-		_, frictionErr := p.monitorClient.AddFriction(outCtx, &flowv1.AddFrictionRequest{
-			FlowId:     flowID,
-			WorkitemId: workitemID,
-			NodeId:     nodeID,
-			LawIds:     req.GetLawIds(),
-			Magnitude:  p.magnitude,
-		})
+		frictionErr := p.eventBusProxy.PublishFriction(
+			outCtx,
+			flowID, workitemID, nodeID,
+			req.GetLawIds(),
+			p.magnitude,
+		)
 		if frictionErr != nil {
-			slog.Warn("Cite: failed to emit friction to Monitor",
+			slog.Warn("Cite: failed to emit friction to Event Bus",
 				"error", frictionErr,
 				"law_ids", req.GetLawIds(),
 			)

@@ -42,15 +42,15 @@ func setupGRPCTestEnv(
 	}
 
 	client := &Client{
-		conn:       conn,
-		workitemID: workitemID,
-		Sidecar:    flowv1.NewSidecarServiceClient(conn),
-		Operator:   flowv1.NewOperatorServiceClient(conn),
-		Archivist:  flowv1.NewArchivistServiceClient(conn),
-		Librarian:  flowv1.NewLibrarianServiceClient(conn),
-		Monitor:    flowv1.NewFlowMonitorServiceClient(conn),
-		Jury:       flowv1.NewJuryServiceClient(conn),
-		Clerk:      flowv1.NewClerkServiceClient(conn),
+		conn:           conn,
+		workitemID:     workitemID,
+		Sidecar:        flowv1.NewSidecarServiceClient(conn),
+		Operator:       flowv1.NewOperatorServiceClient(conn),
+		Archivist:      flowv1.NewArchivistServiceClient(conn),
+		Librarian:      flowv1.NewLibrarianServiceClient(conn),
+		FrictionLedger: flowv1.NewFrictionLedgerServiceClient(conn),
+		Jury:           flowv1.NewJuryServiceClient(conn),
+		Clerk:          flowv1.NewClerkServiceClient(conn),
 	}
 
 	t.Cleanup(func() {

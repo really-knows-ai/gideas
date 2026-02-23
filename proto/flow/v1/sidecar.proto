@@ -11,7 +11,7 @@ import "flow/v1/common.proto";
 // owning service. Nodes see SDK calls; the Sidecar handles transport.
 //
 // The Sidecar also acts as the proxy for all other services (Operator,
-// Archivist, Librarian, FlowMonitor) when called from the Node. Those
+// Archivist, Librarian, FrictionLedger) when called from the Node. Those
 // service definitions are not duplicated here -- the Go SDK will connect
 // to the Sidecar's port and use the respective service stubs.
 //
@@ -27,7 +27,7 @@ service SidecarService {
   // assignment. The timer remains suspended until ResumeTimer is called or
   // the handler returns. Used by HITL nodes to park Workitems while awaiting
   // external input without triggering timeout. The Workitem remains in
-  // Running state — this is a Sidecar-local mechanism.
+  // Running state -- this is a Sidecar-local mechanism.
   // See: specs/04-sdk/08-sdk-hitl.md
   rpc PauseTimer(PauseTimerRequest) returns (PauseTimerResponse);
 
@@ -39,6 +39,19 @@ service SidecarService {
   // Sidecar/Pod. The Sidecar validates the request and forwards it to
   // the co-located User Code container via the NodeService.Process RPC.
   rpc AssignWork(AssignWorkRequest) returns (Ack);
+
+  // Records a friction event. The Sidecar injects identity fields from the
+  // active session, enforces the WRITE:friction capability gate, wraps the
+  // event in a FlowEvent envelope, and publishes to the Event Bus telemetry
+  // channel. The SDK never builds FlowEvent messages directly.
+  // See: specs/04-sdk/06-sdk-telemetry.md
+  rpc AddFriction(AddFrictionRequest) returns (AddFrictionResponse);
+
+  // Records a custom telemetry event. The Sidecar injects identity fields,
+  // wraps the event in a standard FlowEvent envelope with timestamp and
+  // trace context, and publishes to the Event Bus telemetry channel.
+  // Payload is JSON-serializable, max 64 KB.
+  rpc RecordTelemetry(RecordTelemetryRequest) returns (RecordTelemetryResponse);
 }
 
 message HeartbeatRequest {
@@ -76,4 +89,35 @@ message AssignWorkRequest {
 message Ack {
   bool accepted = 1;
   string message = 2;
+}
+
+// --- Ingestion types (migrated from monitor.proto) ---
+
+message AddFrictionRequest {
+  string flow_id = 1;
+  string workitem_id = 2;
+  // Optional: Sidecar-injected for node context.
+  string node_id = 3;
+  // Optional: law identifiers associated with this friction event.
+  repeated string law_ids = 4;
+  // Friction magnitude.
+  int32 magnitude = 5;
+}
+
+message AddFrictionResponse {
+  bool acknowledged = 1;
+}
+
+message RecordTelemetryRequest {
+  string flow_id = 1;
+  string node_id = 2;
+  string workitem_id = 3;
+  // Event type identifier.
+  string event_type = 4;
+  // JSON-serialized payload, max 64 KB.
+  bytes payload = 5;
+}
+
+message RecordTelemetryResponse {
+  bool acknowledged = 1;
 }

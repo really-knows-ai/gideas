@@ -23,7 +23,7 @@ type spyServer struct {
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
-	flowv1.UnimplementedFlowMonitorServiceServer
+	flowv1.UnimplementedFrictionLedgerServiceServer
 	flowv1.UnimplementedJuryServiceServer
 	flowv1.UnimplementedClerkServiceServer
 
@@ -96,6 +96,13 @@ func (s *spyServer) RecordTelemetry(
 ) (*flowv1.RecordTelemetryResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+func (s *spyServer) AddFriction(
+	ctx context.Context, req *flowv1.AddFrictionRequest,
+) (*flowv1.AddFrictionResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.AddFrictionResponse{Acknowledged: true}, nil
 }
 
 func (s *spyServer) RefuseFeedback(
@@ -222,7 +229,7 @@ func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 		flowv1.RegisterOperatorServiceServer(s, spy)
 		flowv1.RegisterArchivistServiceServer(s, spy)
 		flowv1.RegisterLibrarianServiceServer(s, spy)
-		flowv1.RegisterFlowMonitorServiceServer(s, spy)
+		flowv1.RegisterFrictionLedgerServiceServer(s, spy)
 		flowv1.RegisterJuryServiceServer(s, spy)
 		flowv1.RegisterClerkServiceServer(s, spy)
 	})

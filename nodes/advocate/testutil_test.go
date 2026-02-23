@@ -26,7 +26,7 @@ func newSpyGRPCServer(spy *advocateSpy) *grpc.Server {
 	flowv1.RegisterOperatorServiceServer(srv, spy)
 	flowv1.RegisterArchivistServiceServer(srv, spy)
 	flowv1.RegisterLibrarianServiceServer(srv, spy)
-	flowv1.RegisterFlowMonitorServiceServer(srv, spy)
+	flowv1.RegisterFrictionLedgerServiceServer(srv, spy)
 	flowv1.RegisterJuryServiceServer(srv, spy)
 	flowv1.RegisterClerkServiceServer(srv, spy)
 	return srv
@@ -38,7 +38,7 @@ type advocateSpy struct {
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
-	flowv1.UnimplementedFlowMonitorServiceServer
+	flowv1.UnimplementedFrictionLedgerServiceServer
 	flowv1.UnimplementedJuryServiceServer
 	flowv1.UnimplementedClerkServiceServer
 
@@ -253,7 +253,7 @@ func (s *advocateSpy) LinkRuling(
 }
 
 // ---------------------------------------------------------------------------
-// Monitor methods
+// FrictionLedger methods
 // ---------------------------------------------------------------------------
 
 func (s *advocateSpy) RecordTelemetry(

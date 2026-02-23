@@ -2,14 +2,11 @@ package proxy
 
 import (
 	"context"
-	"net"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/test/bufconn"
 )
 
 // captureLibrarianServer captures Librarian RPC calls for assertions.
@@ -49,84 +46,51 @@ func (s *captureLibrarianServer) GetLaw(
 	return &flowv1.GetLawResponse{Law: &flowv1.Law{Id: req.GetLawId()}}, nil
 }
 
-// captureMonitorServer captures Monitor RPC calls for assertions.
-type captureMonitorServer struct {
-	flowv1.UnimplementedFlowMonitorServiceServer
-	lastFrictionReq *flowv1.AddFrictionRequest
-	capturedMD      metadata.MD
+// captureEventBusForLibrarian captures Event Bus Publish calls for assertions.
+type captureEventBusForLibrarian struct {
+	flowv1.UnimplementedFlowEventBusServiceServer
+	lastPublishReq *flowv1.PublishRequest
 }
 
-func (s *captureMonitorServer) AddFriction(
-	ctx context.Context, req *flowv1.AddFrictionRequest,
-) (*flowv1.AddFrictionResponse, error) {
-	s.lastFrictionReq = req
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		s.capturedMD = md
-	}
-	return &flowv1.AddFrictionResponse{Acknowledged: true}, nil
+func (s *captureEventBusForLibrarian) Publish(
+	_ context.Context, req *flowv1.PublishRequest,
+) (*flowv1.PublishResponse, error) {
+	s.lastPublishReq = req
+	return &flowv1.PublishResponse{Acknowledged: true, Sequence: 1}, nil
 }
 
 type librarianTestEnv struct {
 	proxy        *LibrarianProxy
 	librarianSpy *captureLibrarianServer
-	monitorSpy   *captureMonitorServer
+	eventBusSpy  *captureEventBusForLibrarian
 }
 
 func setupLibrarianProxy(t *testing.T) *librarianTestEnv {
 	t.Helper()
 
-	// Librarian backend.
-	libLis := bufconn.Listen(1024 * 1024)
-	libSrv := grpc.NewServer()
 	libSpy := &captureLibrarianServer{}
-	flowv1.RegisterLibrarianServiceServer(libSrv, libSpy)
-	go func() { _ = libSrv.Serve(libLis) }()
-	t.Cleanup(func() { libSrv.Stop(); _ = libLis.Close() })
+	libConn := dialBufconn(t, func(s *grpc.Server) {
+		flowv1.RegisterLibrarianServiceServer(s, libSpy)
+	})
 
-	libConn, err := grpc.NewClient(
-		"passthrough:///bufconn",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return libLis.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("failed to dial librarian bufconn: %v", err)
-	}
-	t.Cleanup(func() { _ = libConn.Close() })
+	busSpy := &captureEventBusForLibrarian{}
+	busConn := dialBufconn(t, func(s *grpc.Server) {
+		flowv1.RegisterFlowEventBusServiceServer(s, busSpy)
+	})
 
-	// Monitor backend.
-	monLis := bufconn.Listen(1024 * 1024)
-	monSrv := grpc.NewServer()
-	monSpy := &captureMonitorServer{}
-	flowv1.RegisterFlowMonitorServiceServer(monSrv, monSpy)
-	go func() { _ = monSrv.Serve(monLis) }()
-	t.Cleanup(func() { monSrv.Stop(); _ = monLis.Close() })
+	ebProxy := NewEventBusProxyFromClient(flowv1.NewFlowEventBusServiceClient(busConn))
 
-	monConn, err := grpc.NewClient(
-		"passthrough:///bufconn",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return monLis.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("failed to dial monitor bufconn: %v", err)
-	}
-	t.Cleanup(func() { _ = monConn.Close() })
-
-	proxy := &LibrarianProxy{
+	p := &LibrarianProxy{
 		client:        flowv1.NewLibrarianServiceClient(libConn),
-		monitorClient: flowv1.NewFlowMonitorServiceClient(monConn),
+		eventBusProxy: ebProxy,
 		conn:          libConn,
-		monitorConn:   monConn,
 		magnitude:     1,
 	}
 
 	return &librarianTestEnv{
-		proxy:        proxy,
+		proxy:        p,
 		librarianSpy: libSpy,
-		monitorSpy:   monSpy,
+		eventBusSpy:  busSpy,
 	}
 }
 
@@ -158,24 +122,28 @@ func TestLibrarianProxy_Cite_ForwardsAndEmitsFriction(t *testing.T) {
 		t.Fatalf("expected 2 law_ids forwarded, got %d", len(env.librarianSpy.lastCiteReq.GetLawIds()))
 	}
 
-	// Verify friction was emitted to Monitor.
-	if env.monitorSpy.lastFrictionReq == nil {
-		t.Fatal("AddFriction was not called on Monitor")
+	// Verify friction was published to Event Bus.
+	if env.eventBusSpy.lastPublishReq == nil {
+		t.Fatal("Friction was not published to Event Bus")
 	}
-	if env.monitorSpy.lastFrictionReq.GetMagnitude() != 1 {
-		t.Fatalf("expected magnitude 1, got %d", env.monitorSpy.lastFrictionReq.GetMagnitude())
+	evt := env.eventBusSpy.lastPublishReq.GetEvent()
+	if evt.GetEventType() != "friction" {
+		t.Fatalf("expected event_type=friction, got %q", evt.GetEventType())
 	}
-	if len(env.monitorSpy.lastFrictionReq.GetLawIds()) != 2 {
-		t.Fatalf("expected 2 law_ids in friction, got %d", len(env.monitorSpy.lastFrictionReq.GetLawIds()))
+	if evt.GetFlowId() != "flow-test" {
+		t.Fatalf("expected flow_id=flow-test, got %q", evt.GetFlowId())
 	}
-	if env.monitorSpy.lastFrictionReq.GetWorkitemId() != "wi-test" {
-		t.Fatalf("expected workitem_id=wi-test, got %q", env.monitorSpy.lastFrictionReq.GetWorkitemId())
+	if evt.GetWorkitemId() != "wi-test" {
+		t.Fatalf("expected workitem_id=wi-test, got %q", evt.GetWorkitemId())
 	}
-	if env.monitorSpy.lastFrictionReq.GetFlowId() != "flow-test" {
-		t.Fatalf("expected flow_id=flow-test, got %q", env.monitorSpy.lastFrictionReq.GetFlowId())
+	if evt.GetNodeId() != "node-test" {
+		t.Fatalf("expected node_id=node-test, got %q", evt.GetNodeId())
 	}
-	if env.monitorSpy.lastFrictionReq.GetNodeId() != "node-test" {
-		t.Fatalf("expected node_id=node-test, got %q", env.monitorSpy.lastFrictionReq.GetNodeId())
+	if evt.GetAttributes()["law_ids"] != "law-1,law-2" {
+		t.Fatalf("expected law_ids=law-1,law-2, got %q", evt.GetAttributes()["law_ids"])
+	}
+	if evt.GetAttributes()["magnitude"] != "1" {
+		t.Fatalf("expected magnitude=1, got %q", evt.GetAttributes()["magnitude"])
 	}
 }
 
