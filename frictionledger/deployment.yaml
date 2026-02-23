@@ -1,0 +1,93 @@
+# Friction Ledger Deployment for Foundry Flow
+#
+# The Friction Ledger is the sole friction aggregation and query surface.
+# It subscribes to the Event Bus telemetry channel for friction events,
+# persists them to SQLite, evaluates per-law thresholds, and serves
+# aggregated friction queries via gRPC.
+#
+# It uses a SQLite database persisted on a PVC at /data/frictionledger.db.
+# The service listens on port 50057 and is accessed by Sidecars and the
+# Librarian via the flow-frictionledger Service.
+#
+# Prerequisites:
+#   - Build frictionledger image: docker build -t flow-frictionledger:latest -f frictionledger/Dockerfile .
+#   - Flow Event Bus must be running and accessible at EVENT_BUS_ADDRESS.
+#
+# For Kind cluster:
+#   kind load docker-image flow-frictionledger:latest --name <cluster>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flow-frictionledger-data
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-frictionledger
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: control-plane
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow-frictionledger
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-frictionledger
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flow-frictionledger
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flow-frictionledger
+    spec:
+      containers:
+        - name: frictionledger
+          image: flow-frictionledger:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50057
+              protocol: TCP
+          env:
+            - name: FRICTION_LEDGER_PORT
+              value: "50057"
+            - name: FRICTION_LEDGER_DB_PATH
+              value: "/data/frictionledger.db"
+            - name: EVENT_BUS_ADDRESS
+              value: "flow-eventbus:50056"
+          volumeMounts:
+            - name: frictionledger-data
+              mountPath: /data
+      volumes:
+        - name: frictionledger-data
+          persistentVolumeClaim:
+            claimName: flow-frictionledger-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flow-frictionledger
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-frictionledger
+    app.kubernetes.io/part-of: foundry-flow
+spec:
+  selector:
+    app.kubernetes.io/name: flow-frictionledger
+  ports:
+    - name: grpc
+      port: 50057
+      targetPort: 50057
+      protocol: TCP
+  type: ClusterIP
