@@ -65,6 +65,28 @@ type FoundryNodeSpec struct {
 	// otherwise ReplicaSet (default).
 	// +optional
 	Storage *StorageConfig `json:"storage,omitempty"`
+
+	// childWorkitems configures optional entry and exit contracts for child Workitems
+	// created by this node. When set, the Operator validates child Workitems against
+	// these contracts at creation and completion time. These are developer-opted
+	// validation guards, not platform-mandatory governance.
+	// +optional
+	ChildWorkitems *ChildWorkitemConfig `json:"childWorkitems,omitempty"`
+}
+
+// ChildWorkitemConfig defines optional contracts for child Workitems created by a node.
+// These contracts are node-level validation guards that developers can opt into
+// for stricter child Workitem governance.
+type ChildWorkitemConfig struct {
+	// entryContract defines the artefact and stamp requirements that must be satisfied
+	// on a child Workitem before it can be routed (via RouteChild).
+	// +optional
+	EntryContract Contract `json:"entryContract,omitempty"`
+
+	// exitContract defines the artefact and stamp requirements that must be satisfied
+	// on a child Workitem before it can be completed.
+	// +optional
+	ExitContract Contract `json:"exitContract,omitempty"`
 }
 
 // Output defines a named routing output mapping to a target node.

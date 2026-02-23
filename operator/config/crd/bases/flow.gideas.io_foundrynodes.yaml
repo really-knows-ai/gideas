@@ -48,6 +48,32 @@ spec:
                 items:
                   type: string
                 type: array
+              childWorkitems:
+                description: |-
+                  childWorkitems configures optional entry and exit contracts for child Workitems
+                  created by this node. When set, the Operator validates child Workitems against
+                  these contracts at creation and completion time. These are developer-opted
+                  validation guards, not platform-mandatory governance.
+                properties:
+                  entryContract:
+                    additionalProperties:
+                      items:
+                        type: string
+                      type: array
+                    description: |-
+                      entryContract defines the artefact and stamp requirements that must be satisfied
+                      on a child Workitem before it can be routed (via RouteChild).
+                    type: object
+                  exitContract:
+                    additionalProperties:
+                      items:
+                        type: string
+                      type: array
+                    description: |-
+                      exitContract defines the artefact and stamp requirements that must be satisfied
+                      on a child Workitem before it can be completed.
+                    type: object
+                type: object
               concurrency:
                 default: 1
                 description: |-
