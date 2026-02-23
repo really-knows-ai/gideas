@@ -27,6 +27,7 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 |-------|------|----------|-------------|
 | `entryContracts` | `map[string]Contract` | yes | Named entry contracts. Each contract is a [Contract shape](#contract-shape). At least one entry contract must be defined. |
 | `exitContracts` | `map[string]Contract` | yes | Named exit contracts. Each contract is a [Contract shape](#contract-shape). |
+| `nodeGroups` | `map[string]NodeGroup` | no | Named NodeGroups defining sub-topology boundaries. Each key is a group name; each value is a [NodeGroup shape](#nodegroup-shape). See [NodeGroups](../02-flow/05-configuration.md#nodegroups). |
 | `importNode` | `string` | no | Name of the FoundryNode that receives cross-flow imported Workitems. Must reference an existing entry-bound node. If absent, cross-flow import is disabled. |
 | `governancePolicy` | `GovernancePolicy` | yes | Governance thresholds and timers. See [governance policy](#governance-policy). |
 | `crossFlow` | `CrossFlowConfig` | no | Cross-flow trust and naturalisation settings. See [cross-flow configuration](#cross-flow-configuration). |
@@ -126,6 +127,8 @@ When a law's age exceeds its tier's configured TTL, the Librarian triggers a rev
 | `auditSize` | `string` | no | Size-based retention for audit channel (e.g. `"1GB"`). |
 | `frictionDuration` | `string` | no | Duration-based retention for friction channel (e.g. `"72h"`). |
 | `frictionSize` | `string` | no | Size-based retention for friction channel (e.g. `"100MB"`). |
+| `workitemDuration` | `string` | no | Duration-based retention for workitem channel (e.g. `"24h"`). |
+| `workitemSize` | `string` | no | Size-based retention for workitem channel (e.g. `"100MB"`). |
 
 When both duration and size are specified for a channel, the Event Bus evicts when either limit is exceeded (whichever triggers first). Duration limits use Go `time.Duration` format. Size limits use byte-count strings with unit suffix (e.g. `100MB`, `1GB`).
 
@@ -153,6 +156,7 @@ The FoundryNode CRD defines node-local behaviour, permission envelope, and routi
 | `exit` | `string` | no | Name of the exit contract this node is bound to. Must reference a key in the FoundryFlow's `exitContracts`. Grants `complete()` eligibility. |
 | `timeout` | `duration` | no | Inactivity timeout for assignments to this node. Cannot exceed `governancePolicy.maxTimeout` on the FoundryFlow. Falls back to `governancePolicy.defaultTimeout` if unset. |
 | `concurrency` | `integer` | no | Maximum concurrent Workitem assignments per pod. Default `1`. Value `0` means unlimited. |
+| `childWorkitems` | `ChildWorkitemConfig` | no | Optional child Workitem contract configuration. See [child Workitem contracts](#childworkitemconfig). |
 | `storage` | `StorageConfig` | no | Volume mounts and deployment strategy. Presence of persistent volumes triggers StatefulSet deployment; otherwise ReplicaSet (default). |
 
 ### Output
@@ -197,6 +201,7 @@ Capability grants follow a `VERB:RESOURCE[/QUALIFIER]` grammar:
 | `WRITE:feedback/deadlocked` | Transition feedback to `deadlocked` (`DeadlockFeedback`). |
 | `USE:support/<service>/<capability>` | Invoke a specific Flow Support Service capability. |
 | `USE:queue/server` | Enables HITL queue features: persistent queue, REST API, Federated Queue Mesh. Requires `spec.storage`. Triggers StatefulSet deployment and Headless Service creation. See [SDK HITL](../04-sdk/08-sdk-hitl.md). |
+| `CREATE:workitem/child` | Create child Workitems from the currently assigned parent Workitem. See [Child Workitems](../02-flow/02-workitem.md#child-workitems). |
 
 Some operations (such as `ListArtefacts` — listing artefacts associated with the assigned Workitem via the Archivist) are implicitly available to all nodes by virtue of the assignment scope and do not require explicit capability grants.
 
@@ -218,6 +223,7 @@ Managed by the Operator. Nodes do not write to `status` directly.
 |-------|------|-------------|
 | `phase` | `string` | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed`. |
 | `currentAssignee` | `string` | Node currently processing this Workitem. Empty when `Pending`. |
+| `parentWorkitemID` | `string` | Workitem ID of the parent, if this is a child Workitem. Empty for root Workitems. Set at creation time and immutable. The Operator also applies a `flow.gideas.io/parent` label with this value for efficient querying. |
 | `routingInstruction` | `RoutingInstruction` | Most recent routing outcome submitted by the assigned node. |
 | `thrashCounters` | `map[string]integer` | Per-node visit counts. Hidden from nodes. The Thrash Guard triggers when the aggregate sum exceeds `governancePolicy.maxVisits`. |
 
@@ -373,6 +379,55 @@ Entry and exit contracts use the same evaluation semantics. The Operator validat
 
 ---
 
+## NodeGroup Shape
+
+NodeGroups define sub-topology boundaries within a Flow. Each NodeGroup is a named entry in the FoundryFlow's `nodeGroups` map.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `nodes` | `[]string` | yes | FoundryNode names belonging to this group. Each node must exist as a FoundryNode in the namespace. A node can belong to at most one group. |
+| `entryContracts` | `map[string]Contract` | no | Named entry contracts for the group boundary. Validated when a root Workitem is routed to an entry-bound node within the group from outside. Uses the same [Contract shape](#contract-shape). |
+| `exitContracts` | `map[string]Contract` | no | Named exit contracts for the group boundary. Validated when a Workitem exits the group via an exit-bound node. Uses the same [Contract shape](#contract-shape). |
+
+```yaml
+# Example: codification NodeGroup
+nodeGroups:
+  codification:
+    nodes:
+      - codify-smt
+      - codify-rego
+      - codify-collector
+    entryContracts:
+      codify-input:
+        codification-input: []
+    exitContracts:
+      codify-output:
+        codification-output: []
+```
+
+---
+
+## ChildWorkitemConfig
+
+Optional child Workitem contract configuration on FoundryNode. These are developer-side validation aids for structured fan-out patterns. Detail: [Child Workitem Contracts](../02-flow/05-configuration.md#child-workitem-contracts).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entryContract` | `Contract` | no | Contract validated when a child Workitem is routed (via `RouteChild`). Ensures the child has been populated with expected artefacts before processing. Uses the same [Contract shape](#contract-shape). |
+| `exitContract` | `Contract` | no | Contract validated when a child Workitem calls `Complete()`. Elevates the child's simple completion to contract-validated completion. Uses the same [Contract shape](#contract-shape). |
+
+```yaml
+# Example: FoundryNode with child Workitem contracts
+spec:
+  childWorkitems:
+    entryContract:
+      codification-input: []
+    exitContract:
+      codification-output: []
+```
+
+---
+
 ## Validation and Rejection Rules
 
 The Operator rejects invalid configuration at admission time. Partial application never occurs.
@@ -388,6 +443,10 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 | `maxTimeout` is less than `defaultTimeout` | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Stamp name in a contract is not declared in the GovernedArtefact's stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Duplicate artefact `id` with different `governed_artefact` for the same Workitem | Archivist | `ARTEFACT_KIND_CONFLICT` |
+| NodeGroup references a node that does not exist as a FoundryNode | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
+| A node appears in more than one NodeGroup | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
+| NodeGroup contract stamp name not declared in GovernedArtefact stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
+| Child Workitem contract stamp name not declared in GovernedArtefact stamp vocabulary | FoundryNode | `SCHEMA_VALIDATION_FAILED` |
 
 ---
 
@@ -402,3 +461,5 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 7. Treaty trust is directed — a single CRD represents one direction of trust.
 8. Invalid configuration is rejected at admission; partial application does not occur.
 9. Stamp vocabulary on GovernedArtefact defines which stamp names are meaningful; contracts select from that vocabulary.
+10. Child Workitem `parentWorkitemID` is immutable after creation. The `flow.gideas.io/parent` label is set by the Operator at creation time.
+11. NodeGroups are inline on FoundryFlow. A node belongs to at most one group.

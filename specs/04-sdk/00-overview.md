@@ -61,7 +61,7 @@ The SDK is organised into domain-specific surfaces, each backed by a runtime ser
 | [Artefacts](./02-sdk-artefacts.md) | Read, write, version, stamp, inspect | Archivist (via Sidecar) | Content addressing, passport, stamp application |
 | [Legal](./03-sdk-legal.md) | Law retrieval, citation, finding creation | Librarian (via Sidecar) | Query modes, citation friction, Tier 1 writes |
 | [Feedback](./04-sdk-feedback.md) | Create, transition, query, resolve | Archivist (via Sidecar) | State machine, justification, contempt guard |
-| [Workitems](./05-sdk-workitems.md) | Read state, create locally, inspect | Operator (via Sidecar) | Assignment-scoped access, snapshot semantics |
+| [Workitems](./05-sdk-workitems.md) | Read state, create locally, child Workitems, inspect | Operator (via Sidecar) | Assignment-scoped access, child fan-out/fan-in, snapshot semantics |
 | [Telemetry](./06-sdk-telemetry.md) | Friction, metrics, traces, custom events | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
 | [Agent](./07-sdk-agent.md) | Managed inference wrapper | Operator + Flow Monitor (via Sidecar) | Automatic heartbeat, schema validation, atomic cost accounting |
 | [HITL](./08-sdk-hitl.md) | Queue management, REST API, Federated Queue Mesh | Node-local (queue) + Operator (via Sidecar) | `USE:queue/server` capability, persistent queue, escalation |
@@ -82,6 +82,8 @@ All surfaces share the same trust model: SDK calls transit the Sidecar, which au
 `FlowSupportService` does not include Workitem, Artefact, or routing abstractions. Support Services do not process Workitems and do not participate in Workitem mutation flow or artefact provenance flow.
 
 Specialised subtypes extend `FlowSupportService` with domain-specific contracts. `CodificationService` inherits from `FlowSupportService` and adds the `encode` capability contract for translating law goals into formal representations during [governance hardening](../01-concepts/04-governance.md#precedent).
+
+Note: future codification processing will use the Workitem model (child Workitems, fan-out/fan-in) rather than the Support Service model. The `FlowSupportService` base class is retained for non-codification support services such as notification relays and external integrations.
 
 ## Failure and Error Model
 

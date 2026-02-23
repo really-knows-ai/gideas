@@ -23,6 +23,7 @@ Workitem mutability is partitioned by actor. Ownership is strict and non-overlap
 | assignment fields | Operator | Managed transitions | Current and previous assignee tracking |
 | routing instruction | Operator from Sidecar-submitted result | Overwrite per assignment | Next action requested by node |
 | thrash counters | Operator | Increment-only | Loop budget enforcement |
+| parent Workitem ID | Operator | Immutable after creation | Child-to-parent link for scoped access |
 
 Nodes do not mutate Workitem state directly. All node-originated state changes are mediated by the [Sidecar](../03-node/01-sidecar.md), then validated and persisted by the [Flow Operator](./01-operator.md).
 
@@ -167,6 +168,61 @@ Workitems have no freeform context object. There is no `status.context` and no r
 
 All relevant work context must be represented by explicit Workitem state and governed artefacts.
 
+## Child Workitems
+
+Child Workitems are a platform primitive for parallel work decomposition. A node processing a parent Workitem can create one or more child Workitems, attach artefacts to them, route them for independent processing, and later collect results from the completed children.
+
+### Parent-Child Relationship
+
+A child Workitem is linked to its parent through the `ParentWorkitemID` field on the child's `status` block. This field is Operator-managed and set at creation time. The Operator also applies a `flow.gideas.io/parent` label to the child Workitem CRD for efficient querying.
+
+Child Workitems are internal implementation details of the parent's processing. They are not governed work units — they do not participate in Flow-level entry or exit contracts and are not independently observable by other nodes unless those nodes hold the parent Workitem.
+
+### Child Workitem Lifecycle
+
+Child Workitems follow the same state machine as root Workitems (`Pending`, `Running`, `Completed`, `Failed`) with simplified boundary semantics:
+
+- **Creation**: a node calls `CreateChildWorkitem()` during its assignment on the parent Workitem. The child is created in `Pending` with `ParentWorkitemID` set to the parent's ID and no assignee.
+- **Setup**: the creating node can store artefacts on the child Workitem (via the `ChildWorkitem` handle) before routing it.
+- **Routing**: the creating node calls `RouteTo()` or `RouteToOutput()` on the child handle, which submits a routing instruction to the Operator. Once routed, the child proceeds through normal assignment processing.
+- **Completion**: child Workitems use simple `Complete()` — no exit contract validation. They are internal work decomposition, not governed output boundaries.
+- **Collection**: the parent-assigned node (which may be a different node than the creator, if the parent has been routed) can read artefacts from completed children via cross-Workitem artefact access.
+
+### ChildWorkitem Handle
+
+`CreateChildWorkitem()` returns a `ChildWorkitem` handle — a scoped client with the same operational surface as the parent's SDK Client but targeted at the child Workitem. The handle supports:
+
+- `ID()` — the child's Workitem identifier.
+- `StoreArtefact()` — store artefact content on the child.
+- `StampArtefact()` — apply a stamp to a child artefact.
+- `RouteTo()` / `RouteToOutput()` — submit a routing instruction for the child.
+- `Complete()` — simple completion with no exit contract validation.
+
+Once a child has been routed, the creating node can no longer write artefacts to it or re-route it. The child is now under normal Workitem assignment processing.
+
+### Completion Guard
+
+A parent Workitem cannot transition to `Completed` while any of its children are in non-terminal state (`Pending` or `Running`). When a node calls `Complete()` on a parent Workitem, the Operator queries for children by the `flow.gideas.io/parent` label. If any child is non-terminal, completion is rejected with `CHILDREN_NOT_TERMINAL`.
+
+Children in `Completed` or `Failed` state do not block parent completion. The parent-assigned node is responsible for interpreting child outcomes — a failed child may be acceptable depending on the node's business logic.
+
+### Cross-Workitem Artefact Access
+
+A node assigned to a parent Workitem can read artefacts from the parent's completed children. This access is:
+
+- **Read-only** — no cross-Workitem writes through this path.
+- **Parent-scoped** — the caller's current Workitem must be the parent of the target child.
+- **Completion-gated** — the target child must be in `Completed` state.
+
+Cross-Workitem reads use an optional `target_workitem_id` parameter on [Archivist](../02-flow/04-system-services.md#archivist) read operations. The Archivist validates the parent-child relationship before serving the request.
+
+### Child Workitem Observability
+
+Nodes can observe child Workitem lifecycle through two mechanisms:
+
+- **Polling**: `GetChildren()` returns the current state of all children for the caller's parent Workitem, including phase, current assignee, and artefact references.
+- **Streaming**: `WatchChildren()` subscribes to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) `WORKITEM` channel, filtered by `parent_workitem_id`. The node receives `ChildLifecycleEvent` messages as children transition through lifecycle phases.
+
 ## Retention and Finalisation
 
 `Completed` and `Failed` are terminal states. Terminal Workitems are retained according to configured retention policy and then cleaned up by operational policy.
@@ -192,5 +248,9 @@ All Flow runtimes preserve these Workitem invariants:
 11. Workitems expose no freeform context bag.
 12. Workitem admission is constrained by bound entry-contract governed artefact name entries.
 13. Imported Workitems are created in `Pending` and first-scheduled to configured `importNode` when capacity allows.
+14. Child Workitems carry `ParentWorkitemID` and a `flow.gideas.io/parent` label, both Operator-managed and immutable after creation.
+15. Child Workitems use simple `Complete()` with no exit contract validation.
+16. A parent Workitem cannot complete while any child is in non-terminal state (`CHILDREN_NOT_TERMINAL` guard).
+17. Cross-Workitem artefact access is read-only, parent-scoped, and completion-gated.
 
 These invariants are consumed by [Flow Operator](./01-operator.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), and [Configuration Semantics](./05-configuration.md).

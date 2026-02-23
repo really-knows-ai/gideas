@@ -6,7 +6,7 @@ System services provide the runtime substrate for law lifecycle, artefact lifecy
 
 Each service owns one primary concern:
 
-- **Flow Event Bus**: durable event distribution across telemetry, audit, and friction channels.
+- **Flow Event Bus**: durable event distribution across telemetry, audit, friction, and workitem channels.
 - **Friction Ledger**: friction aggregation, threshold evaluation, and friction query surface.
 - **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (friction-threshold and review-TTL-expiry).
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
@@ -45,7 +45,7 @@ active subscribers.
 
 ### Channels
 
-The Bus operates three channels:
+The Bus operates four channels:
 
 - **Telemetry channel**: friction events, custom telemetry events, metrics, traces, and cost
   accounting signals. Produced by Sidecars (on behalf of nodes) and by system services.
@@ -62,6 +62,12 @@ The Bus operates three channels:
 - **Friction channel**: aggregated friction signals published by the Friction Ledger.
   Threshold-crossing alerts indicate that a law's accumulated friction has crossed its tier's
   configured hearing threshold. Subscribers: Librarian (reactive hearing triggers).
+
+- **Workitem channel**: Workitem lifecycle events published by the Operator on every phase
+  transition. Each event carries `workitem_id`, `parent_workitem_id` (if the Workitem is a
+  child), `phase`, `node_id`, and `flow_id`. Subscribers filter by `parent_workitem_id` to
+  observe child Workitem progress during fan-out/fan-in processing. Subscribers: nodes (via
+  SDK `WatchChildren()`).
 
 ### Persistence and Retention
 
@@ -476,6 +482,7 @@ Core call paths are stable:
 - Flow Event Bus -> Flow Monitor: telemetry and audit channel subscriptions for metrics export and audit log emission.
 - Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
 - Clerk (via Sidecar) <-> Codification Services: encode requests during law promotion.
+- Operator -> Flow Event Bus: Workitem lifecycle events (publish to workitem channel on every phase transition).
 
 Contract failures must return structured errors aligned with [Error Catalogue](../05-reference/error-catalogue.md).
 
@@ -513,5 +520,6 @@ All deployments preserve these service invariants:
 14. Audit events are published by the authoritative service, not by nodes.
 15. The Friction Ledger is the sole aggregation and query surface for friction data.
 16. The Flow Monitor is a stateless pipeline adapter. It does not persist events or serve query APIs. It may persist a lightweight replay checkpoint (last-seen sequence number per channel) to avoid delivery gaps across restarts; this is not an event store.
+17. The Workitem channel publishes lifecycle events for every Workitem phase transition. Filtering by `parent_workitem_id` enables child Workitem observability.
 
 Node-facing implications of these services are detailed in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Telemetry](../04-sdk/06-sdk-telemetry.md).

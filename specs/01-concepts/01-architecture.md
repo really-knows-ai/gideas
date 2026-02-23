@@ -61,7 +61,7 @@ Work assignment and routing decisions. The [Flow Operator](../02-flow/01-operato
 
 The [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) distributes runtime events across three channels — telemetry, audit, and friction — enabling reactive consumption by any subscribing component. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) subscribes to friction events on the telemetry channel, aggregates them, and publishes threshold-crossing signals to the friction channel. The [Flow Monitor](../02-flow/04-system-services.md#flow-monitor) subscribes to the Flow Event Bus's telemetry and audit channels and exports metrics for Prometheus scraping and audit events as JSON Lines for log pipeline consumption.
 
-The Control Plane's scope is routing decisions. It reads state and moves Workitems; nodes do the rest.
+The Control Plane's scope is routing decisions. It reads state and moves Workitems; nodes do the rest. NodeGroups provide sub-topology boundaries within a Flow — named collections of nodes with optional entry and exit contracts that govern work crossing the group boundary. NodeGroups are a configuration concern defined on the [FoundryFlow](../02-flow/05-configuration.md#nodegroups) CRD; nodes inside a group do not need to know about grouping.
 
 ### Data Plane
 
@@ -142,7 +142,7 @@ The namespace boundary also defines data sovereignty. Workitems, artefacts, and 
 
 A [Workitem](./03-data-model.md#workitems) is assigned to exactly one node at a time — atomic ownership prevents race conditions in state transitions. The Operator's routing loop is linear: read state, pick a target, assign, wait for completion, repeat.
 
-When parallel execution is needed within a single step (querying multiple reviewers, running multiple validators), the node handles it internally. A "fat node" can orchestrate concurrent work within its execution boundary — from the Flow's perspective, it is still one assignment.
+When parallel execution is needed, the platform provides [child Workitems](../02-flow/02-workitem.md#child-workitems) for structured fan-out/fan-in. A node creates child Workitems, populates them with input artefacts, routes them for independent processing, and collects results when they complete. From the Flow's perspective, each child is a separate Workitem with atomic ownership — the parallelism is in the number of concurrent children, not in shared state.
 
 ### Stateless Workers
 

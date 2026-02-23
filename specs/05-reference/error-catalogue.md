@@ -37,6 +37,11 @@ Emitted by the [Operator](../02-flow/01-operator.md) when routing, lifecycle, or
 | `TIMEOUT_EXCEEDED` | `DEADLINE_EXCEEDED` | The node's inactivity timer expired. No SDK call or explicit `Heartbeat()` was received within the configured timeout window. | The Sidecar cancels the handler context and reports the failure. The Operator transitions the Workitem per its failure policy. For long-running workloads, use explicit `Heartbeat()` calls or the FoundryAgent pattern. |
 | `CONTRACT_VIOLATION` | `FAILED_PRECONDITION` | Entry contract requirements not satisfied (at admission) or exit contract requirements not satisfied (at completion). Artefacts of a required governed artefact are missing, or required stamps are not present on the current version. | Do not retry without addressing the missing artefacts or stamps. Route the Workitem to nodes that can provide the missing governance state. |
 | `ASSIGNMENT_SCOPE_VIOLATION` | `FAILED_PRECONDITION` | An SDK operation attempted to access or mutate state outside the current Workitem assignment. The Sidecar rejected the request before it reached a service. | Do not retry. This indicates a bug in handler code — the handler is attempting to operate on a foreign Workitem. |
+| `CHILDREN_NOT_TERMINAL` | `FAILED_PRECONDITION` | The handler called `Complete()` on a parent Workitem while one or more child Workitems are still in `Pending` or `Running` state. All children must reach a terminal state (`Completed` or `Failed`) before the parent can complete. | Wait for all child Workitems to reach terminal state. Use `GetChildren()` or `WatchChildren()` to monitor child lifecycle progress. |
+| `CHILD_NOT_OWNED` | `FAILED_PRECONDITION` | An operation targeted a child Workitem whose `parentWorkitemID` does not match the caller's current Workitem. Cross-Workitem operations are scoped to the parent-child relationship. | Do not retry. Verify the child Workitem ID. The child may belong to a different parent Workitem. |
+| `CHILD_ALREADY_ROUTED` | `FAILED_PRECONDITION` | An attempt to write artefacts to or re-route a child Workitem that has already been routed for processing. Once routed, the child is under normal Workitem assignment and the creating node can no longer mutate it. | Do not retry. The child is already in processing. Read results after the child completes. |
+| `GROUP_ENTRY_VIOLATION` | `FAILED_PRECONDITION` | A root Workitem was routed to a group entry node but does not satisfy the group's entry contract. The Operator validated the group entry contract against artefact state in the Archivist and the requirements were not met. | Do not retry without addressing the missing artefacts or stamps required by the group entry contract. |
+| `GROUP_ROUTING_DENIED` | `FAILED_PRECONDITION` | Routing from outside a NodeGroup to a non-entry-bound node inside the group. NodeGroups enforce routing isolation — external work can only enter through designated entry nodes. | Do not retry. Route to an entry-bound node within the group instead. |
 
 ---
 
@@ -125,6 +130,8 @@ Emitted when a service is temporarily unreachable.
 | Error Family | Retryable | Recommended Response |
 |--------------|-----------|---------------------|
 | Control-plane guard (`EXIT_NOT_BOUND`, `ENTRY_NOT_BOUND`, `INVALID_ROUTE`, `CONTRACT_VIOLATION`, `ASSIGNMENT_SCOPE_VIOLATION`) | No | Fix configuration or handler logic. Do not retry. |
+| Child Workitem guard (`CHILDREN_NOT_TERMINAL`, `CHILD_NOT_OWNED`, `CHILD_ALREADY_ROUTED`) | No | Wait for children to complete, verify ownership, or accept routed state. |
+| NodeGroup guard (`GROUP_ENTRY_VIOLATION`, `GROUP_ROUTING_DENIED`) | No | Fix routing to use group entry nodes, or satisfy group entry contract. |
 | Thrash and timeout (`THRASH_BUDGET_EXCEEDED`, `TIMEOUT_EXCEEDED`) | No | Terminal or Operator-managed. Investigate root cause. |
 | Capability (`CAPABILITY_DENIED`) | No | Review node capability grants. |
 | Governance finality (`CONTEMPT_VIOLATION`) | No | Comply with the ruling. |
