@@ -10,7 +10,7 @@ All runtime services expose gRPC APIs. Node-originated calls are mediated by the
 | [Archivist](#archivist-api) | Artefact content, versions, stamps, feedback | Sidecar (on behalf of nodes), Operator |
 | [Librarian](#librarian-api) | Law storage, retrieval, integration, hearing triggers | Sidecar (on behalf of nodes), Operator |
 | [Flow Monitor](#flow-monitor-api) | Pipeline adapter for metrics export (Prometheus) and audit log emission (stdout) | Subscribes to Flow Event Bus |
-| [Flow Event Bus](#flow-event-bus-api) | Durable event distribution across telemetry, audit, and friction channels | Sidecar (publish), all services (publish/subscribe) |
+| [Flow Event Bus](#flow-event-bus-api) | Durable event distribution across telemetry, audit, friction, and workitem channels | Sidecar (publish), all services (publish/subscribe) |
 | [Friction Ledger](#friction-ledger-api) | Friction aggregation, threshold evaluation, friction queries | Sidecar (on behalf of nodes), Librarian, Friction Ledger publishes to Bus |
 | [Jury](#jury-api) | Multi-agent deliberation engine | Arbiter, Tribunal (via Sidecar) |
 | [Clerk](#clerk-api) | Law drafting and codification coordination | Arbiter, Tribunal (via Sidecar) |
@@ -30,6 +30,9 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 |--------|---------|----------|-------------|
 | `SubmitResult` | `workitem_id`, `routing_instruction` | `accepted` or structured error | Submits the handler's routing instruction. The Operator validates routing guards and applies the lifecycle transition. |
 | `CreateWorkitem` | (none) | `workitem_id` or structured error | Creates a new Workitem in `Pending`. The creating node must be entry-bound. The Operator validates the bound entry contract against artefact state in the Archivist. |
+| `CreateChildWorkitem` | (none) | `child_workitem_id` or structured error | Creates a child Workitem in `Pending` with `parentWorkitemID` set to the caller's current Workitem. The Operator applies the `flow.gideas.io/parent` label. Requires `CREATE:workitem/child` capability. Identity comes from Sidecar-injected metadata — the request body is empty. |
+| `RouteChild` | `child_workitem_id`, `routing_instruction` | `accepted` or structured error | Submits a routing instruction for a child Workitem. The Operator validates that the child's `parentWorkitemID` matches the caller's current Workitem, that the child is in `Pending` state (not yet routed), and that the routing target exists. If the creating node has `childWorkitems.entryContract` configured, the Operator validates the child's artefact state against that contract before routing. |
+| `GetChildren` | (none) | `repeated ChildWorkitemStatus` | Returns the current state of all child Workitems for the caller's parent Workitem. The Operator queries by `flow.gideas.io/parent` label and includes artefact references from the Archivist. Identity comes from Sidecar-injected metadata — the request body is empty. |
 | `GetFlowTopology` | (none) | `self`, `nodes`, `exit_contract` | Returns the Flow topology visible to the calling node. Requires `READ:flow` capability. The Sidecar injects node identity; the Operator resolves the calling node's outputs, all peer nodes with capabilities, and the bound exit contract (if exit-bound). Identity comes from Sidecar-injected metadata — the request body is empty. |
 
 ### Service-Facing Methods
@@ -47,6 +50,15 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 | `type` | `string` | `route_to_output`, `route_to`, or `complete`. |
 | `target` | `string` | Output name (for `route_to_output`), node name (for `route_to`), or empty (for `complete`). |
 
+### ChildWorkitemStatus Shape
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `workitem_id` | `string` | Child Workitem identifier. |
+| `phase` | `string` | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed`. |
+| `current_assignee` | `string` | Node currently assigned to the child. Empty when `Pending`. |
+| `artefacts` | `repeated ArtefactRef` | Artefact references (`id`, `governed_artefact`) associated with the child in the Archivist. |
+
 ### Validation and Error Responses
 
 | Condition | Error | gRPC Status |
@@ -59,6 +71,12 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 | Entry contract not satisfied (CreateWorkitem) | `CONTRACT_VIOLATION` | `FAILED_PRECONDITION` |
 | Creating node not entry-bound | `ENTRY_NOT_BOUND` | `FAILED_PRECONDITION` |
 | Imported Workitem does not satisfy import node's entry contract | `IMPORT_ADMISSION_FAILED` | `FAILED_PRECONDITION` |
+| Parent `Complete()` with non-terminal children | `CHILDREN_NOT_TERMINAL` | `FAILED_PRECONDITION` |
+| Child Workitem not owned by caller's current Workitem | `CHILD_NOT_OWNED` | `FAILED_PRECONDITION` |
+| Write or re-route on a child that has already been routed | `CHILD_ALREADY_ROUTED` | `FAILED_PRECONDITION` |
+| Missing `CREATE:workitem/child` capability | `CAPABILITY_DENIED` | `PERMISSION_DENIED` |
+| Routing from outside a group to a non-entry-bound node inside the group | `GROUP_ROUTING_DENIED` | `FAILED_PRECONDITION` |
+| Root Workitem routed to group entry node without satisfying group entry contract | `GROUP_ENTRY_VIOLATION` | `FAILED_PRECONDITION` |
 
 ---
 
@@ -76,10 +94,10 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `GetArtefact` | `workitem_id`, `artefact_id` | `content`, `version_hash`, `governed_artefact` | Returns the latest version's content bytes. Sidecar verifies `SHA256(content) == version_hash`. |
+| `GetArtefact` | `workitem_id`, `artefact_id`, `target_workitem_id?` | `content`, `version_hash`, `governed_artefact` | Returns the latest version's content bytes. Sidecar verifies `SHA256(content) == version_hash`. When `target_workitem_id` is set, reads from a child Workitem — the Archivist validates that the caller's Workitem is the parent of the target and that the target is in `Completed` state. |
 | `GetArtefactVersion` | `workitem_id`, `artefact_id`, `version_hash` | `content` | Returns content bytes for a specific version by hash. |
 | `GetArtefactMetadata` | `workitem_id`, `artefact_id` | `version_history[]`, `stamps[]` | Returns version history and current passport without content bytes. |
-| `ListArtefacts` | `workitem_id` | `artefact_refs[]` | Returns all artefacts (`id`, `governed_artefact`) associated with the Workitem. The Archivist is the source of truth for artefact-to-Workitem relationships. |
+| `ListArtefacts` | `workitem_id`, `target_workitem_id?` | `artefact_refs[]` | Returns all artefacts (`id`, `governed_artefact`) associated with the Workitem. The Archivist is the source of truth for artefact-to-Workitem relationships. When `target_workitem_id` is set, lists artefacts from a child Workitem — same parent-child and completion validation as `GetArtefact`. |
 | `StoreArtefact` | `workitem_id`, `artefact_id`, `governed_artefact`, `content`, `content_hash`\* | `version_hash`, `is_new_version` | Stores content bytes and creates a version record. Returns the confirmed version hash and whether a new version was created. \*`content_hash` is Sidecar-computed, not node-supplied. |
 
 ### Stamp Methods
@@ -176,7 +194,7 @@ The Flow Monitor is a stateless pipeline adapter. It does not persist events, se
 
 ## Flow Event Bus API
 
-The Flow Event Bus distributes runtime events across three channels. Producers publish events;
+The Flow Event Bus distributes runtime events across four channels. Producers publish events;
 consumers subscribe to filtered streams. All events are persisted to a SQLite append-only log
 before fan-out.
 
@@ -184,7 +202,7 @@ before fan-out.
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `Publish` | `channel`, `event` | `acknowledged`, `sequence` | Publishes an event to the specified channel (`TELEMETRY`, `AUDIT`, or `FRICTION`). Write-ahead — the producer receives acknowledgement with the assigned sequence number after the event is persisted to the log. |
+| `Publish` | `channel`, `event` | `acknowledged`, `sequence` | Publishes an event to the specified channel (`TELEMETRY`, `AUDIT`, `FRICTION`, or `WORKITEM`). Write-ahead — the producer receives acknowledgement with the assigned sequence number after the event is persisted to the log. |
 
 ### Subscribe Methods
 
@@ -198,11 +216,12 @@ before fan-out.
 |-------|------|-------------|
 | `event_id` | `string` | Unique event identifier. |
 | `sequence` | `uint64` | Monotonically increasing sequence number within the channel. Used for replay positioning. |
-| `channel` | `EventChannel` | `TELEMETRY`, `AUDIT`, or `FRICTION`. |
+| `channel` | `EventChannel` | `TELEMETRY`, `AUDIT`, `FRICTION`, or `WORKITEM`. |
 | `event_type` | `string` | Event type identifier (e.g. `friction`, `foundry.cost.llm`, `audit.artefact.stamped`, `friction.threshold_crossed`). |
 | `flow_id` | `string` | Flow identifier. |
 | `node_id` | `string` | Emitting node (empty for service-originated events). |
 | `workitem_id` | `string` | Associated Workitem (empty for law-lifecycle audit events). |
+| `parent_workitem_id` | `string` | Parent Workitem ID if the associated Workitem is a child (empty for root Workitems and non-Workitem events). Present on `WORKITEM` channel events for filtering. |
 | `timestamp` | `Timestamp` | Event timestamp. |
 | `trace_id` | `string` | Distributed trace context identifier. Injected by the Sidecar from the active trace. Empty if tracing is not configured. |
 | `attributes` | `map<string, string>` | Event-specific key-value attributes. For friction events: `law_ids` (comma-separated), `magnitude`. For audit events: `action`, `resource_id`. For threshold-crossing events: `law_id`, `tier`, `accumulated_friction`, `threshold`. |
@@ -214,6 +233,7 @@ before fan-out.
 |-------|------|-------------|
 | `event_type` | `string` | Optional: filter to specific event type. |
 | `law_id` | `string` | Optional: filter to events attributed to a specific law. For events carrying a comma-separated `law_ids` attribute (e.g. friction events), the filter matches if the filter value appears as an exact element after splitting on commas — not a substring match. |
+| `parent_workitem_id` | `string` | Optional: filter to events for child Workitems of a specific parent. Used with the `WORKITEM` channel to observe child lifecycle events during fan-out/fan-in processing. |
 
 ### Flow Event Bus Error Responses
 

@@ -373,7 +373,7 @@ These phases build on the three primitives above and are out of scope for this i
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 1: Spec Updates | Not Started | |
+| Phase 1: Spec Updates | Complete | All 8 spec files updated, lint clean |
 | Phase 2: Proto Changes | Not Started | |
 | Phase 3: CRD Type Changes | Not Started | |
 | Phase 4: Operator -- Child Workitem RPCs | Not Started | |

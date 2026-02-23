@@ -48,6 +48,77 @@ Entry contract validation checks artefact state in the Archivist against the nod
 
 Created Workitems are independent lifecycle objects. They are not child Workitems, sub-tasks, or continuations of the creating handler's assignment. The Operator schedules them through normal assignment logic.
 
+## Child Workitem SDK Surface
+
+The child Workitem SDK surface provides parallel work decomposition within a single handler assignment. A node can create child Workitems, populate them with artefacts, route them for independent processing, and collect results when they complete. This enables fan-out/fan-in patterns without requiring intermediate nodes or custom orchestration.
+
+Child Workitem operations require the `CREATE:workitem/child` capability on the [FoundryNode](../05-reference/crds.md#foundrynode) CRD.
+
+### Creating Child Workitems
+
+| Operation | Parameters | Returns |
+|-----------|-----------|---------|
+| `CreateChildWorkitem()` | No parameters. | `(*ChildWorkitem, error)` |
+
+Creates a new child Workitem in `Pending` state with `parentWorkitemID` set to the caller's current Workitem. Returns a `ChildWorkitem` handle scoped to the new child.
+
+The child Workitem is an internal implementation detail of the parent's processing. It does not participate in Flow-level entry or exit contracts.
+
+### ChildWorkitem Handle
+
+`CreateChildWorkitem()` returns a `ChildWorkitem` handle — a scoped client with methods that operate on the child Workitem's artefacts and lifecycle. The handle targets the child's Workitem ID for all operations.
+
+| Method | Parameters | Returns | Description |
+|--------|-----------|---------|-------------|
+| `ID()` | None | `string` | Returns the child Workitem identifier. |
+| `StoreArtefact(ctx, artefactID, governedArtefact, content)` | `context`, artefact ID, governed artefact name, content bytes | `error` | Stores artefact content on the child Workitem. Only valid before the child has been routed. |
+| `StampArtefact(ctx, artefactID, stampName)` | `context`, artefact ID, stamp name | `error` | Applies a stamp to a child artefact. Requires the appropriate `STAMP:artefact` capability. Only valid before the child has been routed. |
+| `RouteTo(ctx, targetNode)` | `context`, target node name | `(bool, error)` | Submits a `route_to` routing instruction for the child. The child transitions to normal assignment processing. Returns whether the routing was accepted. |
+| `RouteToOutput(ctx, outputName)` | `context`, output name | `(bool, error)` | Submits a `route_to_output` routing instruction for the child. Returns whether the routing was accepted. |
+| `Complete(ctx)` | `context` | `(bool, error)` | Simple completion — no exit contract validation. Returns whether completion was accepted. |
+
+Once a child has been routed, the creating node can no longer write artefacts to it or re-route it. Attempts to do so return `CHILD_ALREADY_ROUTED`.
+
+### Querying Child State
+
+| Operation | Parameters | Returns | Description |
+|-----------|-----------|---------|-------------|
+| `GetChildren(ctx)` | `context` | `([]ChildWorkitemStatus, error)` | Returns the current state of all child Workitems for the caller's parent Workitem. |
+| `GetChildArtefact(ctx, childWorkitemID, artefactID)` | `context`, child Workitem ID, artefact ID | `(*GetArtefactResponse, error)` | Reads an artefact from a completed child Workitem. The target child must be in `Completed` state and must be a child of the caller's current Workitem. |
+| `ListChildArtefacts(ctx, childWorkitemID)` | `context`, child Workitem ID | `([]*ArtefactRef, error)` | Lists all artefacts associated with a child Workitem. Same parent-child and completion-state validation as `GetChildArtefact`. |
+
+### ChildWorkitemStatus
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `WorkitemID` | `string` | Child Workitem identifier. |
+| `Phase` | `string` | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed`. |
+| `CurrentAssignee` | `string` | Node currently assigned to the child. Empty when `Pending`. |
+| `Artefacts` | `[]ArtefactRef` | Artefact references associated with the child in the Archivist. |
+
+### Watching Child Lifecycle Events
+
+| Operation | Parameters | Returns | Description |
+|-----------|-----------|---------|-------------|
+| `WatchChildren(ctx)` | `context` | `(<-chan ChildLifecycleEvent, error)` | Opens a streaming subscription to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) `WORKITEM` channel, filtered by `parent_workitem_id` matching the caller's current Workitem. Returns a channel of lifecycle events as children transition through phases. |
+
+### ChildLifecycleEvent
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `WorkitemID` | `string` | Child Workitem identifier. |
+| `Phase` | `string` | The phase the child transitioned to. |
+| `NodeID` | `string` | The node involved in the transition (assignee for `Running`, empty for terminal states). |
+
+### Fan-Out/Fan-In Pattern
+
+The typical usage pattern for child Workitems:
+
+1. **Fan-out**: Create multiple children via `CreateChildWorkitem()`, populate each with input artefacts via the handle's `StoreArtefact()`, then route each for processing.
+2. **Wait**: Use `WatchChildren()` to stream lifecycle events, or poll with `GetChildren()`, until all children reach terminal state.
+3. **Fan-in**: Read artefacts from completed children via `GetChildArtefact()` and `ListChildArtefacts()`. Failed children are skipped or handled according to node business logic.
+4. **Complete**: After collecting results, the parent node continues its own processing — storing aggregated artefacts, routing, or completing.
+
 ## Routing and Outcome Submission
 
 Routing is the handler's final action — the single [Result](./01-sdk-core.md#routing-instruction-model) returned to the platform. The three routing instructions (`RouteToOutput`, `RouteTo`, `Complete`) are defined in [SDK Core](./01-sdk-core.md#routing-instruction-model).
@@ -94,3 +165,7 @@ Export is triggered by exit completion. When a handler calls `Complete()` on an 
 6. The [Operator](../02-flow/01-operator.md) owns lifecycle transitions, routing validation, and contract enforcement.
 7. Thrash guard state is hidden from nodes.
 8. Cross-flow import and export are transparent to node handlers.
+9. Child Workitem creation requires `CREATE:workitem/child` capability.
+10. The `ChildWorkitem` handle is the sole interface for mutating a child before routing. Once routed, the child is immutable from the parent's perspective.
+11. Cross-Workitem artefact reads are read-only, parent-scoped, and completion-gated.
+12. `WatchChildren()` is a streaming subscription to the Flow Event Bus `WORKITEM` channel filtered by `parent_workitem_id`.

@@ -33,7 +33,7 @@ flowchart TB
 FoundryFlow defines the executable shape of a Flow:
 
 - Entry behaviour: named entry contracts and required entry conditions.
-- Topology: optional `importNode` and routing validity constraints.
+- Topology: optional `importNode`, NodeGroups, and routing validity constraints.
 - Completion behaviour: named exit contracts and export implications.
 - Governance policy limits: thresholds and timers used by runtime guards.
 - Cross-flow policy: trust topology and naturalisation requirements.
@@ -71,6 +71,51 @@ flowchart TD
     V2 -->|no| E2["Reject instruction<br/>routing error"]
 
     C --> TC["Validate bound<br/>exit contract"]
+```
+
+## NodeGroups
+
+NodeGroups define sub-topology boundaries within a Flow. A NodeGroup is a named collection of nodes with optional entry and exit contracts that govern work crossing the group boundary. NodeGroups are defined inline on the FoundryFlow CRD — they are a topology concern, not a node concern. Nodes do not need to know which group they belong to.
+
+### Definition
+
+Each NodeGroup is a named entry in the FoundryFlow's `nodeGroups` map. A NodeGroup declares:
+
+- **Nodes** — the set of FoundryNode names that belong to this group. A node can belong to at most one group.
+- **Entry contracts** — optional contracts validated when a root Workitem is routed to an entry-bound node within the group from outside the group. Uses the same [Contract shape](../05-reference/crds.md#contract-shape) as Flow-level contracts.
+- **Exit contracts** — optional contracts validated when a Workitem leaves the group via an exit-bound node within the group. Uses the same [Contract shape](../05-reference/crds.md#contract-shape) as Flow-level contracts.
+
+### Routing Isolation
+
+NodeGroups enforce routing boundaries:
+
+- **Internal routing** — nodes within a group can route to other nodes in the same group without restriction.
+- **Entry bridging** — a root Workitem enters a NodeGroup by routing to a specific entry-bound node within the group. The Operator validates the group's entry contract against artefact state before admitting the Workitem.
+- **Exit bridging** — a Workitem exits a NodeGroup when an exit-bound node within the group completes its assignment. The Operator validates the group's exit contract.
+- **Routing denial** — routing from outside a group to a non-entry-bound node inside the group is rejected with `GROUP_ROUTING_DENIED`.
+
+Child Workitems routed into a group are not subject to the group's entry contract — group contracts apply to root Workitem routing only.
+
+### Reconcile-Time Validation
+
+The Operator validates NodeGroup configuration during reconciliation:
+
+- Every node listed in a group must exist as a FoundryNode.
+- A node can belong to at most one group.
+- Routing outputs from nodes inside a group must target nodes in the same group (except for entry/exit bridging points).
+- Group entry and exit contract stamp references must resolve against [GovernedArtefact](../05-reference/crds.md#governedartefact) stamp vocabularies.
+
+```mermaid
+flowchart TD
+    subgraph flow["FoundryFlow"]
+        N1["Node A"] --> GE["Group Entry Node"]
+        subgraph group["NodeGroup: codification"]
+            GE --> N2["Node B"]
+            N2 --> N3["Node C"]
+            N3 --> GX["Group Exit Node"]
+        end
+        GX --> N4["Node D"]
+    end
 ```
 
 ## Exit Node Semantics
@@ -166,6 +211,17 @@ Gate nodes use this information to build stamp-to-provider mappings dynamically:
 
 The `NODE_ORDER` environment variable (comma-separated node names, set via FoundryNode CRD container env) controls the order in which the gate evaluates stamp phases. This gives the Flow Architect explicit control over evaluation order without coupling gate logic to specific topologies.
 
+## Child Workitem Contracts
+
+FoundryNode CRDs can optionally declare child Workitem contracts via the `childWorkitems` configuration section. These contracts are developer-side validation aids — they do not affect the platform's child Workitem lifecycle (which uses simple `Complete()` without exit contract validation).
+
+- **Entry contract** — if set, the Operator validates the child Workitem's artefact state against this contract when the child is routed (via `RouteChild`). This ensures the creating node has populated the child with the expected artefacts before sending it for processing.
+- **Exit contract** — if set, the Operator validates the child Workitem's artefact state when the child calls `Complete()`. This elevates the child's simple completion to a contract-validated completion for nodes that need structured output guarantees.
+
+Stamp references in child contracts must resolve against [GovernedArtefact](../05-reference/crds.md#governedartefact) stamp vocabularies, validated at reconcile time.
+
+Child contracts are configured on the FoundryNode that creates and routes child Workitems, not on the nodes that process them.
+
 ## Reference Arrangement Defaults and Custom Topology
 
 The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement and standard recommendation for governed workflows. [Flow Architects](../05-reference/glossary.md#flow-architect) can adapt topology while preserving platform invariants.
@@ -222,7 +278,7 @@ Configuration exposes policy limits that bound runtime behaviour:
 
 ### Flow Event Bus Retention
 
-The Flow Event Bus maintains per-channel configurable retention limits. Events within the retention window are available for subscriber replay; events beyond the window are evicted. Each channel supports both duration-based and size-based retention limits. When both are specified, the Event Bus evicts when either limit is exceeded (whichever triggers first). Duration limits use Go `time.Duration` format. Size limits use byte-count strings with unit suffix (e.g. `100MB`, `1GB`).
+The Flow Event Bus maintains per-channel configurable retention limits. Events within the retention window are available for subscriber replay; events beyond the window are evicted. Each channel supports both duration-based and size-based retention limits. When both are specified, the Event Bus evicts when either limit is exceeded (whichever triggers first). Duration limits use Go `time.Duration` format. Size limits use byte-count strings with unit suffix (e.g. `100MB`, `1GB`). The workitem channel uses the same retention model as other channels.
 
 ```yaml
 eventBus:
@@ -233,6 +289,8 @@ eventBus:
     auditSize: "1GB"
     frictionDuration: "72h"
     frictionSize: "100MB"
+    workitemDuration: "24h"
+    workitemSize: "100MB"
 ```
 
 Audit channels will typically have longer retention than telemetry channels. The Bus is a reliable delivery layer, not a long-term storage layer — long-term retention is downstream (Prometheus for metrics, log pipeline for audit records). See [CRD Reference](../05-reference/crds.md#event-bus-configuration) for the full field specification.
@@ -248,6 +306,9 @@ Configuration is admitted only when invariants hold:
 - Entry and exit bindings reference existing entry/exit contracts.
 - Capability grants are syntactically valid and enforceable.
 - Cross-flow trust declarations are structurally complete for the configured topology.
+- NodeGroup nodes exist as FoundryNodes and each node belongs to at most one group.
+- NodeGroup entry and exit contract stamp references resolve against GovernedArtefact stamp vocabularies.
+- Child Workitem contract stamp references on FoundryNodes resolve against GovernedArtefact stamp vocabularies.
 
 The runtime rejects invalid configuration instead of applying partial behaviour.
 
@@ -274,6 +335,9 @@ All Flow configurations must preserve these invariants:
 9. Workitem admission is constrained by bound entry-contract governed artefact name entries.
 10. Imported Workitems begin in `Pending` and are first-scheduled to configured `importNode` when capacity allows.
 11. Support Service capabilities are node-granted and Sidecar-mediated.
+12. NodeGroups enforce routing isolation — routing from outside a group to a non-entry-bound node inside the group is rejected.
+13. A node can belong to at most one NodeGroup.
+14. Child Workitem contracts on FoundryNode are optional developer-side validation aids.
 
 These semantics are consumed by [Flow Operator](./01-operator.md), [Workitems](./02-workitem.md), [External Nodes](./03-nodes-external.md), [System Services](./04-system-services.md), [Cross-Flow Collaboration](./06-cross-flow.md), and [Operations](./07-operations.md).
 
