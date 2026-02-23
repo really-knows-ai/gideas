@@ -8,8 +8,8 @@ import "flow/v1/common.proto";
 import "flow/v1/jury.proto";
 
 // ClerkService drafts law representations from jury verdicts.
-// Initially produces text/markdown prose only; the codification_failures
-// field is present for future CodificationService integration.
+// Produces text/markdown prose and coordinates codification via fan-out
+// to parallel Codification nodes using the Workitem model.
 // See: specs/05-reference/grpc-api.md#clerk-api
 service ClerkService {
   // Drafts a law from a jury verdict and persists it via the Librarian.
@@ -44,7 +44,8 @@ message DraftLawResponse {
   // Drafted representations (initially text/markdown only).
   repeated Representation representations = 3;
 
-  // Codification failures from CodificationService dispatch.
-  // Always empty initially; ready for future integration.
-  repeated string codification_failures = 4;
+  // Codification declines from CodificationService dispatch.
+  // Names of codification services that declined to encode the law's goal
+  // (e.g. goal not expressible in the target formalism).
+  repeated string codification_declines = 4;
 }

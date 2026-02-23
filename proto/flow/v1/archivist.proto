@@ -109,6 +109,10 @@ message QueryArtefactStateResponse {
 message GetArtefactRequest {
   string workitem_id = 1;
   string artefact_id = 2;
+  // Optional: read from a child Workitem. When set, the Archivist validates
+  // that the caller's Workitem is the parent of the target and that the
+  // target is in Completed state.
+  string target_workitem_id = 3;
 }
 
 message GetArtefactResponse {
@@ -140,6 +144,10 @@ message GetArtefactMetadataResponse {
 
 message ListArtefactsRequest {
   string workitem_id = 1;
+  // Optional: list artefacts from a child Workitem. When set, the Archivist
+  // validates that the caller's Workitem is the parent of the target and
+  // that the target is in Completed state.
+  string target_workitem_id = 2;
 }
 
 message ListArtefactsResponse {

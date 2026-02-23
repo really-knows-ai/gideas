@@ -398,7 +398,7 @@ The [Clerk](../02-flow/04-system-services.md#clerk) is a core service that handl
 | `law_id` | `string` | Identifier of the persisted law. |
 | `version_hash` | `string` | Content hash of the new law version. |
 | `representations` | `[]Representation` | The representations successfully assembled (prose + any codified). |
-| `codification_failures` | `[]string` | Codification Service names that failed or were unavailable (logged, not blocking). |
+| `codification_declines` | `[]string` | Codification Service names that declined to encode the law's goal (logged, not blocking). |
 
 ### Clerk Error Responses
 

@@ -26,6 +26,26 @@ service OperatorService {
   // The Operator validates the bound entry contract against artefact state.
   rpc CreateWorkitem(CreateWorkitemRequest) returns (CreateWorkitemResponse);
 
+  // Creates a child Workitem in Pending with parentWorkitemID set to the
+  // caller's current Workitem. The Operator applies the flow.gideas.io/parent
+  // label. Requires CREATE:workitem/child capability. Identity comes from
+  // Sidecar-injected metadata — the request body is empty.
+  rpc CreateChildWorkitem(CreateChildWorkitemRequest) returns (CreateChildWorkitemResponse);
+
+  // Submits a routing instruction for a child Workitem. The Operator validates
+  // that the child's parentWorkitemID matches the caller's current Workitem,
+  // that the child is in Pending state (not yet routed), and that the routing
+  // target exists. If the creating node has childWorkitems.entryContract
+  // configured, the Operator validates the child's artefact state against
+  // that contract before routing.
+  rpc RouteChild(RouteChildRequest) returns (RouteChildResponse);
+
+  // Returns the current state of all child Workitems for the caller's parent
+  // Workitem. The Operator queries by flow.gideas.io/parent label and includes
+  // artefact references from the Archivist. Identity comes from Sidecar-injected
+  // metadata — the request body is empty.
+  rpc GetChildren(GetChildrenRequest) returns (GetChildrenResponse);
+
   // --- Service-Facing Methods ---
 
   // Creates a review hearing Workitem for Tribunal processing. Called by the
@@ -84,6 +104,41 @@ message ImportWorkitemRequest {
 
 message ImportWorkitemResponse {
   string workitem_id = 1;
+}
+
+// Empty — identity comes from Sidecar-injected metadata.
+message CreateChildWorkitemRequest {}
+
+message CreateChildWorkitemResponse {
+  string child_workitem_id = 1;
+}
+
+message RouteChildRequest {
+  string child_workitem_id = 1;
+  RoutingInstruction routing_instruction = 2;
+}
+
+message RouteChildResponse {
+  bool accepted = 1;
+}
+
+// Empty — identity comes from Sidecar-injected metadata.
+message GetChildrenRequest {}
+
+message GetChildrenResponse {
+  repeated ChildWorkitemStatus children = 1;
+}
+
+// Status snapshot of a child Workitem.
+message ChildWorkitemStatus {
+  // Child Workitem identifier.
+  string workitem_id = 1;
+  // Current lifecycle phase: Pending, Running, Completed, Failed.
+  string phase = 2;
+  // Node currently assigned to the child. Empty when Pending.
+  string current_assignee = 3;
+  // Artefact references associated with the child in the Archivist.
+  repeated ArtefactRef artefacts = 4;
 }
 
 // Empty — identity comes from Sidecar-injected metadata.
