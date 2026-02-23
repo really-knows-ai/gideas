@@ -1,0 +1,89 @@
+# Flow Event Bus Deployment for Foundry Flow
+#
+# The Flow Event Bus is a durable pub/sub bus for all Flow runtime events.
+# Events are persisted to SQLite before fan-out. Retention is per-channel
+# and operator-configurable.
+#
+# It uses a SQLite database persisted on a PVC at /data/eventbus.db.
+# The service listens on port 50056 and is accessed by Sidecars, the
+# Friction Ledger, and the Flow Monitor via the flow-eventbus Service.
+#
+# Prerequisites:
+#   - Build eventbus image: docker build -t flow-eventbus:latest -f eventbus/Dockerfile .
+#
+# For Kind cluster:
+#   kind load docker-image flow-eventbus:latest --name <cluster>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flow-eventbus-data
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-eventbus
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: control-plane
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow-eventbus
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-eventbus
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flow-eventbus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flow-eventbus
+    spec:
+      containers:
+        - name: eventbus
+          image: flow-eventbus:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50056
+              protocol: TCP
+          env:
+            - name: EVENT_BUS_PORT
+              value: "50056"
+            - name: EVENT_BUS_DB_PATH
+              value: "/data/eventbus.db"
+          volumeMounts:
+            - name: eventbus-data
+              mountPath: /data
+      volumes:
+        - name: eventbus-data
+          persistentVolumeClaim:
+            claimName: flow-eventbus-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flow-eventbus
+  namespace: default
+  labels:
+    app.kubernetes.io/name: flow-eventbus
+    app.kubernetes.io/part-of: foundry-flow
+spec:
+  selector:
+    app.kubernetes.io/name: flow-eventbus
+  ports:
+    - name: grpc
+      port: 50056
+      targetPort: 50056
+      protocol: TCP
+  type: ClusterIP

@@ -4,7 +4,7 @@
 # service that empanels diverse AI jurors to reach consensus on governed
 # questions.
 #
-# It listens on port 50057 and is accessed by Sidecars via the
+# It listens on port 50059 and is accessed by Sidecars via the
 # flow-jury Service.
 #
 # Prerequisites:
@@ -38,11 +38,11 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc
-              containerPort: 50057
+              containerPort: 50059
               protocol: TCP
           env:
             - name: JURY_PORT
-              value: "50057"
+              value: "50059"
             - name: JURY_MODEL
               value: "kimi-k2.5:cloud"
 ---
@@ -59,7 +59,7 @@ spec:
     app.kubernetes.io/name: flow-jury
   ports:
     - name: grpc
-      port: 50057
-      targetPort: 50057
+      port: 50059
+      targetPort: 50059
       protocol: TCP
   type: ClusterIP

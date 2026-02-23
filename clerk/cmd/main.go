@@ -2,14 +2,14 @@
 // gRPC service that converts jury verdicts into law representations and
 // persists them via the Librarian.
 //
-// It listens on port 50058 (configurable via CLERK_PORT) and implements the
+// It listens on port 50060 (configurable via CLERK_PORT) and implements the
 // ClerkService.DraftLaw RPC. The Clerk drafts text/markdown prose from verdict
 // justifications and delegates persistence to the Librarian.
 //
 // Usage:
 //
 //	go run ./clerk/cmd/main.go
-//	CLERK_PORT=50058 LIBRARIAN_ADDRESS=flow-librarian:50056 go run ./clerk/cmd/main.go
+//	CLERK_PORT=50060 LIBRARIAN_ADDRESS=flow-librarian:50058 go run ./clerk/cmd/main.go
 package main
 
 import (
@@ -28,8 +28,8 @@ import (
 )
 
 const (
-	defaultPort             = "50058"
-	defaultLibrarianAddress = "flow-librarian:50056"
+	defaultPort             = "50060"
+	defaultLibrarianAddress = "flow-librarian:50058"
 
 	envPort             = "CLERK_PORT"
 	envLibrarianAddress = "LIBRARIAN_ADDRESS"

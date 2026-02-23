@@ -8,7 +8,7 @@
 // Usage:
 //
 //	go run ./librarian/cmd/main.go
-//	LIBRARIAN_PORT=50056 LIBRARIAN_DB_PATH=/data/librarian.db go run ./librarian/cmd/main.go
+//	LIBRARIAN_PORT=50058 LIBRARIAN_DB_PATH=/data/librarian.db go run ./librarian/cmd/main.go
 package main
 
 import (
@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	defaultPort                = "50056"
+	defaultPort                = "50058"
 	defaultDBPath              = "/data/librarian.db"
 	defaultOllamaURL           = "http://localhost:11434"
 	defaultOllamaModel         = "qwen3-embedding:4b"

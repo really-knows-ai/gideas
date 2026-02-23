@@ -18,10 +18,10 @@ spec:
         - name: librarian
           image: librarian:latest
           ports:
-            - containerPort: 50056
+            - containerPort: 50058
           env:
             - name: LIBRARIAN_PORT
-              value: "50056"
+              value: "50058"
             - name: LIBRARIAN_DB_PATH
               value: /data/librarian.db
             - name: OLLAMA_URL
@@ -59,8 +59,8 @@ spec:
   selector:
     app: librarian
   ports:
-    - port: 50056
-      targetPort: 50056
+    - port: 50058
+      targetPort: 50058
       protocol: TCP
 ---
 apiVersion: v1

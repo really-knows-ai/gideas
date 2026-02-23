@@ -7,7 +7,7 @@
 # The sidecar connects to:
 #   - Operator at OPERATOR_ADDRESS (default: flow-operator:50052)
 #   - Archivist at ARCHIVIST_ADDRESS (default: flow-archivist:50054)
-#   - Librarian at LIBRARIAN_ADDRESS (default: flow-librarian:50056)
+#   - Librarian at LIBRARIAN_ADDRESS (default: flow-librarian:50058)
 #   - Monitor at MONITOR_ADDRESS (default: flow-monitor:50055)
 #
 # Prerequisites:
@@ -64,7 +64,7 @@ spec:
             - name: ARCHIVIST_ADDRESS
               value: "flow-archivist:50054"
             - name: LIBRARIAN_ADDRESS
-              value: "flow-librarian:50056"
+              value: "flow-librarian:50058"
             - name: MONITOR_ADDRESS
               value: "flow-monitor:50055"
       volumes:
@@ -212,7 +212,7 @@ spec:
             - name: ARCHIVIST_ADDRESS
               value: "flow-archivist:50054"
             - name: LIBRARIAN_ADDRESS
-              value: "flow-librarian:50056"
+              value: "flow-librarian:50058"
             - name: MONITOR_ADDRESS
               value: "flow-monitor:50055"
       volumes:
@@ -268,7 +268,7 @@ spec:
             - name: ARCHIVIST_ADDRESS
               value: "flow-archivist:50054"
             - name: LIBRARIAN_ADDRESS
-              value: "flow-librarian:50056"
+              value: "flow-librarian:50058"
             - name: MONITOR_ADDRESS
               value: "flow-monitor:50055"
       volumes:

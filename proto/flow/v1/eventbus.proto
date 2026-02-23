@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "google/protobuf/timestamp.proto";
+
+// --- Enums ---
+
+// Event channels for the Flow Event Bus.
+// See: specs/02-flow/04-system-services.md
+enum EventChannel {
+  EVENT_CHANNEL_UNSPECIFIED = 0;
+  EVENT_CHANNEL_TELEMETRY = 1;
+  EVENT_CHANNEL_AUDIT = 2;
+  EVENT_CHANNEL_FRICTION = 3;
+}
+
+// --- Messages ---
+
+// A durable event published to the Flow Event Bus.
+// See: specs/05-reference/grpc-api.md#flowevent
+message FlowEvent {
+  // Unique event identifier (assigned by publisher).
+  string event_id = 1;
+
+  // Monotonic per-channel sequence number (assigned by the Event Bus).
+  uint64 sequence = 2;
+
+  // Channel this event belongs to.
+  EventChannel channel = 3;
+
+  // Discriminator for the event payload (e.g. "friction",
+  // "friction.threshold_crossed", "audit.artefact.version_created").
+  string event_type = 4;
+
+  // Flow identity fields.
+  string flow_id = 5;
+  string node_id = 6;
+  string workitem_id = 7;
+
+  // When the event was created.
+  google.protobuf.Timestamp timestamp = 8;
+
+  // Distributed trace identifier for correlation.
+  string trace_id = 9;
+
+  // Typed key-value metadata. Multi-valued fields use comma-separated
+  // strings (e.g. law_ids = "law-1,law-2", magnitude = "3.5").
+  map<string, string> attributes = 10;
+
+  // Optional binary payload (max 64 KB).
+  bytes payload = 11;
+}
+
+// --- Request / Response ---
+
+// Publish a single event to the Event Bus.
+message PublishRequest {
+  EventChannel channel = 1;
+  FlowEvent event = 2;
+}
+
+// Acknowledgement with the assigned sequence number.
+message PublishResponse {
+  bool acknowledged = 1;
+  uint64 sequence = 2;
+}
+
+// Subscribe to a channel, optionally replaying from a past sequence.
+message SubscribeRequest {
+  // Channel to subscribe to.
+  EventChannel channel = 1;
+
+  // Optional filter narrowing the event stream.
+  SubscribeFilter filter = 2;
+
+  // Resume from this sequence (0 = live-only, no replay).
+  uint64 last_sequence = 3;
+}
+
+// Narrow the events delivered to a subscriber.
+message SubscribeFilter {
+  // Match events with this event_type (empty = all types).
+  string event_type = 1;
+
+  // Match events whose comma-separated law_ids attribute contains
+  // this value as an exact element.
+  string law_id = 2;
+}
+
+// --- Service ---
+
+// FlowEventBusService is the durable pub/sub bus for all Flow runtime
+// events. Events are persisted to SQLite before fan-out. Retention is
+// per-channel and operator-configurable.
+// See: specs/02-flow/04-system-services.md (Service Invariant #13)
+service FlowEventBusService {
+  // Publish persists an event and fans it out to active subscribers.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+
+  // Subscribe opens a server-side stream. If last_sequence > 0 the Bus
+  // replays stored events first, then switches to live delivery.
+  rpc Subscribe(SubscribeRequest) returns (stream FlowEvent);
+}

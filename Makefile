@@ -19,7 +19,7 @@ help: ## Display this help.
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: test-sdk test-sidecar test-archivist test-monitor test-librarian test-jury test-clerk ## Run all unit tests.
+test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-librarian test-jury test-clerk ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -36,6 +36,10 @@ test-archivist: ## Run Archivist unit tests.
 .PHONY: test-monitor
 test-monitor: ## Run Monitor unit tests.
 	CGO_ENABLED=1 go test -v ./monitor/...
+
+.PHONY: test-eventbus
+test-eventbus: ## Run Event Bus unit tests.
+	CGO_ENABLED=1 go test -v ./eventbus/...
 
 .PHONY: test-librarian
 test-librarian: ## Run Librarian unit tests.
@@ -61,7 +65,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-archivist build-monitor build-librarian build-jury build-clerk ## Build all binaries.
+build: build-sidecar build-null-node build-archivist build-monitor build-eventbus build-librarian build-jury build-clerk ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -78,6 +82,10 @@ build-archivist: ## Build the Archivist binary.
 .PHONY: build-monitor
 build-monitor: ## Build the Monitor binary.
 	CGO_ENABLED=1 go build -o bin/monitor ./monitor/cmd
+
+.PHONY: build-eventbus
+build-eventbus: ## Build the Event Bus binary.
+	CGO_ENABLED=1 go build -o bin/eventbus ./eventbus/cmd
 
 .PHONY: build-librarian
 build-librarian: ## Build the Librarian binary.
@@ -125,11 +133,11 @@ vet: ## Run go vet across the workspace.
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
-	"$(GOLANGCI_LINT)" run ./sdk/go/... ./sidecar/... ./archivist/... ./monitor/... ./librarian/... ./jury/... ./clerk/... ./nodes/... ./tools/haiku-watch/...
+	"$(GOLANGCI_LINT)" run ./sdk/go/... ./sidecar/... ./archivist/... ./monitor/... ./eventbus/... ./librarian/... ./jury/... ./clerk/... ./nodes/... ./tools/haiku-watch/...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint with auto-fix (excludes operator).
-	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./sidecar/... ./archivist/... ./monitor/... ./librarian/... ./jury/... ./clerk/... ./nodes/... ./tools/haiku-watch/...
+	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./sidecar/... ./archivist/... ./monitor/... ./eventbus/... ./librarian/... ./jury/... ./clerk/... ./nodes/... ./tools/haiku-watch/...
 
 .PHONY: lint-operator
 lint-operator: ## Run golangci-lint for the operator (delegates to operator/Makefile).
@@ -162,7 +170,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go sidecar archivist monitor librarian jury clerk nodes operator; do \
+	@for mod in gen sdk/go sidecar archivist monitor eventbus librarian jury clerk nodes operator; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done
