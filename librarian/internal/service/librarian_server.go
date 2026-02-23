@@ -7,6 +7,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/gideas/flow/librarian/internal/store/sqlite"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -30,6 +33,13 @@ type ConflictCandidate struct {
 	Similarity float64
 }
 
+// AuditPublisher abstracts audit event publication to the Flow Event Bus.
+// Satisfied by flowv1.FlowEventBusServiceClient. A nil publisher silently
+// disables audit publishing.
+type AuditPublisher interface {
+	Publish(ctx context.Context, req *flowv1.PublishRequest, opts ...grpc.CallOption) (*flowv1.PublishResponse, error)
+}
+
 // LibrarianServer implements flowv1.LibrarianServiceServer backed by a
 // SQLite store and optional embedder for conflict detection.
 type LibrarianServer struct {
@@ -38,6 +48,7 @@ type LibrarianServer struct {
 	embedder            embed.Embedder // nil-safe: conflict detection degrades gracefully
 	newID               IDGenerator
 	similarityThreshold float64
+	auditor             AuditPublisher // nil-safe: audit publishing degrades gracefully
 }
 
 // NewLibrarianServer returns a LibrarianServer backed by the given store.
@@ -46,16 +57,61 @@ type LibrarianServer struct {
 func NewLibrarianServer(
 	store *sqlite.Store, embedder embed.Embedder,
 	idGen IDGenerator, similarityThreshold float64,
+	opts ...LibrarianOption,
 ) *LibrarianServer {
 	if similarityThreshold <= 0 {
 		similarityThreshold = 0.85
 	}
-	return &LibrarianServer{
+	srv := &LibrarianServer{
 		store:               store,
 		embedder:            embedder,
 		newID:               idGen,
 		similarityThreshold: similarityThreshold,
 	}
+	for _, o := range opts {
+		o(srv)
+	}
+	return srv
+}
+
+// LibrarianOption configures a LibrarianServer.
+type LibrarianOption func(*LibrarianServer)
+
+// WithAuditPublisher sets the Event Bus client for audit event publishing.
+func WithAuditPublisher(pub AuditPublisher) LibrarianOption {
+	return func(s *LibrarianServer) { s.auditor = pub }
+}
+
+// publishAudit publishes an audit event to the Event Bus. Errors are logged
+// but never propagated — audit publishing must not fail the primary operation.
+func (s *LibrarianServer) publishAudit(ctx context.Context, eventType string, attrs map[string]string) {
+	if s.auditor == nil {
+		return
+	}
+	_, err := s.auditor.Publish(ctx, &flowv1.PublishRequest{
+		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		Event: &flowv1.FlowEvent{
+			EventId:    newLibAuditID(),
+			EventType:  eventType,
+			Timestamp:  timestamppb.Now(),
+			Attributes: attrs,
+		},
+	})
+	if err != nil {
+		slog.Warn("Audit publish failed",
+			"event_type", eventType,
+			"error", err,
+		)
+	}
+}
+
+// newLibAuditID returns a random hex-encoded identifier for audit events.
+func newLibAuditID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
+	return fmt.Sprintf("%x", b)
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +260,12 @@ func (s *LibrarianServer) RecordFinding(
 		"version_hash", versionHash,
 	)
 
+	s.publishAudit(ctx, "audit.law.created", map[string]string{
+		"action":      "created",
+		"resource_id": id,
+		"tier":        "1",
+	})
+
 	// Compute embedding inline and store it. Run conflict detection.
 	if s.embedder != nil {
 		go s.embedAndDetectConflicts(id, versionHash, law)
@@ -293,6 +355,15 @@ func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequ
 		"is_update", protoLaw.GetId() != "",
 	)
 
+	action := "created"
+	if protoLaw.GetId() != "" {
+		action = "updated"
+	}
+	s.publishAudit(ctx, "audit.law."+action, map[string]string{
+		"action":      action,
+		"resource_id": lawID,
+	})
+
 	// Compute and store embedding.
 	if s.embedder != nil {
 		go s.embedLaw(lawID, versionHash, storeLaw)
@@ -318,6 +389,11 @@ func (s *LibrarianServer) RetireLaw(
 	}
 
 	slog.Info("RetireLaw completed", "law_id", req.GetLawId())
+
+	s.publishAudit(ctx, "audit.law.retired", map[string]string{
+		"action":      "retired",
+		"resource_id": req.GetLawId(),
+	})
 
 	return &flowv1.RetireLawResponse{Acknowledged: true}, nil
 }
@@ -364,12 +440,20 @@ func (s *LibrarianServer) ApplyLifecycleAction(
 			}
 		}
 		slog.Info("ApplyLifecycleAction: promote", "law_id", lawID, "new_tier", law.Tier+1)
+		s.publishAudit(ctx, "audit.law.promoted", map[string]string{
+			"action":      "promoted",
+			"resource_id": lawID,
+		})
 
 	case flowv1.Verdict_VERDICT_RETIRE:
 		if err := s.store.RetireLaw(ctx, lawID); err != nil {
 			return nil, status.Errorf(codes.Internal, "retire law: %v", err)
 		}
 		slog.Info("ApplyLifecycleAction: retire", "law_id", lawID)
+		s.publishAudit(ctx, "audit.law.retired", map[string]string{
+			"action":      "retired",
+			"resource_id": lawID,
+		})
 
 	case flowv1.Verdict_VERDICT_DEMOTE:
 		law, err := s.store.GetLaw(ctx, lawID)
@@ -383,6 +467,10 @@ func (s *LibrarianServer) ApplyLifecycleAction(
 			return nil, status.Errorf(codes.Internal, "set tier: %v", err)
 		}
 		slog.Info("ApplyLifecycleAction: demote", "law_id", lawID, "new_tier", law.Tier-1)
+		s.publishAudit(ctx, "audit.law.demoted", map[string]string{
+			"action":      "demoted",
+			"resource_id": lawID,
+		})
 
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown verdict: %v", verdict)

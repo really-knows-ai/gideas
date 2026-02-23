@@ -8,6 +8,7 @@ package rpc
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -16,9 +17,11 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	apiv1 "github.com/gideas/flow/operator/api/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,17 +55,60 @@ const (
 	phaseCompleted = "Completed"
 )
 
+// AuditPublisher abstracts audit event publication to the Flow Event Bus.
+// Satisfied by flowv1.FlowEventBusServiceClient. A nil publisher silently
+// disables audit publishing.
+type AuditPublisher interface {
+	Publish(ctx context.Context, req *flowv1.PublishRequest, opts ...grpc.CallOption) (*flowv1.PublishResponse, error)
+}
+
 // OperatorServer implements the flowv1.OperatorServiceServer interface.
 // It holds a reference to the controller-runtime Kubernetes client for
 // reading and updating CRDs.
 type OperatorServer struct {
 	flowv1.UnimplementedOperatorServiceServer
 	K8sClient client.Client
+	Auditor   AuditPublisher // nil-safe: audit publishing degrades gracefully
 }
 
 // NewOperatorServer returns an OperatorServer wired to the given Kubernetes client.
 func NewOperatorServer(k8sClient client.Client) *OperatorServer {
 	return &OperatorServer{K8sClient: k8sClient}
+}
+
+// publishAudit publishes an audit event to the Event Bus. Errors are logged
+// but never propagated — audit publishing must not fail the primary operation.
+func (s *OperatorServer) publishAudit(ctx context.Context, eventType string, attrs map[string]string) {
+	if s.Auditor == nil {
+		return
+	}
+	_, err := s.Auditor.Publish(ctx, &flowv1.PublishRequest{
+		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		Event: &flowv1.FlowEvent{
+			EventId:    newAuditEventID(),
+			EventType:  eventType,
+			FlowId:     extractMetadataValue(ctx, metadataKeyFlowID),
+			NodeId:     extractMetadataValue(ctx, metadataKeyNodeID),
+			WorkitemId: extractMetadataValue(ctx, metadataKeyWorkitemID),
+			Timestamp:  timestamppb.Now(),
+			Attributes: attrs,
+		},
+	})
+	if err != nil {
+		slog.Warn("Audit publish failed",
+			"event_type", eventType,
+			"error", err,
+		)
+	}
+}
+
+// newAuditEventID returns a random hex-encoded identifier for audit events.
+func newAuditEventID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
+	return fmt.Sprintf("%x", b)
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +198,11 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 		"workitem_id", workitemID,
 		"phase", phaseRouting,
 	)
+
+	s.publishAudit(ctx, "audit.workitem.routing_submitted", map[string]string{
+		"action":      "routing_submitted",
+		"resource_id": workitemID,
+	})
 
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
@@ -318,6 +369,12 @@ func (s *OperatorServer) CreateWorkitem(ctx context.Context, _ *flowv1.CreateWor
 		"entry_contract", node.Spec.Entry,
 	)
 
+	s.publishAudit(ctx, "audit.workitem.created", map[string]string{
+		"action":      "created",
+		"resource_id": workitemName,
+		"flow_id":     flowID,
+	})
+
 	return &flowv1.CreateWorkitemResponse{WorkitemId: workitemName}, nil
 }
 
@@ -390,6 +447,12 @@ func (s *OperatorServer) CreateHearingWorkitem(ctx context.Context, req *flowv1.
 		"tribunal", tribunalNode.Name,
 	)
 
+	s.publishAudit(ctx, "audit.workitem.hearing_created", map[string]string{
+		"action":      "hearing_created",
+		"resource_id": workitemName,
+		"law_id":      lawID,
+	})
+
 	return &flowv1.CreateHearingWorkitemResponse{WorkitemId: workitemName}, nil
 }
 
@@ -440,6 +503,11 @@ func (s *OperatorServer) ExportWorkitem(ctx context.Context, req *flowv1.ExportW
 	}
 
 	slog.Info("Workitem exported", "workitem_id", workitemID, "package_size", len(data))
+
+	s.publishAudit(ctx, "audit.workitem.exported", map[string]string{
+		"action":      "exported",
+		"resource_id": workitemID,
+	})
 
 	return &flowv1.ExportWorkitemResponse{ExportPackage: data}, nil
 }
@@ -569,6 +637,12 @@ func (s *OperatorServer) ImportWorkitem(ctx context.Context, req *flowv1.ImportW
 		"import_node", importNode.Name,
 		"flow", targetFlow.Name,
 	)
+
+	s.publishAudit(ctx, "audit.workitem.imported", map[string]string{
+		"action":      "imported",
+		"resource_id": workitemName,
+		"source":      pkg.WorkitemID,
+	})
 
 	return &flowv1.ImportWorkitemResponse{WorkitemId: workitemName}, nil
 }

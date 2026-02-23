@@ -25,6 +25,7 @@ import (
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -32,8 +33,9 @@ const (
 	defaultPort   = "50054"
 	defaultDBPath = "/data/archivist.db"
 
-	envPort   = "ARCHIVIST_PORT"
-	envDBPath = "ARCHIVIST_DB_PATH"
+	envPort            = "ARCHIVIST_PORT"
+	envDBPath          = "ARCHIVIST_DB_PATH"
+	envEventBusAddress = "EVENT_BUS_ADDRESS"
 )
 
 func main() {
@@ -57,6 +59,27 @@ func main() {
 	}
 	defer func() { _ = store.Close() }()
 
+	// Connect to the Event Bus for audit event publishing.
+	var opts []service.ArchivistOption
+	var eventBusCloser func() error
+	eventBusAddr := os.Getenv(envEventBusAddress)
+	if eventBusAddr != "" {
+		ebConn, ebErr := grpc.NewClient(
+			eventBusAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if ebErr != nil {
+			slog.Error("Failed to connect to Event Bus", "address", eventBusAddr, "error", ebErr)
+			os.Exit(1)
+		}
+		eventBusCloser = ebConn.Close
+		ebClient := flowv1.NewFlowEventBusServiceClient(ebConn)
+		opts = append(opts, service.WithAuditPublisher(ebClient))
+		slog.Info("Event Bus connected for audit publishing", "address", eventBusAddr)
+	} else {
+		slog.Info("Event Bus not configured, audit publishing disabled")
+	}
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
 		slog.Error("Failed to listen", "port", port, "error", err)
@@ -65,7 +88,7 @@ func main() {
 
 	srv := grpc.NewServer()
 
-	archivistSrv := service.NewArchivistServer(store)
+	archivistSrv := service.NewArchivistServer(store, opts...)
 	flowv1.RegisterArchivistServiceServer(srv, archivistSrv)
 
 	// Enable gRPC reflection for debugging with grpcurl.
@@ -79,6 +102,9 @@ func main() {
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		srv.GracefulStop()
 		_ = store.Close()
+		if eventBusCloser != nil {
+			_ = eventBusCloser()
+		}
 	}()
 
 	slog.Info("Archivist listening", "address", lis.Addr().String())
