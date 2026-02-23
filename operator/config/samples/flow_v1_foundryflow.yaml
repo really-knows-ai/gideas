@@ -17,3 +17,11 @@ spec:
     maxVisits: 10
     defaultTimeout: "1h"
     maxTimeout: "4h"
+  eventBusConfig:
+    retention:
+      telemetryDuration: "24h"
+      telemetrySize: "100MB"
+      auditDuration: "168h"
+      auditSize: "1GB"
+      frictionDuration: "72h"
+      frictionSize: "100MB"

@@ -268,6 +268,11 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode) corev
 		Env: []corev1.EnvVar{
 			{Name: "FLOW_NODE_NAME", Value: node.Name},
 			{Name: "FLOW_NAMESPACE", Value: node.Namespace},
+			// Wire control-plane infrastructure service addresses.
+			{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
+			{Name: "FRICTION_LEDGER_ADDRESS", Value: fmt.Sprintf("%s:%d", frictionLedgerSvcNm, frictionLedgerPort)},
+			{Name: "OPERATOR_ADDRESS", Value: fmt.Sprintf("%s:%d", operatorSvcName, operatorPort)},
+			{Name: "LIBRARIAN_ADDRESS", Value: fmt.Sprintf("%s:%d", librarianSvcName, librarianPort)},
 		},
 	}
 

@@ -1,0 +1,22 @@
+# Sidecar Environment Configuration
+#
+# This ConfigMap provides the standard infrastructure addresses that the
+# Operator injects into every Sidecar container. It is provided as a
+# reference for manual deployments that do not use the Operator's automated
+# provisioning.
+#
+# When the Operator reconciles FoundryNode resources, it injects these
+# env vars directly into the sidecar container spec (see foundrynode_controller.go).
+# This ConfigMap exists so Helm-only deployments can reference the same values.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-sidecar-env
+  labels:
+    {{- include "foundry-flow.labels" . | nindent 4 }}
+data:
+  EVENT_BUS_ADDRESS: {{ include "foundry-flow.eventBusAddress" . | quote }}
+  FRICTION_LEDGER_ADDRESS: {{ include "foundry-flow.frictionLedgerAddress" . | quote }}
+  OPERATOR_ADDRESS: {{ include "foundry-flow.operatorAddress" . | quote }}
+  LIBRARIAN_ADDRESS: {{ include "foundry-flow.librarianAddress" . | quote }}

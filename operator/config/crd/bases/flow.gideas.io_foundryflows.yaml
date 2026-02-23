@@ -93,6 +93,47 @@ spec:
                   to required stamp names. At least one entry contract must be defined.
                 minProperties: 1
                 type: object
+              eventBusConfig:
+                description: |-
+                  eventBusConfig defines Event Bus per-channel retention settings.
+                  When omitted, the Event Bus uses its built-in defaults.
+                properties:
+                  retention:
+                    description: retention defines per-channel retention windows for
+                      the Event Bus.
+                    properties:
+                      auditDuration:
+                        description: |-
+                          auditDuration is the retention window for the audit channel.
+                          Go duration string (e.g. "168h").
+                        type: string
+                      auditSize:
+                        description: |-
+                          auditSize is the maximum total payload size for the audit channel.
+                          Byte-count string with unit suffix (e.g. "1GB").
+                        type: string
+                      frictionDuration:
+                        description: |-
+                          frictionDuration is the retention window for the friction channel.
+                          Go duration string (e.g. "72h").
+                        type: string
+                      frictionSize:
+                        description: |-
+                          frictionSize is the maximum total payload size for the friction channel.
+                          Byte-count string with unit suffix (e.g. "100MB").
+                        type: string
+                      telemetryDuration:
+                        description: |-
+                          telemetryDuration is the retention window for the telemetry channel.
+                          Go duration string (e.g. "24h", "168h").
+                        type: string
+                      telemetrySize:
+                        description: |-
+                          telemetrySize is the maximum total payload size for the telemetry channel.
+                          Byte-count string with unit suffix (e.g. "100MB", "1GB").
+                        type: string
+                    type: object
+                type: object
               exitContracts:
                 additionalProperties:
                   additionalProperties:

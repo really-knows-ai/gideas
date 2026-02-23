@@ -1,0 +1,95 @@
+# Flow Event Bus — Deployment, Service, PVC
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-eventbus-data
+  labels:
+    {{- include "foundry-flow.labels" . | nindent 4 }}
+    {{- include "foundry-flow.selectorLabels" "eventbus" | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.eventbus.storage.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-eventbus
+  labels:
+    {{- include "foundry-flow.labels" . | nindent 4 }}
+    {{- include "foundry-flow.selectorLabels" "eventbus" | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-flow.selectorLabels" "eventbus" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-flow.selectorLabels" "eventbus" | nindent 8 }}
+    spec:
+      containers:
+        - name: eventbus
+          image: {{ .Values.eventbus.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.eventbus.port }}
+              protocol: TCP
+          env:
+            - name: EVENT_BUS_PORT
+              value: {{ .Values.eventbus.port | quote }}
+            - name: EVENT_BUS_DB_PATH
+              value: {{ .Values.eventbus.dbPath | quote }}
+            {{- with .Values.eventbus.retention.telemetry.duration }}
+            - name: EVENT_BUS_RETENTION_TELEMETRY_DURATION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.eventbus.retention.telemetry.size }}
+            - name: EVENT_BUS_RETENTION_TELEMETRY_SIZE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.eventbus.retention.audit.duration }}
+            - name: EVENT_BUS_RETENTION_AUDIT_DURATION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.eventbus.retention.audit.size }}
+            - name: EVENT_BUS_RETENTION_AUDIT_SIZE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.eventbus.retention.friction.duration }}
+            - name: EVENT_BUS_RETENTION_FRICTION_DURATION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.eventbus.retention.friction.size }}
+            - name: EVENT_BUS_RETENTION_FRICTION_SIZE
+              value: {{ . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-eventbus-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-eventbus
+  labels:
+    {{- include "foundry-flow.labels" . | nindent 4 }}
+    {{- include "foundry-flow.selectorLabels" "eventbus" | nindent 4 }}
+spec:
+  selector:
+    {{- include "foundry-flow.selectorLabels" "eventbus" | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.eventbus.port }}
+      targetPort: {{ .Values.eventbus.port }}
+      protocol: TCP
+  type: ClusterIP

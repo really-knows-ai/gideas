@@ -8,12 +8,13 @@
 #   - Operator at OPERATOR_ADDRESS (default: flow-operator:50052)
 #   - Archivist at ARCHIVIST_ADDRESS (default: flow-archivist:50054)
 #   - Librarian at LIBRARIAN_ADDRESS (default: flow-librarian:50058)
-#   - Monitor at MONITOR_ADDRESS (default: flow-monitor:50055)
+#   - Event Bus at EVENT_BUS_ADDRESS (default: flow-eventbus:50056)
+#   - Friction Ledger at FRICTION_LEDGER_ADDRESS (default: flow-frictionledger:50057)
 #
 # Prerequisites:
 #   - Build node images (one per node)
 #   - Build sidecar image: docker build -t flow-sidecar:latest -f sidecar/Dockerfile .
-#   - Deploy system services (operator, archivist, librarian, monitor)
+#   - Deploy system services (operator, archivist, librarian, eventbus, frictionledger, monitor)
 #   - Apply flow.yaml first (CRDs must exist before deployments)
 ---
 # --- Forge ---
@@ -65,8 +66,10 @@ spec:
               value: "flow-archivist:50054"
             - name: LIBRARIAN_ADDRESS
               value: "flow-librarian:50058"
-            - name: MONITOR_ADDRESS
-              value: "flow-monitor:50055"
+            - name: EVENT_BUS_ADDRESS
+              value: "flow-eventbus:50056"
+            - name: FRICTION_LEDGER_ADDRESS
+              value: "flow-frictionledger:50057"
       volumes:
         - name: node-config
           configMap:
@@ -213,8 +216,10 @@ spec:
               value: "flow-archivist:50054"
             - name: LIBRARIAN_ADDRESS
               value: "flow-librarian:50058"
-            - name: MONITOR_ADDRESS
-              value: "flow-monitor:50055"
+            - name: EVENT_BUS_ADDRESS
+              value: "flow-eventbus:50056"
+            - name: FRICTION_LEDGER_ADDRESS
+              value: "flow-frictionledger:50057"
       volumes:
         - name: node-config
           configMap:
@@ -269,8 +274,10 @@ spec:
               value: "flow-archivist:50054"
             - name: LIBRARIAN_ADDRESS
               value: "flow-librarian:50058"
-            - name: MONITOR_ADDRESS
-              value: "flow-monitor:50055"
+            - name: EVENT_BUS_ADDRESS
+              value: "flow-eventbus:50056"
+            - name: FRICTION_LEDGER_ADDRESS
+              value: "flow-frictionledger:50057"
       volumes:
         - name: node-config
           configMap:

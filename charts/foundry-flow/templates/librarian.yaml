@@ -1,0 +1,95 @@
+# Librarian — Deployment, Service, PVC
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-librarian-data
+  labels:
+    {{- include "foundry-flow.labels" . | nindent 4 }}
+    {{- include "foundry-flow.selectorLabels" "librarian" | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.librarian.storage.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-librarian
+  labels:
+    {{- include "foundry-flow.labels" . | nindent 4 }}
+    {{- include "foundry-flow.selectorLabels" "librarian" | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-flow.selectorLabels" "librarian" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-flow.selectorLabels" "librarian" | nindent 8 }}
+    spec:
+      containers:
+        - name: librarian
+          image: {{ .Values.librarian.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.librarian.port }}
+              protocol: TCP
+          env:
+            - name: LIBRARIAN_PORT
+              value: {{ .Values.librarian.port | quote }}
+            - name: LIBRARIAN_DB_PATH
+              value: {{ .Values.librarian.dbPath | quote }}
+            - name: EVENT_BUS_ADDRESS
+              value: {{ include "foundry-flow.eventBusAddress" . | quote }}
+            - name: OPERATOR_ADDRESS
+              value: {{ include "foundry-flow.operatorAddress" . | quote }}
+            {{- with .Values.librarian.reviewTTLs.tier1 }}
+            - name: REVIEW_TTL_TIER1
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.librarian.reviewTTLs.tier2 }}
+            - name: REVIEW_TTL_TIER2
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.librarian.reviewTTLs.tier3 }}
+            - name: REVIEW_TTL_TIER3
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.librarian.reviewTTLs.tier4 }}
+            - name: REVIEW_TTL_TIER4
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.librarian.reviewTTLs.tier5 }}
+            - name: REVIEW_TTL_TIER5
+              value: {{ . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-librarian-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-librarian
+  labels:
+    {{- include "foundry-flow.labels" . | nindent 4 }}
+    {{- include "foundry-flow.selectorLabels" "librarian" | nindent 4 }}
+spec:
+  selector:
+    {{- include "foundry-flow.selectorLabels" "librarian" | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.librarian.port }}
+      targetPort: {{ .Values.librarian.port }}
+      protocol: TCP
+  type: ClusterIP
