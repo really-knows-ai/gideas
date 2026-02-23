@@ -60,6 +60,35 @@ type FoundryFlowSpec struct {
 	// crossFlow defines cross-flow trust and naturalisation settings.
 	// +optional
 	CrossFlow *CrossFlowConfig `json:"crossFlow,omitempty"`
+
+	// nodeGroups defines sub-topology boundaries within the Flow.
+	// Each key is a group name; each value defines the group's entry/exit contracts and member nodes.
+	// Nodes inside a group are routing-isolated: internal routing stays within the group,
+	// and external routing enters only through entry-bound nodes.
+	// +optional
+	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
+}
+
+// NodeGroup defines a sub-topology boundary within a Flow.
+// A NodeGroup has its own entry and exit contracts and a set of member nodes.
+// Work enters a NodeGroup by routing to a specific entry-bound node within the group.
+// The group's entry contract is validated by the Operator, same as Flow-level entry contracts.
+type NodeGroup struct {
+	// entryContracts are the named entry contracts for this group.
+	// Validated when a root Workitem is routed to an entry-bound node in the group.
+	// +optional
+	EntryContracts map[string]Contract `json:"entryContracts,omitempty"`
+
+	// exitContracts are the named exit contracts for this group.
+	// Validated when an exit-bound node in the group calls Complete().
+	// +optional
+	ExitContracts map[string]Contract `json:"exitContracts,omitempty"`
+
+	// nodes is the list of FoundryNode names that belong to this group.
+	// Each node can belong to at most one group.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	Nodes []string `json:"nodes"`
 }
 
 // GovernancePolicy defines governance thresholds and timers for a Flow.
@@ -190,6 +219,16 @@ type EventBusRetention struct {
 	// Byte-count string with unit suffix (e.g. "100MB").
 	// +optional
 	FrictionSize string `json:"frictionSize,omitempty"`
+
+	// workitemDuration is the retention window for the workitem lifecycle channel.
+	// Go duration string (e.g. "24h", "168h").
+	// +optional
+	WorkitemDuration string `json:"workitemDuration,omitempty"`
+
+	// workitemSize is the maximum total payload size for the workitem lifecycle channel.
+	// Byte-count string with unit suffix (e.g. "100MB", "1GB").
+	// +optional
+	WorkitemSize string `json:"workitemSize,omitempty"`
 }
 
 // CrossFlowConfig defines cross-flow trust and naturalisation settings.

@@ -38,6 +38,13 @@ type WorkitemStatus struct {
 	// +optional
 	CurrentAssignee string `json:"currentAssignee,omitempty"`
 
+	// parentWorkitemID is the ID of the parent Workitem that spawned this child.
+	// Set by the Operator when a child Workitem is created via CreateChildWorkitem.
+	// Empty for root Workitems. Immutable once set.
+	// The label flow.gideas.io/parent is also set for efficient querying.
+	// +optional
+	ParentWorkitemID string `json:"parentWorkitemID,omitempty"`
+
 	// routingInstruction is the most recent routing outcome submitted by the assigned node.
 	// +optional
 	RoutingInstruction *RoutingInstruction `json:"routingInstruction,omitempty"`

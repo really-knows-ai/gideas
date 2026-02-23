@@ -67,6 +67,13 @@ spec:
                   Stable error codes from the error catalogue (e.g. THRASH_BUDGET_EXCEEDED,
                   TIMEOUT_EXCEEDED, CONTRACT_VIOLATION, INVALID_ROUTE).
                 type: string
+              parentWorkitemID:
+                description: |-
+                  parentWorkitemID is the ID of the parent Workitem that spawned this child.
+                  Set by the Operator when a child Workitem is created via CreateChildWorkitem.
+                  Empty for root Workitems. Immutable once set.
+                  The label flow.gideas.io/parent is also set for efficient querying.
+                type: string
               phase:
                 description: |-
                   phase is the current lifecycle state.

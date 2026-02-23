@@ -132,6 +132,16 @@ spec:
                           telemetrySize is the maximum total payload size for the telemetry channel.
                           Byte-count string with unit suffix (e.g. "100MB", "1GB").
                         type: string
+                      workitemDuration:
+                        description: |-
+                          workitemDuration is the retention window for the workitem lifecycle channel.
+                          Go duration string (e.g. "24h", "168h").
+                        type: string
+                      workitemSize:
+                        description: |-
+                          workitemSize is the maximum total payload size for the workitem lifecycle channel.
+                          Byte-count string with unit suffix (e.g. "100MB", "1GB").
+                        type: string
                     type: object
                 type: object
               exitContracts:
@@ -259,6 +269,65 @@ spec:
                   importNode is the name of the FoundryNode that receives cross-flow imported Workitems.
                   Must reference an existing entry-bound node. If absent, cross-flow import is disabled.
                 type: string
+              nodeGroups:
+                additionalProperties:
+                  description: |-
+                    NodeGroup defines a sub-topology boundary within a Flow.
+                    A NodeGroup has its own entry and exit contracts and a set of member nodes.
+                    Work enters a NodeGroup by routing to a specific entry-bound node within the group.
+                    The group's entry contract is validated by the Operator, same as Flow-level entry contracts.
+                  properties:
+                    entryContracts:
+                      additionalProperties:
+                        additionalProperties:
+                          items:
+                            type: string
+                          type: array
+                        description: |-
+                          Contract is a map of governed artefact name to required stamp names.
+                          Each key is a governed artefact name (the metadata.name of a GovernedArtefact CR).
+                          Each value is a list of required stamp names.
+                          A governed artefact name with an empty list means artefacts of that type must be present but no stamps are required.
+                          Empty map means no artefact requirements.
+                        type: object
+                      description: |-
+                        entryContracts are the named entry contracts for this group.
+                        Validated when a root Workitem is routed to an entry-bound node in the group.
+                      type: object
+                    exitContracts:
+                      additionalProperties:
+                        additionalProperties:
+                          items:
+                            type: string
+                          type: array
+                        description: |-
+                          Contract is a map of governed artefact name to required stamp names.
+                          Each key is a governed artefact name (the metadata.name of a GovernedArtefact CR).
+                          Each value is a list of required stamp names.
+                          A governed artefact name with an empty list means artefacts of that type must be present but no stamps are required.
+                          Empty map means no artefact requirements.
+                        type: object
+                      description: |-
+                        exitContracts are the named exit contracts for this group.
+                        Validated when an exit-bound node in the group calls Complete().
+                      type: object
+                    nodes:
+                      description: |-
+                        nodes is the list of FoundryNode names that belong to this group.
+                        Each node can belong to at most one group.
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                  required:
+                  - nodes
+                  type: object
+                description: |-
+                  nodeGroups defines sub-topology boundaries within the Flow.
+                  Each key is a group name; each value defines the group's entry/exit contracts and member nodes.
+                  Nodes inside a group are routing-isolated: internal routing stays within the group,
+                  and external routing enters only through entry-bound nodes.
+                type: object
             required:
             - entryContracts
             - exitContracts
