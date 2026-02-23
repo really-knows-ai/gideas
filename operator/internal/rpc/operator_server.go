@@ -198,6 +198,15 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 		}
 	}
 
+	// 3b. NodeGroup routing isolation: reject route_to targeting a non-entry-bound
+	// node inside a group from outside that group.
+	if workitem.Status.RoutingInstruction != nil && workitem.Status.RoutingInstruction.Type == routeToType {
+		sourceNodeID := extractMetadataValue(ctx, metadataKeyNodeID)
+		if err := s.checkNodeGroupRouting(ctx, sourceNodeID, workitem.Status.RoutingInstruction.Target); err != nil {
+			return nil, err
+		}
+	}
+
 	// 4. Transition phase to Routing.
 	workitem.Status.Phase = phaseRouting
 
@@ -817,6 +826,12 @@ func (s *OperatorServer) RouteChild(ctx context.Context, req *flowv1.RouteChildR
 				return nil, status.Error(codes.FailedPrecondition,
 					fmt.Sprintf("INVALID_ROUTE: target node %q not found: %v", target, err))
 			}
+
+			// NodeGroup routing isolation for child routing.
+			sourceNodeID := extractMetadataValue(ctx, metadataKeyNodeID)
+			if err := s.checkNodeGroupRouting(ctx, sourceNodeID, target); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -993,6 +1008,69 @@ var timeNow = func() metav1.Time { return metav1.Now() }
 // hasCapability checks whether a capability list contains the given capability.
 func hasCapability(capabilities []string, target string) bool {
 	return slices.Contains(capabilities, target)
+}
+
+// checkNodeGroupRouting enforces NodeGroup routing isolation at runtime.
+//
+// When a route_to instruction targets a node inside a NodeGroup, the source
+// node must either be in the same group OR the target must be an entry-bound
+// node within that group. This prevents external routing to internal group
+// nodes.
+//
+// sourceNodeID may be empty for non-node-originated routing (system calls),
+// which bypass group checks.
+func (s *OperatorServer) checkNodeGroupRouting(ctx context.Context, sourceNodeID, targetNodeID string) error {
+	if sourceNodeID == "" || targetNodeID == "" {
+		return nil // System calls or no target bypass group checks.
+	}
+
+	// Fetch the FoundryFlow to get NodeGroup definitions.
+	var flowList apiv1.FoundryFlowList
+	if err := s.K8sClient.List(ctx, &flowList, client.InNamespace(defaultNamespace)); err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("failed to list flows for group validation: %v", err))
+	}
+	if len(flowList.Items) == 0 {
+		return nil // No flow, no group constraints.
+	}
+	flow := &flowList.Items[0]
+
+	if len(flow.Spec.NodeGroups) == 0 {
+		return nil // No groups defined.
+	}
+
+	// Build node-to-group lookup.
+	nodeToGroup := make(map[string]string)
+	for groupName, group := range flow.Spec.NodeGroups {
+		for _, nodeName := range group.Nodes {
+			nodeToGroup[nodeName] = groupName
+		}
+	}
+
+	targetGroup, targetInGroup := nodeToGroup[targetNodeID]
+	if !targetInGroup {
+		return nil // Target is not in any group; no restriction.
+	}
+
+	sourceGroup := nodeToGroup[sourceNodeID]
+	if sourceGroup == targetGroup {
+		return nil // Same group; routing is allowed.
+	}
+
+	// Target is in a group but source is not (or is in a different group).
+	// Only allow routing to entry-bound nodes within the target group.
+	var targetNode apiv1.FoundryNode
+	targetKey := types.NamespacedName{Namespace: defaultNamespace, Name: targetNodeID}
+	if err := s.K8sClient.Get(ctx, targetKey, &targetNode); err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("failed to fetch target node %q for group validation: %v", targetNodeID, err))
+	}
+
+	if targetNode.Spec.Entry == "" {
+		return status.Error(codes.FailedPrecondition,
+			fmt.Sprintf("GROUP_ROUTING_DENIED: routing from node %q to non-entry-bound node %q in group %q is not allowed",
+				sourceNodeID, targetNodeID, targetGroup))
+	}
+
+	return nil
 }
 
 // checkChildrenTerminal queries for child Workitems and returns an error if
