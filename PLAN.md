@@ -376,7 +376,7 @@ These phases build on the three primitives above and are out of scope for this i
 |-------|--------|-------|
 | Phase 1: Spec Updates | Complete | All 8 spec files updated, lint clean |
 | Phase 2: Proto Changes | Complete | All 4 proto files updated, Go code generated, all tests pass |
-| Phase 3: CRD Type Changes | Not Started | |
+| Phase 3: CRD Type Changes | Complete | All 4 type files updated, manifests regenerated, deepcopy generated, tests pass |
 | Phase 4: Operator -- Child Workitem RPCs | Not Started | |
 | Phase 5: Operator -- NodeGroup Validation | Not Started | |
 | Phase 6: Event Bus WORKITEM Channel | Not Started | |
