@@ -435,6 +435,312 @@ var _ = Describe("FoundryFlow Controller", func() {
 			Expect(deploy.OwnerReferences[0].Kind).To(Equal("FoundryFlow"))
 		})
 	})
+
+	Context("When NodeGroup validation fails", func() {
+		const testNamespace = "nodegroup-test"
+
+		ctx := context.Background()
+
+		BeforeEach(func() {
+			By("creating the test namespace")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: testNamespace},
+			}
+			var existing corev1.Namespace
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: testNamespace}, &existing); errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			}
+		})
+
+		It("should set Degraded when a NodeGroup references a nonexistent node", func() {
+			flowName := "nodegroup-missing-node"
+			typeNamespacedName := types.NamespacedName{Name: flowName, Namespace: testNamespace}
+
+			// Create a flow with a NodeGroup referencing a node that does not exist.
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{Name: flowName, Namespace: testNamespace},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					NodeGroups: map[string]flowv1.NodeGroup{
+						"codification": {
+							Nodes: []string{"nonexistent-node"},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+
+			defer func() {
+				_ = k8sClient.Delete(ctx, flowResource)
+			}()
+
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var flow flowv1.FoundryFlow
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &flow)).To(Succeed())
+			Expect(flow.Status.Phase).To(Equal("Degraded"))
+
+			readyCond := meta.FindStatusCondition(flow.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Reason).To(Equal("NodeGroupValidationFailed"))
+		})
+
+		It("should set Degraded when a node belongs to multiple groups", func() {
+			flowName := "nodegroup-multi-membership"
+			typeNamespacedName := types.NamespacedName{Name: flowName, Namespace: testNamespace}
+
+			// Create nodes first.
+			nodeA := &flowv1.FoundryNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "shared-node-a", Namespace: testNamespace},
+				Spec:       flowv1.FoundryNodeSpec{Image: "shared:latest"},
+			}
+			Expect(k8sClient.Create(ctx, nodeA)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, nodeA) }()
+
+			nodeB := &flowv1.FoundryNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "other-node-b", Namespace: testNamespace},
+				Spec:       flowv1.FoundryNodeSpec{Image: "other:latest"},
+			}
+			Expect(k8sClient.Create(ctx, nodeB)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, nodeB) }()
+
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{Name: flowName, Namespace: testNamespace},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					NodeGroups: map[string]flowv1.NodeGroup{
+						"group-a": {Nodes: []string{"shared-node-a"}},
+						"group-b": {Nodes: []string{"shared-node-a", "other-node-b"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var flow flowv1.FoundryFlow
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &flow)).To(Succeed())
+			Expect(flow.Status.Phase).To(Equal("Degraded"))
+
+			readyCond := meta.FindStatusCondition(flow.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Reason).To(Equal("NodeGroupValidationFailed"))
+		})
+
+		It("should set Degraded when a node routes outside its group", func() {
+			flowName := "nodegroup-routing-leak"
+			typeNamespacedName := types.NamespacedName{Name: flowName, Namespace: testNamespace}
+
+			// Create nodes: internalNode routes to outsideNode.
+			outsideNode := &flowv1.FoundryNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "outside-node", Namespace: testNamespace},
+				Spec:       flowv1.FoundryNodeSpec{Image: "outside:latest"},
+			}
+			Expect(k8sClient.Create(ctx, outsideNode)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, outsideNode) }()
+
+			internalNode := &flowv1.FoundryNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "internal-node", Namespace: testNamespace},
+				Spec: flowv1.FoundryNodeSpec{
+					Image: "internal:latest",
+					Outputs: []flowv1.Output{
+						{Name: "escape", Target: "outside-node"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, internalNode)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, internalNode) }()
+
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{Name: flowName, Namespace: testNamespace},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					NodeGroups: map[string]flowv1.NodeGroup{
+						"isolated": {Nodes: []string{"internal-node"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var flow flowv1.FoundryFlow
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &flow)).To(Succeed())
+			Expect(flow.Status.Phase).To(Equal("Degraded"))
+
+			readyCond := meta.FindStatusCondition(flow.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Reason).To(Equal("NodeGroupValidationFailed"))
+		})
+
+		It("should set Degraded when a group contract references an invalid stamp", func() {
+			flowName := "nodegroup-invalid-stamp"
+			typeNamespacedName := types.NamespacedName{Name: flowName, Namespace: testNamespace}
+
+			// Create a GovernedArtefact with limited stamp vocabulary.
+			ga := &flowv1.GovernedArtefact{
+				ObjectMeta: metav1.ObjectMeta{Name: "codification-input", Namespace: testNamespace},
+				Spec:       flowv1.GovernedArtefactSpec{Stamps: []string{"validated"}},
+			}
+			Expect(k8sClient.Create(ctx, ga)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, ga) }()
+
+			groupNode := &flowv1.FoundryNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "codify-node", Namespace: testNamespace},
+				Spec:       flowv1.FoundryNodeSpec{Image: "codify:latest"},
+			}
+			Expect(k8sClient.Create(ctx, groupNode)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, groupNode) }()
+
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{Name: flowName, Namespace: testNamespace},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					NodeGroups: map[string]flowv1.NodeGroup{
+						"codification": {
+							EntryContracts: map[string]flowv1.Contract{
+								"codify-entry": {"codification-input": {"nonexistent-stamp"}},
+							},
+							Nodes: []string{"codify-node"},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var flow flowv1.FoundryFlow
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &flow)).To(Succeed())
+			Expect(flow.Status.Phase).To(Equal("Degraded"))
+
+			readyCond := meta.FindStatusCondition(flow.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Reason).To(Equal("NodeGroupValidationFailed"))
+		})
+
+		It("should reconcile to Ready with valid NodeGroups", func() {
+			flowName := "nodegroup-valid"
+			typeNamespacedName := types.NamespacedName{Name: flowName, Namespace: testNamespace}
+
+			// Create two nodes that route within the same group.
+			nodeEntry := &flowv1.FoundryNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "codify-entry", Namespace: testNamespace},
+				Spec: flowv1.FoundryNodeSpec{
+					Image: "codify-entry:latest",
+					Entry: "default",
+					Outputs: []flowv1.Output{
+						{Name: "process", Target: "codify-worker"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, nodeEntry)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, nodeEntry) }()
+
+			nodeWorker := &flowv1.FoundryNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "codify-worker", Namespace: testNamespace},
+				Spec: flowv1.FoundryNodeSpec{
+					Image: "codify-worker:latest",
+					Exit:  "default",
+				},
+			}
+			Expect(k8sClient.Create(ctx, nodeWorker)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, nodeWorker) }()
+
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{Name: flowName, Namespace: testNamespace},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					NodeGroups: map[string]flowv1.NodeGroup{
+						"codification": {
+							Nodes: []string{"codify-entry", "codify-worker"},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var flow flowv1.FoundryFlow
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &flow)).To(Succeed())
+			Expect(flow.Status.Phase).To(Equal("Ready"))
+		})
+	})
 })
 
 // envVarMap converts a slice of EnvVar to a map for easy assertions.

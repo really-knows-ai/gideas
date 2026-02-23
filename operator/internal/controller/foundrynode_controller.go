@@ -137,6 +137,11 @@ func (r *FoundryNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.setCondition(ctx, &node, metav1.ConditionFalse, "InvalidOutputTarget", err.Error())
 	}
 
+	// Validate child Workitem contract stamp references.
+	if err := r.validateChildContracts(ctx, &node); err != nil {
+		return r.setCondition(ctx, &node, metav1.ConditionFalse, "InvalidChildContract", err.Error())
+	}
+
 	// Determine deployment strategy.
 	useStatefulSet := r.requiresStatefulSet(&node)
 
@@ -225,6 +230,58 @@ func (r *FoundryNodeReconciler) validateOutputTargets(ctx context.Context, node 
 			return fmt.Errorf("could not verify output target %q: %w", output.Target, err)
 		}
 	}
+	return nil
+}
+
+// validateChildContracts checks that child Workitem contract stamp references
+// resolve against GovernedArtefact vocabularies.
+func (r *FoundryNodeReconciler) validateChildContracts(ctx context.Context, node *flowv1.FoundryNode) error {
+	if node.Spec.ChildWorkitems == nil {
+		return nil
+	}
+
+	// Build GovernedArtefact vocabularies.
+	var artefacts flowv1.GovernedArtefactList
+	if err := r.List(ctx, &artefacts, client.InNamespace(node.Namespace)); err != nil {
+		return fmt.Errorf("could not list GovernedArtefacts: %w", err)
+	}
+	vocabularies := make(map[string]map[string]bool)
+	for _, ga := range artefacts.Items {
+		stamps := make(map[string]bool)
+		for _, s := range ga.Spec.Stamps {
+			stamps[s] = true
+		}
+		vocabularies[ga.Name] = stamps
+	}
+
+	// Validate entry contract stamps.
+	for gaName, requiredStamps := range node.Spec.ChildWorkitems.EntryContract {
+		vocab, exists := vocabularies[gaName]
+		if !exists {
+			continue // GovernedArtefact not yet created.
+		}
+		for _, stamp := range requiredStamps {
+			if !vocab[stamp] {
+				return fmt.Errorf("child entry contract references stamp %q not in GovernedArtefact %q vocabulary",
+					stamp, gaName)
+			}
+		}
+	}
+
+	// Validate exit contract stamps.
+	for gaName, requiredStamps := range node.Spec.ChildWorkitems.ExitContract {
+		vocab, exists := vocabularies[gaName]
+		if !exists {
+			continue // GovernedArtefact not yet created.
+		}
+		for _, stamp := range requiredStamps {
+			if !vocab[stamp] {
+				return fmt.Errorf("child exit contract references stamp %q not in GovernedArtefact %q vocabulary",
+					stamp, gaName)
+			}
+		}
+	}
+
 	return nil
 }
 

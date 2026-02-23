@@ -94,6 +94,12 @@ func (r *FoundryFlowReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			metav1.ConditionFalse, "ImportNodeInvalid", err.Error())
 	}
 
+	// Validate NodeGroup configuration (membership, contracts, routing isolation).
+	if err := r.validateNodeGroups(ctx, &flow); err != nil {
+		return r.setPhaseAndCondition(ctx, &flow, phaseDegraded,
+			metav1.ConditionFalse, "NodeGroupValidationFailed", err.Error())
+	}
+
 	// Validate that all nodes' routing outputs target existing nodes.
 	if err := r.validateNodeTopology(ctx, &flow); err != nil {
 		return r.setPhaseAndCondition(ctx, &flow, phaseDegraded,
@@ -197,6 +203,104 @@ func (r *FoundryFlowReconciler) validateImportNode(ctx context.Context, flow *fl
 	// importNode must be entry-bound.
 	if node.Spec.Entry == "" {
 		return fmt.Errorf("importNode %q must have an entry contract binding", flow.Spec.ImportNode)
+	}
+
+	return nil
+}
+
+// validateNodeGroups checks NodeGroup configuration for referential integrity.
+//
+// Validations:
+//  1. Every node listed in a group must exist as a FoundryNode in the namespace.
+//  2. A node can belong to at most one group.
+//  3. Routing outputs from nodes inside a group must target nodes in the same group
+//     (routing isolation), with the exception that exit-bound nodes may complete.
+//  4. Group entry/exit contract stamp references must resolve against GovernedArtefact
+//     vocabularies (reuses validateContractStamps).
+func (r *FoundryFlowReconciler) validateNodeGroups(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	if len(flow.Spec.NodeGroups) == 0 {
+		return nil
+	}
+
+	// Build the set of existing FoundryNodes in the namespace.
+	var nodeList flowv1.FoundryNodeList
+	if err := r.List(ctx, &nodeList, client.InNamespace(flow.Namespace)); err != nil {
+		return fmt.Errorf("could not list FoundryNodes: %w", err)
+	}
+	existingNodes := make(map[string]*flowv1.FoundryNode, len(nodeList.Items))
+	for i := range nodeList.Items {
+		existingNodes[nodeList.Items[i].Name] = &nodeList.Items[i]
+	}
+
+	// Build GovernedArtefact vocabularies for contract stamp validation.
+	var artefacts flowv1.GovernedArtefactList
+	if err := r.List(ctx, &artefacts, client.InNamespace(flow.Namespace)); err != nil {
+		return fmt.Errorf("could not list GovernedArtefacts: %w", err)
+	}
+	vocabularies := make(map[string]map[string]bool)
+	for _, ga := range artefacts.Items {
+		stamps := make(map[string]bool)
+		for _, s := range ga.Spec.Stamps {
+			stamps[s] = true
+		}
+		vocabularies[ga.Name] = stamps
+	}
+
+	// Track node-to-group membership to detect duplicates.
+	nodeToGroup := make(map[string]string)
+
+	for groupName, group := range flow.Spec.NodeGroups {
+		// Build the set of nodes in this group.
+		groupNodeSet := make(map[string]bool, len(group.Nodes))
+		for _, nodeName := range group.Nodes {
+			groupNodeSet[nodeName] = true
+		}
+
+		for _, nodeName := range group.Nodes {
+			// 1. Node must exist.
+			if _, exists := existingNodes[nodeName]; !exists {
+				return fmt.Errorf("node group %q references nonexistent node %q", groupName, nodeName)
+			}
+
+			// 2. Node can belong to at most one group.
+			if otherGroup, already := nodeToGroup[nodeName]; already {
+				return fmt.Errorf("node %q belongs to multiple groups: %q and %q", nodeName, otherGroup, groupName)
+			}
+			nodeToGroup[nodeName] = groupName
+
+			// 3. Routing isolation: outputs must target nodes in the same group.
+			node := existingNodes[nodeName]
+			for _, output := range node.Spec.Outputs {
+				if !groupNodeSet[output.Target] {
+					return fmt.Errorf("node %q in group %q has output %q targeting node %q outside the group",
+						nodeName, groupName, output.Name, output.Target)
+				}
+			}
+		}
+
+		// 4. Validate group entry contract stamp references.
+		for contractName, contract := range group.EntryContracts {
+			if err := r.validateContractStamps(
+				fmt.Sprintf("group/%s/%s", groupName, contractName),
+				"entry",
+				contract,
+				vocabularies,
+			); err != nil {
+				return err
+			}
+		}
+
+		// 5. Validate group exit contract stamp references.
+		for contractName, contract := range group.ExitContracts {
+			if err := r.validateContractStamps(
+				fmt.Sprintf("group/%s/%s", groupName, contractName),
+				"exit",
+				contract,
+				vocabularies,
+			); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
