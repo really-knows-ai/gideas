@@ -3,13 +3,15 @@ gen/
 go.work.sum
 bin/
 
+# OS artifacts
+.DS_Store
+
 # Editor swap files
 *.swp
 *.swo
 *~
 
 # Session plans and scratch files
-PLAN.md
 *_PLAN.md
 TODO.md
 REVIEW.md
