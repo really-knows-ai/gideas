@@ -9,29 +9,109 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
 
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// AuditPublisher abstracts audit event publication to the Flow Event Bus.
+// It is satisfied by flowv1.FlowEventBusServiceClient but can be replaced
+// with a test double. A nil publisher silently disables audit publishing.
+type AuditPublisher interface {
+	Publish(ctx context.Context, req *flowv1.PublishRequest, opts ...grpc.CallOption) (*flowv1.PublishResponse, error)
+}
+
 // ArchivistServer implements flowv1.ArchivistServiceServer backed by
 // a SQLite CAS store.
 type ArchivistServer struct {
 	flowv1.UnimplementedArchivistServiceServer
-	store *sqlite.Store
+	store    *sqlite.Store
+	auditor  AuditPublisher // nil-safe: audit publishing degrades gracefully
+	newIDFn  func() string
+	flowIDFn func(ctx context.Context) string
 }
 
 // NewArchivistServer returns an ArchivistServer backed by the given store.
-func NewArchivistServer(s *sqlite.Store) *ArchivistServer {
-	return &ArchivistServer{store: s}
+// The auditor may be nil; audit publishing will be silently disabled.
+func NewArchivistServer(s *sqlite.Store, opts ...ArchivistOption) *ArchivistServer {
+	srv := &ArchivistServer{
+		store:   s,
+		newIDFn: newAuditEventID,
+		flowIDFn: func(ctx context.Context) string {
+			return extractMetadataValue(ctx, "x-flow-flow-id")
+		},
+	}
+	for _, o := range opts {
+		o(srv)
+	}
+	return srv
+}
+
+// ArchivistOption configures an ArchivistServer.
+type ArchivistOption func(*ArchivistServer)
+
+// WithAuditPublisher sets the Event Bus client for audit event publishing.
+func WithAuditPublisher(pub AuditPublisher) ArchivistOption {
+	return func(s *ArchivistServer) { s.auditor = pub }
+}
+
+// publishAudit publishes an audit event to the Event Bus. Errors are logged
+// but never propagated — audit publishing must not fail the primary operation.
+func (s *ArchivistServer) publishAudit(ctx context.Context, eventType string, attrs map[string]string) {
+	if s.auditor == nil {
+		return
+	}
+	_, err := s.auditor.Publish(ctx, &flowv1.PublishRequest{
+		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		Event: &flowv1.FlowEvent{
+			EventId:    s.newIDFn(),
+			EventType:  eventType,
+			FlowId:     s.flowIDFn(ctx),
+			NodeId:     extractNodeID(ctx),
+			WorkitemId: extractMetadataValue(ctx, "x-flow-workitem-id"),
+			Timestamp:  timestamppb.Now(),
+			Attributes: attrs,
+		},
+	})
+	if err != nil {
+		slog.Warn("Audit publish failed",
+			"event_type", eventType,
+			"error", err,
+		)
+	}
+}
+
+// newAuditEventID returns a random hex-encoded identifier for audit events.
+func newAuditEventID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
+	return fmt.Sprintf("%x", b)
+}
+
+// extractMetadataValue reads a single value from incoming gRPC metadata.
+func extractMetadataValue(ctx context.Context, key string) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	vals := md.Get(key)
+	if len(vals) == 0 {
+		return ""
+	}
+	return vals[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +255,12 @@ func (s *ArchivistServer) StoreArtefact(
 		"artefact_id", artefactID,
 		"version_hash", contentHash,
 	)
+
+	s.publishAudit(ctx, "audit.artefact.version_created", map[string]string{
+		"action":      "version_created",
+		"resource_id": artefactID,
+		"workitem_id": workitemID,
+	})
 
 	return &flowv1.StoreArtefactResponse{
 		VersionHash:  contentHash,
@@ -432,6 +518,13 @@ func (s *ArchivistServer) StampArtefact(
 			"artefact_id", artefactID,
 			"stamp_name", stampName,
 		)
+	} else {
+		s.publishAudit(ctx, "audit.artefact.stamped", map[string]string{
+			"action":      "stamped",
+			"resource_id": artefactID,
+			"workitem_id": workitemID,
+			"stamp_name":  stampName,
+		})
 	}
 
 	return &flowv1.StampArtefactResponse{
@@ -552,6 +645,13 @@ func (s *ArchivistServer) AddFeedback(
 		return nil, status.Errorf(codes.Internal, "add feedback: %v", err)
 	}
 
+	s.publishAudit(ctx, "audit.artefact.feedback.add", map[string]string{
+		"action":      "add",
+		"resource_id": feedbackID,
+		"workitem_id": workitemID,
+		"artefact_id": artefactID,
+	})
+
 	return &flowv1.AddFeedbackResponse{FeedbackId: feedbackID}, nil
 }
 
@@ -642,6 +742,11 @@ func (s *ArchivistServer) ResolveFeedback(
 		return nil, status.Errorf(codes.InvalidArgument, "resolve feedback: %v", err)
 	}
 
+	s.publishAudit(ctx, "audit.artefact.feedback.resolve", map[string]string{
+		"action":      "resolve",
+		"resource_id": req.GetFeedbackId(),
+	})
+
 	return &flowv1.ResolveFeedbackResponse{
 		UpdatedItem: feedbackRecordToProto(record),
 	}, nil
@@ -666,6 +771,11 @@ func (s *ArchivistServer) RefuseFeedback(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "refuse feedback: %v", err)
 	}
+
+	s.publishAudit(ctx, "audit.artefact.feedback.refuse", map[string]string{
+		"action":      "refuse",
+		"resource_id": req.GetFeedbackId(),
+	})
 
 	return &flowv1.RefuseFeedbackResponse{
 		UpdatedItem: feedbackRecordToProto(record),
@@ -692,6 +802,11 @@ func (s *ArchivistServer) AcceptFix(
 		return nil, status.Errorf(codes.InvalidArgument, "accept fix: %v", err)
 	}
 
+	s.publishAudit(ctx, "audit.artefact.feedback.accept", map[string]string{
+		"action":      "accept",
+		"resource_id": req.GetFeedbackId(),
+	})
+
 	return &flowv1.AcceptFixResponse{
 		UpdatedItem: feedbackRecordToProto(record),
 	}, nil
@@ -716,6 +831,11 @@ func (s *ArchivistServer) RejectFix(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "reject fix: %v", err)
 	}
+
+	s.publishAudit(ctx, "audit.artefact.feedback.reject", map[string]string{
+		"action":      "reject",
+		"resource_id": req.GetFeedbackId(),
+	})
 
 	return &flowv1.RejectFixResponse{
 		UpdatedItem: feedbackRecordToProto(record),
@@ -742,6 +862,11 @@ func (s *ArchivistServer) AcceptRefusal(
 		return nil, status.Errorf(codes.InvalidArgument, "accept refusal: %v", err)
 	}
 
+	s.publishAudit(ctx, "audit.artefact.feedback.accept", map[string]string{
+		"action":      "accept",
+		"resource_id": req.GetFeedbackId(),
+	})
+
 	return &flowv1.AcceptRefusalResponse{
 		UpdatedItem: feedbackRecordToProto(record),
 	}, nil
@@ -766,6 +891,11 @@ func (s *ArchivistServer) RejectRefusal(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "reject refusal: %v", err)
 	}
+
+	s.publishAudit(ctx, "audit.artefact.feedback.reject", map[string]string{
+		"action":      "reject",
+		"resource_id": req.GetFeedbackId(),
+	})
 
 	return &flowv1.RejectRefusalResponse{
 		UpdatedItem: feedbackRecordToProto(record),
@@ -812,6 +942,11 @@ func (s *ArchivistServer) DeadlockFeedback(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "deadlock feedback: %v", err)
 	}
+
+	s.publishAudit(ctx, "audit.artefact.feedback.deadlock", map[string]string{
+		"action":      "deadlock",
+		"resource_id": req.GetFeedbackId(),
+	})
 
 	return &flowv1.DeadlockFeedbackResponse{
 		UpdatedItem: feedbackRecordToProto(record),
@@ -863,6 +998,12 @@ func (s *ArchivistServer) LinkRuling(
 			return nil, status.Errorf(codes.Internal, "link ruling: %v", err)
 		}
 	}
+
+	s.publishAudit(ctx, "audit.artefact.feedback.link-ruling", map[string]string{
+		"action":      "link-ruling",
+		"resource_id": feedbackID,
+		"law_id":      lawID,
+	})
 
 	return &flowv1.LinkRulingResponse{
 		UpdatedItem: feedbackRecordToProto(record),

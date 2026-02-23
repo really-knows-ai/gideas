@@ -41,6 +41,7 @@ import (
 	"github.com/gideas/flow/operator/internal/controller"
 	"github.com/gideas/flow/operator/internal/rpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	// +kubebuilder:scaffold:imports
 )
@@ -65,6 +66,7 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var grpcAddr string
+	var eventBusAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -72,6 +74,7 @@ func main() {
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.StringVar(&grpcAddr, "grpc-bind-address", ":50052", "The address the Operator gRPC server binds to.")
+	flag.StringVar(&eventBusAddr, "event-bus-address", "", "The address of the Event Bus gRPC server for audit publishing (empty = disabled).")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -269,6 +272,28 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	operatorSrv := rpc.NewOperatorServer(mgr.GetClient())
+
+	// Connect to the Event Bus for audit event publishing.
+	// Prefer the flag; fall back to the environment variable.
+	ebAddr := eventBusAddr
+	if ebAddr == "" {
+		ebAddr = os.Getenv("EVENT_BUS_ADDRESS")
+	}
+	if ebAddr != "" {
+		ebConn, ebErr := grpc.NewClient(
+			ebAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if ebErr != nil {
+			setupLog.Error(ebErr, "Failed to connect to Event Bus", "address", ebAddr)
+			os.Exit(1)
+		}
+		operatorSrv.Auditor = flowv1gen.NewFlowEventBusServiceClient(ebConn)
+		setupLog.Info("Event Bus connected for audit publishing", "address", ebAddr)
+	} else {
+		setupLog.Info("Event Bus not configured, audit publishing disabled")
+	}
+
 	flowv1gen.RegisterOperatorServiceServer(grpcServer, operatorSrv)
 	reflection.Register(grpcServer)
 

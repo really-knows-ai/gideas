@@ -18,8 +18,10 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,9 +31,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	flowv1gen "github.com/gideas/flow/gen/flow/v1"
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/operator/internal/controller/dispatcher"
 	"github.com/gideas/flow/operator/internal/controller/scheduler"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Workitem lifecycle phase constants.
@@ -46,6 +51,12 @@ const (
 // nowFunc is a function variable for the current time.
 // Tests can override this to produce deterministic timestamps.
 var nowFunc = metav1.Now
+
+// WorkitemAuditPublisher abstracts audit event publication for the controller.
+// Satisfied by flowv1gen.FlowEventBusServiceClient.
+type WorkitemAuditPublisher interface {
+	Publish(ctx context.Context, req *flowv1gen.PublishRequest, opts ...grpc.CallOption) (*flowv1gen.PublishResponse, error)
+}
 
 // WorkitemReconciler reconciles a Workitem object.
 //
@@ -62,6 +73,43 @@ type WorkitemReconciler struct {
 	// against artefact state in the Archivist. May be nil in tests or when
 	// the Archivist is not yet available (contract validation is skipped).
 	ArtefactQuerier scheduler.ArtefactQuerier
+
+	// Auditor publishes lifecycle events to the Event Bus. nil-safe.
+	Auditor WorkitemAuditPublisher
+}
+
+// publishAudit publishes an audit event for a workitem lifecycle transition.
+// Errors are logged but never propagated.
+func (r *WorkitemReconciler) publishAudit(ctx context.Context, eventType string, workitemName string, attrs map[string]string) {
+	if r.Auditor == nil {
+		return
+	}
+	_, err := r.Auditor.Publish(ctx, &flowv1gen.PublishRequest{
+		Channel: flowv1gen.EventChannel_EVENT_CHANNEL_AUDIT,
+		Event: &flowv1gen.FlowEvent{
+			EventId:    newWIAuditID(),
+			EventType:  eventType,
+			WorkitemId: workitemName,
+			Timestamp:  timestamppb.Now(),
+			Attributes: attrs,
+		},
+	})
+	if err != nil {
+		slog.Warn("Audit publish failed",
+			"event_type", eventType,
+			"workitem", workitemName,
+			"error", err,
+		)
+	}
+}
+
+// newWIAuditID returns a random hex-encoded identifier for audit events.
+func newWIAuditID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
+	return fmt.Sprintf("%x", b)
 }
 
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems,verbs=get;list;watch;create;update;patch;delete
@@ -216,6 +264,10 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 			"aggregate", aggregate,
 			"maxVisits", flow.Spec.GovernancePolicy.MaxVisits,
 		)
+		r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+			"action": "failed",
+			"reason": "THRASH_BUDGET_EXCEEDED",
+		})
 		return r.failWorkitem(ctx, workitem, "THRASH_BUDGET_EXCEEDED")
 	}
 
@@ -272,6 +324,11 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 		"assignee", assignee,
 	)
 
+	r.publishAudit(ctx, "audit.workitem.running", workitem.Name, map[string]string{
+		"action":   "running",
+		"assignee": assignee,
+	})
+
 	// Requeue after the timeout period to check for inactivity timeout.
 	var node flowv1.FoundryNode
 	nodeKey := types.NamespacedName{Namespace: workitem.Namespace, Name: assignee}
@@ -325,6 +382,10 @@ func (r *WorkitemReconciler) reconcileRunning(ctx context.Context, req ctrl.Requ
 				"elapsed", elapsed,
 				"timeout", timeout,
 			)
+			r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+				"action": "failed",
+				"reason": "TIMEOUT_EXCEEDED",
+			})
 			return r.failWorkitem(ctx, workitem, "TIMEOUT_EXCEEDED")
 		}
 
@@ -393,6 +454,10 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 					"code", guardErr.Code,
 					"message", guardErr.Message,
 				)
+				r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+					"action": "failed",
+					"reason": guardErr.Code,
+				})
 				return r.failWorkitem(ctx, workitem, guardErr.Code)
 			}
 
@@ -446,12 +511,21 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 			"name", workitem.Name,
 			"lastNode", previousAssignee,
 		)
+		r.publishAudit(ctx, "audit.workitem.completed", workitem.Name, map[string]string{
+			"action":    "completed",
+			"last_node": previousAssignee,
+		})
 	} else {
 		log.Info("Moving Workitem",
 			"name", workitem.Name,
 			"from", previousAssignee,
 			"to", result.NextAssignee,
 		)
+		r.publishAudit(ctx, "audit.workitem.routed", workitem.Name, map[string]string{
+			"action": "routed",
+			"from":   previousAssignee,
+			"to":     result.NextAssignee,
+		})
 	}
 
 	return ctrl.Result{}, nil
