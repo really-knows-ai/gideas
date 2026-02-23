@@ -18,6 +18,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// Routing type string constants for test assertions.
+const (
+	riComplete      = "complete"
+	riRouteToOutput = "route_to_output"
+	riRouteTo       = "route_to"
+)
+
 func newScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = apiv1.AddToScheme(s)
@@ -71,7 +78,7 @@ func TestSubmitResult_HappyPath(t *testing.T) {
 	if updated.Status.RoutingInstruction == nil {
 		t.Fatal("Expected routing instruction to be set")
 	}
-	if updated.Status.RoutingInstruction.Type != "complete" {
+	if updated.Status.RoutingInstruction.Type != riComplete {
 		t.Fatalf("Expected routing type 'complete', got %s", updated.Status.RoutingInstruction.Type)
 	}
 }
@@ -119,7 +126,7 @@ func TestSubmitResult_WorkitemFromMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get updated workitem: %v", err)
 	}
-	if updated.Status.RoutingInstruction.Type != "route_to_output" {
+	if updated.Status.RoutingInstruction.Type != riRouteToOutput {
 		t.Fatalf("Expected routing type 'route_to_output', got %s", updated.Status.RoutingInstruction.Type)
 	}
 	if updated.Status.RoutingInstruction.Target != "review" {
@@ -1151,4 +1158,883 @@ func TestGetFlowTopology_NodeCallNoCapabilities_Denied(t *testing.T) {
 
 	_, err := srv.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	assertGRPCCode(t, err, codes.PermissionDenied)
+}
+
+// ---------------------------------------------------------------------------
+// childCtx creates a context with Sidecar-injected metadata for child Workitem
+// operations. The caller has CREATE:workitem/child capability.
+// ---------------------------------------------------------------------------
+
+func childCtx(flowID, nodeID, workitemID string) context.Context {
+	md := metadata.Pairs(
+		"x-flow-flow-id", flowID,
+		"x-flow-node-id", nodeID,
+		"x-flow-workitem-id", workitemID,
+		"x-flow-capabilities", "CREATE:workitem/child,READ:flow",
+	)
+	return metadata.NewIncomingContext(context.Background(), md)
+}
+
+// workitemCtx creates a context with Sidecar-injected metadata that carries
+// the workitem identity but no special capabilities.
+func workitemCtx(workitemID string) context.Context {
+	md := metadata.Pairs(
+		"x-flow-workitem-id", workitemID,
+	)
+	return metadata.NewIncomingContext(context.Background(), md)
+}
+
+// ---------------------------------------------------------------------------
+// CreateChildWorkitem tests
+// ---------------------------------------------------------------------------
+
+func TestCreateChildWorkitem_HappyPath(t *testing.T) {
+	fixedTime(t)
+	scheme := newScheme()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-wi",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/flow": "test-flow"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "clerk",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent).
+		WithStatusSubresource(parent, &apiv1.Workitem{}).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := childCtx("test-flow", "clerk", "parent-wi")
+
+	resp, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	if err != nil {
+		t.Fatalf("CreateChildWorkitem() returned error: %v", err)
+	}
+
+	if resp.GetChildWorkitemId() == "" {
+		t.Fatal("Expected non-empty child_workitem_id")
+	}
+	if !strings.HasPrefix(resp.GetChildWorkitemId(), "child-parent-wi-") {
+		t.Fatalf("Expected prefix 'child-parent-wi-', got %s", resp.GetChildWorkitemId())
+	}
+
+	// Verify the CRD was created.
+	var child apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName(resp.GetChildWorkitemId()), &child)
+	if err != nil {
+		t.Fatalf("Failed to get created child workitem: %v", err)
+	}
+	if child.Status.Phase != phasePending {
+		t.Fatalf("Expected phase Pending, got %s", child.Status.Phase)
+	}
+	if child.Status.ParentWorkitemID != "parent-wi" {
+		t.Fatalf("Expected ParentWorkitemID 'parent-wi', got %s", child.Status.ParentWorkitemID)
+	}
+
+	// Verify labels.
+	if child.Labels["flow.gideas.io/parent"] != "parent-wi" {
+		t.Fatalf("Expected parent label 'parent-wi', got %s", child.Labels["flow.gideas.io/parent"])
+	}
+	if child.Labels["flow.gideas.io/flow"] != "test-flow" {
+		t.Fatalf("Expected flow label 'test-flow', got %s", child.Labels["flow.gideas.io/flow"])
+	}
+	if child.Labels["flow.gideas.io/creator"] != "clerk" {
+		t.Fatalf("Expected creator label 'clerk', got %s", child.Labels["flow.gideas.io/creator"])
+	}
+}
+
+func TestCreateChildWorkitem_CapabilityDenied(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	// Node call without CREATE:workitem/child capability.
+	md := metadata.Pairs(
+		"x-flow-flow-id", "test-flow",
+		"x-flow-node-id", "node-1",
+		"x-flow-workitem-id", "wi-1",
+		"x-flow-capabilities", "READ:flow,WRITE:artefact",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	assertGRPCCode(t, err, codes.PermissionDenied)
+}
+
+func TestCreateChildWorkitem_MissingWorkitemID(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	// Has capability but no workitem_id.
+	md := metadata.Pairs(
+		"x-flow-flow-id", "test-flow",
+		"x-flow-node-id", "node-1",
+		"x-flow-capabilities", "CREATE:workitem/child",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+func TestCreateChildWorkitem_MissingFlowID(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	md := metadata.Pairs(
+		"x-flow-node-id", "node-1",
+		"x-flow-workitem-id", "wi-1",
+		"x-flow-capabilities", "CREATE:workitem/child",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+func TestCreateChildWorkitem_MissingNodeID(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	md := metadata.Pairs(
+		"x-flow-flow-id", "test-flow",
+		"x-flow-workitem-id", "wi-1",
+		"x-flow-capabilities", "CREATE:workitem/child",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+func TestCreateChildWorkitem_ParentNotFound(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	ctx := childCtx("test-flow", "clerk", "nonexistent-parent")
+
+	_, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	assertGRPCCode(t, err, codes.NotFound)
+}
+
+// ---------------------------------------------------------------------------
+// RouteChild tests
+// ---------------------------------------------------------------------------
+
+func TestRouteChild_HappyPath(t *testing.T) {
+	scheme := newScheme()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "clerk",
+		},
+	}
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+			Labels: map[string]string{
+				"flow.gideas.io/parent": "parent-wi",
+			},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            phasePending,
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	targetNode := &apiv1.FoundryNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "codify-smt", Namespace: "default"},
+		Spec: apiv1.FoundryNodeSpec{
+			Image: "codify-smt:latest",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent, child, targetNode).
+		WithStatusSubresource(parent, child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("parent-wi")
+
+	resp, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "codify-smt",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RouteChild() returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+
+	// Verify the child was updated.
+	var updated apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName("child-wi"), &updated)
+	if err != nil {
+		t.Fatalf("Failed to get updated child: %v", err)
+	}
+	if updated.Status.Phase != "Routing" {
+		t.Fatalf("Expected phase Routing, got %s", updated.Status.Phase)
+	}
+	if updated.Status.RoutingInstruction == nil {
+		t.Fatal("Expected routing instruction to be set")
+	}
+	if updated.Status.RoutingInstruction.Type != riRouteTo {
+		t.Fatalf("Expected routing type 'route_to', got %s", updated.Status.RoutingInstruction.Type)
+	}
+	if updated.Status.RoutingInstruction.Target != "codify-smt" {
+		t.Fatalf("Expected target 'codify-smt', got %s", updated.Status.RoutingInstruction.Target)
+	}
+}
+
+func TestRouteChild_ChildNotOwned(t *testing.T) {
+	scheme := newScheme()
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            phasePending,
+			ParentWorkitemID: "other-parent",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child).
+		WithStatusSubresource(child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("my-parent")
+
+	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "some-node",
+		},
+	})
+	assertGRPCCode(t, err, codes.PermissionDenied)
+	if !strings.Contains(err.Error(), "CHILD_NOT_OWNED") {
+		t.Fatalf("Expected CHILD_NOT_OWNED error, got: %v", err)
+	}
+}
+
+func TestRouteChild_ChildAlreadyRouted(t *testing.T) {
+	scheme := newScheme()
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Running",
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child).
+		WithStatusSubresource(child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("parent-wi")
+
+	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "some-node",
+		},
+	})
+	assertGRPCCode(t, err, codes.FailedPrecondition)
+	if !strings.Contains(err.Error(), "CHILD_ALREADY_ROUTED") {
+		t.Fatalf("Expected CHILD_ALREADY_ROUTED error, got: %v", err)
+	}
+}
+
+func TestRouteChild_ChildNotFound(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	ctx := workitemCtx("parent-wi")
+
+	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "nonexistent-child",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "some-node",
+		},
+	})
+	assertGRPCCode(t, err, codes.NotFound)
+}
+
+func TestRouteChild_MissingChildID(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	ctx := workitemCtx("parent-wi")
+
+	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "some-node",
+		},
+	})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+func TestRouteChild_MissingParentID(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	_, err := srv.RouteChild(context.Background(), &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "some-node",
+		},
+	})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+func TestRouteChild_MissingInstruction(t *testing.T) {
+	scheme := newScheme()
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            phasePending,
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child).
+		WithStatusSubresource(child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("parent-wi")
+
+	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+	})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+func TestRouteChild_TargetNodeNotFound(t *testing.T) {
+	scheme := newScheme()
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            phasePending,
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child).
+		WithStatusSubresource(child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("parent-wi")
+
+	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "nonexistent-node",
+		},
+	})
+	assertGRPCCode(t, err, codes.FailedPrecondition)
+	if !strings.Contains(err.Error(), "INVALID_ROUTE") {
+		t.Fatalf("Expected INVALID_ROUTE error, got: %v", err)
+	}
+}
+
+func TestRouteChild_RouteToOutput_NoTargetValidation(t *testing.T) {
+	// route_to_output does not validate target node existence (that's the
+	// reconciler's job), but it does require a target.
+	scheme := newScheme()
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            phasePending,
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child).
+		WithStatusSubresource(child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("parent-wi")
+
+	resp, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO_OUTPUT,
+			Target: "review",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RouteChild(route_to_output) returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+}
+
+func TestRouteChild_Complete(t *testing.T) {
+	scheme := newScheme()
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            phasePending,
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child).
+		WithStatusSubresource(child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("parent-wi")
+
+	resp, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RouteChild(complete) returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+
+	// Verify the child was transitioned to Routing with complete instruction.
+	var updated apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName("child-wi"), &updated)
+	if err != nil {
+		t.Fatalf("Failed to get updated child: %v", err)
+	}
+	if updated.Status.RoutingInstruction.Type != riComplete {
+		t.Fatalf("Expected routing type 'complete', got %s", updated.Status.RoutingInstruction.Type)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetChildren tests
+// ---------------------------------------------------------------------------
+
+func TestGetChildren_HappyPath(t *testing.T) {
+	scheme := newScheme()
+
+	child1 := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-1",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Running",
+			CurrentAssignee:  "codify-smt",
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	child2 := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-2",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Completed",
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	// Unrelated workitem (different parent).
+	unrelated := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "unrelated-wi",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "other-parent"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Running",
+			ParentWorkitemID: "other-parent",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child1, child2, unrelated).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := workitemCtx("parent-wi")
+
+	resp, err := srv.GetChildren(ctx, &flowv1.GetChildrenRequest{})
+	if err != nil {
+		t.Fatalf("GetChildren() returned error: %v", err)
+	}
+
+	if len(resp.GetChildren()) != 2 {
+		t.Fatalf("Expected 2 children, got %d", len(resp.GetChildren()))
+	}
+
+	// Verify child data (order may vary with fake client).
+	childMap := make(map[string]*flowv1.ChildWorkitemStatus)
+	for _, c := range resp.GetChildren() {
+		childMap[c.GetWorkitemId()] = c
+	}
+
+	c1, ok := childMap["child-1"]
+	if !ok {
+		t.Fatal("Expected child-1 in response")
+	}
+	if c1.GetPhase() != "Running" {
+		t.Fatalf("Expected child-1 phase Running, got %s", c1.GetPhase())
+	}
+	if c1.GetCurrentAssignee() != "codify-smt" {
+		t.Fatalf("Expected child-1 assignee 'codify-smt', got %s", c1.GetCurrentAssignee())
+	}
+
+	c2, ok := childMap["child-2"]
+	if !ok {
+		t.Fatal("Expected child-2 in response")
+	}
+	if c2.GetPhase() != "Completed" {
+		t.Fatalf("Expected child-2 phase Completed, got %s", c2.GetPhase())
+	}
+}
+
+func TestGetChildren_NoChildren(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	ctx := workitemCtx("parent-wi")
+
+	resp, err := srv.GetChildren(ctx, &flowv1.GetChildrenRequest{})
+	if err != nil {
+		t.Fatalf("GetChildren() returned error: %v", err)
+	}
+
+	if len(resp.GetChildren()) != 0 {
+		t.Fatalf("Expected 0 children, got %d", len(resp.GetChildren()))
+	}
+}
+
+func TestGetChildren_MissingWorkitemID(t *testing.T) {
+	scheme := newScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+	srv := NewOperatorServer(k8s)
+
+	_, err := srv.GetChildren(context.Background(), &flowv1.GetChildrenRequest{})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+// ---------------------------------------------------------------------------
+// Completion guard tests (CHILDREN_NOT_TERMINAL)
+// ---------------------------------------------------------------------------
+
+func TestSubmitResult_CompletionGuard_ChildrenPending(t *testing.T) {
+	scheme := newScheme()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "clerk",
+		},
+	}
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            phasePending,
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent, child).
+		WithStatusSubresource(parent, child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	_, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+		WorkitemId: "parent-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
+		},
+	})
+	assertGRPCCode(t, err, codes.FailedPrecondition)
+	if !strings.Contains(err.Error(), "CHILDREN_NOT_TERMINAL") {
+		t.Fatalf("Expected CHILDREN_NOT_TERMINAL error, got: %v", err)
+	}
+}
+
+func TestSubmitResult_CompletionGuard_ChildrenRunning(t *testing.T) {
+	scheme := newScheme()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "clerk",
+		},
+	}
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Running",
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent, child).
+		WithStatusSubresource(parent, child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	_, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+		WorkitemId: "parent-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
+		},
+	})
+	assertGRPCCode(t, err, codes.FailedPrecondition)
+	if !strings.Contains(err.Error(), "CHILDREN_NOT_TERMINAL") {
+		t.Fatalf("Expected CHILDREN_NOT_TERMINAL error, got: %v", err)
+	}
+}
+
+func TestSubmitResult_CompletionGuard_AllChildrenCompleted(t *testing.T) {
+	scheme := newScheme()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "clerk",
+		},
+	}
+
+	child1 := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-1",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Completed",
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	child2 := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-2",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Failed",
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent, child1, child2).
+		WithStatusSubresource(parent, child1, child2).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	resp, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+		WorkitemId: "parent-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Expected completion to succeed when all children are terminal, got: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+}
+
+func TestSubmitResult_CompletionGuard_NoChildren(t *testing.T) {
+	scheme := newScheme()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "clerk",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent).
+		WithStatusSubresource(parent).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	resp, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+		WorkitemId: "parent-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Expected completion to succeed with no children, got: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+}
+
+func TestSubmitResult_CompletionGuard_NonCompleteSkipsCheck(t *testing.T) {
+	scheme := newScheme()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-wi",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "clerk",
+		},
+	}
+
+	// Non-terminal child that would block completion.
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-wi",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Running",
+			ParentWorkitemID: "parent-wi",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent, child).
+		WithStatusSubresource(parent, child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	// route_to_output does NOT trigger the completion guard.
+	resp, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+		WorkitemId: "parent-wi",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO_OUTPUT,
+			Target: "review",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Expected route_to_output to succeed despite non-terminal child, got: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
 }
