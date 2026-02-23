@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -199,8 +198,103 @@ func TestAudit_ExportWorkitem(t *testing.T) {
 	}
 }
 
-func newTestScheme() *runtime.Scheme {
-	s := runtime.NewScheme()
-	_ = apiv1.AddToScheme(s)
-	return s
+func TestAudit_CreateChildWorkitem(t *testing.T) {
+	scheme := newScheme()
+	pub := &mockAuditPublisher{}
+
+	timeNow = func() metav1.Time {
+		return metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 123456789, time.UTC))
+	}
+	defer func() { timeNow = func() metav1.Time { return metav1.Now() } }()
+
+	parent := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{Name: "parent-audit", Namespace: "default"},
+		Status:     apiv1.WorkitemStatus{Phase: "Running"},
+	}
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(parent).
+		WithStatusSubresource(parent, &apiv1.Workitem{}).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	srv.Auditor = pub
+
+	md := metadata.Pairs(
+		"x-flow-flow-id", "flow-1",
+		"x-flow-node-id", "clerk",
+		"x-flow-workitem-id", "parent-audit",
+		"x-flow-capabilities", "CREATE:workitem/child",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	if err != nil {
+		t.Fatalf("CreateChildWorkitem: %v", err)
+	}
+
+	if pub.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	}
+	evt := pub.last().GetEvent()
+	if evt.GetEventType() != "audit.workitem.child_created" {
+		t.Fatalf("expected audit.workitem.child_created, got %q", evt.GetEventType())
+	}
+	if evt.GetAttributes()["resource_id"] != resp.GetChildWorkitemId() {
+		t.Fatalf("expected resource_id=%q, got %q", resp.GetChildWorkitemId(), evt.GetAttributes()["resource_id"])
+	}
+	if evt.GetAttributes()["parent_workitem_id"] != "parent-audit" {
+		t.Fatalf("expected parent_workitem_id=parent-audit, got %q", evt.GetAttributes()["parent_workitem_id"])
+	}
+}
+
+func TestAudit_RouteChild(t *testing.T) {
+	scheme := newScheme()
+	pub := &mockAuditPublisher{}
+
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{Name: "child-audit", Namespace: "default"},
+		Status: apiv1.WorkitemStatus{
+			Phase:            "Pending",
+			ParentWorkitemID: "parent-audit",
+		},
+	}
+	targetNode := &apiv1.FoundryNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "target-node", Namespace: "default"},
+		Spec:       apiv1.FoundryNodeSpec{Image: "target:latest"},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(child, targetNode).
+		WithStatusSubresource(child).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	srv.Auditor = pub
+
+	md := metadata.Pairs("x-flow-workitem-id", "parent-audit")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{
+		ChildWorkitemId: "child-audit",
+		RoutingInstruction: &flowv1.RoutingInstruction{
+			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
+			Target: "target-node",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RouteChild: %v", err)
+	}
+
+	if pub.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	}
+	evt := pub.last().GetEvent()
+	if evt.GetEventType() != "audit.workitem.child_routed" {
+		t.Fatalf("expected audit.workitem.child_routed, got %q", evt.GetEventType())
+	}
+	if evt.GetAttributes()["resource_id"] != "child-audit" {
+		t.Fatalf("expected resource_id=child-audit, got %q", evt.GetAttributes()["resource_id"])
+	}
 }

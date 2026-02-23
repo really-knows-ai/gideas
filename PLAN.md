@@ -170,7 +170,7 @@ Decisions made during planning that inform the implementation:
 
 ### Checklist
 
-- [ ] **`operator/internal/rpc/operator_server.go`** -- `CreateChildWorkitem`
+- [x] **`operator/internal/rpc/operator_server.go`** -- `CreateChildWorkitem`
   - Extract parent Workitem ID from Sidecar-injected context
   - Validate `CREATE:workitem/child` capability
   - Create child Workitem CRD with `ParentWorkitemID` set
@@ -178,26 +178,26 @@ Decisions made during planning that inform the implementation:
   - Child starts in `Pending` with no assignee
   - Publish audit event
 
-- [ ] **`operator/internal/rpc/operator_server.go`** -- `RouteChild`
+- [x] **`operator/internal/rpc/operator_server.go`** -- `RouteChild`
   - Validate child's `ParentWorkitemID` matches caller's current Workitem
   - Validate child is in `Pending` (not yet routed)
   - Validate routing instruction target exists (same validation as `SubmitResult`)
   - Apply routing instruction on the child
   - Publish audit event
 
-- [ ] **`operator/internal/rpc/operator_server.go`** -- `GetChildren`
+- [x] **`operator/internal/rpc/operator_server.go`** -- `GetChildren`
   - List Workitems with label `flow.gideas.io/parent: <caller's workitem id>`
   - Query Archivist for each child's artefact refs
   - Return `ChildWorkitemStatus` for each child
 
-- [ ] **`operator/internal/rpc/operator_server.go`** -- Completion guard
+- [x] **`operator/internal/rpc/operator_server.go`** -- Completion guard
   - In `SubmitResult` handler for `complete` instructions, before exit contract validation:
   - Query for children (by parent label)
   - If any child is `Pending` or `Running`, reject with `CHILDREN_NOT_TERMINAL`
 
-- [ ] **Capability validation** -- Update `foundrynode_controller.go` capability regex to accept `CREATE:workitem/child`
+- [x] **Capability validation** -- Update `foundrynode_controller.go` capability regex to accept `CREATE:workitem/child`
 
-- [ ] **Tests** -- Unit tests for all new RPCs and the completion guard
+- [x] **Tests** -- Unit tests for all new RPCs and the completion guard
 
 ---
 
@@ -377,7 +377,7 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase 1: Spec Updates | Complete | All 8 spec files updated, lint clean |
 | Phase 2: Proto Changes | Complete | All 4 proto files updated, Go code generated, all tests pass |
 | Phase 3: CRD Type Changes | Complete | All 4 type files updated, manifests regenerated, deepcopy generated, tests pass |
-| Phase 4: Operator -- Child Workitem RPCs | Not Started | |
+| Phase 4: Operator -- Child Workitem RPCs | Complete | CreateChildWorkitem, RouteChild, GetChildren RPCs + completion guard + tests |
 | Phase 5: Operator -- NodeGroup Validation | Not Started | |
 | Phase 6: Event Bus WORKITEM Channel | Not Started | |
 | Phase 7: Archivist Cross-Workitem Reads | Not Started | |

@@ -74,7 +74,8 @@ func main() {
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.StringVar(&grpcAddr, "grpc-bind-address", ":50052", "The address the Operator gRPC server binds to.")
-	flag.StringVar(&eventBusAddr, "event-bus-address", "", "The address of the Event Bus gRPC server for audit publishing (empty = disabled).")
+	flag.StringVar(&eventBusAddr, "event-bus-address", "",
+		"The address of the Event Bus gRPC server for audit publishing (empty = disabled).")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")

@@ -80,7 +80,7 @@ const (
 
 // capabilityPattern validates VERB:RESOURCE[/QUALIFIER] capability strings.
 var capabilityPattern = regexp.MustCompile(
-	`^(READ|WRITE|STAMP|USE):` +
+	`^(READ|WRITE|STAMP|USE|CREATE):` +
 		`(artefact|law|friction|flow|workitem|feedback|support|queue)` +
 		`(/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?)?$`,
 )

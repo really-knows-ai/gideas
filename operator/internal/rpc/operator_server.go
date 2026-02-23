@@ -53,6 +53,12 @@ const (
 
 	// phaseCompleted indicates a Workitem has finished processing.
 	phaseCompleted = "Completed"
+
+	// routeToType is the routing instruction type for direct node routing.
+	routeToType = "route_to"
+
+	// routeToOutputType is the routing instruction type for output routing.
+	routeToOutputType = "route_to_output"
 )
 
 // AuditPublisher abstracts audit event publication to the Flow Event Bus.
@@ -184,6 +190,13 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 
 	// 3. Update routing instruction.
 	workitem.Status.RoutingInstruction = convertRoutingInstruction(req.GetRoutingInstruction())
+
+	// 3a. Completion guard: reject complete if children are non-terminal.
+	if workitem.Status.RoutingInstruction != nil && workitem.Status.RoutingInstruction.Type == "complete" {
+		if err := s.checkChildrenTerminal(ctx, workitemID); err != nil {
+			return nil, err
+		}
+	}
 
 	// 4. Transition phase to Routing.
 	workitem.Status.Phase = phaseRouting
@@ -647,6 +660,236 @@ func (s *OperatorServer) ImportWorkitem(ctx context.Context, req *flowv1.ImportW
 	return &flowv1.ImportWorkitemResponse{WorkitemId: workitemName}, nil
 }
 
+// CreateChildWorkitem creates a child Workitem linked to the caller's current Workitem.
+//
+// Flow:
+//  1. Validate CREATE:workitem/child capability.
+//  2. Extract workitem_id, flow_id, and node_id from Sidecar-injected metadata.
+//  3. Fetch the parent Workitem CRD to confirm it exists.
+//  4. Generate a unique child Workitem name and create the CRD in Pending.
+//  5. Set ParentWorkitemID and flow.gideas.io/parent label.
+//  6. Return the child_workitem_id.
+func (s *OperatorServer) CreateChildWorkitem(ctx context.Context, _ *flowv1.CreateChildWorkitemRequest) (*flowv1.CreateChildWorkitemResponse, error) {
+	// 1. Capability gate: CREATE:workitem/child.
+	if err := checkCapability(ctx, "CREATE:workitem/child"); err != nil {
+		return nil, err
+	}
+
+	// 2. Extract identity from metadata.
+	parentWorkitemID := extractWorkitemID(ctx)
+	flowID := extractMetadataValue(ctx, metadataKeyFlowID)
+	nodeID := extractMetadataValue(ctx, metadataKeyNodeID)
+
+	if parentWorkitemID == "" {
+		return nil, status.Error(codes.InvalidArgument, "x-flow-workitem-id metadata is required")
+	}
+	if flowID == "" {
+		return nil, status.Error(codes.InvalidArgument, "x-flow-flow-id metadata is required")
+	}
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "x-flow-node-id metadata is required")
+	}
+
+	slog.Info("CreateChildWorkitem received",
+		"parent_workitem_id", parentWorkitemID,
+		"flow_id", flowID,
+		"node_id", nodeID,
+	)
+
+	// 3. Fetch the parent Workitem CRD.
+	var parent apiv1.Workitem
+	parentKey := types.NamespacedName{Namespace: defaultNamespace, Name: parentWorkitemID}
+	if err := s.K8sClient.Get(ctx, parentKey, &parent); err != nil {
+		slog.Error("Failed to fetch parent Workitem", "workitem_id", parentWorkitemID, "error", err)
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("parent workitem %q not found: %v", parentWorkitemID, err))
+	}
+
+	// 4. Create the child Workitem CRD.
+	childName := fmt.Sprintf("child-%s-%s", parentWorkitemID, generateSuffix())
+	child := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      childName,
+			Namespace: defaultNamespace,
+			Labels: map[string]string{
+				"flow.gideas.io/flow":    flowID,
+				"flow.gideas.io/creator": nodeID,
+				"flow.gideas.io/parent":  parentWorkitemID,
+			},
+		},
+	}
+
+	if err := s.K8sClient.Create(ctx, child); err != nil {
+		slog.Error("Failed to create child Workitem", "name", childName, "error", err)
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create child workitem: %v", err))
+	}
+
+	// 5. Set status fields via status subresource.
+	child.Status.Phase = phasePending
+	child.Status.ParentWorkitemID = parentWorkitemID
+	if err := s.K8sClient.Status().Update(ctx, child); err != nil {
+		slog.Error("Failed to set child Workitem status", "name", childName, "error", err)
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to set child workitem status: %v", err))
+	}
+
+	slog.Info("Child Workitem created",
+		"child_workitem_id", childName,
+		"parent_workitem_id", parentWorkitemID,
+		"flow_id", flowID,
+		"creator", nodeID,
+	)
+
+	s.publishAudit(ctx, "audit.workitem.child_created", map[string]string{
+		"action":             "child_created",
+		"resource_id":        childName,
+		"parent_workitem_id": parentWorkitemID,
+	})
+
+	return &flowv1.CreateChildWorkitemResponse{ChildWorkitemId: childName}, nil
+}
+
+// RouteChild submits a routing instruction for a child Workitem.
+//
+// Flow:
+//  1. Extract workitem_id (parent) from Sidecar-injected metadata.
+//  2. Validate child_workitem_id is provided.
+//  3. Fetch the child Workitem CRD.
+//  4. Validate the child's ParentWorkitemID matches the caller's Workitem.
+//  5. Validate the child is in Pending state (not yet routed).
+//  6. Validate the routing instruction target exists.
+//  7. Write the routing instruction and transition to Routing.
+func (s *OperatorServer) RouteChild(ctx context.Context, req *flowv1.RouteChildRequest) (*flowv1.RouteChildResponse, error) {
+	// 1. Extract parent identity from metadata.
+	parentWorkitemID := extractWorkitemID(ctx)
+	if parentWorkitemID == "" {
+		return nil, status.Error(codes.InvalidArgument, "x-flow-workitem-id metadata is required")
+	}
+
+	// 2. Validate child_workitem_id.
+	childID := req.GetChildWorkitemId()
+	if childID == "" {
+		return nil, status.Error(codes.InvalidArgument, "child_workitem_id is required")
+	}
+
+	slog.Info("RouteChild received",
+		"parent_workitem_id", parentWorkitemID,
+		"child_workitem_id", childID,
+		"routing_type", routingTypeString(req.GetRoutingInstruction()),
+		"target", routingTargetString(req.GetRoutingInstruction()),
+	)
+
+	// 3. Fetch the child Workitem CRD.
+	var child apiv1.Workitem
+	childKey := types.NamespacedName{Namespace: defaultNamespace, Name: childID}
+	if err := s.K8sClient.Get(ctx, childKey, &child); err != nil {
+		slog.Error("Failed to fetch child Workitem", "child_workitem_id", childID, "error", err)
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("child workitem %q not found: %v", childID, err))
+	}
+
+	// 4. Validate parent-child relationship.
+	if child.Status.ParentWorkitemID != parentWorkitemID {
+		return nil, status.Error(codes.PermissionDenied,
+			fmt.Sprintf("CHILD_NOT_OWNED: child workitem %q is not owned by caller's workitem %q", childID, parentWorkitemID))
+	}
+
+	// 5. Validate child is in Pending state.
+	if child.Status.Phase != phasePending {
+		return nil, status.Error(codes.FailedPrecondition,
+			fmt.Sprintf("CHILD_ALREADY_ROUTED: child workitem %q is in phase %q, must be Pending", childID, child.Status.Phase))
+	}
+
+	// 6. Validate routing instruction target exists.
+	ri := req.GetRoutingInstruction()
+	if ri == nil {
+		return nil, status.Error(codes.InvalidArgument, "routing_instruction is required")
+	}
+	crdRI := convertRoutingInstruction(ri)
+
+	if crdRI.Type == routeToType || crdRI.Type == routeToOutputType {
+		target := crdRI.Target
+		if target == "" {
+			return nil, status.Error(codes.InvalidArgument, "routing instruction target is required")
+		}
+		// For route_to, validate the target node exists.
+		if crdRI.Type == routeToType {
+			var targetNode apiv1.FoundryNode
+			targetKey := types.NamespacedName{Namespace: defaultNamespace, Name: target}
+			if err := s.K8sClient.Get(ctx, targetKey, &targetNode); err != nil {
+				return nil, status.Error(codes.FailedPrecondition,
+					fmt.Sprintf("INVALID_ROUTE: target node %q not found: %v", target, err))
+			}
+		}
+	}
+
+	// 7. Write the routing instruction and transition to Routing.
+	child.Status.RoutingInstruction = crdRI
+	child.Status.Phase = phaseRouting
+	if err := s.K8sClient.Status().Update(ctx, &child); err != nil {
+		slog.Error("Failed to update child Workitem status", "child_workitem_id", childID, "error", err)
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to update child workitem status: %v", err))
+	}
+
+	slog.Info("Child Workitem routed",
+		"child_workitem_id", childID,
+		"parent_workitem_id", parentWorkitemID,
+		"routing_type", crdRI.Type,
+		"routing_target", crdRI.Target,
+	)
+
+	s.publishAudit(ctx, "audit.workitem.child_routed", map[string]string{
+		"action":             "child_routed",
+		"resource_id":        childID,
+		"parent_workitem_id": parentWorkitemID,
+	})
+
+	return &flowv1.RouteChildResponse{Accepted: true}, nil
+}
+
+// GetChildren returns the current state of all child Workitems for the caller's Workitem.
+//
+// Flow:
+//  1. Extract workitem_id from Sidecar-injected metadata.
+//  2. Query Workitems with flow.gideas.io/parent label matching the caller's Workitem.
+//  3. Return ChildWorkitemStatus for each child.
+func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenRequest) (*flowv1.GetChildrenResponse, error) {
+	// 1. Extract identity from metadata.
+	parentWorkitemID := extractWorkitemID(ctx)
+	if parentWorkitemID == "" {
+		return nil, status.Error(codes.InvalidArgument, "x-flow-workitem-id metadata is required")
+	}
+
+	slog.Info("GetChildren received", "parent_workitem_id", parentWorkitemID)
+
+	// 2. Query children by parent label.
+	var childList apiv1.WorkitemList
+	if err := s.K8sClient.List(ctx, &childList,
+		client.InNamespace(defaultNamespace),
+		client.MatchingLabels{"flow.gideas.io/parent": parentWorkitemID},
+	); err != nil {
+		slog.Error("Failed to list child Workitems", "parent_workitem_id", parentWorkitemID, "error", err)
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to list child workitems: %v", err))
+	}
+
+	// 3. Build response.
+	children := make([]*flowv1.ChildWorkitemStatus, len(childList.Items))
+	for i := range childList.Items {
+		c := &childList.Items[i]
+		children[i] = &flowv1.ChildWorkitemStatus{
+			WorkitemId:      c.Name,
+			Phase:           c.Status.Phase,
+			CurrentAssignee: c.Status.CurrentAssignee,
+			// Artefact references are populated via Archivist cross-Workitem
+			// reads (Phase 7). For now, return an empty list.
+		}
+	}
+
+	slog.Info("GetChildren response built",
+		"parent_workitem_id", parentWorkitemID,
+		"child_count", len(children),
+	)
+
+	return &flowv1.GetChildrenResponse{Children: children}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -750,4 +993,28 @@ var timeNow = func() metav1.Time { return metav1.Now() }
 // hasCapability checks whether a capability list contains the given capability.
 func hasCapability(capabilities []string, target string) bool {
 	return slices.Contains(capabilities, target)
+}
+
+// checkChildrenTerminal queries for child Workitems and returns an error if
+// any are in a non-terminal phase (Pending, Running, or Routing).
+// This enforces the invariant that a parent cannot complete while children
+// are still active.
+func (s *OperatorServer) checkChildrenTerminal(ctx context.Context, parentWorkitemID string) error {
+	var childList apiv1.WorkitemList
+	if err := s.K8sClient.List(ctx, &childList,
+		client.InNamespace(defaultNamespace),
+		client.MatchingLabels{"flow.gideas.io/parent": parentWorkitemID},
+	); err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("failed to query child workitems: %v", err))
+	}
+
+	for i := range childList.Items {
+		phase := childList.Items[i].Status.Phase
+		if phase != phaseCompleted && phase != "Failed" {
+			return status.Error(codes.FailedPrecondition,
+				fmt.Sprintf("CHILDREN_NOT_TERMINAL: child workitem %q is in phase %q; parent cannot complete", childList.Items[i].Name, phase))
+		}
+	}
+
+	return nil
 }
