@@ -1,12 +1,12 @@
 # Flow Monitor Deployment for Foundry Flow
 #
-# The Flow Monitor is the central telemetry and friction aggregation service
-# for the Control Plane. It ingests friction events and telemetry from nodes
-# (via Sidecars) and serves friction queries for the Librarian.
+# The Flow Monitor is a stateless pipeline adapter for the Control Plane.
+# It subscribes to the Event Bus telemetry and audit channels and exports:
+#   - Prometheus metrics on HTTP /metrics (port 2112)
+#   - JSON Lines to stdout for audit events
 #
-# It uses a SQLite database persisted on a PVC at /data/monitor.db.
-# The service listens on port 50055 and is accessed by Sidecars and the
-# Librarian via the flow-monitor Service.
+# It persists only a small checkpoint file for replay position.
+# See: specs/02-flow/04-system-services.md (Service Invariant #16)
 #
 # Prerequisites:
 #   - Build monitor image: docker build -t flow-monitor:latest -f monitor/Dockerfile .
@@ -28,7 +28,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 1Gi
+      storage: 100Mi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -54,14 +54,16 @@ spec:
           image: flow-monitor:latest
           imagePullPolicy: IfNotPresent
           ports:
-            - name: grpc
-              containerPort: 50055
+            - name: http-metrics
+              containerPort: 2112
               protocol: TCP
           env:
-            - name: MONITOR_PORT
-              value: "50055"
-            - name: MONITOR_DB_PATH
-              value: "/data/monitor.db"
+            - name: FLOW_MONITOR_PORT
+              value: "2112"
+            - name: FLOW_MONITOR_CHECKPOINT_PATH
+              value: "/data/monitor-checkpoint.json"
+            - name: EVENT_BUS_ADDRESS
+              value: "flow-event-bus:50056"
           volumeMounts:
             - name: monitor-data
               mountPath: /data
@@ -82,8 +84,8 @@ spec:
   selector:
     app.kubernetes.io/name: flow-monitor
   ports:
-    - name: grpc
-      port: 50055
-      targetPort: 50055
+    - name: http-metrics
+      port: 2112
+      targetPort: 2112
       protocol: TCP
   type: ClusterIP

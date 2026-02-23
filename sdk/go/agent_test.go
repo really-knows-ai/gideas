@@ -75,8 +75,6 @@ type agentSpyServer struct {
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
-	flowv1.UnimplementedFlowMonitorServiceServer
-
 	mu             sync.Mutex
 	heartbeatCount atomic.Int64
 	telemetryCalls []recordedTelemetry
@@ -139,7 +137,6 @@ func setupAgentTestEnv(t *testing.T, workitemID string) *agentTestEnv {
 		flowv1.RegisterOperatorServiceServer(s, spy)
 		flowv1.RegisterArchivistServiceServer(s, spy)
 		flowv1.RegisterLibrarianServiceServer(s, spy)
-		flowv1.RegisterFlowMonitorServiceServer(s, spy)
 	})
 
 	return &agentTestEnv{client: client, spy: spy, srv: srv}

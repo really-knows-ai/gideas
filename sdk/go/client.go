@@ -50,13 +50,13 @@ type Client struct {
 	workitemID string
 
 	// Raw gRPC service clients, exposed for advanced use.
-	Sidecar   flowv1.SidecarServiceClient
-	Operator  flowv1.OperatorServiceClient
-	Archivist flowv1.ArchivistServiceClient
-	Librarian flowv1.LibrarianServiceClient
-	Monitor   flowv1.FlowMonitorServiceClient
-	Jury      flowv1.JuryServiceClient
-	Clerk     flowv1.ClerkServiceClient
+	Sidecar        flowv1.SidecarServiceClient
+	Operator       flowv1.OperatorServiceClient
+	Archivist      flowv1.ArchivistServiceClient
+	Librarian      flowv1.LibrarianServiceClient
+	FrictionLedger flowv1.FrictionLedgerServiceClient
+	Jury           flowv1.JuryServiceClient
+	Clerk          flowv1.ClerkServiceClient
 }
 
 // NewClient connects to the Sidecar and returns a configured Client.
@@ -88,15 +88,15 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	}
 
 	return &Client{
-		conn:       conn,
-		workitemID: workitemID,
-		Sidecar:    flowv1.NewSidecarServiceClient(conn),
-		Operator:   flowv1.NewOperatorServiceClient(conn),
-		Archivist:  flowv1.NewArchivistServiceClient(conn),
-		Librarian:  flowv1.NewLibrarianServiceClient(conn),
-		Monitor:    flowv1.NewFlowMonitorServiceClient(conn),
-		Jury:       flowv1.NewJuryServiceClient(conn),
-		Clerk:      flowv1.NewClerkServiceClient(conn),
+		conn:           conn,
+		workitemID:     workitemID,
+		Sidecar:        flowv1.NewSidecarServiceClient(conn),
+		Operator:       flowv1.NewOperatorServiceClient(conn),
+		Archivist:      flowv1.NewArchivistServiceClient(conn),
+		Librarian:      flowv1.NewLibrarianServiceClient(conn),
+		FrictionLedger: flowv1.NewFrictionLedgerServiceClient(conn),
+		Jury:           flowv1.NewJuryServiceClient(conn),
+		Clerk:          flowv1.NewClerkServiceClient(conn),
 	}, nil
 }
 
@@ -495,11 +495,11 @@ func (c *Client) RecordFinding(
 }
 
 // ---------------------------------------------------------------------------
-// Monitor Convenience Methods
+// Telemetry Convenience Methods
 // ---------------------------------------------------------------------------
 
 // RecordTelemetry emits a custom telemetry event through the Sidecar to the
-// Flow Monitor. The eventType identifies the event kind (use the "foundry."
+// Event Bus. The eventType identifies the event kind (use the "foundry."
 // namespace prefix). The payload must be JSON-serializable and at most 64 KB.
 // The Sidecar wraps the event in a standard envelope with identity context.
 //
@@ -507,7 +507,7 @@ func (c *Client) RecordFinding(
 // the gRPC call itself is synchronous. Delivery failures are returned as
 // errors but should not fail work execution.
 func (c *Client) RecordTelemetry(ctx context.Context, eventType string, payload []byte) error {
-	_, err := c.Monitor.RecordTelemetry(ctx, &flowv1.RecordTelemetryRequest{
+	_, err := c.Sidecar.RecordTelemetry(ctx, &flowv1.RecordTelemetryRequest{
 		EventType: eventType,
 		Payload:   payload,
 	})
@@ -598,12 +598,12 @@ func (c *Client) LinkRuling(
 // QueryFriction Convenience Method
 // ---------------------------------------------------------------------------
 
-// QueryFriction returns aggregated friction data from the Flow Monitor.
+// QueryFriction returns aggregated friction data from the Friction Ledger.
 // Used by judiciary nodes to gather evidence for hearings.
 func (c *Client) QueryFriction(
 	ctx context.Context, filter *flowv1.FrictionFilter,
 ) ([]*flowv1.FrictionAggregate, error) {
-	resp, err := c.Monitor.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
+	resp, err := c.FrictionLedger.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
 		Filter: filter,
 	})
 	if err != nil {

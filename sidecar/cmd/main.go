@@ -2,16 +2,17 @@
 //
 // It listens on a single port and multiplexes all Flow services
 // (SidecarService, OperatorService, ArchivistService, LibrarianService,
-// JuryService, ClerkService, FlowMonitorService). The SidecarService
-// handles both node-facing RPCs (Heartbeat) and operator-facing RPCs
-// (AssignWork). Other services are proxied to their real gRPC endpoints
-// when the corresponding address environment variable is set.
+// JuryService, ClerkService, FrictionLedgerService). The SidecarService
+// handles node-facing RPCs (Heartbeat, AddFriction, RecordTelemetry) and
+// operator-facing RPCs (AssignWork). Other services are proxied to their
+// real gRPC endpoints when the corresponding address environment variable
+// is set.
 //
 // Usage:
 //
 //	FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
 //	OPERATOR_ADDRESS=localhost:50052 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
-//	ARCHIVIST_ADDRESS=localhost:50054 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
+//	EVENT_BUS_ADDRESS=localhost:50056 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
 package main
 
 import (
@@ -23,6 +24,7 @@ import (
 	"syscall"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/sidecar/internal/buffer"
 	"github.com/gideas/flow/sidecar/internal/mock"
 	"github.com/gideas/flow/sidecar/internal/proxy"
 	"github.com/gideas/flow/sidecar/internal/service"
@@ -39,7 +41,8 @@ const (
 	envNodeAddress         = "FLOW_NODE_ADDRESS"
 	envArchivistAddress    = "ARCHIVIST_ADDRESS"
 	envLibrarianAddress    = "LIBRARIAN_ADDRESS"
-	envMonitorAddress      = "MONITOR_ADDRESS"
+	envEventBusAddress     = "EVENT_BUS_ADDRESS"
+	envFrictionLedgerAddr  = "FRICTION_LEDGER_ADDRESS"
 	envJuryAddress         = "JURY_ADDRESS"
 	envClerkAddress        = "CLERK_ADDRESS"
 	envCapabilities        = "FLOW_CAPABILITIES"
@@ -66,7 +69,8 @@ func main() {
 
 	archivistAddr := os.Getenv(envArchivistAddress)
 	librarianAddr := os.Getenv(envLibrarianAddress)
-	monitorAddr := os.Getenv(envMonitorAddress)
+	eventBusAddr := os.Getenv(envEventBusAddress)
+	frictionLedgerAddr := os.Getenv(envFrictionLedgerAddr)
 	juryAddr := os.Getenv(envJuryAddress)
 	clerkAddr := os.Getenv(envClerkAddress)
 	capabilities := os.Getenv(envCapabilities)
@@ -78,7 +82,8 @@ func main() {
 		"node_address", nodeAddr,
 		"archivist_address", archivistAddr,
 		"librarian_address", librarianAddr,
-		"monitor_address", monitorAddr,
+		"event_bus_address", eventBusAddr,
+		"friction_ledger_address", frictionLedgerAddr,
 		"jury_address", juryAddr,
 		"clerk_address", clerkAddr,
 		"capabilities", capabilities,
@@ -104,8 +109,31 @@ func main() {
 		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, capabilities)),
 	)
 
+	// Event Bus: create proxy and telemetry buffer.
+	var eventBusCloser func() error
+	var eventBusProxy *proxy.EventBusProxy
+	if eventBusAddr != "" {
+		ebProxy, err := proxy.NewEventBusProxy(eventBusAddr)
+		if err != nil {
+			slog.Error("Failed to connect to Event Bus", "address", eventBusAddr, "error", err)
+			os.Exit(1)
+		}
+		eventBusProxy = ebProxy
+		eventBusCloser = ebProxy.Close
+
+		// Create telemetry buffer and wire it into the SidecarServer.
+		tb := buffer.NewTelemetryBuffer(ebProxy, 0) // 0 = default size
+		sidecarSrv.TelemetryBuffer = tb
+
+		slog.Info("Event Bus proxy enabled", "address", eventBusAddr)
+	} else {
+		eventBusCloser = func() error { return nil }
+		slog.Info("Event Bus proxy disabled (no EVENT_BUS_ADDRESS set)")
+	}
+
 	// Register service handlers.
-	// SidecarService handles Heartbeat (node-facing) and AssignWork (operator-facing).
+	// SidecarService handles Heartbeat, AddFriction, RecordTelemetry
+	// (node-facing) and AssignWork (operator-facing).
 	flowv1.RegisterSidecarServiceServer(srv, sidecarSrv)
 
 	// ArchivistService: proxy to real Archivist if address is set, otherwise mock.
@@ -136,17 +164,33 @@ func main() {
 	// LibrarianService: proxy to real Librarian if address is set, otherwise skip.
 	var librarianCloser func() error
 	if librarianAddr != "" {
-		librarianProxy, err := proxy.NewLibrarianProxy(librarianAddr, monitorAddr)
+		librarianProxy, err := proxy.NewLibrarianProxy(librarianAddr, eventBusProxy)
 		if err != nil {
 			slog.Error("Failed to connect to Librarian", "address", librarianAddr, "error", err)
 			os.Exit(1)
 		}
 		flowv1.RegisterLibrarianServiceServer(srv, librarianProxy)
 		librarianCloser = librarianProxy.Close
-		slog.Info("Librarian proxy enabled", "address", librarianAddr, "monitor_address", monitorAddr)
+		slog.Info("Librarian proxy enabled", "address", librarianAddr, "event_bus_address", eventBusAddr)
 	} else {
 		librarianCloser = func() error { return nil }
 		slog.Info("Librarian proxy disabled (no LIBRARIAN_ADDRESS set)")
+	}
+
+	// FrictionLedgerService: proxy to real Friction Ledger if address is set.
+	var frictionLedgerCloser func() error
+	if frictionLedgerAddr != "" {
+		flProxy, err := proxy.NewFrictionLedgerProxy(frictionLedgerAddr)
+		if err != nil {
+			slog.Error("Failed to connect to Friction Ledger", "address", frictionLedgerAddr, "error", err)
+			os.Exit(1)
+		}
+		flowv1.RegisterFrictionLedgerServiceServer(srv, flProxy)
+		frictionLedgerCloser = flProxy.Close
+		slog.Info("Friction Ledger proxy enabled", "address", frictionLedgerAddr)
+	} else {
+		frictionLedgerCloser = func() error { return nil }
+		slog.Info("Friction Ledger proxy disabled (no FRICTION_LEDGER_ADDRESS set)")
 	}
 
 	// JuryService: proxy to real Jury if address is set, otherwise skip.
@@ -181,22 +225,6 @@ func main() {
 		slog.Info("Clerk proxy disabled (no CLERK_ADDRESS set)")
 	}
 
-	// FlowMonitorService: proxy to real Monitor if address is set, otherwise skip.
-	var monitorCloser func() error
-	if monitorAddr != "" {
-		monitorProxy, err := proxy.NewMonitorProxy(monitorAddr)
-		if err != nil {
-			slog.Error("Failed to connect to Monitor", "address", monitorAddr, "error", err)
-			os.Exit(1)
-		}
-		flowv1.RegisterFlowMonitorServiceServer(srv, monitorProxy)
-		monitorCloser = monitorProxy.Close
-		slog.Info("Monitor proxy enabled", "address", monitorAddr)
-	} else {
-		monitorCloser = func() error { return nil }
-		slog.Info("Monitor proxy disabled (no MONITOR_ADDRESS set)")
-	}
-
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
@@ -207,12 +235,16 @@ func main() {
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		srv.GracefulStop()
+		if sidecarSrv.TelemetryBuffer != nil {
+			sidecarSrv.TelemetryBuffer.Stop()
+		}
 		_ = operatorProxy.Close()
 		_ = archivistCloser()
 		_ = librarianCloser()
+		_ = frictionLedgerCloser()
 		_ = juryCloser()
 		_ = clerkCloser()
-		_ = monitorCloser()
+		_ = eventBusCloser()
 		_ = sidecarSrv.Close()
 	}()
 

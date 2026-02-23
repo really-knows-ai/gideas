@@ -8,7 +8,7 @@
 //
 //  1. Read the "law-reference" artefact to get the law ID under review.
 //  2. Retrieve the full law object from the Librarian.
-//  3. Query friction data from the Monitor.
+//  3. Query friction data from the Friction Ledger.
 //  4. Query related laws from the Librarian for context.
 //  5. Assemble evidence: law goal, representations, friction summary,
 //     related laws.

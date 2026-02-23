@@ -1,10 +1,9 @@
-# Build the monitor binary (requires CGO for go-sqlite3)
+# Build the monitor binary
+# No CGO required — the monitor no longer uses go-sqlite3.
 FROM golang:1.25 AS builder
 WORKDIR /workspace
 
-RUN apt-get update && apt-get install -y gcc libc6-dev && rm -rf /var/lib/apt/lists/*
-
-# Copy workspace module manifests
+# Copy workspace module manifests (all modules in go.work)
 COPY go.work go.work
 COPY go.work.sum go.work.sum
 COPY gen/go.mod gen/go.mod
@@ -23,6 +22,14 @@ COPY nodes/go.mod nodes/go.mod
 COPY nodes/go.sum nodes/go.sum
 COPY operator/go.mod operator/go.mod
 COPY operator/go.sum operator/go.sum
+COPY eventbus/go.mod eventbus/go.mod
+COPY eventbus/go.sum eventbus/go.sum
+COPY frictionledger/go.mod frictionledger/go.mod
+COPY frictionledger/go.sum frictionledger/go.sum
+COPY clerk/go.mod clerk/go.mod
+COPY clerk/go.sum clerk/go.sum
+COPY jury/go.mod jury/go.mod
+COPY jury/go.sum jury/go.sum
 COPY tools/haiku-watch/go.mod tools/haiku-watch/go.mod
 COPY tools/haiku-watch/go.sum tools/haiku-watch/go.sum
 
@@ -31,10 +38,9 @@ RUN go mod download -x 2>&1 | tail -1
 COPY gen/ gen/
 COPY monitor/ monitor/
 
-RUN CGO_ENABLED=1 go build -o /monitor ./monitor/cmd
+RUN CGO_ENABLED=0 go build -o /monitor ./monitor/cmd
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /monitor /monitor
 USER 65532:65532
 ENTRYPOINT ["/monitor"]

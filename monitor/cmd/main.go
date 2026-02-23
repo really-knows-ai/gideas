@@ -1,39 +1,39 @@
-// Flow Monitor is the central telemetry and friction aggregation service
-// for the Foundry Flow Control Plane.
+// Flow Monitor is a stateless pipeline adapter for the Foundry Flow
+// Control Plane. It subscribes to the Event Bus telemetry and audit
+// channels and exports:
+//   - Prometheus metrics on HTTP /metrics (port 2112 by default)
+//   - JSON Lines to stdout for audit events
 //
-// It serves as a mandatory runtime output surface for nodes and a query
-// source for the Librarian's law lifecycle triggers. Data is persisted to
-// a SQLite database at the path specified by MONITOR_DB_PATH (default:
-// /data/monitor.db).
+// The Monitor persists only a small checkpoint file for replay position
+// (not a data store). See: specs/02-flow/04-system-services.md
+// (Service Invariant #16).
 //
 // Usage:
 //
-//	go run ./monitor/cmd/main.go
-//	MONITOR_PORT=50055 MONITOR_DB_PATH=/data/monitor.db go run ./monitor/cmd/main.go
+//	EVENT_BUS_ADDRESS=localhost:50056 go run ./monitor/cmd/main.go
 package main
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log/slog"
-	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/gideas/flow/monitor/internal/service"
-	"github.com/gideas/flow/monitor/internal/store/sqlite"
+	"github.com/gideas/flow/monitor/internal/subscriber"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
-	defaultPort   = "50055"
-	defaultDBPath = "/data/monitor.db"
-	envPort       = "MONITOR_PORT"
-	envDBPath     = "MONITOR_DB_PATH"
+	defaultPort           = "2112"
+	defaultCheckpointPath = "/data/monitor-checkpoint.json"
+	defaultEventBusAddr   = "localhost:50056"
+
+	envPort           = "FLOW_MONITOR_PORT"
+	envCheckpointPath = "FLOW_MONITOR_CHECKPOINT_PATH"
+	envEventBusAddr   = "EVENT_BUS_ADDRESS"
 )
 
 func main() {
@@ -42,34 +42,52 @@ func main() {
 		port = defaultPort
 	}
 
-	dbPath := os.Getenv(envDBPath)
-	if dbPath == "" {
-		dbPath = defaultDBPath
+	cpPath := os.Getenv(envCheckpointPath)
+	if cpPath == "" {
+		cpPath = defaultCheckpointPath
 	}
 
-	slog.Info("Flow Monitor starting", "port", port, "db_path", dbPath)
+	busAddr := os.Getenv(envEventBusAddr)
+	if busAddr == "" {
+		busAddr = defaultEventBusAddr
+	}
 
-	// Initialise the SQLite store.
-	store, err := sqlite.New(dbPath)
+	slog.Info("Flow Monitor starting",
+		"port", port,
+		"checkpoint_path", cpPath,
+		"event_bus_address", busAddr,
+	)
+
+	// Load checkpoint for replay position.
+	checkpoint, err := subscriber.NewFileCheckpoint(cpPath)
 	if err != nil {
-		slog.Error("Failed to initialise SQLite store", "error", err)
+		slog.Error("Failed to load checkpoint", "error", err)
 		os.Exit(1)
 	}
-	defer func() { _ = store.Close() }()
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
+	// Connect to Event Bus.
+	busConn, busClient, err := subscriber.ConnectEventBus(busAddr)
 	if err != nil {
-		slog.Error("Failed to listen", "port", port, "error", err)
+		slog.Error("Failed to connect to Event Bus", "error", err)
 		os.Exit(1)
 	}
+	defer func() { _ = busConn.Close() }()
 
-	srv := grpc.NewServer()
+	// Start subscribers.
+	telemetrySub := subscriber.NewTelemetrySubscriber(busClient, checkpoint)
+	telemetrySub.Start()
 
-	monitorSrv := service.NewMonitorServer(store, newEventID)
-	flowv1.RegisterFlowMonitorServiceServer(srv, monitorSrv)
+	auditSub := subscriber.NewAuditSubscriber(busClient, checkpoint)
+	auditSub.Start()
 
-	// Enable gRPC reflection for debugging with grpcurl.
-	reflection.Register(srv)
+	// HTTP server for Prometheus metrics.
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+
+	httpSrv := &http.Server{
+		Addr:    fmt.Sprintf(":%s", port),
+		Handler: mux,
+	}
 
 	// Graceful shutdown on SIGTERM/SIGINT.
 	go func() {
@@ -77,24 +95,17 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
-		srv.GracefulStop()
-		_ = store.Close()
+		telemetrySub.Stop()
+		auditSub.Stop()
+		_ = busConn.Close()
+		_ = httpSrv.Close()
 	}()
 
-	slog.Info("Flow Monitor listening", "address", lis.Addr().String())
-	if err := srv.Serve(lis); err != nil {
-		slog.Error("Flow Monitor server error", "error", err)
+	slog.Info("Flow Monitor listening", "address", httpSrv.Addr)
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Error("Flow Monitor HTTP server error", "error", err)
 		os.Exit(1)
 	}
 
 	slog.Info("Flow Monitor stopped")
-}
-
-// newEventID returns a random hex-encoded identifier for event records.
-func newEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }

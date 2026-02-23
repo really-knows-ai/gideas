@@ -23,7 +23,7 @@ func newSpyGRPCServer(spy *quenchSpy) *grpc.Server {
 	flowv1.RegisterOperatorServiceServer(srv, spy)
 	flowv1.RegisterArchivistServiceServer(srv, spy)
 	flowv1.RegisterLibrarianServiceServer(srv, spy)
-	flowv1.RegisterFlowMonitorServiceServer(srv, spy)
+	flowv1.RegisterFrictionLedgerServiceServer(srv, spy)
 	return srv
 }
 
@@ -35,7 +35,7 @@ type quenchSpy struct {
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
-	flowv1.UnimplementedFlowMonitorServiceServer
+	flowv1.UnimplementedFrictionLedgerServiceServer
 
 	mu sync.Mutex
 
@@ -160,7 +160,7 @@ func (s *quenchSpy) RejectFix(
 }
 
 // ---------------------------------------------------------------------------
-// Monitor methods
+// FrictionLedger methods
 // ---------------------------------------------------------------------------
 
 func (s *quenchSpy) RecordTelemetry(
