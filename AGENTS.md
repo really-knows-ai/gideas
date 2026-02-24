@@ -22,24 +22,33 @@ The authoritative source of truth for the system design.
 The "Walking Skeleton" and reference components.
 
 /
-├── operator/           # The Control Plane (Kubebuilder Controller)
-├── sidecar/            # The Data Plane (Runtime Host & Proxy)
-├── sdk/                # Node Development Kits
-│   └── go/             # Go SDK Core (Provider abstraction, FoundryAgent)
-├── nodes/              # Standard Node Implementations
-│   ├── forge/          # Content Generation Node (concrete ForgeAgent)
-│   ├── sort/           # Governance Triage Node
-│   └── null-node/      # Verification Node (Phase 1)
-├── proto/              # Protocol Buffer Definitions (The Contract)
-├── charts/             # Helm Charts for deployment
-└── tools/              # Maintenance and build scripts (e.g., linting)
+├── platform/             # The Runtime Infrastructure
+│   ├── operator/         # The Control Plane (Kubebuilder Controller)
+│   ├── sidecar/          # The Data Plane (Runtime Host & Proxy)
+│   ├── eventbus/         # Event Bus Service
+│   ├── frictionledger/   # Friction Ledger Service
+│   ├── monitor/          # Flow Monitor Service
+│   ├── librarian/        # Librarian Service
+│   ├── archivist/        # Archivist Service
+│   ├── clerk/            # Clerk Service
+│   └── pkg/eventbus/     # Shared event bus client library
+├── sdk/                  # Node Development Kits
+│   └── go/               # Go SDK Core (Provider abstraction, FoundryAgent)
+├── nodes/                # Standard Node Implementations
+│   ├── forge/            # Content Generation Node (concrete ForgeAgent)
+│   ├── sort/             # Governance Triage Node
+│   └── null-node/        # Verification Node (Phase 1)
+├── gen/                  # Generated Protocol Buffer Code (The Contract)
+├── proto/                # Protocol Buffer Definitions
+├── charts/               # Helm Charts for deployment
+└── tools/                # Dev/debug utilities (e.g., haiku-watch)
 
 ## Reading Order
 
 1. **Concepts** (`specs/01-concepts`) — What Foundry Flow is and why it exists.
 2. **Architecture** (`specs/01-concepts/01-architecture.md`) — The Six-Plane Model.
 3. **The Contract** (`proto/`) — The wire protocol that binds the components.
-4. **Implementation** — The code in `operator`, `sidecar`, and `sdk`.
+4. **Implementation** — The code in `platform/operator`, `platform/sidecar`, and `sdk`.
 
 ## Quality Gates
 

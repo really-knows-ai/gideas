@@ -1,0 +1,14 @@
+go 1.25.3
+
+use (
+	./operator
+	./sidecar
+	./eventbus
+	./frictionledger
+	./monitor
+	./librarian
+	./archivist
+	./clerk
+	./pkg/eventbus
+	../gen
+)

@@ -1,18 +1,17 @@
 go 1.25.3
 
 use (
-	./archivist
-	./clerk
-	./eventbus
-	./frictionledger
 	./gen
-	./jury
-	./librarian
-	./monitor
 	./nodes
-	./operator
-	./pkg/eventbus
+	./platform/archivist
+	./platform/clerk
+	./platform/eventbus
+	./platform/frictionledger
+	./platform/librarian
+	./platform/monitor
+	./platform/operator
+	./platform/pkg/eventbus
+	./platform/sidecar
 	./sdk/go
-	./sidecar
 	./tools/haiku-watch
 )
