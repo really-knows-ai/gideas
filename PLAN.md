@@ -664,14 +664,14 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
 
 ### Checklist
 
-- [ ] **`sdk/go/client.go`** -- New methods on Client
+- [x] **`sdk/go/client.go`** -- New methods on Client
   - `CreateChildWorkitem(ctx) (*ChildWorkitem, error)`
   - `GetChildren(ctx) ([]ChildWorkitemStatus, error)`
   - `GetChildArtefact(ctx, childWorkitemID, artefactID string) (*flowv1.GetArtefactResponse, error)`
   - `ListChildArtefacts(ctx, childWorkitemID string) ([]*flowv1.ArtefactRef, error)`
   - `WatchChildren(ctx) (<-chan ChildLifecycleEvent, error)` -- wraps Event Bus subscription
 
-- [ ] **`sdk/go/child.go`** -- ChildWorkitem handle (new file)
+- [x] **`sdk/go/child.go`** -- ChildWorkitem handle (new file)
   - `ChildWorkitem` struct wrapping gRPC clients with child's Workitem ID
   - `ID() string`
   - `StoreArtefact(ctx, artefactID, governedArtefact string, content []byte) error`
@@ -680,11 +680,11 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
   - `RouteToOutput(ctx, outputName string) (bool, error)`
   - `Complete(ctx) (bool, error)` -- simple completion, no target
 
-- [ ] **`sdk/go/child.go`** -- ChildWorkitemStatus and ChildLifecycleEvent types
+- [x] **`sdk/go/child.go`** -- ChildWorkitemStatus and ChildLifecycleEvent types
   - `ChildWorkitemStatus`: `WorkitemID`, `Phase`, `CurrentAssignee`, `Artefacts`
   - `ChildLifecycleEvent`: `WorkitemID`, `Phase`, `NodeID`
 
-- [ ] **Tests** -- Unit tests for the ChildWorkitem handle and Client methods
+- [x] **Tests** -- Unit tests for the ChildWorkitem handle and Client methods
 
 ---
 
@@ -766,5 +766,5 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase 7D: Sidecar Proxy -- Forward target_workitem_id | Complete | Passthrough verified (proto forwarded as-is), cross-Workitem logging added. 2 forwarding tests |
 | Phase 7E: Tests | Complete | All tests pass across operator, archivist, sidecar; `make check-fix` + `make lint-operator` clean (0 issues) |
 | Phase 8: Sidecar Parent-Child Authorization | Complete | Session child tracking, OperatorProxy (CreateChildWorkitem/RouteChild/GetChildren with tracking), ArchivistProxy cross-Workitem authorization (reads + writes), 31 tests pass, lint clean |
-| Phase 9: SDK | Not Started | |
+| Phase 9: SDK | Complete | `EventBus` client on `Client`; `ChildWorkitem` handle with `StoreArtefact`, `StampArtefact`, `RouteTo`, `RouteToOutput`, `Complete`; `CreateChildWorkitem`, `GetChildren`, `GetChildArtefact`, `ListChildArtefacts`, `WatchChildren` convenience methods; 16 new tests pass, lint clean |
 | Phase 10: Tests and Quality Gates | Not Started | |

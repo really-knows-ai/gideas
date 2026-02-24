@@ -60,3 +60,47 @@ func setupGRPCTestEnv(
 
 	return client, srv
 }
+
+// setupGRPCTestEnvWithEventBus is like setupGRPCTestEnv but also creates a
+// second bufconn listener for the Event Bus service and wires the Client's
+// EventBus field to it.
+func setupGRPCTestEnvWithEventBus(
+	t *testing.T,
+	workitemID string,
+	registerServices func(srv *grpc.Server),
+	registerEventBus func(srv *grpc.Server),
+) (*Client, *grpc.Server, *grpc.Server) {
+	t.Helper()
+
+	client, srv := setupGRPCTestEnv(t, workitemID, registerServices)
+
+	// Set up a separate bufconn for the Event Bus.
+	ebLis := bufconn.Listen(bufSize)
+	ebSrv := grpc.NewServer()
+	registerEventBus(ebSrv)
+
+	go func() {
+		_ = ebSrv.Serve(ebLis)
+	}()
+
+	ebConn, err := grpc.NewClient(
+		"passthrough:///bufnet-eb",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return ebLis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("failed to dial eventbus bufconn: %v", err)
+	}
+
+	client.eventBusConn = ebConn
+	client.EventBus = flowv1.NewFlowEventBusServiceClient(ebConn)
+
+	t.Cleanup(func() {
+		_ = ebConn.Close()
+		ebSrv.GracefulStop()
+	})
+
+	return client, srv, ebSrv
+}
