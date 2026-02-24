@@ -29,11 +29,17 @@ const (
 	metadataKeyWorkitemID = "x-flow-workitem-id"
 )
 
+// EnvEventBusAddress is the environment variable injected by the runtime
+// to specify the Event Bus gRPC endpoint. When set, the Client connects
+// directly to the Event Bus for streaming operations (e.g. WatchChildren).
+const EnvEventBusAddress = "EVENT_BUS_ADDRESS"
+
 // ClientOption configures the Client.
 type ClientOption func(*clientConfig)
 
 type clientConfig struct {
-	sidecarAddr string
+	sidecarAddr  string
+	eventBusAddr string
 }
 
 // WithSidecarAddress overrides the default Sidecar gRPC address.
@@ -43,11 +49,21 @@ func WithSidecarAddress(addr string) ClientOption {
 	}
 }
 
+// WithEventBusAddress overrides the Event Bus gRPC address read from
+// the environment. When set, the Client establishes a direct connection
+// to the Event Bus for streaming RPCs (e.g. WatchChildren).
+func WithEventBusAddress(addr string) ClientOption {
+	return func(c *clientConfig) {
+		c.eventBusAddr = addr
+	}
+}
+
 // Client is the primary SDK entry point for Foundry Flow nodes.
 // It wraps the generated gRPC clients and provides convenience methods.
 type Client struct {
-	conn       *grpc.ClientConn
-	workitemID string
+	conn         *grpc.ClientConn
+	eventBusConn *grpc.ClientConn
+	workitemID   string
 
 	// Raw gRPC service clients, exposed for advanced use.
 	Sidecar        flowv1.SidecarServiceClient
@@ -57,6 +73,7 @@ type Client struct {
 	FrictionLedger flowv1.FrictionLedgerServiceClient
 	Jury           flowv1.JuryServiceClient
 	Clerk          flowv1.ClerkServiceClient
+	EventBus       flowv1.FlowEventBusServiceClient
 }
 
 // NewClient connects to the Sidecar and returns a configured Client.
@@ -73,6 +90,11 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		o(cfg)
 	}
 
+	// Read Event Bus address from env if not explicitly set.
+	if cfg.eventBusAddr == "" {
+		cfg.eventBusAddr = os.Getenv(EnvEventBusAddress)
+	}
+
 	workitemID := os.Getenv(EnvWorkitemID)
 
 	conn, err := grpc.NewClient(
@@ -87,7 +109,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		)
 	}
 
-	return &Client{
+	c := &Client{
 		conn:           conn,
 		workitemID:     workitemID,
 		Sidecar:        flowv1.NewSidecarServiceClient(conn),
@@ -97,15 +119,42 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		FrictionLedger: flowv1.NewFrictionLedgerServiceClient(conn),
 		Jury:           flowv1.NewJuryServiceClient(conn),
 		Clerk:          flowv1.NewClerkServiceClient(conn),
-	}, nil
+	}
+
+	// Optionally connect to Event Bus for streaming operations.
+	if cfg.eventBusAddr != "" {
+		ebConn, ebErr := grpc.NewClient(
+			cfg.eventBusAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if ebErr != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf(
+				"flow sdk: failed to connect to event bus at %s: %w",
+				cfg.eventBusAddr, ebErr,
+			)
+		}
+		c.eventBusConn = ebConn
+		c.EventBus = flowv1.NewFlowEventBusServiceClient(ebConn)
+	}
+
+	return c, nil
 }
 
-// Close releases the underlying gRPC connection.
+// Close releases the underlying gRPC connections.
 func (c *Client) Close() error {
-	if c.conn != nil {
-		return c.conn.Close()
+	var firstErr error
+	if c.eventBusConn != nil {
+		if err := c.eventBusConn.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	if c.conn != nil {
+		if err := c.conn.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // WorkitemID returns the workitem ID read from the environment at init time.
@@ -626,6 +675,139 @@ func (c *Client) GetLaw(ctx context.Context, lawID string) (*flowv1.Law, error) 
 		return nil, fmt.Errorf("flow sdk: get law failed: %w", err)
 	}
 	return resp.GetLaw(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Child Workitem Convenience Methods
+// ---------------------------------------------------------------------------
+
+// CreateChildWorkitem creates a new child Workitem under the caller's
+// current parent Workitem. The child starts in Pending state with no
+// assignee. Use the returned ChildWorkitem handle to store artefacts
+// and route the child to a target node.
+func (c *Client) CreateChildWorkitem(ctx context.Context) (*ChildWorkitem, error) {
+	resp, err := c.Operator.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: create child workitem failed: %w", err)
+	}
+	return &ChildWorkitem{
+		id:        resp.GetChildWorkitemId(),
+		parent:    c,
+		archivist: c.Archivist,
+		operator:  c.Operator,
+	}, nil
+}
+
+// GetChildren returns the status of all child Workitems created by the
+// caller's current Workitem.
+func (c *Client) GetChildren(ctx context.Context) ([]ChildWorkitemStatus, error) {
+	resp, err := c.Operator.GetChildren(ctx, &flowv1.GetChildrenRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get children failed: %w", err)
+	}
+	children := make([]ChildWorkitemStatus, 0, len(resp.GetChildren()))
+	for _, ch := range resp.GetChildren() {
+		children = append(children, ChildWorkitemStatus{
+			WorkitemID:      ch.GetWorkitemId(),
+			Phase:           ch.GetPhase(),
+			CurrentAssignee: ch.GetCurrentAssignee(),
+			Artefacts:       ch.GetArtefacts(),
+		})
+	}
+	return children, nil
+}
+
+// GetChildArtefact retrieves the latest version of the named artefact from
+// the specified child Workitem. The child must be in Completed state and
+// must belong to the caller's current Workitem (parent-child validated by
+// the Archivist and Sidecar).
+func (c *Client) GetChildArtefact(
+	ctx context.Context, childWorkitemID, artefactID string,
+) (*flowv1.GetArtefactResponse, error) {
+	resp, err := c.Archivist.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId:       c.workitemID,
+		ArtefactId:       artefactID,
+		TargetWorkitemId: childWorkitemID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get child artefact failed: %w", err)
+	}
+	return resp, nil
+}
+
+// ListChildArtefacts returns all artefact references from the specified
+// child Workitem. The child must be in Completed state and must belong
+// to the caller's current Workitem.
+func (c *Client) ListChildArtefacts(
+	ctx context.Context, childWorkitemID string,
+) ([]*flowv1.ArtefactRef, error) {
+	resp, err := c.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+		WorkitemId:       c.workitemID,
+		TargetWorkitemId: childWorkitemID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: list child artefacts failed: %w", err)
+	}
+	return resp.GetArtefactRefs(), nil
+}
+
+// WatchChildren opens a streaming subscription to the Event Bus on the
+// "workitem" channel, filtered by parent_workitem_id matching the caller's
+// current Workitem. It returns a channel that receives ChildLifecycleEvent
+// values for each phase transition of any child Workitem.
+//
+// The returned channel is closed when the context is cancelled, the stream
+// ends, or an error occurs. Errors are not surfaced through the channel;
+// the caller should use context cancellation for lifecycle management.
+//
+// Requires a direct Event Bus connection (set EVENT_BUS_ADDRESS or use
+// WithEventBusAddress). Returns an error if the EventBus client is nil.
+func (c *Client) WatchChildren(ctx context.Context) (<-chan ChildLifecycleEvent, error) {
+	if c.EventBus == nil {
+		return nil, fmt.Errorf("flow sdk: watch children requires Event Bus connection (set EVENT_BUS_ADDRESS)")
+	}
+
+	stream, err := c.EventBus.Subscribe(ctx, &flowv1.SubscribeRequest{
+		Channel: "workitem",
+		Filter: &flowv1.SubscribeFilter{
+			EventType: "workitem.phase_changed",
+			MatchLabels: []*flowv1.Label{
+				{Key: "parent_workitem_id", Value: c.workitemID},
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: watch children subscribe failed: %w", err)
+	}
+
+	ch := make(chan ChildLifecycleEvent, 16)
+	go func() {
+		defer close(ch)
+		for {
+			evt, recvErr := stream.Recv()
+			if recvErr != nil {
+				return
+			}
+			event := ChildLifecycleEvent{
+				WorkitemID: evt.GetWorkitemId(),
+			}
+			for _, lbl := range evt.GetLabels() {
+				switch lbl.GetKey() {
+				case "phase":
+					event.Phase = lbl.GetValue()
+				case "node_id":
+					event.NodeID = lbl.GetValue()
+				}
+			}
+			select {
+			case ch <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return ch, nil
 }
 
 // ---------------------------------------------------------------------------

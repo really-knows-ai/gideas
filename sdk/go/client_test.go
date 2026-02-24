@@ -208,6 +208,75 @@ func (s *spyServer) GetLaw(
 	}, nil
 }
 
+func (s *spyServer) CreateChildWorkitem(
+	ctx context.Context, _ *flowv1.CreateChildWorkitemRequest,
+) (*flowv1.CreateChildWorkitemResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.CreateChildWorkitemResponse{
+		ChildWorkitemId: "child-001",
+	}, nil
+}
+
+func (s *spyServer) RouteChild(
+	ctx context.Context, req *flowv1.RouteChildRequest,
+) (*flowv1.RouteChildResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.RouteChildResponse{Accepted: true}, nil
+}
+
+func (s *spyServer) GetChildren(
+	ctx context.Context, _ *flowv1.GetChildrenRequest,
+) (*flowv1.GetChildrenResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.GetChildrenResponse{
+		Children: []*flowv1.ChildWorkitemStatus{
+			{
+				WorkitemId:      "child-001",
+				Phase:           "Running",
+				CurrentAssignee: "codify-smt",
+				Artefacts: []*flowv1.ArtefactRef{
+					{Id: "input", GovernedArtefact: "codification-input"},
+				},
+			},
+			{
+				WorkitemId:      "child-002",
+				Phase:           "Completed",
+				CurrentAssignee: "codify-smt",
+			},
+		},
+	}, nil
+}
+
+func (s *spyServer) StoreArtefact(
+	ctx context.Context, req *flowv1.StoreArtefactRequest,
+) (*flowv1.StoreArtefactResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.StoreArtefactResponse{
+		VersionHash:  "hash-001",
+		IsNewVersion: true,
+	}, nil
+}
+
+func (s *spyServer) StampArtefact(
+	ctx context.Context, req *flowv1.StampArtefactRequest,
+) (*flowv1.StampArtefactResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.StampArtefactResponse{
+		Stamp: &flowv1.Stamp{Name: req.GetStampName()},
+	}, nil
+}
+
+func (s *spyServer) ListArtefacts(
+	ctx context.Context, req *flowv1.ListArtefactsRequest,
+) (*flowv1.ListArtefactsResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.ListArtefactsResponse{
+		ArtefactRefs: []*flowv1.ArtefactRef{
+			{Id: "output", GovernedArtefact: "codification-output"},
+		},
+	}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helper — starts a bufconn gRPC server and returns a connected Client
 // ---------------------------------------------------------------------------
