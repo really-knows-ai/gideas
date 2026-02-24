@@ -26,7 +26,7 @@ type testHarness struct {
 	conn    *grpc.ClientConn
 }
 
-func newTestHarness(t *testing.T, retention map[int32]RetentionConfig) *testHarness {
+func newTestHarness(t *testing.T, retention map[string]RetentionConfig) *testHarness {
 	t.Helper()
 
 	store, err := sqlite.New(":memory:")
@@ -81,12 +81,12 @@ func newTestHarness(t *testing.T, retention map[int32]RetentionConfig) *testHarn
 func (h *testHarness) publish(
 	t *testing.T,
 	ctx context.Context,
-	ch flowv1.EventChannel,
+	channel string,
 	evt *flowv1.FlowEvent,
 ) *flowv1.PublishResponse {
 	t.Helper()
 	resp, err := h.client.Publish(ctx, &flowv1.PublishRequest{
-		Channel: ch,
+		Channel: channel,
 		Event:   evt,
 	})
 	if err != nil {
@@ -102,7 +102,7 @@ func TestPublishAndReceive(t *testing.T) {
 
 	// Start subscriber before publishing.
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -110,15 +110,18 @@ func TestPublishAndReceive(t *testing.T) {
 
 	// Publish an event (small delay to let server register subscriber).
 	time.Sleep(50 * time.Millisecond)
-	resp := h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+	resp := h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 		EventId:    "test-1",
 		EventType:  "friction",
 		FlowId:     "flow-1",
 		NodeId:     "node-1",
 		WorkitemId: "wi-1",
 		Timestamp:  timestamppb.Now(),
-		Attributes: map[string]string{"law_ids": "law-1", "magnitude": "5.0"},
-		Payload:    []byte("data"),
+		Attributes: map[string]string{"magnitude": "5.0"},
+		Labels: []*flowv1.Label{
+			{Key: "law_id", Value: "law-1"},
+		},
+		Payload: []byte("data"),
 	})
 	if !resp.GetAcknowledged() {
 		t.Error("expected acknowledged=true")
@@ -141,6 +144,16 @@ func TestPublishAndReceive(t *testing.T) {
 	if evt.GetAttributes()["magnitude"] != "5.0" {
 		t.Errorf("magnitude = %q, want %q", evt.GetAttributes()["magnitude"], "5.0")
 	}
+	if evt.GetChannel() != "telemetry" {
+		t.Errorf("Channel = %q, want %q", evt.GetChannel(), "telemetry")
+	}
+	// Verify labels round-trip.
+	if len(evt.GetLabels()) != 1 {
+		t.Fatalf("Labels count = %d, want 1", len(evt.GetLabels()))
+	}
+	if evt.GetLabels()[0].GetKey() != "law_id" || evt.GetLabels()[0].GetValue() != "law-1" {
+		t.Errorf("Labels[0] = %+v, want {law_id, law-1}", evt.GetLabels()[0])
+	}
 }
 
 func TestPublishValidation(t *testing.T) {
@@ -162,14 +175,14 @@ func TestPublishValidation(t *testing.T) {
 		{
 			name: "missing event",
 			req: &flowv1.PublishRequest{
-				Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+				Channel: "telemetry",
 			},
 			code: codes.InvalidArgument,
 		},
 		{
 			name: "missing event_type",
 			req: &flowv1.PublishRequest{
-				Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+				Channel: "telemetry",
 				Event:   &flowv1.FlowEvent{},
 			},
 			code: codes.InvalidArgument,
@@ -177,7 +190,7 @@ func TestPublishValidation(t *testing.T) {
 		{
 			name: "payload too large",
 			req: &flowv1.PublishRequest{
-				Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+				Channel: "telemetry",
 				Event: &flowv1.FlowEvent{
 					EventType: "test",
 					Payload:   make([]byte, 65*1024),
@@ -230,7 +243,7 @@ func TestReplayFromSequence(t *testing.T) {
 
 	// Publish 5 events.
 	for i := 1; i <= 5; i++ {
-		h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+		h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 			EventId:   fmt.Sprintf("evt-%d", i),
 			EventType: "friction",
 			Timestamp: timestamppb.Now(),
@@ -239,7 +252,7 @@ func TestReplayFromSequence(t *testing.T) {
 
 	// Subscribe with replay from sequence 3.
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel:      flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel:      "telemetry",
 		LastSequence: 3,
 	})
 	if err != nil {
@@ -274,13 +287,13 @@ func TestMultiSubscriberFanOut(t *testing.T) {
 
 	// Start two subscribers.
 	stream1, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 	})
 	if err != nil {
 		t.Fatalf("Subscribe 1: %v", err)
 	}
 	stream2, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 	})
 	if err != nil {
 		t.Fatalf("Subscribe 2: %v", err)
@@ -288,7 +301,7 @@ func TestMultiSubscriberFanOut(t *testing.T) {
 
 	// Publish one event (small delay to let server register subscribers).
 	time.Sleep(50 * time.Millisecond)
-	h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+	h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 		EventId:   "fanout-1",
 		EventType: "test",
 		Timestamp: timestamppb.Now(),
@@ -316,7 +329,7 @@ func TestFilterByEventType(t *testing.T) {
 
 	// Subscribe only to "friction" events.
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 		Filter:  &flowv1.SubscribeFilter{EventType: "friction"},
 	})
 	if err != nil {
@@ -325,14 +338,14 @@ func TestFilterByEventType(t *testing.T) {
 
 	// Publish a non-matching event (small delay to let server register subscriber).
 	time.Sleep(50 * time.Millisecond)
-	h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+	h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 		EventId:   "other-1",
 		EventType: "custom",
 		Timestamp: timestamppb.Now(),
 	})
 
 	// Publish a matching event.
-	h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+	h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 		EventId:   "friction-1",
 		EventType: "friction",
 		Timestamp: timestamppb.Now(),
@@ -348,30 +361,58 @@ func TestFilterByEventType(t *testing.T) {
 	}
 }
 
-func TestFilterByLawID(t *testing.T) {
+func TestFilterByLabel(t *testing.T) {
 	tests := []struct {
-		name        string
-		filterLawID string
-		noMatchID   string
-		noMatchLaws string
-		matchID     string
-		matchLaws   string
+		name           string
+		matchLabels    []*flowv1.Label
+		noMatchID      string
+		noMatchLabels  []*flowv1.Label
+		matchID        string
+		matchEvtLabels []*flowv1.Label
 	}{
 		{
-			name:        "element in CSV list",
-			filterLawID: "law-2",
+			name:        "single label match",
+			matchLabels: []*flowv1.Label{{Key: "law_id", Value: "law-2"}},
 			noMatchID:   "no-match",
-			noMatchLaws: "law-1",
-			matchID:     "match",
-			matchLaws:   "law-1,law-2,law-3",
+			noMatchLabels: []*flowv1.Label{
+				{Key: "law_id", Value: "law-1"},
+			},
+			matchID: "match",
+			matchEvtLabels: []*flowv1.Label{
+				{Key: "law_id", Value: "law-1"},
+				{Key: "law_id", Value: "law-2"},
+				{Key: "law_id", Value: "law-3"},
+			},
 		},
 		{
-			name:        "exact element not prefix",
-			filterLawID: "law-1",
+			name:        "exact value not prefix",
+			matchLabels: []*flowv1.Label{{Key: "law_id", Value: "law-1"}},
 			noMatchID:   "prefix-only",
-			noMatchLaws: "law-10,law-11",
-			matchID:     "exact",
-			matchLaws:   "law-1",
+			noMatchLabels: []*flowv1.Label{
+				{Key: "law_id", Value: "law-10"},
+				{Key: "law_id", Value: "law-11"},
+			},
+			matchID: "exact",
+			matchEvtLabels: []*flowv1.Label{
+				{Key: "law_id", Value: "law-1"},
+			},
+		},
+		{
+			name: "AND semantics — both labels must match",
+			matchLabels: []*flowv1.Label{
+				{Key: "law_id", Value: "law-1"},
+				{Key: "phase", Value: "Running"},
+			},
+			noMatchID: "partial",
+			noMatchLabels: []*flowv1.Label{
+				{Key: "law_id", Value: "law-1"},
+				{Key: "phase", Value: "Pending"},
+			},
+			matchID: "full",
+			matchEvtLabels: []*flowv1.Label{
+				{Key: "law_id", Value: "law-1"},
+				{Key: "phase", Value: "Running"},
+			},
 		},
 	}
 
@@ -384,37 +425,29 @@ func TestFilterByLawID(t *testing.T) {
 			defer cancel()
 
 			stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-				Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
-				Filter:  &flowv1.SubscribeFilter{LawId: tt.filterLawID},
+				Channel: "telemetry",
+				Filter: &flowv1.SubscribeFilter{
+					MatchLabels: tt.matchLabels,
+				},
 			})
 			if err != nil {
 				t.Fatalf("Subscribe: %v", err)
 			}
 
 			time.Sleep(50 * time.Millisecond)
-			h.publish(t, ctx,
-				flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
-				&flowv1.FlowEvent{
-					EventId:   tt.noMatchID,
-					EventType: "friction",
-					Timestamp: timestamppb.Now(),
-					Attributes: map[string]string{
-						"law_ids": tt.noMatchLaws,
-					},
-				},
-			)
+			h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
+				EventId:   tt.noMatchID,
+				EventType: "friction",
+				Timestamp: timestamppb.Now(),
+				Labels:    tt.noMatchLabels,
+			})
 
-			h.publish(t, ctx,
-				flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
-				&flowv1.FlowEvent{
-					EventId:   tt.matchID,
-					EventType: "friction",
-					Timestamp: timestamppb.Now(),
-					Attributes: map[string]string{
-						"law_ids": tt.matchLaws,
-					},
-				},
-			)
+			h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
+				EventId:   tt.matchID,
+				EventType: "friction",
+				Timestamp: timestamppb.Now(),
+				Labels:    tt.matchEvtLabels,
+			})
 
 			evt, err := stream.Recv()
 			if err != nil {
@@ -430,10 +463,8 @@ func TestFilterByLawID(t *testing.T) {
 
 func TestSequenceExpired(t *testing.T) {
 	// Configure retention so eviction actually runs.
-	retention := map[int32]RetentionConfig{
-		int32(flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY): {
-			Duration: 1 * time.Hour,
-		},
+	retention := map[string]RetentionConfig{
+		"telemetry": {Duration: 1 * time.Hour},
 	}
 	h := newTestHarness(t, retention)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -441,7 +472,7 @@ func TestSequenceExpired(t *testing.T) {
 
 	// Publish 3 events with timestamps 3 hours ago.
 	for i := 1; i <= 3; i++ {
-		h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+		h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 			EventId:   fmt.Sprintf("evt-%d", i),
 			EventType: "test",
 			Timestamp: timestamppb.New(time.Now().Add(-3 * time.Hour)),
@@ -455,7 +486,7 @@ func TestSequenceExpired(t *testing.T) {
 	// because all events have been evicted and min sequence is now 0
 	// (empty). However, if min=0 the check passes. Let's verify by
 	// publishing a new event so min > 1.
-	h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+	h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 		EventId:   "recent",
 		EventType: "test",
 		Timestamp: timestamppb.Now(),
@@ -463,7 +494,7 @@ func TestSequenceExpired(t *testing.T) {
 
 	// min is now 4 (the recent event). Requesting replay from 1 should fail.
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel:      flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel:      "telemetry",
 		LastSequence: 1,
 	})
 	if err != nil {
@@ -487,7 +518,7 @@ func TestChannelIsolation(t *testing.T) {
 
 	// Subscribe to audit channel.
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		Channel: "audit",
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -495,14 +526,14 @@ func TestChannelIsolation(t *testing.T) {
 
 	// Publish to telemetry channel — audit subscriber should NOT receive it.
 	time.Sleep(50 * time.Millisecond)
-	h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+	h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 		EventId:   "wrong-channel",
 		EventType: "test",
 		Timestamp: timestamppb.Now(),
 	})
 
 	// Publish to audit channel — subscriber should receive it.
-	h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_AUDIT, &flowv1.FlowEvent{
+	h.publish(t, ctx, "audit", &flowv1.FlowEvent{
 		EventId:   "right-channel",
 		EventType: "audit.test",
 		Timestamp: timestamppb.Now(),
@@ -524,7 +555,7 @@ func TestSlowSubscriberDoesNotBlockPublisher(t *testing.T) {
 
 	// Start a subscriber but do NOT read from it (simulates slow consumer).
 	_, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 	})
 	if err != nil {
 		t.Fatalf("Subscribe slow: %v", err)
@@ -537,7 +568,7 @@ func TestSlowSubscriberDoesNotBlockPublisher(t *testing.T) {
 	const total = subscriberBufSize + 100
 	for i := range total {
 		_, err := h.client.Publish(ctx, &flowv1.PublishRequest{
-			Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+			Channel: "telemetry",
 			Event: &flowv1.FlowEvent{
 				EventId:   fmt.Sprintf("flood-%d", i),
 				EventType: "test",
@@ -556,7 +587,7 @@ func TestAutoGeneratedEventID(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := h.client.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
 			EventType: "test",
 			Timestamp: timestamppb.Now(),
@@ -577,7 +608,7 @@ func TestLiveOnlyWhenLastSequenceZero(t *testing.T) {
 
 	// Publish 2 events before subscribing.
 	for i := 1; i <= 2; i++ {
-		h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+		h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 			EventId:   fmt.Sprintf("pre-%d", i),
 			EventType: "test",
 			Timestamp: timestamppb.Now(),
@@ -586,7 +617,7 @@ func TestLiveOnlyWhenLastSequenceZero(t *testing.T) {
 
 	// Subscribe with last_sequence=0 (live-only).
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel:      flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel:      "telemetry",
 		LastSequence: 0,
 	})
 	if err != nil {
@@ -595,7 +626,7 @@ func TestLiveOnlyWhenLastSequenceZero(t *testing.T) {
 
 	// Publish a live event (small delay to let server register subscriber).
 	time.Sleep(50 * time.Millisecond)
-	h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+	h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 		EventId:   "live-1",
 		EventType: "test",
 		Timestamp: timestamppb.Now(),
@@ -625,7 +656,7 @@ func TestConcurrentPublish(t *testing.T) {
 		wg.Go(func() {
 			for i := range perGoroutine {
 				_, err := h.client.Publish(ctx, &flowv1.PublishRequest{
-					Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+					Channel: "telemetry",
 					Event: &flowv1.FlowEvent{
 						EventId:   fmt.Sprintf("g%d-e%d", g, i),
 						EventType: "test",
@@ -652,7 +683,7 @@ func TestSubscriberCleanup(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -670,7 +701,7 @@ func TestSubscriberCleanup(t *testing.T) {
 	// Publishing after cleanup should still work (no panic).
 	pubCtx := context.Background()
 	_, err = h.client.Publish(pubCtx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
 			EventId:   "after-cleanup",
 			EventType: "test",
@@ -683,17 +714,15 @@ func TestSubscriberCleanup(t *testing.T) {
 }
 
 func TestRetentionEviction(t *testing.T) {
-	retention := map[int32]RetentionConfig{
-		int32(flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY): {
-			Duration: 1 * time.Hour,
-		},
+	retention := map[string]RetentionConfig{
+		"telemetry": {Duration: 1 * time.Hour},
 	}
 	h := newTestHarness(t, retention)
 	ctx := context.Background()
 
 	// Publish old events (timestamps 2 hours ago).
 	for i := 1; i <= 5; i++ {
-		h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY, &flowv1.FlowEvent{
+		h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
 			EventId:   fmt.Sprintf("old-%d", i),
 			EventType: "test",
 			Timestamp: timestamppb.New(time.Now().Add(-2 * time.Hour)),
@@ -704,7 +733,7 @@ func TestRetentionEviction(t *testing.T) {
 	h.server.runEviction()
 
 	// Verify all old events were evicted by checking the store directly.
-	events, err := h.store.GetSince(ctx, int32(flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY), 0, 100)
+	events, err := h.store.GetSince(ctx, "telemetry", 0, 100)
 	if err != nil {
 		t.Fatalf("GetSince: %v", err)
 	}
@@ -720,18 +749,16 @@ func TestReplayAllFromSequenceOne(t *testing.T) {
 
 	// Publish 3 events.
 	for i := 1; i <= 3; i++ {
-		h.publish(t, ctx, flowv1.EventChannel_EVENT_CHANNEL_AUDIT, &flowv1.FlowEvent{
+		h.publish(t, ctx, "audit", &flowv1.FlowEvent{
 			EventId:   fmt.Sprintf("audit-%d", i),
 			EventType: "audit.test",
 			Timestamp: timestamppb.Now(),
 		})
 	}
 
-	// Subscribe with last_sequence=0 but on purpose request a replay
-	// that captures everything by using sequence 0 (which means live).
-	// Instead, use last_sequence=1 to replay from after first event.
+	// Subscribe with last_sequence=1 to replay from after first event.
 	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel:      flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		Channel:      "audit",
 		LastSequence: 1,
 	})
 	if err != nil {
@@ -747,5 +774,75 @@ func TestReplayAllFromSequenceOne(t *testing.T) {
 		if evt.GetSequence() != wantSeq {
 			t.Errorf("Sequence = %d, want %d", evt.GetSequence(), wantSeq)
 		}
+	}
+}
+
+func TestReplayWithLabelFilter(t *testing.T) {
+	h := newTestHarness(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Publish events with different labels.
+	h.publish(t, ctx, "workitem", &flowv1.FlowEvent{
+		EventId:   "wi-1",
+		EventType: "workitem.phase_changed",
+		Timestamp: timestamppb.Now(),
+		Labels: []*flowv1.Label{
+			{Key: "parent_workitem_id", Value: "parent-A"},
+			{Key: "phase", Value: "Running"},
+		},
+	})
+	h.publish(t, ctx, "workitem", &flowv1.FlowEvent{
+		EventId:   "wi-2",
+		EventType: "workitem.phase_changed",
+		Timestamp: timestamppb.Now(),
+		Labels: []*flowv1.Label{
+			{Key: "parent_workitem_id", Value: "parent-B"},
+			{Key: "phase", Value: "Running"},
+		},
+	})
+	h.publish(t, ctx, "workitem", &flowv1.FlowEvent{
+		EventId:   "wi-3",
+		EventType: "workitem.phase_changed",
+		Timestamp: timestamppb.Now(),
+		Labels: []*flowv1.Label{
+			{Key: "parent_workitem_id", Value: "parent-A"},
+			{Key: "phase", Value: "Completed"},
+		},
+	})
+
+	// Replay with label filter for parent-A only.
+	stream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
+		Channel:      "workitem",
+		LastSequence: 0, // live-only won't replay; use 1-based trick below
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	// Cancel this stream since we need replay.
+	_ = stream.CloseSend()
+
+	// Now subscribe with replay and filter.
+	replayStream, err := h.client.Subscribe(ctx, &flowv1.SubscribeRequest{
+		Channel: "workitem",
+		Filter: &flowv1.SubscribeFilter{
+			MatchLabels: []*flowv1.Label{
+				{Key: "parent_workitem_id", Value: "parent-A"},
+			},
+		},
+		LastSequence: 1, // replay from after the first sequence (0 means live-only)
+	})
+	if err != nil {
+		t.Fatalf("Subscribe replay: %v", err)
+	}
+
+	// Should receive only wi-3 (parent-A, after sequence 1).
+	// wi-2 is parent-B (filtered out), wi-1 is sequence 1 (before cursor).
+	evt, err := replayStream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if evt.GetEventId() != "wi-3" {
+		t.Errorf("EventId = %q, want %q", evt.GetEventId(), "wi-3")
 	}
 }

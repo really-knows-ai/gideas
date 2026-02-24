@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -155,18 +156,15 @@ func (r *FoundryFlowReconciler) eventBusEnvVars(flow *flowv1.FoundryFlow) []core
 	}
 	ret := flow.Spec.EventBusConfig.Retention
 
-	optionalEnv := func(key, val string) {
-		if val != "" {
-			envs = append(envs, corev1.EnvVar{Name: key, Value: val})
+	if len(ret) > 0 {
+		data, err := json.Marshal(ret)
+		if err == nil {
+			envs = append(envs, corev1.EnvVar{
+				Name:  "EVENT_BUS_RETENTION_CONFIG",
+				Value: string(data),
+			})
 		}
 	}
-
-	optionalEnv("EVENT_BUS_RETENTION_TELEMETRY_DURATION", ret.TelemetryDuration)
-	optionalEnv("EVENT_BUS_RETENTION_TELEMETRY_SIZE", ret.TelemetrySize)
-	optionalEnv("EVENT_BUS_RETENTION_AUDIT_DURATION", ret.AuditDuration)
-	optionalEnv("EVENT_BUS_RETENTION_AUDIT_SIZE", ret.AuditSize)
-	optionalEnv("EVENT_BUS_RETENTION_FRICTION_DURATION", ret.FrictionDuration)
-	optionalEnv("EVENT_BUS_RETENTION_FRICTION_SIZE", ret.FrictionSize)
 
 	return envs
 }

@@ -9,6 +9,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const testLawID = "law-1"
+
 // captureFrictionLedgerServer captures FrictionLedgerService RPC calls.
 type captureFrictionLedgerServer struct {
 	flowv1.UnimplementedFrictionLedgerServiceServer
@@ -58,12 +60,12 @@ func TestFrictionLedgerProxy_QueryFriction_ForwardsAndReturns(t *testing.T) {
 
 	env.ledger.queryResp = &flowv1.QueryFrictionResponse{
 		FrictionAggregates: []*flowv1.FrictionAggregate{
-			{LawId: "law-1", TotalMagnitude: 10, EventCount: 3},
+			{LawId: testLawID, TotalMagnitude: 10, EventCount: 3},
 		},
 	}
 
 	resp, err := env.proxy.QueryFriction(context.Background(), &flowv1.QueryFrictionRequest{
-		Filter: &flowv1.FrictionFilter{LawId: "law-1"},
+		Filter: &flowv1.FrictionFilter{LawId: testLawID},
 	})
 	if err != nil {
 		t.Fatalf("QueryFriction: %v", err)
@@ -72,15 +74,15 @@ func TestFrictionLedgerProxy_QueryFriction_ForwardsAndReturns(t *testing.T) {
 	if env.ledger.lastQueryReq == nil {
 		t.Fatal("QueryFriction was not forwarded")
 	}
-	if env.ledger.lastQueryReq.GetFilter().GetLawId() != "law-1" {
-		t.Fatalf("expected filter law_id=law-1, got %q", env.ledger.lastQueryReq.GetFilter().GetLawId())
+	if env.ledger.lastQueryReq.GetFilter().GetLawId() != testLawID {
+		t.Fatalf("expected filter law_id=%s, got %q", testLawID, env.ledger.lastQueryReq.GetFilter().GetLawId())
 	}
 
 	aggs := resp.GetFrictionAggregates()
 	if len(aggs) != 1 {
 		t.Fatalf("expected 1 aggregate, got %d", len(aggs))
 	}
-	if aggs[0].GetLawId() != "law-1" || aggs[0].GetTotalMagnitude() != 10 {
+	if aggs[0].GetLawId() != testLawID || aggs[0].GetTotalMagnitude() != 10 {
 		t.Fatalf("unexpected aggregate: %+v", aggs[0])
 	}
 }

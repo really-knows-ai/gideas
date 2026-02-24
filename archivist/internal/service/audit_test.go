@@ -7,23 +7,19 @@ import (
 
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
 
-// mockAuditPublisher captures published audit events for testing.
+// mockAuditPublisher captures submitted audit events for testing.
 type mockAuditPublisher struct {
 	mu     sync.Mutex
 	events []*flowv1.PublishRequest
 }
 
-func (m *mockAuditPublisher) Publish(
-	_ context.Context, req *flowv1.PublishRequest, _ ...grpc.CallOption,
-) (*flowv1.PublishResponse, error) {
+func (m *mockAuditPublisher) Submit(req *flowv1.PublishRequest) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, req)
-	return &flowv1.PublishResponse{Acknowledged: true}, nil
 }
 
 func (m *mockAuditPublisher) last() *flowv1.PublishRequest {
@@ -94,8 +90,8 @@ func TestAudit_StoreArtefact_NewVersion(t *testing.T) {
 	if last == nil {
 		t.Fatal("expected audit event")
 	}
-	if last.GetChannel() != flowv1.EventChannel_EVENT_CHANNEL_AUDIT {
-		t.Fatalf("expected AUDIT channel, got %v", last.GetChannel())
+	if last.GetChannel() != "audit" {
+		t.Fatalf("expected audit channel, got %v", last.GetChannel())
 	}
 	evt := last.GetEvent()
 	if evt.GetEventType() != "audit.artefact.version_created" {

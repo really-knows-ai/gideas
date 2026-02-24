@@ -18,18 +18,17 @@ import (
 
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// AuditPublisher abstracts audit event publication to the Flow Event Bus.
-// It is satisfied by flowv1.FlowEventBusServiceClient but can be replaced
-// with a test double. A nil publisher silently disables audit publishing.
+// AuditPublisher provides non-blocking audit event submission to the Event Bus.
+// Satisfied by *eventbus.AsyncPublisher. A nil publisher silently disables
+// audit publishing.
 type AuditPublisher interface {
-	Publish(ctx context.Context, req *flowv1.PublishRequest, opts ...grpc.CallOption) (*flowv1.PublishResponse, error)
+	Submit(req *flowv1.PublishRequest)
 }
 
 // ArchivistServer implements flowv1.ArchivistServiceServer backed by
@@ -66,14 +65,15 @@ func WithAuditPublisher(pub AuditPublisher) ArchivistOption {
 	return func(s *ArchivistServer) { s.auditor = pub }
 }
 
-// publishAudit publishes an audit event to the Event Bus. Errors are logged
-// but never propagated — audit publishing must not fail the primary operation.
+// publishAudit submits an audit event to the async publisher for non-blocking
+// delivery to the Event Bus. If the publisher is nil, audit publishing is
+// silently disabled.
 func (s *ArchivistServer) publishAudit(ctx context.Context, eventType string, attrs map[string]string) {
 	if s.auditor == nil {
 		return
 	}
-	_, err := s.auditor.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+	s.auditor.Submit(&flowv1.PublishRequest{
+		Channel: "audit",
 		Event: &flowv1.FlowEvent{
 			EventId:    s.newIDFn(),
 			EventType:  eventType,
@@ -84,12 +84,6 @@ func (s *ArchivistServer) publishAudit(ctx context.Context, eventType string, at
 			Attributes: attrs,
 		},
 	})
-	if err != nil {
-		slog.Warn("Audit publish failed",
-			"event_type", eventType,
-			"error", err,
-		)
-	}
 }
 
 // newAuditEventID returns a random hex-encoded identifier for audit events.

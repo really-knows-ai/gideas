@@ -16,7 +16,6 @@ import (
 	"github.com/gideas/flow/librarian/internal/store/sqlite"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -33,11 +32,11 @@ type ConflictCandidate struct {
 	Similarity float64
 }
 
-// AuditPublisher abstracts audit event publication to the Flow Event Bus.
-// Satisfied by flowv1.FlowEventBusServiceClient. A nil publisher silently
-// disables audit publishing.
+// AuditPublisher provides non-blocking audit event submission to the Event Bus.
+// Satisfied by *eventbus.AsyncPublisher. A nil publisher silently disables
+// audit publishing.
 type AuditPublisher interface {
-	Publish(ctx context.Context, req *flowv1.PublishRequest, opts ...grpc.CallOption) (*flowv1.PublishResponse, error)
+	Submit(req *flowv1.PublishRequest)
 }
 
 // LibrarianServer implements flowv1.LibrarianServiceServer backed by a
@@ -82,14 +81,15 @@ func WithAuditPublisher(pub AuditPublisher) LibrarianOption {
 	return func(s *LibrarianServer) { s.auditor = pub }
 }
 
-// publishAudit publishes an audit event to the Event Bus. Errors are logged
-// but never propagated — audit publishing must not fail the primary operation.
-func (s *LibrarianServer) publishAudit(ctx context.Context, eventType string, attrs map[string]string) {
+// publishAudit submits an audit event to the async publisher for non-blocking
+// delivery to the Event Bus. If the publisher is nil, audit publishing is
+// silently disabled.
+func (s *LibrarianServer) publishAudit(_ context.Context, eventType string, attrs map[string]string) {
 	if s.auditor == nil {
 		return
 	}
-	_, err := s.auditor.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+	s.auditor.Submit(&flowv1.PublishRequest{
+		Channel: "audit",
 		Event: &flowv1.FlowEvent{
 			EventId:    newLibAuditID(),
 			EventType:  eventType,
@@ -97,12 +97,6 @@ func (s *LibrarianServer) publishAudit(ctx context.Context, eventType string, at
 			Attributes: attrs,
 		},
 	})
-	if err != nil {
-		slog.Warn("Audit publish failed",
-			"event_type", eventType,
-			"error", err,
-		)
-	}
 }
 
 // newLibAuditID returns a random hex-encoded identifier for audit events.

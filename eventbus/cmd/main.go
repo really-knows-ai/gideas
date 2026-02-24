@@ -1,7 +1,7 @@
 // Flow Event Bus is a durable pub/sub bus for all Flow runtime events.
 //
 // Events are persisted to SQLite before fan-out. Retention is per-channel
-// and operator-configurable via environment variables.
+// and operator-configurable via a single JSON environment variable.
 //
 // Usage:
 //
@@ -11,6 +11,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -32,6 +33,11 @@ const (
 	defaultDBPath = "/data/eventbus.db"
 	envPort       = "EVENT_BUS_PORT"
 	envDBPath     = "EVENT_BUS_DB_PATH"
+
+	// envRetentionConfig holds a JSON object mapping channel names to
+	// retention policies. Example:
+	//   {"telemetry":{"duration":"24h","size":"100MB"},"audit":{"duration":"168h"}}
+	envRetentionConfig = "EVENT_BUS_RETENTION_CONFIG"
 )
 
 func main() {
@@ -99,56 +105,58 @@ func newEventID() string {
 	return fmt.Sprintf("%x", b)
 }
 
-// loadRetention reads per-channel retention configuration from
-// environment variables. Missing or unparseable values are treated
-// as no limit for that dimension.
-func loadRetention() map[int32]service.RetentionConfig {
-	type channelEnv struct {
-		channel     int32
-		durationEnv string
-		sizeEnv     string
-	}
-	channels := []channelEnv{
-		{
-			int32(flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY),
-			"EVENT_BUS_RETENTION_TELEMETRY_DURATION",
-			"EVENT_BUS_RETENTION_TELEMETRY_SIZE",
-		},
-		{
-			int32(flowv1.EventChannel_EVENT_CHANNEL_AUDIT),
-			"EVENT_BUS_RETENTION_AUDIT_DURATION",
-			"EVENT_BUS_RETENTION_AUDIT_SIZE",
-		},
-		{
-			int32(flowv1.EventChannel_EVENT_CHANNEL_FRICTION),
-			"EVENT_BUS_RETENTION_FRICTION_DURATION",
-			"EVENT_BUS_RETENTION_FRICTION_SIZE",
-		},
+// retentionEntry mirrors the JSON structure for a single channel's
+// retention policy.
+type retentionEntry struct {
+	Duration string `json:"duration"`
+	Size     string `json:"size"`
+}
+
+// loadRetention reads per-channel retention configuration from a single
+// JSON environment variable. The JSON is a map of channel name to an
+// object with optional "duration" and "size" fields. Example:
+//
+//	{"telemetry":{"duration":"24h","size":"100MB"},"audit":{"duration":"168h"}}
+//
+// Returns nil if the env var is unset or empty.
+func loadRetention() map[string]service.RetentionConfig {
+	raw := os.Getenv(envRetentionConfig)
+	if raw == "" {
+		return nil
 	}
 
-	ret := make(map[int32]service.RetentionConfig)
+	var entries map[string]retentionEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		slog.Warn("Invalid retention config JSON, ignoring",
+			"env", envRetentionConfig, "error", err)
+		return nil
+	}
+
+	ret := make(map[string]service.RetentionConfig, len(entries))
 	anySet := false
-	for _, ce := range channels {
+	for ch, entry := range entries {
 		var cfg service.RetentionConfig
-		if v := os.Getenv(ce.durationEnv); v != "" {
-			d, err := time.ParseDuration(v)
+		if entry.Duration != "" {
+			d, err := time.ParseDuration(entry.Duration)
 			if err != nil {
-				slog.Warn("Invalid retention duration, ignoring", "env", ce.durationEnv, "value", v, "error", err)
+				slog.Warn("Invalid retention duration, ignoring",
+					"channel", ch, "value", entry.Duration, "error", err)
 			} else {
 				cfg.Duration = d
 				anySet = true
 			}
 		}
-		if v := os.Getenv(ce.sizeEnv); v != "" {
-			sz, err := parseByteSize(v)
+		if entry.Size != "" {
+			sz, err := parseByteSize(entry.Size)
 			if err != nil {
-				slog.Warn("Invalid retention size, ignoring", "env", ce.sizeEnv, "value", v, "error", err)
+				slog.Warn("Invalid retention size, ignoring",
+					"channel", ch, "value", entry.Size, "error", err)
 			} else {
 				cfg.Size = sz
 				anySet = true
 			}
 		}
-		ret[ce.channel] = cfg
+		ret[ch] = cfg
 	}
 	if !anySet {
 		return nil

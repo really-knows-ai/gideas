@@ -121,8 +121,8 @@ func main() {
 		eventBusProxy = ebProxy
 		eventBusCloser = ebProxy.Close
 
-		// Create telemetry buffer and wire it into the SidecarServer.
-		tb := buffer.NewTelemetryBuffer(ebProxy, 0) // 0 = default size
+		// Create telemetry buffer using the underlying gRPC client.
+		tb := buffer.NewTelemetryBufferFromClient(ebProxy.Client(), 0) // 0 = default size
 		sidecarSrv.TelemetryBuffer = tb
 
 		slog.Info("Event Bus proxy enabled", "address", eventBusAddr)

@@ -177,7 +177,7 @@ func (ht *HearingTrigger) subscribeFriction(ctx context.Context) {
 
 func (ht *HearingTrigger) subscribeOnce(ctx context.Context) error {
 	stream, err := ht.subscriber.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_FRICTION,
+		Channel: "friction",
 		Filter: &flowv1.SubscribeFilter{
 			EventType: "friction.threshold_crossed",
 		},
@@ -197,7 +197,17 @@ func (ht *HearingTrigger) subscribeOnce(ctx context.Context) error {
 			return fmt.Errorf("recv: %w", err)
 		}
 
-		lawID := evt.GetAttributes()["law_id"]
+		// Read law_id from labels (preferred) or fall back to attributes.
+		var lawID string
+		for _, lbl := range evt.GetLabels() {
+			if lbl.GetKey() == "law_id" {
+				lawID = lbl.GetValue()
+				break
+			}
+		}
+		if lawID == "" {
+			lawID = evt.GetAttributes()["law_id"]
+		}
 		if lawID == "" {
 			slog.Warn("Received threshold_crossed event without law_id, skipping")
 			continue
@@ -297,10 +307,10 @@ func (ht *HearingTrigger) triggerHearing(ctx context.Context, lawID, reason stri
 		"reason", reason,
 	)
 
-	// Publish audit event.
+	// Publish audit event via async publisher.
 	if ht.auditor != nil {
-		_, err := ht.auditor.Publish(ctx, &flowv1.PublishRequest{
-			Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		ht.auditor.Submit(&flowv1.PublishRequest{
+			Channel: "audit",
 			Event: &flowv1.FlowEvent{
 				EventId:   newHearingEventID(),
 				EventType: "audit.hearing.triggered",
@@ -312,12 +322,6 @@ func (ht *HearingTrigger) triggerHearing(ctx context.Context, lawID, reason stri
 				},
 			},
 		})
-		if err != nil {
-			slog.Warn("Audit publish failed for hearing trigger",
-				"law_id", lawID,
-				"error", err,
-			)
-		}
 	}
 }
 

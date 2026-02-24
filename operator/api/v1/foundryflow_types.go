@@ -119,7 +119,7 @@ type GovernancePolicy struct {
 
 	// retentionPolicy defines retention duration for terminal Workitems before garbage collection.
 	// +optional
-	RetentionPolicy *RetentionPolicy `json:"retentionPolicy,omitempty"`
+	RetentionPolicy *WorkitemRetentionPolicy `json:"retentionPolicy,omitempty"`
 }
 
 // FrictionThresholds defines per-tier friction thresholds that trigger review hearings.
@@ -171,8 +171,8 @@ type ReviewTTLs struct {
 	Tier5 *metav1.Duration `json:"tier5,omitempty"`
 }
 
-// RetentionPolicy defines retention duration for terminal Workitems before garbage collection.
-type RetentionPolicy struct {
+// WorkitemRetentionPolicy defines retention duration for terminal Workitems before garbage collection.
+type WorkitemRetentionPolicy struct {
 	// maxAge is the maximum age of terminal Workitems before garbage collection.
 	// +optional
 	MaxAge *metav1.Duration `json:"maxAge,omitempty"`
@@ -182,53 +182,29 @@ type RetentionPolicy struct {
 // The Operator passes these settings as env vars to the Event Bus Deployment.
 type EventBusConfig struct {
 	// retention defines per-channel retention windows for the Event Bus.
+	// Each key is a channel name (e.g. "telemetry", "audit", "friction", "workitem").
 	// +optional
 	Retention EventBusRetention `json:"retention,omitempty"`
 }
 
-// EventBusRetention defines per-channel retention windows.
+// EventBusRetention is a map of channel name to retention policy.
+// Each key is a channel name (e.g. "telemetry", "audit", "friction", "workitem").
+// Adding a new channel requires only a new map entry, not a code change.
+type EventBusRetention map[string]EventBusRetentionPolicy
+
+// EventBusRetentionPolicy defines retention limits for a single Event Bus channel.
 // Both duration-based and size-based limits are supported.
 // When both are specified, the Event Bus evicts when either limit is exceeded.
-type EventBusRetention struct {
-	// telemetryDuration is the retention window for the telemetry channel.
+type EventBusRetentionPolicy struct {
+	// duration is the retention window for this channel.
 	// Go duration string (e.g. "24h", "168h").
 	// +optional
-	TelemetryDuration string `json:"telemetryDuration,omitempty"`
+	Duration string `json:"duration,omitempty"`
 
-	// telemetrySize is the maximum total payload size for the telemetry channel.
+	// size is the maximum total payload size for this channel.
 	// Byte-count string with unit suffix (e.g. "100MB", "1GB").
 	// +optional
-	TelemetrySize string `json:"telemetrySize,omitempty"`
-
-	// auditDuration is the retention window for the audit channel.
-	// Go duration string (e.g. "168h").
-	// +optional
-	AuditDuration string `json:"auditDuration,omitempty"`
-
-	// auditSize is the maximum total payload size for the audit channel.
-	// Byte-count string with unit suffix (e.g. "1GB").
-	// +optional
-	AuditSize string `json:"auditSize,omitempty"`
-
-	// frictionDuration is the retention window for the friction channel.
-	// Go duration string (e.g. "72h").
-	// +optional
-	FrictionDuration string `json:"frictionDuration,omitempty"`
-
-	// frictionSize is the maximum total payload size for the friction channel.
-	// Byte-count string with unit suffix (e.g. "100MB").
-	// +optional
-	FrictionSize string `json:"frictionSize,omitempty"`
-
-	// workitemDuration is the retention window for the workitem lifecycle channel.
-	// Go duration string (e.g. "24h", "168h").
-	// +optional
-	WorkitemDuration string `json:"workitemDuration,omitempty"`
-
-	// workitemSize is the maximum total payload size for the workitem lifecycle channel.
-	// Byte-count string with unit suffix (e.g. "100MB", "1GB").
-	// +optional
-	WorkitemSize string `json:"workitemSize,omitempty"`
+	Size string `json:"size,omitempty"`
 }
 
 // CrossFlowConfig defines cross-flow trust and naturalisation settings.

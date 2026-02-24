@@ -26,7 +26,7 @@ func NewAuditSubscriber(client flowv1.FlowEventBusServiceClient, cp Checkpoint) 
 	s.cs = channelSubscriber{
 		client:      client,
 		checkpoint:  cp,
-		channel:     flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		channel:     "audit",
 		channelName: "audit",
 		handler:     s.processEvent,
 		stopCh:      make(chan struct{}),

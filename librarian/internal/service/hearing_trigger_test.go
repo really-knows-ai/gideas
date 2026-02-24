@@ -16,19 +16,16 @@ import (
 // Test doubles
 // ---------------------------------------------------------------------------
 
-// mockAuditPublisher captures published audit events.
+// mockAuditPublisher captures submitted audit events.
 type mockAuditPublisher struct {
 	mu     sync.Mutex
 	events []*flowv1.PublishRequest
 }
 
-func (m *mockAuditPublisher) Publish(
-	_ context.Context, req *flowv1.PublishRequest, _ ...grpc.CallOption,
-) (*flowv1.PublishResponse, error) {
+func (m *mockAuditPublisher) Submit(req *flowv1.PublishRequest) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, req)
-	return &flowv1.PublishResponse{Acknowledged: true}, nil
 }
 
 func (m *mockAuditPublisher) last() *flowv1.PublishRequest {
@@ -110,8 +107,8 @@ func TestAudit_RecordFinding(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", pub.count())
 	}
 	last := pub.last()
-	if last.GetChannel() != flowv1.EventChannel_EVENT_CHANNEL_AUDIT {
-		t.Fatalf("expected AUDIT channel, got %v", last.GetChannel())
+	if last.GetChannel() != "audit" {
+		t.Fatalf("expected audit channel, got %v", last.GetChannel())
 	}
 	evt := last.GetEvent()
 	if evt.GetEventType() != "audit.law.created" {
