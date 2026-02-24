@@ -25,4 +25,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 )
 
-replace github.com/gideas/flow/gen => ../gen
+replace github.com/gideas/flow/gen => ../../gen

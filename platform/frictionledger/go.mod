@@ -2,7 +2,7 @@ module github.com/gideas/flow/frictionledger
 
 go 1.25.0
 
-replace github.com/gideas/flow/gen => ../gen
+replace github.com/gideas/flow/gen => ../../gen
 
 require (
 	github.com/gideas/flow/gen v0.0.0-00010101000000-000000000000

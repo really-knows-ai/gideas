@@ -19,7 +19,7 @@ help: ## Display this help.
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-frictionledger test-librarian test-jury test-clerk ## Run all unit tests.
+test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-frictionledger test-librarian test-clerk ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -27,39 +27,35 @@ test-sdk: ## Run SDK unit tests.
 
 .PHONY: test-sidecar
 test-sidecar: ## Run Sidecar unit tests.
-	go test -v ./sidecar/...
+	go test -v ./platform/sidecar/...
 
 .PHONY: test-archivist
 test-archivist: ## Run Archivist unit tests.
-	CGO_ENABLED=1 go test -v ./archivist/...
+	CGO_ENABLED=1 go test -v ./platform/archivist/...
 
 .PHONY: test-monitor
 test-monitor: ## Run Monitor unit tests.
-	CGO_ENABLED=1 go test -v ./monitor/...
+	CGO_ENABLED=1 go test -v ./platform/monitor/...
 
 .PHONY: test-eventbus
 test-eventbus: ## Run Event Bus unit tests.
-	CGO_ENABLED=1 go test -v ./eventbus/...
+	CGO_ENABLED=1 go test -v ./platform/eventbus/...
 
 .PHONY: test-frictionledger
 test-frictionledger: ## Run Friction Ledger unit tests.
-	CGO_ENABLED=1 go test -v ./frictionledger/...
+	CGO_ENABLED=1 go test -v ./platform/frictionledger/...
 
 .PHONY: test-librarian
 test-librarian: ## Run Librarian unit tests.
-	CGO_ENABLED=1 go test -v ./librarian/...
-
-.PHONY: test-jury
-test-jury: ## Run Jury unit tests.
-	CGO_ENABLED=1 go test -v ./jury/...
+	CGO_ENABLED=1 go test -v ./platform/librarian/...
 
 .PHONY: test-clerk
 test-clerk: ## Run Clerk unit tests.
-	go test -v ./clerk/...
+	go test -v ./platform/clerk/...
 
 .PHONY: test-operator
 test-operator: ## Run Operator unit tests (delegates to operator/Makefile).
-	$(MAKE) -C operator test
+	$(MAKE) -C platform/operator test
 
 .PHONY: test-all
 test-all: test test-operator ## Run every test suite including the operator.
@@ -69,11 +65,11 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-archivist build-monitor build-eventbus build-frictionledger build-librarian build-jury build-clerk ## Build all binaries.
+build: build-sidecar build-null-node build-archivist build-monitor build-eventbus build-frictionledger build-librarian build-clerk ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
-	go build -o bin/sidecar ./sidecar/cmd
+	go build -o bin/sidecar ./platform/sidecar/cmd
 
 .PHONY: build-null-node
 build-null-node: ## Build the Null Node binary.
@@ -81,35 +77,31 @@ build-null-node: ## Build the Null Node binary.
 
 .PHONY: build-archivist
 build-archivist: ## Build the Archivist binary.
-	CGO_ENABLED=1 go build -o bin/archivist ./archivist/cmd
+	CGO_ENABLED=1 go build -o bin/archivist ./platform/archivist/cmd
 
 .PHONY: build-monitor
 build-monitor: ## Build the Monitor binary.
-	CGO_ENABLED=1 go build -o bin/monitor ./monitor/cmd
+	CGO_ENABLED=1 go build -o bin/monitor ./platform/monitor/cmd
 
 .PHONY: build-eventbus
 build-eventbus: ## Build the Event Bus binary.
-	CGO_ENABLED=1 go build -o bin/eventbus ./eventbus/cmd
+	CGO_ENABLED=1 go build -o bin/eventbus ./platform/eventbus/cmd
 
 .PHONY: build-frictionledger
 build-frictionledger: ## Build the Friction Ledger binary.
-	CGO_ENABLED=1 go build -o bin/frictionledger ./frictionledger/cmd
+	CGO_ENABLED=1 go build -o bin/frictionledger ./platform/frictionledger/cmd
 
 .PHONY: build-librarian
 build-librarian: ## Build the Librarian binary.
-	CGO_ENABLED=1 go build -o bin/librarian ./librarian/cmd
-
-.PHONY: build-jury
-build-jury: ## Build the Jury binary.
-	CGO_ENABLED=1 go build -o bin/jury ./jury/cmd
+	CGO_ENABLED=1 go build -o bin/librarian ./platform/librarian/cmd
 
 .PHONY: build-clerk
 build-clerk: ## Build the Clerk binary.
-	go build -o bin/clerk ./clerk/cmd
+	go build -o bin/clerk ./platform/clerk/cmd
 
 .PHONY: build-operator
 build-operator: ## Build the Operator binary (delegates to operator/Makefile).
-	$(MAKE) -C operator build
+	$(MAKE) -C platform/operator build
 
 # ---------------------------------------------------------------------------
 ##@ Code Quality
@@ -141,15 +133,15 @@ vet: ## Run go vet across the workspace.
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
-	"$(GOLANGCI_LINT)" run ./sdk/go/... ./sidecar/... ./archivist/... ./monitor/... ./eventbus/... ./frictionledger/... ./librarian/... ./jury/... ./clerk/... ./nodes/... ./tools/haiku-watch/...
+	"$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/frictionledger/... ./platform/librarian/... ./platform/clerk/... ./nodes/... ./tools/haiku-watch/...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint with auto-fix (excludes operator).
-	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./sidecar/... ./archivist/... ./monitor/... ./eventbus/... ./frictionledger/... ./librarian/... ./jury/... ./clerk/... ./nodes/... ./tools/haiku-watch/...
+	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/frictionledger/... ./platform/librarian/... ./platform/clerk/... ./nodes/... ./tools/haiku-watch/...
 
 .PHONY: lint-operator
 lint-operator: ## Run golangci-lint for the operator (delegates to operator/Makefile).
-	$(MAKE) -C operator lint
+	$(MAKE) -C platform/operator lint
 
 .PHONY: lint-all
 lint-all: lint lint-operator ## Run golangci-lint across every module including the operator.
@@ -178,7 +170,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go sidecar archivist monitor eventbus frictionledger librarian jury clerk nodes operator; do \
+	@for mod in gen sdk/go platform/sidecar platform/archivist platform/monitor platform/eventbus platform/frictionledger platform/librarian platform/clerk platform/pkg/eventbus nodes platform/operator tools/haiku-watch; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done

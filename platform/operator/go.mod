@@ -101,6 +101,6 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/gideas/flow/gen => ../gen
+replace github.com/gideas/flow/gen => ../../gen
 
 replace github.com/gideas/flow/pkg/eventbus => ../pkg/eventbus

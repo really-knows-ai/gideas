@@ -1,9 +1,9 @@
-module github.com/gideas/flow/pkg/eventbus
+module github.com/gideas/flow/clerk
 
 go 1.25.0
 
 require (
-	github.com/gideas/flow/gen v0.0.0
+	github.com/gideas/flow/gen v0.0.0-00010101000000-000000000000
 	google.golang.org/grpc v1.79.1
 )
 
