@@ -694,11 +694,11 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
 
 ### Checklist
 
-- [ ] **`go test ./...`** across all modules (operator, sidecar, sdk, clerk, nodes, proto)
-- [ ] **`make check-fix`** -- resolve all lint issues
-- [ ] **`make test-all`** -- full test suite
-- [ ] **`make check-all`** -- full lint suite
-- [ ] **Integration verification** -- end-to-end test of child Workitem creation, artefact attachment, routing, completion, and parent collection
+- [x] **`go test ./...`** across all modules (operator, sidecar, sdk, clerk, nodes, proto)
+- [x] **`make check-fix`** -- resolve all lint issues
+- [x] **`make test-all`** -- full test suite
+- [x] **`make lint-all`** -- full lint suite (0 issues across all modules including operator)
+- [ ] **Integration verification** -- end-to-end test of child Workitem creation, artefact attachment, routing, completion, and parent collection (deferred: requires running cluster)
 
 ---
 
@@ -767,4 +767,4 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase 7E: Tests | Complete | All tests pass across operator, archivist, sidecar; `make check-fix` + `make lint-operator` clean (0 issues) |
 | Phase 8: Sidecar Parent-Child Authorization | Complete | Session child tracking, OperatorProxy (CreateChildWorkitem/RouteChild/GetChildren with tracking), ArchivistProxy cross-Workitem authorization (reads + writes), 31 tests pass, lint clean |
 | Phase 9: SDK | Complete | `EventBus` client on `Client`; `ChildWorkitem` handle with `StoreArtefact`, `StampArtefact`, `RouteTo`, `RouteToOutput`, `Complete`; `CreateChildWorkitem`, `GetChildren`, `GetChildArtefact`, `ListChildArtefacts`, `WatchChildren` convenience methods; 16 new tests pass, lint clean |
-| Phase 10: Tests and Quality Gates | Not Started | |
+| Phase 10: Tests and Quality Gates | Complete | `make test-all` all pass (operator 67-95% coverage); `make check-fix` 0 issues; `make lint-all` 0 issues; no `EventChannel_` references in codebase |

@@ -114,8 +114,9 @@ func (r *FoundryFlowReconciler) reconcileEventBusDeployment(ctx context.Context,
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
-					Name:  "eventbus",
-					Image: eventBusImage,
+					Name:            "eventbus",
+					Image:           eventBusImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Ports: []corev1.ContainerPort{{
 						Name:          "grpc",
 						ContainerPort: int32(eventBusPort),
@@ -199,8 +200,9 @@ func (r *FoundryFlowReconciler) reconcileFrictionLedgerDeployment(ctx context.Co
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
-					Name:  "frictionledger",
-					Image: frictionLedgerImage,
+					Name:            "frictionledger",
+					Image:           frictionLedgerImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Ports: []corev1.ContainerPort{{
 						Name:          "grpc",
 						ContainerPort: int32(frictionLedgerPort),
@@ -288,8 +290,9 @@ func (r *FoundryFlowReconciler) reconcileFlowMonitorDeployment(ctx context.Conte
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
-					Name:  "monitor",
-					Image: flowMonitorImage,
+					Name:            "monitor",
+					Image:           flowMonitorImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Ports: []corev1.ContainerPort{{
 						Name:          "http-metrics",
 						ContainerPort: int32(flowMonitorHTTPPort),
@@ -352,8 +355,9 @@ func (r *FoundryFlowReconciler) reconcileLibrarianDeployment(ctx context.Context
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
-					Name:  "librarian",
-					Image: librarianImage,
+					Name:            "librarian",
+					Image:           librarianImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Ports: []corev1.ContainerPort{{
 						Name:          "grpc",
 						ContainerPort: int32(librarianPort),

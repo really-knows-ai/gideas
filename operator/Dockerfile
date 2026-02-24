@@ -27,6 +27,16 @@ COPY librarian/go.mod librarian/go.mod
 COPY librarian/go.sum librarian/go.sum
 COPY nodes/go.mod nodes/go.mod
 COPY nodes/go.sum nodes/go.sum
+COPY clerk/go.mod clerk/go.mod
+COPY clerk/go.sum clerk/go.sum
+COPY eventbus/go.mod eventbus/go.mod
+COPY eventbus/go.sum eventbus/go.sum
+COPY frictionledger/go.mod frictionledger/go.mod
+COPY frictionledger/go.sum frictionledger/go.sum
+COPY jury/go.mod jury/go.mod
+COPY jury/go.sum jury/go.sum
+COPY pkg/eventbus/go.mod pkg/eventbus/go.mod
+COPY pkg/eventbus/go.sum pkg/eventbus/go.sum
 COPY tools/haiku-watch/go.mod tools/haiku-watch/go.mod
 COPY tools/haiku-watch/go.sum tools/haiku-watch/go.sum
 
@@ -35,6 +45,7 @@ RUN go mod download -x 2>&1 | tail -1
 # Copy source
 COPY gen/ gen/
 COPY operator/ operator/
+COPY pkg/eventbus/ pkg/eventbus/
 
 # Build
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o /manager ./operator/cmd/main.go
