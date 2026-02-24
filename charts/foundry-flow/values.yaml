@@ -20,6 +20,9 @@ eventbus:
     friction:
       duration: ""
       size: ""
+    workitem:
+      duration: ""
+      size: ""
 
 # -- Friction Ledger configuration
 frictionledger:

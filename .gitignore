@@ -11,7 +11,8 @@ bin/
 *.swo
 *~
 
-# Session plans and scratch files (keep PLAN.md)
+# Session plans and scratch files
+PLAN.md
 *_PLAN.md
 TODO.md
 REVIEW.md
