@@ -33,6 +33,8 @@ COPY jury/go.mod jury/go.mod
 COPY jury/go.sum jury/go.sum
 COPY tools/haiku-watch/go.mod tools/haiku-watch/go.mod
 COPY tools/haiku-watch/go.sum tools/haiku-watch/go.sum
+COPY pkg/eventbus/go.mod pkg/eventbus/go.mod
+COPY pkg/eventbus/go.sum pkg/eventbus/go.sum
 
 RUN go mod download -x 2>&1 | tail -1
 

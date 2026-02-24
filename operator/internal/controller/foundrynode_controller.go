@@ -306,8 +306,9 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode) corev
 
 	// Node container.
 	nodeContainer := corev1.Container{
-		Name:  nodeContainerName,
-		Image: node.Spec.Image,
+		Name:            nodeContainerName,
+		Image:           node.Spec.Image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
 		Env: []corev1.EnvVar{
 			{Name: "FLOW_NODE_NAME", Value: node.Name},
 			{Name: "FLOW_NAMESPACE", Value: node.Namespace},
@@ -317,8 +318,9 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode) corev
 
 	// Sidecar container.
 	sidecarContainer := corev1.Container{
-		Name:  sidecarContainerName,
-		Image: sidecarImage,
+		Name:            sidecarContainerName,
+		Image:           sidecarImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
 		Ports: []corev1.ContainerPort{
 			{Name: "grpc", ContainerPort: int32(sidecarGRPCPort), Protocol: corev1.ProtocolTCP},
 		},
