@@ -45,29 +45,18 @@ spec:
               value: {{ .Values.eventbus.port | quote }}
             - name: EVENT_BUS_DB_PATH
               value: {{ .Values.eventbus.dbPath | quote }}
-            {{- with .Values.eventbus.retention.telemetry.duration }}
-            - name: EVENT_BUS_RETENTION_TELEMETRY_DURATION
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.eventbus.retention.telemetry.size }}
-            - name: EVENT_BUS_RETENTION_TELEMETRY_SIZE
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.eventbus.retention.audit.duration }}
-            - name: EVENT_BUS_RETENTION_AUDIT_DURATION
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.eventbus.retention.audit.size }}
-            - name: EVENT_BUS_RETENTION_AUDIT_SIZE
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.eventbus.retention.friction.duration }}
-            - name: EVENT_BUS_RETENTION_FRICTION_DURATION
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.eventbus.retention.friction.size }}
-            - name: EVENT_BUS_RETENTION_FRICTION_SIZE
-              value: {{ . | quote }}
+            {{- /* Build retention config: only include channels that have
+                 at least one non-empty field (duration or size). */ -}}
+            {{- $ret := dict -}}
+            {{- range $ch, $pol := .Values.eventbus.retention -}}
+              {{- $entry := dict -}}
+              {{- if $pol.duration }}{{ $_ := set $entry "duration" $pol.duration }}{{ end -}}
+              {{- if $pol.size }}{{ $_ := set $entry "size" $pol.size }}{{ end -}}
+              {{- if $entry }}{{ $_ := set $ret $ch $entry }}{{ end -}}
+            {{- end -}}
+            {{- if $ret }}
+            - name: EVENT_BUS_RETENTION_CONFIG
+              value: {{ $ret | toJson | quote }}
             {{- end }}
           volumeMounts:
             - name: data

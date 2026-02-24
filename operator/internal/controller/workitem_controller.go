@@ -91,6 +91,48 @@ func (r *WorkitemReconciler) publishAudit(_ context.Context, eventType string, w
 	})
 }
 
+// publishLifecycle emits a workitem.phase_changed event on the "workitem"
+// Event Bus channel. Labels carry the filtering-relevant dimensions
+// (workitem_id, phase, node_id, and optionally parent_workitem_id).
+// The flow_id is placed in attributes as non-filtered context.
+func (r *WorkitemReconciler) publishLifecycle(workitem *flowv1.Workitem, phase string, nodeID string) {
+	if r.Auditor == nil {
+		return
+	}
+
+	labels := []*flowv1gen.Label{
+		{Key: "workitem_id", Value: workitem.Name},
+		{Key: "phase", Value: phase},
+		{Key: "node_id", Value: nodeID},
+	}
+
+	if workitem.Status.ParentWorkitemID != "" {
+		labels = append(labels, &flowv1gen.Label{
+			Key:   "parent_workitem_id",
+			Value: workitem.Status.ParentWorkitemID,
+		})
+	}
+
+	attrs := map[string]string{}
+	if workitem.Labels != nil {
+		if flowID := workitem.Labels["flow.gideas.io/flow"]; flowID != "" {
+			attrs["flow_id"] = flowID
+		}
+	}
+
+	r.Auditor.Submit(&flowv1gen.PublishRequest{
+		Channel: "workitem",
+		Event: &flowv1gen.FlowEvent{
+			EventId:    newWIAuditID(),
+			EventType:  "workitem.phase_changed",
+			WorkitemId: workitem.Name,
+			Timestamp:  timestamppb.Now(),
+			Labels:     labels,
+			Attributes: attrs,
+		},
+	})
+}
+
 // newWIAuditID returns a random hex-encoded identifier for audit events.
 func newWIAuditID() string {
 	b := make([]byte, 16)
@@ -256,6 +298,7 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 			"action": "failed",
 			"reason": "THRASH_BUDGET_EXCEEDED",
 		})
+		r.publishLifecycle(workitem, phaseFailed, assignee)
 		return r.failWorkitem(ctx, workitem, "THRASH_BUDGET_EXCEEDED")
 	}
 
@@ -316,6 +359,7 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 		"action":   "running",
 		"assignee": assignee,
 	})
+	r.publishLifecycle(workitem, wiPhaseRunning, assignee)
 
 	// Requeue after the timeout period to check for inactivity timeout.
 	var node flowv1.FoundryNode
@@ -374,6 +418,7 @@ func (r *WorkitemReconciler) reconcileRunning(ctx context.Context, req ctrl.Requ
 				"action": "failed",
 				"reason": "TIMEOUT_EXCEEDED",
 			})
+			r.publishLifecycle(workitem, phaseFailed, workitem.Status.CurrentAssignee)
 			return r.failWorkitem(ctx, workitem, "TIMEOUT_EXCEEDED")
 		}
 
@@ -446,6 +491,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 					"action": "failed",
 					"reason": guardErr.Code,
 				})
+				r.publishLifecycle(workitem, phaseFailed, workitem.Status.CurrentAssignee)
 				return r.failWorkitem(ctx, workitem, guardErr.Code)
 			}
 
@@ -503,6 +549,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 			"action":    "completed",
 			"last_node": previousAssignee,
 		})
+		r.publishLifecycle(workitem, wiPhaseCompleted, previousAssignee)
 	} else {
 		log.Info("Moving Workitem",
 			"name", workitem.Name,
@@ -514,6 +561,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 			"from":   previousAssignee,
 			"to":     result.NextAssignee,
 		})
+		r.publishLifecycle(workitem, wiPhasePending, result.NextAssignee)
 	}
 
 	return ctrl.Result{}, nil

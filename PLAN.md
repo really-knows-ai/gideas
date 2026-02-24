@@ -476,7 +476,7 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
 
 **Goal:** With the generic Event Bus in place, publish Workitem lifecycle events.
 
-- [ ] **`operator/internal/controller/workitem_controller.go`** -- Add `publishLifecycle()` helper
+- [x] **`operator/internal/controller/workitem_controller.go`** -- Add `publishLifecycle()` helper
   - Uses the same `AsyncPublisher` instance as audit publishing (or a separate one for the `"workitem"` channel -- implementer's choice)
   - Channel: `"workitem"`
   - Event type: `"workitem.phase_changed"`
@@ -484,7 +484,7 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
   - If the Workitem has a `ParentWorkitemID`, add label `{parent_workitem_id, <parent_id>}`
   - Attributes: `flow_id` and any additional context
 
-- [ ] **Call `publishLifecycle()` at every phase transition**
+- [x] **Call `publishLifecycle()` at every phase transition**
   - `reconcilePending()` → on thrash budget failure (phase = `Failed`)
   - `reconcilePending()` → on successful Running transition (phase = `Running`)
   - `reconcileRunning()` → on timeout failure (phase = `Failed`)
@@ -492,27 +492,27 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
   - `reconcileRouting()` → on completion (phase = `Completed`)
   - `reconcileRouting()` → on routing to next node (phase = `Pending`, new assignee)
 
-- [ ] **Tests** -- Unit tests for lifecycle publishing
+- [x] **Tests** -- Unit tests for lifecycle publishing
 
 ### Phase 6H: Spec Updates
 
 **Goal:** Update specs to reflect the generic Event Bus design and the unified async publisher pattern.
 
-- [ ] **`specs/02-flow/04-system-services.md`** -- Event Bus is channel-agnostic, labels, generic filtering (already in Phase 1 checklist but may need implementation-informed updates). Document the async publishing model: all publishers use fire-and-forget `Submit()` with buffered retry; Event Bus latency is decoupled from RPC critical paths.
+- [x] **`specs/02-flow/04-system-services.md`** -- Event Bus is channel-agnostic, labels, generic filtering (already in Phase 1 checklist but may need implementation-informed updates). Document the async publishing model: all publishers use fire-and-forget `Submit()` with buffered retry; Event Bus latency is decoupled from RPC critical paths.
 
-- [ ] **`specs/05-reference/grpc-api.md`** -- Updated proto surface: string channels, `Label` message, `repeated Label labels` on `FlowEvent`, generic `SubscribeFilter`
+- [x] **`specs/05-reference/grpc-api.md`** -- Updated proto surface: string channels, `Label` message, `repeated Label labels` on `FlowEvent`, generic `SubscribeFilter`
 
-- [ ] **`specs/05-reference/crds.md`** -- Generic retention map on `EventBusRetention`
+- [x] **`specs/05-reference/crds.md`** -- Generic retention map on `EventBusRetention`
 
-- [ ] **Spec lint** -- Run `make check-fix` on all updated spec files
+- [x] **Spec lint** -- Run `make check-fix` on all updated spec files
 
 ### Phase 6I: Tests and Quality Gates
 
 **Goal:** Full quality gate pass after all Phase 6 changes.
 
-- [ ] **`go test ./...`** across all modules (eventbus, operator, sidecar, frictionledger, librarian, archivist, monitor, sdk, clerk, nodes)
-- [ ] **`make check-fix`** -- resolve all lint issues
-- [ ] **Verify no module references `EventChannel` enum** -- grep for `EventChannel_` across the codebase (excluding `gen/`)
+- [x] **`go test ./...`** across all modules (eventbus, operator, sidecar, frictionledger, librarian, archivist, monitor, sdk, clerk, nodes)
+- [x] **`make check-fix`** -- resolve all lint issues
+- [x] **Verify no module references `EventChannel` enum** -- grep for `EventChannel_` across the codebase (excluding `gen/`)
 
 ### Blast Radius Summary
 
@@ -676,10 +676,10 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase 6D: Operator -- Generic Env Vars | Complete | `eventBusEnvVars()` serializes `EVENT_BUS_RETENTION_CONFIG` as single JSON env var; tests updated. Also fixed pre-existing `EventChannel` enum refs in operator (partial Phase 6E work). |
 | Phase 6E0: Shared AsyncPublisher | Complete | `pkg/eventbus/` package with `AsyncPublisher` + tests; sidecar `TelemetryBuffer` refactored to compose two `AsyncPublisher` instances |
 | Phase 6E: Publishers/Subscribers | Complete | All publishers/subscribers migrated: string channels, labels for law_ids, AsyncPublisher for all audit/friction/telemetry publishing, cmd/main.go wiring updated, all tests pass, lint clean |
-| Phase 6F: Helm Chart | Not Started | Generic retention env var |
-| Phase 6G: Workitem Lifecycle Publishing | Not Started | `publishLifecycle()` in workitem controller |
-| Phase 6H: Spec Updates | Not Started | Document generic Event Bus design |
-| Phase 6I: Tests and Quality Gates | Not Started | Full cross-module test pass |
+| Phase 6F: Helm Chart | Complete | Generic retention: single `EVENT_BUS_RETENTION_CONFIG` JSON env var; `workitem` channel added to values; empty channels omitted from rendered output |
+| Phase 6G: Workitem Lifecycle Publishing | Complete | `publishLifecycle()` helper + calls at all 6 phase transition points; 11 unit tests pass |
+| Phase 6H: Spec Updates | Complete | All 3 spec files updated: channel-agnostic Bus, labels/filtering, async publishing model, generic retention map |
+| Phase 6I: Tests and Quality Gates | Complete | All tests pass across all modules; `make check-fix` clean (0 issues); no `EventChannel_` references outside `gen/` |
 | Phase 7: Archivist Cross-Workitem Reads | Not Started | |
 | Phase 8: Sidecar Parent-Child Authorization | Not Started | |
 | Phase 9: SDK | Not Started | |

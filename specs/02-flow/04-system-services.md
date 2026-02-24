@@ -45,29 +45,46 @@ active subscribers.
 
 ### Channels
 
-The Bus operates four channels:
+The Bus is channel-agnostic. Channels are free-form strings — adding a new channel requires no code changes, proto regeneration, or rebuilds. The reference implementation uses four channels:
 
-- **Telemetry channel**: friction events, custom telemetry events, metrics, traces, and cost
+- **`telemetry`**: friction events, custom telemetry events, metrics, traces, and cost
   accounting signals. Produced by Sidecars (on behalf of nodes) and by system services.
   Subscribers: Friction Ledger (friction aggregation), Flow Monitor (metrics export), future
   operational dashboards.
 
-- **Audit channel**: authoritative state transition records emitted by the service that
+- **`audit`**: authoritative state transition records emitted by the service that
   accepted, rejected, or applied a mutation. The Archivist publishes artefact version creation,
   stamp application, and feedback transitions. The Operator publishes lifecycle transitions,
   routing decisions, and contract evaluations. The Librarian publishes law creation, retirement,
   and integration events. Subscribers: Flow Monitor (JSON Lines to stdout for log pipeline),
   future compliance tooling.
 
-- **Friction channel**: aggregated friction signals published by the Friction Ledger.
+- **`friction`**: aggregated friction signals published by the Friction Ledger.
   Threshold-crossing alerts indicate that a law's accumulated friction has crossed its tier's
   configured hearing threshold. Subscribers: Librarian (reactive hearing triggers).
 
-- **Workitem channel**: Workitem lifecycle events published by the Operator on every phase
-  transition. Each event carries `workitem_id`, `parent_workitem_id` (if the Workitem is a
-  child), `phase`, `node_id`, and `flow_id`. Subscribers filter by `parent_workitem_id` to
-  observe child Workitem progress during fan-out/fan-in processing. Subscribers: nodes (via
-  SDK `WatchChildren()`).
+- **`workitem`**: Workitem lifecycle events published by the Operator on every phase
+  transition. Each event carries labels for `workitem_id`, `phase`, `node_id`, and
+  `parent_workitem_id` (if the Workitem is a child). The `flow_id` is carried in attributes.
+  Subscribers filter by `parent_workitem_id` to observe child Workitem progress during
+  fan-out/fan-in processing. Subscribers: nodes (via SDK `WatchChildren()`).
+
+### Labels and Filtering
+
+Events carry two key-value structures:
+
+- **Labels**: repeated key-value pairs (`repeated Label`) designed for server-side filtering.
+  Filtering-relevant dimensions go in labels (e.g. `law_id`, `parent_workitem_id`, `phase`,
+  `workitem_id`, `node_id`). Labels use a repeated message (not a map) so that a single event
+  can carry multiple values for the same key (e.g. `law_id=law-1` and `law_id=law-2`). The
+  server stores labels in a separate indexed table for efficient filtering.
+
+- **Attributes**: a `map<string, string>` for arbitrary unfiltered metadata (e.g. `magnitude`,
+  `threshold`, `accumulated_friction`, `flow_id`). Not used for server-side filtering.
+
+Subscribers filter using `SubscribeFilter`, which supports an `event_type` convenience field
+and `repeated Label match_labels` with AND semantics: every label in the filter must have at
+least one matching label on the event.
 
 ### Persistence and Retention
 
@@ -83,7 +100,14 @@ downstream: Prometheus for metrics and friction time-series, log pipeline for au
 
 - **Publish** is write-ahead. The producer receives an acknowledgement when the Bus has
   persisted the event to its log and accepted it for distribution.
-- **Subscribe** opens a server-side stream filtered by channel and optional event attributes.
+- **Async publishing model**: all publishers use a shared `AsyncPublisher` abstraction that
+  buffers events in a channel and drains them in a background goroutine with
+  exponential-backoff retry. The non-blocking `Submit()` method decouples Event Bus latency
+  from RPC critical paths — audit events, lifecycle events, and telemetry events never block
+  the RPC response to the caller. If the buffer is full, events are dropped with a counter
+  increment. This is a latency optimisation and a consistency pattern: one well-tested async
+  mechanism replaces ad-hoc synchronous publish helpers.
+- **Subscribe** opens a server-side stream filtered by channel and optional labels.
   The subscriber receives events as they are published. If the subscriber falls behind, the Bus
   applies backpressure per subscriber — slow subscribers do not block fast ones.
 - **Replay**: reconnecting subscribers provide a last-seen sequence number. The Bus replays

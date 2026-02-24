@@ -194,21 +194,30 @@ The Flow Monitor is a stateless pipeline adapter. It does not persist events, se
 
 ## Flow Event Bus API
 
-The Flow Event Bus distributes runtime events across four channels. Producers publish events;
-consumers subscribe to filtered streams. All events are persisted to a SQLite append-only log
-before fan-out.
+The Flow Event Bus is a channel-agnostic, shape-agnostic event distribution service. Channels
+are free-form strings — adding a new channel or filter dimension requires no code changes, proto
+regeneration, or rebuilds. All events are persisted to a SQLite append-only log before fan-out.
 
 ### Publish Methods
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `Publish` | `channel`, `event` | `acknowledged`, `sequence` | Publishes an event to the specified channel (`TELEMETRY`, `AUDIT`, `FRICTION`, or `WORKITEM`). Write-ahead — the producer receives acknowledgement with the assigned sequence number after the event is persisted to the log. |
+| `Publish` | `channel` (string), `event` | `acknowledged`, `sequence` | Publishes an event to the specified channel (e.g. `"telemetry"`, `"audit"`, `"friction"`, `"workitem"`). Write-ahead — the producer receives acknowledgement with the assigned sequence number after the event is persisted to the log. |
 
 ### Subscribe Methods
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `Subscribe` | `channel`, `filter`, `last_sequence?` | `stream FlowEvent` | Opens a server-side stream of events matching the channel and optional filter. If `last_sequence` is provided, the Bus replays events from that sequence number (if still within the retention window) before switching to live delivery. The stream remains open until the client disconnects. Filters support event type and law_id for telemetry channel events. |
+| `Subscribe` | `channel` (string), `filter`, `last_sequence?` | `stream FlowEvent` | Opens a server-side stream of events matching the channel and optional filter. If `last_sequence` is provided, the Bus replays events from that sequence number (if still within the retention window) before switching to live delivery. The stream remains open until the client disconnects. |
+
+### Label Shape
+
+Labels are repeated key-value pairs for server-side filtering. Using a repeated message (not a map) allows multiple values for the same key (e.g. `law_id=law-1` and `law_id=law-2` on the same event).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | `string` | Label key (e.g. `law_id`, `parent_workitem_id`, `phase`, `workitem_id`, `node_id`). |
+| `value` | `string` | Label value. |
 
 ### Event Shape
 
@@ -216,24 +225,23 @@ before fan-out.
 |-------|------|-------------|
 | `event_id` | `string` | Unique event identifier. |
 | `sequence` | `uint64` | Monotonically increasing sequence number within the channel. Used for replay positioning. |
-| `channel` | `EventChannel` | `TELEMETRY`, `AUDIT`, `FRICTION`, or `WORKITEM`. |
-| `event_type` | `string` | Event type identifier (e.g. `friction`, `foundry.cost.llm`, `audit.artefact.stamped`, `friction.threshold_crossed`). |
+| `channel` | `string` | Channel name (e.g. `"telemetry"`, `"audit"`, `"friction"`, `"workitem"`). Free-form string; the Bus is channel-agnostic. |
+| `event_type` | `string` | Event type identifier (e.g. `friction`, `foundry.cost.llm`, `audit.artefact.stamped`, `friction.threshold_crossed`, `workitem.phase_changed`). |
 | `flow_id` | `string` | Flow identifier. |
 | `node_id` | `string` | Emitting node (empty for service-originated events). |
 | `workitem_id` | `string` | Associated Workitem (empty for law-lifecycle audit events). |
-| `parent_workitem_id` | `string` | Parent Workitem ID if the associated Workitem is a child (empty for root Workitems and non-Workitem events). Present on `WORKITEM` channel events for filtering. |
 | `timestamp` | `Timestamp` | Event timestamp. |
 | `trace_id` | `string` | Distributed trace context identifier. Injected by the Sidecar from the active trace. Empty if tracing is not configured. |
-| `attributes` | `map<string, string>` | Event-specific key-value attributes. For friction events: `law_ids` (comma-separated), `magnitude`. For audit events: `action`, `resource_id`. For threshold-crossing events: `law_id`, `tier`, `accumulated_friction`, `threshold`. |
+| `attributes` | `map<string, string>` | Arbitrary key-value metadata not used for server-side filtering. For friction events: `magnitude`. For audit events: `action`, `resource_id`. For threshold-crossing events: `tier`, `accumulated_friction`, `threshold`. For workitem lifecycle events: `flow_id`. |
 | `payload` | `bytes` | Optional structured payload (max 64 KB). |
+| `labels` | `repeated Label` | Repeated labels for server-side filtering. For friction events: `law_id` (repeated per attributed law). For workitem lifecycle events: `workitem_id`, `phase`, `node_id`, `parent_workitem_id` (if child). For threshold-crossing events: `law_id`. |
 
 ### Subscribe Filter
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `event_type` | `string` | Optional: filter to specific event type. |
-| `law_id` | `string` | Optional: filter to events attributed to a specific law. For events carrying a comma-separated `law_ids` attribute (e.g. friction events), the filter matches if the filter value appears as an exact element after splitting on commas — not a substring match. |
-| `parent_workitem_id` | `string` | Optional: filter to events for child Workitems of a specific parent. Used with the `WORKITEM` channel to observe child lifecycle events during fan-out/fan-in processing. |
+| `event_type` | `string` | Optional: filter to specific event type. Convenience field — every subscriber uses it. |
+| `match_labels` | `repeated Label` | Optional: AND-match filter. Every label in the filter must have at least one matching label on the event. For example, `[{parent_workitem_id, "wi-42"}]` matches events with a `parent_workitem_id=wi-42` label. |
 
 ### Flow Event Bus Error Responses
 

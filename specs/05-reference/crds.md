@@ -119,18 +119,38 @@ When a law's age exceeds its tier's configured TTL, the Librarian triggers a rev
 
 ### EventBusRetention
 
+Retention is configured as a map of channel name to retention policy. Each key is a channel string (e.g. `"telemetry"`, `"audit"`, `"friction"`, `"workitem"`); each value specifies duration and/or size limits. The Bus is channel-agnostic — adding retention for a new channel requires only a map entry, not a schema change.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `telemetryDuration` | `string` | no | Duration-based retention for telemetry channel (e.g. `"24h"`). |
-| `telemetrySize` | `string` | no | Size-based retention for telemetry channel (e.g. `"100MB"`). |
-| `auditDuration` | `string` | no | Duration-based retention for audit channel (e.g. `"168h"`). |
-| `auditSize` | `string` | no | Size-based retention for audit channel (e.g. `"1GB"`). |
-| `frictionDuration` | `string` | no | Duration-based retention for friction channel (e.g. `"72h"`). |
-| `frictionSize` | `string` | no | Size-based retention for friction channel (e.g. `"100MB"`). |
-| `workitemDuration` | `string` | no | Duration-based retention for workitem channel (e.g. `"24h"`). |
-| `workitemSize` | `string` | no | Size-based retention for workitem channel (e.g. `"100MB"`). |
+| `<channel>` | `EventBusRetentionPolicy` | no | Per-channel retention policy. Each entry is keyed by channel name. |
 
-When both duration and size are specified for a channel, the Event Bus evicts when either limit is exceeded (whichever triggers first). Duration limits use Go `time.Duration` format. Size limits use byte-count strings with unit suffix (e.g. `100MB`, `1GB`).
+#### EventBusRetentionPolicy
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `duration` | `string` | no | Duration-based retention (e.g. `"24h"`, `"168h"`). Go `time.Duration` format. |
+| `size` | `string` | no | Size-based retention (e.g. `"100MB"`, `"1GB"`). Byte-count string with unit suffix. |
+
+When both duration and size are specified for a channel, the Event Bus evicts when either limit is exceeded (whichever triggers first).
+
+```yaml
+# Example: per-channel retention configuration
+eventBus:
+  retention:
+    telemetry:
+      duration: "24h"
+      size: "100MB"
+    audit:
+      duration: "168h"
+      size: "1GB"
+    friction:
+      duration: "72h"
+    workitem:
+      duration: "24h"
+```
+
+The Operator serialises the retention map as a single `EVENT_BUS_RETENTION_CONFIG` JSON environment variable for the Event Bus deployment.
 
 ### `status`
 
