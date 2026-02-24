@@ -893,6 +893,81 @@ func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenR
 	return &flowv1.GetChildrenResponse{Children: children}, nil
 }
 
+// ValidateChildAccess validates a parent-child Workitem relationship and the
+// child's completion state. This is a service-facing RPC called by the
+// Archivist (not by nodes through the Sidecar) to authorise cross-Workitem
+// artefact reads.
+//
+// Returns valid=true only when:
+//  1. The child Workitem exists.
+//  2. The child's ParentWorkitemID matches the given parent_workitem_id.
+//  3. The child is in Completed state.
+//
+// No capability gate — this is a service-to-service call.
+func (s *OperatorServer) ValidateChildAccess(ctx context.Context, req *flowv1.ValidateChildAccessRequest) (*flowv1.ValidateChildAccessResponse, error) {
+	parentWorkitemID := req.GetParentWorkitemId()
+	childWorkitemID := req.GetChildWorkitemId()
+
+	if parentWorkitemID == "" {
+		return nil, status.Error(codes.InvalidArgument, "parent_workitem_id is required")
+	}
+	if childWorkitemID == "" {
+		return nil, status.Error(codes.InvalidArgument, "child_workitem_id is required")
+	}
+
+	slog.Info("ValidateChildAccess received",
+		"parent_workitem_id", parentWorkitemID,
+		"child_workitem_id", childWorkitemID,
+	)
+
+	// Fetch the child Workitem CRD.
+	var child apiv1.Workitem
+	childKey := types.NamespacedName{Namespace: defaultNamespace, Name: childWorkitemID}
+	if err := s.K8sClient.Get(ctx, childKey, &child); err != nil {
+		slog.Error("ValidateChildAccess: child not found",
+			"child_workitem_id", childWorkitemID,
+			"error", err,
+		)
+		return nil, status.Error(codes.NotFound,
+			fmt.Sprintf("child workitem %q not found: %v", childWorkitemID, err))
+	}
+
+	// Check parent-child relationship.
+	if child.Status.ParentWorkitemID != parentWorkitemID {
+		slog.Info("ValidateChildAccess: parent mismatch",
+			"child_workitem_id", childWorkitemID,
+			"expected_parent", parentWorkitemID,
+			"actual_parent", child.Status.ParentWorkitemID,
+		)
+		return &flowv1.ValidateChildAccessResponse{
+			Valid: false,
+			Phase: child.Status.Phase,
+		}, nil
+	}
+
+	// Check child is Completed.
+	if child.Status.Phase != phaseCompleted {
+		slog.Info("ValidateChildAccess: child not completed",
+			"child_workitem_id", childWorkitemID,
+			"phase", child.Status.Phase,
+		)
+		return &flowv1.ValidateChildAccessResponse{
+			Valid: false,
+			Phase: child.Status.Phase,
+		}, nil
+	}
+
+	slog.Info("ValidateChildAccess: access granted",
+		"parent_workitem_id", parentWorkitemID,
+		"child_workitem_id", childWorkitemID,
+	)
+
+	return &flowv1.ValidateChildAccessResponse{
+		Valid: true,
+		Phase: child.Status.Phase,
+	}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

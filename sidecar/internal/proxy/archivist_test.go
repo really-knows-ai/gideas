@@ -17,6 +17,7 @@ type captureArchivistServer struct {
 	flowv1.UnimplementedArchivistServiceServer
 	lastStoreReq *flowv1.StoreArtefactRequest
 	lastGetReq   *flowv1.GetArtefactRequest
+	lastListReq  *flowv1.ListArtefactsRequest
 	capturedMD   metadata.MD
 }
 
@@ -58,6 +59,20 @@ func (s *captureArchivistServer) LinkRuling(
 			Id:           req.GetFeedbackId(),
 			LinkedRuling: req.GetLawId(),
 			State:        flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+		},
+	}, nil
+}
+
+func (s *captureArchivistServer) ListArtefacts(
+	ctx context.Context, req *flowv1.ListArtefactsRequest,
+) (*flowv1.ListArtefactsResponse, error) {
+	s.lastListReq = req
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		s.capturedMD = md
+	}
+	return &flowv1.ListArtefactsResponse{
+		ArtefactRefs: []*flowv1.ArtefactRef{
+			{Id: "doc1", GovernedArtefact: "txt"},
 		},
 	}, nil
 }
@@ -212,5 +227,52 @@ func TestArchivistProxy_LinkRuling_PropagatesMetadata(t *testing.T) {
 	vals := capture.capturedMD.Get("x-flow-workitem-id")
 	if len(vals) != 1 || vals[0] != "wi-ruling-test" {
 		t.Fatalf("expected metadata propagation, got %v", vals)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-Workitem forwarding tests (Phase 7D)
+// ---------------------------------------------------------------------------
+
+func TestArchivistProxy_GetArtefact_ForwardsTargetWorkitemID(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	resp, err := proxy.GetArtefact(context.Background(), &flowv1.GetArtefactRequest{
+		WorkitemId:       "parent-wi",
+		ArtefactId:       "doc",
+		TargetWorkitemId: "child-wi",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the target_workitem_id was forwarded to the backend.
+	if capture.lastGetReq.GetTargetWorkitemId() != "child-wi" {
+		t.Fatalf("expected target_workitem_id=child-wi, got %q",
+			capture.lastGetReq.GetTargetWorkitemId())
+	}
+	if string(resp.GetContent()) != "test-content" {
+		t.Fatalf("expected passthrough content, got %q", string(resp.GetContent()))
+	}
+}
+
+func TestArchivistProxy_ListArtefacts_ForwardsTargetWorkitemID(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	resp, err := proxy.ListArtefacts(context.Background(), &flowv1.ListArtefactsRequest{
+		WorkitemId:       "parent-wi",
+		TargetWorkitemId: "child-wi",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the target_workitem_id was forwarded.
+	if capture.lastListReq.GetTargetWorkitemId() != "child-wi" {
+		t.Fatalf("expected target_workitem_id=child-wi, got %q",
+			capture.lastListReq.GetTargetWorkitemId())
+	}
+	if len(resp.GetArtefactRefs()) != 1 {
+		t.Fatalf("expected 1 artefact ref, got %d", len(resp.GetArtefactRefs()))
 	}
 }

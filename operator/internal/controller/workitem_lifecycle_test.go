@@ -30,14 +30,6 @@ func (s *lifecycleSpy) Publish(_ context.Context, req *flowv1gen.PublishRequest)
 	return &flowv1gen.PublishResponse{Acknowledged: true}, nil
 }
 
-func (s *lifecycleSpy) all() []*flowv1gen.PublishRequest {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*flowv1gen.PublishRequest, len(s.events))
-	copy(out, s.events)
-	return out
-}
-
 // byChannel returns events matching the given channel.
 func (s *lifecycleSpy) byChannel(ch string) []*flowv1gen.PublishRequest {
 	s.mu.Lock()
