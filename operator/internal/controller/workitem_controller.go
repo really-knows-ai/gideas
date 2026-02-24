@@ -21,7 +21,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,7 +34,7 @@ import (
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/operator/internal/controller/dispatcher"
 	"github.com/gideas/flow/operator/internal/controller/scheduler"
-	"google.golang.org/grpc"
+	"github.com/gideas/flow/pkg/eventbus"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -51,12 +50,6 @@ const (
 // nowFunc is a function variable for the current time.
 // Tests can override this to produce deterministic timestamps.
 var nowFunc = metav1.Now
-
-// WorkitemAuditPublisher abstracts audit event publication for the controller.
-// Satisfied by flowv1gen.FlowEventBusServiceClient.
-type WorkitemAuditPublisher interface {
-	Publish(ctx context.Context, req *flowv1gen.PublishRequest, opts ...grpc.CallOption) (*flowv1gen.PublishResponse, error)
-}
 
 // WorkitemReconciler reconciles a Workitem object.
 //
@@ -74,18 +67,20 @@ type WorkitemReconciler struct {
 	// the Archivist is not yet available (contract validation is skipped).
 	ArtefactQuerier scheduler.ArtefactQuerier
 
-	// Auditor publishes lifecycle events to the Event Bus. nil-safe.
-	Auditor WorkitemAuditPublisher
+	// Auditor publishes lifecycle events to the Event Bus via async submit.
+	// nil-safe: audit publishing degrades gracefully.
+	Auditor *eventbus.AsyncPublisher
 }
 
-// publishAudit publishes an audit event for a workitem lifecycle transition.
-// Errors are logged but never propagated.
-func (r *WorkitemReconciler) publishAudit(ctx context.Context, eventType string, workitemName string, attrs map[string]string) {
+// publishAudit submits an audit event for a workitem lifecycle transition via
+// the async publisher. If the publisher is nil, audit publishing is silently
+// disabled.
+func (r *WorkitemReconciler) publishAudit(_ context.Context, eventType string, workitemName string, attrs map[string]string) {
 	if r.Auditor == nil {
 		return
 	}
-	_, err := r.Auditor.Publish(ctx, &flowv1gen.PublishRequest{
-		Channel: flowv1gen.EventChannel_EVENT_CHANNEL_AUDIT,
+	r.Auditor.Submit(&flowv1gen.PublishRequest{
+		Channel: "audit",
 		Event: &flowv1gen.FlowEvent{
 			EventId:    newWIAuditID(),
 			EventType:  eventType,
@@ -94,13 +89,6 @@ func (r *WorkitemReconciler) publishAudit(ctx context.Context, eventType string,
 			Attributes: attrs,
 		},
 	})
-	if err != nil {
-		slog.Warn("Audit publish failed",
-			"event_type", eventType,
-			"workitem", workitemName,
-			"error", err,
-		)
-	}
 }
 
 // newWIAuditID returns a random hex-encoded identifier for audit events.

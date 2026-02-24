@@ -40,6 +40,7 @@ import (
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/operator/internal/controller"
 	"github.com/gideas/flow/operator/internal/rpc"
+	"github.com/gideas/flow/pkg/eventbus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
@@ -289,7 +290,8 @@ func main() {
 			setupLog.Error(ebErr, "Failed to connect to Event Bus", "address", ebAddr)
 			os.Exit(1)
 		}
-		operatorSrv.Auditor = flowv1gen.NewFlowEventBusServiceClient(ebConn)
+		ebClient := flowv1gen.NewFlowEventBusServiceClient(ebConn)
+		operatorSrv.Auditor = eventbus.NewAsyncPublisher(ebClient)
 		setupLog.Info("Event Bus connected for audit publishing", "address", ebAddr)
 	} else {
 		setupLog.Info("Event Bus not configured, audit publishing disabled")
@@ -311,6 +313,9 @@ func main() {
 		<-ctx.Done()
 		setupLog.Info("Shutting down Operator gRPC server")
 		grpcServer.GracefulStop()
+		if operatorSrv.Auditor != nil {
+			operatorSrv.Auditor.Stop()
+		}
 	}()
 
 	if err := mgr.Start(ctx); err != nil {

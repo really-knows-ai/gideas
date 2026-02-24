@@ -8,43 +8,53 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	apiv1 "github.com/gideas/flow/operator/api/v1"
-	"google.golang.org/grpc"
+	"github.com/gideas/flow/pkg/eventbus"
 	"google.golang.org/grpc/metadata"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// mockAuditPublisher captures published audit events.
-type mockAuditPublisher struct {
+// spyPublisher implements eventbus.Publisher and captures published requests
+// for test assertions.
+type spyPublisher struct {
 	mu     sync.Mutex
 	events []*flowv1.PublishRequest
 }
 
-func (m *mockAuditPublisher) Publish(_ context.Context, req *flowv1.PublishRequest, _ ...grpc.CallOption) (*flowv1.PublishResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.events = append(m.events, req)
+func (s *spyPublisher) Publish(_ context.Context, req *flowv1.PublishRequest) (*flowv1.PublishResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, req)
 	return &flowv1.PublishResponse{Acknowledged: true}, nil
 }
 
-func (m *mockAuditPublisher) last() *flowv1.PublishRequest {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.events) == 0 {
+func (s *spyPublisher) last() *flowv1.PublishRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.events) == 0 {
 		return nil
 	}
-	return m.events[len(m.events)-1]
+	return s.events[len(s.events)-1]
 }
 
-func (m *mockAuditPublisher) count() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.events)
+func (s *spyPublisher) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.events)
+}
+
+// newTestAuditor creates a spyPublisher and an AsyncPublisher for tests.
+// The returned stop function must be called to drain the publisher.
+func newTestAuditor() (*spyPublisher, *eventbus.AsyncPublisher, func()) {
+	spy := &spyPublisher{}
+	pub := eventbus.NewAsyncPublisherFromPublisher(spy)
+	return spy, pub, func() { pub.Stop() }
 }
 
 func TestAudit_SubmitResult(t *testing.T) {
 	scheme := newScheme()
-	pub := &mockAuditPublisher{}
+	spy, pub, stop := newTestAuditor()
+	defer stop()
 
 	workitem := &apiv1.Workitem{
 		ObjectMeta: metav1.ObjectMeta{Name: "wi-audit-1", Namespace: "default"},
@@ -69,11 +79,14 @@ func TestAudit_SubmitResult(t *testing.T) {
 		t.Fatalf("SubmitResult: %v", err)
 	}
 
-	if pub.count() != 1 {
-		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	// Stop the publisher to flush buffered events before asserting.
+	stop()
+
+	if spy.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", spy.count())
 	}
-	last := pub.last()
-	if last.GetChannel() != flowv1.EventChannel_EVENT_CHANNEL_AUDIT {
+	last := spy.last()
+	if last.GetChannel() != "audit" {
 		t.Fatalf("expected AUDIT channel, got %v", last.GetChannel())
 	}
 	if last.GetEvent().GetEventType() != "audit.workitem.routing_submitted" {
@@ -83,7 +96,8 @@ func TestAudit_SubmitResult(t *testing.T) {
 
 func TestAudit_CreateWorkitem(t *testing.T) {
 	scheme := newScheme()
-	pub := &mockAuditPublisher{}
+	spy, pub, stop := newTestAuditor()
+	defer stop()
 
 	// Freeze time for deterministic workitem names.
 	timeNow = func() metav1.Time {
@@ -126,10 +140,12 @@ func TestAudit_CreateWorkitem(t *testing.T) {
 		t.Fatalf("CreateWorkitem: %v", err)
 	}
 
-	if pub.count() != 1 {
-		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	stop()
+
+	if spy.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", spy.count())
 	}
-	last := pub.last()
+	last := spy.last()
 	evt := last.GetEvent()
 	if evt.GetEventType() != "audit.workitem.created" {
 		t.Fatalf("expected event_type audit.workitem.created, got %q", evt.GetEventType())
@@ -167,7 +183,8 @@ func TestAudit_NilPublisher(t *testing.T) {
 
 func TestAudit_ExportWorkitem(t *testing.T) {
 	scheme := newScheme()
-	pub := &mockAuditPublisher{}
+	spy, pub, stop := newTestAuditor()
+	defer stop()
 
 	workitem := &apiv1.Workitem{
 		ObjectMeta: metav1.ObjectMeta{Name: "wi-export", Namespace: "default"},
@@ -189,10 +206,12 @@ func TestAudit_ExportWorkitem(t *testing.T) {
 		t.Fatalf("ExportWorkitem: %v", err)
 	}
 
-	if pub.count() != 1 {
-		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	stop()
+
+	if spy.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", spy.count())
 	}
-	evt := pub.last().GetEvent()
+	evt := spy.last().GetEvent()
 	if evt.GetEventType() != "audit.workitem.exported" {
 		t.Fatalf("expected audit.workitem.exported, got %q", evt.GetEventType())
 	}
@@ -200,7 +219,8 @@ func TestAudit_ExportWorkitem(t *testing.T) {
 
 func TestAudit_CreateChildWorkitem(t *testing.T) {
 	scheme := newScheme()
-	pub := &mockAuditPublisher{}
+	spy, pub, stop := newTestAuditor()
+	defer stop()
 
 	timeNow = func() metav1.Time {
 		return metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 123456789, time.UTC))
@@ -233,10 +253,12 @@ func TestAudit_CreateChildWorkitem(t *testing.T) {
 		t.Fatalf("CreateChildWorkitem: %v", err)
 	}
 
-	if pub.count() != 1 {
-		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	stop()
+
+	if spy.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", spy.count())
 	}
-	evt := pub.last().GetEvent()
+	evt := spy.last().GetEvent()
 	if evt.GetEventType() != "audit.workitem.child_created" {
 		t.Fatalf("expected audit.workitem.child_created, got %q", evt.GetEventType())
 	}
@@ -250,7 +272,8 @@ func TestAudit_CreateChildWorkitem(t *testing.T) {
 
 func TestAudit_RouteChild(t *testing.T) {
 	scheme := newScheme()
-	pub := &mockAuditPublisher{}
+	spy, pub, stop := newTestAuditor()
+	defer stop()
 
 	child := &apiv1.Workitem{
 		ObjectMeta: metav1.ObjectMeta{Name: "child-audit", Namespace: "default"},
@@ -287,10 +310,12 @@ func TestAudit_RouteChild(t *testing.T) {
 		t.Fatalf("RouteChild: %v", err)
 	}
 
-	if pub.count() != 1 {
-		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	stop()
+
+	if spy.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", spy.count())
 	}
-	evt := pub.last().GetEvent()
+	evt := spy.last().GetEvent()
 	if evt.GetEventType() != "audit.workitem.child_routed" {
 		t.Fatalf("expected audit.workitem.child_routed, got %q", evt.GetEventType())
 	}

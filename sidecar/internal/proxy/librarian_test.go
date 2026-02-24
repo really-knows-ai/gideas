@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"testing"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -122,7 +123,8 @@ func TestLibrarianProxy_Cite_ForwardsAndEmitsFriction(t *testing.T) {
 		t.Fatalf("expected 2 law_ids forwarded, got %d", len(env.librarianSpy.lastCiteReq.GetLawIds()))
 	}
 
-	// Verify friction was published to Event Bus.
+	// Verify friction was published to Event Bus (async — wait briefly).
+	time.Sleep(100 * time.Millisecond)
 	if env.eventBusSpy.lastPublishReq == nil {
 		t.Fatal("Friction was not published to Event Bus")
 	}
@@ -139,8 +141,19 @@ func TestLibrarianProxy_Cite_ForwardsAndEmitsFriction(t *testing.T) {
 	if evt.GetNodeId() != "node-test" {
 		t.Fatalf("expected node_id=node-test, got %q", evt.GetNodeId())
 	}
-	if evt.GetAttributes()["law_ids"] != "law-1,law-2" {
-		t.Fatalf("expected law_ids=law-1,law-2, got %q", evt.GetAttributes()["law_ids"])
+	// law_ids are now in labels, not CSV attributes.
+	labels := evt.GetLabels()
+	if len(labels) != 2 {
+		t.Fatalf("expected 2 law_id labels, got %d", len(labels))
+	}
+	lawIDs := make(map[string]bool)
+	for _, l := range labels {
+		if l.GetKey() == "law_id" {
+			lawIDs[l.GetValue()] = true
+		}
+	}
+	if !lawIDs["law-1"] || !lawIDs["law-2"] {
+		t.Fatalf("expected law_id labels law-1 and law-2, got %v", lawIDs)
 	}
 	if evt.GetAttributes()["magnitude"] != "1" {
 		t.Fatalf("expected magnitude=1, got %q", evt.GetAttributes()["magnitude"])

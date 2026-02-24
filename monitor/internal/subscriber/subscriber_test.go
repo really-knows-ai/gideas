@@ -51,7 +51,7 @@ type mockEventBus struct {
 
 type mockSubscriber struct {
 	ch      chan *flowv1.FlowEvent
-	channel flowv1.EventChannel
+	channel string
 	filter  *flowv1.SubscribeFilter
 }
 
@@ -155,7 +155,7 @@ func (h *testHarness) publishTelemetry(
 ) {
 	t.Helper()
 	_, err := h.busClient.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
 			EventId:    eventID,
 			EventType:  eventType,
@@ -179,7 +179,7 @@ func (h *testHarness) publishAudit(
 ) {
 	t.Helper()
 	_, err := h.busClient.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+		Channel: "audit",
 		Event: &flowv1.FlowEvent{
 			EventId:    eventID,
 			EventType:  eventType,

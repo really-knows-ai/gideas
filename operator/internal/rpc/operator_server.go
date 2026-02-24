@@ -17,7 +17,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	apiv1 "github.com/gideas/flow/operator/api/v1"
-	"google.golang.org/grpc"
+	"github.com/gideas/flow/pkg/eventbus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -61,20 +61,13 @@ const (
 	routeToOutputType = "route_to_output"
 )
 
-// AuditPublisher abstracts audit event publication to the Flow Event Bus.
-// Satisfied by flowv1.FlowEventBusServiceClient. A nil publisher silently
-// disables audit publishing.
-type AuditPublisher interface {
-	Publish(ctx context.Context, req *flowv1.PublishRequest, opts ...grpc.CallOption) (*flowv1.PublishResponse, error)
-}
-
 // OperatorServer implements the flowv1.OperatorServiceServer interface.
 // It holds a reference to the controller-runtime Kubernetes client for
 // reading and updating CRDs.
 type OperatorServer struct {
 	flowv1.UnimplementedOperatorServiceServer
 	K8sClient client.Client
-	Auditor   AuditPublisher // nil-safe: audit publishing degrades gracefully
+	Auditor   *eventbus.AsyncPublisher // nil-safe: audit publishing degrades gracefully
 }
 
 // NewOperatorServer returns an OperatorServer wired to the given Kubernetes client.
@@ -82,14 +75,15 @@ func NewOperatorServer(k8sClient client.Client) *OperatorServer {
 	return &OperatorServer{K8sClient: k8sClient}
 }
 
-// publishAudit publishes an audit event to the Event Bus. Errors are logged
-// but never propagated — audit publishing must not fail the primary operation.
+// publishAudit submits an audit event to the async publisher for non-blocking
+// delivery to the Event Bus. If the publisher is nil, audit publishing is
+// silently disabled.
 func (s *OperatorServer) publishAudit(ctx context.Context, eventType string, attrs map[string]string) {
 	if s.Auditor == nil {
 		return
 	}
-	_, err := s.Auditor.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_AUDIT,
+	s.Auditor.Submit(&flowv1.PublishRequest{
+		Channel: "audit",
 		Event: &flowv1.FlowEvent{
 			EventId:    newAuditEventID(),
 			EventType:  eventType,
@@ -100,12 +94,6 @@ func (s *OperatorServer) publishAudit(ctx context.Context, eventType string, att
 			Attributes: attrs,
 		},
 	})
-	if err != nil {
-		slog.Warn("Audit publish failed",
-			"event_type", eventType,
-			"error", err,
-		)
-	}
 }
 
 // newAuditEventID returns a random hex-encoded identifier for audit events.

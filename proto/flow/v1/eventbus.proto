@@ -6,19 +6,16 @@ option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
 
 import "google/protobuf/timestamp.proto";
 
-// --- Enums ---
-
-// Event channels for the Flow Event Bus.
-// See: specs/02-flow/04-system-services.md
-enum EventChannel {
-  EVENT_CHANNEL_UNSPECIFIED = 0;
-  EVENT_CHANNEL_TELEMETRY = 1;
-  EVENT_CHANNEL_AUDIT = 2;
-  EVENT_CHANNEL_FRICTION = 3;
-  EVENT_CHANNEL_WORKITEM = 4;
-}
-
 // --- Messages ---
+
+// A key-value pair used for server-side event filtering. Events carry
+// repeated labels (allowing multi-valued keys, e.g. law_id=law-1 and
+// law_id=law-2). Subscribers filter with AND semantics: every label in
+// the filter must match at least one label on the event.
+message Label {
+  string key = 1;
+  string value = 2;
+}
 
 // A durable event published to the Flow Event Bus.
 // See: specs/05-reference/grpc-api.md#flowevent
@@ -29,8 +26,10 @@ message FlowEvent {
   // Monotonic per-channel sequence number (assigned by the Event Bus).
   uint64 sequence = 2;
 
-  // Channel this event belongs to.
-  EventChannel channel = 3;
+  // Channel this event belongs to (e.g. "telemetry", "audit",
+  // "friction", "workitem"). Free-form string; the Event Bus is
+  // channel-agnostic.
+  string channel = 3;
 
   // Discriminator for the event payload (e.g. "friction",
   // "friction.threshold_crossed", "audit.artefact.version_created").
@@ -47,24 +46,27 @@ message FlowEvent {
   // Distributed trace identifier for correlation.
   string trace_id = 9;
 
-  // Typed key-value metadata. Multi-valued fields use comma-separated
-  // strings (e.g. law_ids = "law-1,law-2", magnitude = "3.5").
+  // Arbitrary key-value metadata not used for filtering (e.g. magnitude,
+  // threshold, accumulated_friction).
   map<string, string> attributes = 10;
 
   // Optional binary payload (max 64 KB).
   bytes payload = 11;
 
-  // Parent Workitem ID if the associated Workitem is a child (empty for root
-  // Workitems and non-Workitem events). Present on WORKITEM channel events
-  // for filtering.
-  string parent_workitem_id = 12;
+  // Field 12 removed (parent_workitem_id moved to labels).
+  reserved 12;
+
+  // Repeated labels for server-side filtering. Filtering-relevant
+  // dimensions (e.g. law_id, parent_workitem_id, phase) go here.
+  repeated Label labels = 13;
 }
 
 // --- Request / Response ---
 
 // Publish a single event to the Event Bus.
 message PublishRequest {
-  EventChannel channel = 1;
+  // Channel to publish to (e.g. "telemetry", "audit").
+  string channel = 1;
   FlowEvent event = 2;
 }
 
@@ -76,8 +78,8 @@ message PublishResponse {
 
 // Subscribe to a channel, optionally replaying from a past sequence.
 message SubscribeRequest {
-  // Channel to subscribe to.
-  EventChannel channel = 1;
+  // Channel to subscribe to (e.g. "telemetry", "audit").
+  string channel = 1;
 
   // Optional filter narrowing the event stream.
   SubscribeFilter filter = 2;
@@ -89,16 +91,17 @@ message SubscribeRequest {
 // Narrow the events delivered to a subscriber.
 message SubscribeFilter {
   // Match events with this event_type (empty = all types).
+  // Convenience field — equivalent to a label match but used by every
+  // subscriber so it is kept as a first-class field.
   string event_type = 1;
 
-  // Match events whose comma-separated law_ids attribute contains
-  // this value as an exact element.
-  string law_id = 2;
+  // Fields 2-3 removed (law_id and parent_workitem_id moved to
+  // match_labels).
+  reserved 2, 3;
 
-  // Match events for child Workitems of a specific parent. Used with the
-  // WORKITEM channel to observe child lifecycle events during fan-out/fan-in
-  // processing.
-  string parent_workitem_id = 3;
+  // AND-match labels: every label in match_labels must have at least one
+  // matching label on the event.
+  repeated Label match_labels = 4;
 }
 
 // --- Service ---

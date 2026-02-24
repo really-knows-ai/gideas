@@ -52,6 +52,8 @@ Decisions made during planning that inform the implementation:
 
 13. **Repeated Label message for multi-valued labels** -- Labels use `repeated Label` (not `map<string, string>`) so that a single event can carry multiple values for the same key (e.g. `law_id=law-1` and `law_id=law-2`). The server stores labels in a separate SQLite table indexed on `(key, value)` for efficient filtering. `SubscribeFilter.match_labels` uses AND semantics: every label in the filter must have at least one matching label on the event.
 
+14. **Unified async publisher pattern** -- All Event Bus publishers use a shared `AsyncPublisher` abstraction instead of ad-hoc synchronous `publishAudit()` helpers or module-specific buffers. The `AsyncPublisher` is extracted from the sidecar's `TelemetryBuffer` into a shared package (`pkg/eventbus/`) and provides: buffered channel, background drain goroutine, exponential-backoff retry (500ms base, 30s cap), non-blocking `Submit()` with drop-on-full, graceful shutdown drain, and drop counters. The sidecar's `TelemetryBuffer` is refactored to compose the shared `AsyncPublisher` (adding priority channels on top). Audit publishers in the operator, archivist, and librarian switch from synchronous `Publish()` calls to `AsyncPublisher.Submit()`, removing Event Bus latency from all RPC critical paths. This is both a latency improvement (audit events no longer block RPC responses) and a consistency improvement (one well-tested async pattern instead of five ad-hoc approaches). Horizontal scaling (multiple Event Bus instances partitioned by channel) is deferred until throughput is a measured problem.
+
 ---
 
 ## Phase 1: Spec Updates
@@ -247,36 +249,36 @@ Decisions made during planning that inform the implementation:
 
 **Goal:** Remove the channel enum, add labels, make filtering generic.
 
-- [ ] **`proto/flow/v1/eventbus.proto`** -- Remove `EventChannel` enum entirely
+- [x] **`proto/flow/v1/eventbus.proto`** -- Remove `EventChannel` enum entirely
 
-- [ ] **`proto/flow/v1/eventbus.proto`** -- Add `Label` message
+- [x] **`proto/flow/v1/eventbus.proto`** -- Add `Label` message
   - `string key = 1`
   - `string value = 2`
 
-- [ ] **`proto/flow/v1/eventbus.proto`** -- Update `FlowEvent` message
+- [x] **`proto/flow/v1/eventbus.proto`** -- Update `FlowEvent` message
   - Field 3 `channel`: change from `EventChannel` to `string`
   - Remove field 12 `parent_workitem_id` (moves to labels)
   - Add field 13 `repeated Label labels`
 
-- [ ] **`proto/flow/v1/eventbus.proto`** -- Update `PublishRequest`
+- [x] **`proto/flow/v1/eventbus.proto`** -- Update `PublishRequest`
   - Field 1 `channel`: change from `EventChannel` to `string`
 
-- [ ] **`proto/flow/v1/eventbus.proto`** -- Update `SubscribeRequest`
+- [x] **`proto/flow/v1/eventbus.proto`** -- Update `SubscribeRequest`
   - Field 1 `channel`: change from `EventChannel` to `string`
 
-- [ ] **`proto/flow/v1/eventbus.proto`** -- Update `SubscribeFilter`
+- [x] **`proto/flow/v1/eventbus.proto`** -- Update `SubscribeFilter`
   - Keep field 1 `string event_type` (convenience -- every subscriber uses it)
   - Remove field 2 `string law_id`
   - Remove field 3 `string parent_workitem_id`
   - Add field 4 `repeated Label match_labels` (AND semantics: every label must match)
 
-- [ ] **Generate Go code** -- Run proto generation for all updated `.proto` files
+- [x] **Generate Go code** -- Run proto generation for all updated `.proto` files
 
 ### Phase 6B: Event Bus Server -- Generic Channels, Labels, Filtering
 
 **Goal:** Update the Event Bus server to use string channels, store labels, and filter generically.
 
-- [ ] **`eventbus/internal/store/sqlite/store.go`** -- Schema and type changes
+- [x] **`eventbus/internal/store/sqlite/store.go`** -- Schema and type changes
   - Change `Event.Channel` from `int32` to `string`
   - Add `Labels []Label` to `Event` struct (where `Label` is `struct{Key, Value string}`)
   - Update SQLite schema: `channel` column becomes `TEXT`
@@ -288,25 +290,25 @@ Decisions made during planning that inform the implementation:
   - Update per-channel sequence map from `map[int32]uint64` to `map[string]uint64`
   - Update `loadSequences()` for string channel keys
 
-- [ ] **`eventbus/internal/service/subscriber.go`** -- Generic filtering
+- [x] **`eventbus/internal/service/subscriber.go`** -- Generic filtering
   - Change `subscribeFilter` to: `eventType string` + `matchLabels []Label`
   - Update `matchesFilter()`: for each match label, check if the event has at least one label with the same key and value
   - Remove `lawID` field, `containsElement()` function
   - Update `registry.subs` from `map[int32][]*subscriber` to `map[string][]*subscriber`
 
-- [ ] **`eventbus/internal/service/eventbus_server.go`** -- Server logic
+- [x] **`eventbus/internal/service/eventbus_server.go`** -- Server logic
   - Update `Publish()` validation: channel must be non-empty string (replace `UNSPECIFIED` check)
   - Update `storeEvt` construction to map proto labels to store labels
   - Update `toProto()` to map store labels back to proto labels
   - Update `Subscribe()` filter extraction: read `match_labels` from filter
   - Update `retention` map from `map[int32]RetentionConfig` to `map[string]RetentionConfig`
 
-- [ ] **`eventbus/cmd/main.go`** -- Generic retention loading
+- [x] **`eventbus/cmd/main.go`** -- Generic retention loading
   - Replace `loadRetention()`: read a single `EVENT_BUS_RETENTION_CONFIG` env var containing JSON (e.g. `{"telemetry":{"duration":"24h","size":"100MB"},"audit":{"duration":"168h"}}`)
   - Remove per-channel env var parsing and `EventChannel` enum references
   - Remove the `channelEnv` struct and per-channel loop
 
-- [ ] **Tests** -- Update all Event Bus tests
+- [x] **Tests** -- Update all Event Bus tests
   - `eventbus/internal/store/sqlite/store_test.go`: string channels, label insertion/retrieval
   - `eventbus/internal/service/eventbus_server_test.go`: string channels, label-based filtering, remove enum references
 
@@ -332,58 +334,108 @@ Decisions made during planning that inform the implementation:
 - [ ] **`operator/internal/controller/foundryflow_controller_test.go`** -- Update retention tests
   - Update env var assertions from per-channel named vars to single JSON var
 
-### Phase 6E: All Publishers and Subscribers -- String Channels + Labels
+### Phase 6E0: Shared AsyncPublisher Package
 
-**Goal:** Update every module that publishes to or subscribes from the Event Bus.
+**Goal:** Extract the core async-publish-with-retry pattern from the sidecar's `TelemetryBuffer` into a shared package that all Event Bus publishers use. This eliminates five ad-hoc publishing patterns (synchronous `publishAudit()` helpers in operator, archivist, librarian, and the bespoke `TelemetryBuffer` in the sidecar) in favour of one well-tested abstraction.
 
-- [ ] **Define channel constants** -- String constants (e.g. `"telemetry"`, `"audit"`, `"friction"`, `"workitem"`) used by publishers and subscribers. Each module can define its own or use string literals.
+**Background:** Analysis of the Event Bus publisher landscape revealed:
+- Audit publishers (operator RPC server, operator workitem controller, archivist, librarian, hearing trigger) all use synchronous `Publish()` calls in RPC critical paths, swallowing errors with `slog.Warn`. This adds unnecessary latency to every RPC response.
+- The sidecar's `TelemetryBuffer` already implements the correct async pattern (buffered channel, background drain, exponential-backoff retry, non-blocking submit, graceful shutdown, drop counters) but is tightly coupled to the sidecar's proxy types and priority queue logic.
+- Friction/telemetry events from the sidecar are already fully decoupled from node-facing RPCs via the `TelemetryBuffer`. The sidecar's `AddFriction`/`RecordTelemetry` RPCs always return `Acknowledged: true` immediately, with actual Event Bus publishing happening asynchronously.
 
-- [ ] **`operator/internal/rpc/operator_server.go`** -- Audit publishing
+The shared `AsyncPublisher` extracts the generic parts. The sidecar's `TelemetryBuffer` is then refactored to compose it (adding priority channels on top).
+
+- [x] **`pkg/eventbus/publisher.go`** -- `AsyncPublisher` (new file, new package)
+  - `AsyncPublisher` struct: wraps `flowv1.FlowEventBusServiceClient`
+  - Constructor: `NewAsyncPublisher(client, opts ...Option) *AsyncPublisher`
+  - Options: `WithBufferSize(int)` (default 1024), `WithRetry(base, max time.Duration)` (default 500ms/30s), `WithOnDrop(func(*flowv1.PublishRequest))` (optional drop callback)
+  - `Submit(req *flowv1.PublishRequest)` -- non-blocking enqueue; drops with counter + optional callback on full buffer
+  - `Stop()` -- signals drain goroutine, best-effort flush of remaining events, waits for completion
+  - `Dropped() int64` -- atomic counter of dropped events
+  - Internal: single buffered `chan *flowv1.PublishRequest`, one drain goroutine, `publishWithRetry()` with exponential backoff, `drainRemaining()` on shutdown (best-effort, no retry)
+
+- [x] **`pkg/eventbus/publisher_test.go`** -- Comprehensive tests
+  - Submit and drain (happy path)
+  - Drop on full buffer (counter incremented, callback called)
+  - Retry on failure (verify exponential backoff)
+  - Stop drains remaining events
+  - Non-blocking Submit (never blocks even when full)
+  - Concurrent Submit safety
+
+- [x] **`sidecar/internal/buffer/telemetry_buffer.go`** -- Refactor to compose `AsyncPublisher`
+  - Replace direct `chan Event` + `drainLoop` + `publishWithRetry` with two `AsyncPublisher` instances (one for high priority, one for normal)
+  - `TelemetryBuffer.Submit()` routes to the appropriate `AsyncPublisher` by priority
+  - `TelemetryBuffer.Stop()` calls `Stop()` on both publishers
+  - Priority ordering preserved: high publisher drains before normal (or both drain concurrently -- acceptable since priority was best-effort anyway)
+  - Keep `DroppedNormal()` / `DroppedHigh()` accessors delegating to respective publishers
+
+- [x] **`sidecar/internal/buffer/telemetry_buffer_test.go`** -- Update tests
+  - Existing tests should pass with minimal changes (interface preserved)
+  - Add error/retry path test using `spyEventBusClient.publishErr` (currently untested)
+
+- [x] **Tests** -- `go test ./pkg/eventbus/...` and `go test ./sidecar/internal/buffer/...`
+
+### Phase 6E: All Publishers and Subscribers -- String Channels + Labels + AsyncPublisher
+
+**Goal:** Update every module that publishes to or subscribes from the Event Bus. Publishers switch from synchronous `Publish()` to `AsyncPublisher.Submit()`. Subscribers switch from enum channels to string channels and from CSV-in-attributes to labels.
+
+- [x] **Define channel constants** -- String constants (e.g. `"telemetry"`, `"audit"`, `"friction"`, `"workitem"`) used by publishers and subscribers. Each module can define its own or use string literals.
+
+- [x] **`operator/internal/rpc/operator_server.go`** -- Audit publishing
   - `EVENT_CHANNEL_AUDIT` → `"audit"`
-  - No label changes (audit events have no labels currently)
+  - Replace synchronous `publishAudit()` helper with `AsyncPublisher.Submit()`
+  - Add `AsyncPublisher` field to `OperatorServer`, initialised by caller
+  - Remove `Auditor` field (direct `FlowEventBusServiceClient`); replaced by `AsyncPublisher`
 
-- [ ] **`operator/internal/controller/workitem_controller.go`** -- Audit publishing
+- [x] **`operator/internal/controller/workitem_controller.go`** -- Audit publishing
   - `EVENT_CHANNEL_AUDIT` → `"audit"` (via `flowv1gen` alias removal)
   - Remove `flowv1gen.EventChannel_EVENT_CHANNEL_AUDIT` reference
+  - Replace synchronous `publishAudit()` with `AsyncPublisher.Submit()`
+  - Add `AsyncPublisher` field to reconciler, initialised by controller setup
 
-- [ ] **`sidecar/internal/proxy/eventbus.go`** -- Friction and telemetry publishing
+- [x] **`sidecar/internal/proxy/eventbus.go`** -- Friction and telemetry publishing
   - `EVENT_CHANNEL_TELEMETRY` → `"telemetry"`
   - Move `law_ids` CSV from `attributes["law_ids"]` to repeated labels: `{law_id, law-1}, {law_id, law-2}`
   - Keep `magnitude` in attributes (not a filtering dimension)
 
-- [ ] **`frictionledger/internal/service/frictionledger_server.go`** -- Subscribe + publish
+- [x] **`frictionledger/internal/service/frictionledger_server.go`** -- Subscribe + publish
   - Subscribe channel: `EVENT_CHANNEL_TELEMETRY` → `"telemetry"`
   - Publish channel: `EVENT_CHANNEL_FRICTION` → `"friction"`
   - Update `processEvent()` to read `law_id` from labels instead of `attributes["law_ids"]` CSV
   - Add `law_id` label on `friction.threshold_crossed` events
 
-- [ ] **`librarian/internal/service/hearing_trigger.go`** -- Subscribe + publish
+- [x] **`librarian/internal/service/hearing_trigger.go`** -- Subscribe + publish
   - Subscribe channel: `EVENT_CHANNEL_FRICTION` → `"friction"`
   - Publish channel: `EVENT_CHANNEL_AUDIT` → `"audit"`
   - Update event consumption to read `law_id` from labels
+  - Replace synchronous audit `Publish()` in `triggerHearing()` with `AsyncPublisher.Submit()`
 
-- [ ] **`librarian/internal/service/librarian_server.go`** -- Audit publishing
+- [x] **`librarian/internal/service/librarian_server.go`** -- Audit publishing
   - `EVENT_CHANNEL_AUDIT` → `"audit"`
+  - Replace synchronous `publishAudit()` helper with `AsyncPublisher.Submit()`
+  - Add `AsyncPublisher` field to `LibrarianServer`
 
-- [ ] **`archivist/internal/service/archivist_server.go`** -- Audit publishing
+- [x] **`archivist/internal/service/archivist_server.go`** -- Audit publishing
   - `EVENT_CHANNEL_AUDIT` → `"audit"`
+  - Replace synchronous `publishAudit()` helper with `AsyncPublisher.Submit()`
+  - Add `AsyncPublisher` field to `ArchivistServer`
 
-- [ ] **`monitor/internal/subscriber/telemetry.go`** -- Telemetry subscription
+- [x] **`monitor/internal/subscriber/telemetry.go`** -- Telemetry subscription
   - `EVENT_CHANNEL_TELEMETRY` → `"telemetry"`
   - Update `processFriction()` to read `law_id` from labels instead of `attributes["law_ids"]` CSV
   - Update `processThresholdCrossing()` to read `law_id` from labels
 
-- [ ] **`monitor/internal/subscriber/audit.go`** -- Audit subscription
+- [x] **`monitor/internal/subscriber/audit.go`** -- Audit subscription
   - `EVENT_CHANNEL_AUDIT` → `"audit"`
 
-- [ ] **`frictionledger/internal/service/frictionledger_server.go`** -- Update `SubscribeFilter`
+- [x] **`frictionledger/internal/service/frictionledger_server.go`** -- Update `SubscribeFilter`
   - `SubscribeFilter{EventType: "friction"}` → keep as-is (`event_type` convenience field retained)
   - Remove any `LawId` filter usage (unused today, but clean up references)
 
-- [ ] **`librarian/internal/service/hearing_trigger.go`** -- Update `SubscribeFilter`
+- [x] **`librarian/internal/service/hearing_trigger.go`** -- Update `SubscribeFilter`
   - `SubscribeFilter{EventType: "friction.threshold_crossed"}` → keep as-is
 
-- [ ] **Tests for all updated modules**
+- [x] **Tests for all updated modules**
   - `sidecar/internal/proxy/eventbus_test.go`
   - `frictionledger/internal/service/frictionledger_server_test.go`
   - `librarian/internal/service/hearing_trigger_test.go`
@@ -425,7 +477,7 @@ Decisions made during planning that inform the implementation:
 **Goal:** With the generic Event Bus in place, publish Workitem lifecycle events.
 
 - [ ] **`operator/internal/controller/workitem_controller.go`** -- Add `publishLifecycle()` helper
-  - Same fire-and-forget pattern as existing `publishAudit()`
+  - Uses the same `AsyncPublisher` instance as audit publishing (or a separate one for the `"workitem"` channel -- implementer's choice)
   - Channel: `"workitem"`
   - Event type: `"workitem.phase_changed"`
   - Labels: `[{workitem_id, <id>}, {phase, <phase>}, {node_id, <node>}]`
@@ -444,9 +496,9 @@ Decisions made during planning that inform the implementation:
 
 ### Phase 6H: Spec Updates
 
-**Goal:** Update specs to reflect the generic Event Bus design.
+**Goal:** Update specs to reflect the generic Event Bus design and the unified async publisher pattern.
 
-- [ ] **`specs/02-flow/04-system-services.md`** -- Event Bus is channel-agnostic, labels, generic filtering (already in Phase 1 checklist but may need implementation-informed updates)
+- [ ] **`specs/02-flow/04-system-services.md`** -- Event Bus is channel-agnostic, labels, generic filtering (already in Phase 1 checklist but may need implementation-informed updates). Document the async publishing model: all publishers use fire-and-forget `Submit()` with buffered retry; Event Bus latency is decoupled from RPC critical paths.
 
 - [ ] **`specs/05-reference/grpc-api.md`** -- Updated proto surface: string channels, `Label` message, `repeated Label labels` on `FlowEvent`, generic `SubscribeFilter`
 
@@ -468,22 +520,23 @@ Decisions made during planning that inform the implementation:
 |--------|--------------|-----------------|
 | `proto/` | 1 | Schema: remove enum, add labels, string channels |
 | `gen/` | Auto-regenerated | -- |
+| `pkg/eventbus/` | ~2 | **New**: shared `AsyncPublisher` + tests |
 | `eventbus/` | ~5 | Core: store, subscriber, server, main, tests |
-| `operator/` | ~5 | CRD types, infra env vars, workitem controller, tests |
-| `sidecar/` | ~2 | Proxy + test: string channels, labels |
+| `operator/` | ~6 | CRD types, infra env vars, workitem controller, RPC server, tests (+ `AsyncPublisher` integration) |
+| `sidecar/` | ~4 | Proxy + test: string channels, labels; buffer refactor to compose `AsyncPublisher` |
 | `frictionledger/` | ~2 | Server + test: string channels, labels |
-| `librarian/` | ~3 | Server, trigger, tests: string channels |
-| `archivist/` | ~2 | Server + test: string channels |
+| `librarian/` | ~4 | Server, trigger, tests: string channels + `AsyncPublisher` |
+| `archivist/` | ~3 | Server + test: string channels + `AsyncPublisher` |
 | `monitor/` | ~3 | Telemetry, audit, tests: string channels, label consumption |
 | `charts/` | 2 | Template + values: generic retention |
 | `specs/` | ~3 | Documentation updates |
-| **Total** | **~28 files** | |
+| **Total** | **~35 files** | |
 
 ### Execution Order
 
-6A → 6B → 6C → 6D → 6E → 6F → 6G → 6H → 6I
+6A → 6B → 6C → 6D → 6E0 → 6E → 6F → 6G → 6H → 6I
 
-6A (proto) must go first since everything depends on the generated code. 6B (Event Bus server) should follow immediately since it's the core. 6C-6D (CRD + operator wiring) can follow. 6E (all publishers/subscribers) is the bulk of the work. 6G (lifecycle publishing) is the actual WORKITEM feature, now trivial because the bus is generic. 6H-6I are cleanup and verification.
+6A (proto) must go first since everything depends on the generated code. 6B (Event Bus server) should follow immediately since it's the core. 6C-6D (CRD + operator wiring) can follow. 6E0 (shared AsyncPublisher) must precede 6E since all publishers will depend on it. 6E (all publishers/subscribers) is the bulk of the work — each publisher switches from synchronous `Publish()` to `AsyncPublisher.Submit()` while also migrating to string channels and labels. 6G (lifecycle publishing) is the actual WORKITEM feature, now trivial because the bus is generic and the async pattern is shared. 6H-6I are cleanup and verification.
 
 ---
 
@@ -617,11 +670,12 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase 3: CRD Type Changes | Complete | All 4 type files updated, manifests regenerated, deepcopy generated, tests pass. `EventBusRetention` named fields superseded by Phase 6C. |
 | Phase 4: Operator -- Child Workitem RPCs | Complete | CreateChildWorkitem, RouteChild, GetChildren RPCs + completion guard + tests |
 | Phase 5: Operator -- NodeGroup Validation | Complete | validateNodeGroups, runtime GROUP_ROUTING_DENIED, child contract validation + tests |
-| Phase 6A: Proto -- Generic Event Bus | Not Started | Remove `EventChannel` enum, add `Label` message, string channels, generic `SubscribeFilter` |
-| Phase 6B: Event Bus Server | Not Started | String channels, label storage, generic filtering, JSON retention config |
-| Phase 6C: CRD Types -- Generic Retention | Not Started | `EventBusRetention` becomes `map[string]RetentionPolicy` |
-| Phase 6D: Operator -- Generic Env Vars | Not Started | Single `EVENT_BUS_RETENTION_CONFIG` JSON env var |
-| Phase 6E: Publishers/Subscribers | Not Started | ~28 files across 8 modules: string channels + labels |
+| Phase 6A: Proto -- Generic Event Bus | Complete | Remove `EventChannel` enum, add `Label` message, string channels, generic `SubscribeFilter` |
+| Phase 6B: Event Bus Server | Complete | String channels, label storage, generic filtering, JSON retention config |
+| Phase 6C: CRD Types -- Generic Retention | Complete | `EventBusRetention` → `map[string]EventBusRetentionPolicy`; `RetentionPolicy` → `WorkitemRetentionPolicy`; manifests regenerated |
+| Phase 6D: Operator -- Generic Env Vars | Complete | `eventBusEnvVars()` serializes `EVENT_BUS_RETENTION_CONFIG` as single JSON env var; tests updated. Also fixed pre-existing `EventChannel` enum refs in operator (partial Phase 6E work). |
+| Phase 6E0: Shared AsyncPublisher | Complete | `pkg/eventbus/` package with `AsyncPublisher` + tests; sidecar `TelemetryBuffer` refactored to compose two `AsyncPublisher` instances |
+| Phase 6E: Publishers/Subscribers | Complete | All publishers/subscribers migrated: string channels, labels for law_ids, AsyncPublisher for all audit/friction/telemetry publishing, cmd/main.go wiring updated, all tests pass, lint clean |
 | Phase 6F: Helm Chart | Not Started | Generic retention env var |
 | Phase 6G: Workitem Lifecycle Publishing | Not Started | `publishLifecycle()` in workitem controller |
 | Phase 6H: Spec Updates | Not Started | Document generic Event Bus design |

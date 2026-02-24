@@ -231,7 +231,7 @@ func (s *FrictionLedgerServer) runSubscription() error {
 	)
 
 	stream, err := s.eventBusClient.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel:      flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel:      "telemetry",
 		Filter:       &flowv1.SubscribeFilter{EventType: "friction"},
 		LastSequence: lastSeq,
 	})
@@ -273,10 +273,17 @@ func (s *FrictionLedgerServer) runSubscription() error {
 func (s *FrictionLedgerServer) processEvent(ctx context.Context, evt *flowv1.FlowEvent) error {
 	attrs := evt.GetAttributes()
 
-	// Parse law_ids from comma-separated string.
+	// Parse law_ids from labels (preferred) or fall back to CSV-in-attributes.
 	var lawIDs []string
-	if raw, ok := attrs["law_ids"]; ok && raw != "" {
-		lawIDs = strings.Split(raw, ",")
+	for _, lbl := range evt.GetLabels() {
+		if lbl.GetKey() == "law_id" {
+			lawIDs = append(lawIDs, lbl.GetValue())
+		}
+	}
+	if len(lawIDs) == 0 {
+		if raw, ok := attrs["law_ids"]; ok && raw != "" {
+			lawIDs = strings.Split(raw, ",")
+		}
 	}
 
 	// Parse magnitude from string.
@@ -375,7 +382,7 @@ func (s *FrictionLedgerServer) evaluateThreshold(
 
 		// Publish threshold-crossing event to friction channel.
 		_, err := s.eventBusClient.Publish(ctx, &flowv1.PublishRequest{
-			Channel: flowv1.EventChannel_EVENT_CHANNEL_FRICTION,
+			Channel: "friction",
 			Event: &flowv1.FlowEvent{
 				EventId:    s.newID(),
 				EventType:  "friction.threshold_crossed",
@@ -383,8 +390,10 @@ func (s *FrictionLedgerServer) evaluateThreshold(
 				NodeId:     sourceEvt.GetNodeId(),
 				WorkitemId: sourceEvt.GetWorkitemId(),
 				Timestamp:  timestamppb.Now(),
+				Labels: []*flowv1.Label{
+					{Key: "law_id", Value: lawID},
+				},
 				Attributes: map[string]string{
-					"law_id":               lawID,
 					"tier":                 strconv.Itoa(int(tier)),
 					"accumulated_friction": strconv.FormatFloat(accumulated, 'f', -1, 64),
 					"threshold":            strconv.FormatFloat(threshold, 'f', -1, 64),

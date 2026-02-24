@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"testing"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -50,23 +51,23 @@ func setupEventBusProxy(t *testing.T) *eventBusTestEnv {
 
 func TestEventBusProxy_PublishFriction(t *testing.T) {
 	env := setupEventBusProxy(t)
+	t.Cleanup(func() { _ = env.proxy.Close() })
 
-	err := env.proxy.PublishFriction(
-		context.Background(),
+	env.proxy.PublishFriction(
 		"flow-1", "wi-1", "node-1",
 		[]string{"law-1", "law-2"},
 		3.5,
 	)
-	if err != nil {
-		t.Fatalf("PublishFriction: %v", err)
-	}
+
+	// Give async publisher time to drain.
+	time.Sleep(100 * time.Millisecond)
 
 	req := env.busSpy.lastPublishReq
 	if req == nil {
 		t.Fatal("Publish was not called")
 	}
-	if req.GetChannel() != flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY {
-		t.Fatalf("expected TELEMETRY channel, got %v", req.GetChannel())
+	if req.GetChannel() != "telemetry" {
+		t.Fatalf("expected telemetry channel, got %v", req.GetChannel())
 	}
 
 	evt := req.GetEvent()
@@ -82,9 +83,13 @@ func TestEventBusProxy_PublishFriction(t *testing.T) {
 	if evt.GetNodeId() != "node-1" {
 		t.Fatalf("expected node_id=node-1, got %q", evt.GetNodeId())
 	}
-	if evt.GetAttributes()["law_ids"] != "law-1,law-2" {
-		t.Fatalf("expected law_ids=law-1,law-2, got %q", evt.GetAttributes()["law_ids"])
+
+	// Verify law_ids are in labels.
+	lawLabels := labelsForKey(evt.GetLabels(), "law_id")
+	if len(lawLabels) != 2 || lawLabels[0] != "law-1" || lawLabels[1] != "law-2" {
+		t.Fatalf("expected law_id labels [law-1 law-2], got %v", lawLabels)
 	}
+
 	if evt.GetAttributes()["magnitude"] != "3.5" {
 		t.Fatalf("expected magnitude=3.5, got %q", evt.GetAttributes()["magnitude"])
 	}
@@ -92,23 +97,23 @@ func TestEventBusProxy_PublishFriction(t *testing.T) {
 
 func TestEventBusProxy_PublishTelemetry(t *testing.T) {
 	env := setupEventBusProxy(t)
+	t.Cleanup(func() { _ = env.proxy.Close() })
 
-	err := env.proxy.PublishTelemetry(
-		context.Background(),
+	env.proxy.PublishTelemetry(
 		"flow-2", "node-2", "wi-2",
 		"foundry.cost.llm",
 		[]byte(`{"model":"gpt-4"}`),
 	)
-	if err != nil {
-		t.Fatalf("PublishTelemetry: %v", err)
-	}
+
+	// Give async publisher time to drain.
+	time.Sleep(100 * time.Millisecond)
 
 	req := env.busSpy.lastPublishReq
 	if req == nil {
 		t.Fatal("Publish was not called")
 	}
-	if req.GetChannel() != flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY {
-		t.Fatalf("expected TELEMETRY channel, got %v", req.GetChannel())
+	if req.GetChannel() != "telemetry" {
+		t.Fatalf("expected telemetry channel, got %v", req.GetChannel())
 	}
 
 	evt := req.GetEvent()
@@ -125,19 +130,30 @@ func TestEventBusProxy_PublishTelemetry(t *testing.T) {
 
 func TestEventBusProxy_PublishFriction_NoLawIDs(t *testing.T) {
 	env := setupEventBusProxy(t)
+	t.Cleanup(func() { _ = env.proxy.Close() })
 
-	err := env.proxy.PublishFriction(
-		context.Background(),
+	env.proxy.PublishFriction(
 		"flow-3", "wi-3", "node-3",
 		nil,
 		1.0,
 	)
-	if err != nil {
-		t.Fatalf("PublishFriction: %v", err)
-	}
+
+	// Give async publisher time to drain.
+	time.Sleep(100 * time.Millisecond)
 
 	evt := env.busSpy.lastPublishReq.GetEvent()
-	if _, ok := evt.GetAttributes()["law_ids"]; ok {
-		t.Fatalf("expected no law_ids attribute when empty, got %q", evt.GetAttributes()["law_ids"])
+	if len(evt.GetLabels()) != 0 {
+		t.Fatalf("expected no labels when no law IDs, got %v", evt.GetLabels())
 	}
+}
+
+// labelsForKey extracts all label values for a given key.
+func labelsForKey(labels []*flowv1.Label, key string) []string {
+	var vals []string
+	for _, l := range labels {
+		if l.GetKey() == key {
+			vals = append(vals, l.GetValue())
+		}
+	}
+	return vals
 }

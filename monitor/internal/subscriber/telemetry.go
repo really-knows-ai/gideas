@@ -46,8 +46,8 @@ type eventHandler func(evt *flowv1.FlowEvent)
 type channelSubscriber struct {
 	client      flowv1.FlowEventBusServiceClient
 	checkpoint  Checkpoint
-	channel     flowv1.EventChannel
-	channelName string // "telemetry" or "audit" — used for checkpoint key and logging
+	channel     string // e.g. "telemetry", "audit"
+	channelName string // used for checkpoint key and logging (same as channel)
 	handler     eventHandler
 
 	stopCh   chan struct{}
@@ -155,7 +155,7 @@ func NewTelemetrySubscriber(client flowv1.FlowEventBusServiceClient, cp Checkpoi
 	s.cs = channelSubscriber{
 		client:      client,
 		checkpoint:  cp,
-		channel:     flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		channel:     "telemetry",
 		channelName: "telemetry",
 		handler:     s.processEvent,
 		stopCh:      make(chan struct{}),
@@ -209,10 +209,17 @@ func (s *TelemetrySubscriber) processFriction(evt *flowv1.FlowEvent) {
 		}
 	}
 
-	// Split law_ids and increment per-law counters.
+	// Read law_ids from labels (preferred) or fall back to CSV-in-attributes.
 	var lawIDs []string
-	if raw, ok := attrs["law_ids"]; ok && raw != "" {
-		lawIDs = strings.Split(raw, ",")
+	for _, lbl := range evt.GetLabels() {
+		if lbl.GetKey() == "law_id" {
+			lawIDs = append(lawIDs, lbl.GetValue())
+		}
+	}
+	if len(lawIDs) == 0 {
+		if raw, ok := attrs["law_ids"]; ok && raw != "" {
+			lawIDs = strings.Split(raw, ",")
+		}
 	}
 
 	if len(lawIDs) == 0 {
@@ -229,9 +236,18 @@ func (s *TelemetrySubscriber) processFriction(evt *flowv1.FlowEvent) {
 }
 
 func (s *TelemetrySubscriber) processThresholdCrossing(evt *flowv1.FlowEvent) {
-	attrs := evt.GetAttributes()
-	lawID := attrs["law_id"]
-	tier := attrs["tier"]
+	// Read law_id from labels (preferred) or fall back to attributes.
+	var lawID string
+	for _, lbl := range evt.GetLabels() {
+		if lbl.GetKey() == "law_id" {
+			lawID = lbl.GetValue()
+			break
+		}
+	}
+	if lawID == "" {
+		lawID = evt.GetAttributes()["law_id"]
+	}
+	tier := evt.GetAttributes()["tier"]
 	metrics.ThresholdCrossings.WithLabelValues(lawID, tier).Inc()
 }
 

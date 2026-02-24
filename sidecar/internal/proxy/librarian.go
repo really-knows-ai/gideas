@@ -92,23 +92,15 @@ func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*fl
 	if p.eventBusProxy != nil {
 		flowID, workitemID, nodeID := extractIdentityFromMetadata(ctx)
 
-		frictionErr := p.eventBusProxy.PublishFriction(
-			outCtx,
+		p.eventBusProxy.PublishFriction(
 			flowID, workitemID, nodeID,
 			req.GetLawIds(),
 			p.magnitude,
 		)
-		if frictionErr != nil {
-			slog.Warn("Cite: failed to emit friction to Event Bus",
-				"error", frictionErr,
-				"law_ids", req.GetLawIds(),
-			)
-		} else {
-			slog.Info("Cite: friction emitted",
-				"law_ids", req.GetLawIds(),
-				"magnitude", p.magnitude,
-			)
-		}
+		slog.Info("Cite: friction emitted",
+			"law_ids", req.GetLawIds(),
+			"magnitude", p.magnitude,
+		)
 	}
 
 	return resp, nil

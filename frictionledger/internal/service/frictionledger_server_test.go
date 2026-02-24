@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func (m *mockEventBus) publishedOnFrictionChannel() []*flowv1.PublishRequest {
 	defer m.mu.Unlock()
 	var result []*flowv1.PublishRequest
 	for _, p := range m.published {
-		if p.GetChannel() == flowv1.EventChannel_EVENT_CHANNEL_FRICTION {
+		if p.GetChannel() == "friction" {
 			result = append(result, p)
 		}
 	}
@@ -195,8 +196,16 @@ func (h *testHarness) publishFriction(
 	magnitude float64,
 ) {
 	t.Helper()
+	// Build law_id labels from comma-separated string.
+	var labels []*flowv1.Label
+	if lawIDs != "" {
+		for id := range strings.SplitSeq(lawIDs, ",") {
+			labels = append(labels, &flowv1.Label{Key: "law_id", Value: id})
+		}
+	}
+
 	_, err := h.eventBusClient.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
 			EventId:    eventID,
 			EventType:  "friction",
@@ -204,8 +213,8 @@ func (h *testHarness) publishFriction(
 			NodeId:     "node-a",
 			WorkitemId: "wi-1",
 			Timestamp:  timestamppb.Now(),
+			Labels:     labels,
 			Attributes: map[string]string{
-				"law_ids":   lawIDs,
 				"magnitude": fmt.Sprintf("%g", magnitude),
 			},
 		},
@@ -508,8 +517,16 @@ func TestThresholdCrossing_PublishesEvent(t *testing.T) {
 	if evt.GetEventType() != "friction.threshold_crossed" {
 		t.Errorf("event_type = %q, want %q", evt.GetEventType(), "friction.threshold_crossed")
 	}
-	if evt.GetAttributes()["law_id"] != "law-1" {
-		t.Errorf("law_id = %q, want %q", evt.GetAttributes()["law_id"], "law-1")
+	// law_id should be in labels now.
+	var lawID string
+	for _, lbl := range evt.GetLabels() {
+		if lbl.GetKey() == "law_id" {
+			lawID = lbl.GetValue()
+			break
+		}
+	}
+	if lawID != "law-1" {
+		t.Errorf("law_id label = %q, want %q", lawID, "law-1")
 	}
 	if evt.GetAttributes()["tier"] != "1" {
 		t.Errorf("tier = %q, want %q", evt.GetAttributes()["tier"], "1")
@@ -626,7 +643,7 @@ func TestProcessEvent_InvalidMagnitude(t *testing.T) {
 
 	// Publish event with non-numeric magnitude.
 	_, err := h.eventBusClient.Publish(ctx, &flowv1.PublishRequest{
-		Channel: flowv1.EventChannel_EVENT_CHANNEL_TELEMETRY,
+		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
 			EventId:    "bad-1",
 			EventType:  "friction",

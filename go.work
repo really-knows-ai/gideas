@@ -11,6 +11,7 @@ use (
 	./monitor
 	./nodes
 	./operator
+	./pkg/eventbus
 	./sdk/go
 	./sidecar
 	./tools/haiku-watch

@@ -31,7 +31,7 @@ type EventBusServer struct {
 	reg       *registry
 	idGen     func() string
 	stopCh    chan struct{}
-	retention map[int32]RetentionConfig // per-channel
+	retention map[string]RetentionConfig // per-channel
 }
 
 // NewEventBusServer creates a new server backed by the given store.
@@ -40,7 +40,7 @@ type EventBusServer struct {
 func NewEventBusServer(
 	store *sqlite.Store,
 	idGen func() string,
-	retention map[int32]RetentionConfig,
+	retention map[string]RetentionConfig,
 ) *EventBusServer {
 	s := &EventBusServer{
 		store:     store,
@@ -61,7 +61,7 @@ func (s *EventBusServer) Stop() { close(s.stopCh) }
 // Publish persists an event to the store and fans it out to active
 // subscribers on the event's channel.
 func (s *EventBusServer) Publish(ctx context.Context, req *flowv1.PublishRequest) (*flowv1.PublishResponse, error) {
-	if req.GetChannel() == flowv1.EventChannel_EVENT_CHANNEL_UNSPECIFIED {
+	if req.GetChannel() == "" {
 		return nil, status.Error(codes.InvalidArgument, "channel is required")
 	}
 	if req.GetEvent() == nil {
@@ -88,7 +88,7 @@ func (s *EventBusServer) Publish(ctx context.Context, req *flowv1.PublishRequest
 
 	storeEvt := &sqlite.Event{
 		ID:         eventID,
-		Channel:    int32(req.GetChannel()),
+		Channel:    req.GetChannel(),
 		EventType:  evt.GetEventType(),
 		FlowID:     evt.GetFlowId(),
 		NodeID:     evt.GetNodeId(),
@@ -97,6 +97,7 @@ func (s *EventBusServer) Publish(ctx context.Context, req *flowv1.PublishRequest
 		TraceID:    evt.GetTraceId(),
 		Attributes: evt.GetAttributes(),
 		Payload:    evt.GetPayload(),
+		Labels:     protoLabelsToStore(evt.GetLabels()),
 	}
 
 	seq, err := s.store.Insert(ctx, storeEvt)
@@ -126,15 +127,15 @@ func (s *EventBusServer) Subscribe(
 	req *flowv1.SubscribeRequest,
 	stream flowv1.FlowEventBusService_SubscribeServer,
 ) error {
-	if req.GetChannel() == flowv1.EventChannel_EVENT_CHANNEL_UNSPECIFIED {
+	if req.GetChannel() == "" {
 		return status.Error(codes.InvalidArgument, "channel is required")
 	}
 
-	ch := int32(req.GetChannel())
+	ch := req.GetChannel()
 	filter := subscribeFilter{}
 	if f := req.GetFilter(); f != nil {
 		filter.eventType = f.GetEventType()
-		filter.lawID = f.GetLawId()
+		filter.matchLabels = protoLabelsToStore(f.GetMatchLabels())
 	}
 
 	// Replay from store if requested.
@@ -229,7 +230,7 @@ func toProto(evt sqlite.Event) *flowv1.FlowEvent {
 	return &flowv1.FlowEvent{
 		EventId:    evt.ID,
 		Sequence:   evt.Sequence,
-		Channel:    flowv1.EventChannel(evt.Channel),
+		Channel:    evt.Channel,
 		EventType:  evt.EventType,
 		FlowId:     evt.FlowID,
 		NodeId:     evt.NodeID,
@@ -238,5 +239,30 @@ func toProto(evt sqlite.Event) *flowv1.FlowEvent {
 		TraceId:    evt.TraceID,
 		Attributes: evt.Attributes,
 		Payload:    evt.Payload,
+		Labels:     storeLabelsToProto(evt.Labels),
 	}
+}
+
+// protoLabelsToStore converts proto Label messages to store Label values.
+func protoLabelsToStore(pls []*flowv1.Label) []sqlite.Label {
+	if len(pls) == 0 {
+		return nil
+	}
+	labels := make([]sqlite.Label, len(pls))
+	for i, pl := range pls {
+		labels[i] = sqlite.Label{Key: pl.GetKey(), Value: pl.GetValue()}
+	}
+	return labels
+}
+
+// storeLabelsToProto converts store Label values to proto Label messages.
+func storeLabelsToProto(sls []sqlite.Label) []*flowv1.Label {
+	if len(sls) == 0 {
+		return nil
+	}
+	labels := make([]*flowv1.Label, len(sls))
+	for i, sl := range sls {
+		labels[i] = &flowv1.Label{Key: sl.Key, Value: sl.Value}
+	}
+	return labels
 }

@@ -4,6 +4,7 @@ go 1.25.3
 
 require (
 	github.com/gideas/flow/gen v0.0.0
+	github.com/gideas/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	google.golang.org/grpc v1.79.1
@@ -101,3 +102,5 @@ require (
 )
 
 replace github.com/gideas/flow/gen => ../gen
+
+replace github.com/gideas/flow/pkg/eventbus => ../pkg/eventbus

@@ -24,6 +24,7 @@ import (
 	"github.com/gideas/flow/archivist/internal/service"
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/pkg/eventbus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
@@ -62,6 +63,7 @@ func main() {
 	// Connect to the Event Bus for audit event publishing.
 	var opts []service.ArchivistOption
 	var eventBusCloser func() error
+	var auditPub *eventbus.AsyncPublisher
 	eventBusAddr := os.Getenv(envEventBusAddress)
 	if eventBusAddr != "" {
 		ebConn, ebErr := grpc.NewClient(
@@ -74,7 +76,8 @@ func main() {
 		}
 		eventBusCloser = ebConn.Close
 		ebClient := flowv1.NewFlowEventBusServiceClient(ebConn)
-		opts = append(opts, service.WithAuditPublisher(ebClient))
+		auditPub = eventbus.NewAsyncPublisher(ebClient)
+		opts = append(opts, service.WithAuditPublisher(auditPub))
 		slog.Info("Event Bus connected for audit publishing", "address", eventBusAddr)
 	} else {
 		slog.Info("Event Bus not configured, audit publishing disabled")
@@ -101,6 +104,9 @@ func main() {
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		srv.GracefulStop()
+		if auditPub != nil {
+			auditPub.Stop()
+		}
 		_ = store.Close()
 		if eventBusCloser != nil {
 			_ = eventBusCloser()

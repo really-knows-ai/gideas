@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -232,9 +233,8 @@ var _ = Describe("FoundryFlow Controller", func() {
 						},
 						EventBusConfig: &flowv1.EventBusConfig{
 							Retention: flowv1.EventBusRetention{
-								TelemetryDuration: "24h",
-								TelemetrySize:     "100MB",
-								AuditDuration:     "168h",
+								"telemetry": {Duration: "24h", Size: "100MB"},
+								"audit":     {Duration: "168h"},
 							},
 						},
 					},
@@ -289,11 +289,20 @@ var _ = Describe("FoundryFlow Controller", func() {
 
 			By("Verifying Event Bus retention env vars are set")
 			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
-			Expect(envMap).To(HaveKeyWithValue("EVENT_BUS_RETENTION_TELEMETRY_DURATION", "24h"))
-			Expect(envMap).To(HaveKeyWithValue("EVENT_BUS_RETENTION_TELEMETRY_SIZE", "100MB"))
-			Expect(envMap).To(HaveKeyWithValue("EVENT_BUS_RETENTION_AUDIT_DURATION", "168h"))
-			Expect(envMap).NotTo(HaveKey("EVENT_BUS_RETENTION_AUDIT_SIZE"))
-			Expect(envMap).NotTo(HaveKey("EVENT_BUS_RETENTION_FRICTION_DURATION"))
+			Expect(envMap).To(HaveKey("EVENT_BUS_RETENTION_CONFIG"))
+
+			// Parse the JSON to verify structure.
+			var retentionConfig map[string]struct {
+				Duration string `json:"duration,omitempty"`
+				Size     string `json:"size,omitempty"`
+			}
+			Expect(json.Unmarshal([]byte(envMap["EVENT_BUS_RETENTION_CONFIG"]), &retentionConfig)).To(Succeed())
+			Expect(retentionConfig).To(HaveKey("telemetry"))
+			Expect(retentionConfig["telemetry"].Duration).To(Equal("24h"))
+			Expect(retentionConfig["telemetry"].Size).To(Equal("100MB"))
+			Expect(retentionConfig).To(HaveKey("audit"))
+			Expect(retentionConfig["audit"].Duration).To(Equal("168h"))
+			Expect(retentionConfig).NotTo(HaveKey("friction"))
 
 			By("Verifying the Event Bus Service exists")
 			var svc corev1.Service

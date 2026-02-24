@@ -16,38 +16,33 @@ type subscriber struct {
 // subscribeFilter holds the optional narrowing predicates for a
 // subscriber. Zero-value fields match everything.
 type subscribeFilter struct {
-	eventType string
-	lawID     string
+	eventType   string
+	matchLabels []sqlite.Label
 }
 
 // matchesFilter returns true when evt satisfies all non-empty filter
 // predicates. An empty predicate matches any value.
+//
+// Label matching uses AND semantics: every label in matchLabels must
+// have at least one matching label on the event (same key and value).
 func matchesFilter(evt sqlite.Event, f subscribeFilter) bool {
 	if f.eventType != "" && evt.EventType != f.eventType {
 		return false
 	}
-	if f.lawID != "" {
-		lawIDs, ok := evt.Attributes["law_ids"]
-		if !ok {
-			return false
-		}
-		if !containsElement(lawIDs, f.lawID) {
+	for _, want := range f.matchLabels {
+		if !hasLabel(evt.Labels, want) {
 			return false
 		}
 	}
 	return true
 }
 
-// containsElement checks whether needle appears as an exact
-// comma-separated element in csv.
-func containsElement(csv, needle string) bool {
-	start := 0
-	for i := 0; i <= len(csv); i++ {
-		if i == len(csv) || csv[i] == ',' {
-			if csv[start:i] == needle {
-				return true
-			}
-			start = i + 1
+// hasLabel returns true if labels contains at least one entry with the
+// same key and value as want.
+func hasLabel(labels []sqlite.Label, want sqlite.Label) bool {
+	for _, lbl := range labels {
+		if lbl.Key == want.Key && lbl.Value == want.Value {
+			return true
 		}
 	}
 	return false
@@ -58,17 +53,17 @@ func containsElement(csv, needle string) bool {
 // or other subscribers.
 type registry struct {
 	mu   sync.RWMutex
-	subs map[int32][]*subscriber // channel -> active subscribers
+	subs map[string][]*subscriber // channel -> active subscribers
 }
 
 func newRegistry() *registry {
-	return &registry{subs: make(map[int32][]*subscriber)}
+	return &registry{subs: make(map[string][]*subscriber)}
 }
 
 const subscriberBufSize = 256
 
 // add creates a new subscriber for the given channel and returns it.
-func (r *registry) add(channel int32, f subscribeFilter) *subscriber {
+func (r *registry) add(channel string, f subscribeFilter) *subscriber {
 	sub := &subscriber{
 		ch:     make(chan sqlite.Event, subscriberBufSize),
 		filter: f,
@@ -80,7 +75,7 @@ func (r *registry) add(channel int32, f subscribeFilter) *subscriber {
 }
 
 // remove unregisters a subscriber and closes its channel.
-func (r *registry) remove(channel int32, sub *subscriber) {
+func (r *registry) remove(channel string, sub *subscriber) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	subs := r.subs[channel]

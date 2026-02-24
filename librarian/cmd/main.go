@@ -31,6 +31,7 @@ import (
 	"github.com/gideas/flow/librarian/internal/embed"
 	"github.com/gideas/flow/librarian/internal/service"
 	"github.com/gideas/flow/librarian/internal/store/sqlite"
+	"github.com/gideas/flow/pkg/eventbus"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -122,6 +123,7 @@ func main() {
 		ebClient  flowv1.FlowEventBusServiceClient
 		opClient  flowv1.OperatorServiceClient
 		serverOpt []service.LibrarianOption
+		auditPub  *eventbus.AsyncPublisher
 	)
 
 	eventBusAddr := os.Getenv(envEventBusAddress)
@@ -135,7 +137,8 @@ func main() {
 			os.Exit(1)
 		}
 		ebClient = flowv1.NewFlowEventBusServiceClient(ebConn)
-		serverOpt = append(serverOpt, service.WithAuditPublisher(ebClient))
+		auditPub = eventbus.NewAsyncPublisher(ebClient)
+		serverOpt = append(serverOpt, service.WithAuditPublisher(auditPub))
 		slog.Info("Event Bus connected", "address", eventBusAddr)
 	} else {
 		slog.Info("Event Bus not configured, audit publishing and friction subscription disabled")
@@ -190,7 +193,7 @@ func main() {
 		Operator:   opClient,
 		Store:      store,
 		TTLConfig:  ttlConfig,
-		Auditor:    ebClient,
+		Auditor:    auditPub,
 	})
 	go hearingTrigger.Run(ctx)
 
@@ -202,6 +205,9 @@ func main() {
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
 		cancel() // Stop hearing triggers.
 		srv.GracefulStop()
+		if auditPub != nil {
+			auditPub.Stop()
+		}
 		_ = store.Close()
 	}()
 
