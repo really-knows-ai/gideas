@@ -54,6 +54,8 @@ Decisions made during planning that inform the implementation:
 
 14. **Unified async publisher pattern** -- All Event Bus publishers use a shared `AsyncPublisher` abstraction instead of ad-hoc synchronous `publishAudit()` helpers or module-specific buffers. The `AsyncPublisher` is extracted from the sidecar's `TelemetryBuffer` into a shared package (`pkg/eventbus/`) and provides: buffered channel, background drain goroutine, exponential-backoff retry (500ms base, 30s cap), non-blocking `Submit()` with drop-on-full, graceful shutdown drain, and drop counters. The sidecar's `TelemetryBuffer` is refactored to compose the shared `AsyncPublisher` (adding priority channels on top). Audit publishers in the operator, archivist, and librarian switch from synchronous `Publish()` calls to `AsyncPublisher.Submit()`, removing Event Bus latency from all RPC critical paths. This is both a latency improvement (audit events no longer block RPC responses) and a consistency improvement (one well-tested async pattern instead of five ad-hoc approaches). Horizontal scaling (multiple Event Bus instances partitioned by channel) is deferred until throughput is a measured problem.
 
+15. **Defense-in-depth for cross-Workitem reads** -- The Archivist validates parent-child relationships independently by querying the Operator via a `ValidateChildAccess` RPC, rather than blindly trusting the Sidecar. This adds an `OPERATOR_ADDRESS` dependency to the Archivist and a new service-facing RPC to the Operator. The Sidecar also enforces the relationship (Phase 8), providing layered security. On Operator failure, the Archivist fails closed (denies cross-Workitem access).
+
 ---
 
 ## Phase 1: Spec Updates
@@ -544,24 +546,102 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
 
 **Goal:** Allow a parent-assigned node to read artefacts from completed child Workitems.
 
-### Checklist
+**Design Decision:** The Archivist validates parent-child relationships by querying the Operator via a new service-facing `ValidateChildAccess` RPC. This follows the defense-in-depth principle — the Archivist is not a blind storage proxy; it independently verifies that cross-Workitem reads are authorized. The Sidecar also forwards `target_workitem_id` through its proxy layer. This means both the Sidecar (Phase 8) and the Archivist enforce the parent-child constraint, providing layered security.
 
-- [ ] **Archivist service** -- Extend `GetArtefact` and `ListArtefacts`
-  - Accept optional `target_workitem_id`
-  - When set, validate that the caller's Workitem is the parent of the target (query Workitem CRD for `ParentWorkitemID`)
-  - Read-only access (no cross-Workitem writes via this path)
-  - Target child must be in `Completed` state
+### Phase 7A: Operator -- ValidateChildAccess RPC
 
-- [ ] **Sidecar proxy** -- Forward `target_workitem_id` through the Archivist proxy
-  - The identity interceptor must allow calls with a `target_workitem_id` that differs from the active session's Workitem ID (when parent-child relationship is valid)
+**Goal:** Add a service-facing Operator RPC that allows other services (Archivist) to validate parent-child relationships and child completion state.
 
-- [ ] **Tests** -- Unit tests for cross-Workitem reads (valid parent-child, invalid, non-completed child)
+- [ ] **`proto/flow/v1/operator.proto`** -- New service-facing RPC
+  - Add `ValidateChildAccess` RPC to `OperatorService` (under Service-Facing Methods)
+  - `ValidateChildAccessRequest`: `string parent_workitem_id`, `string child_workitem_id`
+  - `ValidateChildAccessResponse`: `bool valid`, `string phase` (child's current phase)
+  - The RPC validates: (1) child exists, (2) child's `ParentWorkitemID` matches `parent_workitem_id`, (3) child is in `Completed` state
+  - Returns `valid=true` only when all three conditions are met; returns the child's phase regardless for diagnostics
+
+- [ ] **Generate Go code** -- Run proto generation
+
+- [ ] **`operator/internal/rpc/operator_server.go`** -- Implement `ValidateChildAccess`
+  - Fetch child Workitem CRD by `child_workitem_id`
+  - Validate `child.Status.ParentWorkitemID == parent_workitem_id`
+  - Check `child.Status.Phase == "Completed"`
+  - Return `valid=true, phase=<phase>` or `valid=false, phase=<phase>` (no error on invalid — the caller decides how to handle)
+  - No capability gate (service-facing, not node-facing)
+
+- [ ] **Tests** -- Unit tests for `ValidateChildAccess` (valid, wrong parent, non-completed child, missing child)
+
+### Phase 7B: Archivist -- Operator Client Wiring
+
+**Goal:** Give the Archivist a gRPC client connection to the Operator for parent-child validation.
+
+- [ ] **`archivist/internal/service/archivist_server.go`** -- Add Operator client
+  - Add `OperatorClient flowv1.OperatorServiceClient` field to `ArchivistServer`
+  - Add `WithOperatorClient(client flowv1.OperatorServiceClient) ArchivistOption` functional option
+  - Add `validateChildAccess(ctx, parentWorkitemID, childWorkitemID) error` helper method
+    - Calls `ValidateChildAccess` RPC on the Operator
+    - Returns `nil` if valid, `codes.PermissionDenied` with `CHILD_NOT_OWNED` if parent mismatch, `codes.FailedPrecondition` if child not completed
+    - Returns `codes.Internal` if Operator is unreachable (fail-closed: deny access on Operator failure)
+
+- [ ] **`archivist/cmd/main.go`** -- Wire Operator client
+  - Add `OPERATOR_ADDRESS` env var (optional; cross-Workitem reads disabled when unset)
+  - Dial Operator gRPC endpoint with insecure credentials
+  - Pass `WithOperatorClient(client)` to `NewArchivistServer`
+
+### Phase 7C: Archivist -- GetArtefact and ListArtefacts Cross-Workitem Reads
+
+**Goal:** Extend `GetArtefact` and `ListArtefacts` to support reading from child Workitems.
+
+- [ ] **`archivist/internal/service/archivist_server.go`** -- `GetArtefact` extension
+  - When `target_workitem_id` is set on the request:
+    - Extract the caller's `workitem_id` from gRPC metadata (`x-flow-workitem-id`) as the parent
+    - Call `validateChildAccess(ctx, callerWorkitemID, targetWorkitemID)`
+    - On success, use `target_workitem_id` as the lookup key (instead of `workitem_id` from the request)
+    - On failure, return the validation error
+  - When `target_workitem_id` is empty, behaviour is unchanged (use `workitem_id` from request)
+
+- [ ] **`archivist/internal/service/archivist_server.go`** -- `ListArtefacts` extension
+  - Same pattern as `GetArtefact`: when `target_workitem_id` is set, validate and use it as lookup key
+  - When empty, behaviour is unchanged
+
+### Phase 7D: Sidecar Proxy -- Forward target_workitem_id
+
+**Goal:** The Sidecar proxy forwards `target_workitem_id` through to the Archivist without stripping it.
+
+- [ ] **`sidecar/internal/proxy/archivist.go`** -- GetArtefact and ListArtefacts
+  - Both methods are already passthroughs (forward the full request unchanged)
+  - Verify that `target_workitem_id` flows through correctly (it should, since the proxy forwards the proto message as-is)
+  - Add logging for cross-Workitem reads (log when `target_workitem_id` is non-empty)
+
+### Phase 7E: Tests
+
+**Goal:** Comprehensive test coverage for cross-Workitem reads.
+
+- [ ] **`operator/internal/rpc/operator_server_test.go`** -- ValidateChildAccess tests
+  - Valid parent-child, child is Completed → `valid=true`
+  - Wrong parent → `valid=false`
+  - Child not completed (Pending, Running, Failed) → `valid=false`
+  - Child does not exist → error (NotFound)
+
+- [ ] **`archivist/internal/service/archivist_server_test.go`** -- Cross-Workitem read tests
+  - `GetArtefact` with `target_workitem_id`: valid parent-child → returns child's artefact
+  - `GetArtefact` with `target_workitem_id`: wrong parent → `PermissionDenied`
+  - `GetArtefact` with `target_workitem_id`: child not completed → `FailedPrecondition`
+  - `GetArtefact` without `target_workitem_id`: unchanged behaviour
+  - `ListArtefacts` with `target_workitem_id`: valid → returns child's artefact list
+  - `ListArtefacts` with `target_workitem_id`: invalid → `PermissionDenied`
+  - Operator unavailable → `Internal` (fail-closed)
+
+- [ ] **`sidecar/internal/proxy/archivist_test.go`** -- Proxy forwarding test
+  - `GetArtefact` with `target_workitem_id` set → verify field forwarded to backend
+  - `ListArtefacts` with `target_workitem_id` set → verify field forwarded to backend
+
+- [ ] **Quality gates** -- `go test ./...` across archivist, operator, sidecar; `make check-fix`
 
 ---
 
 ## Phase 8: Sidecar Parent-Child Authorization
 
-**Goal:** The Sidecar authorizes cross-scope operations by validating parent-child relationships.
+**Goal:** The Sidecar authorizes cross-scope operations by validating parent-child relationships. This provides an additional security layer on top of the Archivist's own validation (defense in depth).
 
 ### Checklist
 
@@ -680,7 +760,11 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase 6G: Workitem Lifecycle Publishing | Complete | `publishLifecycle()` helper + calls at all 6 phase transition points; 11 unit tests pass |
 | Phase 6H: Spec Updates | Complete | All 3 spec files updated: channel-agnostic Bus, labels/filtering, async publishing model, generic retention map |
 | Phase 6I: Tests and Quality Gates | Complete | All tests pass across all modules; `make check-fix` clean (0 issues); no `EventChannel_` references outside `gen/` |
-| Phase 7: Archivist Cross-Workitem Reads | Not Started | |
+| Phase 7A: Operator -- ValidateChildAccess RPC | Complete | Proto: `ValidateChildAccess` RPC + request/response messages. Implementation: validates child exists, parent matches, child is Completed. 6 test cases (valid, wrong parent, 3 non-completed phases, not found, missing IDs) |
+| Phase 7B: Archivist -- Operator Client Wiring | Complete | `WithOperatorClient` option, `OPERATOR_ADDRESS` env var in cmd/main.go, `validateChildAccess` helper (fail-closed on Operator failure) |
+| Phase 7C: Archivist -- Cross-Workitem Reads | Complete | `GetArtefact` + `ListArtefacts` support `target_workitem_id`: validate via Operator, use target as lookup key. 9 test cases |
+| Phase 7D: Sidecar Proxy -- Forward target_workitem_id | Complete | Passthrough verified (proto forwarded as-is), cross-Workitem logging added. 2 forwarding tests |
+| Phase 7E: Tests | Complete | All tests pass across operator, archivist, sidecar; `make check-fix` + `make lint-operator` clean (0 issues) |
 | Phase 8: Sidecar Parent-Child Authorization | Not Started | |
 | Phase 9: SDK | Not Started | |
 | Phase 10: Tests and Quality Gates | Not Started | |

@@ -37,6 +37,7 @@ const (
 	envPort            = "ARCHIVIST_PORT"
 	envDBPath          = "ARCHIVIST_DB_PATH"
 	envEventBusAddress = "EVENT_BUS_ADDRESS"
+	envOperatorAddress = "OPERATOR_ADDRESS"
 )
 
 func main() {
@@ -83,6 +84,26 @@ func main() {
 		slog.Info("Event Bus not configured, audit publishing disabled")
 	}
 
+	// Connect to the Operator for cross-Workitem read validation.
+	var operatorCloser func() error
+	operatorAddr := os.Getenv(envOperatorAddress)
+	if operatorAddr != "" {
+		opConn, opErr := grpc.NewClient(
+			operatorAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if opErr != nil {
+			slog.Error("Failed to connect to Operator", "address", operatorAddr, "error", opErr)
+			os.Exit(1)
+		}
+		operatorCloser = opConn.Close
+		opClient := flowv1.NewOperatorServiceClient(opConn)
+		opts = append(opts, service.WithOperatorClient(opClient))
+		slog.Info("Operator connected for cross-Workitem validation", "address", operatorAddr)
+	} else {
+		slog.Info("Operator not configured, cross-Workitem reads disabled")
+	}
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
 		slog.Error("Failed to listen", "port", port, "error", err)
@@ -110,6 +131,9 @@ func main() {
 		_ = store.Close()
 		if eventBusCloser != nil {
 			_ = eventBusCloser()
+		}
+		if operatorCloser != nil {
+			_ = operatorCloser()
 		}
 	}()
 

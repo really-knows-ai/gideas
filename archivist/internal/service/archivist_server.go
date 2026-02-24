@@ -35,10 +35,11 @@ type AuditPublisher interface {
 // a SQLite CAS store.
 type ArchivistServer struct {
 	flowv1.UnimplementedArchivistServiceServer
-	store    *sqlite.Store
-	auditor  AuditPublisher // nil-safe: audit publishing degrades gracefully
-	newIDFn  func() string
-	flowIDFn func(ctx context.Context) string
+	store          *sqlite.Store
+	auditor        AuditPublisher               // nil-safe: audit publishing degrades gracefully
+	operatorClient flowv1.OperatorServiceClient // nil-safe: cross-Workitem reads disabled when unset
+	newIDFn        func() string
+	flowIDFn       func(ctx context.Context) string
 }
 
 // NewArchivistServer returns an ArchivistServer backed by the given store.
@@ -63,6 +64,63 @@ type ArchivistOption func(*ArchivistServer)
 // WithAuditPublisher sets the Event Bus client for audit event publishing.
 func WithAuditPublisher(pub AuditPublisher) ArchivistOption {
 	return func(s *ArchivistServer) { s.auditor = pub }
+}
+
+// WithOperatorClient sets the Operator gRPC client for parent-child validation
+// on cross-Workitem reads. When unset, cross-Workitem reads are disabled.
+func WithOperatorClient(client flowv1.OperatorServiceClient) ArchivistOption {
+	return func(s *ArchivistServer) { s.operatorClient = client }
+}
+
+// validateChildAccess calls the Operator's ValidateChildAccess RPC to verify
+// that parentWorkitemID is the parent of childWorkitemID and that the child is
+// in Completed state. Returns nil on success.
+//
+// Error cases:
+//   - PermissionDenied (CHILD_NOT_OWNED): parent mismatch
+//   - FailedPrecondition: child not completed
+//   - Internal: Operator unreachable (fail-closed)
+//   - Unavailable: Operator client not configured
+func (s *ArchivistServer) validateChildAccess(ctx context.Context, parentWorkitemID, childWorkitemID string) error {
+	if s.operatorClient == nil {
+		return status.Error(codes.Unavailable,
+			"cross-Workitem reads not available: Operator client not configured")
+	}
+
+	resp, err := s.operatorClient.ValidateChildAccess(ctx, &flowv1.ValidateChildAccessRequest{
+		ParentWorkitemId: parentWorkitemID,
+		ChildWorkitemId:  childWorkitemID,
+	})
+	if err != nil {
+		// Fail closed: deny access when the Operator is unreachable.
+		slog.Error("ValidateChildAccess RPC failed, denying cross-Workitem read",
+			"parent_workitem_id", parentWorkitemID,
+			"child_workitem_id", childWorkitemID,
+			"error", err,
+		)
+		return status.Errorf(codes.Internal,
+			"failed to validate cross-Workitem access (fail-closed): %v", err)
+	}
+
+	if !resp.GetValid() {
+		// Determine the specific reason for the rejection.
+		if resp.GetPhase() == "" {
+			// Phase is empty — child was not found (shouldn't happen as Operator
+			// returns NotFound, but handle defensively).
+			return status.Errorf(codes.PermissionDenied,
+				"CHILD_NOT_OWNED: cross-Workitem read denied for child %q", childWorkitemID)
+		}
+		if resp.GetPhase() != "Completed" {
+			return status.Errorf(codes.FailedPrecondition,
+				"child workitem %q is in phase %q, must be Completed for cross-Workitem read",
+				childWorkitemID, resp.GetPhase())
+		}
+		// Phase is Completed but valid=false — parent mismatch.
+		return status.Errorf(codes.PermissionDenied,
+			"CHILD_NOT_OWNED: cross-Workitem read denied for child %q", childWorkitemID)
+	}
+
+	return nil
 }
 
 // publishAudit submits an audit event to the async publisher for non-blocking
@@ -268,6 +326,9 @@ func (s *ArchivistServer) StoreArtefact(
 //  1. Look up provenance history for (workitem_id, artefact_id).
 //  2. If empty, return NotFound.
 //  3. Get head hash, retrieve bytes from BlobStore.
+//
+// When target_workitem_id is set, the Archivist validates the parent-child
+// relationship via the Operator and uses the target as the lookup key.
 func (s *ArchivistServer) GetArtefact(
 	ctx context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
@@ -279,10 +340,27 @@ func (s *ArchivistServer) GetArtefact(
 	workitemID := req.GetWorkitemId()
 	artefactID := req.GetArtefactId()
 
-	slog.Info("GetArtefact",
-		"workitem_id", workitemID,
-		"artefact_id", artefactID,
-	)
+	// Cross-Workitem read: validate parent-child and use target as lookup key.
+	if targetID := req.GetTargetWorkitemId(); targetID != "" {
+		callerWorkitemID := extractMetadataValue(ctx, "x-flow-workitem-id")
+		if callerWorkitemID == "" {
+			callerWorkitemID = workitemID
+		}
+		if err := s.validateChildAccess(ctx, callerWorkitemID, targetID); err != nil {
+			return nil, err
+		}
+		workitemID = targetID
+		slog.Info("GetArtefact (cross-Workitem)",
+			"caller_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetID,
+			"artefact_id", artefactID,
+		)
+	} else {
+		slog.Info("GetArtefact",
+			"workitem_id", workitemID,
+			"artefact_id", artefactID,
+		)
+	}
 
 	head, err := s.store.GetHead(ctx, workitemID, artefactID)
 	if err != nil {
@@ -392,12 +470,31 @@ func (s *ArchivistServer) GetArtefactMetadata(
 }
 
 // ListArtefacts returns all artefact refs for a workitem.
+//
+// When target_workitem_id is set, the Archivist validates the parent-child
+// relationship via the Operator and uses the target as the lookup key.
 func (s *ArchivistServer) ListArtefacts(
 	ctx context.Context, req *flowv1.ListArtefactsRequest,
 ) (*flowv1.ListArtefactsResponse, error) {
 	workitemID := req.GetWorkitemId()
 
-	slog.Info("ListArtefacts", "workitem_id", workitemID)
+	// Cross-Workitem read: validate parent-child and use target as lookup key.
+	if targetID := req.GetTargetWorkitemId(); targetID != "" {
+		callerWorkitemID := extractMetadataValue(ctx, "x-flow-workitem-id")
+		if callerWorkitemID == "" {
+			callerWorkitemID = workitemID
+		}
+		if err := s.validateChildAccess(ctx, callerWorkitemID, targetID); err != nil {
+			return nil, err
+		}
+		workitemID = targetID
+		slog.Info("ListArtefacts (cross-Workitem)",
+			"caller_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetID,
+		)
+	} else {
+		slog.Info("ListArtefacts", "workitem_id", workitemID)
+	}
 
 	entries, err := s.store.ListArtefacts(ctx, workitemID)
 	if err != nil {

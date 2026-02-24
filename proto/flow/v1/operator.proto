@@ -48,6 +48,13 @@ service OperatorService {
 
   // --- Service-Facing Methods ---
 
+  // Validates that a parent-child Workitem relationship exists and that the
+  // child is in Completed state. Called by the Archivist to authorise
+  // cross-Workitem artefact reads. Returns valid=true only when the child
+  // exists, its ParentWorkitemID matches the given parent, and the child
+  // is Completed. On Operator failure the caller should fail closed.
+  rpc ValidateChildAccess(ValidateChildAccessRequest) returns (ValidateChildAccessResponse);
+
   // Creates a review hearing Workitem for Tribunal processing. Called by the
   // Librarian when friction thresholds or review TTL expiry trigger a hearing.
   rpc CreateHearingWorkitem(CreateHearingWorkitemRequest) returns (CreateHearingWorkitemResponse);
@@ -171,4 +178,21 @@ message FlowOutput {
 // List of required stamp names for a governed artefact in a contract.
 message StampRequirements {
   repeated string stamps = 1;
+}
+
+// --- ValidateChildAccess (Service-Facing) ---
+
+message ValidateChildAccessRequest {
+  // The Workitem claiming to be the parent.
+  string parent_workitem_id = 1;
+  // The child Workitem to validate.
+  string child_workitem_id = 2;
+}
+
+message ValidateChildAccessResponse {
+  // True only when child exists, parent matches, and child is Completed.
+  bool valid = 1;
+  // Current lifecycle phase of the child (for diagnostics). Empty if child
+  // was not found.
+  string phase = 2;
 }

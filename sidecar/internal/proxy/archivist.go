@@ -101,10 +101,18 @@ func (p *ArchivistProxy) GetArtefact(
 ) (*flowv1.GetArtefactResponse, error) {
 	outCtx := propagateMetadata(ctx)
 
-	slog.Info("Sidecar: forwarding GetArtefact",
-		"workitem_id", req.GetWorkitemId(),
-		"artefact_id", req.GetArtefactId(),
-	)
+	if targetID := req.GetTargetWorkitemId(); targetID != "" {
+		slog.Info("Sidecar: forwarding GetArtefact (cross-Workitem)",
+			"workitem_id", req.GetWorkitemId(),
+			"target_workitem_id", targetID,
+			"artefact_id", req.GetArtefactId(),
+		)
+	} else {
+		slog.Info("Sidecar: forwarding GetArtefact",
+			"workitem_id", req.GetWorkitemId(),
+			"artefact_id", req.GetArtefactId(),
+		)
+	}
 	return p.client.GetArtefact(outCtx, req)
 }
 
@@ -129,6 +137,12 @@ func (p *ArchivistProxy) ListArtefacts(
 	ctx context.Context, req *flowv1.ListArtefactsRequest,
 ) (*flowv1.ListArtefactsResponse, error) {
 	outCtx := propagateMetadata(ctx)
+	if targetID := req.GetTargetWorkitemId(); targetID != "" {
+		slog.Info("Sidecar: forwarding ListArtefacts (cross-Workitem)",
+			"workitem_id", req.GetWorkitemId(),
+			"target_workitem_id", targetID,
+		)
+	}
 	return p.client.ListArtefacts(outCtx, req)
 }
 
