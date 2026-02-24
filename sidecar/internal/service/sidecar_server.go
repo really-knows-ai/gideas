@@ -111,6 +111,74 @@ type SessionIdentity struct {
 	NodeID     string
 }
 
+// ChildTracker records child Workitem IDs created during a session.
+// The OperatorProxy calls TrackChild after a successful CreateChildWorkitem
+// to register the child in the session's local cache.
+type ChildTracker interface {
+	TrackChild(parentWorkitemID, childWorkitemID string)
+}
+
+// ChildAccessDecision represents the outcome of a cross-Workitem
+// authorisation check by the Sidecar.
+type ChildAccessDecision int
+
+const (
+	// ChildAccessAllowed means the target is a known child of the session.
+	ChildAccessAllowed ChildAccessDecision = iota
+	// ChildAccessDenied means the session has children but the target is
+	// not one of them, so the access should be blocked.
+	ChildAccessDenied
+	// ChildAccessUnknown means the session has no children (e.g. collection
+	// phase at a different node) so the Sidecar cannot make a determination.
+	// The Archivist should perform its own validation.
+	ChildAccessUnknown
+)
+
+// ChildAuthorizer validates whether a target Workitem ID is a known child
+// of the given parent session. Used by the ArchivistProxy to authorise
+// cross-Workitem operations without an Operator round-trip.
+type ChildAuthorizer interface {
+	// AuthorizeChildAccess checks if the target is an authorised child of
+	// the parent session.
+	//
+	// Returns:
+	//   - ChildAccessAllowed: target is a known child, access permitted
+	//   - ChildAccessDenied: session has children but target is not one of
+	//     them, access should be blocked
+	//   - ChildAccessUnknown: no session found or session has no children,
+	//     the Sidecar cannot make a determination (defer to Archivist)
+	AuthorizeChildAccess(parentWorkitemID, targetWorkitemID string) ChildAccessDecision
+}
+
+// TrackChild records a child Workitem ID in the session for the given
+// parent. No-op if no session exists for the parent.
+func (s *SidecarServer) TrackChild(parentWorkitemID, childWorkitemID string) {
+	sess := s.getSession(parentWorkitemID)
+	if sess == nil {
+		return
+	}
+	sess.addChild(childWorkitemID)
+}
+
+// AuthorizeChildAccess implements ChildAuthorizer. It checks the session's
+// local child cache to determine if the target is an authorised child.
+func (s *SidecarServer) AuthorizeChildAccess(parentWorkitemID, targetWorkitemID string) ChildAccessDecision {
+	sess := s.getSession(parentWorkitemID)
+	if sess == nil {
+		return ChildAccessUnknown
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.childIDs) == 0 {
+		// Session has no children -- cannot make a determination.
+		return ChildAccessUnknown
+	}
+	if _, ok := sess.childIDs[targetWorkitemID]; ok {
+		return ChildAccessAllowed
+	}
+	return ChildAccessDenied
+}
+
 // LookupSession returns the authoritative identity context for an active
 // Workitem assignment. Returns nil if no session exists for the given
 // workitem_id. This is used by the Sidecar's gRPC interceptor to inject

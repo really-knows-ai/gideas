@@ -37,6 +37,12 @@ type session struct {
 
 	// cancelFn cancels the handler context when inactivity timeout fires.
 	cancelFn context.CancelFunc
+
+	// childIDs tracks child Workitem IDs created during this session via
+	// CreateChildWorkitem. Used by the Sidecar to authorise cross-Workitem
+	// operations (e.g. StoreArtefact on a child, GetArtefact from a child)
+	// without an Operator round-trip.
+	childIDs map[string]struct{}
 }
 
 // newSession creates a session for an active Workitem assignment and starts
@@ -52,6 +58,7 @@ func newSession(
 		nodeID:     nodeID,
 		timeout:    timeout,
 		cancelFn:   cancel,
+		childIDs:   make(map[string]struct{}),
 	}
 	s.timer = time.AfterFunc(timeout, func() {
 		s.mu.Lock()
@@ -106,6 +113,22 @@ func (s *session) stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.timer.Stop()
+}
+
+// addChild records a child Workitem ID created during this session.
+func (s *session) addChild(childID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.childIDs[childID] = struct{}{}
+}
+
+// hasChild returns whether the given child Workitem ID was created
+// during this session.
+func (s *session) hasChild(childID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.childIDs[childID]
+	return ok
 }
 
 // isPaused returns whether the timer is currently paused.

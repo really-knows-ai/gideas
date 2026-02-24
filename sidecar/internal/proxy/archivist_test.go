@@ -7,8 +7,17 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
+
+const (
+	testContentStr = "test-content"
+	childWIStr     = "child-wi"
+	parentWIStr    = "parent-wi"
 )
 
 // captureArchivistServer captures the StoreArtefact request to verify
@@ -42,7 +51,7 @@ func (s *captureArchivistServer) GetArtefact(
 		s.capturedMD = md
 	}
 	return &flowv1.GetArtefactResponse{
-		Content:          []byte("test-content"),
+		Content:          []byte(testContentStr),
 		VersionHash:      "test-hash",
 		GovernedArtefact: "txt",
 	}, nil
@@ -88,6 +97,58 @@ func setupArchivistProxy(t *testing.T) (*ArchivistProxy, *captureArchivistServer
 	proxy := &ArchivistProxy{
 		client: flowv1.NewArchivistServiceClient(conn),
 		conn:   conn,
+	}
+
+	return proxy, capture
+}
+
+// fakeChildAuthorizer implements service.ChildAuthorizer for testing.
+type fakeChildAuthorizer struct {
+	decisions map[string]service.ChildAccessDecision // key: "parent:child"
+}
+
+func newFakeChildAuthorizer() *fakeChildAuthorizer {
+	return &fakeChildAuthorizer{
+		decisions: make(map[string]service.ChildAccessDecision),
+	}
+}
+
+func (f *fakeChildAuthorizer) allow(parent, child string) {
+	f.decisions[parent+":"+child] = service.ChildAccessAllowed
+}
+
+func (f *fakeChildAuthorizer) deny(parent, child string) {
+	f.decisions[parent+":"+child] = service.ChildAccessDenied
+}
+
+func (f *fakeChildAuthorizer) unknown(parent, child string) {
+	f.decisions[parent+":"+child] = service.ChildAccessUnknown
+}
+
+func (f *fakeChildAuthorizer) AuthorizeChildAccess(
+	parentWorkitemID, targetWorkitemID string,
+) service.ChildAccessDecision {
+	key := parentWorkitemID + ":" + targetWorkitemID
+	if d, ok := f.decisions[key]; ok {
+		return d
+	}
+	return service.ChildAccessUnknown
+}
+
+func setupArchivistProxyWithAuth(
+	t *testing.T, auth service.ChildAuthorizer,
+) (*ArchivistProxy, *captureArchivistServer) {
+	t.Helper()
+
+	capture := &captureArchivistServer{}
+	conn := dialBufconn(t, func(srv *grpc.Server) {
+		flowv1.RegisterArchivistServiceServer(srv, capture)
+	})
+
+	proxy := &ArchivistProxy{
+		client:    flowv1.NewArchivistServiceClient(conn),
+		conn:      conn,
+		childAuth: auth,
 	}
 
 	return proxy, capture
@@ -163,7 +224,7 @@ func TestArchivistProxy_GetArtefact_Passthrough(t *testing.T) {
 	if capture.lastGetReq.GetWorkitemId() != "wi-1" {
 		t.Fatal("expected workitem_id to be forwarded")
 	}
-	if string(resp.GetContent()) != "test-content" {
+	if string(resp.GetContent()) != testContentStr {
 		t.Fatalf("expected passthrough content, got %q", string(resp.GetContent()))
 	}
 }
@@ -238,20 +299,20 @@ func TestArchivistProxy_GetArtefact_ForwardsTargetWorkitemID(t *testing.T) {
 	proxy, capture := setupArchivistProxy(t)
 
 	resp, err := proxy.GetArtefact(context.Background(), &flowv1.GetArtefactRequest{
-		WorkitemId:       "parent-wi",
+		WorkitemId:       parentWIStr,
 		ArtefactId:       "doc",
-		TargetWorkitemId: "child-wi",
+		TargetWorkitemId: childWIStr,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Verify the target_workitem_id was forwarded to the backend.
-	if capture.lastGetReq.GetTargetWorkitemId() != "child-wi" {
-		t.Fatalf("expected target_workitem_id=child-wi, got %q",
-			capture.lastGetReq.GetTargetWorkitemId())
+	if capture.lastGetReq.GetTargetWorkitemId() != childWIStr {
+		t.Fatalf("expected target_workitem_id=%s, got %q",
+			childWIStr, capture.lastGetReq.GetTargetWorkitemId())
 	}
-	if string(resp.GetContent()) != "test-content" {
+	if string(resp.GetContent()) != testContentStr {
 		t.Fatalf("expected passthrough content, got %q", string(resp.GetContent()))
 	}
 }
@@ -260,19 +321,278 @@ func TestArchivistProxy_ListArtefacts_ForwardsTargetWorkitemID(t *testing.T) {
 	proxy, capture := setupArchivistProxy(t)
 
 	resp, err := proxy.ListArtefacts(context.Background(), &flowv1.ListArtefactsRequest{
-		WorkitemId:       "parent-wi",
-		TargetWorkitemId: "child-wi",
+		WorkitemId:       parentWIStr,
+		TargetWorkitemId: childWIStr,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Verify the target_workitem_id was forwarded.
-	if capture.lastListReq.GetTargetWorkitemId() != "child-wi" {
-		t.Fatalf("expected target_workitem_id=child-wi, got %q",
-			capture.lastListReq.GetTargetWorkitemId())
+	if capture.lastListReq.GetTargetWorkitemId() != childWIStr {
+		t.Fatalf("expected target_workitem_id=%s, got %q",
+			childWIStr, capture.lastListReq.GetTargetWorkitemId())
 	}
 	if len(resp.GetArtefactRefs()) != 1 {
 		t.Fatalf("expected 1 artefact ref, got %d", len(resp.GetArtefactRefs()))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: Cross-Workitem authorization tests
+// ---------------------------------------------------------------------------
+
+// --- GetArtefact authorization ---
+
+func TestArchivistProxy_GetArtefact_CrossWorkitem_Allowed(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	auth.allow(parentWIStr, childWIStr)
+	proxy, capture := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := proxy.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId:       parentWIStr,
+		ArtefactId:       "doc",
+		TargetWorkitemId: childWIStr,
+	})
+	if err != nil {
+		t.Fatalf("expected allowed, got error: %v", err)
+	}
+	if string(resp.GetContent()) != testContentStr {
+		t.Fatalf("expected passthrough content, got %q", string(resp.GetContent()))
+	}
+	if capture.lastGetReq.GetTargetWorkitemId() != childWIStr {
+		t.Fatalf("expected target forwarded, got %q",
+			capture.lastGetReq.GetTargetWorkitemId())
+	}
+}
+
+func TestArchivistProxy_GetArtefact_CrossWorkitem_Denied(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	auth.deny(parentWIStr, "rogue-wi")
+	proxy, _ := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId:       parentWIStr,
+		ArtefactId:       "doc",
+		TargetWorkitemId: "rogue-wi",
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestArchivistProxy_GetArtefact_CrossWorkitem_Unknown_PassesThrough(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	auth.unknown(parentWIStr, childWIStr)
+	proxy, capture := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := proxy.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId:       parentWIStr,
+		ArtefactId:       "doc",
+		TargetWorkitemId: childWIStr,
+	})
+	if err != nil {
+		t.Fatalf("expected passthrough for unknown, got error: %v", err)
+	}
+	if string(resp.GetContent()) != testContentStr {
+		t.Fatalf("expected passthrough content")
+	}
+	if capture.lastGetReq.GetTargetWorkitemId() != childWIStr {
+		t.Fatalf("expected target forwarded")
+	}
+}
+
+func TestArchivistProxy_GetArtefact_NoTargetWorkitem_NoAuth(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	proxy, _ := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId: parentWIStr,
+		ArtefactId: "doc",
+	})
+	if err != nil {
+		t.Fatalf("expected no auth for normal read, got error: %v", err)
+	}
+}
+
+func TestArchivistProxy_GetArtefact_NilAuth_PassesThrough(t *testing.T) {
+	proxy, _ := setupArchivistProxy(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId:       parentWIStr,
+		ArtefactId:       "doc",
+		TargetWorkitemId: childWIStr,
+	})
+	if err != nil {
+		t.Fatalf("expected passthrough with nil auth, got error: %v", err)
+	}
+}
+
+// --- ListArtefacts authorization ---
+
+func TestArchivistProxy_ListArtefacts_CrossWorkitem_Allowed(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	auth.allow(parentWIStr, childWIStr)
+	proxy, capture := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := proxy.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+		WorkitemId:       parentWIStr,
+		TargetWorkitemId: childWIStr,
+	})
+	if err != nil {
+		t.Fatalf("expected allowed, got error: %v", err)
+	}
+	if len(resp.GetArtefactRefs()) != 1 {
+		t.Fatalf("expected 1 artefact ref")
+	}
+	if capture.lastListReq.GetTargetWorkitemId() != childWIStr {
+		t.Fatalf("expected target forwarded")
+	}
+}
+
+func TestArchivistProxy_ListArtefacts_CrossWorkitem_Denied(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	auth.deny(parentWIStr, "rogue-wi")
+	proxy, _ := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+		WorkitemId:       parentWIStr,
+		TargetWorkitemId: "rogue-wi",
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+// --- StoreArtefact authorization ---
+
+func TestArchivistProxy_StoreArtefact_SameWorkitem_NoAuth(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	proxy, _ := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", "wi-1")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+		WorkitemId:       "wi-1",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          []byte("data"),
+	})
+	if err != nil {
+		t.Fatalf("expected no auth for same-workitem write, got error: %v", err)
+	}
+}
+
+func TestArchivistProxy_StoreArtefact_ChildWorkitem_Allowed(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	auth.allow(parentWIStr, childWIStr)
+	proxy, capture := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+		WorkitemId:       childWIStr,
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          []byte("child data"),
+	})
+	if err != nil {
+		t.Fatalf("expected allowed, got error: %v", err)
+	}
+	if capture.lastStoreReq.GetWorkitemId() != childWIStr {
+		t.Fatalf("expected child workitem forwarded")
+	}
+}
+
+func TestArchivistProxy_StoreArtefact_ChildWorkitem_Denied(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	auth.deny(parentWIStr, "rogue-wi")
+	proxy, _ := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+		WorkitemId:       "rogue-wi",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          []byte("rogue data"),
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestArchivistProxy_StoreArtefact_ChildWorkitem_Unknown_Denied(t *testing.T) {
+	auth := newFakeChildAuthorizer()
+	proxy, _ := setupArchivistProxyWithAuth(t, auth)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+		WorkitemId:       "unknown-wi",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          []byte("data"),
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for unknown cross-Workitem write")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestArchivistProxy_StoreArtefact_NilAuth_PassesThrough(t *testing.T) {
+	proxy, _ := setupArchivistProxy(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
+		WorkitemId:       "other-wi",
+		ArtefactId:       "doc",
+		GovernedArtefact: "txt",
+		Content:          []byte("data"),
+	})
+	if err != nil {
+		t.Fatalf("expected passthrough with nil auth, got error: %v", err)
 	}
 }

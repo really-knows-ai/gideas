@@ -645,16 +645,16 @@ The shared `AsyncPublisher` extracts the generic parts. The sidecar's `Telemetry
 
 ### Checklist
 
-- [ ] **`sidecar/internal/service/identity_interceptor.go`** -- Authorization logic
+- [x] **`sidecar/internal/service/identity_interceptor.go`** -- Authorization logic
   - During child setup (before `RouteChild`): parent node can write artefacts to child Workitem IDs
   - During collection (after child completes): parent-assigned node can read from child Workitem IDs
   - Validate by querying Operator for parent-child relationship (or caching child IDs from `CreateChildWorkitem`)
 
-- [ ] **`sidecar/internal/service/sidecar_server.go`** -- Session tracking
+- [x] **`sidecar/internal/service/sidecar_server.go`** -- Session tracking
   - Track child Workitem IDs created during the current session (for the setup phase)
   - For the collection phase (different node may hold the parent), validate via Operator query
 
-- [ ] **Tests** -- Unit tests for authorization (valid cross-scope, invalid, routed child write rejection)
+- [x] **Tests** -- Unit tests for authorization (valid cross-scope, invalid, routed child write rejection)
 
 ---
 
@@ -765,6 +765,6 @@ These phases build on the three primitives above and are out of scope for this i
 | Phase 7C: Archivist -- Cross-Workitem Reads | Complete | `GetArtefact` + `ListArtefacts` support `target_workitem_id`: validate via Operator, use target as lookup key. 9 test cases |
 | Phase 7D: Sidecar Proxy -- Forward target_workitem_id | Complete | Passthrough verified (proto forwarded as-is), cross-Workitem logging added. 2 forwarding tests |
 | Phase 7E: Tests | Complete | All tests pass across operator, archivist, sidecar; `make check-fix` + `make lint-operator` clean (0 issues) |
-| Phase 8: Sidecar Parent-Child Authorization | Not Started | |
+| Phase 8: Sidecar Parent-Child Authorization | Complete | Session child tracking, OperatorProxy (CreateChildWorkitem/RouteChild/GetChildren with tracking), ArchivistProxy cross-Workitem authorization (reads + writes), 31 tests pass, lint clean |
 | Phase 9: SDK | Not Started | |
 | Phase 10: Tests and Quality Gates | Not Started | |

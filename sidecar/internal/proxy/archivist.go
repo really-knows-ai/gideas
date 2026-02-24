@@ -12,23 +12,39 @@ import (
 	"log/slog"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // ArchivistProxy implements flowv1.ArchivistServiceServer by forwarding
 // calls to the real Archivist gRPC endpoint. For StoreArtefact, it acts
 // as the security boundary by computing the SHA-256 content hash
 // server-side — the node is not trusted to supply this value.
+//
+// When a ChildAuthorizer is set, the proxy validates cross-Workitem
+// operations (target_workitem_id) against the session's local child cache.
+// If the session created children and the target is not one of them, the
+// request is rejected. If the session has no children (collection phase
+// at a different node), the request passes through and the Archivist
+// performs its own Operator-backed validation (defense in depth).
 type ArchivistProxy struct {
 	flowv1.UnimplementedArchivistServiceServer
 	client flowv1.ArchivistServiceClient
 	conn   *grpc.ClientConn
+
+	// childAuth validates cross-Workitem operations against the session's
+	// local child cache. May be nil (authorization disabled).
+	childAuth service.ChildAuthorizer
 }
 
 // NewArchivistProxy dials the Archivist gRPC endpoint and returns a proxy
 // handler ready to be registered on the Sidecar's gRPC server.
-func NewArchivistProxy(archivistAddr string) (*ArchivistProxy, error) {
+// The childAuth, if non-nil, is used to validate cross-Workitem operations
+// against the session's local child cache.
+func NewArchivistProxy(archivistAddr string, childAuth service.ChildAuthorizer) (*ArchivistProxy, error) {
 	conn, err := grpc.NewClient(
 		archivistAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -38,8 +54,9 @@ func NewArchivistProxy(archivistAddr string) (*ArchivistProxy, error) {
 	}
 
 	return &ArchivistProxy{
-		client: flowv1.NewArchivistServiceClient(conn),
-		conn:   conn,
+		client:    flowv1.NewArchivistServiceClient(conn),
+		conn:      conn,
+		childAuth: childAuth,
 	}, nil
 }
 
@@ -51,15 +68,112 @@ func (p *ArchivistProxy) Close() error {
 	return nil
 }
 
+// authorizeTargetWorkitem validates a cross-Workitem operation against the
+// session's local child cache. Returns nil if the operation is allowed,
+// or a gRPC PermissionDenied error if the target is not a known child.
+//
+// The decision matrix:
+//   - No childAuth configured → allow (no authorization layer)
+//   - No target_workitem_id → allow (not a cross-Workitem operation)
+//   - ChildAccessAllowed → allow (target is a known child)
+//   - ChildAccessDenied → reject (session has children, target is not one)
+//   - ChildAccessUnknown → allow (session has no children; Archivist
+//     will perform Operator-backed validation)
+func (p *ArchivistProxy) authorizeTargetWorkitem(ctx context.Context, targetWorkitemID string) error {
+	if p.childAuth == nil || targetWorkitemID == "" {
+		return nil
+	}
+
+	callerWorkitemID := extractWorkitemIDFromMD(ctx)
+	if callerWorkitemID == "" {
+		return nil
+	}
+
+	decision := p.childAuth.AuthorizeChildAccess(callerWorkitemID, targetWorkitemID)
+	switch decision {
+	case service.ChildAccessAllowed:
+		slog.Debug("Sidecar: cross-Workitem access authorised (known child)",
+			"parent_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetWorkitemID,
+		)
+		return nil
+	case service.ChildAccessDenied:
+		slog.Warn("Sidecar: cross-Workitem access denied (CHILD_NOT_OWNED)",
+			"parent_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetWorkitemID,
+		)
+		return status.Errorf(codes.PermissionDenied,
+			"CHILD_NOT_OWNED: workitem %q is not a child of %q", targetWorkitemID, callerWorkitemID)
+	default: // ChildAccessUnknown
+		slog.Info("Sidecar: cross-Workitem access deferred to Archivist (no local children)",
+			"parent_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetWorkitemID,
+		)
+		return nil
+	}
+}
+
+// authorizeWorkitemWrite validates that a write operation targeting a
+// workitem_id is authorised. If the target workitem is the same as the
+// session's (normal case), the write is always allowed. If different
+// (cross-Workitem child write), it must be a known child.
+func (p *ArchivistProxy) authorizeWorkitemWrite(ctx context.Context, targetWorkitemID string) error {
+	if p.childAuth == nil || targetWorkitemID == "" {
+		return nil
+	}
+
+	callerWorkitemID := extractWorkitemIDFromMD(ctx)
+	if callerWorkitemID == "" || callerWorkitemID == targetWorkitemID {
+		return nil // Same workitem or no session identity -- normal case.
+	}
+
+	// The target differs from the session's workitem -- this is a
+	// cross-Workitem write. Validate it's a known child.
+	decision := p.childAuth.AuthorizeChildAccess(callerWorkitemID, targetWorkitemID)
+	switch decision {
+	case service.ChildAccessAllowed:
+		slog.Debug("Sidecar: cross-Workitem write authorised (known child)",
+			"parent_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetWorkitemID,
+		)
+		return nil
+	case service.ChildAccessDenied:
+		slog.Warn("Sidecar: cross-Workitem write denied (CHILD_NOT_OWNED)",
+			"parent_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetWorkitemID,
+		)
+		return status.Errorf(codes.PermissionDenied,
+			"CHILD_NOT_OWNED: workitem %q is not a child of %q", targetWorkitemID, callerWorkitemID)
+	default: // ChildAccessUnknown
+		// Session has no children -- can't determine. Allow through,
+		// but this case shouldn't happen for writes (you can't write to
+		// a child you haven't created).
+		slog.Warn("Sidecar: cross-Workitem write to unknown target (no local children)",
+			"parent_workitem_id", callerWorkitemID,
+			"target_workitem_id", targetWorkitemID,
+		)
+		return status.Errorf(codes.PermissionDenied,
+			"CHILD_NOT_OWNED: workitem %q is not a child of %q", targetWorkitemID, callerWorkitemID)
+	}
+}
+
 // StoreArtefact is the security boundary for artefact writes.
 //
 // The Sidecar:
-//  1. Receives content from the Node (SDK).
-//  2. Computes the SHA-256 hash of the raw bytes. Does NOT trust the node.
-//  3. Forwards to archivistClient.StoreArtefact with the computed hash.
+//  1. Validates cross-Workitem writes: if the request's workitem_id differs
+//     from the session's workitem_id, the target must be a known child.
+//  2. Receives content from the Node (SDK).
+//  3. Computes the SHA-256 hash of the raw bytes. Does NOT trust the node.
+//  4. Forwards to archivistClient.StoreArtefact with the computed hash.
 func (p *ArchivistProxy) StoreArtefact(
 	ctx context.Context, req *flowv1.StoreArtefactRequest,
 ) (*flowv1.StoreArtefactResponse, error) {
+	// Validate cross-Workitem writes: if the request targets a different
+	// workitem than the session's, it must be a known child.
+	if err := p.authorizeWorkitemWrite(ctx, req.GetWorkitemId()); err != nil {
+		return nil, err
+	}
+
 	outCtx := propagateMetadata(ctx)
 
 	// Security: compute the content hash server-side.
@@ -95,10 +209,16 @@ func (p *ArchivistProxy) StoreArtefact(
 	return resp, nil
 }
 
-// GetArtefact forwards to the Archivist (passthrough).
+// GetArtefact forwards to the Archivist. If target_workitem_id is set,
+// the Sidecar validates the cross-Workitem read against the session's
+// local child cache before forwarding.
 func (p *ArchivistProxy) GetArtefact(
 	ctx context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
+	if err := p.authorizeTargetWorkitem(ctx, req.GetTargetWorkitemId()); err != nil {
+		return nil, err
+	}
+
 	outCtx := propagateMetadata(ctx)
 
 	if targetID := req.GetTargetWorkitemId(); targetID != "" {
@@ -132,10 +252,16 @@ func (p *ArchivistProxy) GetArtefactMetadata(
 	return p.client.GetArtefactMetadata(outCtx, req)
 }
 
-// ListArtefacts forwards to the Archivist (passthrough).
+// ListArtefacts forwards to the Archivist. If target_workitem_id is set,
+// the Sidecar validates the cross-Workitem read against the session's
+// local child cache before forwarding.
 func (p *ArchivistProxy) ListArtefacts(
 	ctx context.Context, req *flowv1.ListArtefactsRequest,
 ) (*flowv1.ListArtefactsResponse, error) {
+	if err := p.authorizeTargetWorkitem(ctx, req.GetTargetWorkitemId()); err != nil {
+		return nil, err
+	}
+
 	outCtx := propagateMetadata(ctx)
 	if targetID := req.GetTargetWorkitemId(); targetID != "" {
 		slog.Info("Sidecar: forwarding ListArtefacts (cross-Workitem)",
