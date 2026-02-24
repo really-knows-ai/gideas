@@ -139,7 +139,7 @@ func main() {
 	// ArchivistService: proxy to real Archivist if address is set, otherwise mock.
 	var archivistCloser func() error
 	if archivistAddr != "" {
-		archivistProxy, err := proxy.NewArchivistProxy(archivistAddr)
+		archivistProxy, err := proxy.NewArchivistProxy(archivistAddr, sidecarSrv)
 		if err != nil {
 			slog.Error("Failed to connect to Archivist", "address", archivistAddr, "error", err)
 			os.Exit(1)
@@ -154,7 +154,9 @@ func main() {
 	}
 
 	// OperatorService is proxied to the real Operator.
-	operatorProxy, err := proxy.NewOperatorProxy(operatorAddr)
+	// The SidecarServer implements ChildTracker so the OperatorProxy can
+	// register child Workitem IDs in the session's local cache.
+	operatorProxy, err := proxy.NewOperatorProxy(operatorAddr, sidecarSrv)
 	if err != nil {
 		slog.Error("Failed to connect to Operator", "address", operatorAddr, "error", err)
 		os.Exit(1)

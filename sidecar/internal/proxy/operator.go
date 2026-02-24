@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -21,11 +22,18 @@ type OperatorProxy struct {
 	flowv1.UnimplementedOperatorServiceServer
 	client flowv1.OperatorServiceClient
 	conn   *grpc.ClientConn
+
+	// childTracker records child Workitem IDs created during the current
+	// session so the Sidecar can authorise cross-Workitem operations
+	// without an Operator round-trip. May be nil (child tracking disabled).
+	childTracker service.ChildTracker
 }
 
 // NewOperatorProxy dials the Operator gRPC endpoint and returns a proxy
 // handler ready to be registered on the Sidecar's gRPC server.
-func NewOperatorProxy(operatorAddr string) (*OperatorProxy, error) {
+// The childTracker, if non-nil, is notified when CreateChildWorkitem
+// succeeds so that the session can authorise cross-Workitem operations.
+func NewOperatorProxy(operatorAddr string, childTracker service.ChildTracker) (*OperatorProxy, error) {
 	conn, err := grpc.NewClient(
 		operatorAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -35,8 +43,9 @@ func NewOperatorProxy(operatorAddr string) (*OperatorProxy, error) {
 	}
 
 	return &OperatorProxy{
-		client: flowv1.NewOperatorServiceClient(conn),
-		conn:   conn,
+		client:       flowv1.NewOperatorServiceClient(conn),
+		conn:         conn,
+		childTracker: childTracker,
 	}, nil
 }
 
@@ -119,6 +128,79 @@ func (p *OperatorProxy) GetFlowTopology(
 	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding GetFlowTopology to Operator")
 	return p.client.GetFlowTopology(outCtx, req)
+}
+
+// ---------------------------------------------------------------------------
+// Child Workitem RPCs
+// ---------------------------------------------------------------------------
+
+// CreateChildWorkitem forwards to the Operator and, on success, records the
+// child Workitem ID in the session's local cache via the ChildTracker.
+// This enables the ArchivistProxy to authorise cross-Workitem operations
+// (e.g. StoreArtefact on a child) without an Operator round-trip.
+func (p *OperatorProxy) CreateChildWorkitem(
+	ctx context.Context, req *flowv1.CreateChildWorkitemRequest,
+) (*flowv1.CreateChildWorkitemResponse, error) {
+	outCtx := propagateMetadata(ctx)
+
+	slog.Info("Forwarding CreateChildWorkitem to Operator")
+
+	resp, err := p.client.CreateChildWorkitem(outCtx, req)
+	if err != nil {
+		slog.Error("CreateChildWorkitem forwarding failed", "error", err)
+		return nil, err
+	}
+
+	// Track the child in the session so the Sidecar can authorise
+	// cross-Workitem writes/reads without an Operator round-trip.
+	if p.childTracker != nil {
+		parentWorkitemID := extractWorkitemIDFromMD(ctx)
+		if parentWorkitemID != "" && resp.GetChildWorkitemId() != "" {
+			p.childTracker.TrackChild(parentWorkitemID, resp.GetChildWorkitemId())
+			slog.Info("Tracked child Workitem in session",
+				"parent_workitem_id", parentWorkitemID,
+				"child_workitem_id", resp.GetChildWorkitemId(),
+			)
+		}
+	}
+
+	return resp, nil
+}
+
+// RouteChild forwards to the Operator. The Operator validates parent-child
+// ownership and child state.
+func (p *OperatorProxy) RouteChild(
+	ctx context.Context, req *flowv1.RouteChildRequest,
+) (*flowv1.RouteChildResponse, error) {
+	outCtx := propagateMetadata(ctx)
+	slog.Info("Forwarding RouteChild to Operator",
+		"child_workitem_id", req.GetChildWorkitemId(),
+	)
+	return p.client.RouteChild(outCtx, req)
+}
+
+// GetChildren forwards to the Operator. The Operator queries children by
+// the parent label and returns their status.
+func (p *OperatorProxy) GetChildren(
+	ctx context.Context, req *flowv1.GetChildrenRequest,
+) (*flowv1.GetChildrenResponse, error) {
+	outCtx := propagateMetadata(ctx)
+	slog.Info("Forwarding GetChildren to Operator")
+	return p.client.GetChildren(outCtx, req)
+}
+
+// extractWorkitemIDFromMD reads the workitem ID from incoming gRPC metadata.
+// Returns empty string if not present.
+func extractWorkitemIDFromMD(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	vals := md.Get("x-flow-workitem-id")
+	if len(vals) == 0 {
+		return ""
+	}
+	return vals[0]
 }
 
 // propagateMetadata copies incoming gRPC metadata from the server context
