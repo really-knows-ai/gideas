@@ -761,3 +761,170 @@ func TestNowFunc_Override(t *testing.T) {
 		t.Fatalf("Expected fixed time, got %v", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Running phase: child-aware timeout enforcement
+// ---------------------------------------------------------------------------
+
+func TestRunning_WithNonTerminalChildren_SkipsTimeout(t *testing.T) {
+	flow := testFlow(100)
+	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
+
+	node := testNode("worker")
+	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+
+	// Assignment started 15 minutes ago — exceeds 10 minute timeout.
+	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
+	wi.Status.AssignedAt = &past
+
+	// Create a child Workitem that is still Running.
+	child := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-of-wi-1",
+			Namespace: "default",
+			Labels: map[string]string{
+				"flow.gideas.io/parent": testWorkitemName,
+				"flow.gideas.io/flow":   testFlowName,
+			},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Running",
+			CurrentAssignee:  "codify-smt",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+
+	r := testReconciler(flow, node, wi, child)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Should requeue at the child-check interval, NOT fail the workitem.
+	if result.RequeueAfter != childCheckInterval {
+		t.Fatalf("Expected RequeueAfter=%v (child check interval), got %v", childCheckInterval, result.RequeueAfter)
+	}
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != phaseRunning {
+		t.Fatalf("Expected phase %s (parent waiting for children), got %q", phaseRunning, fresh.Status.Phase)
+	}
+}
+
+func TestRunning_WithAllTerminalChildren_AppliesTimeout(t *testing.T) {
+	flow := testFlow(100)
+	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
+
+	node := testNode("worker")
+	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+
+	// Assignment started 15 minutes ago — exceeds 10 minute timeout.
+	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
+	wi.Status.AssignedAt = &past
+
+	// All children are terminal.
+	child1 := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-1-of-wi-1",
+			Namespace: "default",
+			Labels: map[string]string{
+				"flow.gideas.io/parent": testWorkitemName,
+				"flow.gideas.io/flow":   testFlowName,
+			},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Completed",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+	child2 := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-2-of-wi-1",
+			Namespace: "default",
+			Labels: map[string]string{
+				"flow.gideas.io/parent": testWorkitemName,
+				"flow.gideas.io/flow":   testFlowName,
+			},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Failed",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+
+	r := testReconciler(flow, node, wi, child1, child2)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	assertNoRequeue(t, result)
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != phaseFailed {
+		t.Fatalf("Expected phase %s (timeout applied — all children terminal), got %q", phaseFailed, fresh.Status.Phase)
+	}
+	if fresh.Status.FailureReason != reasonTimeoutExceeded {
+		t.Fatalf("Expected failure reason %s, got %q", reasonTimeoutExceeded, fresh.Status.FailureReason)
+	}
+}
+
+func TestRunning_WithMixedChildren_SkipsTimeout(t *testing.T) {
+	flow := testFlow(100)
+	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
+
+	node := testNode("worker")
+	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+
+	// Assignment started 15 minutes ago — exceeds 10 minute timeout.
+	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
+	wi.Status.AssignedAt = &past
+
+	// One child completed, one still pending.
+	childCompleted := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-done",
+			Namespace: "default",
+			Labels: map[string]string{
+				"flow.gideas.io/parent": testWorkitemName,
+				"flow.gideas.io/flow":   testFlowName,
+			},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Completed",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+	childPending := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-pending",
+			Namespace: "default",
+			Labels: map[string]string{
+				"flow.gideas.io/parent": testWorkitemName,
+				"flow.gideas.io/flow":   testFlowName,
+			},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Pending",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+
+	r := testReconciler(flow, node, wi, childCompleted, childPending)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Should skip timeout — one child still non-terminal.
+	if result.RequeueAfter != childCheckInterval {
+		t.Fatalf("Expected RequeueAfter=%v, got %v", childCheckInterval, result.RequeueAfter)
+	}
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != phaseRunning {
+		t.Fatalf("Expected phase %s (waiting for pending child), got %q", phaseRunning, fresh.Status.Phase)
+	}
+}
