@@ -13,11 +13,13 @@ bin/
 
 # Session plans and scratch files
 PLAN.md
+PLAN_PART*.md
 *_PLAN.md
 TODO.md
 REVIEW.md
 HITL_SORT.md
 SPEC_UPDATE.md
+RESTRUCTURE.md
 
 # Compiled Go binaries (built in-place by `go build`)
 /appraise

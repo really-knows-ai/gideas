@@ -279,6 +279,7 @@ The Law object is managed by the [Librarian](../02-flow/04-system-services.md#li
 | `goal` | `string` | yes | Plain-language statement of what the law enforces, stops, or ensures. The law's identity. |
 | `representations` | `[]Representation` | yes | One or more typed expressions of the goal. At least one representation is required. |
 | `tier` | `integer` | yes | Law tier: `1` (Finding), `2` (Ruling), `3` (Local Statute), `4` (State Constitution), `5` (Federal Accord). |
+| `division` | `string` | no | Governance division this law belongs to (e.g. `"security"`, `"architecture"`, `"style"`). Empty means unset — consumers treat unset as `"general"`. Used to partition laws for division-aware review fan-out. Changing a law's division produces a new version. |
 | `appliesTo` | `[]string` | no | Governed artefact names this law applies to. Empty means global — applies to all governed artefacts in the Flow. |
 
 ### Representation

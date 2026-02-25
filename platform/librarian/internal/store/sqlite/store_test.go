@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const testDivisionSecurity = "security"
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := New(":memory:")
@@ -389,11 +391,11 @@ func TestContentHash_Deterministic(t *testing.T) {
 	h1 := ComputeContentHash("goal", 1, []string{"b", "a"}, []Representation{
 		{Type: "text/plain", Content: "content"},
 		{Type: "application/rego", Content: "rule"},
-	})
+	}, testDivisionSecurity)
 	h2 := ComputeContentHash("goal", 1, []string{"a", "b"}, []Representation{
 		{Type: "application/rego", Content: "rule"},
 		{Type: "text/plain", Content: "content"},
-	})
+	}, testDivisionSecurity)
 
 	if h1 != h2 {
 		t.Fatalf("content hash should be deterministic regardless of field ordering, got %q and %q", h1, h2)
@@ -401,8 +403,8 @@ func TestContentHash_Deterministic(t *testing.T) {
 }
 
 func TestContentHash_DifferentContent(t *testing.T) {
-	h1 := ComputeContentHash("goal A", 1, nil, []Representation{{Type: "text/plain", Content: "a"}})
-	h2 := ComputeContentHash("goal B", 1, nil, []Representation{{Type: "text/plain", Content: "a"}})
+	h1 := ComputeContentHash("goal A", 1, nil, []Representation{{Type: "text/plain", Content: "a"}}, "")
+	h2 := ComputeContentHash("goal B", 1, nil, []Representation{{Type: "text/plain", Content: "a"}}, "")
 
 	if h1 == h2 {
 		t.Fatal("different goals should produce different hashes")
@@ -499,4 +501,192 @@ func TestGetLawsByScope(t *testing.T) {
 	if ids["law-s3"] {
 		t.Fatalf("law-s3 should not be included (no scope overlap)")
 	}
+}
+
+func TestDivision_Persistence(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	law := Law{
+		Goal:            "Security check",
+		Tier:            1,
+		Division:        testDivisionSecurity,
+		Representations: []Representation{{Type: "text/plain", Content: "check"}},
+	}
+
+	_, err := s.CreateLaw(ctx, "law-div", law)
+	if err != nil {
+		t.Fatalf("CreateLaw: %v", err)
+	}
+
+	got, err := s.GetLaw(ctx, "law-div")
+	if err != nil {
+		t.Fatalf("GetLaw: %v", err)
+	}
+	if got.Division != testDivisionSecurity {
+		t.Fatalf("expected division %q, got %q", testDivisionSecurity, got.Division)
+	}
+}
+
+func TestDivision_EmptyDefault(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	law := Law{
+		Goal:            "General rule",
+		Tier:            1,
+		Representations: []Representation{{Type: "text/plain", Content: "general"}},
+	}
+
+	_, err := s.CreateLaw(ctx, "law-nodiv", law)
+	if err != nil {
+		t.Fatalf("CreateLaw: %v", err)
+	}
+
+	got, err := s.GetLaw(ctx, "law-nodiv")
+	if err != nil {
+		t.Fatalf("GetLaw: %v", err)
+	}
+	if got.Division != "" {
+		t.Fatalf("expected empty division, got %q", got.Division)
+	}
+}
+
+func TestQueryLaws_DivisionFilter(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Security division.
+	if _, err := s.CreateLaw(ctx, "law-sec", Law{
+		Goal: "Security rule", Tier: 1, Division: testDivisionSecurity,
+		Representations: []Representation{{Type: "text/plain", Content: "s"}},
+	}); err != nil {
+		t.Fatalf("CreateLaw law-sec: %v", err)
+	}
+	// Architecture division.
+	if _, err := s.CreateLaw(ctx, "law-arch", Law{
+		Goal: "Architecture rule", Tier: 1, Division: "architecture",
+		Representations: []Representation{{Type: "text/plain", Content: "a"}},
+	}); err != nil {
+		t.Fatalf("CreateLaw law-arch: %v", err)
+	}
+	// No division (general).
+	if _, err := s.CreateLaw(ctx, "law-gen", Law{
+		Goal: "General rule", Tier: 1,
+		Representations: []Representation{{Type: "text/plain", Content: "g"}},
+	}); err != nil {
+		t.Fatalf("CreateLaw law-gen: %v", err)
+	}
+
+	// Filter by security division.
+	laws, err := s.QueryLaws(ctx, QueryFilter{Division: testDivisionSecurity})
+	if err != nil {
+		t.Fatalf("QueryLaws division=security: %v", err)
+	}
+	if len(laws) != 1 || laws[0].ID != "law-sec" {
+		t.Fatalf("expected [law-sec], got %v", lawIDs(laws))
+	}
+
+	// Empty division filter returns all.
+	laws, err = s.QueryLaws(ctx, QueryFilter{})
+	if err != nil {
+		t.Fatalf("QueryLaws no filter: %v", err)
+	}
+	if len(laws) != 3 {
+		t.Fatalf("expected 3 laws, got %d", len(laws))
+	}
+}
+
+func TestQueryLaws_DivisionWithArtefactFilter(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Security + scoped to source-code.
+	if _, err := s.CreateLaw(ctx, "law-ss", Law{
+		Goal: "Security scoped", Tier: 1, Division: testDivisionSecurity, AppliesTo: []string{"source-code"},
+		Representations: []Representation{{Type: "text/plain", Content: "ss"}},
+	}); err != nil {
+		t.Fatalf("CreateLaw law-ss: %v", err)
+	}
+	// Architecture + scoped to source-code.
+	if _, err := s.CreateLaw(ctx, "law-as", Law{
+		Goal: "Arch scoped", Tier: 1, Division: "architecture", AppliesTo: []string{"source-code"},
+		Representations: []Representation{{Type: "text/plain", Content: "as"}},
+	}); err != nil {
+		t.Fatalf("CreateLaw law-as: %v", err)
+	}
+	// Security + global.
+	if _, err := s.CreateLaw(ctx, "law-sg", Law{
+		Goal: "Security global", Tier: 1, Division: testDivisionSecurity,
+		Representations: []Representation{{Type: "text/plain", Content: "sg"}},
+	}); err != nil {
+		t.Fatalf("CreateLaw law-sg: %v", err)
+	}
+
+	// Filter: artefact=source-code + division=security.
+	laws, err := s.QueryLaws(ctx, QueryFilter{GovernedArtefact: "source-code", Division: testDivisionSecurity})
+	if err != nil {
+		t.Fatalf("QueryLaws: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, l := range laws {
+		ids[l.ID] = true
+	}
+	if len(ids) != 2 || !ids["law-ss"] || !ids["law-sg"] {
+		t.Fatalf("expected law-ss and law-sg, got %v", ids)
+	}
+}
+
+func TestContentHash_DivisionChangesHash(t *testing.T) {
+	h1 := ComputeContentHash("goal", 1, nil, []Representation{{Type: "text/plain", Content: "c"}}, "")
+	h2 := ComputeContentHash("goal", 1, nil, []Representation{{Type: "text/plain", Content: "c"}}, testDivisionSecurity)
+
+	if h1 == h2 {
+		t.Fatal("different divisions should produce different hashes")
+	}
+}
+
+func TestUpdateLaw_DivisionChange(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	law := Law{
+		Goal: "A rule", Tier: 1,
+		Representations: []Representation{{Type: "text/plain", Content: "r"}},
+	}
+	hash1, err := s.CreateLaw(ctx, "law-upd", law)
+	if err != nil {
+		t.Fatalf("CreateLaw: %v", err)
+	}
+
+	// Change only division.
+	law.Division = testDivisionSecurity
+	hash2, err := s.UpdateLaw(ctx, "law-upd", law)
+	if err != nil {
+		t.Fatalf("UpdateLaw: %v", err)
+	}
+
+	if hash1 == hash2 {
+		t.Fatal("changing division should produce a new version hash")
+	}
+
+	got, err := s.GetLaw(ctx, "law-upd")
+	if err != nil {
+		t.Fatalf("GetLaw: %v", err)
+	}
+	if got.Division != testDivisionSecurity {
+		t.Fatalf("expected division %q, got %q", testDivisionSecurity, got.Division)
+	}
+	if got.VersionHash != hash2 {
+		t.Fatalf("expected head hash %q, got %q", hash2, got.VersionHash)
+	}
+}
+
+// lawIDs is a test helper that extracts IDs from a slice of laws.
+func lawIDs(laws []Law) []string {
+	ids := make([]string, len(laws))
+	for i, l := range laws {
+		ids[i] = l.ID
+	}
+	return ids
 }

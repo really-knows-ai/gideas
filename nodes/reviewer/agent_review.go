@@ -1,12 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"text/template"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -19,7 +20,7 @@ import (
 // produces zero or more new feedback observations.
 type ReviewAgent struct {
 	agent *flow.Agent
-	cfg   *appraiseConfig
+	cfg   *reviewerConfig
 }
 
 // reviewOutput is the Go representation of the reviewSchema-validated JSON.
@@ -62,6 +63,7 @@ var reviewSchema = []byte(`{
 type reviewSystemData struct {
 	ReviewArtefact string
 	InputArtefact  string
+	DivisionSuffix string
 }
 
 //nolint:lll // Prompt template — readability favors keeping the template intact.
@@ -77,7 +79,11 @@ Each feedback item must include a severity level:
 - "low": Minor style or preference issue
 - "medium": Quality issue that should be addressed
 - "high": Functional or structural concern
-- "critical": Blocking issue`
+- "critical": Blocking issue
+{{- if .DivisionSuffix}}
+
+{{.DivisionSuffix}}
+{{- end}}`
 
 //nolint:lll // Prompt template — readability favors keeping the template intact.
 const reviewQueryPromptTemplate = `## THE {{.InputArtefactUpper}}
@@ -159,20 +165,42 @@ type reviewTemplateQueryData struct {
 	ExampleLawID        string
 }
 
-// NewReviewAgent creates a ReviewAgent with the given client and config.
-// The model (KimiK2Ollama) is created internally — model choice is a
-// code-time decision, not deploy-time config.
-func NewReviewAgent(client *flow.Client, cfg *appraiseConfig) (*ReviewAgent, error) {
+// NewReviewAgent creates a ReviewAgent with the given client, config, and
+// optional division prompt suffix. The model (KimiK2Ollama) is created
+// internally — model choice is a code-time decision, not deploy-time config.
+func NewReviewAgent(client *flow.Client, cfg *reviewerConfig, divisionPromptSuffix string) (*ReviewAgent, error) {
 	sysData := reviewSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
 		InputArtefact:  cfg.InputArtefact,
+		DivisionSuffix: divisionPromptSuffix,
 	}
 
-	agent, err := buildAgent(client, "review agent",
-		reviewSystemPromptTemplate, sysData,
-		reviewQueryPromptTemplate, reviewSchema)
+	// 1. Render system prompt with config + division suffix.
+	sysTmpl, err := template.New("system").Parse(reviewSystemPromptTemplate)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("review agent: parse system template: %w", err)
+	}
+
+	var sysBuf bytes.Buffer
+	if err := sysTmpl.Execute(&sysBuf, sysData); err != nil {
+		return nil, fmt.Errorf("review agent: render system prompt: %w", err)
+	}
+
+	// 2. Parse query template.
+	queryTmpl, err := template.New("query").Parse(reviewQueryPromptTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("review agent: parse query template: %w", err)
+	}
+
+	// 3. Create flow.Agent with schema, model, prompts.
+	agent, err := flow.NewAgent(client,
+		flow.WithSchema(reviewSchema),
+		flow.WithModel(flow.NewKimiK2Ollama()),
+		flow.WithSystemPrompt(sysBuf.String()),
+		flow.WithQueryTemplate(queryTmpl),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("review agent: create agent: %w", err)
 	}
 
 	return &ReviewAgent{agent: agent, cfg: cfg}, nil
@@ -182,31 +210,30 @@ func NewReviewAgent(client *flow.Client, cfg *appraiseConfig) (*ReviewAgent, err
 func (r *ReviewAgent) Run(
 	ctx context.Context,
 	inputContent, reviewContent string,
-	laws []*flowv1.Law,
-	existingFeedback []*flowv1.FeedbackItem,
+	laws []lawData,
+	history []historyData,
 ) (*reviewOutput, error) {
 	// Build law block.
 	var lawBlock strings.Builder
 	if len(laws) > 0 {
 		for _, law := range laws {
 			fmt.Fprintf(&lawBlock, "- [%s] (Tier %d): %s\n",
-				law.GetId(), law.GetTier(), law.GetGoal())
+				law.ID, law.Tier, law.Goal)
 		}
 	}
 
 	// Build history block.
 	var historyBlock strings.Builder
-	if len(existingFeedback) > 0 {
-		for _, fb := range existingFeedback {
-			fmt.Fprintf(&historyBlock, "- [%s] %s\n",
-				fb.GetState().String(), fb.GetMessage())
+	if len(history) > 0 {
+		for _, h := range history {
+			fmt.Fprintf(&historyBlock, "- [%s] %s\n", h.State, h.Message)
 		}
 	}
 
 	// Pick example law ID.
 	exampleLawID := "example-law-id"
 	if len(laws) > 0 {
-		exampleLawID = laws[0].GetId()
+		exampleLawID = laws[0].ID
 	}
 
 	data := reviewTemplateQueryData{

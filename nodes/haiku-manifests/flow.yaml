@@ -7,6 +7,7 @@
 # Topology:
 #   Forge ──[default]──→ Sort ──[quench]──→ Quench ──[default]──→ Sort
 #                         │──[appraise]──→ Appraise ──[default]──→ Sort
+#                         │                  └──[fan-out]──→ Reviewer(s) ──[Complete]──┘
 #                         │──[refine]────→ Refine ──[default]───→ Sort
 #                         └──Complete() (exit)
 #
@@ -19,6 +20,7 @@
 # Artefacts:
 #   - petition: The creative brief, pre-populated at workitem creation.
 #   - haiku: The governed output, must carry [linter, review, approval].
+#   - review-data: Internal data transfer between Appraise and Reviewer children.
 #
 # Apply order:
 #   1. kubectl apply -f flow.yaml          (this file)
@@ -43,6 +45,16 @@ apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
 metadata:
   name: petition
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: review-data
   namespace: default
   labels:
     app.kubernetes.io/part-of: haiku-flow
@@ -153,6 +165,22 @@ spec:
     - "READ:law"
     - "WRITE:feedback/new"
     - "STAMP:artefact/haiku/review"
+    - "CREATE:workitem/child"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: reviewer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: reviewer:latest
+  outputs: []
+  capabilities:
+    - "READ:artefact/review-data"
+    - "WRITE:artefact/review-data"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode

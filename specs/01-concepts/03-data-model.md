@@ -393,6 +393,14 @@ Tiers 4 and 5 arrive from above. A standalone Flow has no Tiers 4 or 5 — they 
 
 The full integration protocol — how higher-tier laws are pushed to Flows, how conflicts are detected and resolved, and how escalation works across tiers — is covered in [Governance](./04-governance.md).
 
+### Division
+
+Each law carries an optional `division` field — a string identifying the governance division the law belongs to (e.g. `"security"`, `"architecture"`, `"style"`). An empty division means unset; consumers treat unset laws as belonging to the `"general"` division. The semantic default is applied by consumers, not the CRD.
+
+Divisions enable division-aware review fan-out: a review orchestrator (such as [Appraise](./02-foundry-cycle.md#appraise-reviewer)) groups laws by division and delegates per-division review to child nodes, each with a division-specific prompt context. The [Librarian](../02-flow/04-system-services.md) supports querying laws by division via `LawFilter`.
+
+Changing a law's division produces a new version (the content hash includes the division field).
+
 ### Scoping
 
 Each law carries an `appliesTo` scope — a list of zero or more governed artefact names. A law with `appliesTo: ["haiku"]` governs haiku artefacts. A law with `appliesTo: ["haiku", "sonnet"]` governs both. An empty `appliesTo` means the law is global and applies to all governed artefacts in the Flow.

@@ -52,6 +52,24 @@ data:
     reviewArtefact: "haiku"
     governedArtefact: "haiku"
     stampName: "review"
+    reviewerNode: "reviewer"
+    divisionPrompts:
+      security: "Pay special attention to information disclosure and injection risks."
+      architecture: "Focus on structural patterns, separation of concerns, and maintainability."
+      style: "Evaluate adherence to style guides, naming conventions, and consistency."
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reviewer-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: reviewer
+    app.kubernetes.io/part-of: haiku-flow
+data:
+  node-config.yaml: |
+    inputArtefact: "input"
+    reviewArtefact: "review"
 ---
 apiVersion: v1
 kind: ConfigMap
