@@ -284,18 +284,17 @@ func defaultTestConfig() *appraiseConfig {
 		ReviewArtefact:   "haiku",
 		GovernedArtefact: "haiku",
 		StampName:        "review",
-		Model:            "test-model",
 	}
 }
 
-// mockProvider implements flow.Provider for test isolation.
-type mockProvider struct {
+// mockModel implements flow.Model for test isolation.
+// It supports both single-call and multi-call (parallel) test patterns.
+type mockModel struct {
 	mu sync.Mutex
 
 	output *flow.InferOutput
 	err    error
 
-	capturedModel  string
 	capturedSystem string
 	capturedQuery  []byte
 
@@ -304,12 +303,11 @@ type mockProvider struct {
 	callIdx int
 }
 
-func (m *mockProvider) Infer(
-	_ context.Context, model, systemPrompt string, queryPrompt []byte,
+func (m *mockModel) Infer(
+	_ context.Context, systemPrompt string, queryPrompt []byte,
 ) (*flow.InferOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.capturedModel = model
 	m.capturedSystem = systemPrompt
 	m.capturedQuery = queryPrompt
 

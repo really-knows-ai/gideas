@@ -10,39 +10,37 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Mock Provider for forge tests
+// Mock Model for forge tests
 // ---------------------------------------------------------------------------
 
-type mockProvider struct {
+type mockModel struct {
 	output *flow.InferOutput
 	err    error
 
-	capturedModel  string
 	capturedSystem string
 	capturedQuery  []byte
 }
 
-func (m *mockProvider) Infer(
-	_ context.Context, model, systemPrompt string, queryPrompt []byte,
+func (m *mockModel) Infer(
+	_ context.Context, systemPrompt string, queryPrompt []byte,
 ) (*flow.InferOutput, error) {
-	m.capturedModel = model
 	m.capturedSystem = systemPrompt
 	m.capturedQuery = queryPrompt
 	return m.output, m.err
 }
 
 // ---------------------------------------------------------------------------
-// Test helper — creates a ForgeAgent with a mock provider
+// Test helper — creates a ForgeAgent with a mock model
 // ---------------------------------------------------------------------------
 
-func newTestForgeAgent(t *testing.T, mp *mockProvider, cfg *forgeConfig) *ForgeAgent {
+func newTestForgeAgent(t *testing.T, mm *mockModel, cfg *forgeConfig) *ForgeAgent {
 	t.Helper()
 	client := newSpyClient(t)
-	model := flow.NewModel(cfg.Model, mp)
-	agent, err := NewForgeAgent(client, model, cfg)
+	agent, err := NewForgeAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewForgeAgent() failed: %v", err)
 	}
+	flow.OverrideModelForTest(agent.agent, mm)
 	return agent
 }
 
@@ -51,7 +49,6 @@ func defaultTestConfig() *forgeConfig {
 		InputArtefact:    "petition",
 		OutputArtefact:   "haiku",
 		GovernedArtefact: "haiku",
-		Model:            "test-model",
 		OutputField:      "haiku",
 	}
 }
@@ -62,7 +59,7 @@ func defaultTestConfig() *forgeConfig {
 
 func TestForgeAgent_ValidOutput(t *testing.T) {
 	cfg := defaultTestConfig()
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"haiku": "autumn moonlight\na worm digs silently\ninto the chestnut"}`),
 			Cost: &flow.CostMetadata{
@@ -74,7 +71,7 @@ func TestForgeAgent_ValidOutput(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	result, err := agent.Run(context.Background(), "write a haiku about autumn", nil)
 	if err != nil {
@@ -89,7 +86,7 @@ func TestForgeAgent_ValidOutput(t *testing.T) {
 
 func TestForgeAgent_RejectsEmptyOutput(t *testing.T) {
 	cfg := defaultTestConfig()
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"haiku": ""}`),
 			Cost: &flow.CostMetadata{
@@ -101,7 +98,7 @@ func TestForgeAgent_RejectsEmptyOutput(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err == nil {
@@ -114,7 +111,7 @@ func TestForgeAgent_RejectsEmptyOutput(t *testing.T) {
 
 func TestForgeAgent_RejectsMissingField(t *testing.T) {
 	cfg := defaultTestConfig()
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"poem": "not a haiku"}`),
 			Cost: &flow.CostMetadata{
@@ -126,7 +123,7 @@ func TestForgeAgent_RejectsMissingField(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err == nil {
@@ -136,7 +133,7 @@ func TestForgeAgent_RejectsMissingField(t *testing.T) {
 
 func TestForgeAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku", "extra": "not allowed"}`),
 			Cost: &flow.CostMetadata{
@@ -148,7 +145,7 @@ func TestForgeAgent_RejectsAdditionalProperties(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err == nil {
@@ -165,11 +162,10 @@ func TestForgeAgent_CustomOutputField(t *testing.T) {
 		InputArtefact:    "petition",
 		OutputArtefact:   "document",
 		GovernedArtefact: "document",
-		Model:            "test-model",
 		OutputField:      "document",
 	}
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"document": "generated document content"}`),
 			Cost: &flow.CostMetadata{
@@ -181,7 +177,7 @@ func TestForgeAgent_CustomOutputField(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	result, err := agent.Run(context.Background(), "write a document", nil)
 	if err != nil {
@@ -198,7 +194,7 @@ func TestForgeAgent_CustomOutputField(t *testing.T) {
 
 func TestForgeAgent_PromptContainsInput(t *testing.T) {
 	cfg := defaultTestConfig()
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &flow.CostMetadata{
@@ -210,7 +206,7 @@ func TestForgeAgent_PromptContainsInput(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	_, err := agent.Run(context.Background(), "write about autumn leaves", nil)
 	if err != nil {
@@ -218,14 +214,14 @@ func TestForgeAgent_PromptContainsInput(t *testing.T) {
 	}
 
 	// Verify the query prompt contains the input.
-	if !strings.Contains(string(mp.capturedQuery), "write about autumn leaves") {
-		t.Fatalf("query prompt should contain input, got: %s", mp.capturedQuery)
+	if !strings.Contains(string(mm.capturedQuery), "write about autumn leaves") {
+		t.Fatalf("query prompt should contain input, got: %s", mm.capturedQuery)
 	}
 }
 
 func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 	cfg := defaultTestConfig()
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &flow.CostMetadata{
@@ -237,7 +233,7 @@ func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	laws := []*flowv1.Law{
 		{Goal: "The haiku must evoke a season"},
@@ -250,7 +246,7 @@ func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 	}
 
 	// Verify the query prompt contains the laws.
-	query := string(mp.capturedQuery)
+	query := string(mm.capturedQuery)
 	if !strings.Contains(query, "The haiku must evoke a season") {
 		t.Fatalf("query prompt should contain first law, got: %s", query)
 	}
@@ -261,7 +257,7 @@ func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 
 func TestForgeAgent_SystemPromptContainsOutputField(t *testing.T) {
 	cfg := defaultTestConfig()
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &flow.CostMetadata{
@@ -273,7 +269,7 @@ func TestForgeAgent_SystemPromptContainsOutputField(t *testing.T) {
 		},
 	}
 
-	agent := newTestForgeAgent(t, mp, cfg)
+	agent := newTestForgeAgent(t, mm, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err != nil {
@@ -281,41 +277,8 @@ func TestForgeAgent_SystemPromptContainsOutputField(t *testing.T) {
 	}
 
 	// Verify the system prompt references the output field.
-	if !strings.Contains(mp.capturedSystem, `"haiku"`) {
-		t.Fatalf("system prompt should contain output field name, got: %s", mp.capturedSystem)
-	}
-}
-
-func TestForgeAgent_ModelPassedToProvider(t *testing.T) {
-	cfg := &forgeConfig{
-		InputArtefact:    "petition",
-		OutputArtefact:   "haiku",
-		GovernedArtefact: "haiku",
-		Model:            "custom-model-v2",
-		OutputField:      "haiku",
-	}
-
-	mp := &mockProvider{
-		output: &flow.InferOutput{
-			Output: []byte(`{"haiku": "test haiku"}`),
-			Cost: &flow.CostMetadata{
-				Model:        "custom-model-v2",
-				InputTokens:  10,
-				OutputTokens: 5,
-				DurationMs:   100,
-			},
-		},
-	}
-
-	agent := newTestForgeAgent(t, mp, cfg)
-
-	_, err := agent.Run(context.Background(), "write a haiku", nil)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
-
-	if mp.capturedModel != "custom-model-v2" {
-		t.Fatalf("expected model 'custom-model-v2', got %q", mp.capturedModel)
+	if !strings.Contains(mm.capturedSystem, `"haiku"`) {
+		t.Fatalf("system prompt should contain output field name, got: %s", mm.capturedSystem)
 	}
 }
 

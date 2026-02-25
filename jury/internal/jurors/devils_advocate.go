@@ -26,11 +26,10 @@ Your judicial philosophy:
 
 Evaluate the evidence and question presented to you. Vote for the outcome that you believe would survive the strongest possible scrutiny, even if it goes against the apparent consensus.`
 
-// NewDevilsAdvocate creates a Devil's Advocate juror with the given model and
-// shared schema/template. If systemPrompt is empty, the default is used.
+// NewDevilsAdvocate creates a Devil's Advocate juror with the shared
+// schema/template. If systemPrompt is empty, the default is used.
 func NewDevilsAdvocate(
 	client *flow.Client,
-	model *flow.Model,
 	systemPrompt string,
 	schemaBytes []byte,
 	queryTmpl *template.Template,
@@ -38,7 +37,7 @@ func NewDevilsAdvocate(
 	if systemPrompt == "" {
 		systemPrompt = DefaultDevilsAdvocatePrompt
 	}
-	base, err := NewBaseJuror("devils-advocate", client, model, systemPrompt, schemaBytes, queryTmpl)
+	base, err := NewBaseJuror("devils-advocate", client, systemPrompt, schemaBytes, queryTmpl)
 	if err != nil {
 		return nil, err
 	}

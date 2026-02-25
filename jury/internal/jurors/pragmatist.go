@@ -26,11 +26,10 @@ Your judicial philosophy:
 
 Evaluate the evidence and question presented to you. Vote for the outcome that is most practical and cost-effective.`
 
-// NewPragmatist creates a Pragmatist juror with the given model and shared
-// schema/template. If systemPrompt is empty, the default is used.
+// NewPragmatist creates a Pragmatist juror with the shared schema/template.
+// If systemPrompt is empty, the default is used.
 func NewPragmatist(
 	client *flow.Client,
-	model *flow.Model,
 	systemPrompt string,
 	schemaBytes []byte,
 	queryTmpl *template.Template,
@@ -38,7 +37,7 @@ func NewPragmatist(
 	if systemPrompt == "" {
 		systemPrompt = DefaultPragmatistPrompt
 	}
-	base, err := NewBaseJuror("pragmatist", client, model, systemPrompt, schemaBytes, queryTmpl)
+	base, err := NewBaseJuror("pragmatist", client, systemPrompt, schemaBytes, queryTmpl)
 	if err != nil {
 		return nil, err
 	}

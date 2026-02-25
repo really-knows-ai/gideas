@@ -17,7 +17,7 @@ import (
 const maxJurorTypes = 5
 
 // JurorFactory constructs jurors for a deliberation. It abstracts over the
-// construction details (Client, Model, Provider) so the server can be tested
+// construction details (Client, Provider) so the server can be tested
 // with mock jurors.
 type JurorFactory interface {
 	// BuildPanel constructs a diverse panel of jurors for the given
@@ -140,15 +140,15 @@ type JurorConfig struct {
 }
 
 // DefaultFactory constructs real jurors backed by flow.Agent instances.
-// Each juror uses the same Provider/Model but has a distinct system prompt.
+// Each juror creates its own model internally (KimiK2Ollama) with a distinct
+// system prompt.
 type DefaultFactory struct {
 	client  *flow.Client
-	model   *flow.Model
 	prompts map[string]string // juror type -> optional system prompt override
 }
 
 // NewDefaultFactory creates a production juror factory.
-func NewDefaultFactory(client *flow.Client, model *flow.Model, configs []JurorConfig) *DefaultFactory {
+func NewDefaultFactory(client *flow.Client, configs []JurorConfig) *DefaultFactory {
 	prompts := make(map[string]string)
 	for _, cfg := range configs {
 		if cfg.SystemPrompt != "" {
@@ -157,7 +157,6 @@ func NewDefaultFactory(client *flow.Client, model *flow.Model, configs []JurorCo
 	}
 	return &DefaultFactory{
 		client:  client,
-		model:   model,
 		prompts: prompts,
 	}
 }
@@ -198,15 +197,15 @@ func (f *DefaultFactory) createJuror(
 ) (jurors.Juror, error) {
 	switch typeName {
 	case "textualist":
-		return jurors.NewTextualist(f.client, f.model, systemPrompt, schemaBytes, queryTmpl)
+		return jurors.NewTextualist(f.client, systemPrompt, schemaBytes, queryTmpl)
 	case "pragmatist":
-		return jurors.NewPragmatist(f.client, f.model, systemPrompt, schemaBytes, queryTmpl)
+		return jurors.NewPragmatist(f.client, systemPrompt, schemaBytes, queryTmpl)
 	case "conservator":
-		return jurors.NewConservator(f.client, f.model, systemPrompt, schemaBytes, queryTmpl)
+		return jurors.NewConservator(f.client, systemPrompt, schemaBytes, queryTmpl)
 	case "reformer":
-		return jurors.NewReformer(f.client, f.model, systemPrompt, schemaBytes, queryTmpl)
+		return jurors.NewReformer(f.client, systemPrompt, schemaBytes, queryTmpl)
 	case "devils-advocate":
-		return jurors.NewDevilsAdvocate(f.client, f.model, systemPrompt, schemaBytes, queryTmpl)
+		return jurors.NewDevilsAdvocate(f.client, systemPrompt, schemaBytes, queryTmpl)
 	default:
 		return nil, fmt.Errorf("unknown juror type: %s", typeName)
 	}

@@ -69,10 +69,10 @@ func setupGRPCTestEnvWithEventBus(
 	workitemID string,
 	registerServices func(srv *grpc.Server),
 	registerEventBus func(srv *grpc.Server),
-) (*Client, *grpc.Server, *grpc.Server) {
+) *Client {
 	t.Helper()
 
-	client, srv := setupGRPCTestEnv(t, workitemID, registerServices)
+	client, _ := setupGRPCTestEnv(t, workitemID, registerServices)
 
 	// Set up a separate bufconn for the Event Bus.
 	ebLis := bufconn.Listen(bufSize)
@@ -102,5 +102,5 @@ func setupGRPCTestEnvWithEventBus(
 		ebSrv.GracefulStop()
 	})
 
-	return client, srv, ebSrv
+	return client
 }

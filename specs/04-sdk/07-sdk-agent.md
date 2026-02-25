@@ -85,6 +85,75 @@ FoundryAgent handles steps 2, 4, and 5 from the raw handler list automatically. 
 
 Multiple inference steps within a single assignment are supported. Each step independently emits a `foundry.cost.llm` event and resets the heartbeat timer. A handler that chains multiple LLM calls (e.g. generate, self-critique, revise) emits one cost event per call, preserving per-step accounting granularity.
 
+## Model and Provider Architecture
+
+### Model Interface
+
+FoundryAgent performs inference through a `Model` — a single-method interface that encapsulates both the model identity and the transport backend:
+
+```go
+type Model interface {
+    Infer(ctx context.Context, systemPrompt string, queryPrompt []byte) (*InferOutput, error)
+}
+```
+
+`Model` is the sole abstraction the developer interacts with for inference. There is no separate provider interface, no model ID parameter, and no deploy-time model selection. The model choice is a code-time decision — prompts are intrinsically coupled to the model they were built and tested with.
+
+### Concrete Model Types
+
+Each supported model is a concrete type whose name encodes both the model and the provider backend that serves it:
+
+| Type | Model ID | Provider |
+|------|----------|----------|
+| `GptOss120bOllama` | `gpt-oss:120b-cloud` | Ollama |
+| `KimiK2Ollama` | `kimi-k2.5:cloud` | Ollama |
+
+Construction is a zero-argument call. Infrastructure configuration (endpoint URLs, timeouts) is handled internally by the provider via environment variables:
+
+```go
+model := flow.NewGptOss120bOllama()
+model := flow.NewKimiK2Ollama()
+```
+
+The naming convention is `{Model}{Provider}`. The same underlying model served by different providers (e.g. Ollama vs OpenRouter) would be distinct types — different providers have different cost profiles, API behaviours, and prompt formatting requirements.
+
+### Provider Encapsulation
+
+The provider layer is fully internal to the SDK. Consumers never see, create, or configure providers directly. Each concrete model type creates and owns its provider instance. The `provider` interface and its implementations are unexported.
+
+This encapsulation means:
+
+- **No provider wiring in node code** — nodes do not call `NewOllamaProvider()` or pass providers to constructors. The concrete model type handles this internally.
+- **No model ID in configuration** — the model identifier is hardcoded in the concrete type, not read from ConfigMaps or environment variables. Model selection is a source code decision validated at compile time.
+- **Cost metadata flows from the provider** — `CostMetadata.Model` (populated by the provider at inference time) carries the model identity at runtime. There is no `ID()` method on the `Model` interface because this would be redundant with the provider-sourced cost data.
+
+### Model Ownership in Agents
+
+Concrete agents create their model internally during construction. The caller never supplies or sees the model:
+
+```go
+// Inside a concrete agent constructor:
+func NewForgeAgent(...) *ForgeAgent {
+    agent := flow.NewAgent(
+        flow.WithModel(flow.NewGptOss120bOllama()),
+        // ...
+    )
+    return &ForgeAgent{agent: agent}
+}
+```
+
+This keeps the model choice co-located with the prompts that depend on it. Changing the model requires changing the agent code — which is correct, because the prompts would need updating too.
+
+### Test Injection
+
+Tests replace the model after construction using the exported escape hatch:
+
+```go
+flow.OverrideModelForTest(agent.agent, mockModel)
+```
+
+`OverrideModelForTest` is named to make misuse in production code obvious. It sets the model on an `Agent` instance directly. The function is exported for cross-package test access while the `model` field on `Agent` remains unexported.
+
 ## When to Use FoundryAgent
 
 **Recommended for:**
@@ -127,3 +196,4 @@ Parallel juror execution is managed by the Jury service internally. Each juror's
 5. The `Infer` method is the sole developer extension point. Heartbeat, validation, and cost accounting are wrapper-managed.
 6. Multiple inference steps within a single assignment are independently accounted and heartbeat-managed.
 7. Jury service jurors are FoundryAgent instances. Per-juror cost attribution is automatic through telemetry tags.
+8. Model selection is a code-time decision. Concrete agents create their model internally. The provider layer is unexported and invisible to consumers.

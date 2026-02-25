@@ -72,8 +72,10 @@ func forgeOutputSchema(outputField string) []byte {
 	return b
 }
 
-// NewForgeAgent creates a ForgeAgent with the given client, model, and config.
-func NewForgeAgent(client *flow.Client, model *flow.Model, cfg *forgeConfig) (*ForgeAgent, error) {
+// NewForgeAgent creates a ForgeAgent with the given client and config.
+// The model (GptOss120bOllama) is created internally — model choice is a
+// code-time decision, not configuration.
+func NewForgeAgent(client *flow.Client, cfg *forgeConfig) (*ForgeAgent, error) {
 	// 1. Render system prompt with config params.
 	sysTmpl, err := template.New("system").Parse(forgeSystemPromptTemplate)
 	if err != nil {
@@ -102,7 +104,7 @@ func NewForgeAgent(client *flow.Client, model *flow.Model, cfg *forgeConfig) (*F
 	// 4. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(model),
+		flow.WithModel(flow.NewGptOss120bOllama()),
 		flow.WithSystemPrompt(systemPrompt),
 		flow.WithQueryTemplate(queryTmpl),
 	)

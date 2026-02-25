@@ -102,9 +102,9 @@ type revisionTemplateQueryData struct {
 	Fixes               string
 }
 
-// NewRevisionAgent creates a RevisionAgent with the given client, model,
-// and config.
-func NewRevisionAgent(client *flow.Client, model *flow.Model, cfg *refineConfig) (*RevisionAgent, error) {
+// NewRevisionAgent creates a RevisionAgent with the given client and config.
+// The model (GptOss120bOllama) is created internally by buildAgent.
+func NewRevisionAgent(client *flow.Client, cfg *refineConfig) (*RevisionAgent, error) {
 	sysData := revisionSystemData{
 		OutputArtefact: cfg.OutputArtefact,
 		OutputField:    cfg.OutputField,
@@ -112,7 +112,7 @@ func NewRevisionAgent(client *flow.Client, model *flow.Model, cfg *refineConfig)
 
 	schema := revisionOutputSchema(cfg.OutputField)
 
-	agent, err := buildAgent(client, model, "revision agent",
+	agent, err := buildAgent(client, "revision agent",
 		revisionSystemPromptTemplate, sysData,
 		revisionQueryPromptTemplate, schema)
 	if err != nil {

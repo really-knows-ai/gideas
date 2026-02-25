@@ -26,11 +26,10 @@ Your judicial philosophy:
 
 Evaluate the evidence and question presented to you. Vote for the outcome that is most supported by the explicit rules and citations provided.`
 
-// NewTextualist creates a Textualist juror with the given model and shared
-// schema/template. If systemPrompt is empty, the default is used.
+// NewTextualist creates a Textualist juror with the shared schema/template.
+// If systemPrompt is empty, the default is used.
 func NewTextualist(
 	client *flow.Client,
-	model *flow.Model,
 	systemPrompt string,
 	schemaBytes []byte,
 	queryTmpl *template.Template,
@@ -38,7 +37,7 @@ func NewTextualist(
 	if systemPrompt == "" {
 		systemPrompt = DefaultTextualistPrompt
 	}
-	base, err := NewBaseJuror("textualist", client, model, systemPrompt, schemaBytes, queryTmpl)
+	base, err := NewBaseJuror("textualist", client, systemPrompt, schemaBytes, queryTmpl)
 	if err != nil {
 		return nil, err
 	}

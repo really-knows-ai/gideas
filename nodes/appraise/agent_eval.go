@@ -94,14 +94,16 @@ type evalTemplateQueryData struct {
 	KindInstruction  string
 }
 
-// NewEvalAgent creates an EvalAgent with the given client, model, and config.
-func NewEvalAgent(client *flow.Client, model *flow.Model, cfg *appraiseConfig) (*EvalAgent, error) {
+// NewEvalAgent creates an EvalAgent with the given client and config.
+// The model (KimiK2Ollama) is created internally — model choice is a
+// code-time decision, not deploy-time config.
+func NewEvalAgent(client *flow.Client, cfg *appraiseConfig) (*EvalAgent, error) {
 	sysData := evalSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
 		InputArtefact:  cfg.InputArtefact,
 	}
 
-	agent, err := buildAgent(client, model, "eval agent",
+	agent, err := buildAgent(client, "eval agent",
 		evalSystemPromptTemplate, sysData,
 		evalQueryPromptTemplate, evalSchema)
 	if err != nil {

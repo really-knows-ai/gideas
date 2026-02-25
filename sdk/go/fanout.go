@@ -203,7 +203,7 @@ func (c *Client) CollectArtefacts(
 ) ([]ChildResult, error) {
 	// Check for any failed children first.
 	for _, ch := range children {
-		if ch.Phase == "Failed" {
+		if ch.Phase == PhaseFailed {
 			return nil, fmt.Errorf("flow sdk: collect artefacts: child %s is in Failed phase", ch.WorkitemID)
 		}
 	}
@@ -249,5 +249,5 @@ func allTerminal(children []ChildWorkitemStatus) bool {
 }
 
 func isTerminalPhase(phase string) bool {
-	return phase == "Completed" || phase == "Failed"
+	return phase == PhaseCompleted || phase == PhaseFailed
 }

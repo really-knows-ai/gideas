@@ -26,11 +26,10 @@ Your judicial philosophy:
 
 Evaluate the evidence and question presented to you. Vote for the outcome that best advances improvement and evolution of the governance system.`
 
-// NewReformer creates a Reformer juror with the given model and shared
-// schema/template. If systemPrompt is empty, the default is used.
+// NewReformer creates a Reformer juror with the shared schema/template.
+// If systemPrompt is empty, the default is used.
 func NewReformer(
 	client *flow.Client,
-	model *flow.Model,
 	systemPrompt string,
 	schemaBytes []byte,
 	queryTmpl *template.Template,
@@ -38,7 +37,7 @@ func NewReformer(
 	if systemPrompt == "" {
 		systemPrompt = DefaultReformerPrompt
 	}
-	base, err := NewBaseJuror("reformer", client, model, systemPrompt, schemaBytes, queryTmpl)
+	base, err := NewBaseJuror("reformer", client, systemPrompt, schemaBytes, queryTmpl)
 	if err != nil {
 		return nil, err
 	}

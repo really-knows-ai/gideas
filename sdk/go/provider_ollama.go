@@ -18,48 +18,48 @@ const (
 	ollamaDefaultTimeout = 5 * time.Minute
 )
 
-// OllamaProvider implements Provider for Ollama's /api/generate endpoint.
+// ollamaProvider implements provider for Ollama's /api/generate endpoint.
 //
 // It concatenates the system prompt and query prompt into a single prompt
 // string for Ollama's non-streaming generate API. Token counts and timing
 // are extracted from the response to populate CostMetadata.
-type OllamaProvider struct {
+type ollamaProvider struct {
 	baseURL    string
 	httpClient *http.Client
 }
 
-// OllamaOption configures an OllamaProvider.
-type OllamaOption func(*OllamaProvider)
+// ollamaOption configures an ollamaProvider.
+type ollamaOption func(*ollamaProvider)
 
-// WithBaseURL overrides the base URL for the Ollama API.
+// withBaseURL overrides the base URL for the Ollama API.
 // If not set, the provider reads OLLAMA_BASE_URL from the environment,
 // falling back to http://localhost:11434.
-func WithBaseURL(url string) OllamaOption {
-	return func(p *OllamaProvider) {
+func withBaseURL(url string) ollamaOption {
+	return func(p *ollamaProvider) {
 		p.baseURL = strings.TrimRight(url, "/")
 	}
 }
 
-// WithTimeout overrides the HTTP client timeout.
+// withTimeout overrides the HTTP client timeout.
 // The default is 5 minutes, appropriate for long LLM generation calls.
-func WithTimeout(d time.Duration) OllamaOption {
-	return func(p *OllamaProvider) {
+func withTimeout(d time.Duration) ollamaOption {
+	return func(p *ollamaProvider) {
 		p.httpClient.Timeout = d
 	}
 }
 
-// NewOllamaProvider creates an OllamaProvider.
+// newOllamaProvider creates an ollamaProvider.
 //
 // By default the base URL is read from the OLLAMA_BASE_URL environment
-// variable, falling back to http://localhost:11434. Use WithBaseURL to
+// variable, falling back to http://localhost:11434. Use withBaseURL to
 // override explicitly.
-func NewOllamaProvider(opts ...OllamaOption) *OllamaProvider {
+func newOllamaProvider(opts ...ollamaOption) *ollamaProvider {
 	baseURL := os.Getenv(ollamaEnvBaseURL)
 	if baseURL == "" {
 		baseURL = ollamaDefaultBaseURL
 	}
 
-	p := &OllamaProvider{
+	p := &ollamaProvider{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
 			Timeout: ollamaDefaultTimeout,
@@ -87,14 +87,14 @@ type ollamaGenerateResponse struct {
 	TotalDuration   int64  `json:"total_duration"` // nanoseconds
 }
 
-// Infer sends a prompt to the Ollama /api/generate endpoint and returns the
+// infer sends a prompt to the Ollama /api/generate endpoint and returns the
 // response with cost metadata.
 //
 // The system prompt and query prompt are concatenated with a double newline
 // separator into a single prompt string. This matches Ollama's single-prompt
 // API model. For providers that support message roles (OpenAI-compat), a
-// different Provider implementation would map these to system/user messages.
-func (p *OllamaProvider) Infer(
+// different provider implementation would map these to system/user messages.
+func (p *ollamaProvider) infer(
 	ctx context.Context, model, systemPrompt string, queryPrompt []byte,
 ) (*InferOutput, error) {
 	// Concatenate system + query prompts.

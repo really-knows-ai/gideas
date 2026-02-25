@@ -54,9 +54,9 @@ func TestOllamaProvider_Infer_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := NewOllamaProvider(WithBaseURL(srv.URL))
+	provider := newOllamaProvider(withBaseURL(srv.URL))
 
-	result, err := provider.Infer(
+	result, err := provider.infer(
 		context.Background(), "test-model", "You are a poet.",
 		[]byte("write a haiku about winter"),
 	)
@@ -114,10 +114,10 @@ func TestOllamaProvider_Infer_PromptConcatenation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := NewOllamaProvider(WithBaseURL(srv.URL))
+	provider := newOllamaProvider(withBaseURL(srv.URL))
 
 	// With system prompt — should concatenate with double newline.
-	_, err := provider.Infer(context.Background(), "m", "system prompt", []byte("query prompt"))
+	_, err := provider.infer(context.Background(), "m", "system prompt", []byte("query prompt"))
 	if err != nil {
 		t.Fatalf("Infer() returned error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestOllamaProvider_Infer_PromptConcatenation(t *testing.T) {
 	}
 
 	// Without system prompt — should use query prompt only.
-	_, err = provider.Infer(context.Background(), "m", "", []byte("query only"))
+	_, err = provider.infer(context.Background(), "m", "", []byte("query only"))
 	if err != nil {
 		t.Fatalf("Infer() returned error: %v", err)
 	}
@@ -142,9 +142,9 @@ func TestOllamaProvider_Infer_ErrorStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := NewOllamaProvider(WithBaseURL(srv.URL))
+	provider := newOllamaProvider(withBaseURL(srv.URL))
 
-	_, err := provider.Infer(context.Background(), "nonexistent-model", "sys", []byte("prompt"))
+	_, err := provider.infer(context.Background(), "nonexistent-model", "sys", []byte("prompt"))
 	if err == nil {
 		t.Fatal("expected error when Ollama returns non-200")
 	}
@@ -160,9 +160,9 @@ func TestOllamaProvider_Infer_MalformedResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := NewOllamaProvider(WithBaseURL(srv.URL))
+	provider := newOllamaProvider(withBaseURL(srv.URL))
 
-	_, err := provider.Infer(context.Background(), "model", "sys", []byte("prompt"))
+	_, err := provider.infer(context.Background(), "model", "sys", []byte("prompt"))
 	if err == nil {
 		t.Fatal("expected error for malformed response")
 	}
@@ -179,12 +179,12 @@ func TestOllamaProvider_Infer_Timeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := NewOllamaProvider(
-		WithBaseURL(srv.URL),
-		WithTimeout(50*time.Millisecond),
+	provider := newOllamaProvider(
+		withBaseURL(srv.URL),
+		withTimeout(50*time.Millisecond),
 	)
 
-	_, err := provider.Infer(context.Background(), "model", "sys", []byte("prompt"))
+	_, err := provider.infer(context.Background(), "model", "sys", []byte("prompt"))
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -201,7 +201,7 @@ func TestOllamaProvider_DefaultBaseURL(t *testing.T) {
 	// Clear any env var.
 	t.Setenv("OLLAMA_BASE_URL", "")
 
-	provider := NewOllamaProvider()
+	provider := newOllamaProvider()
 	if provider.baseURL != ollamaDefaultBaseURL {
 		t.Fatalf("expected default base URL %q, got %q", ollamaDefaultBaseURL, provider.baseURL)
 	}
@@ -210,7 +210,7 @@ func TestOllamaProvider_DefaultBaseURL(t *testing.T) {
 func TestOllamaProvider_EnvBaseURL(t *testing.T) {
 	t.Setenv("OLLAMA_BASE_URL", "http://custom:1234/")
 
-	provider := NewOllamaProvider()
+	provider := newOllamaProvider()
 	// Trailing slash should be trimmed.
 	if provider.baseURL != "http://custom:1234" {
 		t.Fatalf("expected base URL 'http://custom:1234', got %q", provider.baseURL)
@@ -221,7 +221,7 @@ func TestOllamaProvider_ExplicitBaseURL(t *testing.T) {
 	t.Setenv("OLLAMA_BASE_URL", "http://from-env:1234")
 
 	// Explicit option should override env var.
-	provider := NewOllamaProvider(WithBaseURL("http://explicit:5678"))
+	provider := newOllamaProvider(withBaseURL("http://explicit:5678"))
 	if provider.baseURL != "http://explicit:5678" {
 		t.Fatalf("expected base URL 'http://explicit:5678', got %q", provider.baseURL)
 	}

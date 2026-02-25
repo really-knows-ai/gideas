@@ -34,7 +34,7 @@ type AgentOption func(*agentConfig)
 type agentConfig struct {
 	heartbeatInterval time.Duration
 	schema            []byte
-	model             *Model
+	model             Model
 	systemPrompt      string
 	queryTemplate     *template.Template
 }
@@ -56,9 +56,10 @@ func WithSchema(schema []byte) AgentOption {
 	}
 }
 
-// WithModel sets the Model for inference dispatch. The Model binds a model
-// identifier to a Provider; the Agent never references either directly.
-func WithModel(m *Model) AgentOption {
+// WithModel sets the Model for inference dispatch. The Model encapsulates
+// both the model identity and the provider; the Agent never references
+// either directly.
+func WithModel(m Model) AgentOption {
 	return func(c *agentConfig) {
 		c.model = m
 	}
@@ -100,7 +101,7 @@ func WithQueryTemplate(tmpl *template.Template) AgentOption {
 type Agent struct {
 	client        *Client
 	schema        *jsonschema.Schema
-	model         *Model
+	model         Model
 	systemPrompt  string
 	queryTemplate *template.Template
 	cfg           agentConfig

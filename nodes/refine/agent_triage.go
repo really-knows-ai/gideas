@@ -130,13 +130,14 @@ type triageTemplateQueryData struct {
 	Laws             string
 }
 
-// NewTriageAgent creates a TriageAgent with the given client, model, and config.
-func NewTriageAgent(client *flow.Client, model *flow.Model, cfg *refineConfig) (*TriageAgent, error) {
+// NewTriageAgent creates a TriageAgent with the given client and config.
+// The model (GptOss120bOllama) is created internally by buildAgent.
+func NewTriageAgent(client *flow.Client, cfg *refineConfig) (*TriageAgent, error) {
 	sysData := triageSystemData{
 		OutputArtefact: cfg.OutputArtefact,
 	}
 
-	agent, err := buildAgent(client, model, "triage agent",
+	agent, err := buildAgent(client, "triage agent",
 		triageSystemPromptTemplate, sysData,
 		triageQueryPromptTemplate, triageSchema)
 	if err != nil {

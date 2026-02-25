@@ -164,17 +164,18 @@ func (b *baseJuror) Name() string {
 
 // NewBaseJuror constructs a baseJuror with the given parameters.
 // This is the shared construction path for all 5 juror types.
+// The model (KimiK2Ollama) is created internally — callers do not
+// provide a model.
 func NewBaseJuror(
 	name string,
 	client *flow.Client,
-	model *flow.Model,
 	systemPrompt string,
 	schemaBytes []byte,
 	queryTmpl *template.Template,
 ) (*baseJuror, error) {
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(model),
+		flow.WithModel(flow.NewKimiK2Ollama()),
 		flow.WithSystemPrompt(systemPrompt),
 		flow.WithQueryTemplate(queryTmpl),
 	)
