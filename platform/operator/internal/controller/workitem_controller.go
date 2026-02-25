@@ -45,6 +45,11 @@ const (
 	wiPhaseRouting   = "Routing"
 	wiPhaseCompleted = "Completed"
 	// wiPhaseFailed uses the package-level phaseFailed from foundrynode_controller.go.
+
+	// childCheckInterval is the requeue interval for a Running parent
+	// that has non-terminal children. The Operator re-checks periodically
+	// to resume normal timeout enforcement once all children finish.
+	childCheckInterval = 30 * time.Second
 )
 
 // nowFunc is a function variable for the current time.
@@ -404,6 +409,20 @@ func (r *WorkitemReconciler) reconcileRunning(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
+	// If this Workitem has non-terminal children, skip timeout enforcement.
+	// A parent waiting for children to complete is not stuck — the Sidecar
+	// pauses the inactivity timer while AwaitChildren blocks.
+	if hasActiveChildren, checkErr := r.hasNonTerminalChildren(ctx, req.Namespace, workitem.Name); checkErr != nil {
+		log.Error(checkErr, "Failed to check child Workitems", "name", workitem.Name)
+		// On error, fall through to normal timeout logic (fail-open for timeout).
+	} else if hasActiveChildren {
+		log.Info("Skipping timeout — Workitem has non-terminal children",
+			"name", workitem.Name,
+			"assignee", workitem.Status.CurrentAssignee,
+		)
+		return ctrl.Result{RequeueAfter: childCheckInterval}, nil
+	}
+
 	// Check timeout expiry.
 	if workitem.Status.AssignedAt != nil {
 		elapsed := nowFunc().Sub(workitem.Status.AssignedAt.Time)
@@ -602,6 +621,33 @@ func (r *WorkitemReconciler) failWorkitem(ctx context.Context, workitem *flowv1.
 	)
 
 	return ctrl.Result{}, nil
+}
+
+// hasNonTerminalChildren checks whether the given Workitem has any child
+// Workitems that are still in a non-terminal phase (i.e. not Completed or
+// Failed). This is used by reconcileRunning to skip timeout enforcement
+// for parents that are waiting on children.
+func (r *WorkitemReconciler) hasNonTerminalChildren(ctx context.Context, namespace, parentName string) (bool, error) {
+	var childList flowv1.WorkitemList
+	if err := r.List(ctx, &childList,
+		client.InNamespace(namespace),
+		client.MatchingLabels{"flow.gideas.io/parent": parentName},
+	); err != nil {
+		return false, fmt.Errorf("failed to list child workitems: %w", err)
+	}
+
+	// No children at all — not a fan-out parent.
+	if len(childList.Items) == 0 {
+		return false, nil
+	}
+
+	for i := range childList.Items {
+		phase := childList.Items[i].Status.Phase
+		if phase != wiPhaseCompleted && phase != phaseFailed {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
