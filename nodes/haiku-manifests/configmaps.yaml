@@ -23,7 +23,6 @@ data:
     inputArtefact: "petition"
     outputArtefact: "haiku"
     governedArtefact: "haiku"
-    model: "gpt-oss:120b-cloud"
     outputField: "haiku"
 ---
 apiVersion: v1
@@ -53,7 +52,6 @@ data:
     reviewArtefact: "haiku"
     governedArtefact: "haiku"
     stampName: "review"
-    model: "kimi-k2.5:cloud"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -69,4 +67,3 @@ data:
     outputArtefact: "haiku"
     governedArtefact: "haiku"
     outputField: "haiku"
-    model: "gpt-oss:120b-cloud"

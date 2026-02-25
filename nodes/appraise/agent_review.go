@@ -159,14 +159,16 @@ type reviewTemplateQueryData struct {
 	ExampleLawID        string
 }
 
-// NewReviewAgent creates a ReviewAgent with the given client, model, and config.
-func NewReviewAgent(client *flow.Client, model *flow.Model, cfg *appraiseConfig) (*ReviewAgent, error) {
+// NewReviewAgent creates a ReviewAgent with the given client and config.
+// The model (KimiK2Ollama) is created internally — model choice is a
+// code-time decision, not deploy-time config.
+func NewReviewAgent(client *flow.Client, cfg *appraiseConfig) (*ReviewAgent, error) {
 	sysData := reviewSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
 		InputArtefact:  cfg.InputArtefact,
 	}
 
-	agent, err := buildAgent(client, model, "review agent",
+	agent, err := buildAgent(client, "review agent",
 		reviewSystemPromptTemplate, sysData,
 		reviewQueryPromptTemplate, reviewSchema)
 	if err != nil {

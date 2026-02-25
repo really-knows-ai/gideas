@@ -10,7 +10,7 @@
 // Usage:
 //
 //	go run ./jury/cmd/main.go
-//	JURY_PORT=50059 JURY_MODEL=kimi-k2.5:cloud go run ./jury/cmd/main.go
+//	JURY_PORT=50059 go run ./jury/cmd/main.go
 package main
 
 import (
@@ -29,11 +29,9 @@ import (
 )
 
 const (
-	defaultPort  = "50059"
-	defaultModel = "kimi-k2.5:cloud"
+	defaultPort = "50059"
 
 	envPort    = "JURY_PORT"
-	envModel   = "JURY_MODEL"
 	envSidecar = "JURY_SIDECAR_ADDRESS"
 )
 
@@ -43,12 +41,7 @@ func main() {
 		port = defaultPort
 	}
 
-	modelID := os.Getenv(envModel)
-	if modelID == "" {
-		modelID = defaultModel
-	}
-
-	slog.Info("Jury starting", "port", port, "model", modelID)
+	slog.Info("Jury starting", "port", port)
 
 	// Create SDK client for juror agents (heartbeat, telemetry).
 	// The Jury service connects to a sidecar for these management operations.
@@ -65,12 +58,9 @@ func main() {
 	}
 	defer func() { _ = client.Close() }()
 
-	// Create provider and model for juror inference.
-	provider := flow.NewOllamaProvider()
-	model := flow.NewModel(modelID, provider)
-
 	// Create juror factory with default configs (no prompt overrides).
-	factory := service.NewDefaultFactory(client, model, nil)
+	// Each juror creates its own KimiK2Ollama model internally.
+	factory := service.NewDefaultFactory(client, nil)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {

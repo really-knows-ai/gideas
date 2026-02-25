@@ -52,7 +52,7 @@ func TestGetChildren_ReturnsStatuses(t *testing.T) {
 	if c1.WorkitemID != "child-001" {
 		t.Fatalf("expected child-001, got %q", c1.WorkitemID)
 	}
-	if c1.Phase != "Running" {
+	if c1.Phase != PhaseRunning {
 		t.Fatalf("expected phase Running, got %q", c1.Phase)
 	}
 	if c1.CurrentAssignee != "codify-smt" {
@@ -66,7 +66,7 @@ func TestGetChildren_ReturnsStatuses(t *testing.T) {
 	if c2.WorkitemID != "child-002" {
 		t.Fatalf("expected child-002, got %q", c2.WorkitemID)
 	}
-	if c2.Phase != "Completed" {
+	if c2.Phase != PhaseCompleted {
 		t.Fatalf("expected phase Completed, got %q", c2.Phase)
 	}
 
@@ -284,7 +284,7 @@ func TestWatchChildren_ReceivesEvents(t *testing.T) {
 				EventType:  "workitem.phase_changed",
 				Labels: []*flowv1.Label{
 					{Key: "parent_workitem_id", Value: parentID},
-					{Key: "phase", Value: "Completed"},
+					{Key: "phase", Value: PhaseCompleted},
 					{Key: "node_id", Value: "codify-smt"},
 				},
 			},
@@ -292,7 +292,7 @@ func TestWatchChildren_ReceivesEvents(t *testing.T) {
 	}
 
 	spy := &spyServer{}
-	client, _, _ := setupGRPCTestEnvWithEventBus(t, parentID,
+	client := setupGRPCTestEnvWithEventBus(t, parentID,
 		func(s *grpc.Server) {
 			flowv1.RegisterSidecarServiceServer(s, spy)
 			flowv1.RegisterOperatorServiceServer(s, spy)
@@ -328,14 +328,14 @@ func TestWatchChildren_ReceivesEvents(t *testing.T) {
 	if received[0].WorkitemID != "child-w-001" {
 		t.Fatalf("event[0] workitem_id = %q, want child-w-001", received[0].WorkitemID)
 	}
-	if received[0].Phase != "Running" {
+	if received[0].Phase != PhaseRunning {
 		t.Fatalf("event[0] phase = %q, want Running", received[0].Phase)
 	}
 	if received[0].NodeID != "codify-smt" {
 		t.Fatalf("event[0] node_id = %q, want codify-smt", received[0].NodeID)
 	}
 
-	if received[1].Phase != "Completed" {
+	if received[1].Phase != PhaseCompleted {
 		t.Fatalf("event[1] phase = %q, want Completed", received[1].Phase)
 	}
 

@@ -27,7 +27,6 @@
 //	reviewArtefact:   "haiku"
 //	governedArtefact: "haiku"
 //	stampName:        "review"
-//	model:            "kimi-k2.5:cloud"
 package main
 
 import (
@@ -52,7 +51,6 @@ type appraiseConfig struct {
 	ReviewArtefact   string `yaml:"reviewArtefact"`   // artefact ID to review (e.g. "haiku")
 	GovernedArtefact string `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
 	StampName        string `yaml:"stampName"`        // stamp to apply (e.g. "review")
-	Model            string `yaml:"model"`            // LLM model name
 }
 
 const (
@@ -94,10 +92,12 @@ func hasNovelArgument(fb *flowv1.FeedbackItem) bool {
 
 // buildAgent is the shared construction pattern for all three appraise agents.
 // It renders the system prompt template, parses the query template, and
-// creates a flow.Agent with schema, model, and prompts.
+// creates a flow.Agent with schema, model (KimiK2Ollama), and prompts.
+//
+// The model is created internally — model choice is a code-time decision
+// coupled to the prompts, not deploy-time config.
 func buildAgent(
 	client *flow.Client,
-	model *flow.Model,
 	name string,
 	sysTmplStr string,
 	sysData any,
@@ -124,7 +124,7 @@ func buildAgent(
 	// 3. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schema),
-		flow.WithModel(model),
+		flow.WithModel(flow.NewKimiK2Ollama()),
 		flow.WithSystemPrompt(sysBuf.String()),
 		flow.WithQueryTemplate(queryTmpl),
 	)
@@ -170,21 +170,18 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("appraise: load config: %w", err)
 	}
 
-	// Create provider, model, and agents.
-	provider := flow.NewOllamaProvider()
-	model := flow.NewModel(cfg.Model, provider)
-
-	evalAgent, err := NewEvalAgent(client, model, cfg)
+	// Create agents. Each agent creates its model (KimiK2Ollama) internally.
+	evalAgent, err := NewEvalAgent(client, cfg)
 	if err != nil {
 		return fmt.Errorf("appraise: create eval agent: %w", err)
 	}
 
-	reviewAgent, err := NewReviewAgent(client, model, cfg)
+	reviewAgent, err := NewReviewAgent(client, cfg)
 	if err != nil {
 		return fmt.Errorf("appraise: create review agent: %w", err)
 	}
 
-	findingAgent, err := NewFindingAgent(client, model, cfg)
+	findingAgent, err := NewFindingAgent(client, cfg)
 	if err != nil {
 		return fmt.Errorf("appraise: create finding agent: %w", err)
 	}

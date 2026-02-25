@@ -2,40 +2,13 @@ package flow
 
 import "context"
 
-// Provider abstracts LLM inference backends. Each implementation decides
+// provider abstracts LLM inference backends. Each implementation decides
 // how to present the system and query prompts to its backend (concatenation,
 // message roles, etc.).
 //
 // Implementations must be safe for concurrent use.
-type Provider interface {
-	Infer(ctx context.Context, model, systemPrompt string, queryPrompt []byte) (*InferOutput, error)
-}
-
-// ---------------------------------------------------------------------------
-// Model — binds a model identifier to a Provider
-// ---------------------------------------------------------------------------
-
-// Model binds a model identifier to a Provider. It encapsulates which model
-// to use and how to reach it. Agents receive a Model at construction time;
-// they never reference the provider or model string directly.
-//
-// Create a Model once, share it across multiple agents. Different agents
-// can use different Models (backed by the same or different providers).
-type Model struct {
-	id       string
-	provider Provider
-}
-
-// NewModel creates a Model. The id is the model identifier passed to the
-// provider on each inference call (e.g. "kimi-k2.5:cloud", "gpt-4o").
-// The provider is the transport backend that executes the inference.
-func NewModel(id string, provider Provider) *Model {
-	return &Model{id: id, provider: provider}
-}
-
-// Infer delegates to the underlying provider with the bound model ID.
-func (m *Model) Infer(ctx context.Context, systemPrompt string, queryPrompt []byte) (*InferOutput, error) {
-	return m.provider.Infer(ctx, m.id, systemPrompt, queryPrompt)
+type provider interface {
+	infer(ctx context.Context, model, systemPrompt string, queryPrompt []byte) (*InferOutput, error)
 }
 
 // InferOutput holds the raw LLM response and optional cost metadata.

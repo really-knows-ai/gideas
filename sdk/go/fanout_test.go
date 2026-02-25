@@ -358,7 +358,7 @@ func TestAwaitChildren_Polling_AllCompleted(t *testing.T) {
 		t.Fatalf("expected 2 children, got %d", len(children))
 	}
 	for _, ch := range children {
-		if ch.Phase != "Completed" {
+		if ch.Phase != PhaseCompleted {
 			t.Fatalf("expected Completed, got %q", ch.Phase)
 		}
 	}
@@ -514,7 +514,7 @@ func TestAwaitChildren_Streaming(t *testing.T) {
 		},
 	}
 
-	client, _, _ := setupGRPCTestEnvWithEventBus(t, "workitem-fanout-parent",
+	client := setupGRPCTestEnvWithEventBus(t, "workitem-fanout-parent",
 		func(s *grpc.Server) {
 			flowv1.RegisterSidecarServiceServer(s, spy)
 			flowv1.RegisterOperatorServiceServer(s, spy)
@@ -549,7 +549,7 @@ func TestAwaitChildren_Streaming(t *testing.T) {
 		t.Fatalf("expected 2 children, got %d", len(children))
 	}
 	for _, ch := range children {
-		if ch.Phase != "Completed" {
+		if ch.Phase != PhaseCompleted {
 			t.Fatalf("expected Completed, got %q for %s", ch.Phase, ch.WorkitemID)
 		}
 	}
@@ -577,8 +577,8 @@ func TestCollectArtefacts_HappyPath(t *testing.T) {
 	client := setupFanoutEnv(t, spy)
 
 	children := []ChildWorkitemStatus{
-		{WorkitemID: "child-001", Phase: "Completed"},
-		{WorkitemID: "child-002", Phase: "Completed"},
+		{WorkitemID: "child-001", Phase: PhaseCompleted},
+		{WorkitemID: "child-002", Phase: PhaseCompleted},
 	}
 
 	results, err := client.CollectArtefacts(context.Background(), children, "output")
@@ -602,8 +602,8 @@ func TestCollectArtefacts_FailedChild_ReturnsError(t *testing.T) {
 	client := setupFanoutEnv(t, spy)
 
 	children := []ChildWorkitemStatus{
-		{WorkitemID: "child-001", Phase: "Completed"},
-		{WorkitemID: "child-002", Phase: "Failed"},
+		{WorkitemID: "child-001", Phase: PhaseCompleted},
+		{WorkitemID: "child-002", Phase: PhaseFailed},
 	}
 
 	_, err := client.CollectArtefacts(context.Background(), children, "output")
@@ -622,8 +622,8 @@ func TestCollectArtefacts_MissingArtefact_NilInMap(t *testing.T) {
 	client := setupFanoutEnv(t, spy)
 
 	children := []ChildWorkitemStatus{
-		{WorkitemID: "child-001", Phase: "Completed"},
-		{WorkitemID: "child-002", Phase: "Completed"},
+		{WorkitemID: "child-001", Phase: PhaseCompleted},
+		{WorkitemID: "child-002", Phase: PhaseCompleted},
 	}
 
 	results, err := client.CollectArtefacts(context.Background(), children, "output")
@@ -657,8 +657,8 @@ func TestCollectArtefacts_MultipleArtefactIDs(t *testing.T) {
 	client := setupFanoutEnv(t, spy)
 
 	children := []ChildWorkitemStatus{
-		{WorkitemID: "child-001", Phase: "Completed"},
-		{WorkitemID: "child-002", Phase: "Completed"},
+		{WorkitemID: "child-001", Phase: PhaseCompleted},
+		{WorkitemID: "child-002", Phase: PhaseCompleted},
 	}
 
 	results, err := client.CollectArtefacts(context.Background(), children, "output", "report")
@@ -702,9 +702,9 @@ func TestIsTerminalPhase(t *testing.T) {
 		phase    string
 		terminal bool
 	}{
-		{"Completed", true},
-		{"Failed", true},
-		{"Running", false},
+		{PhaseCompleted, true},
+		{PhaseFailed, true},
+		{PhaseRunning, false},
 		{"Pending", false},
 		{"Routing", false},
 		{"", false},
@@ -724,16 +724,16 @@ func TestAllTerminal(t *testing.T) {
 	}{
 		{"empty", nil, false},
 		{"all completed", []ChildWorkitemStatus{
-			{Phase: "Completed"}, {Phase: "Completed"},
+			{Phase: PhaseCompleted}, {Phase: PhaseCompleted},
 		}, true},
 		{"mixed terminal", []ChildWorkitemStatus{
-			{Phase: "Completed"}, {Phase: "Failed"},
+			{Phase: PhaseCompleted}, {Phase: PhaseFailed},
 		}, true},
 		{"one running", []ChildWorkitemStatus{
-			{Phase: "Completed"}, {Phase: "Running"},
+			{Phase: PhaseCompleted}, {Phase: PhaseRunning},
 		}, false},
 		{"all running", []ChildWorkitemStatus{
-			{Phase: "Running"}, {Phase: "Running"},
+			{Phase: PhaseRunning}, {Phase: PhaseRunning},
 		}, false},
 	}
 	for _, tc := range cases {

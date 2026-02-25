@@ -120,3 +120,10 @@ type ChildLifecycleEvent struct {
 	Phase      string
 	NodeID     string
 }
+
+// Workitem phase constants.
+const (
+	PhaseRunning   = "Running"
+	PhaseCompleted = "Completed"
+	PhaseFailed    = "Failed"
+)

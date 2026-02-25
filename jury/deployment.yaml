@@ -43,8 +43,6 @@ spec:
           env:
             - name: JURY_PORT
               value: "50059"
-            - name: JURY_MODEL
-              value: "kimi-k2.5:cloud"
 ---
 apiVersion: v1
 kind: Service

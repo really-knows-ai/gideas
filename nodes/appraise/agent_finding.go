@@ -108,14 +108,16 @@ type findingTemplateQueryData struct {
 	Discussions      string
 }
 
-// NewFindingAgent creates a FindingAgent with the given client, model, and config.
-func NewFindingAgent(client *flow.Client, model *flow.Model, cfg *appraiseConfig) (*FindingAgent, error) {
+// NewFindingAgent creates a FindingAgent with the given client and config.
+// The model (KimiK2Ollama) is created internally — model choice is a
+// code-time decision, not deploy-time config.
+func NewFindingAgent(client *flow.Client, cfg *appraiseConfig) (*FindingAgent, error) {
 	sysData := findingSystemData{
 		ReviewArtefact:   cfg.ReviewArtefact,
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	agent, err := buildAgent(client, model, "finding agent",
+	agent, err := buildAgent(client, "finding agent",
 		findingSystemPromptTemplate, sysData,
 		findingQueryPromptTemplate, findingSchema)
 	if err != nil {

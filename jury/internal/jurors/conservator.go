@@ -26,11 +26,10 @@ Your judicial philosophy:
 
 Evaluate the evidence and question presented to you. Vote for the outcome that best preserves stability and existing precedent.`
 
-// NewConservator creates a Conservator juror with the given model and shared
-// schema/template. If systemPrompt is empty, the default is used.
+// NewConservator creates a Conservator juror with the shared schema/template.
+// If systemPrompt is empty, the default is used.
 func NewConservator(
 	client *flow.Client,
-	model *flow.Model,
 	systemPrompt string,
 	schemaBytes []byte,
 	queryTmpl *template.Template,
@@ -38,7 +37,7 @@ func NewConservator(
 	if systemPrompt == "" {
 		systemPrompt = DefaultConservatorPrompt
 	}
-	base, err := NewBaseJuror("conservator", client, model, systemPrompt, schemaBytes, queryTmpl)
+	base, err := NewBaseJuror("conservator", client, systemPrompt, schemaBytes, queryTmpl)
 	if err != nil {
 		return nil, err
 	}

@@ -29,7 +29,6 @@
 //	outputArtefact:   "haiku"
 //	governedArtefact: "haiku"
 //	outputField:      "haiku"
-//	model:            "gpt-oss:120b-cloud"
 package main
 
 import (
@@ -53,7 +52,6 @@ type refineConfig struct {
 	OutputArtefact   string `yaml:"outputArtefact"`   // artefact ID to revise and store back (e.g. "haiku")
 	GovernedArtefact string `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
 	OutputField      string `yaml:"outputField"`      // JSON key in revision output (e.g. "haiku")
-	Model            string `yaml:"model"`            // LLM model name
 }
 
 const (
@@ -79,10 +77,12 @@ type actionedItem struct {
 
 // buildAgent is the shared construction pattern for the triage and revision
 // agents. It renders the system prompt template, parses the query template,
-// and creates a flow.Agent with schema, model, and prompts.
+// and creates a flow.Agent with schema, model (GptOss120bOllama), and prompts.
+//
+// The model is created internally — model choice is a code-time decision
+// coupled to the prompts, not deploy-time config.
 func buildAgent(
 	client *flow.Client,
-	model *flow.Model,
 	name string,
 	sysTmplStr string,
 	sysData any,
@@ -109,7 +109,7 @@ func buildAgent(
 	// 3. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schema),
-		flow.WithModel(model),
+		flow.WithModel(flow.NewGptOss120bOllama()),
 		flow.WithSystemPrompt(sysBuf.String()),
 		flow.WithQueryTemplate(queryTmpl),
 	)
@@ -155,16 +155,13 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("refine: load config: %w", err)
 	}
 
-	// Create provider, model, and agents.
-	provider := flow.NewOllamaProvider()
-	model := flow.NewModel(cfg.Model, provider)
-
-	triageAgent, err := NewTriageAgent(client, model, cfg)
+	// Create agents (model is created internally by buildAgent).
+	triageAgent, err := NewTriageAgent(client, cfg)
 	if err != nil {
 		return fmt.Errorf("refine: create triage agent: %w", err)
 	}
 
-	revisionAgent, err := NewRevisionAgent(client, model, cfg)
+	revisionAgent, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		return fmt.Errorf("refine: create revision agent: %w", err)
 	}

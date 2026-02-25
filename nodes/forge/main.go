@@ -6,7 +6,7 @@
 //
 // Forge uses FoundryAgent with a concrete ForgeAgent to wrap the LLM call,
 // providing:
-//   - Provider-abstracted inference (Ollama, OpenAI-compat, etc.)
+//   - Model-encapsulated inference (model choice is code, not config)
 //   - Managed heartbeats during inference (no timeout during long generations)
 //   - JSON Schema validation of the structured output before storage
 //   - Automatic foundry.cost.llm telemetry with token counts and timing
@@ -16,7 +16,6 @@
 //	inputArtefact:    "petition"
 //	outputArtefact:   "haiku"
 //	governedArtefact: "haiku"
-//	model:            "gpt-oss:120b-cloud"
 //	outputField:      "haiku"
 package main
 
@@ -37,7 +36,6 @@ type forgeConfig struct {
 	InputArtefact    string `yaml:"inputArtefact"`    // artefact ID to read (e.g. "petition")
 	OutputArtefact   string `yaml:"outputArtefact"`   // artefact ID to write (e.g. "haiku")
 	GovernedArtefact string `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
-	Model            string `yaml:"model"`            // LLM model name
 	OutputField      string `yaml:"outputField"`      // JSON key to extract from validated output
 }
 
@@ -68,10 +66,8 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("forge: load config: %w", err)
 	}
 
-	// Create provider, model, and agent.
-	provider := flow.NewOllamaProvider()
-	model := flow.NewModel(cfg.Model, provider)
-	agent, err := NewForgeAgent(client, model, cfg)
+	// Create agent (model is created internally by ForgeAgent).
+	agent, err := NewForgeAgent(client, cfg)
 	if err != nil {
 		return fmt.Errorf("forge: create agent: %w", err)
 	}

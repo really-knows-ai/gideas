@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"text/template"
@@ -35,27 +34,25 @@ const invalidSchemaJSON = `{not valid json`
 const testModel = "test-model"
 
 // ---------------------------------------------------------------------------
-// Mock Provider
+// Mock Model
 // ---------------------------------------------------------------------------
 
-// mockProvider implements Provider for testing.
-type mockProvider struct {
+// mockModel implements Model for testing.
+type mockModel struct {
 	output *InferOutput
 	err    error
 
-	// capturedModel, capturedSystem, capturedQuery record the last Infer call.
-	capturedModel  string
+	// capturedSystem, capturedQuery record the last Infer call.
 	capturedSystem string
 	capturedQuery  []byte
 
-	// delay simulates a slow provider call for heartbeat testing.
+	// delay simulates a slow model call for heartbeat testing.
 	delay time.Duration
 }
 
-func (m *mockProvider) Infer(
-	ctx context.Context, model, systemPrompt string, queryPrompt []byte,
+func (m *mockModel) Infer(
+	_ context.Context, systemPrompt string, queryPrompt []byte,
 ) (*InferOutput, error) {
-	m.capturedModel = model
 	m.capturedSystem = systemPrompt
 	m.capturedQuery = queryPrompt
 
@@ -75,7 +72,6 @@ type agentSpyServer struct {
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
-	mu             sync.Mutex
 	heartbeatCount atomic.Int64
 	telemetryCalls []recordedTelemetry
 	lastMD         metadata.MD
@@ -87,32 +83,26 @@ type recordedTelemetry struct {
 }
 
 func (s *agentSpyServer) Heartbeat(
-	ctx context.Context, req *flowv1.HeartbeatRequest,
+	ctx context.Context, _ *flowv1.HeartbeatRequest,
 ) (*flowv1.HeartbeatResponse, error) {
 	s.heartbeatCount.Add(1)
-	s.mu.Lock()
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
-	s.mu.Unlock()
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
 func (s *agentSpyServer) RecordTelemetry(
 	ctx context.Context, req *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
-	s.mu.Lock()
 	s.telemetryCalls = append(s.telemetryCalls, recordedTelemetry{
 		EventType: req.GetEventType(),
 		Payload:   req.GetPayload(),
 	})
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
-	s.mu.Unlock()
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
 }
 
 // getTelemetryCalls returns a copy of recorded telemetry calls.
 func (s *agentSpyServer) getTelemetryCalls() []recordedTelemetry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	cp := make([]recordedTelemetry, len(s.telemetryCalls))
 	copy(cp, s.telemetryCalls)
 	return cp
@@ -152,12 +142,12 @@ func simpleQueryTemplate(t *testing.T) *template.Template {
 	return tmpl
 }
 
-// newTestAgent creates a FoundryAgent with a mock provider for testing.
-func newTestAgent(t *testing.T, env *agentTestEnv, mp *mockProvider) *Agent {
+// newTestAgent creates a FoundryAgent with a mock model for testing.
+func newTestAgent(t *testing.T, env *agentTestEnv, mm *mockModel) *Agent {
 	t.Helper()
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, mp)),
+		WithModel(mm),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(time.Hour), // effectively disable heartbeat
 	)
@@ -174,10 +164,10 @@ func newTestAgent(t *testing.T, env *agentTestEnv, mp *mockProvider) *Agent {
 func TestNewAgent_ValidConstruction(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-001")
 
-	mp := &mockProvider{}
+	mm := &mockModel{}
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, mp)),
+		WithModel(mm),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err != nil {
@@ -191,10 +181,10 @@ func TestNewAgent_ValidConstruction(t *testing.T) {
 func TestNewAgent_InvalidSchemaJSON(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-002")
 
-	mp := &mockProvider{}
+	mm := &mockModel{}
 	_, err := NewAgent(env.client,
 		WithSchema([]byte(invalidSchemaJSON)),
-		WithModel(NewModel(testModel, mp)),
+		WithModel(mm),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err == nil {
@@ -208,7 +198,7 @@ func TestNewAgent_InvalidSchemaJSON(t *testing.T) {
 func TestNewAgent_NilClient(t *testing.T) {
 	_, err := NewAgent(nil,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, &mockProvider{})),
+		WithModel(&mockModel{}),
 		WithQueryTemplate(template.Must(template.New("q").Parse("{{.Input}}"))),
 	)
 	if err == nil {
@@ -238,7 +228,7 @@ func TestNewAgent_MissingSchema(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-agent-004")
 
 	_, err := NewAgent(env.client,
-		WithModel(NewModel(testModel, &mockProvider{})),
+		WithModel(&mockModel{}),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err == nil {
@@ -254,7 +244,7 @@ func TestNewAgent_MissingQueryTemplate(t *testing.T) {
 
 	_, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, &mockProvider{})),
+		WithModel(&mockModel{}),
 	)
 	if err == nil {
 		t.Fatal("NewAgent() with nil query template should return error")
@@ -269,7 +259,7 @@ func TestNewAgent_DefaultHeartbeatInterval(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, &mockProvider{})),
+		WithModel(&mockModel{}),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 	)
 	if err != nil {
@@ -286,7 +276,7 @@ func TestNewAgent_CustomHeartbeatInterval(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, &mockProvider{})),
+		WithModel(&mockModel{}),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(5*time.Second),
 	)
@@ -305,7 +295,7 @@ func TestNewAgent_CustomHeartbeatInterval(t *testing.T) {
 func TestAgent_Run_TemplateRendering(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-tmpl-001")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &CostMetadata{
@@ -322,7 +312,7 @@ func TestAgent_Run_TemplateRendering(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, mp)),
+		WithModel(mm),
 		WithQueryTemplate(tmpl),
 		WithSystemPrompt("You are a haiku poet."),
 		WithHeartbeatInterval(time.Hour),
@@ -343,18 +333,13 @@ func TestAgent_Run_TemplateRendering(t *testing.T) {
 
 	// Verify the query prompt was rendered correctly.
 	expectedQuery := "Write a haiku about autumn with style classical"
-	if string(mp.capturedQuery) != expectedQuery {
-		t.Fatalf("query mismatch:\ngot:  %q\nwant: %q", string(mp.capturedQuery), expectedQuery)
+	if string(mm.capturedQuery) != expectedQuery {
+		t.Fatalf("query mismatch:\ngot:  %q\nwant: %q", string(mm.capturedQuery), expectedQuery)
 	}
 
 	// Verify the system prompt was passed through.
-	if mp.capturedSystem != "You are a haiku poet." {
-		t.Fatalf("system prompt mismatch: got %q", mp.capturedSystem)
-	}
-
-	// Verify the model was passed through.
-	if mp.capturedModel != testModel {
-		t.Fatalf("model mismatch: got %q", mp.capturedModel)
+	if mm.capturedSystem != "You are a haiku poet." {
+		t.Fatalf("system prompt mismatch: got %q", mm.capturedSystem)
 	}
 }
 
@@ -367,7 +352,7 @@ func TestAgent_Run_OutputValidation_Pass(t *testing.T) {
 
 	validOutput := []byte(`{"haiku": "autumn moonlight"}`)
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: validOutput,
 			Cost: &CostMetadata{
@@ -379,7 +364,7 @@ func TestAgent_Run_OutputValidation_Pass(t *testing.T) {
 		},
 	}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	got, err := agent.Run(context.Background(), struct{ Input string }{Input: "write a haiku"})
 	if err != nil {
@@ -396,7 +381,7 @@ func TestAgent_Run_OutputValidation_Fail(t *testing.T) {
 	// Output missing required "haiku" field.
 	invalidOutput := []byte(`{"title": "not a haiku"}`)
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: invalidOutput,
 			Cost: &CostMetadata{
@@ -408,7 +393,7 @@ func TestAgent_Run_OutputValidation_Fail(t *testing.T) {
 		},
 	}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "write a haiku"})
 	if err == nil {
@@ -428,7 +413,7 @@ func TestAgent_Run_OutputValidation_Fail(t *testing.T) {
 func TestAgent_Run_OutputNotJSON(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-val-notjson")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: []byte("this is not JSON"),
 			Cost: &CostMetadata{
@@ -440,7 +425,7 @@ func TestAgent_Run_OutputNotJSON(t *testing.T) {
 		},
 	}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
@@ -458,7 +443,7 @@ func TestAgent_Run_OutputNotJSON(t *testing.T) {
 func TestAgent_Run_CostTelemetry(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-cost-001")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &CostMetadata{
@@ -471,7 +456,7 @@ func TestAgent_Run_CostTelemetry(t *testing.T) {
 		},
 	}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
@@ -519,14 +504,14 @@ func TestAgent_Run_CostTelemetry(t *testing.T) {
 func TestAgent_Run_NilCostMetadata(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-cost-nil")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost:   nil, // Provider doesn't report costs.
 		},
 	}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
@@ -547,12 +532,12 @@ func TestAgent_Run_NilCostMetadata(t *testing.T) {
 func TestAgent_Run_MultiStep(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-multi-001")
 
-	mp := &mockProvider{}
+	mm := &mockModel{}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	// First step.
-	mp.output = &InferOutput{
+	mm.output = &InferOutput{
 		Output: []byte(`{"haiku": "first draft"}`),
 		Cost: &CostMetadata{
 			Model:        "gpt-4o",
@@ -566,7 +551,7 @@ func TestAgent_Run_MultiStep(t *testing.T) {
 	}
 
 	// Second step.
-	mp.output = &InferOutput{
+	mm.output = &InferOutput{
 		Output: []byte(`{"haiku": "revised draft"}`),
 		Cost: &CostMetadata{
 			Model:        "gpt-4o-mini",
@@ -610,7 +595,7 @@ func TestAgent_Run_MultiStep(t *testing.T) {
 func TestAgent_Run_HeartbeatDuringInference(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-hb-001")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: []byte(`{"haiku": "slow inference"}`),
 			Cost: &CostMetadata{
@@ -627,7 +612,7 @@ func TestAgent_Run_HeartbeatDuringInference(t *testing.T) {
 	// during a simulated slow inference.
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, mp)),
+		WithModel(mm),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(20*time.Millisecond),
 	)
@@ -650,7 +635,7 @@ func TestAgent_Run_HeartbeatDuringInference(t *testing.T) {
 func TestAgent_Run_HeartbeatStopsAfterInfer(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-hb-stop")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: []byte(`{"haiku": "done"}`),
 			Cost: &CostMetadata{
@@ -665,7 +650,7 @@ func TestAgent_Run_HeartbeatStopsAfterInfer(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, mp)),
+		WithModel(mm),
 		WithQueryTemplate(simpleQueryTemplate(t)),
 		WithHeartbeatInterval(10*time.Millisecond),
 	)
@@ -699,12 +684,12 @@ func TestAgent_Run_ProviderError(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-err-001")
 
 	providerErr := errors.New("LLM provider unavailable")
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: nil,
 		err:    providerErr,
 	}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
@@ -727,12 +712,12 @@ func TestAgent_Run_ProviderError(t *testing.T) {
 func TestAgent_Run_NilResult(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-err-nil")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: nil,
 		err:    nil,
 	}
 
-	agent := newTestAgent(t, env, mp)
+	agent := newTestAgent(t, env, mm)
 
 	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
@@ -746,7 +731,7 @@ func TestAgent_Run_NilResult(t *testing.T) {
 func TestAgent_Run_TemplateRenderError(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-err-tmpl")
 
-	mp := &mockProvider{
+	mm := &mockModel{
 		output: &InferOutput{
 			Output: []byte(`{"haiku": "test"}`),
 			Cost:   nil,
@@ -758,7 +743,7 @@ func TestAgent_Run_TemplateRenderError(t *testing.T) {
 
 	agent, err := NewAgent(env.client,
 		WithSchema([]byte(validHaikuSchema)),
-		WithModel(NewModel(testModel, mp)),
+		WithModel(mm),
 		WithQueryTemplate(badTmpl),
 		WithHeartbeatInterval(time.Hour),
 	)
