@@ -643,3 +643,107 @@ func TestApplyLifecycleAction_UnspecifiedVerdict(t *testing.T) {
 		t.Fatal("expected error for unspecified verdict")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Division support
+// ---------------------------------------------------------------------------
+
+func TestQueryLaws_DivisionFilter(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	// Create laws in different divisions via WriteLaw (which passes division through).
+	if _, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
+		Law: &flowv1.Law{
+			Goal: "Security rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
+			Division:        "security",
+			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "s"}},
+		},
+	}); err != nil {
+		t.Fatalf("WriteLaw security: %v", err)
+	}
+	if _, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
+		Law: &flowv1.Law{
+			Goal: "Arch rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
+			Division:        "architecture",
+			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "a"}},
+		},
+	}); err != nil {
+		t.Fatalf("WriteLaw architecture: %v", err)
+	}
+
+	// Activate both so they appear in QueryLaws.
+	srv.ApplyLifecycleAction(ctx, &flowv1.ApplyLifecycleActionRequest{ //nolint:errcheck
+		LawId: "law-0001", Verdict: flowv1.Verdict_VERDICT_PROMOTE,
+	})
+	srv.ApplyLifecycleAction(ctx, &flowv1.ApplyLifecycleActionRequest{ //nolint:errcheck
+		LawId: "law-0002", Verdict: flowv1.Verdict_VERDICT_PROMOTE,
+	})
+
+	// Filter by security.
+	resp, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{
+		Filter: &flowv1.LawFilter{Division: "security"},
+	})
+	if err != nil {
+		t.Fatalf("QueryLaws division=security: %v", err)
+	}
+	if len(resp.GetLaws()) != 1 {
+		t.Fatalf("expected 1 security law, got %d", len(resp.GetLaws()))
+	}
+	if resp.GetLaws()[0].GetDivision() != "security" {
+		t.Fatalf("expected division=security, got %q", resp.GetLaws()[0].GetDivision())
+	}
+
+	// No division filter returns all.
+	resp, err = srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
+	if err != nil {
+		t.Fatalf("QueryLaws no filter: %v", err)
+	}
+	if len(resp.GetLaws()) != 2 {
+		t.Fatalf("expected 2 laws, got %d", len(resp.GetLaws()))
+	}
+}
+
+func TestWriteLaw_DivisionRoundTrip(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	writeResp, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
+		Law: &flowv1.Law{
+			Goal: "Styled rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
+			Division:        "style",
+			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "x"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteLaw: %v", err)
+	}
+
+	getLawResp, err := srv.GetLaw(ctx, &flowv1.GetLawRequest{LawId: writeResp.GetLawId()})
+	if err != nil {
+		t.Fatalf("GetLaw: %v", err)
+	}
+	if getLawResp.GetLaw().GetDivision() != "style" {
+		t.Fatalf("expected division=style, got %q", getLawResp.GetLaw().GetDivision())
+	}
+}
+
+func TestStoreLawToProto_IncludesDivision(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	// RecordFinding doesn't set division (always empty for findings).
+	findResp, _ := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+		Goal:            "Finding",
+		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "f"}},
+	})
+
+	getLawResp, err := srv.GetLaw(ctx, &flowv1.GetLawRequest{LawId: findResp.GetLawId()})
+	if err != nil {
+		t.Fatalf("GetLaw: %v", err)
+	}
+	// Division should be empty for a RecordFinding (no division in request).
+	if getLawResp.GetLaw().GetDivision() != "" {
+		t.Fatalf("expected empty division for finding, got %q", getLawResp.GetLaw().GetDivision())
+	}
+}

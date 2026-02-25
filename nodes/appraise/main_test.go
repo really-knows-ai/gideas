@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 )
 
 const testFeedbackID = "fb-1"
+const testLawID = "law-1"
 
 // ---------------------------------------------------------------------------
 // Helpers for constructing test agents
@@ -22,17 +25,6 @@ func newTestEvalAgent(t *testing.T, mm *mockModel, spy *appraiseSpy, cfg *apprai
 	agent, err := NewEvalAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewEvalAgent() failed: %v", err)
-	}
-	flow.OverrideModelForTest(agent.agent, mm)
-	return agent
-}
-
-func newTestReviewAgent(t *testing.T, mm *mockModel, spy *appraiseSpy, cfg *appraiseConfig) *ReviewAgent {
-	t.Helper()
-	client := newSpyClient(t, spy)
-	agent, err := NewReviewAgent(client, cfg)
-	if err != nil {
-		t.Fatalf("NewReviewAgent() failed: %v", err)
 	}
 	flow.OverrideModelForTest(agent.agent, mm)
 	return agent
@@ -274,207 +266,6 @@ func TestEvalAgent_SystemPromptContainsConfig(t *testing.T) {
 	}
 	if !strings.Contains(mp.capturedSystem, "petition") {
 		t.Errorf("system prompt should contain input artefact name, got:\n%s", mp.capturedSystem)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — ReviewAgent: Schema Validation via Run()
-// ---------------------------------------------------------------------------
-
-func TestReviewAgent_ValidOutput(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [{"message": "issue found", "severity": "medium", "cited_laws": []}]}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err != nil {
-		t.Fatalf("expected valid output, got error: %v", err)
-	}
-	if len(out.Feedback) != 1 {
-		t.Fatalf("expected 1 feedback item, got %d", len(out.Feedback))
-	}
-	if out.Feedback[0].Message != "issue found" {
-		t.Fatalf("expected message 'issue found', got %q", out.Feedback[0].Message)
-	}
-}
-
-func TestReviewAgent_EmptyFeedback(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": []}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err != nil {
-		t.Fatalf("expected valid output, got error: %v", err)
-	}
-	if len(out.Feedback) != 0 {
-		t.Fatalf("expected 0 feedback items, got %d", len(out.Feedback))
-	}
-}
-
-func TestReviewAgent_RejectsInvalidSeverity(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [{"message": "issue", "severity": "extreme", "cited_laws": []}]}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err == nil {
-		t.Fatal("expected invalid severity to fail schema validation")
-	}
-	if !strings.Contains(err.Error(), "output validation failed") {
-		t.Fatalf("expected 'output validation failed' in error, got: %v", err)
-	}
-}
-
-func TestReviewAgent_RejectsEmptyMessage(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [{"message": "", "severity": "low", "cited_laws": []}]}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err == nil {
-		t.Fatal("expected empty message to fail schema validation")
-	}
-}
-
-func TestReviewAgent_RejectsAdditionalProperties(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [], "extra": "bad"}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err == nil {
-		t.Fatal("expected additional properties to fail schema validation")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — ReviewAgent: Template Rendering
-// ---------------------------------------------------------------------------
-
-func TestReviewAgent_PromptContainsLawsAndHistory(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": []}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	laws := []*flowv1.Law{
-		{Id: "law-1", Tier: 2, Goal: "Must evoke a season"},
-		{Id: "law-2", Tier: 1, Goal: "Use natural imagery"},
-	}
-	existingFeedback := []*flowv1.FeedbackItem{
-		{State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED, Message: "old issue fixed"},
-	}
-
-	_, err := agent.Run(context.Background(), "write about autumn", "autumn moon", laws, existingFeedback)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
-
-	query := string(mp.capturedQuery)
-	checks := []string{
-		"Must evoke a season",
-		"Use natural imagery",
-		"law-1",
-		"law-2",
-		"old issue fixed",
-		"Do NOT re-raise",
-		"write about autumn",
-		"autumn moon",
-	}
-	for _, want := range checks {
-		if !strings.Contains(query, want) {
-			t.Errorf("query prompt should contain %q, got:\n%s", want, query)
-		}
-	}
-}
-
-func TestReviewAgent_PromptOmitsEmptySections(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": []}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
-
-	query := string(mp.capturedQuery)
-	if strings.Contains(query, "GOVERNANCE LAWS") {
-		t.Errorf("query should not contain GOVERNANCE LAWS when no laws, got:\n%s", query)
-	}
-	if strings.Contains(query, "PREVIOUS FEEDBACK HISTORY") {
-		t.Errorf("query should not contain PREVIOUS FEEDBACK HISTORY when no feedback, got:\n%s", query)
-	}
-}
-
-func TestReviewAgent_SystemPromptContainsConfig(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": []}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg)
-
-	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
-
-	if !strings.Contains(mp.capturedSystem, "haiku") {
-		t.Errorf("system prompt should contain review artefact name, got:\n%s", mp.capturedSystem)
 	}
 }
 
@@ -987,7 +778,7 @@ func TestEvaluateFeedback_CitationNotNovel(t *testing.T) {
 			State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 			Justification: &flowv1.Justification{
 				Kind: &flowv1.Justification_Citation{
-					Citation: &flowv1.Citation{CitationIds: []string{"law-1"}},
+					Citation: &flowv1.Citation{CitationIds: []string{testLawID}},
 				},
 			},
 			Message: "test",
@@ -1217,7 +1008,7 @@ func TestHasNovelArgument(t *testing.T) {
 			fb: &flowv1.FeedbackItem{
 				Justification: &flowv1.Justification{
 					Kind: &flowv1.Justification_Citation{
-						Citation: &flowv1.Citation{CitationIds: []string{"law-1"}},
+						Citation: &flowv1.Citation{CitationIds: []string{testLawID}},
 					},
 				},
 			},
@@ -1254,5 +1045,563 @@ func TestHasNovelArgument(t *testing.T) {
 				t.Fatalf("hasNovelArgument() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — groupLawsByDivision
+// ---------------------------------------------------------------------------
+
+func TestGroupLawsByDivision_MixedDivisions(t *testing.T) {
+	laws := []*flowv1.Law{
+		{Id: testLawID, Division: "security"},
+		{Id: "law-2", Division: "architecture"},
+		{Id: "law-3", Division: "security"},
+		{Id: "law-4"},
+	}
+
+	groups := groupLawsByDivision(laws)
+
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups, got %d", len(groups))
+	}
+
+	securityLaws := groups["security"]
+	if len(securityLaws) != 2 {
+		t.Fatalf("expected 2 security laws, got %d", len(securityLaws))
+	}
+
+	archLaws := groups["architecture"]
+	if len(archLaws) != 1 {
+		t.Fatalf("expected 1 architecture law, got %d", len(archLaws))
+	}
+
+	generalLaws := groups[defaultDivision]
+	if len(generalLaws) != 1 {
+		t.Fatalf("expected 1 general law, got %d", len(generalLaws))
+	}
+	if generalLaws[0].GetId() != "law-4" {
+		t.Fatalf("expected general law to be law-4, got %s", generalLaws[0].GetId())
+	}
+}
+
+func TestGroupLawsByDivision_AllEmpty(t *testing.T) {
+	laws := []*flowv1.Law{
+		{Id: testLawID},
+		{Id: "law-2"},
+	}
+
+	groups := groupLawsByDivision(laws)
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if len(groups[defaultDivision]) != 2 {
+		t.Fatalf("expected 2 general laws, got %d", len(groups[defaultDivision]))
+	}
+}
+
+func TestGroupLawsByDivision_NoLaws(t *testing.T) {
+	groups := groupLawsByDivision(nil)
+	if len(groups) != 0 {
+		t.Fatalf("expected 0 groups for nil laws, got %d", len(groups))
+	}
+}
+
+func TestGroupLawsByDivision_SingleDivision(t *testing.T) {
+	laws := []*flowv1.Law{
+		{Id: testLawID, Division: "security"},
+		{Id: "law-2", Division: "security"},
+	}
+
+	groups := groupLawsByDivision(laws)
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if len(groups["security"]) != 2 {
+		t.Fatalf("expected 2 security laws, got %d", len(groups["security"]))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — fanOutReview (Phase 2 orchestration)
+// ---------------------------------------------------------------------------
+
+func TestFanOutReview_SingleDivision(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	cfg.DivisionPrompts = map[string]string{
+		"security": "Focus on security.",
+	}
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Division: "security", Goal: "No secrets"},
+	}
+
+	// Pre-configure child review outputs.
+	setupChildReviewOutputs(spy, reviewOutput{
+		Feedback: []reviewItem{
+			{Message: "found issue", Severity: "medium", CitedLaws: []string{testLawID}},
+		},
+	})
+
+	client := newSpyClient(t, spy)
+
+	feedback, err := fanOutReview(
+		context.Background(), client, cfg,
+		spy.Laws, nil,
+		"petition text", "haiku text",
+	)
+	if err != nil {
+		t.Fatalf("fanOutReview() returned error: %v", err)
+	}
+
+	if len(feedback) != 1 {
+		t.Fatalf("expected 1 merged feedback item, got %d", len(feedback))
+	}
+	if feedback[0].Message != "found issue" {
+		t.Fatalf("expected message 'found issue', got %q", feedback[0].Message)
+	}
+	if feedback[0].CitedLaws[0] != testLawID {
+		t.Fatalf("expected cited law 'law-1', got %v", feedback[0].CitedLaws)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// Verify fan-out: 1 child created, routed to "reviewer".
+	if len(spy.FanOutTasks) != 1 {
+		t.Fatalf("expected 1 fan-out task, got %d", len(spy.FanOutTasks))
+	}
+	if spy.FanOutTasks[0].TargetNode != "reviewer" {
+		t.Fatalf("expected target 'reviewer', got %q", spy.FanOutTasks[0].TargetNode)
+	}
+
+	// Verify division artefact contains prompt suffix.
+	divRaw := spy.FanOutTasks[0].Artefacts[artefactDivision]
+	var div divisionData
+	if err := json.Unmarshal(divRaw, &div); err != nil {
+		t.Fatalf("failed to unmarshal division artefact: %v", err)
+	}
+	if div.Name != "security" {
+		t.Fatalf("expected division name 'security', got %q", div.Name)
+	}
+	if div.PromptSuffix != "Focus on security." {
+		t.Fatalf("expected prompt suffix 'Focus on security.', got %q", div.PromptSuffix)
+	}
+}
+
+func TestFanOutReview_MultipleDivisions(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Division: "security", Goal: "No secrets"},
+		{Id: "law-2", Division: "style", Goal: "Be consistent"},
+	}
+
+	// Pre-configure child review outputs (2 children).
+	setupChildReviewOutputs(spy,
+		reviewOutput{Feedback: []reviewItem{
+			{Message: "security issue", Severity: "high", CitedLaws: []string{testLawID}},
+		}},
+		reviewOutput{Feedback: []reviewItem{
+			{Message: "style issue", Severity: "low", CitedLaws: []string{"law-2"}},
+		}},
+	)
+
+	client := newSpyClient(t, spy)
+
+	feedback, err := fanOutReview(
+		context.Background(), client, cfg,
+		spy.Laws, nil,
+		"petition text", "haiku text",
+	)
+	if err != nil {
+		t.Fatalf("fanOutReview() returned error: %v", err)
+	}
+
+	if len(feedback) != 2 {
+		t.Fatalf("expected 2 merged feedback items, got %d", len(feedback))
+	}
+
+	// Sort by message for stable assertion.
+	sort.Slice(feedback, func(i, j int) bool {
+		return feedback[i].Message < feedback[j].Message
+	})
+
+	if feedback[0].Message != "security issue" {
+		t.Fatalf("expected 'security issue', got %q", feedback[0].Message)
+	}
+	if feedback[1].Message != "style issue" {
+		t.Fatalf("expected 'style issue', got %q", feedback[1].Message)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.FanOutTasks) != 2 {
+		t.Fatalf("expected 2 fan-out tasks, got %d", len(spy.FanOutTasks))
+	}
+}
+
+func TestFanOutReview_NoLaws(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+
+	client := newSpyClient(t, spy)
+
+	feedback, err := fanOutReview(
+		context.Background(), client, cfg,
+		nil, nil,
+		"petition text", "haiku text",
+	)
+	if err != nil {
+		t.Fatalf("fanOutReview() returned error: %v", err)
+	}
+	if feedback != nil {
+		t.Fatalf("expected nil feedback for no laws, got %v", feedback)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.FanOutTasks) != 0 {
+		t.Fatalf("expected 0 fan-out tasks, got %d", len(spy.FanOutTasks))
+	}
+}
+
+func TestFanOutReview_EmptyDivisionDefaultsToGeneral(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Goal: "General law"},
+	}
+
+	setupChildReviewOutputs(spy, reviewOutput{Feedback: []reviewItem{}})
+
+	client := newSpyClient(t, spy)
+
+	_, err := fanOutReview(
+		context.Background(), client, cfg,
+		spy.Laws, nil,
+		"petition text", "haiku text",
+	)
+	if err != nil {
+		t.Fatalf("fanOutReview() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	if len(spy.FanOutTasks) != 1 {
+		t.Fatalf("expected 1 fan-out task, got %d", len(spy.FanOutTasks))
+	}
+
+	divRaw := spy.FanOutTasks[0].Artefacts[artefactDivision]
+	var div divisionData
+	if err := json.Unmarshal(divRaw, &div); err != nil {
+		t.Fatalf("failed to unmarshal division: %v", err)
+	}
+	if div.Name != defaultDivision {
+		t.Fatalf("expected division name %q, got %q", defaultDivision, div.Name)
+	}
+}
+
+func TestFanOutReview_LawsArtefactContainsCorrectData(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Tier: 2, Division: "security", Goal: "No secrets"},
+		{Id: "law-2", Tier: 1, Division: "security", Goal: "Be careful"},
+	}
+
+	setupChildReviewOutputs(spy, reviewOutput{Feedback: []reviewItem{}})
+
+	client := newSpyClient(t, spy)
+
+	_, err := fanOutReview(
+		context.Background(), client, cfg,
+		spy.Laws, nil,
+		"petition text", "haiku text",
+	)
+	if err != nil {
+		t.Fatalf("fanOutReview() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	lawsRaw := spy.FanOutTasks[0].Artefacts[artefactLaws]
+	var laws []lawData
+	if err := json.Unmarshal(lawsRaw, &laws); err != nil {
+		t.Fatalf("failed to unmarshal laws artefact: %v", err)
+	}
+	if len(laws) != 2 {
+		t.Fatalf("expected 2 laws in artefact, got %d", len(laws))
+	}
+
+	// Sort for stable assertion.
+	sort.Slice(laws, func(i, j int) bool {
+		return laws[i].ID < laws[j].ID
+	})
+
+	if laws[0].ID != testLawID || laws[0].Tier != 2 || laws[0].Goal != "No secrets" {
+		t.Fatalf("law-1 data mismatch: %+v", laws[0])
+	}
+	if laws[1].ID != "law-2" || laws[1].Tier != 1 || laws[1].Goal != "Be careful" {
+		t.Fatalf("law-2 data mismatch: %+v", laws[1])
+	}
+}
+
+func TestFanOutReview_HistoryArtefactContainsCorrectData(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Division: "security", Goal: "No secrets"},
+	}
+
+	existingFeedback := []*flowv1.FeedbackItem{
+		{
+			State:   flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED,
+			Message: "old issue",
+		},
+		{
+			State:   flowv1.FeedbackState_FEEDBACK_STATE_NEW,
+			Message: "new issue",
+		},
+	}
+
+	setupChildReviewOutputs(spy, reviewOutput{Feedback: []reviewItem{}})
+
+	client := newSpyClient(t, spy)
+
+	_, err := fanOutReview(
+		context.Background(), client, cfg,
+		spy.Laws, existingFeedback,
+		"petition text", "haiku text",
+	)
+	if err != nil {
+		t.Fatalf("fanOutReview() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	historyRaw := spy.FanOutTasks[0].Artefacts[artefactHistory]
+	var history []historyData
+	if err := json.Unmarshal(historyRaw, &history); err != nil {
+		t.Fatalf("failed to unmarshal history artefact: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 history items, got %d", len(history))
+	}
+	if history[0].Message != "old issue" {
+		t.Fatalf("expected first history message 'old issue', got %q", history[0].Message)
+	}
+	if history[1].Message != "new issue" {
+		t.Fatalf("expected second history message 'new issue', got %q", history[1].Message)
+	}
+}
+
+func TestFanOutReview_DivisionPromptSuffixFromConfig(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	cfg.DivisionPrompts = map[string]string{
+		"security": "Extra security instructions.",
+	}
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Division: "security", Goal: "No secrets"},
+		{Id: "law-2", Goal: "General law"},
+	}
+
+	setupChildReviewOutputs(spy,
+		reviewOutput{Feedback: []reviewItem{}},
+		reviewOutput{Feedback: []reviewItem{}},
+	)
+
+	client := newSpyClient(t, spy)
+
+	_, err := fanOutReview(
+		context.Background(), client, cfg,
+		spy.Laws, nil,
+		"petition text", "haiku text",
+	)
+	if err != nil {
+		t.Fatalf("fanOutReview() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// Find the task for each division.
+	for _, task := range spy.FanOutTasks {
+		divRaw := task.Artefacts[artefactDivision]
+		var div divisionData
+		if err := json.Unmarshal(divRaw, &div); err != nil {
+			t.Fatalf("failed to unmarshal division: %v", err)
+		}
+
+		switch div.Name {
+		case "security":
+			if div.PromptSuffix != "Extra security instructions." {
+				t.Fatalf("security division should have prompt suffix, got %q", div.PromptSuffix)
+			}
+		case defaultDivision:
+			if div.PromptSuffix != "" {
+				t.Fatalf("general division should have empty prompt suffix, got %q", div.PromptSuffix)
+			}
+		default:
+			t.Fatalf("unexpected division %q", div.Name)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — handleAppraise (full orchestrator integration)
+// ---------------------------------------------------------------------------
+
+func TestHandleAppraise_HappyPath(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Division: "security", Goal: "No secrets"},
+	}
+
+	// Set up child to return feedback.
+	setupChildReviewOutputs(spy, reviewOutput{
+		Feedback: []reviewItem{
+			{Message: "found issue", Severity: "medium", CitedLaws: []string{testLawID}},
+		},
+	})
+
+	client := newSpyClient(t, spy)
+
+	// Create eval and finding agents (they won't be triggered — no ACTIONED/WONT_FIX feedback).
+	evalMP := &mockModel{}
+	eval, err := NewEvalAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewEvalAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(eval.agent, evalMP)
+
+	findingMP := &mockModel{}
+	finding, err := NewFindingAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewFindingAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(finding.agent, findingMP)
+
+	err = handleAppraise(context.Background(), client, eval, finding, cfg)
+	if err != nil {
+		t.Fatalf("handleAppraise() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// Verify stamp was applied.
+	if len(spy.StampedArtefacts) != 1 || spy.StampedArtefacts[0] != "review" {
+		t.Fatalf("expected stamp 'review', got %v", spy.StampedArtefacts)
+	}
+
+	// Verify feedback was raised from child.
+	if len(spy.AddedFeedback) != 1 {
+		t.Fatalf("expected 1 feedback item raised, got %d", len(spy.AddedFeedback))
+	}
+	if spy.AddedFeedback[0].Message != "found issue" {
+		t.Fatalf("expected feedback 'found issue', got %q", spy.AddedFeedback[0].Message)
+	}
+
+	// Verify cite was called.
+	if len(spy.CitedLaws) != 1 || spy.CitedLaws[0][0] != testLawID {
+		t.Fatalf("expected cited law 'law-1', got %v", spy.CitedLaws)
+	}
+
+	// Verify routed to output.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "default" {
+		t.Fatalf("expected route to 'default', got %v", spy.RoutedOutputs)
+	}
+}
+
+func TestHandleAppraise_NoLaws_NoReview(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	// No laws configured.
+
+	client := newSpyClient(t, spy)
+
+	evalMP := &mockModel{}
+	eval, err := NewEvalAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewEvalAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(eval.agent, evalMP)
+
+	findingMP := &mockModel{}
+	finding, err := NewFindingAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewFindingAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(finding.agent, findingMP)
+
+	err = handleAppraise(context.Background(), client, eval, finding, cfg)
+	if err != nil {
+		t.Fatalf("handleAppraise() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// No feedback should be raised (no laws = no fan-out).
+	if len(spy.AddedFeedback) != 0 {
+		t.Fatalf("expected 0 feedback, got %d", len(spy.AddedFeedback))
+	}
+	if len(spy.FanOutTasks) != 0 {
+		t.Fatalf("expected 0 fan-out tasks, got %d", len(spy.FanOutTasks))
+	}
+
+	// Stamp and route should still happen.
+	if len(spy.StampedArtefacts) != 1 {
+		t.Fatalf("expected stamp, got %v", spy.StampedArtefacts)
+	}
+	if len(spy.RoutedOutputs) != 1 {
+		t.Fatalf("expected route, got %v", spy.RoutedOutputs)
+	}
+}
+
+func TestHandleAppraise_ChildReturnsNoFeedback(t *testing.T) {
+	spy := newAppraiseSpy()
+	cfg := defaultTestConfig()
+	spy.Laws = []*flowv1.Law{
+		{Id: testLawID, Division: "security", Goal: "No secrets"},
+	}
+
+	// Child returns empty feedback.
+	setupChildReviewOutputs(spy, reviewOutput{Feedback: []reviewItem{}})
+
+	client := newSpyClient(t, spy)
+
+	evalMP := &mockModel{}
+	eval, err := NewEvalAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewEvalAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(eval.agent, evalMP)
+
+	findingMP := &mockModel{}
+	finding, err := NewFindingAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewFindingAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(finding.agent, findingMP)
+
+	err = handleAppraise(context.Background(), client, eval, finding, cfg)
+	if err != nil {
+		t.Fatalf("handleAppraise() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	if len(spy.AddedFeedback) != 0 {
+		t.Fatalf("expected 0 feedback for empty child output, got %d", len(spy.AddedFeedback))
 	}
 }

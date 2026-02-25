@@ -225,6 +225,58 @@ spec:
           configMap:
             name: appraise-config
 ---
+# --- Reviewer ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviewer
+  namespace: default
+  labels:
+    app.kubernetes.io/name: reviewer
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reviewer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reviewer
+        flow.gideas.io/node-name: reviewer
+    spec:
+      containers:
+        - name: node
+          image: reviewer:latest
+          ports:
+            - containerPort: 50053
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+          volumeMounts:
+            - name: node-config
+              mountPath: /etc/foundry
+              readOnly: true
+        - name: sidecar
+          image: flow-sidecar:latest
+          ports:
+            - containerPort: 50051
+          env:
+            - name: FLOW_NODE_ID
+              value: "reviewer"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "flow-operator:50052"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
+      volumes:
+        - name: node-config
+          configMap:
+            name: reviewer-config
+---
 # --- Refine ---
 apiVersion: apps/v1
 kind: Deployment

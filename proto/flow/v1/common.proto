@@ -181,6 +181,9 @@ message Law {
   string version_hash = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  // Optional specialisation division (e.g. "security", "architecture").
+  // Empty means unset; consumers treat empty as "general".
+  string division = 9;
 }
 
 // A typed representation of a law's goal.

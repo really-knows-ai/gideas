@@ -187,7 +187,9 @@ The Librarian serves law queries through the [Sidecar](../03-node/01-sidecar.md)
 - **By governed artefact name** — returns laws whose `appliesTo` includes the queried name, plus all global laws.
 - **By governed artefact name + representation type** — same name filter, plus the law must have at least one representation of the requested type. Laws without a matching representation type are excluded.
 
-All query modes return full law objects (goal, all representations, tier, metadata). Filters gate which laws are included in the result; they never strip representations from returned law objects.
+All query modes support an optional **division filter**. When a division is specified in the `LawFilter`, only laws with that exact division value are returned. An empty division filter means no division filtering — laws from all divisions are included. Division filtering composes with the other query modes (governed artefact name, representation type).
+
+All query modes return full law objects (goal, all representations, tier, division, metadata). Filters gate which laws are included in the result; they never strip representations from returned law objects.
 
 Tier is part of legal authority, but retrieval remains one law body with one identity model — all tiers are returned together.
 

@@ -164,6 +164,7 @@ func (s *LibrarianServer) QueryLaws(
 	if f := req.GetFilter(); f != nil {
 		filter.GovernedArtefact = f.GetGovernedArtefact()
 		filter.RepresentationType = f.GetRepresentationType()
+		filter.Division = f.GetDivision()
 
 		// Validate: if representation_type is set, governed_artefact must also be set.
 		if filter.RepresentationType != "" && filter.GovernedArtefact == "" {
@@ -174,6 +175,7 @@ func (s *LibrarianServer) QueryLaws(
 	slog.Info("QueryLaws",
 		"governed_artefact", filter.GovernedArtefact,
 		"representation_type", filter.RepresentationType,
+		"division", filter.Division,
 	)
 
 	laws, err := s.store.QueryLaws(ctx, filter)
@@ -317,6 +319,7 @@ func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequ
 		Tier:            tier,
 		AppliesTo:       protoLaw.GetAppliesTo(),
 		Representations: storeReps,
+		Division:        protoLaw.GetDivision(),
 	}
 
 	var (
@@ -587,6 +590,7 @@ func storeLawToProto(law sqlite.Law) *flowv1.Law {
 		Representations: reps,
 		Tier:            flowv1.LawTier(law.Tier),
 		AppliesTo:       law.AppliesTo,
+		Division:        law.Division,
 		VersionHash:     law.VersionHash,
 		CreatedAt:       timestamppb.New(law.CreatedAt),
 		UpdatedAt:       timestamppb.New(law.UpdatedAt),
