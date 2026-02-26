@@ -299,8 +299,6 @@ func TestWatchChildren_ReceivesEvents(t *testing.T) {
 			flowv1.RegisterArchivistServiceServer(s, spy)
 			flowv1.RegisterLibrarianServiceServer(s, spy)
 			flowv1.RegisterFrictionLedgerServiceServer(s, spy)
-			flowv1.RegisterJuryServiceServer(s, spy)
-			flowv1.RegisterClerkServiceServer(s, spy)
 		},
 		func(s *grpc.Server) {
 			flowv1.RegisterFlowEventBusServiceServer(s, ebSpy)

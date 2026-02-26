@@ -2,11 +2,10 @@
 //
 // It listens on a single port and multiplexes all Flow services
 // (SidecarService, OperatorService, ArchivistService, LibrarianService,
-// JuryService, ClerkService, FrictionLedgerService). The SidecarService
-// handles node-facing RPCs (Heartbeat, AddFriction, RecordTelemetry) and
-// operator-facing RPCs (AssignWork). Other services are proxied to their
-// real gRPC endpoints when the corresponding address environment variable
-// is set.
+// FrictionLedgerService). The SidecarService handles node-facing RPCs
+// (Heartbeat, AddFriction, RecordTelemetry) and operator-facing RPCs
+// (AssignWork). Other services are proxied to their real gRPC endpoints
+// when the corresponding address environment variable is set.
 //
 // Usage:
 //
@@ -43,8 +42,6 @@ const (
 	envLibrarianAddress    = "LIBRARIAN_ADDRESS"
 	envEventBusAddress     = "EVENT_BUS_ADDRESS"
 	envFrictionLedgerAddr  = "FRICTION_LEDGER_ADDRESS"
-	envJuryAddress         = "JURY_ADDRESS"
-	envClerkAddress        = "CLERK_ADDRESS"
 	envCapabilities        = "FLOW_CAPABILITIES"
 )
 
@@ -71,8 +68,6 @@ func main() {
 	librarianAddr := os.Getenv(envLibrarianAddress)
 	eventBusAddr := os.Getenv(envEventBusAddress)
 	frictionLedgerAddr := os.Getenv(envFrictionLedgerAddr)
-	juryAddr := os.Getenv(envJuryAddress)
-	clerkAddr := os.Getenv(envClerkAddress)
 	capabilities := os.Getenv(envCapabilities)
 
 	slog.Info("Sidecar starting",
@@ -84,8 +79,6 @@ func main() {
 		"librarian_address", librarianAddr,
 		"event_bus_address", eventBusAddr,
 		"friction_ledger_address", frictionLedgerAddr,
-		"jury_address", juryAddr,
-		"clerk_address", clerkAddr,
 		"capabilities", capabilities,
 		"phase", "brain-stem",
 	)
@@ -195,38 +188,6 @@ func main() {
 		slog.Info("Friction Ledger proxy disabled (no FRICTION_LEDGER_ADDRESS set)")
 	}
 
-	// JuryService: proxy to real Jury if address is set, otherwise skip.
-	var juryCloser func() error
-	if juryAddr != "" {
-		juryProxy, err := proxy.NewJuryProxy(juryAddr)
-		if err != nil {
-			slog.Error("Failed to connect to Jury", "address", juryAddr, "error", err)
-			os.Exit(1)
-		}
-		flowv1.RegisterJuryServiceServer(srv, juryProxy)
-		juryCloser = juryProxy.Close
-		slog.Info("Jury proxy enabled", "address", juryAddr)
-	} else {
-		juryCloser = func() error { return nil }
-		slog.Info("Jury proxy disabled (no JURY_ADDRESS set)")
-	}
-
-	// ClerkService: proxy to real Clerk if address is set, otherwise skip.
-	var clerkCloser func() error
-	if clerkAddr != "" {
-		clerkProxy, err := proxy.NewClerkProxy(clerkAddr)
-		if err != nil {
-			slog.Error("Failed to connect to Clerk", "address", clerkAddr, "error", err)
-			os.Exit(1)
-		}
-		flowv1.RegisterClerkServiceServer(srv, clerkProxy)
-		clerkCloser = clerkProxy.Close
-		slog.Info("Clerk proxy enabled", "address", clerkAddr)
-	} else {
-		clerkCloser = func() error { return nil }
-		slog.Info("Clerk proxy disabled (no CLERK_ADDRESS set)")
-	}
-
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
@@ -244,8 +205,6 @@ func main() {
 		_ = archivistCloser()
 		_ = librarianCloser()
 		_ = frictionLedgerCloser()
-		_ = juryCloser()
-		_ = clerkCloser()
 		_ = eventBusCloser()
 		_ = sidecarSrv.Close()
 	}()
