@@ -157,7 +157,7 @@ Integration-time law conflict handling and runtime dispute escalation are distin
 
 Judiciary authority remains bounded across boundaries:
 
-- Resolve at Tier 2 by minting rulings via the Clerk.
+- Resolve at Tier 2 by minting rulings via Clerk petition.
 - Propose Tier 3 changes for human ratification via the Advocate.
 - Appeal Tier 4-5 conflicts through the Advocate to governance channels.
 
@@ -165,8 +165,8 @@ Runtime conflict outcomes are tier-pair specific and align with [Governance](../
 
 | Conflict tier combination | Runtime outcome |
 |---------------------------|-----------------|
-| Tier 1 vs Tier 2 | The Arbiter deliberates via the Jury with supremacy weighting, mints a new Tier 2 Ruling via the Clerk that consolidates the surviving position, and retires the originals. |
-| Tier 1 vs Tier 1, Tier 2 vs Tier 2 | The Arbiter mints a new Tier 2 Ruling via the Clerk that consolidates the conflicting laws and retires the originals. |
+| Tier 1 vs Tier 2 | The Arbiter fans out to Juror nodes for deliberation with supremacy weighting, the verdict flows to the Clerk to draft a Tier 2 Ruling petition that consolidates the surviving position, and retires the originals. |
+| Tier 1 vs Tier 1, Tier 2 vs Tier 2 | The Arbiter fans out to Juror nodes, the verdict flows to the Clerk to draft a Tier 2 Ruling petition that consolidates the conflicting laws and retires the originals. |
 | Tier 1-2 vs Tier 3 | The lower-tier law retires. If the conflict exposes ambiguity or a gap in Tier 3, the Arbiter routes to the Advocate to petition HITL with a proposed clarification or amendment. |
 | Tier 3 vs Tier 3 | The Arbiter drafts a consolidated Tier 3 proposal and routes to the Advocate to petition HITL. If rejected, the conflict persists — every future Workitem that hits the same conflict generates another HITL escalation and more friction until the humans act. |
 | Tier 4 or Tier 5 involvement | The Advocate files an appeal through the Librarian to Governance Flow authorities. Tier 4 can be repealed or amended by Governance Flow; Tier 5 appeals escalate to the relevant Federal authority. |
@@ -176,7 +176,7 @@ Supremacy heavily informs outcomes, but does not bypass Judiciary deliberation i
 ```mermaid
 flowchart TD
     RT["Runtime conflict"] --> ARB["Arbiter"]
-    ARB -->|"Tier 1-2"| RS["Resolve locally<br/>via Clerk"]
+    ARB -->|"Tier 1-2"| RS["Resolve locally<br/>via Clerk petition"]
     ARB -->|"Tier 3+"| ADV["Advocate"]
     ADV -->|"Tier 3"| PR["Propose to HITL"]
     ADV -->|"Tier 4-5"| AP["Appeal to Governance Flow"]

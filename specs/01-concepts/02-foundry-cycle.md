@@ -41,37 +41,94 @@ Refine addresses feedback. It reads the applicable laws for the governed artefac
 
 ### The Judiciary — Standard Subsystem
 
-The Judiciary is the judicial branch of the Flow. It is built into the runtime as a standard subsystem — every Flow includes it, and Flow Architects do not choose whether to include it. The Judiciary comprises three nodes and two core services, all Operator-provisioned.
+The Judiciary is the judicial branch of the Flow. It is built into the runtime as a standard subsystem — every Flow includes it, and Flow Architects do not choose whether to include it. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking.
+
+The Judiciary comprises orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes (Juror, Deliberation Gate), and a legislative inner cycle (Clerk, Codification nodes, Tribunal Router, Judiciary Gate). All are Operator-provisioned.
 
 #### Arbiter (Deadlock Resolver)
 
-The Arbiter resolves deadlocked feedback disputes. When the gate node detects that a feedback item's history depth warrants escalation, it transitions the item to `deadlocked` and routes the Workitem to the Arbiter. The Arbiter invokes the [Jury](../02-flow/04-system-services.md#jury) service for multi-agent deliberation, then uses the [Clerk](../02-flow/04-system-services.md#clerk) service to draft and codify a Tier 2 Ruling. The feedback item's `linkedRuling` is set to this Ruling regardless of which side the Arbiter favours, and the Workitem routes back to Sort for re-evaluation.
+The Arbiter resolves deadlocked feedback disputes. When the gate node detects that a feedback item's history depth warrants escalation, it transitions the item to `deadlocked` and routes the Workitem to the Arbiter. The Arbiter assembles evidence (artefact content, feedback history, relevant laws, friction data), fans out to [Juror](#juror-judicial-agent) nodes using [child Workitems](../02-flow/02-workitem.md#child-workitems), and collects their verdicts. The Workitem then routes to the [Deliberation Gate](#deliberation-gate-consensus-tally) for consensus tally. On consensus (or after HITL resolution of a hung jury), the verdict flows to the [Clerk](#clerk-petition-drafter) to draft a Tier 2 Ruling as a petition. The feedback item's `linkedRuling` is set to this Ruling regardless of which side the Arbiter favours, and the Workitem routes back to Sort for re-evaluation.
 
 The Arbiter holds the `WRITE:law/tier2` capability — Tier 2 Rulings are both the floor and the ceiling of its judicial authority, and the ceiling grant also covers Tier 1. The Arbiter does not write Tier 1 Findings by convention; its role is judicial, not observational. Its full [authority ceiling](./04-governance.md#judiciary-authority-ceiling) is constitutionally bounded.
 
 #### Tribunal (Hearing Conductor)
 
-The Tribunal conducts review hearings on laws. When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a hearing Workitem routed to the Tribunal. The Tribunal invokes the [Jury](../02-flow/04-system-services.md#jury) service for deliberation, then renders a tier-appropriate verdict:
+The Tribunal conducts review hearings on laws and reviews petitions from the Clerk. It operates in two modes, distinguished by the artefacts present on the Workitem:
 
-- **Tier 1 Finding**: Promote (mint Tier 2 Ruling via the [Clerk](../02-flow/04-system-services.md#clerk)) or Retire.
-- **Tier 2 Ruling**: Promote (route to [Advocate](#advocate-human-escalation) for HITL ratification as Tier 3), Retire, or Demote (drop to Tier 1).
-- **Tier 3–5**: Route to [Advocate](#advocate-human-escalation) for petition or appeal.
+**Hearing mode.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a hearing Workitem routed to the Tribunal. The Tribunal assembles evidence (the law under review, friction data, related laws), fans out to [Juror](#juror-judicial-agent) nodes, and collects their verdicts. The Workitem then routes to the [Deliberation Gate](#deliberation-gate-consensus-tally) for consensus tally. On consensus, the [Tribunal Router](#tribunal-router) reads the tier from the law-reference artefact and routes accordingly:
 
-Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They are self-contained at the Tribunal.
+- **Tier 1–2 verdict**: Route to [Clerk](#clerk-petition-drafter) to draft a petition (promote, retire, or demote).
+- **Tier 3+**: Route to [Advocate](#advocate-human-escalation) for petition or appeal.
+
+**Review mode.** When the Clerk drafts a petition and routes it for review (mirroring how Appraise reviews Forge's artefacts), the Tribunal reads the petition artefact, reviews it against governance context, fans out to [Juror](#juror-judicial-agent) nodes for deliberation, and routes to the [Deliberation Gate](#deliberation-gate-consensus-tally). On consensus, the Workitem flows to the [Judiciary Gate](#judiciary-gate).
+
+Hearing Workitems carry a `law-reference` artefact containing the law ID under review. Review Workitems carry a `petition` artefact.
 
 #### Advocate (Human Escalation)
 
 The Advocate is the Judiciary's [human-in-the-loop](../03-node/03-patterns.md#human-in-the-loop-pattern) node. It receives work that exceeds automated judicial authority:
 
-- **Hung jury**: When the Arbiter or Tribunal cannot reach consensus after the configured maximum jury rounds, the Workitem routes to the Advocate for human decision.
-- **Tier 3 proposal**: When the Tribunal renders a Promote verdict for a Tier 2 Ruling, the Advocate presents the proposal to a human for ratification.
-- **Tier 4–5 appeal**: When a conflict involves Tier 4 or Tier 5 laws, the Advocate files an appeal to the [Governance Flow](./04-governance.md) via the Librarian.
+- **Hung jury**: When the [Deliberation Gate](#deliberation-gate-consensus-tally) produces a `hung` output (consensus not reached after the configured maximum rounds), the Workitem routes to the Advocate for human decision.
+- **Tier 3+ hearing**: When the [Tribunal Router](#tribunal-router) routes a Tier 3+ verdict, the Advocate presents it to a human for ratification or appeal.
+- **Tier 3+ ratification**: When the [Judiciary Gate](#judiciary-gate) routes an approved Tier 3 petition, the Advocate presents it for HITL ratification before application.
+- **Tier 4–5 escalation**: The Advocate files an appeal to the [Governance Flow](./04-governance.md) via the Librarian.
 
-The Advocate uses the SDK's [HITL pattern](../04-sdk/08-sdk-hitl.md) — exposing a queue interface for human reviewers, persisting pending decisions in local storage, and maintaining heartbeats while awaiting human input. Escalation patterns (timeout chains, delegation, pool routing) are built on top of this base.
+The Advocate uses the SDK's [HITL pattern](../04-sdk/08-sdk-hitl.md) — exposing a queue interface for human reviewers, persisting pending decisions in local storage, and maintaining heartbeats while awaiting human input. Escalation patterns (timeout chains, delegation, pool routing) are built on top of this base. HITL decisions route to the [Clerk](#clerk-petition-drafter) so they are codified as petitions and go through the normal review cycle.
+
+#### Juror (Judicial Agent)
+
+The Juror is the deliberation primitive. A single Juror node image loads different agent configurations at fan-out time to maximise diversity of judicial philosophy for the jury size required. Each Juror receives a child Workitem containing: the question to deliberate, evidence artefacts, prior-round reasoning (if a retry), and allowed outcomes. It runs a [FoundryAgent](../04-sdk/07-sdk-agent.md) with the loaded judicial personality and produces a structured verdict artefact (outcome + reasoning). It then calls `Complete()`.
+
+Juror nodes are shared across both the Arbiter path and the Tribunal path. The Arbiter and Tribunal are responsible for framing the question and assembling evidence; the Juror only deliberates.
+
+#### Deliberation Gate (Consensus Tally)
+
+The Deliberation Gate is a generic consensus tally node. It reads juror verdict artefacts from the Workitem (the parent collected them after fan-in), applies the configured consensus strategy (simple majority, super-majority, or unanimity), and tracks the round count. It has three well-known outputs:
+
+- **`consensus`**: The jury reached agreement. Route to the next step (Clerk for Arbiter path, Tribunal Router for hearing path, Judiciary Gate for review path).
+- **`retry`**: No consensus, but rounds remain. Route back to the fan-out parent (Arbiter or Tribunal) for another round with prior-round reasoning attached.
+- **`hung`**: No consensus and maximum rounds exhausted. Route to the [Advocate](#advocate-human-escalation) for human decision.
+
+The Deliberation Gate does not know about tiers, petitions, or law semantics. It tallies votes and routes.
+
+#### Clerk (Petition Drafter)
+
+The Clerk drafts and revises [petition](#petition-artefact) artefacts — structured YAML/Markdown documents describing proposed law changes. It receives verdict and context artefacts (from Arbiter consensus, HITL decision, or Tribunal hearing verdict), drafts the petition with prose description, fans out to [Codification](#codification-nodes) nodes for formal representations, collects codification results, and assembles the complete petition (prose + formal representations). The petition then routes to the [Tribunal](#tribunal-hearing-conductor) for review (review mode).
+
+On revision (feedback from the Tribunal via the [Judiciary Gate](#judiciary-gate)), the Clerk reads the feedback, revises the petition, re-fans-out for codification, and re-routes to the Tribunal.
+
+#### Codification Nodes
+
+Codification nodes produce formal representations of laws. Each node receives a child Workitem containing the law goal and context as artefacts, produces a formal representation in its declared output format (Rego, SMT-LIB, prose, etc.), and calls `Complete()`. The Clerk fans out to the appropriate Codification nodes based on which representations are needed.
+
+#### Tribunal Router
+
+The Tribunal Router handles post-hearing routing. After the Deliberation Gate reaches consensus on a hearing, the Tribunal Router reads the verdict artefacts and the law-reference artefact (for tier context) and routes:
+
+- **Tier 1–2 verdict**: Route to [Clerk](#clerk-petition-drafter) to draft a petition.
+- **Tier 2 promote to Tier 3**: Route to [Advocate](#advocate-human-escalation) for HITL ratification.
+- **Tier 3+**: Route to [Advocate](#advocate-human-escalation) for petition or appeal.
+
+The Tribunal Router is distinct from the [Judiciary Gate](#judiciary-gate): it routes after hearings (before the inner cycle), while the Judiciary Gate routes after petition review (after the inner cycle).
+
+#### Judiciary Gate
+
+The Judiciary Gate mirrors Sort for the judiciary's inner cycle. After the Tribunal reviews a petition and the Deliberation Gate reaches consensus, the Judiciary Gate checks feedback resolution on the petition artefact and routes:
+
+- **Approved, all feedback resolved, Tier 1–2**: Apply the petition via the Librarian (`WriteLaw`/`RetireLaw`), add approval stamp, done.
+- **Rejected or unresolved feedback**: Route back to the [Clerk](#clerk-petition-drafter) for revision.
+- **Approved, Tier 3**: Route to the [Advocate](#advocate-human-escalation) for HITL ratification, then apply.
+- **Tier 4–5**: Route to the [Advocate](#advocate-human-escalation), then to the [Governance Flow](./04-governance.md).
+
+#### Petition Artefact
+
+A petition is a structured YAML/Markdown [GovernedArtefact](./03-data-model.md#artefacts) containing the complete proposed change set. It is human-readable — a HITL reviewer can read it directly. The petition includes context (trigger, source, verdict, justification) and one or more proposed changes (create, retire, demote), each with the goal, applicable representations, and tier.
 
 ---
 
 ## Cycle Topology
+
+### Main Cycle
 
 ```mermaid
 flowchart LR
@@ -86,10 +143,51 @@ flowchart LR
 
     Appraise --> Sort
     Refine --> Quench
-    Arbiter --> Sort
+    Arbiter -->|fan-out| Jurors[Juror nodes]
+    Jurors -->|collect| Arbiter
+    Arbiter --> DG[Deliberation Gate]
+    DG -->|consensus| Clerk
+    DG -->|retry| Arbiter
+    DG -->|hung| Advocate
 ```
 
-In the reference arrangement, Refine routes back through Quench — deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort (or to whatever gate node the Flow Architect has configured). Deadlock-escalated governed-work assignments route back through Sort after Arbiter adjudication. Review-hearing [Workitems](./03-data-model.md#workitems) are self-contained at the Tribunal. Human escalations are handled by the Advocate.
+### Judiciary Inner Cycle
+
+```mermaid
+flowchart LR
+    Clerk -->|fan-out| Codify[Codification nodes]
+    Codify -->|collect| Clerk
+    Clerk --> Tribunal[Tribunal - review mode]
+    Tribunal -->|fan-out| Jurors[Juror nodes]
+    Jurors -->|collect| Tribunal
+    Tribunal --> DG[Deliberation Gate]
+    DG -->|consensus| JG[Judiciary Gate]
+    DG -->|retry| Tribunal
+    DG -->|hung| Advocate
+
+    JG -->|approved, T1-2| Apply(( ))
+    JG -->|rejected / unresolved| Clerk
+    JG -->|approved, T3| Advocate
+    JG -->|T4-5| Advocate
+```
+
+### Hearing Path
+
+```mermaid
+flowchart LR
+    Librarian -->|trigger| Tribunal[Tribunal - hearing mode]
+    Tribunal -->|fan-out| Jurors[Juror nodes]
+    Jurors -->|collect| Tribunal
+    Tribunal --> DG[Deliberation Gate]
+    DG -->|consensus| TR[Tribunal Router]
+    DG -->|retry| Tribunal
+    DG -->|hung| Advocate
+
+    TR -->|T1-2 verdict| Clerk
+    TR -->|T3+| Advocate
+```
+
+In the reference arrangement, Refine routes back through Quench — deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort (or to whatever gate node the Flow Architect has configured). Deadlock-escalated governed-work assignments route through the Arbiter, Juror fan-out, Deliberation Gate, and Clerk before the resulting petition enters the judiciary inner cycle (Tribunal review, Judiciary Gate). Review-hearing [Workitems](./03-data-model.md#workitems) follow the hearing path through the Tribunal, Deliberation Gate, and Tribunal Router. Human escalations are handled by the Advocate.
 
 ---
 
@@ -108,14 +206,14 @@ flowchart TD
     Refine -->|reads| Library
     Arbiter -->|reads| Library
     Tribunal -->|reads| Library
+    Clerk -->|reads| Library
 
     Appraise -.->|writes Tier 1| Library
     Refine -.->|writes Tier 1| Library
-    Arbiter -.->|writes Tier 2 via Clerk| Library
-    Tribunal -.->|writes Tier 2 via Clerk| Library
+    JG[Judiciary Gate] -.->|writes Tier 2 via Librarian| Library
 ```
 
-Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) — any node granted the `WRITE:law/tier1` capability can do the same, regardless of whether it bears one of these names. The Arbiter and Tribunal hold `WRITE:law/tier2` and mint Tier 2 Rulings (binding precedent) through the [Clerk](../02-flow/04-system-services.md#clerk) service, which coordinates [codification](../02-flow/04-system-services.md#codification-services) and persists the law via the Librarian. Their [authority ceiling](./04-governance.md#judiciary-authority-ceiling) is constitutionally bounded.
+Forge reads laws for context seeding. Quench and Sort are read-only consumers. Appraise and Refine can record Tier 1 Findings (emergent patterns) — any node granted the `WRITE:law/tier1` capability can do the same, regardless of whether it bears one of these names. The Arbiter and Tribunal hold `WRITE:law/tier2`, and the [Judiciary Gate](#judiciary-gate) applies approved petitions to the Library via the Librarian (`WriteLaw`/`RetireLaw`). The [Clerk](#clerk-petition-drafter) drafts petitions and fans out to [Codification](#codification-nodes) nodes for formal representations, but law writes are performed by the Judiciary Gate after the petition has been reviewed and approved. The judiciary's [authority ceiling](./04-governance.md#judiciary-authority-ceiling) is constitutionally bounded.
 
 The underlying platform mechanism is capability-gated law access. Law read and write permissions are granted per node through the FoundryNode CRD. The reference arrangement maps these capabilities to specific roles, but a custom topology can distribute them differently.
 

@@ -35,26 +35,35 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 
 ### The Judiciary
 
-The Judiciary is a runtime-mandated subsystem — the Operator provisions it without requiring separate FoundryNode CRDs. It comprises three nodes and two core services:
+The Judiciary is a runtime-mandated subsystem — the Operator provisions it without requiring separate FoundryNode CRDs. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions. Every step produces auditable artefacts with full friction tracking. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
-**Judiciary Nodes:**
+**Orchestration Nodes:**
 
 | Node | Role | Provisioning |
 |---|---|---|
-| **Arbiter** | Resolves deadlocked feedback disputes. Invokes the Jury for deliberation, uses the Clerk to draft rulings, resolves feedback with `linkedRuling`, routes back to Sort. | Operator-provisioned |
-| **Tribunal** | Conducts review hearings on laws. Receives hearing Workitems, invokes the Jury for deliberation, uses the Clerk (promote) or routes to Advocate (escalate). | Operator-provisioned |
-| **Advocate** | Human escalation point. Receives hung jury escalations and Tier 3+ proposals. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. | Operator-provisioned |
+| **[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver)** | Resolves deadlocked feedback disputes. Assembles evidence, fans out to Juror nodes using child Workitems, collects verdicts, routes to Deliberation Gate. On consensus, the verdict flows to the Clerk to draft a petition. | Operator-provisioned |
+| **[Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-law-review)** | Conducts review hearings (Librarian-triggered) and petition reviews (inner cycle). Both modes fan out to Juror nodes. Hearing mode routes to Deliberation Gate then Tribunal Router. Review mode routes to Deliberation Gate then Judiciary Gate. | Operator-provisioned |
+| **[Advocate](../01-concepts/02-foundry-cycle.md#advocate-human-escalation)** | Human escalation point. Three entry paths: Deliberation Gate (hung verdict), Tribunal Router (Tier 3+ hearing), Judiciary Gate (Tier 3 ratification). Routes HITL decisions to Clerk for petition codification. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. | Operator-provisioned |
 
-**Judiciary Services:**
+**Deliberation Nodes:**
 
-| Service | Role | Provisioning |
+| Node | Role | Provisioning |
 |---|---|---|
-| **Jury** | Multi-agent deliberation engine. Runs parallel FoundryAgent instances, collects votes, applies consensus strategy, returns structured verdict. | Operator-provisioned |
-| **Clerk** | Law drafting and codification coordination. Drafts prose, dispatches to Codification Services, assembles law, calls WriteLaw. | Operator-provisioned |
+| **[Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent)** | Single image, configurable judicial philosophy. Receives child Workitems with question, evidence, and prior-round reasoning. Produces verdict + reasoning artefact. Used by both Arbiter and Tribunal fan-out. | Operator-provisioned |
+| **[Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally)** | Generic consensus tally node. Reads Juror verdict artefacts, applies consensus strategy, tracks round count. Three well-known outputs: `consensus`, `retry`, `hung`. | Operator-provisioned |
 
-The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, feedback resolution capabilities, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages their `USE:support/<name>/encode` capability for each). The Advocate holds `USE:queue/server` and `spec.storage` for HITL queue persistence, and is deployed as a StatefulSet with a Headless Service.
+**Legislative Inner Cycle Nodes:**
 
-The Operator also provisions a `law-reference` GovernedArtefact alongside the Tribunal. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The Tribunal's hearing entry contract requires a single `law-reference` artefact; its hearing exit contract requires it to still be present.
+| Node | Role | Provisioning |
+|---|---|---|
+| **[Clerk](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter)** | Drafts/revises [petition artefacts](../01-concepts/02-foundry-cycle.md#petition-artefact) (YAML/Markdown). Fans out to Codification nodes for formal representations. Assembles complete petition and routes to Tribunal for review. | Operator-provisioned |
+| **[Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes)** | Each produces a formal representation in its declared output format (Rego, SMT-LIB, etc.). Receive child Workitems from Clerk. | Operator-provisioned |
+| **[Tribunal Router](../01-concepts/02-foundry-cycle.md#tribunal-router)** | Tier-aware routing after Tribunal hearing deliberation. Routes Tier 1-2 verdicts to Clerk, Tier 3+ to Advocate. | Operator-provisioned |
+| **[Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate)** | Mirrors Sort for the judiciary inner cycle. Checks feedback resolution on petition artefacts, applies approved petitions via Librarian, or routes back to Clerk for revision, or escalates by tier. | Operator-provisioned |
+
+The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, `CREATE:workitem/child`, feedback resolution capabilities, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages their `USE:support/<name>/encode` capability for each). The Clerk node holds `WRITE:law/tier2`, `READ:law`, `CREATE:workitem/child`, and access to CodificationService instances for fan-out. The Judiciary Gate holds `WRITE:law/tier2` and `READ:law` for applying approved petitions via the Librarian. The Advocate holds `USE:queue/server` and `spec.storage` for HITL queue persistence, and is deployed as a StatefulSet with a Headless Service.
+
+The Operator also provisions a `law-reference` GovernedArtefact alongside the Tribunal. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The Tribunal's hearing entry contract requires a single `law-reference` artefact; its hearing exit contract requires it to still be present. The Operator also provisions a `petition` GovernedArtefact for the inner cycle. The [petition artefact](../01-concepts/02-foundry-cycle.md#petition-artefact) is a YAML/Markdown GovernedArtefact containing the complete proposed change set (context, verdict, justification, and formal representations).
 
 ### Governance Policy
 
@@ -270,7 +279,7 @@ The GovernedArtefact CRD registers a governed artefact and declares its stamp vo
 
 ## Law
 
-The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by the [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) via the [Clerk](../02-flow/04-system-services.md#clerk) (with `WRITE:law/tier2`); Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Governance Flow and Federation. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
+The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by the [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) via the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) (with `WRITE:law/tier2`), which drafts petitions, fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes), and routes approved petitions through the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) to the Librarian; Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Governance Flow and Federation. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
 
 ### `spec`
 
@@ -346,7 +355,7 @@ Specialised CRDs (e.g. [CodificationService](#codificationservice)) share the sa
 
 ## CodificationService
 
-The CodificationService CRD declares a [Codification Service](../02-flow/04-system-services.md#codification-services) — a specialised Flow Support Service that translates law goals into formal representations. Each CodificationService instance produces exactly one representation type, declared via `outputFormat`.
+The CodificationService CRD declares a [Codification Service](../02-flow/04-system-services.md#codification-services) — a specialised Flow Support Service that translates law goals into formal representations. Each CodificationService instance produces exactly one representation type, declared via `outputFormat`. The [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) fans out to Codification nodes via child Workitems; the CodificationService CRD declares the infrastructure for each codification node.
 
 The CodificationService shares the base deployment fields of FlowSupportService (image, deployment strategy, replicas, storage, resources). Its provided capability is always `encode` — the Operator enforces this implicitly; no `providesCapabilities` field is declared.
 
@@ -369,7 +378,7 @@ The CodificationService shares the base deployment fields of FlowSupportService 
 | `availableReplicas` | `integer` | Current number of ready replicas. |
 | `conditions` | `[]Condition` | Standard Kubernetes conditions. |
 
-The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator internally manages the Judiciary's `USE:support/<name>/encode` capability for each registered CodificationService instance. Other nodes that need direct access to a Codification Service require an explicit `USE:support/<name>/encode` grant on their FoundryNode `capabilities`.
+The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator internally manages the Judiciary's `USE:support/<name>/encode` capability for each registered CodificationService instance; the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) fans out to these instances via child Workitems during petition drafting. Other nodes that need direct access to a Codification Service require an explicit `USE:support/<name>/encode` grant on their FoundryNode `capabilities`.
 
 ---
 

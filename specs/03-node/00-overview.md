@@ -75,7 +75,7 @@ Completion semantics are configuration-bound:
 Law and stamp access is capability-gated:
 
 - A node without a `WRITE:law/tierN` capability grant cannot write laws regardless of its role. In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) node reads laws for context seeding and does not write them.
-- The [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) resolves Tier 1-2 conflicts (via the Arbiter), proposes Tier 3 changes and appeals Tier 4-5 conflicts (via the Advocate), and codifies rulings (via the Clerk).
+- The [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) resolves Tier 1-2 conflicts (via the Arbiter), proposes Tier 3 changes and appeals Tier 4-5 conflicts (via the Advocate), and codifies rulings (via the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter), which drafts petitions and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes)).
 
 ## Relationship to SDK Documents
 

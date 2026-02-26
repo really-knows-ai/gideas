@@ -158,6 +158,15 @@ The GovernedArtefact CRD declares the stamp vocabulary — which stamp names are
 
 Validation is stamp-based, not identity-based. The specific node that applied a stamp is recorded for audit, but governance checks verify that the required stamp names are present. This enables horizontal scaling — multiple nodes can be authorised to apply the same stamp (though only one can apply it per artefact version, since stamps are write-once) — and topology-aware cross-Flow trust. In sibling Flows that share a State Root, imported stamps are authoritative once the certificate chain validates. In Treaty/non-sibling crossings, imported stamps remain provenance only until the receiving Flow naturalises and applies its own local checks.
 
+#### Petition Artefact
+
+The **petition** is a governed artefact used by the [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) to propose law changes. It is a structured YAML/Markdown document containing the complete proposed change set — human-readable so a HITL reviewer can read it directly. A petition includes:
+
+- **Context**: trigger (deadlock resolution, friction hearing, TTL hearing), source Workitem, verdict, justification.
+- **Changes**: one or more proposed actions (create, retire, demote), each with a tier, goal, applicable scoping, and formal representations produced by [Codification nodes](./02-foundry-cycle.md#codification-nodes).
+
+The [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node drafts petitions. The [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) reviews them (review mode). The [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate) applies approved petitions to the Library via the Librarian. The petition artefact follows the same versioning, stamping, and feedback model as all other governed artefacts.
+
 ### Passports and Stamps
 
 Every governed [artefact](#artefacts) carries stamps in the [Archivist's](../02-flow/04-system-services.md) database, scoped to `workitem_id` and artefact `id` — the same storage layer as [feedback](#feedback) and version history. Each stamp is tagged with the artefact version hash it was recorded against. When new content is stored (producing a new hash), existing stamps remain with the old version. The new version starts with no stamps — governance certification begins fresh for the new content. Nodes access stamps through the [SDK](../04-sdk/01-sdk-core.md) (`GetArtefactMetadata(id)`, `GetStamps(id)`), routed via the [Sidecar](../03-node/01-sidecar.md) to the Archivist.
@@ -302,7 +311,7 @@ In the [reference arrangement](./02-foundry-cycle.md), the refining node is [Ref
 
 The refining node makes the first move: fix the issue (`actioned`) or refuse it (`wont_fix`, display label "Won't Fix"). The reviewing node evaluates the response and either accepts (`resolved`) or rejects (`rejected`). A rejected item returns to the refining node, which may either comply by applying a fix (`actioned`) or re-refuse with a new structured justification (`wont_fix`). The argument is essential — the refiner always retains the right to refuse, provided they justify the refusal on governance grounds. The cycle continues until either the reviewer accepts or the gate node detects fatigue and escalates to the Arbiter.
 
-When the gate node determines that a feedback item's history depth warrants escalation, it calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to the Arbiter via its normal routing instruction. The Arbiter examines the investigative history, invokes the [Jury](../02-flow/04-system-services.md#jury) for deliberation, retires the conflicting laws, and uses the [Clerk](../02-flow/04-system-services.md#clerk) to mint a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side the Arbiter favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
+When the gate node determines that a feedback item's history depth warrants escalation, it calls `DeadlockFeedback()` to transition the item to `deadlocked`, then routes the Workitem to the Arbiter via its normal routing instruction. The Arbiter examines the investigative history, fans out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for deliberation, and the [Deliberation Gate](./02-foundry-cycle.md#deliberation-gate-consensus-tally) tallies the verdict. The [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) then drafts a petition to retire the conflicting laws and mint a new Tier 2 Ruling that consolidates the decision. The [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate) applies the approved petition via the Librarian. The feedback item's `linkedRuling` field is set to this Ruling regardless of which side the Arbiter favours. The Contempt Guard then enforces finality — the losing side must accept the verdict.
 
 From the gate node's perspective, only `resolved` feedback is settled. Feedback in any other state — `new`, `actioned`, `wont_fix`, `rejected`, `deadlocked` — is unresolved and blocks the Workitem. An `actioned` item still needs reviewer verification; a `wont_fix` state still needs reviewer acceptance or dispute. The adversarial loop runs until every feedback item reaches `resolved`.
 
@@ -348,12 +357,12 @@ Friction compounds as governance escalates:
 | Layer | Trigger | Magnitude | Example (depth 5) |
 |-------|---------|-----------|-------------------|
 | Feedback | Each `AddFeedback` call | depth | 1, 2, 3, 4, 5 |
-| Jury deliberation | Each jury deliberation round | depth ^ (round + 1) | 25, 125, 625 |
+| Juror deliberation | Each Juror fan-out round | depth ^ (round + 1) | 25, 125, 625 |
 | HITL escalation | Judiciary deadlocks to human via Advocate | depth ^ (rounds * 2) | 15,625 (after 3 rounds) |
 
-The cost curve ensures that every layer of escalation is dramatically more expensive than the last. A routine feedback exchange costs single digits. A deadlocked dispute that reaches the Arbiter costs hundreds to thousands. A dispute that exhausts the Jury and requires human intervention via the Advocate costs tens of thousands. The system makes the governance cost visible and creates economic pressure to resolve disputes at the lowest possible layer.
+The cost curve ensures that every layer of escalation is dramatically more expensive than the last. A routine feedback exchange costs single digits. A deadlocked dispute that reaches the Arbiter and triggers Juror fan-out costs hundreds to thousands. A dispute that exhausts deliberation rounds and requires human intervention via the Advocate costs tens of thousands. The system makes the governance cost visible and creates economic pressure to resolve disputes at the lowest possible layer.
 
-Nodes may also emit friction directly through `AddFriction` at any point during execution for domain-specific costs. These voluntary emissions flow through the same pipeline alongside the mandatory feedback, jury, and HITL friction.
+Nodes may also emit friction directly through `AddFriction` at any point during execution for domain-specific costs. These voluntary emissions flow through the same pipeline alongside the mandatory feedback, deliberation, and HITL friction.
 
 ---
 
@@ -376,7 +385,7 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Scope | Source | Lifecycle |
 |------|------|-------|--------|-----------|
 | 1 | **Finding** | Single Flow | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer) and [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Decays if uncited, promoted to Tier 2 if heavily used. |
-| 2 | **Ruling** | Single Flow | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (Arbiter and Tribunal nodes, via the [Clerk](../02-flow/04-system-services.md#clerk) service) | Binding precedent. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
+| 2 | **Ruling** | Single Flow | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (Arbiter and Tribunal nodes, via the [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node) | Binding precedent. Requires a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement. |
 | 3 | **Local Statute** | Single Flow | Flow Architect (human-administered or local legislative cycle) | Persistent. No automatic decay. |
 | 4 | **State Constitution** | All Flows in a Governance Flow instance | [Governance Flow](./04-governance.md) | Organisational policy. Pushed to all sibling Flows. No local decay. |
 | 5 | **Federal Accord** | All instances in the network | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
@@ -385,7 +394,7 @@ Supremacy is absolute — higher tier always wins, with no upward override. A Ti
 
 Tier 1 Findings are the raw material of governance. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. Findings that prove useful accumulate friction as nodes [cite](../04-sdk/03-sdk-legal.md#citation) them during processing. When a Finding's accumulated friction crosses a configured threshold, the [Librarian](../02-flow/04-system-services.md) triggers a review hearing that can promote it to Tier 2. Findings that go uncited decay when their tier's configured review TTL expires.
 
-Tier 2 Rulings are binding precedent. They are minted when the Arbiter resolves a dispute or the Tribunal promotes a Finding, consolidating the arguments into a durable law via the [Clerk](../02-flow/04-system-services.md#clerk) service. Rulings require a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement.
+Tier 2 Rulings are binding precedent. They are minted when the Arbiter resolves a dispute or the Tribunal promotes a Finding, with the [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node drafting a petition that consolidates the arguments into a durable law. The petition goes through the judiciary's inner cycle ([Codification](./02-foundry-cycle.md#codification-nodes), Tribunal review, [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate)) before the law is applied via the Librarian. Rulings require a formal [review hearing](./04-governance.md#decay-and-retirement) before retirement.
 
 Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows (no Governance Flow), these are CRDs applied by an administrator. Under a Governance Flow, the local legislative cycle can also produce them.
 

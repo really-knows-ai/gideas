@@ -58,7 +58,7 @@ Emitted by runtime services when the requesting node lacks the required permissi
 
 ## Governance and Finality Errors
 
-Emitted by the [Archivist](../02-flow/04-system-services.md#archivist) when governance constraints are violated, and by the [Jury](../02-flow/04-system-services.md#jury) service during deliberation failures.
+Emitted by the [Archivist](../02-flow/04-system-services.md#archivist) when governance constraints are violated, and by Judiciary nodes during deliberation failures.
 
 | Code | gRPC Status | Cause | Caller Response |
 |------|-------------|-------|-----------------|
@@ -67,9 +67,9 @@ Emitted by the [Archivist](../02-flow/04-system-services.md#archivist) when gove
 | `INVALID_STATE_TRANSITION` | `FAILED_PRECONDITION` | The requested feedback state transition is not permitted from the item's current state. The Archivist enforces the [feedback state machine](../01-concepts/03-data-model.md#feedback-lifecycle) — only explicitly listed transitions are valid. | Do not retry. Check the feedback item's current state and use the correct transition operation. |
 | `ARTEFACT_CORRUPTED` | `DATA_LOSS` | The SHA-256 hash of retrieved artefact content does not match the stored version hash. The Sidecar detected the mismatch on read. | Do not use the content. Report the corruption through telemetry. This indicates a storage integrity issue requiring operational investigation. |
 | `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` | An operation referenced an existing artefact `id` with a different `governed_artefact` than previously established. An artefact's governed artefact is immutable for a given `id` within a Workitem. | Do not retry. The artefact `id` is already bound to a different governed artefact. Use a different `id` for the new artefact, or use the existing governed artefact. |
-| `JURY_HUNG` | `FAILED_PRECONDITION` | The [Jury](../02-flow/04-system-services.md#jury) service failed to reach consensus within the configured maximum deliberation rounds. The Arbiter routes to the [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) for human escalation. | Not directly retriable by nodes. The Arbiter handles hung jury escalation internally. |
-| `JURY_INFERENCE_FAILED` | `INTERNAL` | A juror's inference call failed during deliberation. | Transient — the Jury service may retry internally. If persistent, the deliberation fails and the Arbiter escalates. |
-| `LAW_WRITE_FAILED` | `INTERNAL` | The [Clerk](../02-flow/04-system-services.md#clerk) service failed to persist a law via the Librarian's `WriteLaw` method. | The Clerk may retry internally. Persistent failures block the ruling from being recorded. |
+| `DELIBERATION_HUNG` | `FAILED_PRECONDITION` | The [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) failed to reach consensus within the configured maximum deliberation rounds. The Deliberation Gate routes to its `hung` output — the Arbiter routes to the [Advocate](../01-concepts/02-foundry-cycle.md#advocate-human-escalation) for human escalation; the Tribunal routes to the Advocate for HITL resolution. | Not directly retriable by nodes. The Deliberation Gate handles hung verdict routing internally. |
+| `JUROR_INFERENCE_FAILED` | `INTERNAL` | A [Juror node's](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) inference call failed during deliberation. | Transient — the Juror node may be retried via the fan-out parent. If persistent, the child Workitem fails and the Deliberation Gate accounts for the missing verdict. |
+| `LAW_WRITE_FAILED` | `INTERNAL` | The [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) failed to persist an approved petition's law changes via the Librarian's `WriteLaw` method. | The Judiciary Gate may retry internally. Persistent failures block the petition from being applied. |
 | `QUEUE_ITEM_NOT_FOUND` | `NOT_FOUND` | A queue operation referenced an item that does not exist on the target shard. | Verify the item ID. The item may have been decided or may reside on a different shard. |
 | `QUEUE_ITEM_ALREADY_CLAIMED` | `ALREADY_EXISTS` | An attempt to claim a queue item that is already in `claimed` state. | The item is already claimed. Wait for it to be released or decided. |
 | `QUEUE_ITEM_INVALID_STATE` | `FAILED_PRECONDITION` | A queue state transition was attempted from an invalid state. For example, deciding or releasing an item that is not in `claimed` state. | Check the item's current state and use the correct operation. |
@@ -139,8 +139,8 @@ Emitted when a service is temporarily unreachable.
 | State machine (`INVALID_STATE_TRANSITION`) | No | Check current state, use correct operation. |
 | Data integrity (`ARTEFACT_CORRUPTED`) | No | Report and investigate. |
 | Identity conflict (`ARTEFACT_KIND_CONFLICT`) | No | Use correct `id`/`governed_artefact` pairing. |
-| Jury deliberation (`JURY_HUNG`, `JURY_INFERENCE_FAILED`) | No | Handled internally by the Arbiter. Hung jury escalates to the Advocate. |
-| Clerk (`LAW_WRITE_FAILED`) | Possibly | Clerk may retry internally. Persistent failure blocks ruling. |
+| Jury deliberation (`DELIBERATION_HUNG`, `JUROR_INFERENCE_FAILED`) | No | Handled internally by the Judiciary. Hung verdict routes to the Advocate. |
+| Judiciary Gate (`LAW_WRITE_FAILED`) | Possibly | Judiciary Gate may retry internally. Persistent failure blocks petition application. |
 | Queue (`QUEUE_ITEM_NOT_FOUND`, `QUEUE_ITEM_ALREADY_CLAIMED`, `QUEUE_ITEM_INVALID_STATE`) | No | Verify item state. |
 | Queue availability (`QUEUE_UNAVAILABLE`) | Yes | Retry with backoff. Shard may recover. |
 | Configuration (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) | No | Fix CRD configuration. |

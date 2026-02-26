@@ -83,7 +83,7 @@ All surfaces share the same trust model: SDK calls transit the Sidecar, which au
 
 Specialised subtypes extend `FlowSupportService` with domain-specific contracts. `CodificationService` inherits from `FlowSupportService` and adds the `encode` capability contract for translating law goals into formal representations during [governance hardening](../01-concepts/04-governance.md#precedent).
 
-Note: future codification processing will use the Workitem model (child Workitems, fan-out/fan-in) rather than the Support Service model. The `FlowSupportService` base class is retained for non-codification support services such as notification relays and external integrations.
+Note: codification processing uses the Workitem model — the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems, and each Codification node invokes its backing Codification Service's `Encode` method. The `FlowSupportService` base class is retained for non-codification support services such as notification relays and external integrations.
 
 ## Failure and Error Model
 

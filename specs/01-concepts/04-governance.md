@@ -46,9 +46,9 @@ The [Librarian](../02-flow/04-system-services.md) admits externally applied laws
 
 The [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) is the judicial branch. It is invoked when governance reaches an impasse:
 
-1. **Feedback deadlock.** When a gate node determines that a [feedback](./03-data-model.md#feedback) item's history depth warrants escalation, it transitions the item to `deadlocked` and routes the Workitem to the [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate). The Arbiter invokes the [Jury](../02-flow/04-system-services.md#jury) service for multi-agent deliberation — examining the investigative history (the forced-choice justifications, the citations, the novel arguments) — then uses the [Clerk](../02-flow/04-system-services.md#clerk) service to retire the conflicting laws and mint a new Tier 2 Ruling that consolidates the decision. The feedback item's `linkedRuling` is set to this Ruling regardless of which side the Arbiter favours.
+1. **Feedback deadlock.** When a gate node determines that a [feedback](./03-data-model.md#feedback) item's history depth warrants escalation, it transitions the item to `deadlocked` and routes the Workitem to the [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate). The Arbiter assembles evidence and fans out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for multi-agent deliberation — examining the investigative history (the forced-choice justifications, the citations, the novel arguments). The [Deliberation Gate](./02-foundry-cycle.md#deliberation-gate-consensus-tally) tallies the verdicts. On consensus, the [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node drafts a petition to retire the conflicting laws and mint a new Tier 2 Ruling. The petition goes through the judiciary's inner cycle (Tribunal review, Judiciary Gate) before the law is applied via the Librarian. The feedback item's `linkedRuling` is set to this Ruling regardless of which side the Arbiter favours.
 
-    Jury deliberation is itself a friction source. Each jury round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first jury round, 125 on the second, 625 on the third. If the Jury cannot reach consensus and the dispute escalates to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) for human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 jury rounds produces 15,625. The cost curve ensures that disputes reaching the Arbiter are visibly expensive, and disputes reaching humans are dramatically so.
+    Juror deliberation is itself a friction source. Each deliberation round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first round, 125 on the second, 625 on the third. If the Deliberation Gate cannot reach consensus and the dispute escalates to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) for human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 rounds produces 15,625. The cost curve ensures that disputes reaching the Arbiter are visibly expensive, and disputes reaching humans are dramatically so.
 
 2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [governance policy](../05-reference/crds.md#governance-policy). The law remains active during the hearing. For Tiers 1-2, the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) adjudicates directly — rendering a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow, routed through the [Advocate](./02-foundry-cycle.md#advocate-human-escalation). Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at the Tribunal.
 
@@ -103,8 +103,8 @@ When nodes cite conflicting laws during Workitem processing — not at integrati
 
 | Conflict | Resolution |
 |----------|------------|
-| **Tier 1 vs Tier 2** (cross-tier) | The Arbiter deliberates via the [Jury](../02-flow/04-system-services.md#jury). Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but the Arbiter still adjudicates. The Arbiter mints a new Tier 2 Ruling via the [Clerk](../02-flow/04-system-services.md#clerk) consolidating the surviving position. Originals retired. |
-| **Same tier** (Tier 1 vs Tier 1, or Tier 2 vs Tier 2) | The Arbiter resolves via the Jury and drafts a new Tier 2 Ruling via the Clerk consolidating the conflicting laws. Originals retired. |
+| **Tier 1 vs Tier 2** (cross-tier) | The Arbiter fans out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for deliberation. Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but the Arbiter still adjudicates. The [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) drafts a petition for a new Tier 2 Ruling consolidating the surviving position. Originals retired after the petition is approved. |
+| **Same tier** (Tier 1 vs Tier 1, or Tier 2 vs Tier 2) | The Arbiter fans out to Juror nodes and the Clerk drafts a petition for a new Tier 2 Ruling consolidating the conflicting laws. Originals retired after the petition is approved. |
 | **Tier 1–2 vs Tier 3** | The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, the Arbiter routes to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) to petition HITL with a proposed clarification or amendment. |
 | **Tier 3 vs Tier 3** | The Arbiter drafts a *proposal* for a consolidated Tier 3 statute and routes to the Advocate to petition HITL. On rejection, the conflict persists — every future Workitem that encounters the same conflict generates another HITL escalation and more friction until the humans act. |
 | **Tier 4 or Tier 5 involvement** | The Advocate files an *appeal* to the [Governance Flow](#the-governance-flow) via the Librarian. |
@@ -115,8 +115,8 @@ The Judiciary's power is constitutionally bounded. The Arbiter and Tribunal shar
 
 | Tier range | Authority | Action |
 |------------|-----------|--------|
-| Tier 1 | **None** (by convention) | The Arbiter and Tribunal hold `WRITE:law/tier2` (which covers Tier 1), but do not write Findings — their role is judicial, not observational. Tier 2 Rulings are the exclusive output of their authority, drafted and codified by the [Clerk](../02-flow/04-system-services.md#clerk). |
-| Tier 2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings via the Clerk. |
+| Tier 1 | **None** (by convention) | The Arbiter and Tribunal hold `WRITE:law/tier2` (which covers Tier 1), but do not write Findings — their role is judicial, not observational. Tier 2 Rulings are the exclusive output of their authority, drafted by the [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node and applied by the [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate) via the Librarian. |
+| Tier 2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings through the petition process (Clerk drafts, Tribunal reviews, Judiciary Gate applies). |
 | Tier 3 | **Propose** | Drafts a proposal. Routes to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) for HITL ratification. |
 | Tier 4–5 | **Appeal** | Routes to the Advocate, which files an appeal to the Governance Flow. Cannot directly modify. |
 
@@ -256,7 +256,7 @@ Federal authorities operate their own Governance Flows — full [Foundry Cycle](
 ```mermaid
 flowchart TD
     Node["Node<br/>(discovers conflict)"] --> Arbiter["Arbiter<br/>(deadlock resolver)"]
-    Arbiter -->|"Tier 2:<br/>resolve directly<br/>via Clerk"| Library["Flow Library"]
+    Arbiter -->|"Tier 2:<br/>resolve via<br/>Clerk petition"| Library["Flow Library"]
     Arbiter -->|"Tier 3+:<br/>escalate"| Advocate["Advocate<br/>(human escalation)"]
     Advocate -->|"Tier 3:<br/>propose to HITL"| HITL["HITL<br/>(human ratification)"]
     HITL --> Library
@@ -267,7 +267,7 @@ flowchart TD
     Federal --> FedPropagate["Propagate to<br/>all Governance Flows"]
 ```
 
-Nodes raise issues. The Arbiter adjudicates within its tier. The Advocate escalates beyond the Judiciary's authority ceiling — presenting Tier 3 proposals to humans and filing Tier 4-5 appeals to the Governance Flow. The Governance Flow legislates within the State. The Federation legislates across States. The escalation path sends the conflict to the institution with the authority to resolve it.
+Nodes raise issues. The Arbiter adjudicates within its tier — fanning out to Juror nodes for deliberation, with the Clerk drafting petitions and the Judiciary Gate applying approved laws. The Advocate escalates beyond the Judiciary's authority ceiling — presenting Tier 3 proposals to humans and filing Tier 4-5 appeals to the Governance Flow. The Governance Flow legislates within the State. The Federation legislates across States. The escalation path sends the conflict to the institution with the authority to resolve it.
 
 ---
 
