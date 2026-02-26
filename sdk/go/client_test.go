@@ -24,8 +24,6 @@ type spyServer struct {
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
 	flowv1.UnimplementedFrictionLedgerServiceServer
-	flowv1.UnimplementedJuryServiceServer
-	flowv1.UnimplementedClerkServiceServer
 
 	// lastMD is the metadata captured from the most recent call.
 	lastMD metadata.MD
@@ -158,27 +156,6 @@ func (s *spyServer) DeadlockFeedback(
 	}}, nil
 }
 
-func (s *spyServer) Deliberate(
-	ctx context.Context, req *flowv1.DeliberateRequest,
-) (*flowv1.DeliberateResponse, error) {
-	s.lastMD, _ = metadata.FromIncomingContext(ctx)
-	return &flowv1.DeliberateResponse{
-		Outcome:    req.GetAllowedOutcomes()[0],
-		RoundsUsed: 1,
-		Hung:       false,
-	}, nil
-}
-
-func (s *spyServer) DraftLaw(
-	ctx context.Context, req *flowv1.DraftLawRequest,
-) (*flowv1.DraftLawResponse, error) {
-	s.lastMD, _ = metadata.FromIncomingContext(ctx)
-	return &flowv1.DraftLawResponse{
-		LawId:       "law-drafted-001",
-		VersionHash: "abc123",
-	}, nil
-}
-
 func (s *spyServer) LinkRuling(
 	ctx context.Context, req *flowv1.LinkRulingRequest,
 ) (*flowv1.LinkRulingResponse, error) {
@@ -299,8 +276,6 @@ func setupTestEnv(t *testing.T, workitemID string) *testEnv {
 		flowv1.RegisterArchivistServiceServer(s, spy)
 		flowv1.RegisterLibrarianServiceServer(s, spy)
 		flowv1.RegisterFrictionLedgerServiceServer(s, spy)
-		flowv1.RegisterJuryServiceServer(s, spy)
-		flowv1.RegisterClerkServiceServer(s, spy)
 	})
 
 	return &testEnv{client: client, spy: spy, srv: srv}
@@ -648,73 +623,6 @@ func TestGetFlowTopology_InjectsWorkitemMetadata(t *testing.T) {
 	}
 
 	// Verify metadata injection.
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Jury Convenience Methods
-// ---------------------------------------------------------------------------
-
-func TestDeliberate_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-deliberate-001"
-	env := setupTestEnv(t, wantID)
-
-	resp, err := env.client.Deliberate(
-		context.Background(),
-		"Should the fix be accepted?",
-		"## Evidence\nSome evidence here.",
-		[]string{"accept", "reject"},
-		flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY,
-		3, 5,
-	)
-	if err != nil {
-		t.Fatalf("Deliberate() returned error: %v", err)
-	}
-	if resp.GetOutcome() != "accept" {
-		t.Fatalf("expected outcome=accept, got %q", resp.GetOutcome())
-	}
-	if resp.GetRoundsUsed() != 1 {
-		t.Fatalf("expected rounds_used=1, got %d", resp.GetRoundsUsed())
-	}
-	if resp.GetHung() {
-		t.Fatal("expected hung=false, got true")
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Clerk Convenience Methods
-// ---------------------------------------------------------------------------
-
-func TestDraftLaw_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-draftlaw-001"
-	env := setupTestEnv(t, wantID)
-
-	verdict := &flowv1.DeliberateResponse{
-		Outcome:    "promote",
-		RoundsUsed: 2,
-	}
-	resp, err := env.client.DraftLaw(
-		context.Background(),
-		verdict, "enforce consistent naming", 2, []string{"docs"},
-	)
-	if err != nil {
-		t.Fatalf("DraftLaw() returned error: %v", err)
-	}
-	if resp.GetLawId() != "law-drafted-001" {
-		t.Fatalf("expected law_id=law-drafted-001, got %q", resp.GetLawId())
-	}
-	if resp.GetVersionHash() != "abc123" {
-		t.Fatalf("expected version_hash=abc123, got %q", resp.GetVersionHash())
-	}
-
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
 	if len(got) == 0 || got[0] != wantID {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)

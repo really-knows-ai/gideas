@@ -71,8 +71,6 @@ type Client struct {
 	Archivist      flowv1.ArchivistServiceClient
 	Librarian      flowv1.LibrarianServiceClient
 	FrictionLedger flowv1.FrictionLedgerServiceClient
-	Jury           flowv1.JuryServiceClient
-	Clerk          flowv1.ClerkServiceClient
 	EventBus       flowv1.FlowEventBusServiceClient
 }
 
@@ -117,8 +115,6 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		Archivist:      flowv1.NewArchivistServiceClient(conn),
 		Librarian:      flowv1.NewLibrarianServiceClient(conn),
 		FrictionLedger: flowv1.NewFrictionLedgerServiceClient(conn),
-		Jury:           flowv1.NewJuryServiceClient(conn),
-		Clerk:          flowv1.NewClerkServiceClient(conn),
 	}
 
 	// Optionally connect to Event Bus for streaming operations.
@@ -564,60 +560,6 @@ func (c *Client) RecordTelemetry(ctx context.Context, eventType string, payload 
 		return fmt.Errorf("flow sdk: record telemetry failed: %w", err)
 	}
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Jury Convenience Methods
-// ---------------------------------------------------------------------------
-
-// Deliberate conducts a multi-agent deliberation via the Jury service.
-// The caller frames the question and assembles evidence; the Jury empanels
-// jurors, runs voting rounds, and returns the verdict.
-func (c *Client) Deliberate(
-	ctx context.Context,
-	question, evidence string,
-	allowedOutcomes []string,
-	strategy flowv1.ConsensusStrategy,
-	maxRounds, jurySize int32,
-) (*flowv1.DeliberateResponse, error) {
-	resp, err := c.Jury.Deliberate(ctx, &flowv1.DeliberateRequest{
-		Question:          question,
-		Evidence:          evidence,
-		AllowedOutcomes:   allowedOutcomes,
-		ConsensusStrategy: strategy,
-		MaxRounds:         maxRounds,
-		JurySize:          jurySize,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: deliberate failed: %w", err)
-	}
-	return resp, nil
-}
-
-// ---------------------------------------------------------------------------
-// Clerk Convenience Methods
-// ---------------------------------------------------------------------------
-
-// DraftLaw requests the Clerk to draft a law from a jury verdict and persist
-// it via the Librarian. For retire verdicts, retires the law. For demote
-// verdicts, writes the law at a lower tier.
-func (c *Client) DraftLaw(
-	ctx context.Context,
-	verdict *flowv1.DeliberateResponse,
-	goal string,
-	tier int32,
-	appliesTo []string,
-) (*flowv1.DraftLawResponse, error) {
-	resp, err := c.Clerk.DraftLaw(ctx, &flowv1.DraftLawRequest{
-		Verdict:   verdict,
-		Goal:      goal,
-		Tier:      tier,
-		AppliesTo: appliesTo,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: draft law failed: %w", err)
-	}
-	return resp, nil
 }
 
 // ---------------------------------------------------------------------------

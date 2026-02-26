@@ -49,8 +49,6 @@ func setupGRPCTestEnv(
 		Archivist:      flowv1.NewArchivistServiceClient(conn),
 		Librarian:      flowv1.NewLibrarianServiceClient(conn),
 		FrictionLedger: flowv1.NewFrictionLedgerServiceClient(conn),
-		Jury:           flowv1.NewJuryServiceClient(conn),
-		Clerk:          flowv1.NewClerkServiceClient(conn),
 	}
 
 	t.Cleanup(func() {

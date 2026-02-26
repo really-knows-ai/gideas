@@ -24,8 +24,6 @@ type fanoutSpy struct {
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
 	flowv1.UnimplementedFrictionLedgerServiceServer
-	flowv1.UnimplementedJuryServiceServer
-	flowv1.UnimplementedClerkServiceServer
 
 	mu sync.Mutex
 
@@ -179,8 +177,6 @@ func setupFanoutEnv(t *testing.T, spy *fanoutSpy) *Client {
 		flowv1.RegisterArchivistServiceServer(s, spy)
 		flowv1.RegisterLibrarianServiceServer(s, spy)
 		flowv1.RegisterFrictionLedgerServiceServer(s, spy)
-		flowv1.RegisterJuryServiceServer(s, spy)
-		flowv1.RegisterClerkServiceServer(s, spy)
 	})
 	return client
 }
@@ -521,8 +517,6 @@ func TestAwaitChildren_Streaming(t *testing.T) {
 			flowv1.RegisterArchivistServiceServer(s, spy)
 			flowv1.RegisterLibrarianServiceServer(s, spy)
 			flowv1.RegisterFrictionLedgerServiceServer(s, spy)
-			flowv1.RegisterJuryServiceServer(s, spy)
-			flowv1.RegisterClerkServiceServer(s, spy)
 		},
 		func(s *grpc.Server) {
 			flowv1.RegisterFlowEventBusServiceServer(s, ebSpy)
