@@ -12,8 +12,6 @@ All runtime services expose gRPC APIs. Node-originated calls are mediated by the
 | [Flow Monitor](#flow-monitor-api) | Pipeline adapter for metrics export (Prometheus) and audit log emission (stdout) | Subscribes to Flow Event Bus |
 | [Flow Event Bus](#flow-event-bus-api) | Durable event distribution across telemetry, audit, friction, and workitem channels | Sidecar (publish), all services (publish/subscribe) |
 | [Friction Ledger](#friction-ledger-api) | Friction aggregation, threshold evaluation, friction queries | Sidecar (on behalf of nodes), Librarian, Friction Ledger publishes to Bus |
-| [Jury](#jury-api) | Multi-agent deliberation engine | Arbiter, Tribunal (via Sidecar) |
-| [Clerk](#clerk-api) | Law drafting and codification coordination | Arbiter, Tribunal (via Sidecar) |
 | [Sidecar](#sidecar-mediated-sdk-paths) | Authentication proxy, identity injection, local validation | Node handlers (via SDK) |
 | [Support Services](#support-service-api) | Pluggable capabilities (e.g. codification) | Sidecar (on behalf of nodes), system services |
 | [QueuePeer](#queuepeer-api) | Federated Queue Mesh inter-pod communication | HITL node replicas (peer-to-peer) |
@@ -159,7 +157,7 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `GetLaw` | `law_id` | `law` | Returns the full law object by identifier. Used by Judiciary nodes for hearing evidence retrieval. |
-| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling minted by the [Clerk](../02-flow/04-system-services.md#clerk), Tier 3+ applied by administrator or Governance Flow). During hearing processing, the law is created in an inactive state pending hearing completion. |
+| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling applied by the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) from an approved petition, Tier 3+ applied by administrator or Governance Flow). During hearing processing, the law is created in an inactive state pending hearing completion. |
 | `RetireLaw` | `law_id` | `acknowledged` | Removes a law from the active Library. History is preserved in the audit log. |
 | `ReplicateLaws` | `laws[]`, `source_flow_id` | `integration_results[]` | Receives higher-tier laws from a remote Librarian for integration. Triggers the two-stage conflict protocol. |
 | `ApplyLifecycleAction` | `law_id`, `verdict` | `acknowledged` | Applies the outcome of a review hearing (promote, retire, demote) to the specified law. Called by the Operator after Tribunal hearing completion. This action activates any law created during the hearing. |
@@ -341,79 +339,18 @@ These methods were previously on `FlowMonitorService`. They now live on `Sidecar
 
 ---
 
-## Jury API
+## Judiciary Shared Types
 
-The [Jury](../02-flow/04-system-services.md#jury) is a generic deliberation engine. It receives a question (string) and evidence (markdown bundle) — not domain-specific structured data. The calling node (Arbiter or Tribunal) is responsible for framing the question and assembling evidence. This keeps the Jury reusable with no Foundry-domain coupling. It is consumed through Sidecar-mediated calls.
+The Judiciary subsystem uses node-based Workitem transitions instead of dedicated gRPC services. Deliberation and codification are externalised into the flow topology — [Juror nodes](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) receive child Workitems, produce verdict artefacts, and call `Complete()`; the [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) tallies votes; the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) drafts petitions and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes). No Jury or Clerk gRPC API exists.
 
-### Deliberation Methods
+Shared judiciary types are defined in `judiciary.proto`:
 
-| Method | Request | Response | Description |
-|--------|---------|----------|-------------|
-| `Deliberate` | `question`, `evidence`, `allowed_outcomes`, `consensus_strategy`, `max_rounds`, `jury_size` | `DeliberateResponse` | Empanels a diverse panel of FoundryAgent jurors, runs blind voting with optional deliberation rounds feeding anonymised peer arguments, applies the consensus strategy, and returns the outcome with per-juror justifications. A hung jury is a valid outcome (`hung=true`), not an error. |
+| Type | Kind | Description |
+|------|------|-------------|
+| `ConsensusStrategy` | enum | `SIMPLE_MAJORITY` (>50%), `SUPER_MAJORITY` (>=66%), `UNANIMITY` (100%). Configured on the Deliberation Gate. |
+| `JurorJustification` | message | Per-Juror verdict record: `juror_id` (opaque), `outcome` (the Juror's vote), `reasoning` (the Juror's justification). Stored as artefacts on child Workitems. |
 
-### Deliberate Request
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `question` | `string` | yes | What the jury is deliberating. Framed by the calling node (e.g., "Should the reviewer's feedback be upheld, or should the refiner's refusal stand?"). |
-| `evidence` | `string` | yes | Structured markdown evidence bundle assembled by the calling node (feedback history, artefact excerpts, cited laws, friction summary). |
-| `allowed_outcomes` | `repeated string` | yes | Valid vote values (e.g., `["favour_refiner", "favour_reviewer"]`). The Jury builds the output JSON Schema dynamically from these values, ensuring juror votes are always valid outcomes. |
-| `consensus_strategy` | `ConsensusStrategy` | yes | `SIMPLE_MAJORITY` (>50%), `SUPER_MAJORITY` (>=66%), or `UNANIMITY` (100%). Proto enum. |
-| `max_rounds` | `int32` | yes | Maximum deliberation rounds before declaring a hung jury. Each round after the first feeds anonymised peer arguments back to jurors. |
-| `jury_size` | `int32` | yes | Number of jurors to empanel from the pool. The Jury owns juror construction — 5 distinct personality types with different judicial philosophies. Callers specify count, not profiles. If `jury_size <= 5`, each type appears at most once. |
-
-### Deliberate Response
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `outcome` | `string` | The winning outcome (one of `allowed_outcomes`). Empty if `hung` is true. |
-| `justifications` | `repeated JurorJustification` | Per-juror vote and reasoning from the final round. Each entry contains `juror_id` (opaque, e.g., `"textualist-0"`), `outcome` (the juror's vote), and `reasoning` (the juror's justification). No numerical confidence — confidence is reflected structurally (hung vs. unanimous). |
-| `rounds_used` | `int32` | Number of deliberation rounds executed. |
-| `hung` | `bool` | `true` if consensus was not reached after `max_rounds`. A hung jury is a valid response, not an error — the calling node decides how to handle it (e.g., escalate to Advocate). |
-
-### Jury Error Responses
-
-| Condition | Error | gRPC Status |
-|-----------|-------|-------------|
-| Jury service unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
-| Juror inference failure | `JURY_INFERENCE_FAILED` | `INTERNAL` |
-
----
-
-## Clerk API
-
-The [Clerk](../02-flow/04-system-services.md#clerk) is a core service that handles law drafting and codification. It is consumed by the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) and [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) through Sidecar-mediated calls.
-
-### Drafting Methods
-
-| Method | Request | Response | Description |
-|--------|---------|----------|-------------|
-| `DraftLaw` | `verdict`, `goal`, `tier`, `applies_to` | `law` | Drafts a prose representation, discovers and dispatches to all ready Codification Services in parallel, assembles the final law with prose + successfully returned formal representations, and calls `WriteLaw` on the Librarian to persist. |
-
-### DraftLaw Request
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `verdict` | `Verdict` | yes | The Jury's verdict providing the decision basis for the law. |
-| `goal` | `string` | yes | Plain-language statement of what the law enforces, stops, or ensures. |
-| `tier` | `integer` | yes | Law tier (typically `2` for Rulings). |
-| `applies_to` | `[]string` | no | Governed artefact names. Empty for global. |
-
-### DraftLaw Response
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `law_id` | `string` | Identifier of the persisted law. |
-| `version_hash` | `string` | Content hash of the new law version. |
-| `representations` | `[]Representation` | The representations successfully assembled (prose + any codified). |
-| `codification_declines` | `[]string` | Codification Service names that declined to encode the law's goal (logged, not blocking). |
-
-### Clerk Error Responses
-
-| Condition | Error | gRPC Status |
-|-----------|-------|-------------|
-| Clerk service unavailable | `SERVICE_UNAVAILABLE` | `UNAVAILABLE` |
-| Librarian WriteLaw failed | `LAW_WRITE_FAILED` | `INTERNAL` |
+Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
 ---
 
@@ -505,6 +442,4 @@ These are the default port assignments for the reference implementation. All gRP
 | Flow Event Bus | 50056 | gRPC |
 | Friction Ledger | 50057 | gRPC |
 | Librarian | 50058 | gRPC |
-| Jury | 50059 | gRPC |
-| Clerk | 50060 | gRPC |
 | Flow Monitor | 2112 | HTTP (`/metrics`) |

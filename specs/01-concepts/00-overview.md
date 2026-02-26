@@ -36,7 +36,7 @@ A **[law](./03-data-model.md#laws)** is a governance rule with a textual **goal*
 
 The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. [Flow Architects](../05-reference/glossary.md#flow-architect) adapt it to their context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
 
-The Judiciary is the exception — it is a standard runtime subsystem present in every Flow, not a swappable reference implementation. It comprises three nodes ([Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor), [Advocate](./02-foundry-cycle.md#advocate-human-escalation)) and two core services ([Jury](../02-flow/04-system-services.md#jury), [Clerk](../02-flow/04-system-services.md#clerk)).
+The Judiciary is the exception — it is a standard runtime subsystem present in every Flow, not a swappable reference implementation. It comprises orchestration nodes ([Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor), [Advocate](./02-foundry-cycle.md#advocate-human-escalation)), deliberation nodes ([Juror](./02-foundry-cycle.md#juror-judicial-agent), [Deliberation Gate](./02-foundry-cycle.md#deliberation-gate-consensus-tally)), and a legislative inner cycle ([Clerk](./02-foundry-cycle.md#clerk-petition-drafter), [Codification](./02-foundry-cycle.md#codification-nodes), [Tribunal Router](./02-foundry-cycle.md#tribunal-router), [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate)).
 
 The standard library provides configurable reference implementations for each role as container images. The platform enforces behaviour through capabilities and configuration, not node names.
 
@@ -59,7 +59,7 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Source | Lifecycle |
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
-| 2 | **Ruling** | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (Arbiter and Tribunal nodes, via the Clerk service) | Binding precedent. Minted when disputes are resolved. |
+| 2 | **Ruling** | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (Arbiter and Tribunal nodes, via the Clerk node) | Binding precedent. Minted when disputes are resolved. |
 | 3 | **Local Statute** | [Flow Architect](../05-reference/glossary.md#flow-architect) | Local policy. Human-administered or via local legislative cycle. |
 | 4 | **State Constitution** | [Governance Flow](./04-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
 | 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |

@@ -62,12 +62,12 @@ Finding creation is the only law-writing operation available through the node SD
 | Tier | Write Authority | SDK Available |
 |------|----------------|---------------|
 | 1 — Finding | Nodes with `WRITE:law/tier1` | Yes — `RecordFinding` |
-| 2 — Ruling | [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (via the [Clerk](../02-flow/04-system-services.md#clerk), `WRITE:law/tier2`) | No |
+| 2 — Ruling | [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (via the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter), `WRITE:law/tier2`) | No |
 | 3 — Local Statute | Flow Architect (human-administered or local legislative cycle) | No |
 | 4 — State Constitution | [Governance Flow](../01-concepts/04-governance.md#the-governance-flow) | No |
 | 5 — Federal Accord | Federation | No |
 
-The [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) creates Tier 2 Rulings when the Arbiter resolves deadlocked disputes and when the Tribunal adjudicates [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol), using the [Clerk](../02-flow/04-system-services.md#clerk) to draft and codify laws. The Advocate proposes Tier 3 amendments for human ratification and appeals Tier 4-5 conflicts to the [Governance Flow](../01-concepts/04-governance.md#the-governance-flow). These are Judiciary-internal judicial operations, not SDK methods available to node handlers.
+The [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) creates Tier 2 Rulings when the Arbiter resolves deadlocked disputes and when the Tribunal adjudicates [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol), using the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) to draft petitions and fan out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) for formal representations. The Advocate proposes Tier 3 amendments for human ratification and appeals Tier 4-5 conflicts to the [Governance Flow](../01-concepts/04-governance.md#the-governance-flow). These are Judiciary-internal judicial operations, not SDK methods available to node handlers.
 
 ## Representation-Aware Usage
 
@@ -118,4 +118,4 @@ Missing capabilities produce a `CAPABILITY_DENIED` error from the Librarian, for
 5. `RecordFinding` is eventually consistent — the Finding is writable immediately but queryable after indexing.
 6. Duplicate Finding detection is asynchronous and Librarian-owned.
 7. Law objects are immutable from the SDK's perspective. Any mutation produces a new version with a new content hash. The node reads laws; the Librarian manages lifecycle.
-8. Governance hardening (adding representations) is a [Codification Service](../02-flow/04-system-services.md#codification-services) operation triggered by the [Clerk](../02-flow/04-system-services.md#clerk), not a node SDK operation.
+8. Governance hardening (adding representations) is a [Codification Service](../02-flow/04-system-services.md#codification-services) operation triggered by the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) via fan-out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes), not a node SDK operation.

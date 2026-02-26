@@ -364,12 +364,12 @@ HITL involvement emits friction at magnitude `depth ^ (rounds * 2)`, where `dept
 
 The [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is the Judiciary's concrete HITL node. It is a standard HITL node using the SDK pattern described in this document, with domain-specific logic for judicial escalation:
 
-- Receives Workitems from the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (hung jury on deadlock adjudication) and the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (Tier 3+ escalation from review hearings).
+- Receives Workitems from the [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) (hung verdict — consensus not reached after maximum deliberation rounds), the [Tribunal Router](../01-concepts/02-foundry-cycle.md#tribunal-router) (Tier 3+ hearing verdicts requiring human ratification or appeal), and the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) (approved Tier 3 petitions requiring HITL ratification before application).
 - Parks Workitems in the HITL queue for human decision.
 - The human reviewer (via Dashboard/BFF) reviews the judicial context and renders a decision.
 - The Advocate records the decision on artefacts and routes based on the human verdict.
 
-For Tier 3 proposals, the human ratifies or rejects the proposed law change. For Tier 4-5 appeals, the Advocate routes to the [Governance Flow](../01-concepts/04-governance.md#the-governance-flow). The Advocate's routing topology is defined by the Operator at provisioning time.
+For Tier 3 proposals, the human ratifies or rejects the proposed law change. For Tier 4-5 appeals, the Advocate routes to the [Governance Flow](../01-concepts/04-governance.md#the-governance-flow). HITL decisions route to the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) so they are codified as petitions and go through the normal review cycle. The Advocate's routing topology is defined by the Operator at provisioning time.
 
 ## HITL SDK Invariants
 

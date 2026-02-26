@@ -248,7 +248,7 @@ Flow Support Services are declared via dedicated CRDs that define provided capab
 - Support Services must implement standard `healthz`/`readyz` endpoints.
 - Nodes consume Support Service capabilities via `USE:support/<service>/<capability>` grants on their FoundryNode `capabilities` field, following the same capability-grant pattern as stamp and law capabilities.
 
-The Clerk discovers available Codification Services from Flow configuration. Other nodes discover Support Services through their granted capabilities.
+The [Clerk node](./03-nodes-external.md#the-judiciary--standard-subsystem) discovers available Codification Services from Flow configuration and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems. Other nodes discover Support Services through their granted capabilities.
 
 Support Service CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 
