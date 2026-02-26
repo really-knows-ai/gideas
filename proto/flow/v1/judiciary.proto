@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+// Shared types for the judiciary subsystem (Juror nodes, Deliberation Gate,
+// Clerk node, Tribunal, Arbiter). No service definition -- the judiciary
+// operates through standard node Workitem assignments, not dedicated RPCs.
+// See: specs/02-flow/03-nodes-external.md#judiciary-subsystem
+
+// --- Enums ---
+
+// Strategy for determining whether consensus has been reached among jurors.
+enum ConsensusStrategy {
+  CONSENSUS_STRATEGY_UNSPECIFIED = 0;
+  CONSENSUS_STRATEGY_SIMPLE_MAJORITY = 1;  // >50%
+  CONSENSUS_STRATEGY_SUPER_MAJORITY = 2;   // >=66%
+  CONSENSUS_STRATEGY_UNANIMITY = 3;        // 100%
+}
+
+// --- Messages ---
+
+// A single juror's vote and reasoning from a deliberation round.
+message JurorJustification {
+  // Opaque juror identifier (e.g. "textualist-0").
+  string juror_id = 1;
+
+  // The outcome this juror voted for.
+  string outcome = 2;
+
+  // The juror's reasoning for their vote.
+  string reasoning = 3;
+}
