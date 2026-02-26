@@ -25,7 +25,6 @@ Before staging anything, review every untracked and modified file against these 
 
 - **Generated files** must be ignored: `gen/`, `bin/`, `node_modules/`, `go.work.sum`, compiled Go binaries.
 - **Editor artifacts** must be ignored: `*.swp`, `*.swo`, `*~`.
-- **Session scratch files** must be ignored: `PLAN.md`, `*_PLAN.md`, `TODO.md`, `REVIEW.md`.
 - **Secrets and credentials** must never be committed: `.env`, `credentials.json`, `*.pem`, `*.key`, or anything that looks like it contains secrets. Warn the user if any are present.
 - **Build output** should not be committed unless it is an intentionally-distributed artifact (e.g. `dist/install.yaml`).
 
