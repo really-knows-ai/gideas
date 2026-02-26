@@ -152,6 +152,10 @@ check: fmt vet lint ## Run fmt, vet, and lint in sequence.
 .PHONY: check-fix
 check-fix: tidy lint-fix ## Run tidy, fmt (via goimports), and lint with auto-fix.
 
+.PHONY: check-fix-all
+check-fix-all: check-fix ## Run check-fix across every module including the operator.
+	$(MAKE) -C platform/operator lint-fix
+
 # ---------------------------------------------------------------------------
 ##@ Code Generation
 # ---------------------------------------------------------------------------
