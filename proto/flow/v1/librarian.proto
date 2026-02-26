@@ -32,8 +32,8 @@ service LibrarianService {
   // Used by the Judiciary (Tribunal, Arbiter) for hearing evidence retrieval.
   rpc GetLaw(GetLawRequest) returns (GetLawResponse);
 
-  // Persists a law (Tier 2 Ruling minted by the Clerk, Tier 3+ applied by
-  // administrator or Governance Flow).
+  // Persists a law (Tier 2 Ruling applied by the Judiciary Gate after petition
+  // approval, Tier 3+ applied by administrator or Governance Flow).
   rpc WriteLaw(WriteLawRequest) returns (WriteLawResponse);
 
   // Removes a law from the active Library.
