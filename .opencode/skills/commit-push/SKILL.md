@@ -34,8 +34,8 @@ If any file that should be ignored is not covered by `.gitignore`, update `.giti
 
 Run the repository quality gates from `AGENTS.md` before committing:
 
-1. **Tests** — Run `go test` across all workspace modules. If any test fails, stop and report the failure. Do not commit with failing tests.
-2. **Lint** — Run `make check-fix`. If any issue is reported, stop and report. Do not commit with lint failures.
+1. **Tests** — Run `make test-all`. If any test fails, stop and report the failure. Do not commit with failing tests.
+2. **Lint** — Run `make check-fix-all`. If any issue is reported, stop and report. Do not commit with lint failures.
 
 If both pass, proceed to commit.
 

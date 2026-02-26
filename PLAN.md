@@ -233,6 +233,11 @@ petition:
 
 ## Implementation Phases
 
+> **Regression gate:** Run `make test-all && make check-fix-all` at the end of
+> any phase where the codebase should be in a compilable, passing state.
+> Phases that make known breaking changes (e.g. deleting services before their
+> replacements exist) skip the gate — the next stabilising phase picks it up.
+
 ### Phase 1: Specification Updates ✅
 
 Update all spec documents to reflect the new architecture. Specs are the source
@@ -590,6 +595,11 @@ Files affected:
 - `nodes/advocate/main_test.go` -- moderate rewrite
 - `nodes/advocate/testutil_test.go` -- moderate rewrite
 
+#### 6.4 Regression Check
+
+- `make test-all` -- all tests pass (first green build since Phase 4)
+- `make check-fix-all` -- all lint/tidy clean
+
 ---
 
 ### Phase 7: Operator and Platform Updates
@@ -623,12 +633,17 @@ Files affected:
 - Update `nodes/haiku-manifests/configmaps.yaml` with new node configs
 - Review Helm chart values for Judiciary configuration changes
 
+#### 7.3 Regression Check
+
+- `make test-all` -- all tests pass
+- `make check-fix-all` -- all lint/tidy clean
+
 ---
 
 ### Phase 8: Validation and Cleanup
 
-- `go test ./...` -- all tests pass
-- `make check-fix` -- all lint clean
+- `make test-all` -- all tests pass
+- `make check-fix-all` -- all lint/tidy clean
 - Spec lint (`tools/spec-lint/`) -- all specs clean
 - Verify no orphaned references to Jury/Clerk services remain (grep for
   `JuryService`, `ClerkService`, `Deliberate`, `DraftLaw`, `USE:jury`,
