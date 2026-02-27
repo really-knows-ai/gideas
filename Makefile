@@ -19,7 +19,7 @@ help: ## Display this help.
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-frictionledger test-librarian test-clerk ## Run all unit tests.
+test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-frictionledger test-librarian ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -49,10 +49,6 @@ test-frictionledger: ## Run Friction Ledger unit tests.
 test-librarian: ## Run Librarian unit tests.
 	CGO_ENABLED=1 go test -v ./platform/librarian/...
 
-.PHONY: test-clerk
-test-clerk: ## Run Clerk unit tests.
-	go test -v ./platform/clerk/...
-
 .PHONY: test-operator
 test-operator: ## Run Operator unit tests (delegates to operator/Makefile).
 	$(MAKE) -C platform/operator test
@@ -65,7 +61,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-archivist build-monitor build-eventbus build-frictionledger build-librarian build-clerk ## Build all binaries.
+build: build-sidecar build-null-node build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -94,10 +90,6 @@ build-frictionledger: ## Build the Friction Ledger binary.
 .PHONY: build-librarian
 build-librarian: ## Build the Librarian binary.
 	CGO_ENABLED=1 go build -o bin/librarian ./platform/librarian/cmd
-
-.PHONY: build-clerk
-build-clerk: ## Build the Clerk binary.
-	go build -o bin/clerk ./platform/clerk/cmd
 
 .PHONY: build-operator
 build-operator: ## Build the Operator binary (delegates to operator/Makefile).
@@ -133,11 +125,11 @@ vet: ## Run go vet across the workspace.
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
-	"$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/frictionledger/... ./platform/librarian/... ./platform/clerk/... ./nodes/... ./tools/haiku-watch/...
+	"$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/... ./tools/haiku-watch/...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint with auto-fix (excludes operator).
-	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/frictionledger/... ./platform/librarian/... ./platform/clerk/... ./nodes/... ./tools/haiku-watch/...
+	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/... ./tools/haiku-watch/...
 
 .PHONY: lint-operator
 lint-operator: ## Run golangci-lint for the operator (delegates to operator/Makefile).
@@ -174,7 +166,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go platform/sidecar platform/archivist platform/monitor platform/eventbus platform/frictionledger platform/librarian platform/clerk platform/pkg/eventbus nodes platform/operator tools/haiku-watch; do \
+	@for mod in gen sdk/go platform/sidecar platform/archivist platform/monitor platform/eventbus platform/frictionledger platform/librarian platform/pkg/eventbus nodes platform/operator tools/haiku-watch; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done

@@ -30,7 +30,6 @@ The "Walking Skeleton" and reference components.
 │   ├── monitor/          # Flow Monitor Service
 │   ├── librarian/        # Librarian Service
 │   ├── archivist/        # Archivist Service
-│   ├── clerk/            # Clerk Service
 │   └── pkg/eventbus/     # Shared event bus client library
 ├── sdk/                  # Node Development Kits
 │   └── go/               # Go SDK Core (Provider abstraction, FoundryAgent)

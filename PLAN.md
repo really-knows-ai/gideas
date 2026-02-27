@@ -1,6 +1,6 @@
 # Judiciary Architecture Redesign
 
-## Status: In Progress (Phase 4 next)
+## Status: In Progress (Phase 6 next)
 
 This document captures the full plan for replacing the monolithic Jury service
 and Clerk platform service with a node-based judiciary that mirrors the main
@@ -382,11 +382,15 @@ package -- import path and type names are identical.
 
 ---
 
-### Phase 4: Delete Jury Service and Clerk Service
+### Phase 4: Delete Jury Service and Clerk Service ✅
 
-#### 4.1 Delete Jury Service
+**Completed.** Deleted `jury/` (15 files) and `platform/clerk/` (7 files).
+Removed clerk from `go.work`, `platform/go.work`, and all Makefile targets
+(test, build, lint, tidy). Updated `AGENTS.md` repository structure.
 
-Delete entire `jury/` directory (15 files):
+#### 4.1 Delete Jury Service ✅
+
+Deleted entire `jury/` directory (15 files):
 
 - `jury/cmd/main.go`
 - `jury/internal/service/jury_server.go`
@@ -403,12 +407,9 @@ Delete entire `jury/` directory (15 files):
 - `jury/Dockerfile`
 - `jury/deployment.yaml`
 
-Note: juror personality logic and deliberation engine logic should be ported to
-the new Juror and Deliberation Gate nodes (Phase 5) before deletion.
+#### 4.2 Delete Clerk Platform Service ✅
 
-#### 4.2 Delete Clerk Platform Service
-
-Delete entire `platform/clerk/` directory (7 files):
+Deleted entire `platform/clerk/` directory (7 files):
 
 - `platform/clerk/cmd/main.go`
 - `platform/clerk/internal/service/clerk_server.go`
@@ -417,23 +418,20 @@ Delete entire `platform/clerk/` directory (7 files):
 - `platform/clerk/Dockerfile`
 - `platform/clerk/deployment.yaml`
 
-Note: prose drafting logic should be ported to the new Clerk node (Phase 5)
-before deletion.
-
-#### 4.3 Build System Cleanup
+#### 4.3 Build System Cleanup ✅
 
 | File | Changes |
 |---|---|
-| `Makefile` | Remove `test-clerk`, `build-clerk` targets. Remove `./platform/clerk/...` from lint invocations. Remove `platform/clerk` from tidy target. Add new targets for new nodes. |
-| `go.work` | Remove `./platform/clerk`. |
-| `platform/go.work` | Remove `./clerk`. |
-| `AGENTS.md` | Update repository structure tree. |
+| `Makefile` | Removed `test-clerk`, `build-clerk` targets. Removed `./platform/clerk/...` from lint invocations. Removed `platform/clerk` from tidy target. |
+| `go.work` | Removed `./platform/clerk`. |
+| `platform/go.work` | Removed `./clerk`. |
+| `AGENTS.md` | Removed `clerk/` from repository structure tree. |
 
 ---
 
 ### Phase 5: New Node Implementations
 
-#### 5.1 Juror Node (`nodes/juror/`)
+#### 5.1 Juror Node (`nodes/juror/`) ✅
 
 - Single image, loads agent configurations for personality diversity
 - Receives child Workitem with: question, evidence, prior-round reasoning (if
@@ -450,7 +448,7 @@ Files to create:
 - `nodes/juror/main_test.go`
 - `nodes/juror/testutil_test.go`
 
-#### 5.2 Deliberation Gate (`nodes/deliberation-gate/`)
+#### 5.2 Deliberation Gate (`nodes/deliberation-gate/`) ✅
 
 - Generic consensus tally node
 - Reads juror verdict artefacts from the Workitem (parent collected them)
@@ -473,7 +471,7 @@ Files to create:
 - `nodes/deliberation-gate/main_test.go`
 - `nodes/deliberation-gate/testutil_test.go`
 
-#### 5.3 Clerk Node (`nodes/clerk/`)
+#### 5.3 Clerk Node (`nodes/clerk/`) ✅
 
 - Receives verdict + context artefacts (from Arbiter consensus, HITL decision,
   or Tribunal hearing verdict)
@@ -492,7 +490,14 @@ Files to create:
 - `nodes/clerk/main_test.go`
 - `nodes/clerk/testutil_test.go`
 
-#### 5.4 Codification Nodes
+#### 5.4 Codification Nodes ✅
+
+**Completed.** Reference implementation `codify-smt` created (3 files, 17 tests
+passing, lint clean). Uses a FoundryAgent (KimiK2) to translate law goals into
+SMT-LIB formal representations. Config-driven output format (default
+`application/smt-lib`). Follows the Clerk fan-out contract: reads
+`codification-goal` artefact, produces `codification-result` artefact, calls
+`Complete()`.
 
 Each codification node:
 
@@ -511,7 +516,13 @@ Files to create (per codification type, starting with one reference impl):
   output format config)
 - Tests
 
-#### 5.5 Tribunal Router (`nodes/tribunal-router/`)
+#### 5.5 Tribunal Router (`nodes/tribunal-router/`) ✅
+
+**Completed.** Tier-aware post-hearing routing node (3 files, 19 tests with
+sub-tests passing, lint clean). Reads `deliberation-result` artefact and `law-reference` artefact,
+fetches the law's tier from the Librarian, and routes based on tier and outcome:
+Tier 1-2 non-promote to Clerk, Tier 1-2 promote and Tier 3+ to Advocate. Pure
+routing node with no artefact modification.
 
 - Reads verdict artefacts and law-reference artefact (for tier context)
 - Routes based on tier and outcome:
@@ -525,7 +536,16 @@ Files to create:
 - `nodes/tribunal-router/main_test.go`
 - `nodes/tribunal-router/testutil_test.go`
 
-#### 5.6 Judiciary Gate (`nodes/judiciary-gate/`)
+#### 5.6 Judiciary Gate (`nodes/judiciary-gate/`) ✅
+
+**Completed.** Feedback resolution gate for the judiciary inner cycle (3 files,
+29 tests passing, lint clean). Reads `deliberation-result`, `petition`, and
+`law-reference` artefacts. Checks feedback resolution on the petition artefact.
+Routing rules: Tier 4-5 always to Advocate (Governance Flow); Tier 3 approved
+to Advocate (HITL ratification); rejected or unresolved feedback to Clerk
+(revision); Tier 1-2 approved with all feedback resolved applies the petition
+via Librarian (WriteLaw/RetireLaw/demote) and stores an approval stamp before
+completing.
 
 - Mirrors Sort for the judiciary inner cycle
 - Checks feedback resolution on the petition artefact
