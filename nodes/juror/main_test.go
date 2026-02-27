@@ -38,7 +38,8 @@ func (m *mockModel) Infer(_ context.Context, systemPrompt string, query []byte) 
 
 func TestJuror_HappyPath(t *testing.T) {
 	spy := newJurorSpy()
-	seedArtefacts(spy, "Should the feedback be upheld?", "Some evidence", []string{"favour_refiner", "favour_reviewer"}, "")
+	seedArtefacts(spy, "Should the feedback be upheld?", "Some evidence",
+		[]string{"favour_refiner", "favour_reviewer"}, "")
 
 	client := setupJurorTest(t, spy)
 
@@ -103,7 +104,8 @@ func TestJuror_HappyPath(t *testing.T) {
 func TestJuror_WithPriorRoundReasoning(t *testing.T) {
 	spy := newJurorSpy()
 	priorRound := "Juror 1 voted \"favour_reviewer\":\nStrong evidence of rule violation."
-	seedArtefacts(spy, "Should the feedback be upheld?", "Evidence", []string{"favour_refiner", "favour_reviewer"}, priorRound)
+	seedArtefacts(spy, "Should the feedback be upheld?", "Evidence",
+		[]string{"favour_refiner", "favour_reviewer"}, priorRound)
 
 	client := setupJurorTest(t, spy)
 

@@ -1,10 +1,14 @@
-// Tribunal is the hearing conductor node of the Foundry Judiciary.
+// Tribunal is the hearing conductor and petition reviewer of the Foundry
+// Judiciary.
 //
-// The Tribunal convenes hearings on individual laws to decide their
-// lifecycle progression. It is triggered by a Governance Flow workitem
-// that carries a "law-reference" artefact identifying the law under review.
+// The Tribunal operates in two modes, detected by the artefacts present on
+// the incoming Workitem:
 //
-// The algorithm:
+// ## Hearing Mode (law-reference artefact present, no petition artefact)
+//
+// Convenes a hearing on an individual law to decide its lifecycle
+// progression. Triggered by a Governance Flow workitem carrying a
+// "law-reference" artefact identifying the law under review.
 //
 //  1. Read the "law-reference" artefact to get the law ID under review.
 //  2. Retrieve the full law object from the Librarian.
@@ -15,20 +19,29 @@
 //  6. Frame the question based on law tier:
 //     - Tier 1 (Finding):  "Should this Finding be promoted or retired?"
 //     - Tier 2 (Ruling):   "Should this Ruling be promoted, retired, or demoted?"
-//  7. Call Deliberate with tier-appropriate allowed_outcomes.
-//  8. If hung: route to Advocate for HITL resolution.
-//  9. Based on verdict + tier:
-//     - Tier 1 promote: DraftLaw at tier=2, then Complete.
-//     - Tier 1 retire:  DraftLaw retire, then Complete.
-//     - Tier 2 promote: Route to Advocate for Tier 3 HITL ratification.
-//     - Tier 2 retire:  DraftLaw retire, then Complete.
-//     - Tier 2 demote:  DraftLaw at tier=1, then Complete.
+//  7. Fan out to Juror nodes with question, evidence, and allowed outcomes.
+//  8. Await juror children.
+//  9. Store verdict-context artefact for downstream Clerk consumption.
+//  10. Route to Deliberation Gate.
+//
+// ## Review Mode (petition artefact present)
+//
+// Reviews a petition drafted by the Clerk. The Tribunal reads the petition,
+// assembles review evidence (petition content + verdict context), and fans
+// out to Juror nodes for an approve/reject vote.
+//
+//  1. Read the "petition" artefact.
+//  2. Read the "verdict-context" artefact for context.
+//  3. Frame the review question: "Should this petition be approved or rejected?"
+//  4. Fan out to Juror nodes with question, evidence, and allowed outcomes.
+//  5. Await juror children.
+//  6. Route to Deliberation Gate.
 //
 // Configuration (YAML via NODE_CONFIG_PATH, default /etc/foundry/node-config.yaml):
 //
-//	consensusStrategy: SIMPLE_MAJORITY
-//	maxRounds:         3
-//	jurySize:          5
+//	jurySize:     5                # number of jurors to fan out to
+//	jurorNode:    juror            # name of the Juror FoundryNode
+//	gateOutput:   deliberation-gate  # output name for routing to the Deliberation Gate
 package main
 
 import (
@@ -38,54 +51,110 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
+// ---------------------------------------------------------------------------
+// Well-known artefact IDs
+// ---------------------------------------------------------------------------
+
 const (
-	// outputAdvocate is the well-known output name for escalation to HITL.
-	outputAdvocate = "advocate"
+	// Artefacts written on each child Workitem for the Juror.
+	artefactQuestion   = "question"
+	artefactEvidence   = "evidence"
+	artefactOutcomes   = "allowed-outcomes"
+	artefactPriorRound = "prior-round-reasoning"
 
-	// lawReferenceArtefact is the artefact ID that carries the law ID under review.
-	lawReferenceArtefact = "law-reference"
+	// Input artefacts that determine mode.
+	artefactLawReference   = "law-reference"
+	artefactPetition       = "petition"
+	artefactVerdictContext = "verdict-context"
 
-	// defaultMaxRounds is the fallback maximum deliberation rounds.
-	defaultMaxRounds int32 = 3
-
-	// defaultJurySize is the fallback number of jurors.
-	defaultJurySize int32 = 5
-
-	// Outcome constants used in verdict matching and question framing.
+	// Outcome constants used in hearing-mode question framing.
 	outcomePromote = "promote"
 	outcomeRetire  = "retire"
 	outcomeDemote  = "demote"
+
+	// Review-mode outcomes.
+	outcomeApprove = "approve"
+	outcomeReject  = "reject"
 )
+
+// ---------------------------------------------------------------------------
+// Well-known output names
+// ---------------------------------------------------------------------------
+
+const (
+	// outputGate is the default output name for routing to the Deliberation Gate.
+	outputGate = "deliberation-gate"
+
+	// defaultJurorNode is the default FoundryNode name for the Juror.
+	defaultJurorNode = "juror"
+
+	// defaultJurySize is the fallback number of jurors to fan out to.
+	defaultJurySize int32 = 5
+)
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
 // tribunalConfig holds the Tribunal's runtime configuration.
 type tribunalConfig struct {
-	ConsensusStrategy string `yaml:"consensusStrategy"`
-	MaxRounds         int32  `yaml:"maxRounds"`
-	JurySize          int32  `yaml:"jurySize"`
+	// JurySize is the number of jurors to fan out to. Default: 5.
+	JurySize int32 `yaml:"jurySize"`
+
+	// JurorNode is the FoundryNode name to route child Workitems to.
+	// Default: "juror".
+	JurorNode string `yaml:"jurorNode"`
+
+	// GateOutput is the output name for routing to the Deliberation Gate
+	// after fan-out is complete. Default: "deliberation-gate".
+	GateOutput string `yaml:"gateOutput"`
 }
 
-func (c *tribunalConfig) strategy() flowv1.ConsensusStrategy {
-	return nodeconfig.ParseConsensusStrategy(c.ConsensusStrategy)
-}
-
-func (c *tribunalConfig) maxRounds() int32 {
-	if c.MaxRounds < 1 {
-		return defaultMaxRounds
-	}
-	return c.MaxRounds
-}
-
+// jurySize returns the effective jury size, applying the default when unset.
 func (c *tribunalConfig) jurySize() int32 {
 	if c.JurySize < 1 {
 		return defaultJurySize
 	}
 	return c.JurySize
+}
+
+// jurorNode returns the effective juror node name.
+func (c *tribunalConfig) jurorNode() string {
+	if c.JurorNode == "" {
+		return defaultJurorNode
+	}
+	return c.JurorNode
+}
+
+// gateOutput returns the effective gate output name.
+func (c *tribunalConfig) gateOutput() string {
+	if c.GateOutput == "" {
+		return outputGate
+	}
+	return c.GateOutput
+}
+
+// ---------------------------------------------------------------------------
+// Verdict Context (written for downstream Clerk consumption)
+// ---------------------------------------------------------------------------
+
+// verdictContext carries the context that produced the verdict. Written by
+// the Tribunal in hearing mode so that the downstream Clerk knows how to
+// draft the petition.
+type verdictContext struct {
+	Trigger   string   `json:"trigger"`
+	Goal      string   `json:"goal"`
+	AppliesTo []string `json:"applies_to"`
+	Tier      int32    `json:"tier"`
+	LawID     string   `json:"law_id"` // the law being reviewed
+	Action    string   `json:"action"` // "create", "retire", "demote"
 }
 
 func main() {
@@ -118,12 +187,28 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 }
 
 // handleTribunal contains the Tribunal's core logic, separated from handler
-// boilerplate for testability.
+// boilerplate for testability. It detects the mode by checking which
+// artefacts are present and dispatches to the appropriate handler.
 func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfig) error {
 	_, _ = client.Heartbeat(ctx)
 
+	// Mode detection: if "petition" artefact is present, we are in review
+	// mode. Otherwise, look for "law-reference" for hearing mode.
+	_, petitionErr := client.GetArtefact(ctx, artefactPetition)
+	if petitionErr == nil {
+		return handleReviewMode(ctx, client, cfg)
+	}
+
+	return handleHearingMode(ctx, client, cfg)
+}
+
+// ---------------------------------------------------------------------------
+// Hearing Mode
+// ---------------------------------------------------------------------------
+
+func handleHearingMode(ctx context.Context, client *flow.Client, cfg *tribunalConfig) error {
 	// ── Step 1: Read the law-reference artefact ──────────────────────
-	lawRef, err := client.GetArtefact(ctx, lawReferenceArtefact)
+	lawRef, err := client.GetArtefact(ctx, artefactLawReference)
 	if err != nil {
 		return fmt.Errorf("tribunal: get law-reference artefact: %w", err)
 	}
@@ -132,7 +217,7 @@ func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfi
 		return fmt.Errorf("tribunal: law-reference artefact is empty")
 	}
 
-	slog.Info("tribunal: reviewing law", "law_id", lawID)
+	slog.Info("tribunal: hearing mode, reviewing law", "law_id", lawID)
 
 	// ── Step 2: Get the full law object ──────────────────────────────
 	law, err := client.GetLaw(ctx, lawID)
@@ -158,63 +243,81 @@ func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfi
 	}
 
 	// ── Step 5: Assemble evidence ────────────────────────────────────
-	evidence := assembleHearingEvidence(law, friction, relatedLaws)
+	evidenceText := assembleHearingEvidence(law, friction, relatedLaws)
 
 	// ── Step 6: Frame question and determine allowed outcomes ────────
 	tier := law.GetTier()
-	question, allowedOutcomes := frameQuestion(tier)
+	question, allowedOutcomes := frameHearingQuestion(tier)
 
-	// ── Step 7: Deliberate ───────────────────────────────────────────
-	verdict, err := client.Deliberate(
-		ctx,
-		question,
-		evidence,
-		allowedOutcomes,
-		cfg.strategy(),
-		cfg.maxRounds(),
-		cfg.jurySize(),
-	)
+	// ── Step 7: Fan out to Juror nodes ───────────────────────────────
+	outcomesJSON, err := json.Marshal(allowedOutcomes)
 	if err != nil {
-		return fmt.Errorf("tribunal: deliberate: %w", err)
+		return fmt.Errorf("tribunal: marshal allowed-outcomes: %w", err)
 	}
 
-	// ── Step 8: Hung jury → Advocate ─────────────────────────────────
-	if verdict.GetHung() {
-		slog.Info("tribunal: hung jury, escalating to advocate",
-			"law_id", lawID,
-			"tier", int32(tier),
-			"rounds_used", verdict.GetRoundsUsed())
-
-		// Write advocate-context artefact for the Advocate node.
-		advCtx := map[string]any{
-			"type":           "tribunal-hung",
-			"law_id":         law.GetId(),
-			"law_goal":       law.GetGoal(),
-			"law_applies_to": law.GetAppliesTo(),
-			"law_tier":       int32(tier),
-			"choices":        allowedOutcomes,
+	tasks := make([]flow.FanOutTask, cfg.jurySize())
+	for i := range tasks {
+		tasks[i] = flow.FanOutTask{
+			TargetNode: cfg.jurorNode(),
+			Artefacts: []flow.ChildArtefact{
+				{ID: artefactQuestion, Content: []byte(question)},
+				{ID: artefactEvidence, Content: []byte(evidenceText)},
+				{ID: artefactOutcomes, Content: outcomesJSON},
+			},
 		}
-		advCtxJSON, err := json.Marshal(advCtx)
-		if err != nil {
-			return fmt.Errorf("tribunal: marshal advocate-context: %w", err)
-		}
-		if _, err := client.StoreArtefact(ctx, "advocate-context", "", advCtxJSON); err != nil {
-			return fmt.Errorf("tribunal: store advocate-context: %w", err)
-		}
-
-		_, err = client.RouteToOutput(ctx, outputAdvocate)
-		if err != nil {
-			return fmt.Errorf("tribunal: route to advocate: %w", err)
-		}
-		return nil
 	}
 
-	// ── Step 9: Apply verdict based on tier ──────────────────────────
-	return applyVerdict(ctx, client, law, verdict)
+	if _, err := client.FanOut(ctx, tasks); err != nil {
+		return fmt.Errorf("tribunal: juror fan-out: %w", err)
+	}
+
+	// ── Step 8: Await juror children ─────────────────────────────────
+	if _, err := client.AwaitChildren(ctx, flow.WithPollingInterval(time.Millisecond)); err != nil {
+		return fmt.Errorf("tribunal: await juror children: %w", err)
+	}
+
+	// ── Step 9: Store verdict-context for downstream Clerk ───────────
+	vctx := verdictContext{
+		Trigger:   "hearing",
+		Goal:      law.GetGoal(),
+		AppliesTo: law.GetAppliesTo(),
+		Tier:      int32(tier),
+		LawID:     lawID,
+		Action:    hearingAction(tier),
+	}
+	vctxJSON, err := json.Marshal(vctx)
+	if err != nil {
+		return fmt.Errorf("tribunal: marshal verdict-context: %w", err)
+	}
+	if _, err := client.StoreArtefact(ctx, artefactVerdictContext, "", vctxJSON); err != nil {
+		return fmt.Errorf("tribunal: store verdict-context: %w", err)
+	}
+
+	// ── Step 10: Route to Deliberation Gate ──────────────────────────
+	slog.Info("tribunal: hearing fan-out complete, routing to deliberation gate",
+		"law_id", lawID,
+		"juror_count", cfg.jurySize(),
+	)
+	if _, err := client.RouteToOutput(ctx, cfg.gateOutput()); err != nil {
+		return fmt.Errorf("tribunal: route to deliberation gate: %w", err)
+	}
+	return nil
 }
 
-// frameQuestion returns the question and allowed outcomes for the given tier.
-func frameQuestion(tier flowv1.LawTier) (string, []string) {
+// hearingAction returns the default action for a hearing. The actual
+// outcome will be determined by the jury verdict (which happens downstream
+// in the Deliberation Gate), but we provide a default for the
+// verdict-context that the Clerk uses to understand the origin.
+//
+// Currently all hearing tiers default to "create". If future tiers need
+// different defaults, extend this function.
+func hearingAction(_ flowv1.LawTier) string {
+	return "create"
+}
+
+// frameHearingQuestion returns the question and allowed outcomes for the
+// given tier.
+func frameHearingQuestion(tier flowv1.LawTier) (string, []string) {
 	switch tier {
 	case flowv1.LawTier_LAW_TIER_FINDING:
 		return "Should this Finding be promoted to a Ruling, or retired?",
@@ -224,94 +327,11 @@ func frameQuestion(tier flowv1.LawTier) (string, []string) {
 			[]string{outcomePromote, outcomeRetire, outcomeDemote}
 	default:
 		return fmt.Sprintf("Should this Tier %d law be promoted, retired, or demoted?", int32(tier)),
-			[]string{"promote", "retire", "demote"}
+			[]string{outcomePromote, outcomeRetire, outcomeDemote}
 	}
 }
 
-// applyVerdict executes the verdict based on the law's tier and the jury's outcome.
-func applyVerdict(
-	ctx context.Context,
-	client *flow.Client,
-	law *flowv1.Law,
-	verdict *flowv1.DeliberateResponse,
-) error {
-	tier := law.GetTier()
-	outcome := verdict.GetOutcome()
-
-	slog.Info("tribunal: applying verdict",
-		"law_id", law.GetId(),
-		"tier", int32(tier),
-		"outcome", outcome)
-
-	switch {
-	// ── Tier 1 Finding ───────────────────────────────────────────────
-	case tier == flowv1.LawTier_LAW_TIER_FINDING && outcome == outcomePromote:
-		return draftAndComplete(ctx, client, verdict, law, int32(flowv1.LawTier_LAW_TIER_RULING), "promote finding")
-
-	case tier == flowv1.LawTier_LAW_TIER_FINDING && outcome == outcomeRetire:
-		return draftAndComplete(ctx, client, verdict, law, int32(tier), "retire finding")
-
-	// ── Tier 2 Ruling ────────────────────────────────────────────────
-	case tier == flowv1.LawTier_LAW_TIER_RULING && outcome == outcomePromote:
-		// Tier 2 promote → Route to Advocate for Tier 3 HITL ratification.
-		slog.Info("tribunal: tier 2 promote, escalating to advocate for ratification",
-			"law_id", law.GetId())
-
-		// Write advocate-context artefact for the Advocate node.
-		advCtx := map[string]any{
-			"type":           "tribunal-promote",
-			"law_id":         law.GetId(),
-			"law_goal":       law.GetGoal(),
-			"law_applies_to": law.GetAppliesTo(),
-			"law_tier":       int32(tier),
-			"choices":        []string{"accept", "reject"},
-		}
-		advCtxJSON, err := json.Marshal(advCtx)
-		if err != nil {
-			return fmt.Errorf("tribunal: marshal advocate-context (promote): %w", err)
-		}
-		if _, err := client.StoreArtefact(ctx, "advocate-context", "", advCtxJSON); err != nil {
-			return fmt.Errorf("tribunal: store advocate-context (promote): %w", err)
-		}
-
-		_, err = client.RouteToOutput(ctx, outputAdvocate)
-		if err != nil {
-			return fmt.Errorf("tribunal: route to advocate (promote ruling): %w", err)
-		}
-		return nil
-
-	case tier == flowv1.LawTier_LAW_TIER_RULING && outcome == outcomeRetire:
-		return draftAndComplete(ctx, client, verdict, law, int32(tier), "retire ruling")
-
-	case tier == flowv1.LawTier_LAW_TIER_RULING && outcome == outcomeDemote:
-		return draftAndComplete(ctx, client, verdict, law, int32(flowv1.LawTier_LAW_TIER_FINDING), "demote ruling")
-
-	default:
-		return fmt.Errorf("tribunal: unhandled verdict tier=%d outcome=%s", int32(tier), outcome)
-	}
-}
-
-// draftAndComplete calls DraftLaw and then Complete. Used by multiple verdict
-// branches to avoid code duplication.
-func draftAndComplete(
-	ctx context.Context,
-	client *flow.Client,
-	verdict *flowv1.DeliberateResponse,
-	law *flowv1.Law,
-	tier int32,
-	label string,
-) error {
-	_, err := client.DraftLaw(ctx, verdict, law.GetGoal(), tier, law.GetAppliesTo())
-	if err != nil {
-		return fmt.Errorf("tribunal: draft law (%s): %w", label, err)
-	}
-	if _, err := client.Complete(ctx, ""); err != nil {
-		return fmt.Errorf("tribunal: complete (%s): %w", label, err)
-	}
-	return nil
-}
-
-// assembleHearingEvidence builds a markdown evidence bundle for the Jury.
+// assembleHearingEvidence builds a markdown evidence bundle for the Jurors.
 func assembleHearingEvidence(
 	law *flowv1.Law,
 	friction []*flowv1.FrictionAggregate,
@@ -362,6 +382,88 @@ func assembleHearingEvidence(
 		}
 		b.WriteString("\n")
 	}
+
+	return b.String()
+}
+
+// ---------------------------------------------------------------------------
+// Review Mode
+// ---------------------------------------------------------------------------
+
+func handleReviewMode(ctx context.Context, client *flow.Client, cfg *tribunalConfig) error {
+	// ── Step 1: Read the petition artefact ───────────────────────────
+	petResp, err := client.GetArtefact(ctx, artefactPetition)
+	if err != nil {
+		return fmt.Errorf("tribunal: get petition artefact: %w", err)
+	}
+	petitionContent := string(petResp.GetContent())
+
+	slog.Info("tribunal: review mode, reviewing petition")
+
+	// ── Step 2: Read verdict-context for context ────────────────────
+	vctxResp, err := client.GetArtefact(ctx, artefactVerdictContext)
+	if err != nil {
+		return fmt.Errorf("tribunal: get verdict-context artefact: %w", err)
+	}
+	vctxContent := string(vctxResp.GetContent())
+
+	// ── Step 3: Frame review question ───────────────────────────────
+	question := "Should this petition be approved or rejected? " +
+		"Review the proposed law changes, justification, and formal representations " +
+		"for correctness and completeness."
+	allowedOutcomes := []string{outcomeApprove, outcomeReject}
+
+	evidenceText := assembleReviewEvidence(petitionContent, vctxContent)
+
+	// ── Step 4: Fan out to Juror nodes ──────────────────────────────
+	outcomesJSON, err := json.Marshal(allowedOutcomes)
+	if err != nil {
+		return fmt.Errorf("tribunal: marshal allowed-outcomes: %w", err)
+	}
+
+	tasks := make([]flow.FanOutTask, cfg.jurySize())
+	for i := range tasks {
+		tasks[i] = flow.FanOutTask{
+			TargetNode: cfg.jurorNode(),
+			Artefacts: []flow.ChildArtefact{
+				{ID: artefactQuestion, Content: []byte(question)},
+				{ID: artefactEvidence, Content: []byte(evidenceText)},
+				{ID: artefactOutcomes, Content: outcomesJSON},
+			},
+		}
+	}
+
+	if _, err := client.FanOut(ctx, tasks); err != nil {
+		return fmt.Errorf("tribunal: juror fan-out (review): %w", err)
+	}
+
+	// ── Step 5: Await juror children ────────────────────────────────
+	if _, err := client.AwaitChildren(ctx, flow.WithPollingInterval(time.Millisecond)); err != nil {
+		return fmt.Errorf("tribunal: await juror children (review): %w", err)
+	}
+
+	// ── Step 6: Route to Deliberation Gate ──────────────────────────
+	slog.Info("tribunal: review fan-out complete, routing to deliberation gate",
+		"juror_count", cfg.jurySize(),
+	)
+	if _, err := client.RouteToOutput(ctx, cfg.gateOutput()); err != nil {
+		return fmt.Errorf("tribunal: route to deliberation gate (review): %w", err)
+	}
+	return nil
+}
+
+// assembleReviewEvidence builds a markdown evidence bundle for petition
+// review by the Jurors.
+func assembleReviewEvidence(petitionContent, verdictContextContent string) string {
+	var b strings.Builder
+
+	b.WriteString("## Petition Under Review\n\n")
+	b.WriteString(petitionContent)
+	b.WriteString("\n\n")
+
+	b.WriteString("## Verdict Context\n\n")
+	b.WriteString(verdictContextContent)
+	b.WriteString("\n\n")
 
 	return b.String()
 }

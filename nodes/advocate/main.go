@@ -2,32 +2,38 @@
 //
 // The Advocate handles three escalation types:
 //
-//  1. Hung jury from Arbiter — deadlock dispute. Human picks
-//     "favour_refiner" or "favour_reviewer".
-//  2. Hung jury from Tribunal — hearing. Human picks "promote",
-//     "retire", or "demote".
-//  3. Tier 3 proposal from Tribunal — Tier 2 promote verdict.
-//     Human ratifies (accept) or rejects.
+//  1. Hung jury from Deliberation Gate — deadlock dispute from an Arbiter
+//     or Tribunal hearing. Human picks from the allowed outcomes.
+//  2. Tier 3+ from Tribunal Router — a promote verdict on a Tier 2 law
+//     (needs HITL ratification) or any Tier 3+ verdict.
+//  3. Tier 3+ from Judiciary Gate — petition review ratification for
+//     Tier 3 laws, or Tier 4-5 governance flow.
 //
 // The escalation type is determined from the "advocate-context" artefact,
-// which is a structured text block written by the upstream node before
-// routing to the Advocate. Format:
+// which is a structured JSON block written by the upstream node before
+// routing to the Advocate. Fields:
 //
-//	type: arbiter-hung | tribunal-hung | tribunal-promote
-//	artefact-kind: <kind>          (for arbiter-hung)
-//	law-id: <id>                   (for tribunal-hung / tribunal-promote)
-//	feedback-ids: <comma-sep>      (for arbiter-hung)
-//	choices: <comma-sep>           (allowed human choices)
+//	type:          arbiter-hung | tribunal-hung | tribunal-promote | judiciary-ratify
+//	artefact_kind: <kind>          (for arbiter-hung)
+//	law_id:        <id>            (for tribunal/judiciary types)
+//	feedback_ids:  [<id>, ...]     (for arbiter-hung)
+//	choices:       [<choice>, ...] (allowed human choices)
+//	law_goal:      <text>          (for tribunal types)
+//	law_applies_to: [<kind>, ...]  (for tribunal types)
+//	law_tier:      <int>           (for tribunal types)
 //
 // The node:
 //  1. Reads the "advocate-context" artefact for escalation metadata.
 //  2. Presents choices to the human via the HITL queue.
 //  3. Enqueue → PauseTimer → WaitForDecision → ResumeTimer.
-//  4. Applies the human decision:
-//     - Arbiter hung: Clerk mint Tier 2 Ruling, LinkRuling, route to Sort.
-//     - Tribunal hung: Clerk action per human choice, Complete.
-//     - Tier 3 accept: Clerk mint Tier 3 Local Statute, Complete.
-//     - Tier 3 reject: Complete (no action).
+//  4. Stores a "human-decision" artefact recording the choice and context.
+//  5. Routes the decision:
+//     - All accept/actionable decisions: route to "clerk" for codification.
+//     - Reject (tier 3 ratification / judiciary ratification): Complete().
+//
+// The Advocate no longer calls DraftLaw or LinkRuling directly.
+// Those responsibilities are handled downstream by the Clerk node and
+// Judiciary Gate respectively.
 //
 // Configuration (YAML via NODE_CONFIG_PATH):
 //
@@ -47,11 +53,14 @@ import (
 )
 
 const (
-	// outputSort is the well-known output name for routing back to the Sort gate.
-	outputSort = "sort"
+	// outputClerk is the well-known output name for routing to the Clerk node.
+	outputClerk = "clerk"
 
 	// advocateContextArtefact is the artefact ID carrying escalation metadata.
 	advocateContextArtefact = "advocate-context"
+
+	// humanDecisionArtefact is the artefact ID storing the human's decision.
+	humanDecisionArtefact = "human-decision"
 )
 
 // escalationType identifies the kind of escalation the Advocate is handling.
@@ -61,6 +70,7 @@ const (
 	escalationArbiterHung     escalationType = "arbiter-hung"
 	escalationTribunalHung    escalationType = "tribunal-hung"
 	escalationTribunalPromote escalationType = "tribunal-promote"
+	escalationJudiciaryRatify escalationType = "judiciary-ratify"
 )
 
 // advocateContext holds the parsed escalation metadata from the
@@ -74,6 +84,20 @@ type advocateContext struct {
 	LawGoal      string         `json:"law_goal,omitempty"`
 	LawAppliesTo []string       `json:"law_applies_to,omitempty"`
 	LawTier      int32          `json:"law_tier,omitempty"`
+}
+
+// humanDecision is the JSON structure stored as the "human-decision" artefact.
+// It records the full context of the HITL decision for downstream consumption
+// by the Clerk node.
+type humanDecision struct {
+	EscalationType escalationType `json:"escalation_type"`
+	Choice         string         `json:"choice"`
+	ArtefactKind   string         `json:"artefact_kind,omitempty"`
+	LawID          string         `json:"law_id,omitempty"`
+	FeedbackIDs    []string       `json:"feedback_ids,omitempty"`
+	LawGoal        string         `json:"law_goal,omitempty"`
+	LawAppliesTo   []string       `json:"law_applies_to,omitempty"`
+	LawTier        int32          `json:"law_tier,omitempty"`
 }
 
 func main() {
@@ -196,6 +220,9 @@ func readAdvocateContext(ctx context.Context, client *flow.Client) (*advocateCon
 }
 
 // applyDecision executes the human's decision based on escalation type.
+// For all actionable decisions, the Advocate stores a "human-decision"
+// artefact and routes to the Clerk node. Rejection decisions Complete()
+// the workitem without further action.
 func applyDecision(
 	ctx context.Context,
 	client *flow.Client,
@@ -209,136 +236,171 @@ func applyDecision(
 		return applyTribunalHungDecision(ctx, client, advCtx, choice)
 	case escalationTribunalPromote:
 		return applyTribunalPromoteDecision(ctx, client, advCtx, choice)
+	case escalationJudiciaryRatify:
+		return applyJudiciaryRatifyDecision(ctx, client, advCtx, choice)
 	default:
 		return fmt.Errorf("advocate: unknown escalation type %q", advCtx.Type)
 	}
 }
 
-// applyArbiterHungDecision handles a hung jury from the Arbiter.
-// The human picks favour_refiner or favour_reviewer.
+// applyArbiterHungDecision handles a hung jury from a Deliberation Gate
+// (Arbiter path). The human picks favour_refiner or favour_reviewer.
+// Stores the decision and routes to Clerk for codification.
 func applyArbiterHungDecision(
 	ctx context.Context,
 	client *flow.Client,
 	advCtx *advocateContext,
 	choice string,
 ) error {
-	// Build a synthetic verdict from the human decision.
-	verdict := &flowv1.DeliberateResponse{
-		Outcome: choice,
-		Justifications: []*flowv1.JurorJustification{
-			{JurorId: "human-advocate", Outcome: choice, Reasoning: "Human decision via HITL Advocate"},
-		},
-		RoundsUsed: 0, // human decision, not jury rounds
+	decision := humanDecision{
+		EscalationType: escalationArbiterHung,
+		Choice:         choice,
+		ArtefactKind:   advCtx.ArtefactKind,
+		FeedbackIDs:    advCtx.FeedbackIDs,
 	}
 
-	goal := fmt.Sprintf("Human ruling on %s dispute: %s", advCtx.ArtefactKind, choice)
-	appliesTo := []string{advCtx.ArtefactKind}
-
-	lawResp, err := client.DraftLaw(ctx, verdict, goal, int32(flowv1.LawTier_LAW_TIER_RULING), appliesTo)
-	if err != nil {
-		return fmt.Errorf("advocate: draft law (arbiter-hung): %w", err)
+	if err := storeHumanDecision(ctx, client, &decision); err != nil {
+		return err
 	}
 
-	slog.Info("advocate: ruling minted from human decision",
-		"law_id", lawResp.GetLawId(),
-		"choice", choice)
+	slog.Info("advocate: arbiter-hung resolved by human",
+		"choice", choice,
+		"artefact_kind", advCtx.ArtefactKind)
 
-	// Link ruling to each deadlocked feedback item.
-	// Determine terminal state: favour_refiner → WONT_FIX, favour_reviewer → REJECTED.
-	targetState := flowv1.FeedbackState_FEEDBACK_STATE_REJECTED
-	if choice == "favour_refiner" {
-		targetState = flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX
-	}
-	for _, fbID := range advCtx.FeedbackIDs {
-		if _, err := client.LinkRuling(ctx, fbID, lawResp.GetLawId(), targetState); err != nil {
-			return fmt.Errorf("advocate: link ruling to feedback %s: %w", fbID, err)
-		}
-	}
-
-	// Route back to Sort for re-evaluation.
-	if _, err := client.RouteToOutput(ctx, outputSort); err != nil {
-		return fmt.Errorf("advocate: route to sort: %w", err)
+	if _, err := client.RouteToOutput(ctx, outputClerk); err != nil {
+		return fmt.Errorf("advocate: route to clerk (arbiter-hung): %w", err)
 	}
 	return nil
 }
 
-// applyTribunalHungDecision handles a hung jury from the Tribunal.
-// The human picks promote, retire, or demote.
+// applyTribunalHungDecision handles a hung jury from a Deliberation Gate
+// (Tribunal path). The human picks promote, retire, or demote.
+// Stores the decision and routes to Clerk for codification.
 func applyTribunalHungDecision(
 	ctx context.Context,
 	client *flow.Client,
 	advCtx *advocateContext,
 	choice string,
 ) error {
-	verdict := &flowv1.DeliberateResponse{
-		Outcome: choice,
-		Justifications: []*flowv1.JurorJustification{
-			{JurorId: "human-advocate", Outcome: choice, Reasoning: "Human decision via HITL Advocate"},
-		},
+	decision := humanDecision{
+		EscalationType: escalationTribunalHung,
+		Choice:         choice,
+		LawID:          advCtx.LawID,
+		LawGoal:        advCtx.LawGoal,
+		LawAppliesTo:   advCtx.LawAppliesTo,
+		LawTier:        advCtx.LawTier,
 	}
 
-	tier := tierForTribunalChoice(choice, advCtx.LawTier)
-	_, err := client.DraftLaw(ctx, verdict, advCtx.LawGoal, tier, advCtx.LawAppliesTo)
-	if err != nil {
-		return fmt.Errorf("advocate: draft law (tribunal-hung, choice=%s): %w", choice, err)
+	if err := storeHumanDecision(ctx, client, &decision); err != nil {
+		return err
 	}
 
-	slog.Info("advocate: tribunal hung resolved by human",
+	slog.Info("advocate: tribunal-hung resolved by human",
 		"law_id", advCtx.LawID,
 		"choice", choice)
 
-	if _, err := client.Complete(ctx, ""); err != nil {
-		return fmt.Errorf("advocate: complete (tribunal-hung): %w", err)
+	if _, err := client.RouteToOutput(ctx, outputClerk); err != nil {
+		return fmt.Errorf("advocate: route to clerk (tribunal-hung): %w", err)
 	}
 	return nil
 }
 
-// applyTribunalPromoteDecision handles a Tier 2→3 promotion ratification.
-// The human accepts or rejects.
+// applyTribunalPromoteDecision handles a Tier 2→3 promotion ratification
+// (from Tribunal Router). The human accepts or rejects.
+// Accept: stores decision and routes to Clerk for codification.
+// Reject: completes without further action.
 func applyTribunalPromoteDecision(
 	ctx context.Context,
 	client *flow.Client,
 	advCtx *advocateContext,
 	choice string,
 ) error {
-	if choice == "accept" {
-		verdict := &flowv1.DeliberateResponse{
-			Outcome: "promote",
-			Justifications: []*flowv1.JurorJustification{
-				{JurorId: "human-advocate", Outcome: "promote", Reasoning: "Human ratification of Tier 3 promotion"},
-			},
-		}
-
-		tier := int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE)
-		lawResp, err := client.DraftLaw(ctx, verdict, advCtx.LawGoal, tier, advCtx.LawAppliesTo)
-		if err != nil {
-			return fmt.Errorf("advocate: draft law (tier 3 ratification): %w", err)
-		}
-
-		slog.Info("advocate: tier 3 local statute ratified",
-			"law_id", lawResp.GetLawId())
-	} else {
+	if choice == "reject" {
 		slog.Info("advocate: tier 3 ratification rejected",
 			"law_id", advCtx.LawID)
+
+		if _, err := client.Complete(ctx, ""); err != nil {
+			return fmt.Errorf("advocate: complete (tribunal-promote reject): %w", err)
+		}
+		return nil
 	}
 
-	if _, err := client.Complete(ctx, ""); err != nil {
-		return fmt.Errorf("advocate: complete (tribunal-promote): %w", err)
+	// Accept: store decision and route to Clerk.
+	decision := humanDecision{
+		EscalationType: escalationTribunalPromote,
+		Choice:         choice,
+		LawID:          advCtx.LawID,
+		LawGoal:        advCtx.LawGoal,
+		LawAppliesTo:   advCtx.LawAppliesTo,
+		LawTier:        advCtx.LawTier,
+	}
+
+	if err := storeHumanDecision(ctx, client, &decision); err != nil {
+		return err
+	}
+
+	slog.Info("advocate: tier 3 promotion ratified by human",
+		"law_id", advCtx.LawID)
+
+	if _, err := client.RouteToOutput(ctx, outputClerk); err != nil {
+		return fmt.Errorf("advocate: route to clerk (tribunal-promote accept): %w", err)
 	}
 	return nil
 }
 
-// tierForTribunalChoice maps a tribunal hearing choice to the DraftLaw tier
-// using the original law tier from the advocate context.
-func tierForTribunalChoice(choice string, originalTier int32) int32 {
-	switch choice {
-	case "promote":
-		return originalTier + 1
-	case "demote":
-		return originalTier - 1
-	default: // "retire" — pass the original tier through to the Clerk
-		return originalTier
+// applyJudiciaryRatifyDecision handles Tier 3+ petition review ratification
+// (from Judiciary Gate). The human accepts or rejects.
+// Accept: stores decision and routes to Clerk.
+// Reject: completes without further action.
+func applyJudiciaryRatifyDecision(
+	ctx context.Context,
+	client *flow.Client,
+	advCtx *advocateContext,
+	choice string,
+) error {
+	if choice == "reject" {
+		slog.Info("advocate: judiciary ratification rejected",
+			"law_id", advCtx.LawID)
+
+		if _, err := client.Complete(ctx, ""); err != nil {
+			return fmt.Errorf("advocate: complete (judiciary-ratify reject): %w", err)
+		}
+		return nil
 	}
+
+	// Accept: store decision and route to Clerk.
+	decision := humanDecision{
+		EscalationType: escalationJudiciaryRatify,
+		Choice:         choice,
+		LawID:          advCtx.LawID,
+		LawGoal:        advCtx.LawGoal,
+		LawAppliesTo:   advCtx.LawAppliesTo,
+		LawTier:        advCtx.LawTier,
+	}
+
+	if err := storeHumanDecision(ctx, client, &decision); err != nil {
+		return err
+	}
+
+	slog.Info("advocate: judiciary ratification accepted by human",
+		"law_id", advCtx.LawID)
+
+	if _, err := client.RouteToOutput(ctx, outputClerk); err != nil {
+		return fmt.Errorf("advocate: route to clerk (judiciary-ratify accept): %w", err)
+	}
+	return nil
+}
+
+// storeHumanDecision marshals and stores the human-decision artefact.
+func storeHumanDecision(ctx context.Context, client *flow.Client, decision *humanDecision) error {
+	data, err := json.Marshal(decision)
+	if err != nil {
+		return fmt.Errorf("advocate: marshal human-decision: %w", err)
+	}
+	if _, err := client.StoreArtefact(ctx, humanDecisionArtefact, "", data); err != nil {
+		return fmt.Errorf("advocate: store human-decision: %w", err)
+	}
+	return nil
 }
 
 // handleChoices returns the choices endpoint. The actual choices are

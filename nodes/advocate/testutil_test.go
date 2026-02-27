@@ -19,7 +19,7 @@ func newLocalListener() (net.Listener, error) {
 }
 
 // newSpyGRPCServer creates a gRPC server with the advocateSpy registered
-// for all seven Foundry Flow service interfaces.
+// for the five Foundry Flow service interfaces the Advocate depends on.
 func newSpyGRPCServer(spy *advocateSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
@@ -27,8 +27,6 @@ func newSpyGRPCServer(spy *advocateSpy) *grpc.Server {
 	flowv1.RegisterArchivistServiceServer(srv, spy)
 	flowv1.RegisterLibrarianServiceServer(srv, spy)
 	flowv1.RegisterFrictionLedgerServiceServer(srv, spy)
-	flowv1.RegisterJuryServiceServer(srv, spy)
-	flowv1.RegisterClerkServiceServer(srv, spy)
 	return srv
 }
 
@@ -39,56 +37,37 @@ type advocateSpy struct {
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
 	flowv1.UnimplementedFrictionLedgerServiceServer
-	flowv1.UnimplementedJuryServiceServer
-	flowv1.UnimplementedClerkServiceServer
 
 	mu sync.Mutex
 
 	// Configurable artefact content (for advocate-context).
 	ArtefactContent []byte
 
-	// Configurable DraftLaw response.
-	DraftLawResponse *flowv1.DraftLawResponse
-
 	// Configurable errors.
 	GetArtefactErr   error
-	DraftLawErr      error
-	LinkRulingErr    error
+	StoreArtefactErr error
 	RouteToOutputErr error
 	CompleteErr      error
 	PauseTimerErr    error
 	ResumeTimerErr   error
 
 	// Recorded operations.
-	RoutedOutputs    []string
-	Completed        bool
-	LinkedRulings    []linkRulingRecord
-	DraftLawCalls    []draftLawRecord
-	PauseTimerCalls  int
-	ResumeTimerCalls int
+	RoutedOutputs      []string
+	Completed          bool
+	StoreArtefactCalls []storeArtefactRecord
+	PauseTimerCalls    int
+	ResumeTimerCalls   int
 }
 
-type linkRulingRecord struct {
-	FeedbackID  string
-	LawID       string
-	TargetState flowv1.FeedbackState
-}
-
-type draftLawRecord struct {
-	Goal      string
-	Tier      int32
-	AppliesTo []string
-	Outcome   string
+type storeArtefactRecord struct {
+	ArtefactID string
+	Content    []byte
 }
 
 func newAdvocateSpy(advCtx *advocateContext) *advocateSpy {
 	content, _ := json.Marshal(advCtx)
 	return &advocateSpy{
 		ArtefactContent: content,
-		DraftLawResponse: &flowv1.DraftLawResponse{
-			LawId:       "law-advocate-001",
-			VersionHash: "adv123",
-		},
 	}
 }
 
@@ -215,6 +194,12 @@ func (s *advocateSpy) SubmitResult(
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 
+func (s *advocateSpy) RecordTelemetry(
+	_ context.Context, _ *flowv1.RecordTelemetryRequest,
+) (*flowv1.RecordTelemetryResponse, error) {
+	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Archivist methods
 // ---------------------------------------------------------------------------
@@ -230,55 +215,35 @@ func (s *advocateSpy) GetArtefact(
 	}, nil
 }
 
-func (s *advocateSpy) LinkRuling(
-	_ context.Context, req *flowv1.LinkRulingRequest,
-) (*flowv1.LinkRulingResponse, error) {
+func (s *advocateSpy) StoreArtefact(
+	_ context.Context, req *flowv1.StoreArtefactRequest,
+) (*flowv1.StoreArtefactResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.LinkRulingErr != nil {
-		return nil, s.LinkRulingErr
+	if s.StoreArtefactErr != nil {
+		return nil, s.StoreArtefactErr
 	}
-	s.LinkedRulings = append(s.LinkedRulings, linkRulingRecord{
-		FeedbackID:  req.GetFeedbackId(),
-		LawID:       req.GetLawId(),
-		TargetState: req.GetTargetState(),
+	s.StoreArtefactCalls = append(s.StoreArtefactCalls, storeArtefactRecord{
+		ArtefactID: req.GetArtefactId(),
+		Content:    req.GetContent(),
 	})
-	return &flowv1.LinkRulingResponse{
-		UpdatedItem: &flowv1.FeedbackItem{
-			Id:           req.GetFeedbackId(),
-			State:        req.GetTargetState(),
-			LinkedRuling: req.GetLawId(),
-		},
+	return &flowv1.StoreArtefactResponse{
+		VersionHash:  "mock-hash",
+		IsNewVersion: true,
 	}, nil
 }
 
 // ---------------------------------------------------------------------------
-// FrictionLedger methods
+// Test helpers
 // ---------------------------------------------------------------------------
 
-func (s *advocateSpy) RecordTelemetry(
-	_ context.Context, _ *flowv1.RecordTelemetryRequest,
-) (*flowv1.RecordTelemetryResponse, error) {
-	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
-}
-
-// ---------------------------------------------------------------------------
-// Clerk methods
-// ---------------------------------------------------------------------------
-
-func (s *advocateSpy) DraftLaw(
-	_ context.Context, req *flowv1.DraftLawRequest,
-) (*flowv1.DraftLawResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.DraftLawErr != nil {
-		return nil, s.DraftLawErr
+// getStoredArtefact parses a stored artefact from the spy by ID.
+// Returns nil if not found.
+func (s *advocateSpy) getStoredArtefact(id string) []byte { //nolint:unparam // generic helper
+	for _, call := range s.StoreArtefactCalls {
+		if call.ArtefactID == id {
+			return call.Content
+		}
 	}
-	s.DraftLawCalls = append(s.DraftLawCalls, draftLawRecord{
-		Goal:      req.GetGoal(),
-		Tier:      req.GetTier(),
-		AppliesTo: req.GetAppliesTo(),
-		Outcome:   req.GetVerdict().GetOutcome(),
-	})
-	return s.DraftLawResponse, nil
+	return nil
 }
