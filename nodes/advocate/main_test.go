@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -45,37 +46,23 @@ func TestAdvocate_ArbiterHung_FavourRefiner(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Should have drafted a Tier 2 Ruling.
-	if len(spy.DraftLawCalls) != 1 {
-		t.Fatalf("expected 1 DraftLaw call, got %d", len(spy.DraftLawCalls))
+	// Should have stored a human-decision artefact.
+	decision := mustGetStoredDecision(t, spy)
+	if decision.EscalationType != escalationArbiterHung {
+		t.Fatalf("expected escalation_type=arbiter-hung, got %s", decision.EscalationType)
 	}
-	dl := spy.DraftLawCalls[0]
-	if dl.Tier != int32(flowv1.LawTier_LAW_TIER_RULING) {
-		t.Fatalf("expected Tier 2 (RULING), got %d", dl.Tier)
+	if decision.Choice != "favour_refiner" {
+		t.Fatalf("expected choice=favour_refiner, got %s", decision.Choice)
 	}
-	if dl.Outcome != "favour_refiner" {
-		t.Fatalf("expected outcome favour_refiner, got %s", dl.Outcome)
+	if decision.ArtefactKind != "haiku" {
+		t.Fatalf("expected artefact_kind=haiku, got %s", decision.ArtefactKind)
 	}
-
-	// Should have linked ruling to both feedback items.
-	if len(spy.LinkedRulings) != 2 {
-		t.Fatalf("expected 2 LinkRuling calls, got %d", len(spy.LinkedRulings))
-	}
-	ids := map[string]bool{}
-	for _, lr := range spy.LinkedRulings {
-		ids[lr.FeedbackID] = true
-		if lr.LawID != "law-advocate-001" {
-			t.Fatalf("expected law_id=law-advocate-001, got %s", lr.LawID)
-		}
-	}
-	if !ids["fb-1"] || !ids["fb-2"] {
-		t.Fatalf("expected LinkRuling for fb-1 and fb-2")
+	if len(decision.FeedbackIDs) != 2 {
+		t.Fatalf("expected 2 feedback_ids, got %d", len(decision.FeedbackIDs))
 	}
 
-	// Should route to sort.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "sort" {
-		t.Fatalf("expected route to sort, got %v", spy.RoutedOutputs)
-	}
+	// Should route to clerk.
+	assertRoutedTo(t, spy, outputClerk)
 
 	// Should have paused and resumed timer.
 	if spy.PauseTimerCalls != 1 {
@@ -118,12 +105,12 @@ func TestAdvocate_ArbiterHung_FavourReviewer(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	if spy.DraftLawCalls[0].Outcome != "favour_reviewer" {
-		t.Fatalf("expected outcome favour_reviewer, got %s", spy.DraftLawCalls[0].Outcome)
+	decision := mustGetStoredDecision(t, spy)
+	if decision.Choice != "favour_reviewer" {
+		t.Fatalf("expected choice=favour_reviewer, got %s", decision.Choice)
 	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "sort" {
-		t.Fatalf("expected route to sort, got %v", spy.RoutedOutputs)
-	}
+
+	assertRoutedTo(t, spy, outputClerk)
 }
 
 // ---------------------------------------------------------------------------
@@ -164,29 +151,37 @@ func TestAdvocate_TribunalHung_Promote(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	if len(spy.DraftLawCalls) != 1 {
-		t.Fatalf("expected 1 DraftLaw call, got %d", len(spy.DraftLawCalls))
+	// Should store a human-decision artefact with tribunal-hung metadata.
+	decision := mustGetStoredDecision(t, spy)
+	if decision.EscalationType != escalationTribunalHung {
+		t.Fatalf("expected escalation_type=tribunal-hung, got %s", decision.EscalationType)
 	}
-	dl := spy.DraftLawCalls[0]
-	if dl.Tier != int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE) {
-		t.Fatalf("expected Tier 3 (LOCAL_STATUTE), got %d", dl.Tier)
+	if decision.Choice != "promote" {
+		t.Fatalf("expected choice=promote, got %s", decision.Choice)
 	}
-	if !spy.Completed {
-		t.Fatal("expected Complete()")
+	if decision.LawID != "law-001" {
+		t.Fatalf("expected law_id=law-001, got %s", decision.LawID)
 	}
-	if len(spy.RoutedOutputs) != 0 {
-		t.Fatalf("expected no routing, got %v", spy.RoutedOutputs)
+	if decision.LawTier != int32(flowv1.LawTier_LAW_TIER_RULING) {
+		t.Fatalf("expected law_tier=2, got %d", decision.LawTier)
+	}
+
+	// Should route to clerk.
+	assertRoutedTo(t, spy, outputClerk)
+
+	// Should NOT complete.
+	if spy.Completed {
+		t.Fatal("expected no Complete() for tribunal-hung")
 	}
 }
 
 func TestAdvocate_TribunalHung_RetireAndDemote(t *testing.T) {
 	tests := []struct {
-		name     string
-		choice   string
-		wantTier int32
+		name   string
+		choice string
 	}{
-		{"retire", "retire", int32(flowv1.LawTier_LAW_TIER_RULING)},
-		{"demote", "demote", int32(flowv1.LawTier_LAW_TIER_FINDING)},
+		{"retire", "retire"},
+		{"demote", "demote"},
 	}
 
 	for _, tt := range tests {
@@ -225,106 +220,176 @@ func TestAdvocate_TribunalHung_RetireAndDemote(t *testing.T) {
 			spy.mu.Lock()
 			defer spy.mu.Unlock()
 
-			dl := spy.DraftLawCalls[0]
-			if dl.Tier != tt.wantTier {
-				t.Fatalf("expected tier %d for %s, got %d", tt.wantTier, tt.choice, dl.Tier)
+			// Should store human-decision with the correct choice.
+			decision := mustGetStoredDecision(t, spy)
+			if decision.Choice != tt.choice {
+				t.Fatalf("expected choice=%s, got %s", tt.choice, decision.Choice)
 			}
-			if !spy.Completed {
-				t.Fatal("expected Complete()")
+
+			// Should route to clerk.
+			assertRoutedTo(t, spy, outputClerk)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Accept-and-route-to-clerk tests (tribunal-promote + judiciary-ratify)
+// ---------------------------------------------------------------------------
+
+func TestAdvocate_AcceptRoutesToClerk(t *testing.T) {
+	tests := []struct {
+		name           string
+		escalation     escalationType
+		lawID          string
+		lawGoal        string
+		lawAppliesTo   []string
+		lawTier        int32
+		wantWorkitemID string
+	}{
+		{
+			name:           "tribunal-promote",
+			escalation:     escalationTribunalPromote,
+			lawID:          "law-004",
+			lawGoal:        "Well-proven ruling",
+			lawAppliesTo:   []string{"haiku"},
+			lawTier:        int32(flowv1.LawTier_LAW_TIER_RULING),
+			wantWorkitemID: "wi-promote-accept",
+		},
+		{
+			name:           "judiciary-ratify",
+			escalation:     escalationJudiciaryRatify,
+			lawID:          "law-010",
+			lawGoal:        "Codified statute",
+			lawAppliesTo:   []string{"haiku"},
+			lawTier:        int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE),
+			wantWorkitemID: "wi-jud-accept",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			advCtx := &advocateContext{
+				Type:         tt.escalation,
+				LawID:        tt.lawID,
+				LawGoal:      tt.lawGoal,
+				LawAppliesTo: tt.lawAppliesTo,
+				LawTier:      tt.lawTier,
+				Choices:      []string{"accept", "reject"},
+			}
+
+			spy := newAdvocateSpy(advCtx)
+			client := newSpyClient(t, spy)
+			qm := newTestQueueManager(t)
+
+			wctx := &flowv1.WorkitemContext{WorkitemId: tt.wantWorkitemID}
+
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- handleAdvocate(context.Background(), client, qm, wctx)
+			}()
+
+			waitForEnqueue(t, qm, tt.wantWorkitemID)
+			_, _ = qm.Claim(context.Background(), tt.wantWorkitemID)
+			if err := qm.Decide(context.Background(), tt.wantWorkitemID, "accept"); err != nil {
+				t.Fatalf("Decide failed: %v", err)
+			}
+
+			if err := <-errCh; err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+
+			spy.mu.Lock()
+			defer spy.mu.Unlock()
+
+			// Should store human-decision with correct escalation type.
+			decision := mustGetStoredDecision(t, spy)
+			if decision.EscalationType != tt.escalation {
+				t.Fatalf("expected escalation_type=%s, got %s", tt.escalation, decision.EscalationType)
+			}
+			if decision.Choice != "accept" {
+				t.Fatalf("expected choice=accept, got %s", decision.Choice)
+			}
+			if decision.LawID != tt.lawID {
+				t.Fatalf("expected law_id=%s, got %s", tt.lawID, decision.LawID)
+			}
+
+			// Should route to clerk (not Complete).
+			assertRoutedTo(t, spy, outputClerk)
+			if spy.Completed {
+				t.Fatal("expected no Complete() for accept")
 			}
 		})
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Tribunal-promote (Tier 3 ratification) tests
+// Reject-and-complete tests (tribunal-promote + judiciary-ratify)
 // ---------------------------------------------------------------------------
 
-func TestAdvocate_TribunalPromote_Accept(t *testing.T) {
-	advCtx := &advocateContext{
-		Type:         escalationTribunalPromote,
-		LawID:        "law-004",
-		LawGoal:      "Well-proven ruling",
-		LawAppliesTo: []string{"haiku"},
-		Choices:      []string{"accept", "reject"},
+func TestAdvocate_RejectCompletes(t *testing.T) {
+	tests := []struct {
+		name       string
+		escalation escalationType
+		lawID      string
+		workitemID string
+	}{
+		{
+			name:       "tribunal-promote",
+			escalation: escalationTribunalPromote,
+			lawID:      "law-005",
+			workitemID: "wi-promote-reject",
+		},
+		{
+			name:       "judiciary-ratify",
+			escalation: escalationJudiciaryRatify,
+			lawID:      "law-011",
+			workitemID: "wi-jud-reject",
+		},
 	}
 
-	spy := newAdvocateSpy(advCtx)
-	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			advCtx := &advocateContext{
+				Type:    tt.escalation,
+				LawID:   tt.lawID,
+				Choices: []string{"accept", "reject"},
+			}
 
-	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-promote-1"}
+			spy := newAdvocateSpy(advCtx)
+			client := newSpyClient(t, spy)
+			qm := newTestQueueManager(t)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- handleAdvocate(context.Background(), client, qm, wctx)
-	}()
+			wctx := &flowv1.WorkitemContext{WorkitemId: tt.workitemID}
 
-	waitForEnqueue(t, qm, "wi-promote-1")
-	_, _ = qm.Claim(context.Background(), "wi-promote-1")
-	if err := qm.Decide(context.Background(), "wi-promote-1", "accept"); err != nil {
-		t.Fatalf("Decide failed: %v", err)
-	}
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- handleAdvocate(context.Background(), client, qm, wctx)
+			}()
 
-	if err := <-errCh; err != nil {
-		t.Fatalf("handler returned error: %v", err)
-	}
+			waitForEnqueue(t, qm, tt.workitemID)
+			_, _ = qm.Claim(context.Background(), tt.workitemID)
+			if err := qm.Decide(context.Background(), tt.workitemID, "reject"); err != nil {
+				t.Fatalf("Decide failed: %v", err)
+			}
 
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
+			if err := <-errCh; err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
 
-	// Should have drafted a Tier 3 Local Statute.
-	if len(spy.DraftLawCalls) != 1 {
-		t.Fatalf("expected 1 DraftLaw call, got %d", len(spy.DraftLawCalls))
-	}
-	dl := spy.DraftLawCalls[0]
-	if dl.Tier != int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE) {
-		t.Fatalf("expected Tier 3 (LOCAL_STATUTE), got %d", dl.Tier)
-	}
-	if !spy.Completed {
-		t.Fatal("expected Complete()")
-	}
-}
+			spy.mu.Lock()
+			defer spy.mu.Unlock()
 
-func TestAdvocate_TribunalPromote_Reject(t *testing.T) {
-	advCtx := &advocateContext{
-		Type:         escalationTribunalPromote,
-		LawID:        "law-005",
-		LawGoal:      "Controversial ruling",
-		LawAppliesTo: []string{"haiku"},
-		Choices:      []string{"accept", "reject"},
-	}
-
-	spy := newAdvocateSpy(advCtx)
-	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
-
-	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-promote-2"}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- handleAdvocate(context.Background(), client, qm, wctx)
-	}()
-
-	waitForEnqueue(t, qm, "wi-promote-2")
-	_, _ = qm.Claim(context.Background(), "wi-promote-2")
-	if err := qm.Decide(context.Background(), "wi-promote-2", "reject"); err != nil {
-		t.Fatalf("Decide failed: %v", err)
-	}
-
-	if err := <-errCh; err != nil {
-		t.Fatalf("handler returned error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	// Reject: no DraftLaw, just Complete.
-	if len(spy.DraftLawCalls) != 0 {
-		t.Fatalf("expected 0 DraftLaw calls for reject, got %d", len(spy.DraftLawCalls))
-	}
-	if !spy.Completed {
-		t.Fatal("expected Complete()")
+			// Reject: no human-decision artefact, just Complete.
+			if spy.getStoredArtefact(humanDecisionArtefact) != nil {
+				t.Fatal("expected no human-decision artefact for reject")
+			}
+			if !spy.Completed {
+				t.Fatal("expected Complete()")
+			}
+			if len(spy.RoutedOutputs) != 0 {
+				t.Fatalf("expected no routing for reject, got %v", spy.RoutedOutputs)
+			}
+		})
 	}
 }
 
@@ -383,59 +448,75 @@ func TestAdvocate_Error_GetArtefactFails(t *testing.T) {
 	}
 }
 
-func TestAdvocate_Error_ServiceCallFails(t *testing.T) {
-	tests := []struct {
-		name    string
-		advCtx  *advocateContext
-		setupFn func(spy *advocateSpy)
-		choice  string
-	}{
-		{
-			name: "DraftLawFails",
-			advCtx: &advocateContext{
-				Type: escalationTribunalPromote, LawGoal: "Test",
-				LawAppliesTo: []string{"haiku"}, Choices: []string{"accept"},
-			},
-			setupFn: func(spy *advocateSpy) { spy.DraftLawErr = fmt.Errorf("clerk unavailable") },
-			choice:  "accept",
-		},
-		{
-			name: "LinkRulingFails",
-			advCtx: &advocateContext{
-				Type: escalationArbiterHung, ArtefactKind: "haiku",
-				FeedbackIDs: []string{"fb-err"}, Choices: []string{"favour_refiner"},
-			},
-			setupFn: func(spy *advocateSpy) { spy.LinkRulingErr = fmt.Errorf("link ruling failed") },
-			choice:  "favour_refiner",
-		},
+func TestAdvocate_Error_StoreArtefactFails(t *testing.T) {
+	advCtx := &advocateContext{
+		Type:         escalationArbiterHung,
+		ArtefactKind: "haiku",
+		FeedbackIDs:  []string{"fb-1"},
+		Choices:      []string{"favour_refiner"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			spy := newAdvocateSpy(tt.advCtx)
-			tt.setupFn(spy)
-			client := newSpyClient(t, spy)
-			qm := newTestQueueManager(t)
+	spy := newAdvocateSpy(advCtx)
+	spy.StoreArtefactErr = fmt.Errorf("archivist unavailable")
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
 
-			wid := "wi-err-" + tt.name
-			wctx := &flowv1.WorkitemContext{WorkitemId: wid}
+	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-err-store"}
 
-			errCh := make(chan error, 1)
-			go func() {
-				errCh <- handleAdvocate(context.Background(), client, qm, wctx)
-			}()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handleAdvocate(context.Background(), client, qm, wctx)
+	}()
 
-			waitForEnqueue(t, qm, wid)
-			_, _ = qm.Claim(context.Background(), wid)
-			if err := qm.Decide(context.Background(), wid, tt.choice); err != nil {
-				t.Fatalf("Decide failed: %v", err)
-			}
+	waitForEnqueue(t, qm, "wi-err-store")
+	_, _ = qm.Claim(context.Background(), "wi-err-store")
+	if err := qm.Decide(context.Background(), "wi-err-store", "favour_refiner"); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
 
-			err := <-errCh
-			if err == nil {
-				t.Fatalf("expected error for %s", tt.name)
-			}
-		})
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error from StoreArtefact failure")
+	}
+	if !strings.Contains(err.Error(), "store human-decision") {
+		t.Errorf("expected 'store human-decision' in error, got: %v", err)
+	}
+}
+
+func TestAdvocate_Error_RouteToOutputFails(t *testing.T) {
+	advCtx := &advocateContext{
+		Type:         escalationTribunalHung,
+		LawID:        "law-err",
+		LawGoal:      "Error test",
+		LawAppliesTo: []string{"haiku"},
+		LawTier:      int32(flowv1.LawTier_LAW_TIER_RULING),
+		Choices:      []string{"promote"},
+	}
+
+	spy := newAdvocateSpy(advCtx)
+	spy.RouteToOutputErr = fmt.Errorf("routing unavailable")
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+
+	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-err-route"}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handleAdvocate(context.Background(), client, qm, wctx)
+	}()
+
+	waitForEnqueue(t, qm, "wi-err-route")
+	_, _ = qm.Claim(context.Background(), "wi-err-route")
+	if err := qm.Decide(context.Background(), "wi-err-route", "promote"); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error from RouteToOutput failure")
+	}
+	if !strings.Contains(err.Error(), "route to clerk") {
+		t.Errorf("expected 'route to clerk' in error, got: %v", err)
 	}
 }
 
@@ -505,28 +586,187 @@ func TestAdvocate_Error_NoChoices(t *testing.T) {
 	}
 }
 
+func TestAdvocate_Error_UnknownEscalationType(t *testing.T) {
+	advCtx := &advocateContext{
+		Type:    "unknown-type",
+		Choices: []string{"something"},
+	}
+
+	spy := newAdvocateSpy(advCtx)
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+
+	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-unknown-type"}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handleAdvocate(context.Background(), client, qm, wctx)
+	}()
+
+	waitForEnqueue(t, qm, "wi-unknown-type")
+	_, _ = qm.Claim(context.Background(), "wi-unknown-type")
+	if err := qm.Decide(context.Background(), "wi-unknown-type", "something"); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error for unknown escalation type")
+	}
+	if !strings.Contains(err.Error(), "unknown escalation type") {
+		t.Errorf("expected 'unknown escalation type' in error, got: %v", err)
+	}
+}
+
+func TestAdvocate_Error_MissingTypeField(t *testing.T) {
+	spy := newAdvocateSpy(&advocateContext{
+		Choices: []string{"accept"},
+	})
+	// The JSON will have type:"" which should be rejected.
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+
+	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-missing-type"}
+
+	err := handleAdvocate(context.Background(), client, qm, wctx)
+	if err == nil {
+		t.Fatal("expected error for missing type field")
+	}
+	if !strings.Contains(err.Error(), "missing type") {
+		t.Errorf("expected 'missing type' in error, got: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
-// tierForTribunalChoice unit tests
+// Human-decision artefact content validation
 // ---------------------------------------------------------------------------
 
-func TestTierForTribunalChoice(t *testing.T) {
-	tests := []struct {
-		choice       string
-		originalTier int32
-		want         int32
-	}{
-		{"promote", int32(flowv1.LawTier_LAW_TIER_RULING), int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE)},
-		{"promote", int32(flowv1.LawTier_LAW_TIER_FINDING), int32(flowv1.LawTier_LAW_TIER_RULING)},
-		{"demote", int32(flowv1.LawTier_LAW_TIER_RULING), int32(flowv1.LawTier_LAW_TIER_FINDING)},
-		{"retire", int32(flowv1.LawTier_LAW_TIER_RULING), int32(flowv1.LawTier_LAW_TIER_RULING)},
-		{"retire", int32(flowv1.LawTier_LAW_TIER_FINDING), int32(flowv1.LawTier_LAW_TIER_FINDING)},
+func TestAdvocate_HumanDecisionArtefact_ArbiterHung(t *testing.T) {
+	advCtx := &advocateContext{
+		Type:         escalationArbiterHung,
+		ArtefactKind: "sonnet",
+		FeedbackIDs:  []string{"fb-a", "fb-b", "fb-c"},
+		Choices:      []string{"favour_refiner", "favour_reviewer"},
 	}
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%s_tier%d", tt.choice, tt.originalTier), func(t *testing.T) {
-			got := tierForTribunalChoice(tt.choice, tt.originalTier)
-			if got != tt.want {
-				t.Fatalf("tierForTribunalChoice(%q, %d) = %d, want %d", tt.choice, tt.originalTier, got, tt.want)
-			}
-		})
+
+	spy := newAdvocateSpy(advCtx)
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+
+	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-decision-test"}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handleAdvocate(context.Background(), client, qm, wctx)
+	}()
+
+	waitForEnqueue(t, qm, "wi-decision-test")
+	_, _ = qm.Claim(context.Background(), "wi-decision-test")
+	if err := qm.Decide(context.Background(), "wi-decision-test", "favour_refiner"); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	decision := mustGetStoredDecision(t, spy)
+
+	// Validate all fields are propagated correctly.
+	if decision.EscalationType != escalationArbiterHung {
+		t.Errorf("escalation_type: want arbiter-hung, got %s", decision.EscalationType)
+	}
+	if decision.Choice != "favour_refiner" {
+		t.Errorf("choice: want favour_refiner, got %s", decision.Choice)
+	}
+	if decision.ArtefactKind != "sonnet" {
+		t.Errorf("artefact_kind: want sonnet, got %s", decision.ArtefactKind)
+	}
+	if len(decision.FeedbackIDs) != 3 {
+		t.Errorf("feedback_ids: want 3, got %d", len(decision.FeedbackIDs))
+	}
+}
+
+func TestAdvocate_HumanDecisionArtefact_TribunalHung(t *testing.T) {
+	advCtx := &advocateContext{
+		Type:         escalationTribunalHung,
+		LawID:        "law-100",
+		LawGoal:      "Must have seasonal reference",
+		LawAppliesTo: []string{"haiku", "sonnet"},
+		LawTier:      int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE),
+		Choices:      []string{"promote", "retire", "demote"},
+	}
+
+	spy := newAdvocateSpy(advCtx)
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+
+	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-decision-trib"}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handleAdvocate(context.Background(), client, qm, wctx)
+	}()
+
+	waitForEnqueue(t, qm, "wi-decision-trib")
+	_, _ = qm.Claim(context.Background(), "wi-decision-trib")
+	if err := qm.Decide(context.Background(), "wi-decision-trib", "demote"); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	decision := mustGetStoredDecision(t, spy)
+
+	if decision.LawID != "law-100" {
+		t.Errorf("law_id: want law-100, got %s", decision.LawID)
+	}
+	if decision.LawGoal != "Must have seasonal reference" {
+		t.Errorf("law_goal: want 'Must have seasonal reference', got %s", decision.LawGoal)
+	}
+	if len(decision.LawAppliesTo) != 2 {
+		t.Errorf("law_applies_to: want 2, got %d", len(decision.LawAppliesTo))
+	}
+	if decision.LawTier != int32(flowv1.LawTier_LAW_TIER_LOCAL_STATUTE) {
+		t.Errorf("law_tier: want 3, got %d", decision.LawTier)
+	}
+	if decision.Choice != "demote" {
+		t.Errorf("choice: want demote, got %s", decision.Choice)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+// mustGetStoredDecision reads and parses the human-decision artefact from the
+// spy. Fails the test if not found or invalid.
+func mustGetStoredDecision(t *testing.T, spy *advocateSpy) humanDecision {
+	t.Helper()
+	raw := spy.getStoredArtefact(humanDecisionArtefact)
+	if raw == nil {
+		t.Fatal("expected human-decision artefact to be stored")
+	}
+	var decision humanDecision
+	if err := json.Unmarshal(raw, &decision); err != nil {
+		t.Fatalf("unmarshal human-decision: %v", err)
+	}
+	return decision
+}
+
+// assertRoutedTo checks that the spy recorded exactly one route to the given
+// output name. Fails the test otherwise.
+func assertRoutedTo(t *testing.T, spy *advocateSpy, output string) { //nolint:unparam // generic helper
+	t.Helper()
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != output {
+		t.Fatalf("expected route to %s, got %v", output, spy.RoutedOutputs)
 	}
 }

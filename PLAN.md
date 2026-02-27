@@ -1,6 +1,6 @@
 # Judiciary Architecture Redesign
 
-## Status: In Progress (Phase 6 next)
+## Status: In Progress (Phase 6 complete, Phase 7 next)
 
 This document captures the full plan for replacing the monolithic Jury service
 and Clerk platform service with a node-based judiciary that mirrors the main
@@ -564,43 +564,42 @@ Files to create:
 
 ---
 
-### Phase 6: Rewrite Existing Nodes
+### Phase 6: Rewrite Existing Nodes ✅
 
-#### 6.1 Arbiter (`nodes/arbiter/`)
+#### 6.1 Arbiter (`nodes/arbiter/`) ✅
 
-- Remove `client.Deliberate()` and `client.DraftLaw()` calls
-- Replace with fan-out to Juror nodes using
-  `FanOut()`/`AwaitChildren()`/`CollectArtefacts()`
-- Evidence assembly survives (adapted for artefact format passed to Jurors)
-- Output goes to Deliberation Gate (not inline verdict processing)
-- Rewrite all tests for fan-out pattern
+**Completed.** Replaced `client.Deliberate()` and `client.DraftLaw()` with
+Juror fan-out using `FanOut()`/`AwaitChildren()`. Evidence assembly preserved.
+Output routes to Deliberation Gate instead of inline verdict processing. Stores
+`verdict-context` artefact for downstream Clerk consumption. Config simplified:
+`jurySize`, `jurorNode`, `gateOutput` (removed `consensusStrategy`/`maxRounds`
+which are now Deliberation Gate config). All 16 tests passing, lint clean.
 
-Files affected:
+| File | Changes |
+|---|---|
+| `nodes/arbiter/main.go` | Major rewrite: removed Deliberate/DraftLaw/LinkRuling calls. Added fan-out to Juror nodes. Added verdict-context artefact. Routes to Deliberation Gate. |
+| `nodes/arbiter/main_test.go` | Major rewrite: 16 tests covering fan-out count, child artefacts, verdict-context, routing, timer pause/resume, evidence assembly, config, no-deadlock fallback, errors. |
+| `nodes/arbiter/testutil_test.go` | Major rewrite: removed Jury/Clerk service embeds. Added fan-out spy support (CreateChildWorkitem, RouteChild, GetChildren, PauseTimer/ResumeTimer, child artefact storage). |
 
-- `nodes/arbiter/main.go` -- major rewrite
-- `nodes/arbiter/main_test.go` -- major rewrite
-- `nodes/arbiter/testutil_test.go` -- major rewrite (remove Jury/Clerk embeds)
+#### 6.2 Tribunal (`nodes/tribunal/`) ✅
 
-#### 6.2 Tribunal (`nodes/tribunal/`)
+**Completed.** Replaced `client.Deliberate()` and `client.DraftLaw()` with
+Juror fan-out using `FanOut()`/`AwaitChildren()`. Implemented two-mode
+operation: **hearing mode** (law lifecycle review, triggered by `law-reference`
+artefact) and **review mode** (petition review, triggered by `petition`
+artefact). Mode detection by artefact presence. Evidence assembly preserved.
+Output routes to Deliberation Gate in both modes. Hearing mode stores
+`verdict-context` artefact for downstream Clerk consumption. Config simplified:
+`jurySize`, `jurorNode`, `gateOutput` (removed `consensusStrategy`/`maxRounds`
+which are now Deliberation Gate config). All 33 tests passing, lint clean.
 
-- Two modes: **hearing** (initial deliberation on existing law, triggered by
-  Librarian) and **review** (reviewing a petition from Clerk, in the inner
-  cycle)
-- Both modes fan out to Juror nodes
-- Hearing mode: assembles law evidence, frames tier-appropriate question, fans
-  out to Jurors, routes to Deliberation Gate
-- Review mode: reads petition artefact, reviews against governance context,
-  adds feedback or approves, routes to Deliberation Gate
-- Remove `client.Deliberate()` and `client.DraftLaw()` calls
-- Rewrite all tests
+| File | Changes |
+|---|---|
+| `nodes/tribunal/main.go` | Major rewrite: removed Deliberate/DraftLaw calls. Added two-mode operation (hearing + review). Added fan-out to Juror nodes. Added verdict-context artefact (hearing mode). Routes to Deliberation Gate. |
+| `nodes/tribunal/main_test.go` | Major rewrite: 33 tests covering hearing fan-out, review fan-out, mode detection, child artefacts, verdict-context, routing, timer pause/resume, evidence assembly, config, error propagation. |
+| `nodes/tribunal/testutil_test.go` | Major rewrite: removed Jury/Clerk service embeds. Added fan-out spy support (CreateChildWorkitem, RouteChild, GetChildren, PauseTimer/ResumeTimer, child artefact storage). Added artefact-based mode control. |
 
-Files affected:
-
-- `nodes/tribunal/main.go` -- major rewrite
-- `nodes/tribunal/main_test.go` -- major rewrite
-- `nodes/tribunal/testutil_test.go` -- major rewrite
-
-#### 6.3 Advocate (`nodes/advocate/`)
+#### 6.3 Advocate (`nodes/advocate/`) ✅
 
 - Remove `client.DraftLaw()` calls and `DeliberateResponse` synthetic verdicts
 - New entry paths: from Deliberation Gate (`hung`), from Tribunal Router
@@ -608,17 +607,21 @@ Files affected:
 - HITL decision routes to Clerk (not directly to Librarian) so the decision
   gets codified as a petition and goes through the normal review cycle
 - Rewrite tests
+- **Status**: 3 files rewritten, 18 tests (22 including subtests) passing, lint clean
 
 Files affected:
 
-- `nodes/advocate/main.go` -- moderate rewrite
-- `nodes/advocate/main_test.go` -- moderate rewrite
-- `nodes/advocate/testutil_test.go` -- moderate rewrite
+| File | Changes |
+|---|---|
+| `nodes/advocate/main.go` | Major rewrite: removed DraftLaw/DeliberateResponse/LinkRuling calls. Added `judiciary-ratify` escalation type. All actionable decisions store `human-decision` artefact and route to Clerk. Reject decisions Complete(). Removed `tierForTribunalChoice` helper and `outputSort` constant. |
+| `nodes/advocate/main_test.go` | Major rewrite: 18 tests covering all 4 escalation types (arbiter-hung, tribunal-hung, tribunal-promote, judiciary-ratify), accept/reject paths, human-decision artefact validation, error propagation (store, route, artefact, choices, type), context cancellation. Table-driven tests for accept-route-to-clerk and reject-complete patterns. |
+| `nodes/advocate/testutil_test.go` | Major rewrite: removed Jury/Clerk service embeds (UnimplementedJuryServiceServer, UnimplementedClerkServiceServer). Removed DraftLaw/LinkRuling spy methods. Added StoreArtefact spy with `getStoredArtefact` helper. Registered only 5 services (Sidecar, Operator, Archivist, Librarian, FrictionLedger). |
 
-#### 6.4 Regression Check
+#### 6.4 Regression Check ✅
 
-- `make test-all` -- all tests pass (first green build since Phase 4)
-- `make check-fix-all` -- all lint/tidy clean
+- `make test-all` -- all tests pass (first green build since Phase 4) ✅
+- `make check-fix-all` -- all lint/tidy clean ✅
+- Minor fix: 2 line-length (lll) lint violations in `nodes/juror/main_test.go` — wrapped long `seedArtefacts` calls
 
 ---
 

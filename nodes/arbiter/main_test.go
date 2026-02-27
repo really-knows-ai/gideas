@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,7 +14,7 @@ import (
 // Happy path tests
 // ---------------------------------------------------------------------------
 
-func TestArbiter_FavourReviewer_VerdictReached(t *testing.T) {
+func TestArbiter_FanOut_CorrectJurorCount(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
@@ -23,16 +24,9 @@ func TestArbiter_FavourReviewer_VerdictReached(t *testing.T) {
 			Message: "Haiku lacks seasonal reference",
 		},
 	}
-	spy.DeliberateResponse = &flowv1.DeliberateResponse{
-		Outcome: "favour_reviewer",
-		Justifications: []*flowv1.JurorJustification{
-			{JurorId: "textualist", Outcome: "favour_reviewer", Reasoning: "The law requires seasonal reference"},
-		},
-		RoundsUsed: 1,
-	}
 
 	client := setupArbiterTest(t, spy)
-	cfg := &arbiterConfig{}
+	cfg := &arbiterConfig{JurySize: 3}
 
 	if err := handleArbiter(context.Background(), client, cfg); err != nil {
 		t.Fatalf("handleArbiter() error: %v", err)
@@ -41,61 +35,103 @@ func TestArbiter_FavourReviewer_VerdictReached(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Should have called Deliberate once.
-	if len(spy.DeliberateCalls) != 1 {
-		t.Fatalf("expected 1 Deliberate call, got %d", len(spy.DeliberateCalls))
-	}
-	dc := spy.DeliberateCalls[0]
-	if len(dc.AllowedOutcomes) != 2 {
-		t.Fatalf("expected 2 allowed outcomes, got %v", dc.AllowedOutcomes)
+	// Should have created 3 child Workitems (one per juror).
+	if len(spy.CreatedChildren) != 3 {
+		t.Fatalf("expected 3 children, got %d", len(spy.CreatedChildren))
 	}
 
-	// Should have called DraftLaw once with Tier 2 (RULING).
-	if len(spy.DraftLawCalls) != 1 {
-		t.Fatalf("expected 1 DraftLaw call, got %d", len(spy.DraftLawCalls))
+	// Each child should be routed to the juror node.
+	if len(spy.RoutedChildren) != 3 {
+		t.Fatalf("expected 3 routed children, got %d", len(spy.RoutedChildren))
 	}
-	dl := spy.DraftLawCalls[0]
-	if dl.Tier != int32(flowv1.LawTier_LAW_TIER_RULING) {
-		t.Fatalf("expected Tier 2 (RULING=%d), got %d", int32(flowv1.LawTier_LAW_TIER_RULING), dl.Tier)
-	}
-	if dl.Outcome != "favour_reviewer" {
-		t.Fatalf("expected DraftLaw outcome favour_reviewer, got %s", dl.Outcome)
-	}
-
-	// Should have linked ruling to the deadlocked feedback item.
-	if len(spy.LinkedRulings) != 1 {
-		t.Fatalf("expected 1 LinkRuling call, got %d", len(spy.LinkedRulings))
-	}
-	if spy.LinkedRulings[0].FeedbackID != "fb-1" {
-		t.Fatalf("expected LinkRuling for fb-1, got %s", spy.LinkedRulings[0].FeedbackID)
-	}
-	if spy.LinkedRulings[0].LawID != "law-ruling-001" {
-		t.Fatalf("expected law_id=law-ruling-001, got %s", spy.LinkedRulings[0].LawID)
-	}
-
-	// Should route to sort.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputSort {
-		t.Fatalf("expected route to sort, got %v", spy.RoutedOutputs)
+	for i, rc := range spy.RoutedChildren {
+		if rc.TargetNode != defaultJurorNode {
+			t.Errorf("child %d routed to %q, expected %q", i, rc.TargetNode, defaultJurorNode)
+		}
 	}
 }
 
-func TestArbiter_FavourRefiner_VerdictReached(t *testing.T) {
+func TestArbiter_FanOut_ChildArtefactsCorrect(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:      "fb-1",
+			Source:  "appraise",
+			State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			Message: "Missing kigo",
+		},
+	}
+
+	client := setupArbiterTest(t, spy)
+	cfg := &arbiterConfig{JurySize: 1}
+
+	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+		t.Fatalf("handleArbiter() error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	if len(spy.CreatedChildren) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(spy.CreatedChildren))
+	}
+
+	childID := spy.CreatedChildren[0]
+
+	// Verify question artefact.
+	questionKey := childID + ":" + artefactQuestion
+	q, ok := spy.ChildStoredArtefacts[questionKey]
+	if !ok {
+		t.Fatal("question artefact not stored on child")
+	}
+	if !strings.Contains(string(q), "reviewer's feedback be upheld") {
+		t.Errorf("unexpected question: %s", string(q))
+	}
+
+	// Verify evidence artefact.
+	evidenceKey := childID + ":" + artefactEvidence
+	ev, ok := spy.ChildStoredArtefacts[evidenceKey]
+	if !ok {
+		t.Fatal("evidence artefact not stored on child")
+	}
+	if len(ev) == 0 {
+		t.Fatal("evidence artefact is empty")
+	}
+
+	// Verify allowed-outcomes artefact.
+	outcomesKey := childID + ":" + artefactOutcomes
+	out, ok := spy.ChildStoredArtefacts[outcomesKey]
+	if !ok {
+		t.Fatal("allowed-outcomes artefact not stored on child")
+	}
+	var outcomes []string
+	if err := json.Unmarshal(out, &outcomes); err != nil {
+		t.Fatalf("failed to parse allowed-outcomes: %v", err)
+	}
+	if len(outcomes) != 2 || outcomes[0] != "favour_refiner" || outcomes[1] != "favour_reviewer" {
+		t.Fatalf("expected [favour_refiner, favour_reviewer], got %v", outcomes)
+	}
+}
+
+func TestArbiter_VerdictContextStored(t *testing.T) {
+	spy := newArbiterSpy()
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:      "fb-1",
+			Source:  "appraise",
+			State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			Message: "Missing kigo",
+		},
 		{
 			Id:      "fb-2",
 			Source:  "appraise",
 			State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-			Message: "Reviewer feedback excessive",
+			Message: "Too many syllables",
 		},
 	}
-	spy.DeliberateResponse = &flowv1.DeliberateResponse{
-		Outcome:    "favour_refiner",
-		RoundsUsed: 2,
-	}
 
 	client := setupArbiterTest(t, spy)
-	cfg := &arbiterConfig{}
+	cfg := &arbiterConfig{JurySize: 1}
 
 	if err := handleArbiter(context.Background(), client, cfg); err != nil {
 		t.Fatalf("handleArbiter() error: %v", err)
@@ -104,69 +140,47 @@ func TestArbiter_FavourRefiner_VerdictReached(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	if len(spy.DraftLawCalls) != 1 {
-		t.Fatalf("expected 1 DraftLaw call, got %d", len(spy.DraftLawCalls))
-	}
-	if spy.DraftLawCalls[0].Outcome != "favour_refiner" {
-		t.Fatalf("expected outcome favour_refiner, got %s", spy.DraftLawCalls[0].Outcome)
+	vctx := spy.getStoredVerdictContext()
+	if vctx == nil {
+		t.Fatal("verdict-context artefact not stored")
 	}
 
-	if len(spy.LinkedRulings) != 1 || spy.LinkedRulings[0].FeedbackID != "fb-2" {
-		t.Fatalf("expected LinkRuling for fb-2, got %v", spy.LinkedRulings)
+	if vctx.Trigger != "deadlock-resolution" {
+		t.Errorf("expected trigger=deadlock-resolution, got %s", vctx.Trigger)
 	}
-
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputSort {
-		t.Fatalf("expected route to sort, got %v", spy.RoutedOutputs)
+	if vctx.Action != "create" {
+		t.Errorf("expected action=create, got %s", vctx.Action)
 	}
-}
-
-func TestArbiter_MultipleDeadlockedFeedback_AllLinked(t *testing.T) {
-	spy := newArbiterSpy()
-	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-a", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "appraise"},
-		{Id: "fb-b", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "quench"},
-		{Id: "fb-resolved", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
+	if vctx.Tier != int32(flowv1.LawTier_LAW_TIER_RULING) {
+		t.Errorf("expected tier=%d (RULING), got %d", int32(flowv1.LawTier_LAW_TIER_RULING), vctx.Tier)
 	}
-
-	client := setupArbiterTest(t, spy)
-	cfg := &arbiterConfig{}
-
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleArbiter() error: %v", err)
+	if len(vctx.AppliesTo) != 1 || vctx.AppliesTo[0] != "haiku" {
+		t.Errorf("expected applies_to=[haiku], got %v", vctx.AppliesTo)
 	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	// Should link ruling to both deadlocked items, not the resolved one.
-	if len(spy.LinkedRulings) != 2 {
-		t.Fatalf("expected 2 LinkRuling calls, got %d", len(spy.LinkedRulings))
+	if len(vctx.FeedbackIDs) != 2 {
+		t.Fatalf("expected 2 feedback IDs, got %d", len(vctx.FeedbackIDs))
 	}
 	ids := map[string]bool{}
-	for _, lr := range spy.LinkedRulings {
-		ids[lr.FeedbackID] = true
+	for _, id := range vctx.FeedbackIDs {
+		ids[id] = true
 	}
-	if !ids["fb-a"] || !ids["fb-b"] {
-		t.Fatalf("expected LinkRuling for fb-a and fb-b, got %v", spy.LinkedRulings)
+	if !ids["fb-1"] || !ids["fb-2"] {
+		t.Errorf("expected feedback IDs fb-1 and fb-2, got %v", vctx.FeedbackIDs)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Hung jury tests
-// ---------------------------------------------------------------------------
-
-func TestArbiter_HungJury_RoutesToAdvocate(t *testing.T) {
+func TestArbiter_RoutesToDeliberationGate(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-3", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "appraise"},
-	}
-	spy.DeliberateResponse = &flowv1.DeliberateResponse{
-		Hung:       true,
-		RoundsUsed: 3,
+		{
+			Id:     "fb-1",
+			Source: "appraise",
+			State:  flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+		},
 	}
 
 	client := setupArbiterTest(t, spy)
-	cfg := &arbiterConfig{}
+	cfg := &arbiterConfig{JurySize: 1}
 
 	if err := handleArbiter(context.Background(), client, cfg); err != nil {
 		t.Fatalf("handleArbiter() error: %v", err)
@@ -175,17 +189,37 @@ func TestArbiter_HungJury_RoutesToAdvocate(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Should NOT call DraftLaw or LinkRuling.
-	if len(spy.DraftLawCalls) != 0 {
-		t.Fatalf("expected 0 DraftLaw calls for hung jury, got %d", len(spy.DraftLawCalls))
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputGate {
+		t.Fatalf("expected route to %q, got %v", outputGate, spy.RoutedOutputs)
 	}
-	if len(spy.LinkedRulings) != 0 {
-		t.Fatalf("expected 0 LinkRuling calls for hung jury, got %d", len(spy.LinkedRulings))
+}
+
+func TestArbiter_PauseResumeTimer(t *testing.T) {
+	spy := newArbiterSpy()
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:     "fb-1",
+			Source: "appraise",
+			State:  flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+		},
 	}
 
-	// Should route to advocate.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "advocate" {
-		t.Fatalf("expected route to advocate, got %v", spy.RoutedOutputs)
+	client := setupArbiterTest(t, spy)
+	cfg := &arbiterConfig{JurySize: 1}
+
+	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+		t.Fatalf("handleArbiter() error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// AwaitChildren pauses timer while waiting and resumes on return.
+	if !spy.PauseTimerCalled {
+		t.Error("expected PauseTimer to be called during AwaitChildren")
+	}
+	if !spy.ResumeTimerCalled {
+		t.Error("expected ResumeTimer to be called after AwaitChildren")
 	}
 }
 
@@ -219,12 +253,8 @@ func TestArbiter_EvidenceBundleContainsAllSections(t *testing.T) {
 		{LawId: "law-1", NodeId: "appraise", EventCount: 5, TotalMagnitude: 12.5},
 	}
 
-	// Capture evidence via Deliberate call.
-	var capturedEvidence string
-	origResp := spy.DeliberateResponse
-	spy.DeliberateResponse = origResp
 	client := setupArbiterTest(t, spy)
-	cfg := &arbiterConfig{}
+	cfg := &arbiterConfig{JurySize: 1}
 
 	if err := handleArbiter(context.Background(), client, cfg); err != nil {
 		t.Fatalf("handleArbiter() error: %v", err)
@@ -233,10 +263,17 @@ func TestArbiter_EvidenceBundleContainsAllSections(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	if len(spy.DeliberateCalls) != 1 {
-		t.Fatalf("expected 1 Deliberate call, got %d", len(spy.DeliberateCalls))
+	// Evidence is stored on the child as the "evidence" artefact.
+	if len(spy.CreatedChildren) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(spy.CreatedChildren))
 	}
-	capturedEvidence = spy.DeliberateCalls[0].Evidence
+	childID := spy.CreatedChildren[0]
+	evidenceKey := childID + ":" + artefactEvidence
+	ev, ok := spy.ChildStoredArtefacts[evidenceKey]
+	if !ok {
+		t.Fatal("evidence artefact not found on child")
+	}
+	capturedEvidence := string(ev)
 
 	// Verify all sections are present.
 	sections := []string{
@@ -261,7 +298,7 @@ func TestArbiter_EvidenceBundleContainsAllSections(t *testing.T) {
 // Configuration tests
 // ---------------------------------------------------------------------------
 
-func TestArbiter_ConfigPassedToDeliberate(t *testing.T) {
+func TestArbiter_CustomConfig(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-cfg", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "appraise"},
@@ -269,9 +306,9 @@ func TestArbiter_ConfigPassedToDeliberate(t *testing.T) {
 
 	client := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
-		ConsensusStrategy: "SUPER_MAJORITY",
-		MaxRounds:         5,
-		JurySize:          3,
+		JurySize:   7,
+		JurorNode:  "custom-juror",
+		GateOutput: "custom-gate",
 	}
 
 	if err := handleArbiter(context.Background(), client, cfg); err != nil {
@@ -281,46 +318,34 @@ func TestArbiter_ConfigPassedToDeliberate(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	if len(spy.DeliberateCalls) != 1 {
-		t.Fatalf("expected 1 Deliberate call, got %d", len(spy.DeliberateCalls))
+	// Should create 7 children.
+	if len(spy.CreatedChildren) != 7 {
+		t.Fatalf("expected 7 children, got %d", len(spy.CreatedChildren))
 	}
-	dc := spy.DeliberateCalls[0]
-	if dc.Strategy != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SUPER_MAJORITY {
-		t.Fatalf("expected SUPER_MAJORITY, got %v", dc.Strategy)
+
+	// Each should route to custom-juror.
+	for i, rc := range spy.RoutedChildren {
+		if rc.TargetNode != "custom-juror" {
+			t.Errorf("child %d routed to %q, expected custom-juror", i, rc.TargetNode)
+		}
 	}
-	if dc.MaxRounds != 5 {
-		t.Fatalf("expected maxRounds=5, got %d", dc.MaxRounds)
-	}
-	if dc.JurySize != 3 {
-		t.Fatalf("expected jurySize=3, got %d", dc.JurySize)
+
+	// Should route to custom-gate output.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "custom-gate" {
+		t.Fatalf("expected route to custom-gate, got %v", spy.RoutedOutputs)
 	}
 }
 
 func TestArbiter_DefaultConfig(t *testing.T) {
-	spy := newArbiterSpy()
-	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-def", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "appraise"},
+	cfg := &arbiterConfig{}
+	if cfg.jurySize() != defaultJurySize {
+		t.Fatalf("expected default jurySize=%d, got %d", defaultJurySize, cfg.jurySize())
 	}
-
-	client := setupArbiterTest(t, spy)
-	cfg := &arbiterConfig{} // all zero values
-
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleArbiter() error: %v", err)
+	if cfg.jurorNode() != defaultJurorNode {
+		t.Fatalf("expected default jurorNode=%q, got %q", defaultJurorNode, cfg.jurorNode())
 	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	dc := spy.DeliberateCalls[0]
-	if dc.Strategy != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY {
-		t.Fatalf("expected SIMPLE_MAJORITY default, got %v", dc.Strategy)
-	}
-	if dc.MaxRounds != defaultMaxRounds {
-		t.Fatalf("expected default maxRounds=%d, got %d", defaultMaxRounds, dc.MaxRounds)
-	}
-	if dc.JurySize != defaultJurySize {
-		t.Fatalf("expected default jurySize=%d, got %d", defaultJurySize, dc.JurySize)
+	if cfg.gateOutput() != outputGate {
+		t.Fatalf("expected default gateOutput=%q, got %q", outputGate, cfg.gateOutput())
 	}
 }
 
@@ -328,7 +353,7 @@ func TestArbiter_DefaultConfig(t *testing.T) {
 // No deadlocked feedback
 // ---------------------------------------------------------------------------
 
-func TestArbiter_NoDeadlockedFeedback_RoutesToSort(t *testing.T) {
+func TestArbiter_NoDeadlockedFeedback_RoutesToGate(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-ok", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
@@ -344,14 +369,14 @@ func TestArbiter_NoDeadlockedFeedback_RoutesToSort(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Should not deliberate.
-	if len(spy.DeliberateCalls) != 0 {
-		t.Fatalf("expected 0 Deliberate calls, got %d", len(spy.DeliberateCalls))
+	// Should NOT fan out.
+	if len(spy.CreatedChildren) != 0 {
+		t.Fatalf("expected 0 children for no deadlock, got %d", len(spy.CreatedChildren))
 	}
 
-	// Should route back to sort.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputSort {
-		t.Fatalf("expected route to sort, got %v", spy.RoutedOutputs)
+	// Should route to gate.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputGate {
+		t.Fatalf("expected route to %q, got %v", outputGate, spy.RoutedOutputs)
 	}
 }
 
@@ -395,61 +420,57 @@ func TestArbiter_Error_GetArtefactFails(t *testing.T) {
 	}
 }
 
-func TestArbiter_Error_DeliberateFails(t *testing.T) {
+func TestArbiter_Error_FanOutFails(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "appraise"},
 	}
-	spy.DeliberateErr = fmt.Errorf("jury unavailable")
+	spy.CreateChildErr = fmt.Errorf("cannot create child")
 	client := setupArbiterTest(t, spy)
 
-	err := handleArbiter(context.Background(), client, &arbiterConfig{})
+	err := handleArbiter(context.Background(), client, &arbiterConfig{JurySize: 1})
 	if err == nil {
-		t.Fatal("expected error from Deliberate failure")
+		t.Fatal("expected error from FanOut failure")
 	}
 }
 
-func TestArbiter_Error_DraftLawFails(t *testing.T) {
+func TestArbiter_Error_AwaitChildrenFails(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "appraise"},
 	}
-	spy.DraftLawErr = fmt.Errorf("clerk unavailable")
+	spy.GetChildrenErr = fmt.Errorf("children unavailable")
 	client := setupArbiterTest(t, spy)
 
-	err := handleArbiter(context.Background(), client, &arbiterConfig{})
+	err := handleArbiter(context.Background(), client, &arbiterConfig{JurySize: 1})
 	if err == nil {
-		t.Fatal("expected error from DraftLaw failure")
-	}
-}
-
-func TestArbiter_Error_LinkRulingFails(t *testing.T) {
-	spy := newArbiterSpy()
-	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED, Source: "appraise"},
-	}
-	spy.LinkRulingErr = fmt.Errorf("archivist link failed")
-	client := setupArbiterTest(t, spy)
-
-	err := handleArbiter(context.Background(), client, &arbiterConfig{})
-	if err == nil {
-		t.Fatal("expected error from LinkRuling failure")
+		t.Fatal("expected error from AwaitChildren failure")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Config defaults tests
+// Goal synthesis
 // ---------------------------------------------------------------------------
 
-func TestArbiterConfig_Defaults(t *testing.T) {
-	cfg := &arbiterConfig{}
-	if cfg.maxRounds() != defaultMaxRounds {
-		t.Fatalf("expected default maxRounds=%d, got %d", defaultMaxRounds, cfg.maxRounds())
+func TestSynthesizeGoal(t *testing.T) {
+	items := []*flowv1.FeedbackItem{
+		{Id: "fb-1", Source: "appraise"},
 	}
-	if cfg.jurySize() != defaultJurySize {
-		t.Fatalf("expected default jurySize=%d, got %d", defaultJurySize, cfg.jurySize())
+	goal := synthesizeGoal("haiku", items)
+	if !strings.Contains(goal, "haiku") {
+		t.Errorf("goal missing artefact kind: %s", goal)
 	}
-	if cfg.strategy() != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY {
-		t.Fatalf("expected default SIMPLE_MAJORITY, got %v", cfg.strategy())
+	if !strings.Contains(goal, "fb-1") {
+		t.Errorf("goal missing feedback ID: %s", goal)
+	}
+	if !strings.Contains(goal, "appraise") {
+		t.Errorf("goal missing source: %s", goal)
+	}
+}
+
+func TestSynthesizeGoal_Empty(t *testing.T) {
+	goal := synthesizeGoal("haiku", nil)
+	if !strings.Contains(goal, "haiku") {
+		t.Errorf("goal missing artefact kind: %s", goal)
 	}
 }

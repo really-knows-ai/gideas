@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -9,6 +11,8 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // newLocalListener creates a TCP listener on an ephemeral localhost port.
@@ -17,7 +21,7 @@ func newLocalListener() (net.Listener, error) {
 }
 
 // newSpyGRPCServer creates a gRPC server with the tribunalSpy registered
-// for all seven Foundry Flow service interfaces.
+// for the five Foundry Flow service interfaces the Tribunal depends on.
 func newSpyGRPCServer(spy *tribunalSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
@@ -25,73 +29,77 @@ func newSpyGRPCServer(spy *tribunalSpy) *grpc.Server {
 	flowv1.RegisterArchivistServiceServer(srv, spy)
 	flowv1.RegisterLibrarianServiceServer(srv, spy)
 	flowv1.RegisterFrictionLedgerServiceServer(srv, spy)
-	flowv1.RegisterJuryServiceServer(srv, spy)
-	flowv1.RegisterClerkServiceServer(srv, spy)
 	return srv
 }
 
 // tribunalSpy captures calls to service operations for test assertions.
+// It supports the fan-out pattern: CreateChildWorkitem, RouteChild,
+// GetChildren, PauseTimer/ResumeTimer, and child artefact storage.
 type tribunalSpy struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
 	flowv1.UnimplementedFrictionLedgerServiceServer
-	flowv1.UnimplementedJuryServiceServer
-	flowv1.UnimplementedClerkServiceServer
 
 	mu sync.Mutex
 
-	// Configurable responses.
-	LawReferenceContent []byte                      // content of "law-reference" artefact
-	Law                 *flowv1.Law                 // returned by GetLaw
-	FrictionAggregates  []*flowv1.FrictionAggregate // returned by QueryFriction
-	RelatedLaws         []*flowv1.Law               // returned by QueryLaws
-	DeliberateResponse  *flowv1.DeliberateResponse  // returned by Deliberate
-	DraftLawResponse    *flowv1.DraftLawResponse    // returned by DraftLaw
+	// Configurable artefact store: artefactID → content.
+	// Used to control which artefacts are "present" (mode detection).
+	Artefacts map[string][]byte
 
-	// Configurable errors.
+	// Configurable child artefacts: "childID:artefactID" → content.
+	ChildArtefacts map[string][]byte
+
+	// Configurable law returned by GetLaw.
+	Law *flowv1.Law
+
+	// Configurable friction aggregates returned by QueryFriction.
+	FrictionAggregates []*flowv1.FrictionAggregate
+
+	// Configurable related laws returned by QueryLaws.
+	RelatedLaws []*flowv1.Law
+
+	// Configurable children returned by GetChildren (for AwaitChildren).
+	// If nil, auto-generates completed children from CreatedChildren.
+	Children []*flowv1.ChildWorkitemStatus
+
+	// Auto-created child IDs (returned by CreateChildWorkitem).
+	nextChildID int
+
+	// Configurable error returns.
 	GetArtefactErr   error
 	GetLawErr        error
 	QueryFrictionErr error
 	QueryLawsErr     error
-	DeliberateErr    error
-	DraftLawErr      error
 	RouteToOutputErr error
-	CompleteErr      error
+	CreateChildErr   error
+	RouteChildErr    error
+	GetChildrenErr   error
+	StoreArtefactErr error
 
 	// Recorded operations for assertions.
-	RoutedOutputs      []string
-	Completed          bool
-	DeliberateCalls    []deliberateRecord
-	DraftLawCalls      []draftLawRecord
-	StoreArtefactCalls []storeArtefactRecord
+	RoutedOutputs        []string
+	StoredArtefacts      map[string][]byte // artefactID → content
+	ChildStoredArtefacts map[string][]byte // "childID:artefactID" → content
+	CreatedChildren      []string
+	RoutedChildren       []routedChild
+	PauseTimerCalled     bool
+	ResumeTimerCalled    bool
 }
 
-type storeArtefactRecord struct {
-	ArtefactID string
-	Content    []byte
-}
-
-type deliberateRecord struct {
-	Question        string
-	Evidence        string
-	AllowedOutcomes []string
-	Strategy        flowv1.ConsensusStrategy
-	MaxRounds       int32
-	JurySize        int32
-}
-
-type draftLawRecord struct {
-	Goal      string
-	Tier      int32
-	AppliesTo []string
-	Outcome   string
+type routedChild struct {
+	ChildID    string
+	TargetNode string
 }
 
 func newTribunalSpy(tier flowv1.LawTier) *tribunalSpy {
+	artefacts := map[string][]byte{
+		"law-reference": []byte("law-under-review-001"),
+	}
+
 	return &tribunalSpy{
-		LawReferenceContent: []byte("law-under-review-001"),
+		Artefacts: artefacts,
 		Law: &flowv1.Law{
 			Id:        "law-under-review-001",
 			Goal:      "Haiku must contain a seasonal reference",
@@ -101,14 +109,37 @@ func newTribunalSpy(tier flowv1.LawTier) *tribunalSpy {
 				{Type: "text/markdown", Content: "All haiku must include a kigo (seasonal word)."},
 			},
 		},
-		DeliberateResponse: &flowv1.DeliberateResponse{
-			Outcome:    "promote",
-			RoundsUsed: 1,
+		StoredArtefacts:      make(map[string][]byte),
+		ChildStoredArtefacts: make(map[string][]byte),
+		ChildArtefacts:       make(map[string][]byte),
+	}
+}
+
+// newReviewModeSpy creates a spy configured for review mode (petition
+// artefact present).
+func newReviewModeSpy() *tribunalSpy {
+	vctx := verdictContext{
+		Trigger:   "hearing",
+		Goal:      "Haiku must contain a seasonal reference",
+		AppliesTo: []string{"haiku"},
+		Tier:      1,
+		LawID:     "law-001",
+		Action:    "create",
+	}
+	vctxJSON, _ := json.Marshal(vctx)
+
+	petitionContent := `{"petition":{"context":{"trigger":"hearing"},` +
+		`"changes":[{"action":"create","goal":"test"}],` +
+		`"prose_justification":"test"}}`
+
+	return &tribunalSpy{
+		Artefacts: map[string][]byte{
+			"petition":        []byte(petitionContent),
+			"verdict-context": vctxJSON,
 		},
-		DraftLawResponse: &flowv1.DraftLawResponse{
-			LawId:       "law-promoted-001",
-			VersionHash: "abc123",
-		},
+		StoredArtefacts:      make(map[string][]byte),
+		ChildStoredArtefacts: make(map[string][]byte),
+		ChildArtefacts:       make(map[string][]byte),
 	}
 }
 
@@ -147,6 +178,24 @@ func (s *tribunalSpy) Heartbeat(
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
+func (s *tribunalSpy) PauseTimer(
+	_ context.Context, _ *flowv1.PauseTimerRequest,
+) (*flowv1.PauseTimerResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PauseTimerCalled = true
+	return &flowv1.PauseTimerResponse{Acknowledged: true}, nil
+}
+
+func (s *tribunalSpy) ResumeTimer(
+	_ context.Context, _ *flowv1.ResumeTimerRequest,
+) (*flowv1.ResumeTimerResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ResumeTimerCalled = true
+	return &flowv1.ResumeTimerResponse{Acknowledged: true}, nil
+}
+
 func (s *tribunalSpy) SubmitResult(
 	_ context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
@@ -158,20 +207,81 @@ func (s *tribunalSpy) SubmitResult(
 		return &flowv1.SubmitResultResponse{Accepted: true}, nil
 	}
 
-	isComplete := ri.GetType() == flowv1.RoutingType_ROUTING_TYPE_COMPLETE
-
-	if isComplete {
-		if s.CompleteErr != nil {
-			return nil, s.CompleteErr
-		}
-		s.Completed = true
-	} else {
-		if s.RouteToOutputErr != nil {
-			return nil, s.RouteToOutputErr
-		}
-		s.RoutedOutputs = append(s.RoutedOutputs, ri.GetTarget())
+	if s.RouteToOutputErr != nil {
+		return nil, s.RouteToOutputErr
 	}
+
+	s.RoutedOutputs = append(s.RoutedOutputs, ri.GetTarget())
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
+}
+
+func (s *tribunalSpy) RecordTelemetry(
+	_ context.Context, _ *flowv1.RecordTelemetryRequest,
+) (*flowv1.RecordTelemetryResponse, error) {
+	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Operator methods
+// ---------------------------------------------------------------------------
+
+func (s *tribunalSpy) CreateChildWorkitem(
+	_ context.Context, _ *flowv1.CreateChildWorkitemRequest,
+) (*flowv1.CreateChildWorkitemResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.CreateChildErr != nil {
+		return nil, s.CreateChildErr
+	}
+
+	s.nextChildID++
+	childID := fmt.Sprintf("child-%d", s.nextChildID)
+	s.CreatedChildren = append(s.CreatedChildren, childID)
+	return &flowv1.CreateChildWorkitemResponse{ChildWorkitemId: childID}, nil
+}
+
+func (s *tribunalSpy) RouteChild(
+	_ context.Context, req *flowv1.RouteChildRequest,
+) (*flowv1.RouteChildResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.RouteChildErr != nil {
+		return nil, s.RouteChildErr
+	}
+
+	s.RoutedChildren = append(s.RoutedChildren, routedChild{
+		ChildID:    req.GetChildWorkitemId(),
+		TargetNode: req.GetRoutingInstruction().GetTarget(),
+	})
+	return &flowv1.RouteChildResponse{Accepted: true}, nil
+}
+
+func (s *tribunalSpy) GetChildren(
+	_ context.Context, _ *flowv1.GetChildrenRequest,
+) (*flowv1.GetChildrenResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.GetChildrenErr != nil {
+		return nil, s.GetChildrenErr
+	}
+
+	// If explicit children are configured, return them.
+	if len(s.Children) > 0 {
+		return &flowv1.GetChildrenResponse{Children: s.Children}, nil
+	}
+
+	// Auto-generate completed children from created list.
+	children := make([]*flowv1.ChildWorkitemStatus, len(s.CreatedChildren))
+	for i, id := range s.CreatedChildren {
+		children[i] = &flowv1.ChildWorkitemStatus{
+			WorkitemId: id,
+			Phase:      "Completed",
+		}
+	}
+	return &flowv1.GetChildrenResponse{Children: children}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -179,14 +289,28 @@ func (s *tribunalSpy) SubmitResult(
 // ---------------------------------------------------------------------------
 
 func (s *tribunalSpy) GetArtefact(
-	_ context.Context, _ *flowv1.GetArtefactRequest,
+	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
 	if s.GetArtefactErr != nil {
 		return nil, s.GetArtefactErr
 	}
-	return &flowv1.GetArtefactResponse{
-		Content: s.LawReferenceContent,
-	}, nil
+
+	// Child artefact request (has TargetWorkitemId).
+	if target := req.GetTargetWorkitemId(); target != "" {
+		key := target + ":" + req.GetArtefactId()
+		content, ok := s.ChildArtefacts[key]
+		if !ok {
+			return nil, status.Errorf(codes.NotFound, "child artefact %q not found", key)
+		}
+		return &flowv1.GetArtefactResponse{Content: content}, nil
+	}
+
+	// Parent artefact request — use the Artefacts map.
+	content, ok := s.Artefacts[req.GetArtefactId()]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "artefact %q not found", req.GetArtefactId())
+	}
+	return &flowv1.GetArtefactResponse{Content: content}, nil
 }
 
 func (s *tribunalSpy) StoreArtefact(
@@ -194,10 +318,18 @@ func (s *tribunalSpy) StoreArtefact(
 ) (*flowv1.StoreArtefactResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.StoreArtefactCalls = append(s.StoreArtefactCalls, storeArtefactRecord{
-		ArtefactID: req.GetArtefactId(),
-		Content:    req.GetContent(),
-	})
+
+	if s.StoreArtefactErr != nil {
+		return nil, s.StoreArtefactErr
+	}
+
+	// Distinguish between parent and child artefact stores.
+	if req.GetWorkitemId() != "" && req.GetWorkitemId() != "test-workitem" {
+		key := req.GetWorkitemId() + ":" + req.GetArtefactId()
+		s.ChildStoredArtefacts[key] = req.GetContent()
+	} else {
+		s.StoredArtefacts[req.GetArtefactId()] = req.GetContent()
+	}
 	return &flowv1.StoreArtefactResponse{
 		VersionHash:  "mock-hash",
 		IsNewVersion: true,
@@ -230,11 +362,8 @@ func (s *tribunalSpy) QueryLaws(
 // FrictionLedger methods
 // ---------------------------------------------------------------------------
 
-func (s *tribunalSpy) RecordTelemetry(
-	_ context.Context, _ *flowv1.RecordTelemetryRequest,
-) (*flowv1.RecordTelemetryResponse, error) {
-	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
-}
+// Note: RecordTelemetry is defined in the Sidecar methods section above
+// and satisfies both interfaces.
 
 func (s *tribunalSpy) QueryFriction(
 	_ context.Context, _ *flowv1.QueryFrictionRequest,
@@ -248,45 +377,19 @@ func (s *tribunalSpy) QueryFriction(
 }
 
 // ---------------------------------------------------------------------------
-// Jury methods
+// Test helpers
 // ---------------------------------------------------------------------------
 
-func (s *tribunalSpy) Deliberate(
-	_ context.Context, req *flowv1.DeliberateRequest,
-) (*flowv1.DeliberateResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.DeliberateErr != nil {
-		return nil, s.DeliberateErr
+// getStoredVerdictContext parses the verdict-context artefact from the spy's
+// recorded store calls. Returns nil if not found.
+func (s *tribunalSpy) getStoredVerdictContext() *verdictContext {
+	content, ok := s.StoredArtefacts[artefactVerdictContext]
+	if !ok {
+		return nil
 	}
-	s.DeliberateCalls = append(s.DeliberateCalls, deliberateRecord{
-		Question:        req.GetQuestion(),
-		Evidence:        req.GetEvidence(),
-		AllowedOutcomes: req.GetAllowedOutcomes(),
-		Strategy:        req.GetConsensusStrategy(),
-		MaxRounds:       req.GetMaxRounds(),
-		JurySize:        req.GetJurySize(),
-	})
-	return s.DeliberateResponse, nil
-}
-
-// ---------------------------------------------------------------------------
-// Clerk methods
-// ---------------------------------------------------------------------------
-
-func (s *tribunalSpy) DraftLaw(
-	_ context.Context, req *flowv1.DraftLawRequest,
-) (*flowv1.DraftLawResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.DraftLawErr != nil {
-		return nil, s.DraftLawErr
+	var vctx verdictContext
+	if err := json.Unmarshal(content, &vctx); err != nil {
+		return nil
 	}
-	s.DraftLawCalls = append(s.DraftLawCalls, draftLawRecord{
-		Goal:      req.GetGoal(),
-		Tier:      req.GetTier(),
-		AppliesTo: req.GetAppliesTo(),
-		Outcome:   req.GetVerdict().GetOutcome(),
-	})
-	return s.DraftLawResponse, nil
+	return &vctx
 }
