@@ -8,7 +8,6 @@ use (
 	./monitor
 	./librarian
 	./archivist
-	./clerk
 	./pkg/eventbus
 	../gen
 )

@@ -4,7 +4,6 @@ use (
 	./gen
 	./nodes
 	./platform/archivist
-	./platform/clerk
 	./platform/eventbus
 	./platform/frictionledger
 	./platform/librarian
