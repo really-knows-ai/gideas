@@ -319,7 +319,7 @@ func applyTribunalPromoteDecision(
 		slog.Info("advocate: tier 3 ratification rejected",
 			"law_id", advCtx.LawID)
 
-		if _, err := client.Complete(ctx, ""); err != nil {
+		if _, err := client.Complete(ctx); err != nil {
 			return fmt.Errorf("advocate: complete (tribunal-promote reject): %w", err)
 		}
 		return nil
@@ -362,7 +362,7 @@ func applyJudiciaryRatifyDecision(
 		slog.Info("advocate: judiciary ratification rejected",
 			"law_id", advCtx.LawID)
 
-		if _, err := client.Complete(ctx, ""); err != nil {
+		if _, err := client.Complete(ctx); err != nil {
 			return fmt.Errorf("advocate: complete (judiciary-ratify reject): %w", err)
 		}
 		return nil

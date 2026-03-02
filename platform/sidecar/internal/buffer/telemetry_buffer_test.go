@@ -52,7 +52,7 @@ func TestTelemetryBuffer_SubmitAndDrain(t *testing.T) {
 
 	tb.Submit(Event{
 		Priority:   PriorityNormal,
-		FlowID:     "flow-1",
+		Namespace:  "ns-1",
 		NodeID:     "node-1",
 		WorkitemID: "wi-1",
 		EventType:  "foundry.test",
@@ -86,12 +86,12 @@ func TestTelemetryBuffer_PriorityOrdering(t *testing.T) {
 
 	tb.Submit(Event{
 		Priority:  PriorityNormal,
-		FlowID:    "flow-n",
+		Namespace: "ns-n",
 		EventType: "normal-event",
 	})
 	tb.Submit(Event{
 		Priority:  PriorityHigh,
-		FlowID:    "flow-h",
+		Namespace: "ns-h",
 		Magnitude: 1.0,
 	})
 
@@ -147,7 +147,7 @@ func TestTelemetryBuffer_DropNormalWhenFull(t *testing.T) {
 	}
 
 	// High priority should also work independently.
-	tb.Submit(Event{Priority: PriorityHigh, FlowID: "flow-h"})
+	tb.Submit(Event{Priority: PriorityHigh, Namespace: "ns-h"})
 
 	tb.Stop()
 }
@@ -158,7 +158,7 @@ func TestTelemetryBuffer_DropHighWhenFull(t *testing.T) {
 
 	// Fill the high buffer.
 	for range 10 {
-		tb.Submit(Event{Priority: PriorityHigh, FlowID: "flow-h"})
+		tb.Submit(Event{Priority: PriorityHigh, Namespace: "ns-h"})
 	}
 
 	time.Sleep(50 * time.Millisecond)
@@ -200,7 +200,7 @@ func TestTelemetryBuffer_FrictionEventFormat(t *testing.T) {
 
 	tb.Submit(Event{
 		Priority:   PriorityHigh,
-		FlowID:     "flow-1",
+		Namespace:  "ns-1",
 		WorkitemID: "wi-1",
 		NodeID:     "node-1",
 		LawIDs:     []string{"law-a", "law-b"},
@@ -225,8 +225,8 @@ func TestTelemetryBuffer_FrictionEventFormat(t *testing.T) {
 	if evt.GetEventType() != "friction" {
 		t.Fatalf("expected event_type 'friction', got %q", evt.GetEventType())
 	}
-	if evt.GetFlowId() != "flow-1" {
-		t.Fatalf("expected flow_id 'flow-1', got %q", evt.GetFlowId())
+	if evt.GetFlowNamespace() != "ns-1" {
+		t.Fatalf("expected flow_namespace='ns-1', got %q", evt.GetFlowNamespace())
 	}
 	if evt.GetNodeId() != "node-1" {
 		t.Fatalf("expected node_id 'node-1', got %q", evt.GetNodeId())

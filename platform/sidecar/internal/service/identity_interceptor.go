@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	// MetadataKeyFlowID is the gRPC metadata key for the flow identity.
-	MetadataKeyFlowID = "x-flow-flow-id"
+	// MetadataKeyNamespace is the gRPC metadata key for the namespace
+	// (flow identity boundary). Replaces the former x-flow-flow-id.
+	MetadataKeyNamespace = "x-flow-namespace"
 
 	// MetadataKeyWorkitemID is the gRPC metadata key for the workitem identity.
 	MetadataKeyWorkitemID = "x-flow-workitem-id"
@@ -34,29 +35,28 @@ type SessionResolver interface {
 }
 
 // IdentityInterceptor returns a gRPC unary server interceptor that enriches
-// incoming metadata with authoritative identity and capability fields from
-// the active assignment session.
+// incoming metadata with authoritative identity and capability fields.
 //
 // Per spec (specs/05-reference/grpc-api.md#identity-injection), the Sidecar
 // is the sole authority for runtime attribution on node-originated requests.
-// Nodes cannot override or spoof these fields. The interceptor:
+// Nodes cannot override or spoof these fields. The interceptor operates in
+// two modes:
 //
-//  1. Reads x-flow-workitem-id from the incoming metadata (SDK-supplied).
-//  2. Looks up the active session to retrieve flow_id and node_id.
-//  3. Overwrites/injects x-flow-flow-id, x-flow-workitem-id,
-//     x-flow-node-id, and x-flow-capabilities in the incoming metadata
-//     so that all downstream proxy handlers (via propagateMetadata)
-//     forward authoritative identity and capability context.
+//  1. **Session mode**: When x-flow-workitem-id is present and a matching
+//     session exists, the interceptor injects x-flow-namespace (from the
+//     Sidecar's environment), x-flow-workitem-id, x-flow-node-id, and
+//     x-flow-capabilities from the active session.
 //
-// The capabilities string is provided at Sidecar startup (from the
-// FLOW_CAPABILITIES environment variable set by the Operator). It is
-// injected on every enriched request so that owning services can enforce
-// deny-by-default capability checks.
+//  2. **Entry-bound fallback**: When no workitem session is found but the
+//     Sidecar has namespace and nodeID configured, it injects
+//     x-flow-namespace, x-flow-node-id, and x-flow-capabilities (but NOT
+//     x-flow-workitem-id). This enables entry-bound node calls such as
+//     CreateWorkitem before any assignment exists.
 //
-// If no session is found for the workitem_id (e.g. SidecarService or
-// Operator-facing RPCs that don't originate from node code), the context
-// is passed through unmodified.
-func IdentityInterceptor(resolver SessionResolver, capabilities string) grpc.UnaryServerInterceptor {
+// The namespace and nodeID are Sidecar-level constants provided at startup.
+// The capabilities string comes from the FLOW_CAPABILITIES environment
+// variable set by the Operator.
+func IdentityInterceptor(resolver SessionResolver, namespace, nodeID, capabilities string) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
 		req any,
@@ -65,40 +65,53 @@ func IdentityInterceptor(resolver SessionResolver, capabilities string) grpc.Una
 	) (any, error) {
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
-			return handler(ctx, req)
+			md = metadata.MD{}
 		}
 
-		// Extract the SDK-supplied workitem_id from incoming metadata.
+		// Try session-based enrichment first.
 		vals := md.Get(MetadataKeyWorkitemID)
-		if len(vals) == 0 {
+		if len(vals) > 0 {
+			identity := resolver.LookupSession(vals[0])
+			if identity != nil {
+				slog.Debug("Identity interceptor: injecting session identity",
+					"namespace", namespace,
+					"workitem_id", identity.WorkitemID,
+					"node_id", identity.NodeID,
+					"capabilities", capabilities,
+					"method", info.FullMethod,
+				)
+
+				enriched := md.Copy()
+				enriched.Set(MetadataKeyNamespace, namespace)
+				enriched.Set(MetadataKeyWorkitemID, identity.WorkitemID)
+				enriched.Set(MetadataKeyNodeID, identity.NodeID)
+				enriched.Set(MetadataKeyCapabilities, capabilities)
+
+				ctx = metadata.NewIncomingContext(ctx, enriched)
+				return handler(ctx, req)
+			}
+		}
+
+		// Entry-bound fallback: no active workitem session, but the
+		// Sidecar knows its namespace and node identity.
+		if namespace != "" && nodeID != "" {
+			slog.Debug("Identity interceptor: entry-bound fallback",
+				"namespace", namespace,
+				"node_id", nodeID,
+				"capabilities", capabilities,
+				"method", info.FullMethod,
+			)
+
+			enriched := md.Copy()
+			enriched.Set(MetadataKeyNamespace, namespace)
+			enriched.Set(MetadataKeyNodeID, nodeID)
+			enriched.Set(MetadataKeyCapabilities, capabilities)
+			// Do NOT set x-flow-workitem-id — no active assignment.
+
+			ctx = metadata.NewIncomingContext(ctx, enriched)
 			return handler(ctx, req)
 		}
-		workitemID := vals[0]
 
-		// Look up the active session for this workitem.
-		identity := resolver.LookupSession(workitemID)
-		if identity == nil {
-			return handler(ctx, req)
-		}
-
-		slog.Debug("Identity interceptor: injecting session identity",
-			"flow_id", identity.FlowID,
-			"workitem_id", identity.WorkitemID,
-			"node_id", identity.NodeID,
-			"capabilities", capabilities,
-			"method", info.FullMethod,
-		)
-
-		// Clone the metadata and overwrite identity fields with
-		// authoritative values from the session. This prevents node
-		// code from spoofing identity or capabilities.
-		enriched := md.Copy()
-		enriched.Set(MetadataKeyFlowID, identity.FlowID)
-		enriched.Set(MetadataKeyWorkitemID, identity.WorkitemID)
-		enriched.Set(MetadataKeyNodeID, identity.NodeID)
-		enriched.Set(MetadataKeyCapabilities, capabilities)
-
-		ctx = metadata.NewIncomingContext(ctx, enriched)
 		return handler(ctx, req)
 	}
 }

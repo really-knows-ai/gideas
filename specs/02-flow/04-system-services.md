@@ -8,7 +8,7 @@ Each service owns one primary concern:
 
 - **Flow Event Bus**: durable event distribution across telemetry, audit, friction, and workitem channels.
 - **Friction Ledger**: friction aggregation, threshold evaluation, and friction query surface.
-- **Librarian**: law storage, retrieval, representation lifecycle, tier integration, and law lifecycle hearing triggers (friction-threshold and review-TTL-expiry).
+- **Librarian**: law storage, retrieval, representation lifecycle, and tier integration.
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
 - **Flow Monitor**: pipeline adapter for metrics export (Prometheus) and audit log emission (JSON Lines to stdout).
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
@@ -31,8 +31,6 @@ flowchart TD
     EB --> FL
     EB --> FM["Flow Monitor"]
     FL --> EB
-
-    EB --> LB
 
     LB <-->|"law sync and appeals"| XFL["Cross-flow Librarian"]
 ```
@@ -61,11 +59,11 @@ The Bus is channel-agnostic. Channels are free-form strings — adding a new cha
 
 - **`friction`**: aggregated friction signals published by the Friction Ledger.
   Threshold-crossing alerts indicate that a law's accumulated friction has crossed its tier's
-  configured hearing threshold. Subscribers: Librarian (reactive hearing triggers).
+  configured hearing threshold. Subscribers: [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) node (reactive hearing triggers via Sidecar).
 
 - **`workitem`**: Workitem lifecycle events published by the Operator on every phase
   transition. Each event carries labels for `workitem_id`, `phase`, `node_id`, and
-  `parent_workitem_id` (if the Workitem is a child). The `flow_id` is carried in attributes.
+  `parent_workitem_id` (if the Workitem is a child). The namespace is carried in attributes.
   Subscribers filter by `parent_workitem_id` to observe child Workitem progress during
   fan-out/fan-in processing. Subscribers: nodes (via SDK `WatchChildren()`).
 
@@ -80,7 +78,7 @@ Events carry two key-value structures:
   server stores labels in a separate indexed table for efficient filtering.
 
 - **Attributes**: a `map<string, string>` for arbitrary unfiltered metadata (e.g. `magnitude`,
-  `threshold`, `accumulated_friction`, `flow_id`). Not used for server-side filtering.
+  `threshold`, `accumulated_friction`, `namespace`). Not used for server-side filtering.
 
 Subscribers filter using `SubscribeFilter`, which supports an `event_type` convenience field
 and `repeated Label match_labels` with AND semantics: every label in the filter must have at
@@ -146,7 +144,7 @@ Ledger publishes a threshold-crossing event to the Flow Event Bus's friction cha
 includes the law identifier, the tier, the accumulated friction, and the threshold that was
 crossed.
 
-The Librarian subscribes to the friction channel and triggers review hearings reactively in
+The [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) node subscribes to the friction channel and triggers review hearings reactively in
 response to these signals.
 
 ### QueryFriction API
@@ -155,7 +153,7 @@ The Friction Ledger serves `QueryFriction` as a direct gRPC API for point-to-poi
 This is the query surface for friction data, used by:
 
 - The Tribunal (via Sidecar) for hearing evidence retrieval.
-- The Librarian (direct service-to-service) for catch-up on startup or reconnection.
+- The Librarian (direct service-to-service) for law lifecycle queries.
 
 ### Deployment
 
@@ -207,17 +205,16 @@ Integration outcomes follow tiered supremacy semantics:
 - On grace expiry, incoming law integrates automatically and conflicting Tier 3 law retires.
 - If the LLM evaluator is unavailable or returns an indeterminate result, incoming higher-tier laws remain queued and inactive until evaluation succeeds.
 
-### Law Lifecycle Hearing Triggers
+### Law Lifecycle
 
-The Librarian owns all hearing trigger emission for law lifecycle events. It monitors two signals and triggers review hearings by requesting Workitem creation through the Operator.
+The Librarian is a pure law store and lifecycle service. It does not own hearing trigger logic — hearing triggers are owned by dedicated watcher nodes ([Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) and [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem)) that create hearing Workitems via generic `CreateWorkitem` and route to the Tribunal.
 
-**Friction-threshold triggers:** The Librarian subscribes to the [Friction Ledger](#friction-ledger)'s threshold-crossing signals on the Flow Event Bus's friction channel. When a threshold-crossing event is received for a law, the Librarian triggers a review hearing. On startup or reconnection, the Librarian queries the Friction Ledger's `QueryFriction` API to determine whether any laws have crossed their thresholds during the disconnection window. Thresholds are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [configuration](./05-configuration.md). For Tiers 1-2, the [Tribunal](./03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the [Advocate](./03-nodes-external.md#the-judiciary--standard-subsystem).
+The Librarian's law lifecycle responsibilities:
 
-**Review-TTL-expiry triggers:** When a law's age exceeds its tier's configured review TTL (from the FoundryFlow's [governance policy](./05-configuration.md)), the Librarian triggers a review hearing. The law remains active during the hearing — expiry is the trigger, not a demotion event.
-
-Every review hearing produces a decisive outcome — promote, retire, or demote.
-
-Librarian does not adjudicate hearings.
+- Store, index, and serve laws to nodes and services.
+- Manage integration conflict checks for cross-flow law replication.
+- Apply law lifecycle actions (promote, retire, demote) when called by the Operator after hearing completion.
+- Manage law version history and content-hash versioning.
 
 ## Archivist
 
@@ -250,6 +247,7 @@ flowchart LR
 - Nodes never call Archivist directly.
 - SDK calls are mediated by the [Sidecar](../03-node/01-sidecar.md).
 - Query and write operations enforce capability boundaries configured in FoundryNode.
+- `StoreArtefact` validates that the `governed_artefact` name matches a registered [GovernedArtefact](../05-reference/crds.md#governedartefact) CRD. Writes with an unregistered name are rejected with `UNKNOWN_GOVERNED_ARTEFACT`.
 - The [Flow Operator](./01-operator.md) maintains a direct service-level query path to the Archivist for exit contract validation and Workitem lifecycle coordination — this is distinct from the Sidecar-mediated path that nodes use.
 
 ## Flow Monitor
@@ -347,22 +345,23 @@ Hearing Workitems carry a single `law-reference` artefact — a built-in Governe
 
 The hearing follows the node-based Judiciary topology:
 
-1. The Tribunal assembles evidence and fans out to [Juror](./03-nodes-external.md#the-judiciary--standard-subsystem) nodes.
-2. Juror verdicts are collected and the Workitem routes to the [Deliberation Gate](./03-nodes-external.md#the-judiciary--standard-subsystem).
-3. On consensus, the [Tribunal Router](./03-nodes-external.md#the-judiciary--standard-subsystem) reads the tier from the law-reference artefact and routes accordingly:
+1. A watcher node ([Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) or [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem)) creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact, and routes to the Tribunal.
+2. The Tribunal assembles evidence and fans out to [Juror](./03-nodes-external.md#the-judiciary--standard-subsystem) nodes.
+3. Juror verdicts are collected and the Workitem routes to the [Deliberation Gate](./03-nodes-external.md#the-judiciary--standard-subsystem).
+4. On consensus, the [Tribunal Router](./03-nodes-external.md#the-judiciary--standard-subsystem) reads the tier from the law-reference artefact and routes accordingly:
    - Tier 1–2 verdict: route to the [Clerk](./03-nodes-external.md#the-judiciary--standard-subsystem) to draft a petition.
    - Tier 3+: route to the [Advocate](./03-nodes-external.md#the-judiciary--standard-subsystem) for petition or appeal.
 4. If the Clerk drafts a petition, it enters the judiciary inner cycle: Clerk drafts, fans out to Codification nodes, routes to the Tribunal for review (review mode), Deliberation Gate tallies, and the [Judiciary Gate](./03-nodes-external.md#the-judiciary--standard-subsystem) checks feedback resolution. On approval, the Judiciary Gate applies the petition to the Library via the Librarian (`WriteLaw`/`RetireLaw`). The law is created in a pending state and remains inactive until ratification.
 5. The Tribunal calls `complete()`. The Operator validates the hearing exit contract and applies completion state; the Librarian applies resulting law lifecycle actions, activating the new law.
 
-Trigger ownership is consolidated in the Librarian:
+Trigger ownership is distributed to dedicated watcher nodes:
 
-- Friction-threshold trigger (all tiers) -> Librarian subscribes to friction channel, receives threshold-crossing signal from Friction Ledger. For Tiers 1-2, the Tribunal adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the Advocate.
-- Review-TTL-expiry trigger -> Librarian detects law age exceeding tier's configured review TTL. The law remains active during the hearing.
+- Friction-threshold trigger (all tiers) -> [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) subscribes to friction channel (via Sidecar), receives threshold-crossing signal from Friction Ledger. Creates hearing Workitem via `CreateWorkitem` and routes to Tribunal. For Tiers 1-2, the Tribunal adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the Advocate.
+- Review-TTL-expiry trigger -> [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) polls Librarian for laws exceeding tier's configured review TTL. Creates hearing Workitem via `CreateWorkitem` and routes to Tribunal. The law remains active during the hearing.
 
 Execution and adjudication path:
 
-1. Librarian requests hearing Workitem creation through the Operator, supplying the `lawId`.
+1. Watcher node (Friction Watcher or TTL Watcher) creates hearing Workitem via `CreateWorkitem`, stores `law-reference` artefact with the `lawId`, and routes to Tribunal.
 2. Operator admits and assigns the hearing Workitem to the Tribunal using the Tribunal's bound hearing entry contract.
 3. The Tribunal retrieves the law's friction data from the Friction Ledger (via Sidecar) and legal context from the Librarian.
 4. The Tribunal fans out to [Juror](./03-nodes-external.md#the-judiciary--standard-subsystem) nodes for deliberation using child Workitems.
@@ -373,7 +372,7 @@ Execution and adjudication path:
 
 ```mermaid
 sequenceDiagram
-    participant LB as Librarian
+    participant WN as Watcher Node
     participant OP as Operator
     participant TB as Tribunal
     participant JR as Juror nodes
@@ -384,8 +383,14 @@ sequenceDiagram
     participant JG as Judiciary Gate
     participant SC as Sidecar
     participant FL as Friction Ledger
+    participant LB as Librarian
 
-    LB->>OP: create hearing Workitem (lawId)
+    WN->>SC: CreateWorkitem
+    SC->>OP: CreateWorkitem
+    OP-->>SC: workitem_id
+    WN->>SC: StoreArtefact (law-reference)
+    SC->>LB: (Archivist stores artefact)
+    WN->>SC: route to Tribunal
     OP->>TB: assign hearing via entry binding
     TB->>SC: query friction for law
     SC->>FL: friction query (by law_id)
@@ -459,7 +464,7 @@ Detailed runbooks are specified in [Operations](./07-operations.md).
 
 Core call paths are stable:
 
-- Operator <-> Librarian: law lifecycle events, hearing Workitem creation coordination.
+- Operator <-> Librarian: law lifecycle events, hearing completion coordination.
 - Operator <-> Archivist: completion validation queries and artefact presence checks.
 - Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
 - Sidecar <-> Librarian: law retrieval and legal-context queries.
@@ -467,8 +472,9 @@ Core call paths are stable:
 - Services -> Flow Event Bus: audit events (publish to audit channel).
 - Flow Event Bus -> Friction Ledger: friction events (telemetry channel subscription).
 - Friction Ledger -> Flow Event Bus: threshold-crossing signals (publish to friction channel).
-- Flow Event Bus -> Librarian: threshold-crossing signals (friction channel subscription).
-- Librarian -> Friction Ledger: QueryFriction for catch-up on startup/reconnection.
+- Flow Event Bus -> Friction Watcher (via Sidecar): threshold-crossing signals (friction channel subscription).
+- TTL Watcher (via Sidecar) -> Librarian: QueryLaws for TTL expiry detection.
+- Librarian -> Friction Ledger: QueryFriction for law lifecycle queries.
 - Tribunal (via Sidecar) -> Friction Ledger: friction queries for hearing evidence.
 - Flow Event Bus -> Flow Monitor: telemetry and audit channel subscriptions for metrics export and audit log emission.
 - Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
@@ -482,10 +488,10 @@ Contract failures must return structured errors aligned with [Error Catalogue](.
 Service outages degrade behaviour predictably:
 
 - Archivist unavailable: artefact mutation and provenance queries fail closed; Workitems cannot progress through affected steps.
-- Librarian unavailable: law retrieval and law lifecycle actions fail closed. Hearing trigger evaluation pauses until the Librarian recovers.
+- Librarian unavailable: law retrieval and law lifecycle actions fail closed. TTL Watcher polling pauses until the Librarian recovers.
 - LLM contradiction evaluator unavailable: higher-tier law activation pauses in queued state; integration retries with backoff and raises operational alerts.
 - Flow Monitor unavailable: metrics export and audit log emission pause. Friction aggregation and hearing threshold evaluation are unaffected (those are Friction Ledger-owned). Alerting is raised.
-- Flow Event Bus unavailable: event distribution pauses. Sidecars buffer events locally and retry. Friction Ledger's `QueryFriction` continues to serve from persisted aggregation data. Hearing threshold evaluation is paused for new events but the Librarian's subscription will replay missed events within the retention window on Bus recovery.
+- Flow Event Bus unavailable: event distribution pauses. Sidecars buffer events locally and retry. Friction Ledger's `QueryFriction` continues to serve from persisted aggregation data. Friction Watcher hearing threshold evaluation is paused for new events but the Friction Watcher's subscription will replay missed events within the retention window on Bus recovery.
 - Friction Ledger unavailable: friction aggregation pauses. Raw friction events accumulate in the Bus's telemetry channel log within the retention window. On Friction Ledger recovery, it replays from its last-seen sequence number. Threshold-crossing signals are delayed but not lost. `QueryFriction` calls from the Tribunal return errors; hearing evidence retrieval is blocked until recovery.
 - Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; the Clerk node proceeds with whatever representations succeeded (prose at minimum).
 
@@ -498,8 +504,8 @@ All deployments preserve these service invariants:
 1. Archivist is the source of truth for artefact provenance beyond raw bytes.
 2. Workitem CRD carries no artefact references. Artefact-to-Workitem associations are Archivist-owned.
 3. Laws are single objects with one goal and multiple representations under whole-law versioning.
-4. Friction-threshold hearing triggers are evaluated reactively by the Librarian via Friction Ledger threshold-crossing signals on the Flow Event Bus's friction channel.
-5. Review-TTL-expiry hearing triggers are emitted by the Librarian.
+4. Friction-threshold hearing triggers are owned by the [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) node, which subscribes to the Friction Ledger's threshold-crossing signals on the Flow Event Bus's friction channel (via Sidecar) and creates hearing Workitems via generic `CreateWorkitem`.
+5. Review-TTL-expiry hearing triggers are owned by the [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) node, which polls the Librarian for laws exceeding their tier's review TTL and creates hearing Workitems via generic `CreateWorkitem`.
 6. Tribunal evidence retrieval includes friction data from the Friction Ledger.
 7. Hearing adjudication remains a Tribunal responsibility, not a service-local shortcut.
 8. Friction is first-class and queryable by source attribution.

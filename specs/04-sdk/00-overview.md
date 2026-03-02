@@ -28,7 +28,7 @@ Every handler invocation is scoped to a single [Workitem](../02-flow/02-workitem
 Assignment scoping is enforced at every layer:
 
 - **SDK surface** — no parameter exists for targeting a foreign Workitem. Operations are implicitly scoped to the current assignment.
-- **Sidecar** — injects `node_id`, `workitem_id`, and `flow_id` into every outgoing request. Requests referencing artefacts or state outside the current assignment are rejected before they reach a service.
+- **Sidecar** — injects `node_id`, `workitem_id`, and `namespace` into every outgoing request. Requests referencing artefacts or state outside the current assignment are rejected before they reach a service.
 - **Runtime services** — validate that incoming requests match the declared assignment context.
 
 When a node is configured for concurrent processing (`concurrency > 1`), each assignment runs an independent session with its own Workitem scope, activity timer, and handler context. Thread safety within node code is the developer's responsibility.

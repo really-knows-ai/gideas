@@ -57,6 +57,11 @@ type FoundryFlowSpec struct {
 	// +optional
 	EventBusConfig *EventBusConfig `json:"eventBusConfig,omitempty"`
 
+	// suspension defines suspension timeout policy for this Flow.
+	// Controls how long workitems may remain in the Suspended phase.
+	// +optional
+	Suspension *SuspensionConfig `json:"suspension,omitempty"`
+
 	// crossFlow defines cross-flow trust and naturalisation settings.
 	// +optional
 	CrossFlow *CrossFlowConfig `json:"crossFlow,omitempty"`
@@ -176,6 +181,25 @@ type WorkitemRetentionPolicy struct {
 	// maxAge is the maximum age of terminal Workitems before garbage collection.
 	// +optional
 	MaxAge *metav1.Duration `json:"maxAge,omitempty"`
+}
+
+// SuspensionConfig defines suspension timeout policy for a Flow.
+// Controls how long workitems may remain in the Suspended phase.
+// Every suspension has a timeout. If the resume condition is not met before
+// the deadline, the workitem transitions to Failed. There are no truly
+// indefinite suspensions.
+type SuspensionConfig struct {
+	// maxSuspendTimeout is the hard cap on suspension duration.
+	// The Operator rejects suspensions exceeding this value.
+	// Defaults to 336h (2 weeks) if not specified.
+	// +optional
+	MaxSuspendTimeout *metav1.Duration `json:"maxSuspendTimeout,omitempty"`
+
+	// defaultSuspendTimeout is applied when a node calls Suspend() without
+	// specifying a timeout via WithTimeout(). Defaults to maxSuspendTimeout
+	// if not specified.
+	// +optional
+	DefaultSuspendTimeout *metav1.Duration `json:"defaultSuspendTimeout,omitempty"`
 }
 
 // EventBusConfig defines Event Bus configuration for a Flow.

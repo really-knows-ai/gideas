@@ -157,13 +157,13 @@ func (h *testHarness) publishTelemetry(
 	_, err := h.busClient.Publish(ctx, &flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:    eventID,
-			EventType:  eventType,
-			FlowId:     "flow-1",
-			NodeId:     "node-a",
-			WorkitemId: "wi-1",
-			Timestamp:  timestamppb.Now(),
-			Attributes: attrs,
+			EventId:       eventID,
+			EventType:     eventType,
+			FlowNamespace: "flow-1",
+			NodeId:        "node-a",
+			WorkitemId:    "wi-1",
+			Timestamp:     timestamppb.Now(),
+			Attributes:    attrs,
 		},
 	})
 	if err != nil {
@@ -181,13 +181,13 @@ func (h *testHarness) publishAudit(
 	_, err := h.busClient.Publish(ctx, &flowv1.PublishRequest{
 		Channel: "audit",
 		Event: &flowv1.FlowEvent{
-			EventId:    eventID,
-			EventType:  eventType,
-			FlowId:     "flow-1",
-			NodeId:     "node-a",
-			WorkitemId: "wi-1",
-			Timestamp:  timestamppb.Now(),
-			Attributes: attrs,
+			EventId:       eventID,
+			EventType:     eventType,
+			FlowNamespace: "flow-1",
+			NodeId:        "node-a",
+			WorkitemId:    "wi-1",
+			Timestamp:     timestamppb.Now(),
+			Attributes:    attrs,
 		},
 	})
 	if err != nil {

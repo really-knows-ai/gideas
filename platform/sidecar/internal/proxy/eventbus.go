@@ -70,7 +70,7 @@ func (p *EventBusProxy) Close() error {
 // event_type="friction", serialises law_ids as labels and magnitude into
 // attributes, and submits asynchronously to the Event Bus.
 func (p *EventBusProxy) PublishFriction(
-	flowID, workitemID, nodeID string,
+	namespace, workitemID, nodeID string,
 	lawIDs []string,
 	magnitude float64,
 ) {
@@ -87,19 +87,19 @@ func (p *EventBusProxy) PublishFriction(
 	p.publisher.Submit(&flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:    newEventID(),
-			EventType:  "friction",
-			FlowId:     flowID,
-			NodeId:     nodeID,
-			WorkitemId: workitemID,
-			Timestamp:  timestamppb.Now(),
-			Attributes: attrs,
-			Labels:     labels,
+			EventId:       newEventID(),
+			EventType:     "friction",
+			FlowNamespace: namespace,
+			NodeId:        nodeID,
+			WorkitemId:    workitemID,
+			Timestamp:     timestamppb.Now(),
+			Attributes:    attrs,
+			Labels:        labels,
 		},
 	})
 
 	slog.Info("Friction event submitted to Event Bus",
-		"flow_id", flowID,
+		"namespace", namespace,
 		"node_id", nodeID,
 		"workitem_id", workitemID,
 		"magnitude", magnitude,
@@ -110,24 +110,24 @@ func (p *EventBusProxy) PublishFriction(
 // PublishTelemetry builds a FlowEvent with channel="telemetry" and the
 // caller's event_type, then submits asynchronously to the Event Bus.
 func (p *EventBusProxy) PublishTelemetry(
-	flowID, nodeID, workitemID, eventType string,
+	namespace, nodeID, workitemID, eventType string,
 	payload []byte,
 ) {
 	p.publisher.Submit(&flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:    newEventID(),
-			EventType:  eventType,
-			FlowId:     flowID,
-			NodeId:     nodeID,
-			WorkitemId: workitemID,
-			Timestamp:  timestamppb.Now(),
-			Payload:    payload,
+			EventId:       newEventID(),
+			EventType:     eventType,
+			FlowNamespace: namespace,
+			NodeId:        nodeID,
+			WorkitemId:    workitemID,
+			Timestamp:     timestamppb.Now(),
+			Payload:       payload,
 		},
 	})
 
 	slog.Info("Telemetry event submitted to Event Bus",
-		"flow_id", flowID,
+		"namespace", namespace,
 		"node_id", nodeID,
 		"event_type", eventType,
 	)

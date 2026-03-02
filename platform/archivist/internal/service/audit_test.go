@@ -58,7 +58,7 @@ func ctxWithIdentity() context.Context {
 		"WRITE:feedback/link-ruling"
 	md := metadata.Pairs(
 		"x-flow-node-id", "forge-node",
-		"x-flow-flow-id", "flow-1",
+		"x-flow-namespace", "flow-1",
 		"x-flow-workitem-id", "wi-1",
 		"x-flow-capabilities", caps,
 	)

@@ -125,8 +125,13 @@ func (s *hitlSortSpy) SubmitResult(
 ) (*flowv1.SubmitResultResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if ri := req.GetRoutingInstruction(); ri != nil {
-		s.RoutedOutputs = append(s.RoutedOutputs, ri.GetTarget())
+	switch a := req.GetAction().(type) {
+	case *flowv1.SubmitResultRequest_Route:
+		if a.Route != nil {
+			s.RoutedOutputs = append(s.RoutedOutputs, a.Route.GetTarget())
+		}
+	default:
+		// Complete / Suspend / nil — nothing to record.
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }

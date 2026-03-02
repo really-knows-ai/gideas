@@ -25,8 +25,8 @@ const (
 	reasonTimeoutExceeded      = "TIMEOUT_EXCEEDED"
 
 	testWorkitemName = "wi-1"
-	testFlowLabel    = "flow.gideas.io/flow"
 	testFlowName     = "test-flow"
+	testAssignee     = "worker"
 )
 
 // ---------------------------------------------------------------------------
@@ -100,22 +100,17 @@ func testExitNode(name, exitContract string) *flowv1.FoundryNode {
 	}
 }
 
-func testWorkitem(phase, assignee string, labels map[string]string) *flowv1.Workitem {
+func testWorkitem(phase, assignee string) *flowv1.Workitem {
 	return &flowv1.Workitem{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      testWorkitemName,
 			Namespace: "default",
-			Labels:    labels,
 		},
 		Status: flowv1.WorkitemStatus{
 			Phase:           phase,
 			CurrentAssignee: assignee,
 		},
 	}
-}
-
-func flowLabels() map[string]string {
-	return map[string]string{testFlowLabel: testFlowName}
 }
 
 // getWorkitem fetches a fresh copy of the workitem from the fake client.
@@ -146,8 +141,8 @@ func TestPending_ThrashCounterIncrement(t *testing.T) {
 	// incremented during reconciliation. Dispatch will fail because there
 	// are no pods — the counter is incremented before dispatch.
 	flow := testFlow(100)
-	node := testNode("worker")
-	wi := testWorkitem(phasePending, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phasePending, testAssignee)
 
 	r := testReconciler(flow, node, wi)
 
@@ -160,7 +155,7 @@ func TestPending_ThrashCounterIncrement(t *testing.T) {
 	// failed and reverted). If the claim itself failed, the counter won't
 	// persist — that is acceptable.
 	if fresh.Status.ThrashCounters != nil {
-		if count := fresh.Status.ThrashCounters["worker"]; count > 0 {
+		if count := fresh.Status.ThrashCounters[testAssignee]; count > 0 {
 			t.Logf("Thrash counter incremented to %d — correct", count)
 		}
 	}
@@ -172,14 +167,14 @@ func TestPending_ThrashCounterIncrement(t *testing.T) {
 
 func TestPending_ThrashBudgetExceeded(t *testing.T) {
 	flow := testFlow(5)
-	node := testNode("worker")
-	wi := testWorkitem(phasePending, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phasePending, testAssignee)
 
 	// Pre-set thrash counters to just below the limit (aggregate=5).
 	// After increment (aggregate=6), it exceeds maxVisits=5.
 	wi.Status.ThrashCounters = map[string]int32{
-		"worker": 3,
-		"other":  2,
+		testAssignee: 3,
+		"other":      2,
 	}
 
 	r := testReconciler(flow, node, wi)
@@ -205,7 +200,7 @@ func TestPending_ThrashBudgetExceeded(t *testing.T) {
 
 func TestPending_NoAssignee_Skips(t *testing.T) {
 	flow := testFlow(100)
-	wi := testWorkitem(phasePending, "", flowLabels())
+	wi := testWorkitem(phasePending, "")
 
 	r := testReconciler(flow, wi)
 
@@ -229,8 +224,8 @@ func TestRunning_TimeoutExpired(t *testing.T) {
 	flow := testFlow(100)
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
-	node := testNode("worker")
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRunning, testAssignee)
 
 	// Assignment started 15 minutes ago — exceeds 10 minute timeout.
 	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
@@ -257,8 +252,8 @@ func TestRunning_TimeoutNotExpired_Requeues(t *testing.T) {
 	flow := testFlow(100)
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 30 * time.Minute}
 
-	node := testNode("worker")
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRunning, testAssignee)
 
 	// Assignment started 5 minutes ago — within 30 minute timeout.
 	past := metav1.NewTime(time.Now().Add(-5 * time.Minute))
@@ -289,11 +284,11 @@ func TestRunning_NodeSpecificTimeout(t *testing.T) {
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 30 * time.Minute}
 	flow.Spec.GovernancePolicy.MaxTimeout = metav1.Duration{Duration: 1 * time.Hour}
 
-	node := testNode("worker")
+	node := testNode(testAssignee)
 	nodeTimeout := metav1.Duration{Duration: 5 * time.Minute}
 	node.Spec.Timeout = &nodeTimeout
 
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	wi := testWorkitem(phaseRunning, testAssignee)
 
 	// Assignment started 6 minutes ago — exceeds 5 minute node-specific timeout.
 	past := metav1.NewTime(time.Now().Add(-6 * time.Minute))
@@ -320,11 +315,11 @@ func TestRunning_NodeTimeoutCappedAtMaxTimeout(t *testing.T) {
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 30 * time.Minute}
 	flow.Spec.GovernancePolicy.MaxTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
-	node := testNode("worker")
+	node := testNode(testAssignee)
 	nodeTimeout := metav1.Duration{Duration: 1 * time.Hour} // Node wants 1h but max is 10m.
 	node.Spec.Timeout = &nodeTimeout
 
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	wi := testWorkitem(phaseRunning, testAssignee)
 
 	// Assignment started 12 minutes ago — exceeds capped timeout of 10m.
 	past := metav1.NewTime(time.Now().Add(-12 * time.Minute))
@@ -349,9 +344,9 @@ func TestRunning_NodeTimeoutCappedAtMaxTimeout(t *testing.T) {
 
 func TestRouting_RouteToOutput_HappyPath(t *testing.T) {
 	flow := testFlow(100)
-	node := testNode("worker")
+	node := testNode(testAssignee)
 	nextNode := testNode("next-node")
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	wi := testWorkitem(phaseRouting, testAssignee)
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type:   "route_to_output",
 		Target: "default",
@@ -386,7 +381,7 @@ func TestRouting_RouteToOutput_HappyPath(t *testing.T) {
 func TestRouting_Complete_HappyPath(t *testing.T) {
 	flow := testFlow(100)
 	exitNode := testExitNode("publisher", "standard-exit")
-	wi := testWorkitem(phaseRouting, "publisher", flowLabels())
+	wi := testWorkitem(phaseRouting, "publisher")
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type: "complete",
 	}
@@ -413,8 +408,8 @@ func TestRouting_Complete_HappyPath(t *testing.T) {
 
 func TestRouting_Complete_NonExitNode_ReturnsError(t *testing.T) {
 	flow := testFlow(100)
-	node := testNode("worker") // Not exit-bound.
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	node := testNode(testAssignee) // Not exit-bound.
+	wi := testWorkitem(phaseRouting, testAssignee)
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type: "complete",
 	}
@@ -439,8 +434,8 @@ func TestRouting_Complete_NonExitNode_ReturnsError(t *testing.T) {
 
 func TestRouting_UnknownOutput_ReturnsError(t *testing.T) {
 	flow := testFlow(100)
-	node := testNode("worker")
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRouting, testAssignee)
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type:   "route_to_output",
 		Target: "nonexistent",
@@ -460,9 +455,9 @@ func TestRouting_UnknownOutput_ReturnsError(t *testing.T) {
 
 func TestRouting_RouteTo_TargetExists(t *testing.T) {
 	flow := testFlow(100)
-	currentNode := testNode("worker")
+	currentNode := testNode(testAssignee)
 	targetNode := testNode("step-3")
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	wi := testWorkitem(phaseRouting, testAssignee)
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type:   "route_to",
 		Target: "step-3",
@@ -486,8 +481,8 @@ func TestRouting_RouteTo_TargetExists(t *testing.T) {
 
 func TestRouting_RouteTo_TargetNotFound(t *testing.T) {
 	flow := testFlow(100)
-	currentNode := testNode("worker")
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	currentNode := testNode(testAssignee)
+	wi := testWorkitem(phaseRouting, testAssignee)
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type:   "route_to",
 		Target: "nonexistent",
@@ -507,11 +502,11 @@ func TestRouting_RouteTo_TargetNotFound(t *testing.T) {
 
 func TestRouting_ThrashGuardExceeded_FailsWorkitem(t *testing.T) {
 	flow := testFlow(5) // maxVisits=5
-	node := testNode("worker")
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRouting, testAssignee)
 	wi.Status.ThrashCounters = map[string]int32{
-		"worker": 3,
-		"other":  3, // aggregate=6, exceeds 5
+		testAssignee: 3,
+		"other":      3, // aggregate=6, exceeds 5
 	}
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type:   "route_to_output",
@@ -541,7 +536,7 @@ func TestRouting_ThrashGuardExceeded_FailsWorkitem(t *testing.T) {
 
 func TestRouting_MissingInstruction_NoError(t *testing.T) {
 	flow := testFlow(100)
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	wi := testWorkitem(phaseRouting, testAssignee)
 
 	r := testReconciler(flow, wi)
 
@@ -557,7 +552,7 @@ func TestRouting_MissingInstruction_NoError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCompleted_NoOp(t *testing.T) {
-	wi := testWorkitem(phaseCompleted, "", flowLabels())
+	wi := testWorkitem(phaseCompleted, "")
 
 	r := testReconciler(wi)
 
@@ -569,7 +564,7 @@ func TestCompleted_NoOp(t *testing.T) {
 }
 
 func TestFailed_NoOp(t *testing.T) {
-	wi := testWorkitem(phaseFailed, "", flowLabels())
+	wi := testWorkitem(phaseFailed, "")
 	wi.Status.FailureReason = reasonTimeoutExceeded
 
 	r := testReconciler(wi)
@@ -600,7 +595,7 @@ func TestDeletedWorkitem_NoError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFailWorkitem_AlreadyFailed_NoOp(t *testing.T) {
-	wi := testWorkitem(phaseFailed, "", flowLabels())
+	wi := testWorkitem(phaseFailed, "")
 	wi.Status.FailureReason = reasonTimeoutExceeded
 
 	r := testReconciler(wi)
@@ -618,7 +613,7 @@ func TestFailWorkitem_AlreadyFailed_NoOp(t *testing.T) {
 }
 
 func TestFailWorkitem_AlreadyCompleted_NoOp(t *testing.T) {
-	wi := testWorkitem(phaseCompleted, "", flowLabels())
+	wi := testWorkitem(phaseCompleted, "")
 
 	r := testReconciler(wi)
 
@@ -704,24 +699,9 @@ func TestResolveTimeout_NilNode(t *testing.T) {
 // resolveFlow unit tests
 // ---------------------------------------------------------------------------
 
-func TestResolveFlow_FromLabel(t *testing.T) {
+func TestResolveFlow_SingletonInNamespace(t *testing.T) {
 	flow := testFlow(100)
-	wi := testWorkitem(phasePending, "worker", flowLabels())
-
-	r := testReconciler(flow, wi)
-
-	resolved, err := r.resolveFlow(context.Background(), wi)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-	if resolved.Name != testFlowName {
-		t.Fatalf("Expected flow %q, got %q", testFlowName, resolved.Name)
-	}
-}
-
-func TestResolveFlow_FallbackToList(t *testing.T) {
-	flow := testFlow(100)
-	wi := testWorkitem(phasePending, "worker", nil)
+	wi := testWorkitem(phasePending, testAssignee)
 
 	r := testReconciler(flow, wi)
 
@@ -735,13 +715,36 @@ func TestResolveFlow_FallbackToList(t *testing.T) {
 }
 
 func TestResolveFlow_NoFlowFound(t *testing.T) {
-	wi := testWorkitem(phasePending, "worker", nil)
+	wi := testWorkitem(phasePending, testAssignee)
 
 	r := testReconciler(wi)
 
 	_, err := r.resolveFlow(context.Background(), wi)
 	if err == nil {
 		t.Fatal("Expected error when no flow found")
+	}
+}
+
+func TestResolveFlow_MultipleFlows_ReturnsError(t *testing.T) {
+	flow1 := testFlow(100)
+	flow2 := &flowv1.FoundryFlow{
+		ObjectMeta: metav1.ObjectMeta{Name: "second-flow", Namespace: "default"},
+		Spec: flowv1.FoundryFlowSpec{
+			EntryContracts: map[string]flowv1.Contract{"main": {}},
+			GovernancePolicy: flowv1.GovernancePolicy{
+				MaxVisits:      100,
+				DefaultTimeout: metav1.Duration{Duration: 30 * time.Minute},
+				MaxTimeout:     metav1.Duration{Duration: 1 * time.Hour},
+			},
+		},
+	}
+	wi := testWorkitem(phasePending, testAssignee)
+
+	r := testReconciler(flow1, flow2, wi)
+
+	_, err := r.resolveFlow(context.Background(), wi)
+	if err == nil {
+		t.Fatal("Expected error when multiple flows found in namespace")
 	}
 }
 
@@ -770,8 +773,8 @@ func TestRunning_WithNonTerminalChildren_SkipsTimeout(t *testing.T) {
 	flow := testFlow(100)
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
-	node := testNode("worker")
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRunning, testAssignee)
 
 	// Assignment started 15 minutes ago — exceeds 10 minute timeout.
 	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
@@ -784,7 +787,6 @@ func TestRunning_WithNonTerminalChildren_SkipsTimeout(t *testing.T) {
 			Namespace: "default",
 			Labels: map[string]string{
 				"flow.gideas.io/parent": testWorkitemName,
-				"flow.gideas.io/flow":   testFlowName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -816,8 +818,8 @@ func TestRunning_WithAllTerminalChildren_AppliesTimeout(t *testing.T) {
 	flow := testFlow(100)
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
-	node := testNode("worker")
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRunning, testAssignee)
 
 	// Assignment started 15 minutes ago — exceeds 10 minute timeout.
 	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
@@ -830,7 +832,6 @@ func TestRunning_WithAllTerminalChildren_AppliesTimeout(t *testing.T) {
 			Namespace: "default",
 			Labels: map[string]string{
 				"flow.gideas.io/parent": testWorkitemName,
-				"flow.gideas.io/flow":   testFlowName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -844,7 +845,6 @@ func TestRunning_WithAllTerminalChildren_AppliesTimeout(t *testing.T) {
 			Namespace: "default",
 			Labels: map[string]string{
 				"flow.gideas.io/parent": testWorkitemName,
-				"flow.gideas.io/flow":   testFlowName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -874,8 +874,8 @@ func TestRunning_WithMixedChildren_SkipsTimeout(t *testing.T) {
 	flow := testFlow(100)
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
-	node := testNode("worker")
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRunning, testAssignee)
 
 	// Assignment started 15 minutes ago — exceeds 10 minute timeout.
 	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
@@ -888,7 +888,6 @@ func TestRunning_WithMixedChildren_SkipsTimeout(t *testing.T) {
 			Namespace: "default",
 			Labels: map[string]string{
 				"flow.gideas.io/parent": testWorkitemName,
-				"flow.gideas.io/flow":   testFlowName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -902,7 +901,6 @@ func TestRunning_WithMixedChildren_SkipsTimeout(t *testing.T) {
 			Namespace: "default",
 			Labels: map[string]string{
 				"flow.gideas.io/parent": testWorkitemName,
-				"flow.gideas.io/flow":   testFlowName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -926,5 +924,321 @@ func TestRunning_WithMixedChildren_SkipsTimeout(t *testing.T) {
 	fresh := getWorkitem(t, r)
 	if fresh.Status.Phase != phaseRunning {
 		t.Fatalf("Expected phase %s (waiting for pending child), got %q", phaseRunning, fresh.Status.Phase)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Suspended phase: reconcileSuspended tests
+// ---------------------------------------------------------------------------
+
+func testSuspendedWorkitem(assignee, condition, timeout string, suspendedAt metav1.Time) *flowv1.Workitem {
+	wi := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testWorkitemName,
+			Namespace: "default",
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:           wiPhaseSuspended,
+			CurrentAssignee: assignee,
+			SuspendedAt:     &suspendedAt,
+			ResumeCondition: condition,
+			ResumeTimeout:   timeout,
+		},
+	}
+	return wi
+}
+
+func TestSuspended_TimeoutExceeded_FailsWorkitem(t *testing.T) {
+	// Override nowFunc to control elapsed time.
+	orig := nowFunc
+	t.Cleanup(func() { nowFunc = orig })
+
+	baseTime := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	suspendedAt := metav1.NewTime(baseTime)
+
+	// Now is 20 minutes after suspension — exceeds 10m timeout.
+	nowFunc = func() metav1.Time {
+		return metav1.NewTime(baseTime.Add(20 * time.Minute))
+	}
+
+	flow := testFlow(100)
+	wi := testSuspendedWorkitem(testAssignee, "", "10m", suspendedAt)
+
+	r := testReconciler(flow, wi)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	assertNoRequeue(t, result)
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != phaseFailed {
+		t.Fatalf("Expected phase %s, got %q", phaseFailed, fresh.Status.Phase)
+	}
+	if fresh.Status.FailureReason != "SUSPEND_TIMEOUT_EXCEEDED" {
+		t.Fatalf("Expected failure reason SUSPEND_TIMEOUT_EXCEEDED, got %q", fresh.Status.FailureReason)
+	}
+}
+
+func TestSuspended_InvalidTimeout_FailsWorkitem(t *testing.T) {
+	flow := testFlow(100)
+	suspendedAt := metav1.NewTime(time.Now())
+	wi := testSuspendedWorkitem(testAssignee, "", "not-a-duration", suspendedAt)
+
+	r := testReconciler(flow, wi)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	assertNoRequeue(t, result)
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != phaseFailed {
+		t.Fatalf("Expected phase %s, got %q", phaseFailed, fresh.Status.Phase)
+	}
+	if fresh.Status.FailureReason != "SUSPEND_TIMEOUT_EXCEEDED" {
+		t.Fatalf("Expected failure reason SUSPEND_TIMEOUT_EXCEEDED, got %q", fresh.Status.FailureReason)
+	}
+}
+
+func TestSuspended_CELConditionMet_ResumesToPending(t *testing.T) {
+	flow := testFlow(100)
+	suspendedAt := metav1.NewTime(time.Now())
+	wi := testSuspendedWorkitem(testAssignee,
+		`children.all(c, c.phase == "Completed")`,
+		"1h",
+		suspendedAt,
+	)
+
+	// All children are Completed — condition should evaluate to true.
+	child1 := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-1",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Completed",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+	child2 := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-2",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Completed",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+
+	r := testReconciler(flow, wi, child1, child2)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	assertNoRequeue(t, result)
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != phasePending {
+		t.Fatalf("Expected phase %s, got %q", phasePending, fresh.Status.Phase)
+	}
+	// Suspend fields should be cleared.
+	if fresh.Status.SuspendedAt != nil {
+		t.Fatal("Expected SuspendedAt to be cleared")
+	}
+	if fresh.Status.ResumeCondition != "" {
+		t.Fatalf("Expected ResumeCondition to be cleared, got %q", fresh.Status.ResumeCondition)
+	}
+	if fresh.Status.ResumeTimeout != "" {
+		t.Fatalf("Expected ResumeTimeout to be cleared, got %q", fresh.Status.ResumeTimeout)
+	}
+	// CurrentAssignee preserved.
+	if fresh.Status.CurrentAssignee != testAssignee {
+		t.Fatalf("Expected CurrentAssignee=worker, got %q", fresh.Status.CurrentAssignee)
+	}
+}
+
+func TestSuspended_CELConditionNotMet_Requeues(t *testing.T) {
+	flow := testFlow(100)
+	suspendedAt := metav1.NewTime(time.Now())
+	wi := testSuspendedWorkitem(testAssignee,
+		`children.all(c, c.phase == "Completed")`,
+		"1h",
+		suspendedAt,
+	)
+
+	// One child still Running — condition evaluates to false.
+	child1 := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-1",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Completed",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+	child2 := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-2",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Running",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+
+	r := testReconciler(flow, wi, child1, child2)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Should requeue (condition not met).
+	if result.RequeueAfter <= 0 {
+		t.Fatal("Expected RequeueAfter > 0 for condition not met")
+	}
+	if result.RequeueAfter > suspendCheckInterval {
+		t.Errorf("Expected RequeueAfter <= %v, got %v", suspendCheckInterval, result.RequeueAfter)
+	}
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != wiPhaseSuspended {
+		t.Fatalf("Expected phase Suspended (unchanged), got %q", fresh.Status.Phase)
+	}
+}
+
+func TestSuspended_NoCondition_NoTimeout_Requeues(t *testing.T) {
+	flow := testFlow(100)
+	// No condition, no timeout — just a manually-resumable suspension.
+	wi := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testWorkitemName,
+			Namespace: "default",
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:           wiPhaseSuspended,
+			CurrentAssignee: testAssignee,
+			// SuspendedAt, ResumeCondition, ResumeTimeout all zero/empty.
+		},
+	}
+
+	r := testReconciler(flow, wi)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Should requeue at the default suspend check interval.
+	if result.RequeueAfter != suspendCheckInterval {
+		t.Fatalf("Expected RequeueAfter=%v, got %v", suspendCheckInterval, result.RequeueAfter)
+	}
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != wiPhaseSuspended {
+		t.Fatalf("Expected phase Suspended (unchanged), got %q", fresh.Status.Phase)
+	}
+}
+
+func TestSuspended_ResumePreservesAssignee(t *testing.T) {
+	flow := testFlow(100)
+	suspendedAt := metav1.NewTime(time.Now())
+	wi := testSuspendedWorkitem("sort",
+		`children.all(c, c.phase == "Completed" || c.phase == "Failed")`,
+		"1h",
+		suspendedAt,
+	)
+
+	// All children terminal — condition met.
+	child := &flowv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-1",
+			Namespace: "default",
+			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+		},
+		Status: flowv1.WorkitemStatus{
+			Phase:            "Failed",
+			ParentWorkitemID: testWorkitemName,
+		},
+	}
+
+	r := testReconciler(flow, wi, child)
+
+	_, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != phasePending {
+		t.Fatalf("Expected phase %s, got %q", phasePending, fresh.Status.Phase)
+	}
+	// Key assertion: assignee preserved after resume.
+	if fresh.Status.CurrentAssignee != "sort" {
+		t.Fatalf("Expected CurrentAssignee=sort (preserved), got %q", fresh.Status.CurrentAssignee)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Routing phase: suspend instruction
+// ---------------------------------------------------------------------------
+
+func TestRouting_Suspend_HappyPath(t *testing.T) {
+	flow := testFlow(100)
+	maxTimeout := metav1.Duration{Duration: 1 * time.Hour}
+	flow.Spec.Suspension = &flowv1.SuspensionConfig{
+		MaxSuspendTimeout: &maxTimeout,
+	}
+
+	node := testNode(testAssignee)
+	wi := testWorkitem(phaseRouting, testAssignee)
+	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
+		Type:             "suspend",
+		SuspendCondition: `children.all(c, c.phase == "Completed")`,
+		SuspendTimeout:   "30m",
+	}
+
+	r := testReconciler(flow, node, wi)
+
+	result, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Should requeue for the suspend timeout.
+	if result.RequeueAfter <= 0 {
+		t.Fatal("Expected RequeueAfter > 0 for suspended workitem")
+	}
+
+	fresh := getWorkitem(t, r)
+	if fresh.Status.Phase != wiPhaseSuspended {
+		t.Fatalf("Expected phase Suspended, got %q", fresh.Status.Phase)
+	}
+	if fresh.Status.CurrentAssignee != testAssignee {
+		t.Fatalf("Expected CurrentAssignee=worker (preserved), got %q", fresh.Status.CurrentAssignee)
+	}
+	if fresh.Status.SuspendedAt == nil {
+		t.Fatal("Expected SuspendedAt to be set")
+	}
+	if fresh.Status.ResumeCondition != `children.all(c, c.phase == "Completed")` {
+		t.Fatalf("Expected ResumeCondition to be set, got %q", fresh.Status.ResumeCondition)
+	}
+	if fresh.Status.ResumeTimeout != "30m" {
+		t.Fatalf("Expected ResumeTimeout=30m, got %q", fresh.Status.ResumeTimeout)
+	}
+	// RoutingInstruction should be cleared.
+	if fresh.Status.RoutingInstruction != nil {
+		t.Fatal("Expected RoutingInstruction to be cleared")
 	}
 }

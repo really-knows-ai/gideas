@@ -313,6 +313,8 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode) corev
 			{Name: "FLOW_NODE_NAME", Value: node.Name},
 			{Name: "FLOW_NAMESPACE", Value: node.Namespace},
 			{Name: "SIDECAR_ADDRESS", Value: fmt.Sprintf("localhost:%d", sidecarGRPCPort)},
+			// Direct access: Event Bus uses gRPC streaming which bypasses the Sidecar proxy.
+			{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
 		},
 	}
 

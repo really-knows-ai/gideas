@@ -36,6 +36,8 @@ The "Walking Skeleton" and reference components.
 ├── nodes/                # Standard Node Implementations
 │   ├── forge/            # Content Generation Node (concrete ForgeAgent)
 │   ├── sort/             # Governance Triage Node
+│   ├── friction-watcher/ # Judiciary Entry Node (friction threshold events)
+│   ├── ttl-watcher/      # Judiciary Entry Node (law TTL expiry)
 │   └── null-node/        # Verification Node (Phase 1)
 ├── gen/                  # Generated Protocol Buffer Code (The Contract)
 ├── proto/                # Protocol Buffer Definitions

@@ -69,16 +69,16 @@ func newTestSidecar(t *testing.T, fake *fakeNodeServer) *SidecarServer {
 	go func() { _ = nodeSrv.Serve(lis) }()
 	t.Cleanup(func() { nodeSrv.GracefulStop() })
 
-	sidecar := NewSidecarServer("test-node", lis.Addr().String())
+	sidecar := NewSidecarServer("test-ns", "test-node", lis.Addr().String())
 	t.Cleanup(func() { _ = sidecar.Close() })
 	return sidecar
 }
 
 func testContext() *flowv1.WorkitemContext {
 	return &flowv1.WorkitemContext{
-		FlowId:     "flow-1",
-		WorkitemId: "wi-1",
-		NodeId:     "node-1",
+		FlowNamespace: "flow-1",
+		WorkitemId:    "wi-1",
+		NodeId:        "node-1",
 	}
 }
 
@@ -87,7 +87,7 @@ func testContext() *flowv1.WorkitemContext {
 // ---------------------------------------------------------------------------
 
 func TestSidecarServer_Heartbeat(t *testing.T) {
-	srv := NewSidecarServer("test-node", "")
+	srv := NewSidecarServer("test-ns", "test-node", "")
 
 	resp, err := srv.Heartbeat(context.Background(), &flowv1.HeartbeatRequest{
 		WorkitemId: "wi-1",
@@ -144,7 +144,7 @@ func TestSidecarServer_Heartbeat_ResetsTimer(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSidecarServer_AssignWork_MissingContext(t *testing.T) {
-	srv := NewSidecarServer("test-node", "")
+	srv := NewSidecarServer("test-ns", "test-node", "")
 
 	_, err := srv.AssignWork(context.Background(), &flowv1.AssignWorkRequest{})
 	if err == nil {
@@ -196,7 +196,7 @@ func TestSidecarServer_AssignWork_NodeFailure(t *testing.T) {
 
 func TestSidecarServer_AssignWork_UnreachableNode(t *testing.T) {
 	// Point at an address where nothing is listening.
-	sidecar := NewSidecarServer("test-node", "127.0.0.1:1")
+	sidecar := NewSidecarServer("test-ns", "test-node", "127.0.0.1:1")
 
 	// Force connection with a real address that's refused.
 	conn, err := grpc.NewClient(
@@ -212,9 +212,9 @@ func TestSidecarServer_AssignWork_UnreachableNode(t *testing.T) {
 
 	_, err = sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{
 		Context: &flowv1.WorkitemContext{
-			FlowId:     "flow-1",
-			WorkitemId: "wi-unreachable",
-			NodeId:     "node-1",
+			FlowNamespace: "flow-1",
+			WorkitemId:    "wi-unreachable",
+			NodeId:        "node-1",
 		},
 	})
 	if err == nil {
@@ -269,7 +269,7 @@ func TestSidecarServer_InactivityTimeout(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSidecarServer_PauseTimer_NoSession(t *testing.T) {
-	srv := NewSidecarServer("test-node", "")
+	srv := NewSidecarServer("test-ns", "test-node", "")
 
 	_, err := srv.PauseTimer(context.Background(), &flowv1.PauseTimerRequest{
 		WorkitemId: "nonexistent",
@@ -408,7 +408,7 @@ func TestSidecarServer_PauseTimer_PreventsTimeout(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSidecarServer_ResumeTimer_NoSession(t *testing.T) {
-	srv := NewSidecarServer("test-node", "")
+	srv := NewSidecarServer("test-ns", "test-node", "")
 
 	_, err := srv.ResumeTimer(context.Background(), &flowv1.ResumeTimerRequest{
 		WorkitemId: "nonexistent",
@@ -501,7 +501,7 @@ func TestSidecarServer_ResumeTimer_ResetsToFullWindow(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSession_PauseResumeCycle(t *testing.T) {
-	sess, _ := newSession(context.Background(), "f", "w", "n", time.Second)
+	sess, _ := newSession(context.Background(), "w", "n", time.Second)
 	defer sess.stop()
 
 	if sess.isPaused() {
@@ -530,7 +530,7 @@ func TestSession_PauseResumeCycle(t *testing.T) {
 }
 
 func TestSession_TimeoutCancelsContext(t *testing.T) {
-	sess, ctx := newSession(context.Background(), "f", "w", "n", 50*time.Millisecond)
+	sess, ctx := newSession(context.Background(), "w", "n", 50*time.Millisecond)
 	defer sess.stop()
 
 	select {
@@ -546,7 +546,7 @@ func TestSession_TimeoutCancelsContext(t *testing.T) {
 }
 
 func TestSession_PausePreventsTimeout(t *testing.T) {
-	sess, ctx := newSession(context.Background(), "f", "w", "n", 100*time.Millisecond)
+	sess, ctx := newSession(context.Background(), "w", "n", 100*time.Millisecond)
 	defer sess.stop()
 
 	if !sess.pause() {
@@ -570,7 +570,7 @@ func TestSession_PausePreventsTimeout(t *testing.T) {
 }
 
 func TestSession_ResetTimerWhilePaused(t *testing.T) {
-	sess, _ := newSession(context.Background(), "f", "w", "n", time.Second)
+	sess, _ := newSession(context.Background(), "w", "n", time.Second)
 	defer sess.stop()
 
 	sess.pause()
@@ -586,7 +586,7 @@ func TestSession_ResetTimerWhilePaused(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSession_AddChild_HasChild(t *testing.T) {
-	sess, _ := newSession(context.Background(), "f", "w", "n", time.Second)
+	sess, _ := newSession(context.Background(), "w", "n", time.Second)
 	defer sess.stop()
 
 	if sess.hasChild("child-1") {
@@ -608,7 +608,7 @@ func TestSession_AddChild_HasChild(t *testing.T) {
 }
 
 func TestSession_AddChild_Idempotent(t *testing.T) {
-	sess, _ := newSession(context.Background(), "f", "w", "n", time.Second)
+	sess, _ := newSession(context.Background(), "w", "n", time.Second)
 	defer sess.stop()
 
 	sess.addChild("child-1")
@@ -624,10 +624,10 @@ func TestSession_AddChild_Idempotent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSidecarServer_TrackChild(t *testing.T) {
-	srv := NewSidecarServer("node-1", "")
+	srv := NewSidecarServer("test-ns", "node-1", "")
 
 	// Create a session.
-	sess, _ := newSession(context.Background(), "flow-A", "wi-1", "node-1", DefaultTimeout)
+	sess, _ := newSession(context.Background(), "wi-1", "node-1", DefaultTimeout)
 	defer sess.stop()
 	srv.mu.Lock()
 	srv.sessions["wi-1"] = sess
@@ -645,16 +645,16 @@ func TestSidecarServer_TrackChild(t *testing.T) {
 }
 
 func TestSidecarServer_TrackChild_NoSession(t *testing.T) {
-	srv := NewSidecarServer("node-1", "")
+	srv := NewSidecarServer("test-ns", "node-1", "")
 
 	// Should not panic when no session exists.
 	srv.TrackChild("nonexistent", "child-1")
 }
 
 func TestSidecarServer_AuthorizeChildAccess_Allowed(t *testing.T) {
-	srv := NewSidecarServer("node-1", "")
+	srv := NewSidecarServer("test-ns", "node-1", "")
 
-	sess, _ := newSession(context.Background(), "flow-A", "wi-1", "node-1", DefaultTimeout)
+	sess, _ := newSession(context.Background(), "wi-1", "node-1", DefaultTimeout)
 	defer sess.stop()
 	srv.mu.Lock()
 	srv.sessions["wi-1"] = sess
@@ -669,9 +669,9 @@ func TestSidecarServer_AuthorizeChildAccess_Allowed(t *testing.T) {
 }
 
 func TestSidecarServer_AuthorizeChildAccess_Denied(t *testing.T) {
-	srv := NewSidecarServer("node-1", "")
+	srv := NewSidecarServer("test-ns", "node-1", "")
 
-	sess, _ := newSession(context.Background(), "flow-A", "wi-1", "node-1", DefaultTimeout)
+	sess, _ := newSession(context.Background(), "wi-1", "node-1", DefaultTimeout)
 	defer sess.stop()
 	srv.mu.Lock()
 	srv.sessions["wi-1"] = sess
@@ -687,7 +687,7 @@ func TestSidecarServer_AuthorizeChildAccess_Denied(t *testing.T) {
 }
 
 func TestSidecarServer_AuthorizeChildAccess_Unknown_NoSession(t *testing.T) {
-	srv := NewSidecarServer("node-1", "")
+	srv := NewSidecarServer("test-ns", "node-1", "")
 
 	decision := srv.AuthorizeChildAccess("nonexistent", "child-1")
 	if decision != ChildAccessUnknown {
@@ -696,10 +696,10 @@ func TestSidecarServer_AuthorizeChildAccess_Unknown_NoSession(t *testing.T) {
 }
 
 func TestSidecarServer_AuthorizeChildAccess_Unknown_NoChildren(t *testing.T) {
-	srv := NewSidecarServer("node-1", "")
+	srv := NewSidecarServer("test-ns", "node-1", "")
 
 	// Session exists but has no children (collection phase).
-	sess, _ := newSession(context.Background(), "flow-A", "wi-1", "node-1", DefaultTimeout)
+	sess, _ := newSession(context.Background(), "wi-1", "node-1", DefaultTimeout)
 	defer sess.stop()
 	srv.mu.Lock()
 	srv.sessions["wi-1"] = sess

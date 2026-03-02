@@ -1,7 +1,7 @@
 // Package proxy implements forwarding handlers that relay gRPC calls
 // from the Sidecar to the real cluster services. Each handler wraps a
 // generated gRPC client and propagates Sidecar-injected identity metadata
-// (x-flow-flow-id, x-flow-workitem-id, x-flow-node-id) from the incoming
+// (x-flow-namespace, x-flow-workitem-id, x-flow-node-id) from the incoming
 // server context to the outgoing client context.
 package proxy
 
@@ -91,15 +91,6 @@ func (p *OperatorProxy) CreateWorkitem(
 	return p.client.CreateWorkitem(outCtx, req)
 }
 
-// CreateHearingWorkitem forwards to the Operator.
-func (p *OperatorProxy) CreateHearingWorkitem(
-	ctx context.Context, req *flowv1.CreateHearingWorkitemRequest,
-) (*flowv1.CreateHearingWorkitemResponse, error) {
-	outCtx := propagateMetadata(ctx)
-	slog.Info("Forwarding CreateHearingWorkitem to Operator", "law_id", req.GetLawId())
-	return p.client.CreateHearingWorkitem(outCtx, req)
-}
-
 // ExportWorkitem forwards to the Operator.
 func (p *OperatorProxy) ExportWorkitem(
 	ctx context.Context, req *flowv1.ExportWorkitemRequest,
@@ -119,7 +110,7 @@ func (p *OperatorProxy) ImportWorkitem(
 }
 
 // GetFlowTopology forwards the topology discovery request to the Operator.
-// Identity metadata (flow_id, node_id) is propagated from the incoming
+// Identity metadata (namespace, node_id) is propagated from the incoming
 // Sidecar-enriched context so the Operator can resolve the calling node's
 // view of the flow topology.
 func (p *OperatorProxy) GetFlowTopology(
@@ -189,6 +180,18 @@ func (p *OperatorProxy) GetChildren(
 	return p.client.GetChildren(outCtx, req)
 }
 
+// ResumeWorkitem forwards to the Operator. The Operator validates that the
+// target Workitem is in the Suspended phase and transitions it to Pending.
+func (p *OperatorProxy) ResumeWorkitem(
+	ctx context.Context, req *flowv1.ResumeWorkitemRequest,
+) (*flowv1.ResumeWorkitemResponse, error) {
+	outCtx := propagateMetadata(ctx)
+	slog.Info("Forwarding ResumeWorkitem to Operator",
+		"workitem_id", req.GetWorkitemId(),
+	)
+	return p.client.ResumeWorkitem(outCtx, req)
+}
+
 // extractWorkitemIDFromMD reads the workitem ID from incoming gRPC metadata.
 // Returns empty string if not present.
 func extractWorkitemIDFromMD(ctx context.Context) string {
@@ -206,7 +209,7 @@ func extractWorkitemIDFromMD(ctx context.Context) string {
 // propagateMetadata copies incoming gRPC metadata from the server context
 // to outgoing metadata on a new client context. The identity injection
 // interceptor (service.IdentityInterceptor) enriches the incoming metadata
-// with authoritative x-flow-flow-id, x-flow-workitem-id, and x-flow-node-id
+// with authoritative x-flow-namespace, x-flow-workitem-id, and x-flow-node-id
 // before this function is called, so all proxied requests carry the complete
 // Sidecar-injected identity context.
 func propagateMetadata(ctx context.Context) context.Context {

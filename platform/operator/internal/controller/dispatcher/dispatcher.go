@@ -67,14 +67,17 @@ type AssignResult struct {
 }
 
 // Assign discovers a ready Pod for the given node and pushes the work
-// assignment via gRPC.
+// assignment via gRPC. The FlowNamespace in the WorkitemContext is set to the
+// Dispatcher's Namespace (one namespace = one flow). The metadata map, if
+// non-nil, is included in the WorkitemContext so the handler can access
+// caller-supplied context (e.g. law_id from an entry-bound watcher node).
 //
 // Steps:
 //  1. List Pods with label flow.gideas.io/node-name=<nodeName>.
 //  2. Filter for Running + Ready Pods.
 //  3. Select one Pod (random).
 //  4. Dial PodIP:50051 and call SidecarService.AssignWork.
-func (d *Dispatcher) Assign(ctx context.Context, nodeName string, flowID string, workitemID string) (*AssignResult, error) {
+func (d *Dispatcher) Assign(ctx context.Context, nodeName string, workitemID string, metadata map[string]string) (*AssignResult, error) {
 	log := slog.With("node", nodeName, "workitem_id", workitemID)
 
 	// 1. Discover Pods.
@@ -113,9 +116,10 @@ func (d *Dispatcher) Assign(ctx context.Context, nodeName string, flowID string,
 
 	ack, err := sidecarClient.AssignWork(ctx, &flowv1gen.AssignWorkRequest{
 		Context: &flowv1gen.WorkitemContext{
-			FlowId:     flowID,
-			WorkitemId: workitemID,
-			NodeId:     nodeName,
+			FlowNamespace: d.Namespace,
+			WorkitemId:    workitemID,
+			NodeId:        nodeName,
+			Metadata:      metadata,
 		},
 	})
 	if err != nil {

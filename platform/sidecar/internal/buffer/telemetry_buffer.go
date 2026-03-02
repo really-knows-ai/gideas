@@ -38,7 +38,8 @@ type Event struct {
 	Priority int
 
 	// --- Friction fields (Priority == PriorityHigh) ---
-	FlowID     string
+	// Namespace is the Kubernetes namespace (flow identity boundary).
+	Namespace  string
 	WorkitemID string
 	NodeID     string
 	LawIDs     []string
@@ -138,14 +139,14 @@ func frictionRequest(evt Event) *flowv1.PublishRequest {
 	return &flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:    newEventID(),
-			EventType:  "friction",
-			FlowId:     evt.FlowID,
-			NodeId:     evt.NodeID,
-			WorkitemId: evt.WorkitemID,
-			Timestamp:  timestamppb.Now(),
-			Attributes: attrs,
-			Labels:     labels,
+			EventId:       newEventID(),
+			EventType:     "friction",
+			FlowNamespace: evt.Namespace,
+			NodeId:        evt.NodeID,
+			WorkitemId:    evt.WorkitemID,
+			Timestamp:     timestamppb.Now(),
+			Attributes:    attrs,
+			Labels:        labels,
 		},
 	}
 }
@@ -154,13 +155,13 @@ func telemetryRequest(evt Event) *flowv1.PublishRequest {
 	return &flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:    newEventID(),
-			EventType:  evt.EventType,
-			FlowId:     evt.FlowID,
-			NodeId:     evt.NodeID,
-			WorkitemId: evt.WorkitemID,
-			Timestamp:  timestamppb.Now(),
-			Payload:    evt.Payload,
+			EventId:       newEventID(),
+			EventType:     evt.EventType,
+			FlowNamespace: evt.Namespace,
+			NodeId:        evt.NodeID,
+			WorkitemId:    evt.WorkitemID,
+			Timestamp:     timestamppb.Now(),
+			Payload:       evt.Payload,
 		},
 	}
 }

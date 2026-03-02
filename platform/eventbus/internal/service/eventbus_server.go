@@ -90,7 +90,7 @@ func (s *EventBusServer) Publish(ctx context.Context, req *flowv1.PublishRequest
 		ID:         eventID,
 		Channel:    req.GetChannel(),
 		EventType:  evt.GetEventType(),
-		FlowID:     evt.GetFlowId(),
+		FlowID:     evt.GetFlowNamespace(),
 		NodeID:     evt.GetNodeId(),
 		WorkitemID: evt.GetWorkitemId(),
 		Timestamp:  ts,
@@ -228,18 +228,18 @@ func (s *EventBusServer) runEviction() {
 // toProto converts a store event to the protobuf FlowEvent message.
 func toProto(evt sqlite.Event) *flowv1.FlowEvent {
 	return &flowv1.FlowEvent{
-		EventId:    evt.ID,
-		Sequence:   evt.Sequence,
-		Channel:    evt.Channel,
-		EventType:  evt.EventType,
-		FlowId:     evt.FlowID,
-		NodeId:     evt.NodeID,
-		WorkitemId: evt.WorkitemID,
-		Timestamp:  timestamppb.New(evt.Timestamp),
-		TraceId:    evt.TraceID,
-		Attributes: evt.Attributes,
-		Payload:    evt.Payload,
-		Labels:     storeLabelsToProto(evt.Labels),
+		EventId:       evt.ID,
+		Sequence:      evt.Sequence,
+		Channel:       evt.Channel,
+		EventType:     evt.EventType,
+		FlowNamespace: evt.FlowID,
+		NodeId:        evt.NodeID,
+		WorkitemId:    evt.WorkitemID,
+		Timestamp:     timestamppb.New(evt.Timestamp),
+		TraceId:       evt.TraceID,
+		Attributes:    evt.Attributes,
+		Payload:       evt.Payload,
+		Labels:        storeLabelsToProto(evt.Labels),
 	}
 }
 

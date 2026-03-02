@@ -35,9 +35,9 @@ The SDK surface accepts a single parameter:
 
 - `law_ids` (`[]string`, one or more) — the laws the node used.
 
-The Sidecar injects all identity context (`node_id`, `workitem_id`, `flow_id`) and the fixed citation magnitude. The node cannot override the magnitude — the signal is frequency of use, not caller-weighted importance.
+The Sidecar injects all identity context (`node_id`, `workitem_id`, `namespace`) and the fixed citation magnitude. The node cannot override the magnitude — the signal is frequency of use, not caller-weighted importance.
 
-Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates these events alongside all other friction. The [Librarian](../02-flow/04-system-services.md#librarian) queries the Friction Ledger for accumulated friction on individual laws to determine when friction-threshold [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol) should be triggered.
+Every `Cite` call produces an `AddFriction` event with the cited law identifiers. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates these events alongside all other friction. The [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node subscribes to the Friction Ledger's threshold-crossing signals to determine when friction-threshold [review hearings](../02-flow/04-system-services.md#hearing-lifecycle-as-cross-component-protocol) should be triggered.
 
 Requires `WRITE:friction` capability — the underlying mechanism is friction emission through the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus).
 

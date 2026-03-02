@@ -61,6 +61,150 @@ metadata:
 spec:
   stamps: []
 ---
+# --- Judiciary GovernedArtefact CRDs ---
+# These artefact types are used exclusively within the judiciary subsystem.
+# All declare empty stamp vocabularies — judiciary artefacts are not stamped.
+
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: question
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: evidence
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: allowed-outcomes
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: prior-round-reasoning
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: verdict
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: verdict-context
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: deliberation-result
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: round-count
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: law-reference
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: codification-goal
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: codification-result
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: advocate-context
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: human-decision
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
+apiVersion: flow.gideas.io/v1
+kind: GovernedArtefact
+metadata:
+  name: approval-stamp
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: haiku-flow
+spec:
+  stamps: []
+---
 apiVersion: flow.gideas.io/v1
 kind: FoundryFlow
 metadata:

@@ -5,6 +5,7 @@ go 1.25.3
 require (
 	github.com/gideas/flow/gen v0.0.0
 	github.com/gideas/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
+	github.com/google/cel-go v0.26.0
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	google.golang.org/grpc v1.79.1
@@ -37,7 +38,6 @@ require (
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/cel-go v0.26.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20250403155104-27863c87afa6 // indirect

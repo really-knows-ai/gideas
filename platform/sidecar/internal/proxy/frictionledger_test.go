@@ -91,7 +91,7 @@ func TestFrictionLedgerProxy_QueryFriction_PropagatesMetadata(t *testing.T) {
 	env := setupFrictionLedgerProxy(t)
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-meta",
+		"x-flow-namespace", "ns-meta",
 		"x-flow-workitem-id", "wi-meta",
 		"x-flow-node-id", "node-meta",
 	)
@@ -110,7 +110,7 @@ func TestFrictionLedgerProxy_QueryFriction_PropagatesMetadata(t *testing.T) {
 		}
 	}
 
-	assertMD("x-flow-flow-id", "flow-meta")
+	assertMD("x-flow-namespace", "ns-meta")
 	assertMD("x-flow-workitem-id", "wi-meta")
 	assertMD("x-flow-node-id", "node-meta")
 }

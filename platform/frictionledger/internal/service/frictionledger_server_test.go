@@ -207,13 +207,13 @@ func (h *testHarness) publishFriction(
 	_, err := h.eventBusClient.Publish(ctx, &flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:    eventID,
-			EventType:  "friction",
-			FlowId:     "flow-1",
-			NodeId:     "node-a",
-			WorkitemId: "wi-1",
-			Timestamp:  timestamppb.Now(),
-			Labels:     labels,
+			EventId:       eventID,
+			EventType:     "friction",
+			FlowNamespace: "flow-1",
+			NodeId:        "node-a",
+			WorkitemId:    "wi-1",
+			Timestamp:     timestamppb.Now(),
+			Labels:        labels,
 			Attributes: map[string]string{
 				"magnitude": fmt.Sprintf("%g", magnitude),
 			},
@@ -645,11 +645,11 @@ func TestProcessEvent_InvalidMagnitude(t *testing.T) {
 	_, err := h.eventBusClient.Publish(ctx, &flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:    "bad-1",
-			EventType:  "friction",
-			FlowId:     "flow-1",
-			Timestamp:  timestamppb.Now(),
-			Attributes: map[string]string{"magnitude": "not-a-number"},
+			EventId:       "bad-1",
+			EventType:     "friction",
+			FlowNamespace: "flow-1",
+			Timestamp:     timestamppb.Now(),
+			Attributes:    map[string]string{"magnitude": "not-a-number"},
 		},
 	})
 	if err != nil {

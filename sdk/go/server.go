@@ -24,7 +24,7 @@ const (
 )
 
 // Handler is the function signature for user-provided work processing logic.
-// It receives the workitem context (flow_id, workitem_id, node_id) and returns
+// It receives the workitem context (flow_namespace, workitem_id, node_id) and returns
 // an error if processing fails.
 type Handler func(ctx context.Context, workitemCtx *flowv1.WorkitemContext) error
 
@@ -129,7 +129,7 @@ type nodeServiceServer struct {
 func (s *nodeServiceServer) Process(ctx context.Context, req *flowv1.AssignWorkRequest) (*flowv1.Ack, error) {
 	wctx := req.GetContext()
 	slog.Info("Processing work assignment",
-		"flow_id", wctx.GetFlowId(),
+		"namespace", wctx.GetFlowNamespace(),
 		"workitem_id", wctx.GetWorkitemId(),
 		"node_id", wctx.GetNodeId(),
 	)

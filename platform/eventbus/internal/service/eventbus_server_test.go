@@ -111,13 +111,13 @@ func TestPublishAndReceive(t *testing.T) {
 	// Publish an event (small delay to let server register subscriber).
 	time.Sleep(50 * time.Millisecond)
 	resp := h.publish(t, ctx, "telemetry", &flowv1.FlowEvent{
-		EventId:    "test-1",
-		EventType:  "friction",
-		FlowId:     "flow-1",
-		NodeId:     "node-1",
-		WorkitemId: "wi-1",
-		Timestamp:  timestamppb.Now(),
-		Attributes: map[string]string{"magnitude": "5.0"},
+		EventId:       "test-1",
+		EventType:     "friction",
+		FlowNamespace: "flow-1",
+		NodeId:        "node-1",
+		WorkitemId:    "wi-1",
+		Timestamp:     timestamppb.Now(),
+		Attributes:    map[string]string{"magnitude": "5.0"},
 		Labels: []*flowv1.Label{
 			{Key: "law_id", Value: "law-1"},
 		},

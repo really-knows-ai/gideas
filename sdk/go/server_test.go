@@ -50,9 +50,9 @@ func TestNodeServiceServer_Process_Success(t *testing.T) {
 	// Call Process.
 	ack, err := client.Process(context.Background(), &flowv1.AssignWorkRequest{
 		Context: &flowv1.WorkitemContext{
-			FlowId:     "flow-1",
-			WorkitemId: "wi-1",
-			NodeId:     "node-1",
+			FlowNamespace: "flow-1",
+			WorkitemId:    "wi-1",
+			NodeId:        "node-1",
 		},
 	})
 	if err != nil {
@@ -65,8 +65,8 @@ func TestNodeServiceServer_Process_Success(t *testing.T) {
 	// Verify handler was called with correct context.
 	select {
 	case wctx := <-handlerCalled:
-		if wctx.GetFlowId() != "flow-1" {
-			t.Errorf("expected flow_id=flow-1, got %s", wctx.GetFlowId())
+		if wctx.GetFlowNamespace() != "flow-1" {
+			t.Errorf("expected flow_namespace=flow-1, got %s", wctx.GetFlowNamespace())
 		}
 		if wctx.GetWorkitemId() != "wi-1" {
 			t.Errorf("expected workitem_id=wi-1, got %s", wctx.GetWorkitemId())
@@ -108,9 +108,9 @@ func TestNodeServiceServer_Process_HandlerError(t *testing.T) {
 
 	ack, err := client.Process(context.Background(), &flowv1.AssignWorkRequest{
 		Context: &flowv1.WorkitemContext{
-			FlowId:     "flow-1",
-			WorkitemId: "wi-err",
-			NodeId:     "node-1",
+			FlowNamespace: "flow-1",
+			WorkitemId:    "wi-err",
+			NodeId:        "node-1",
 		},
 	})
 	if err != nil {

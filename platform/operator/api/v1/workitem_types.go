@@ -30,7 +30,7 @@ type WorkitemStatus struct {
 	// SubmitResult is received, signalling the reconciler to process
 	// the routing instruction.
 	// +optional
-	// +kubebuilder:validation:Enum=Pending;Running;Routing;Completed;Failed
+	// +kubebuilder:validation:Enum=Pending;Running;Routing;Suspended;Completed;Failed
 	Phase string `json:"phase,omitempty"`
 
 	// currentAssignee is the node currently processing this Workitem.
@@ -54,6 +54,14 @@ type WorkitemStatus struct {
 	// +optional
 	ThrashCounters map[string]int32 `json:"thrashCounters,omitempty"`
 
+	// metadata contains caller-supplied key-value pairs from CreateWorkitemRequest.
+	// Stored on the Workitem CRD and propagated through to the handler via
+	// WorkitemContext.Metadata. Entry-bound nodes use this to pass context
+	// (e.g. law_id) from the entry loop to the handler, which may run on a
+	// different replica. Immutable once set.
+	// +optional
+	Metadata map[string]string `json:"metadata,omitempty"`
+
 	// assignedAt records when the current assignment began.
 	// Set when the Workitem transitions to Running. Used for timeout enforcement.
 	// +optional
@@ -64,19 +72,55 @@ type WorkitemStatus struct {
 	// TIMEOUT_EXCEEDED, CONTRACT_VIOLATION, INVALID_ROUTE).
 	// +optional
 	FailureReason string `json:"failureReason,omitempty"`
+
+	// completionReason distinguishes success from cancellation on Completed workitems.
+	// Empty or "success" means normal completion. "cancelled" means HITL cancelled.
+	// Stored for audit and filterable in CEL suspend conditions.
+	// +optional
+	CompletionReason string `json:"completionReason,omitempty"`
+
+	// resumeCondition is the CEL expression that must evaluate to true for the
+	// Operator to auto-resume a Suspended workitem. Empty means manual Resume() required.
+	// +optional
+	ResumeCondition string `json:"resumeCondition,omitempty"`
+
+	// suspendedAt records when the Workitem entered the Suspended phase.
+	// Used for timeout enforcement.
+	// +optional
+	SuspendedAt *metav1.Time `json:"suspendedAt,omitempty"`
+
+	// resumeTimeout is the maximum duration a workitem may remain Suspended.
+	// Serialized as a Go duration string (e.g. "336h"). If the condition is not
+	// met before suspendedAt + resumeTimeout, the workitem transitions to Failed.
+	// +optional
+	ResumeTimeout string `json:"resumeTimeout,omitempty"`
 }
 
 // RoutingInstruction represents a routing outcome submitted by the assigned node.
 type RoutingInstruction struct {
-	// type is the routing instruction type: route_to_output, route_to, or complete.
+	// type is the routing instruction type: route_to_output, route_to, complete, or suspend.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=route_to_output;route_to;complete
+	// +kubebuilder:validation:Enum=route_to_output;route_to;complete;suspend
 	Type string `json:"type"`
 
 	// target is the output name (for route_to_output) or node name (for route_to).
-	// Empty for complete.
+	// Empty for complete and suspend.
 	// +optional
 	Target string `json:"target,omitempty"`
+
+	// completionReason is set when type is "complete". Distinguishes success from
+	// cancellation. Empty means success (default, backward compatible).
+	// +optional
+	CompletionReason string `json:"completionReason,omitempty"`
+
+	// suspendCondition is set when type is "suspend". CEL expression for auto-resume.
+	// Empty means manual Resume() required.
+	// +optional
+	SuspendCondition string `json:"suspendCondition,omitempty"`
+
+	// suspendTimeout is set when type is "suspend". Duration string for timeout.
+	// +optional
+	SuspendTimeout string `json:"suspendTimeout,omitempty"`
 }
 
 // +kubebuilder:object:root=true

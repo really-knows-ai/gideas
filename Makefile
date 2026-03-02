@@ -19,7 +19,7 @@ help: ## Display this help.
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-frictionledger test-librarian ## Run all unit tests.
+test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-frictionledger test-librarian test-nodes ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -49,6 +49,10 @@ test-frictionledger: ## Run Friction Ledger unit tests.
 test-librarian: ## Run Librarian unit tests.
 	CGO_ENABLED=1 go test -v ./platform/librarian/...
 
+.PHONY: test-nodes
+test-nodes: ## Run Node unit tests (forge, sort, friction-watcher, ttl-watcher).
+	CGO_ENABLED=1 go test -v ./nodes/...
+
 .PHONY: test-operator
 test-operator: ## Run Operator unit tests (delegates to operator/Makefile).
 	$(MAKE) -C platform/operator test
@@ -61,7 +65,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
+build: build-sidecar build-null-node build-forge build-sort build-friction-watcher build-ttl-watcher build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -70,6 +74,22 @@ build-sidecar: ## Build the Sidecar binary.
 .PHONY: build-null-node
 build-null-node: ## Build the Null Node binary.
 	go build -o bin/null-node ./nodes/null-node/cmd
+
+.PHONY: build-forge
+build-forge: ## Build the Forge node binary.
+	CGO_ENABLED=1 go build -o bin/forge ./nodes/forge
+
+.PHONY: build-sort
+build-sort: ## Build the Sort node binary.
+	CGO_ENABLED=1 go build -o bin/sort ./nodes/sort
+
+.PHONY: build-friction-watcher
+build-friction-watcher: ## Build the Friction Watcher node binary.
+	CGO_ENABLED=1 go build -o bin/friction-watcher ./nodes/friction-watcher
+
+.PHONY: build-ttl-watcher
+build-ttl-watcher: ## Build the TTL Watcher node binary.
+	CGO_ENABLED=1 go build -o bin/ttl-watcher ./nodes/ttl-watcher
 
 .PHONY: build-archivist
 build-archivist: ## Build the Archivist binary.

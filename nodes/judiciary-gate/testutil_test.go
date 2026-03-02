@@ -95,34 +95,30 @@ func (s *gateSpy) SubmitResult(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ri := req.GetRoutingInstruction()
-	if ri == nil {
-		// Complete with empty target.
+	switch a := req.GetAction().(type) {
+	case *flowv1.SubmitResultRequest_Complete:
+		if s.CompleteErr != nil {
+			return nil, s.CompleteErr
+		}
+		_ = a // suppress unused warning
+		s.Completed = true
+	case *flowv1.SubmitResultRequest_Route:
+		if a.Route != nil {
+			target := a.Route.GetTarget()
+			if s.RouteToOutputErr != nil {
+				return nil, s.RouteToOutputErr
+			}
+			s.RoutedOutputs = append(s.RoutedOutputs, target)
+		}
+	case nil:
+		// No action set — treat as complete.
 		if s.CompleteErr != nil {
 			return nil, s.CompleteErr
 		}
 		s.Completed = true
-		return &flowv1.SubmitResultResponse{Accepted: true}, nil
+	default:
+		// Suspend — no-op for gate spy.
 	}
-
-	target := ri.GetTarget()
-
-	// Complete() sends a SubmitResult with target="" or as a completion.
-	// RouteToOutput() sends a SubmitResult with a non-empty target.
-	if target == "" {
-		if s.CompleteErr != nil {
-			return nil, s.CompleteErr
-		}
-		s.Completed = true
-		s.CompletedTarget = target
-		return &flowv1.SubmitResultResponse{Accepted: true}, nil
-	}
-
-	if s.RouteToOutputErr != nil {
-		return nil, s.RouteToOutputErr
-	}
-
-	s.RoutedOutputs = append(s.RoutedOutputs, target)
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 

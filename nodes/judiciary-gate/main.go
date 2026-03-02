@@ -329,7 +329,7 @@ func route(
 		return fmt.Errorf("judiciary-gate: store approval stamp: %w", err)
 	}
 
-	if _, err := client.Complete(ctx, ""); err != nil {
+	if _, err := client.Complete(ctx); err != nil {
 		return fmt.Errorf("judiciary-gate: complete: %w", err)
 	}
 

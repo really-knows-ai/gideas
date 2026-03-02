@@ -43,7 +43,7 @@ Refine addresses feedback. It reads the applicable laws for the governed artefac
 
 The Judiciary is the judicial branch of the Flow. It is built into the runtime as a standard subsystem — every Flow includes it, and Flow Architects do not choose whether to include it. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking.
 
-The Judiciary comprises orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes (Juror, Deliberation Gate), and a legislative inner cycle (Clerk, Codification nodes, Tribunal Router, Judiciary Gate). All are Operator-provisioned.
+The Judiciary comprises orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes (Juror, Deliberation Gate), watcher nodes (Friction Watcher, TTL Watcher), and a legislative inner cycle (Clerk, Codification nodes, Tribunal Router, Judiciary Gate). All are Operator-provisioned.
 
 #### Arbiter (Deadlock Resolver)
 
@@ -55,7 +55,7 @@ The Arbiter holds the `WRITE:law/tier2` capability — Tier 2 Rulings are both t
 
 The Tribunal conducts review hearings on laws and reviews petitions from the Clerk. It operates in two modes, distinguished by the artefacts present on the Workitem:
 
-**Hearing mode.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the [Librarian](../02-flow/04-system-services.md#librarian) triggers creation of a hearing Workitem routed to the Tribunal. The Tribunal assembles evidence (the law under review, friction data, related laws), fans out to [Juror](#juror-judicial-agent) nodes, and collects their verdicts. The Workitem then routes to the [Deliberation Gate](#deliberation-gate-consensus-tally) for consensus tally. On consensus, the [Tribunal Router](#tribunal-router) reads the tier from the law-reference artefact and routes accordingly:
+**Hearing mode.** When a law's accumulated friction crosses its tier's configured threshold, the [Friction Watcher](#friction-watcher) node creates a hearing Workitem. When a law's age exceeds its tier's configured review TTL, the [TTL Watcher](#ttl-watcher) node creates a hearing Workitem. Both watcher nodes store a `law-reference` artefact and route to the Tribunal. The Tribunal assembles evidence (the law under review, friction data, related laws), fans out to [Juror](#juror-judicial-agent) nodes, and collects their verdicts. The Workitem then routes to the [Deliberation Gate](#deliberation-gate-consensus-tally) for consensus tally. On consensus, the [Tribunal Router](#tribunal-router) reads the tier from the law-reference artefact and routes accordingly:
 
 - **Tier 1–2 verdict**: Route to [Clerk](#clerk-petition-drafter) to draft a petition (promote, retire, or demote).
 - **Tier 3+**: Route to [Advocate](#advocate-human-escalation) for petition or appeal.
@@ -120,6 +120,14 @@ The Judiciary Gate mirrors Sort for the judiciary's inner cycle. After the Tribu
 - **Approved, Tier 3**: Route to the [Advocate](#advocate-human-escalation) for HITL ratification, then apply.
 - **Tier 4–5**: Route to the [Advocate](#advocate-human-escalation), then to the [Governance Flow](./04-governance.md).
 
+#### Friction Watcher
+
+The Friction Watcher is an entry-bound watcher node that subscribes to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) friction channel for `friction.threshold_crossed` events. When a law's accumulated friction crosses its tier's configured threshold, the Friction Watcher creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact containing the law ID, and routes to the [Tribunal](#tribunal-hearing-conductor) via its `default` output. The Friction Watcher tracks pending hearing law IDs to prevent duplicate hearing creation for the same law.
+
+#### TTL Watcher
+
+The TTL Watcher is an entry-bound watcher node that periodically polls the [Librarian](../02-flow/04-system-services.md#librarian) via `QueryLaws` for laws whose age exceeds their tier's configured review TTL. On expiry, the TTL Watcher creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact containing the law ID, and routes to the [Tribunal](#tribunal-hearing-conductor) via its `default` output. The TTL Watcher tracks pending hearing law IDs to prevent duplicate hearing creation for the same law. Per-tier TTL durations are configured via node config.
+
 #### Petition Artefact
 
 A petition is a structured YAML/Markdown [GovernedArtefact](./03-data-model.md#artefacts) containing the complete proposed change set. It is human-readable — a HITL reviewer can read it directly. The petition includes context (trigger, source, verdict, justification) and one or more proposed changes (create, retire, demote), each with the goal, applicable representations, and tier.
@@ -175,7 +183,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Librarian -->|trigger| Tribunal[Tribunal - hearing mode]
+    FW[Friction Watcher] -->|trigger| Tribunal[Tribunal - hearing mode]
+    TW[TTL Watcher] -->|trigger| Tribunal
     Tribunal -->|fan-out| Jurors[Juror nodes]
     Jurors -->|collect| Tribunal
     Tribunal --> DG[Deliberation Gate]

@@ -39,7 +39,7 @@ type ArchivistServer struct {
 	auditor        AuditPublisher               // nil-safe: audit publishing degrades gracefully
 	operatorClient flowv1.OperatorServiceClient // nil-safe: cross-Workitem reads disabled when unset
 	newIDFn        func() string
-	flowIDFn       func(ctx context.Context) string
+	namespaceFn    func(ctx context.Context) string
 }
 
 // NewArchivistServer returns an ArchivistServer backed by the given store.
@@ -48,8 +48,8 @@ func NewArchivistServer(s *sqlite.Store, opts ...ArchivistOption) *ArchivistServ
 	srv := &ArchivistServer{
 		store:   s,
 		newIDFn: newAuditEventID,
-		flowIDFn: func(ctx context.Context) string {
-			return extractMetadataValue(ctx, "x-flow-flow-id")
+		namespaceFn: func(ctx context.Context) string {
+			return extractMetadataValue(ctx, "x-flow-namespace")
 		},
 	}
 	for _, o := range opts {
@@ -133,13 +133,13 @@ func (s *ArchivistServer) publishAudit(ctx context.Context, eventType string, at
 	s.auditor.Submit(&flowv1.PublishRequest{
 		Channel: "audit",
 		Event: &flowv1.FlowEvent{
-			EventId:    s.newIDFn(),
-			EventType:  eventType,
-			FlowId:     s.flowIDFn(ctx),
-			NodeId:     extractNodeID(ctx),
-			WorkitemId: extractMetadataValue(ctx, "x-flow-workitem-id"),
-			Timestamp:  timestamppb.Now(),
-			Attributes: attrs,
+			EventId:       s.newIDFn(),
+			EventType:     eventType,
+			FlowNamespace: s.namespaceFn(ctx),
+			NodeId:        extractNodeID(ctx),
+			WorkitemId:    extractMetadataValue(ctx, "x-flow-workitem-id"),
+			Timestamp:     timestamppb.Now(),
+			Attributes:    attrs,
 		},
 	})
 }

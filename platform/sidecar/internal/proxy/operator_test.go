@@ -26,6 +26,11 @@ type captureOperatorServer struct {
 	routeChildErr   error
 	getChildrenResp *flowv1.GetChildrenResponse
 	lastRouteReq    *flowv1.RouteChildRequest
+
+	// ResumeWorkitem RPC fields.
+	resumeResp    *flowv1.ResumeWorkitemResponse
+	resumeErr     error
+	lastResumeReq *flowv1.ResumeWorkitemRequest
 }
 
 func (s *captureOperatorServer) GetFlowTopology(
@@ -70,6 +75,19 @@ func (s *captureOperatorServer) GetChildren(
 		s.capturedMD = md
 	}
 	return s.getChildrenResp, nil
+}
+
+func (s *captureOperatorServer) ResumeWorkitem(
+	ctx context.Context, req *flowv1.ResumeWorkitemRequest,
+) (*flowv1.ResumeWorkitemResponse, error) {
+	s.lastResumeReq = req
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		s.capturedMD = md
+	}
+	if s.resumeErr != nil {
+		return nil, s.resumeErr
+	}
+	return s.resumeResp, nil
 }
 
 // fakeChildTracker records TrackChild calls for assertions.
@@ -173,7 +191,7 @@ func TestPropagateMetadata_ForwardsEnrichedIdentity(t *testing.T) {
 	// Simulate what the identity interceptor does: incoming metadata
 	// contains all three identity fields after enrichment.
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-A",
+		"x-flow-namespace", "ns-A",
 		"x-flow-workitem-id", "wi-42",
 		"x-flow-node-id", "node-X",
 		"x-custom", "preserved",
@@ -196,7 +214,7 @@ func TestPropagateMetadata_ForwardsEnrichedIdentity(t *testing.T) {
 		}
 	}
 
-	assertOutgoing("x-flow-flow-id", "flow-A")
+	assertOutgoing("x-flow-namespace", "ns-A")
 	assertOutgoing("x-flow-workitem-id", "wi-42")
 	assertOutgoing("x-flow-node-id", "node-X")
 	assertOutgoing("x-custom", "preserved")
@@ -248,7 +266,7 @@ func TestOperatorProxy_GetFlowTopology_PropagatesIdentityMetadata(t *testing.T) 
 	proxy, capture := setupOperatorProxy(t)
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-test",
+		"x-flow-namespace", "ns-test",
 		"x-flow-workitem-id", "wi-test",
 		"x-flow-node-id", "node-test",
 	)
@@ -267,7 +285,7 @@ func TestOperatorProxy_GetFlowTopology_PropagatesIdentityMetadata(t *testing.T) 
 		}
 	}
 
-	assertMD("x-flow-flow-id", "flow-test")
+	assertMD("x-flow-namespace", "ns-test")
 	assertMD("x-flow-workitem-id", "wi-test")
 	assertMD("x-flow-node-id", "node-test")
 }
@@ -289,6 +307,7 @@ func setupOperatorProxyWithTracker(t *testing.T) (*OperatorProxy, *captureOperat
 				{WorkitemId: childWI42, Phase: "Running", CurrentAssignee: "forge"},
 			},
 		},
+		resumeResp: &flowv1.ResumeWorkitemResponse{Accepted: true},
 	}
 
 	conn := dialBufconn(t, func(srv *grpc.Server) {
@@ -333,7 +352,7 @@ func TestOperatorProxy_CreateChildWorkitem_PropagatesMetadata(t *testing.T) {
 	proxy, capture, _ := setupOperatorProxyWithTracker(t)
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-A",
+		"x-flow-namespace", "ns-A",
 		"x-flow-workitem-id", "parent-wi",
 		"x-flow-node-id", "node-X",
 	)
@@ -351,7 +370,7 @@ func TestOperatorProxy_CreateChildWorkitem_PropagatesMetadata(t *testing.T) {
 			t.Fatalf("expected %s=%s, got %v", key, expected, vals)
 		}
 	}
-	assertCapturedMD("x-flow-flow-id", "flow-A")
+	assertCapturedMD("x-flow-namespace", "ns-A")
 	assertCapturedMD("x-flow-workitem-id", "parent-wi")
 	assertCapturedMD("x-flow-node-id", "node-X")
 }
@@ -437,7 +456,7 @@ func TestOperatorProxy_RouteChild_PropagatesMetadata(t *testing.T) {
 	proxy, capture, _ := setupOperatorProxyWithTracker(t)
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-A",
+		"x-flow-namespace", "ns-A",
 		"x-flow-workitem-id", "parent-wi",
 		"x-flow-node-id", "node-X",
 	)
@@ -487,7 +506,7 @@ func TestOperatorProxy_GetChildren_PropagatesMetadata(t *testing.T) {
 	proxy, capture, _ := setupOperatorProxyWithTracker(t)
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-A",
+		"x-flow-namespace", "ns-A",
 		"x-flow-workitem-id", "parent-wi",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -501,4 +520,63 @@ func TestOperatorProxy_GetChildren_PropagatesMetadata(t *testing.T) {
 	if len(vals) != 1 || vals[0] != "parent-wi" {
 		t.Fatalf("expected x-flow-workitem-id=parent-wi, got %v", vals)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// ResumeWorkitem proxy tests
+// ---------------------------------------------------------------------------
+
+func TestOperatorProxy_ResumeWorkitem_ForwardsAndReturns(t *testing.T) {
+	proxy, capture, _ := setupOperatorProxyWithTracker(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", "wi-suspended")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := proxy.ResumeWorkitem(ctx, &flowv1.ResumeWorkitemRequest{
+		WorkitemId: "wi-suspended",
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkitem: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("expected accepted=true")
+	}
+
+	// Verify the request was forwarded to the backend.
+	if capture.lastResumeReq == nil {
+		t.Fatal("ResumeWorkitem was not forwarded to Operator backend")
+	}
+	if capture.lastResumeReq.GetWorkitemId() != "wi-suspended" {
+		t.Fatalf("expected forwarded workitem_id=wi-suspended, got %q",
+			capture.lastResumeReq.GetWorkitemId())
+	}
+}
+
+func TestOperatorProxy_ResumeWorkitem_PropagatesMetadata(t *testing.T) {
+	proxy, capture, _ := setupOperatorProxyWithTracker(t)
+
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns-A",
+		"x-flow-workitem-id", "wi-suspended",
+		"x-flow-node-id", "node-X",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.ResumeWorkitem(ctx, &flowv1.ResumeWorkitemRequest{
+		WorkitemId: "wi-suspended",
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkitem: %v", err)
+	}
+
+	assertCapturedMD := func(key, expected string) {
+		t.Helper()
+		vals := capture.capturedMD.Get(key)
+		if len(vals) != 1 || vals[0] != expected {
+			t.Fatalf("expected %s=%s, got %v", key, expected, vals)
+		}
+	}
+	assertCapturedMD("x-flow-namespace", "ns-A")
+	assertCapturedMD("x-flow-workitem-id", "wi-suspended")
+	assertCapturedMD("x-flow-node-id", "node-X")
 }

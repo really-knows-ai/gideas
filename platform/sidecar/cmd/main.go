@@ -34,6 +34,7 @@ import (
 const (
 	defaultPort            = "50051"
 	defaultOperatorAddress = "localhost:50052"
+	envNamespace           = "FLOW_NAMESPACE"
 	envNodeID              = "FLOW_NODE_ID"
 	envPort                = "FLOW_SIDECAR_PORT"
 	envOperatorAddress     = "OPERATOR_ADDRESS"
@@ -50,6 +51,8 @@ func main() {
 	if port == "" {
 		port = defaultPort
 	}
+
+	namespace := os.Getenv(envNamespace)
 
 	nodeID := os.Getenv(envNodeID)
 	if nodeID == "" {
@@ -72,6 +75,7 @@ func main() {
 
 	slog.Info("Sidecar starting",
 		"port", port,
+		"namespace", namespace,
 		"node_id", nodeID,
 		"operator_address", operatorAddr,
 		"node_address", nodeAddr,
@@ -91,15 +95,16 @@ func main() {
 
 	// Create the SidecarServer first so we can wire its session store
 	// into the identity injection interceptor.
-	sidecarSrv := service.NewSidecarServer(nodeID, nodeAddr)
+	sidecarSrv := service.NewSidecarServer(namespace, nodeID, nodeAddr)
 
 	// The identity interceptor enriches incoming metadata with
-	// authoritative flow_id, workitem_id, and node_id from the active
-	// assignment session. This ensures that all proxied RPCs carry the
-	// correct identity context regardless of what the node SDK sends.
+	// authoritative namespace, workitem_id, and node_id from the active
+	// assignment session (or entry-bound fallback). This ensures that
+	// all proxied RPCs carry the correct identity context regardless of
+	// what the node SDK sends.
 	// See: specs/05-reference/grpc-api.md#identity-injection
 	srv := grpc.NewServer(
-		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, capabilities)),
+		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, namespace, nodeID, capabilities)),
 	)
 
 	// Event Bus: create proxy and telemetry buffer.

@@ -63,17 +63,17 @@ func (s *codifySpy) SubmitResult(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ri := req.GetRoutingInstruction()
-	if ri == nil {
-		return &flowv1.SubmitResultResponse{Accepted: true}, nil
+	switch req.GetAction().(type) {
+	case *flowv1.SubmitResultRequest_Complete:
+		if s.CompleteErr != nil {
+			return nil, s.CompleteErr
+		}
+		s.Completed = true
+	case nil:
+		// No action set — treat as no-op.
+	default:
+		// Route / Suspend — no-op for codify spy.
 	}
-
-	if s.CompleteErr != nil {
-		return nil, s.CompleteErr
-	}
-
-	s.Completed = true
-	s.CompletedTarget = ri.GetTarget()
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 

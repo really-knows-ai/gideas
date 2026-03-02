@@ -54,7 +54,7 @@ func TestEventBusProxy_PublishFriction(t *testing.T) {
 	t.Cleanup(func() { _ = env.proxy.Close() })
 
 	env.proxy.PublishFriction(
-		"flow-1", "wi-1", "node-1",
+		"ns-1", "wi-1", "node-1",
 		[]string{"law-1", "law-2"},
 		3.5,
 	)
@@ -74,8 +74,8 @@ func TestEventBusProxy_PublishFriction(t *testing.T) {
 	if evt.GetEventType() != "friction" {
 		t.Fatalf("expected event_type=friction, got %q", evt.GetEventType())
 	}
-	if evt.GetFlowId() != "flow-1" {
-		t.Fatalf("expected flow_id=flow-1, got %q", evt.GetFlowId())
+	if evt.GetFlowNamespace() != "ns-1" {
+		t.Fatalf("expected flow_namespace=ns-1, got %q", evt.GetFlowNamespace())
 	}
 	if evt.GetWorkitemId() != "wi-1" {
 		t.Fatalf("expected workitem_id=wi-1, got %q", evt.GetWorkitemId())
@@ -100,7 +100,7 @@ func TestEventBusProxy_PublishTelemetry(t *testing.T) {
 	t.Cleanup(func() { _ = env.proxy.Close() })
 
 	env.proxy.PublishTelemetry(
-		"flow-2", "node-2", "wi-2",
+		"ns-2", "node-2", "wi-2",
 		"foundry.cost.llm",
 		[]byte(`{"model":"gpt-4"}`),
 	)
@@ -120,8 +120,8 @@ func TestEventBusProxy_PublishTelemetry(t *testing.T) {
 	if evt.GetEventType() != "foundry.cost.llm" {
 		t.Fatalf("expected event_type=foundry.cost.llm, got %q", evt.GetEventType())
 	}
-	if evt.GetFlowId() != "flow-2" {
-		t.Fatalf("expected flow_id=flow-2, got %q", evt.GetFlowId())
+	if evt.GetFlowNamespace() != "ns-2" {
+		t.Fatalf("expected flow_namespace=ns-2, got %q", evt.GetFlowNamespace())
 	}
 	if string(evt.GetPayload()) != `{"model":"gpt-4"}` {
 		t.Fatalf("expected payload preserved, got %q", string(evt.GetPayload()))
@@ -133,7 +133,7 @@ func TestEventBusProxy_PublishFriction_NoLawIDs(t *testing.T) {
 	t.Cleanup(func() { _ = env.proxy.Close() })
 
 	env.proxy.PublishFriction(
-		"flow-3", "wi-3", "node-3",
+		"ns-3", "wi-3", "node-3",
 		nil,
 		1.0,
 	)

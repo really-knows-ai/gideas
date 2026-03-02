@@ -90,10 +90,10 @@ func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*fl
 
 	// Emit friction to Event Bus.
 	if p.eventBusProxy != nil {
-		flowID, workitemID, nodeID := extractIdentityFromMetadata(ctx)
+		namespace, workitemID, nodeID := extractIdentityFromMetadata(ctx)
 
 		p.eventBusProxy.PublishFriction(
-			flowID, workitemID, nodeID,
+			namespace, workitemID, nodeID,
 			req.GetLawIds(),
 			p.magnitude,
 		)
@@ -148,13 +148,13 @@ func (p *LibrarianProxy) ApplyLifecycleAction(
 // Identity extraction from metadata
 // ---------------------------------------------------------------------------
 
-func extractIdentityFromMetadata(ctx context.Context) (flowID, workitemID, nodeID string) {
+func extractIdentityFromMetadata(ctx context.Context) (namespace, workitemID, nodeID string) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return
 	}
-	if vals := md.Get("x-flow-flow-id"); len(vals) > 0 {
-		flowID = vals[0]
+	if vals := md.Get("x-flow-namespace"); len(vals) > 0 {
+		namespace = vals[0]
 	}
 	if vals := md.Get("x-flow-workitem-id"); len(vals) > 0 {
 		workitemID = vals[0]

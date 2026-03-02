@@ -84,7 +84,7 @@ func findLabel(labels []*flowv1gen.Label, key string) string {
 func TestLifecycle_PendingThrashFailed(t *testing.T) {
 	flow := testFlow(5) // maxVisits=5
 	node := testNode("worker")
-	wi := testWorkitem(phasePending, "worker", flowLabels())
+	wi := testWorkitem(phasePending, "worker")
 	wi.Status.ThrashCounters = map[string]int32{"worker": 3, "other": 2}
 
 	r, spy, stop := testReconcilerWithAuditor(flow, node, wi)
@@ -123,7 +123,7 @@ func TestLifecycle_PendingThrashFailed(t *testing.T) {
 func TestLifecycle_PendingToRunning(t *testing.T) {
 	flow := testFlow(100)
 	node := testNode("worker")
-	wi := testWorkitem(phasePending, "worker", flowLabels())
+	wi := testWorkitem(phasePending, "worker")
 
 	r, spy, stop := testReconcilerWithAuditor(flow, node, wi)
 
@@ -153,7 +153,7 @@ func TestLifecycle_RunningTimeoutFailed(t *testing.T) {
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
 	node := testNode("worker")
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	wi := testWorkitem(phaseRunning, "worker")
 
 	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
 	wi.Status.AssignedAt = &past
@@ -188,7 +188,7 @@ func TestLifecycle_RunningTimeoutFailed(t *testing.T) {
 func TestLifecycle_RoutingCompleted(t *testing.T) {
 	flow := testFlow(100)
 	exitNode := testExitNode("publisher", "standard-exit")
-	wi := testWorkitem(phaseRouting, "publisher", flowLabels())
+	wi := testWorkitem(phaseRouting, "publisher")
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type: "complete",
 	}
@@ -227,7 +227,7 @@ func TestLifecycle_RoutingToPending(t *testing.T) {
 	flow := testFlow(100)
 	node := testNode("worker")
 	nextNode := testNode("next-node")
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	wi := testWorkitem(phaseRouting, "worker")
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type:   "route_to_output",
 		Target: "default",
@@ -263,7 +263,7 @@ func TestLifecycle_RoutingToPending(t *testing.T) {
 func TestLifecycle_RoutingThrashFailed(t *testing.T) {
 	flow := testFlow(5) // maxVisits=5
 	node := testNode("worker")
-	wi := testWorkitem(phaseRouting, "worker", flowLabels())
+	wi := testWorkitem(phaseRouting, "worker")
 	wi.Status.ThrashCounters = map[string]int32{"worker": 3, "other": 3}
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type:   "route_to_output",
@@ -299,7 +299,7 @@ func TestLifecycle_ChildWorkitem_IncludesParentLabel(t *testing.T) {
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
 	node := testNode("codify")
-	wi := testWorkitem(phaseRunning, "codify", flowLabels())
+	wi := testWorkitem(phaseRunning, "codify")
 	wi.Status.ParentWorkitemID = "parent-wi-42"
 
 	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
@@ -334,7 +334,7 @@ func TestLifecycle_RootWorkitem_NoParentLabel(t *testing.T) {
 	flow.Spec.GovernancePolicy.DefaultTimeout = metav1.Duration{Duration: 10 * time.Minute}
 
 	node := testNode("worker")
-	wi := testWorkitem(phaseRunning, "worker", flowLabels())
+	wi := testWorkitem(phaseRunning, "worker")
 	// ParentWorkitemID is empty (root workitem).
 
 	past := metav1.NewTime(time.Now().Add(-15 * time.Minute))
@@ -361,13 +361,13 @@ func TestLifecycle_RootWorkitem_NoParentLabel(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle: flow_id attribute from workitem labels
+// Lifecycle: flow_namespace attribute from workitem namespace
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_FlowIDAttribute(t *testing.T) {
 	flow := testFlow(100)
 	exitNode := testExitNode("publisher", "standard-exit")
-	wi := testWorkitem(phaseRouting, "publisher", flowLabels())
+	wi := testWorkitem(phaseRouting, "publisher")
 	wi.Status.RoutingInstruction = &flowv1.RoutingInstruction{
 		Type: "complete",
 	}
@@ -387,8 +387,9 @@ func TestLifecycle_FlowIDAttribute(t *testing.T) {
 	}
 
 	evt := lifecycle[0].GetEvent()
-	if got := evt.GetAttributes()["flow_id"]; got != testFlowName {
-		t.Fatalf("Expected flow_id attribute %q, got %q", testFlowName, got)
+	// flow_namespace attribute is now the workitem's namespace (one namespace = one flow).
+	if got := evt.GetAttributes()["flow_namespace"]; got != "default" {
+		t.Fatalf("Expected flow_namespace attribute %q, got %q", "default", got)
 	}
 }
 
@@ -399,7 +400,7 @@ func TestLifecycle_FlowIDAttribute(t *testing.T) {
 func TestLifecycle_NilAuditor_NoPanic(t *testing.T) {
 	flow := testFlow(5)
 	node := testNode("worker")
-	wi := testWorkitem(phasePending, "worker", flowLabels())
+	wi := testWorkitem(phasePending, "worker")
 	wi.Status.ThrashCounters = map[string]int32{"worker": 3, "other": 2}
 
 	// Use testReconciler (no auditor) — should not panic.
@@ -418,7 +419,7 @@ func TestLifecycle_NilAuditor_NoPanic(t *testing.T) {
 func TestLifecycle_BothAuditAndWorkitemEvents(t *testing.T) {
 	flow := testFlow(5) // maxVisits=5
 	node := testNode("worker")
-	wi := testWorkitem(phasePending, "worker", flowLabels())
+	wi := testWorkitem(phasePending, "worker")
 	wi.Status.ThrashCounters = map[string]int32{"worker": 3, "other": 2}
 
 	r, spy, stop := testReconcilerWithAuditor(flow, node, wi)

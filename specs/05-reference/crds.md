@@ -42,8 +42,15 @@ The Judiciary is a runtime-mandated subsystem — the Operator provisions it wit
 | Node | Role | Provisioning |
 |---|---|---|
 | **[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver)** | Resolves deadlocked feedback disputes. Assembles evidence, fans out to Juror nodes using child Workitems, collects verdicts, routes to Deliberation Gate. On consensus, the verdict flows to the Clerk to draft a petition. | Operator-provisioned |
-| **[Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-law-review)** | Conducts review hearings (Librarian-triggered) and petition reviews (inner cycle). Both modes fan out to Juror nodes. Hearing mode routes to Deliberation Gate then Tribunal Router. Review mode routes to Deliberation Gate then Judiciary Gate. | Operator-provisioned |
+| **[Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-law-review)** | Conducts review hearings ([Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher)/[TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher)-triggered) and petition reviews (inner cycle). Both modes fan out to Juror nodes. Hearing mode routes to Deliberation Gate then Tribunal Router. Review mode routes to Deliberation Gate then Judiciary Gate. | Operator-provisioned |
 | **[Advocate](../01-concepts/02-foundry-cycle.md#advocate-human-escalation)** | Human escalation point. Three entry paths: Deliberation Gate (hung verdict), Tribunal Router (Tier 3+ hearing), Judiciary Gate (Tier 3 ratification). Routes HITL decisions to Clerk for petition codification. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. | Operator-provisioned |
+
+**Watcher Nodes:**
+
+| Node | Role | Provisioning |
+|---|---|---|
+| **[Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher)** | Entry-bound watcher node. Subscribes to Flow Event Bus friction channel for threshold-crossing events. Creates hearing Workitems via `CreateWorkitem`, stores `law-reference` artefact, routes to Tribunal. | Operator-provisioned |
+| **[TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher)** | Entry-bound watcher node. Polls Librarian for laws exceeding review TTL. Creates hearing Workitems via `CreateWorkitem`, stores `law-reference` artefact, routes to Tribunal. | Operator-provisioned |
 
 **Deliberation Nodes:**
 
@@ -86,7 +93,7 @@ The Operator also provisions a `law-reference` GovernedArtefact alongside the Tr
 | `tier4` | `float` | no | Accumulated friction threshold for Tier 4 laws (State Constitutions). |
 | `tier5` | `float` | no | Accumulated friction threshold for Tier 5 laws (Federal Accords). |
 
-When a law's accumulated friction crosses its tier's configured threshold, the Librarian triggers a review hearing. For Tiers 1-2, the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
+When a law's accumulated friction crosses its tier's configured threshold, the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node triggers a review hearing. For Tiers 1-2, the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
 
 ### ReviewTTLs
 
@@ -98,7 +105,7 @@ When a law's accumulated friction crosses its tier's configured threshold, the L
 | `tier4` | `duration` | no | Time-to-live for Tier 4 laws (State Constitutions). |
 | `tier5` | `duration` | no | Time-to-live for Tier 5 laws (Federal Accords). |
 
-When a law's age exceeds its tier's configured TTL, the Librarian triggers a review hearing. The law remains active during the hearing. Like friction thresholds, Tiers 1-2 hearings are adjudicated by the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem); Tiers 3-5 produce petitions.
+When a law's age exceeds its tier's configured TTL, the [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. The law remains active during the hearing. Like friction thresholds, Tiers 1-2 hearings are adjudicated by the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem); Tiers 3-5 produce petitions.
 
 ### RetentionPolicy
 
@@ -473,6 +480,7 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 | `maxTimeout` is less than `defaultTimeout` | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Stamp name in a contract is not declared in the GovernedArtefact's stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | Duplicate artefact `id` with different `governed_artefact` for the same Workitem | Archivist | `ARTEFACT_KIND_CONFLICT` |
+| `governed_artefact` name in `StoreArtefact` does not match any registered GovernedArtefact CRD | Archivist | `UNKNOWN_GOVERNED_ARTEFACT` |
 | NodeGroup references a node that does not exist as a FoundryNode | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | A node appears in more than one NodeGroup | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |
 | NodeGroup contract stamp name not declared in GovernedArtefact stamp vocabulary | FoundryFlow | `SCHEMA_VALIDATION_FAILED` |

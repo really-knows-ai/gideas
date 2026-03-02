@@ -292,7 +292,7 @@ func runCodify(
 	}
 
 	// -- Step 6: Complete -----------------------------------------------
-	if _, err := client.Complete(ctx, ""); err != nil {
+	if _, err := client.Complete(ctx); err != nil {
 		return fmt.Errorf("codify-smt: complete: %w", err)
 	}
 

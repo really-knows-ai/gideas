@@ -5,6 +5,7 @@ package flow.v1;
 option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
 
 import "flow/v1/common.proto";
+import "google/protobuf/duration.proto";
 
 // OperatorService handles Workitem control-plane mutations.
 // Node-facing methods are reached through the Sidecar.
@@ -46,6 +47,11 @@ service OperatorService {
   // metadata — the request body is empty.
   rpc GetChildren(GetChildrenRequest) returns (GetChildrenResponse);
 
+  // Explicitly resumes a suspended Workitem. The Operator validates the
+  // Workitem is in Suspended phase and re-dispatches it to the same node
+  // type that suspended it.
+  rpc ResumeWorkitem(ResumeWorkitemRequest) returns (ResumeWorkitemResponse);
+
   // --- Service-Facing Methods ---
 
   // Validates that a parent-child Workitem relationship exists and that the
@@ -54,10 +60,6 @@ service OperatorService {
   // exists, its ParentWorkitemID matches the given parent, and the child
   // is Completed. On Operator failure the caller should fail closed.
   rpc ValidateChildAccess(ValidateChildAccessRequest) returns (ValidateChildAccessResponse);
-
-  // Creates a review hearing Workitem for Tribunal processing. Called by the
-  // Librarian when friction thresholds or review TTL expiry trigger a hearing.
-  rpc CreateHearingWorkitem(CreateHearingWorkitemRequest) returns (CreateHearingWorkitemResponse);
 
   // Assembles an export package from a completed Workitem: artefact content
   // (scoped by exit contract), passport stamps, metadata, and provenance chain.
@@ -71,12 +73,60 @@ service OperatorService {
 
 // --- Request/Response Messages ---
 
-// Empty request -- the Operator uses Sidecar-injected identity context.
-message CreateWorkitemRequest {}
+// The Operator uses Sidecar-injected identity context for namespace/node.
+// Optional metadata is stored on the Workitem CRD and propagated to the
+// handler via WorkitemContext.Metadata.
+message CreateWorkitemRequest {
+  map<string, string> metadata = 1;
+}
+
+// Reason for workitem completion. Stored on workitem status and filterable
+// in CEL suspend conditions.
+enum CompletionReason {
+  COMPLETION_REASON_UNSPECIFIED = 0;  // success (default, backward compatible)
+  COMPLETION_REASON_CANCELLED = 1;    // HITL cancelled
+}
 
 message SubmitResultRequest {
+  // Workitem to submit the result for. Resolved from Sidecar-injected
+  // metadata when empty.
   string workitem_id = 1;
-  RoutingInstruction routing_instruction = 2;
+
+  // The action to perform. Exactly one must be set.
+  oneof action {
+    CompleteAction complete = 3;
+    RouteAction route = 4;
+    SuspendAction suspend = 5;
+  }
+}
+
+// Completes the workitem. Requires exit-bound node or exit contract
+// satisfaction. Optional reason distinguishes success from cancellation.
+message CompleteAction {
+  CompletionReason reason = 1;
+}
+
+// Routes the workitem to the named output or directly to a target node.
+message RouteAction {
+  // Output name (for output routing) or node name (for direct routing).
+  string target = 1;
+  // When true, target is an output name resolved via the node's declared
+  // outputs. When false, target is a direct node name (requires ROUTE:direct
+  // capability).
+  bool output = 2;
+}
+
+// Suspends the workitem. The handler should return nil after calling this.
+// The Operator transitions the workitem to the Suspended phase. On resume,
+// the workitem is re-dispatched to the same node type that suspended it.
+message SuspendAction {
+  // CEL expression for auto-resume. Empty means manual Resume() required.
+  // Available variables: children (list with phase, node, completion_reason),
+  // elapsed (duration since suspension), metadata (workitem metadata).
+  string condition = 1;
+  // Optional timeout. Capped by Flow CRD maxSuspendTimeout. If the condition
+  // is not met before the deadline, the workitem fails (not resumes).
+  google.protobuf.Duration timeout = 2;
 }
 
 message SubmitResultResponse {
@@ -84,14 +134,6 @@ message SubmitResultResponse {
 }
 
 message CreateWorkitemResponse {
-  string workitem_id = 1;
-}
-
-message CreateHearingWorkitemRequest {
-  string law_id = 1;
-}
-
-message CreateHearingWorkitemResponse {
   string workitem_id = 1;
 }
 
@@ -140,12 +182,22 @@ message GetChildrenResponse {
 message ChildWorkitemStatus {
   // Child Workitem identifier.
   string workitem_id = 1;
-  // Current lifecycle phase: Pending, Running, Completed, Failed.
+  // Current lifecycle phase: Pending, Running, Suspended, Completed, Failed.
   string phase = 2;
   // Node currently assigned to the child. Empty when Pending.
   string current_assignee = 3;
   // Artefact references associated with the child in the Archivist.
   repeated ArtefactRef artefacts = 4;
+  // Completion reason (only meaningful when phase is Completed).
+  CompletionReason completion_reason = 5;
+}
+
+message ResumeWorkitemRequest {
+  string workitem_id = 1;
+}
+
+message ResumeWorkitemResponse {
+  bool accepted = 1;
 }
 
 // Empty — identity comes from Sidecar-injected metadata.
