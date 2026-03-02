@@ -273,7 +273,7 @@ Configuration exposes policy limits that bound runtime behaviour:
 - Assignment timeout budgets for node execution windows.
 - Thrash limits for aggregate Workitem visit budgets.
 - Retention windows for completed and failed Workitems.
-- Review TTL expiry and friction threshold values driving review hearing triggers.
+- Review TTL expiry and friction threshold values driving review hearing triggers (consumed by [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) and [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) nodes).
 - Flow Event Bus per-channel retention windows.
 
 ### Flow Event Bus Retention

@@ -8,7 +8,7 @@ All runtime services expose gRPC APIs. Node-originated calls are mediated by the
 |---------|---------------|-------------------|
 | [Operator](#operator-api) | Workitem lifecycle, routing, assignment, entry/exit contract enforcement | Sidecar (on behalf of nodes) |
 | [Archivist](#archivist-api) | Artefact content, versions, stamps, feedback | Sidecar (on behalf of nodes), Operator |
-| [Librarian](#librarian-api) | Law storage, retrieval, integration, hearing triggers | Sidecar (on behalf of nodes), Operator |
+| [Librarian](#librarian-api) | Law storage, retrieval, integration | Sidecar (on behalf of nodes), Operator |
 | [Flow Monitor](#flow-monitor-api) | Pipeline adapter for metrics export (Prometheus) and audit log emission (stdout) | Subscribes to Flow Event Bus |
 | [Flow Event Bus](#flow-event-bus-api) | Durable event distribution across telemetry, audit, friction, and workitem channels | Sidecar (publish), all services (publish/subscribe) |
 | [Friction Ledger](#friction-ledger-api) | Friction aggregation, threshold evaluation, friction queries | Sidecar (on behalf of nodes), Librarian, Friction Ledger publishes to Bus |
@@ -37,7 +37,6 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `CreateHearingWorkitem` | `law_id` | `workitem_id` | Creates a review hearing Workitem for [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) processing. The Operator creates a `law-reference` artefact from the supplied `law_id` and admits the Workitem via the Tribunal's bound hearing entry contract. Called by the Librarian when friction thresholds or review TTL expiry trigger a review hearing. |
 | `ExportWorkitem` | `workitem_id` | `export_package` | Assembles an export package from the completed Workitem: artefact content (scoped by exit contract), passport stamps, Workitem metadata, and provenance chain. The Operator signs the package with the Flow's identity material and includes the certificate chain. |
 | `ImportWorkitem` | `export_package`, `treaty_name?` | `workitem_id` or structured error | Validates and materialises a Workitem from an export package. Verifies the package signature against the certificate chain (State Root for siblings, Treaty `caCert` for non-siblings), enforces `allowedSubjects` and `maxBundleSize` from the Treaty if applicable, validates the materialised Workitem against the configured `importNode`'s entry contract, and creates the Workitem in `Pending`. |
 
@@ -134,6 +133,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 | Stamp already applied to this version | `STAMP_ALREADY_APPLIED` | `ALREADY_EXISTS` |
 | Content hash mismatch on read | `ARTEFACT_CORRUPTED` | `DATA_LOSS` |
 | Existing `id` with different `governed_artefact` | `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` |
+| `governed_artefact` name not registered as a GovernedArtefact CRD | `UNKNOWN_GOVERNED_ARTEFACT` | `FAILED_PRECONDITION` |
 | Invalid feedback state transition | `INVALID_STATE_TRANSITION` | `FAILED_PRECONDITION` |
 | Attempt to override a judicially-linked ruling | `CONTEMPT_VIOLATION` | `FAILED_PRECONDITION` |
 | Feedback ID not found | `FEEDBACK_NOT_FOUND` | `NOT_FOUND` |
@@ -159,7 +159,7 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 | `GetLaw` | `law_id` | `law` | Returns the full law object by identifier. Used by Judiciary nodes for hearing evidence retrieval. |
 | `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling applied by the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) from an approved petition, Tier 3+ applied by administrator or Governance Flow). During hearing processing, the law is created in an inactive state pending hearing completion. |
 | `RetireLaw` | `law_id` | `acknowledged` | Removes a law from the active Library. History is preserved in the audit log. |
-| `ReplicateLaws` | `laws[]`, `source_flow_id` | `integration_results[]` | Receives higher-tier laws from a remote Librarian for integration. Triggers the two-stage conflict protocol. |
+| `ReplicateLaws` | `laws[]`, `source_flow_namespace` | `integration_results[]` | Receives higher-tier laws from a remote Librarian for integration. `source_flow_namespace` carries the source namespace for cross-flow replication. Triggers the two-stage conflict protocol. |
 | `ApplyLifecycleAction` | `law_id`, `verdict` | `acknowledged` | Applies the outcome of a review hearing (promote, retire, demote) to the specified law. Called by the Operator after Tribunal hearing completion. This action activates any law created during the hearing. |
 
 ### Librarian Error Responses
@@ -225,12 +225,12 @@ Labels are repeated key-value pairs for server-side filtering. Using a repeated 
 | `sequence` | `uint64` | Monotonically increasing sequence number within the channel. Used for replay positioning. |
 | `channel` | `string` | Channel name (e.g. `"telemetry"`, `"audit"`, `"friction"`, `"workitem"`). Free-form string; the Bus is channel-agnostic. |
 | `event_type` | `string` | Event type identifier (e.g. `friction`, `foundry.cost.llm`, `audit.artefact.stamped`, `friction.threshold_crossed`, `workitem.phase_changed`). |
-| `flow_id` | `string` | Flow identifier. |
+| `flow_namespace` | `string` | Kubernetes namespace that owns this flow. |
 | `node_id` | `string` | Emitting node (empty for service-originated events). |
 | `workitem_id` | `string` | Associated Workitem (empty for law-lifecycle audit events). |
 | `timestamp` | `Timestamp` | Event timestamp. |
 | `trace_id` | `string` | Distributed trace context identifier. Injected by the Sidecar from the active trace. Empty if tracing is not configured. |
-| `attributes` | `map<string, string>` | Arbitrary key-value metadata not used for server-side filtering. For friction events: `magnitude`. For audit events: `action`, `resource_id`. For threshold-crossing events: `tier`, `accumulated_friction`, `threshold`. For workitem lifecycle events: `flow_id`. |
+| `attributes` | `map<string, string>` | Arbitrary key-value metadata not used for server-side filtering. For friction events: `magnitude`. For audit events: `action`, `resource_id`. For threshold-crossing events: `tier`, `accumulated_friction`, `threshold`. For workitem lifecycle events: `namespace`. |
 | `payload` | `bytes` | Optional structured payload (max 64 KB). |
 | `labels` | `repeated Label` | Repeated labels for server-side filtering. For friction events: `law_id` (repeated per attributed law). For workitem lifecycle events: `workitem_id`, `phase`, `node_id`, `parent_workitem_id` (if child). For threshold-crossing events: `law_id`. |
 
@@ -282,7 +282,7 @@ sequenceDiagram
 
     ND->>SC: SDK call
     SC->>SC: Validate scope and parameters
-    SC->>SC: Inject identity (node_id, workitem_id, flow_id)
+    SC->>SC: Inject identity (node_id, workitem_id, namespace)
     SC->>SV: Authenticated gRPC request
     SV->>SV: Validate capability and authorise
     SV-->>SC: Response or structured error
@@ -296,8 +296,8 @@ Every outgoing request from the Sidecar carries:
 | Field | Source | Description |
 |-------|--------|-------------|
 | `node_id` | Sidecar identity material | The node's identity. |
-| `workitem_id` | Current assignment | The Workitem being processed. |
-| `flow_id` | Sidecar identity material | The Flow this node belongs to. |
+| `workitem_id` | Current assignment | The Workitem being processed. Empty for entry-bound calls before a Workitem is created. |
+| `namespace` | Sidecar environment (`FLOW_NAMESPACE`) | The Kubernetes namespace (flow identity) this node belongs to. Carried on the wire as the `x-flow-namespace` gRPC metadata header. |
 
 Nodes cannot override or spoof these fields. The Sidecar is the sole authority for runtime attribution on node-originated requests.
 
@@ -324,8 +324,8 @@ These methods were previously on `FlowMonitorService`. They now live on `Sidecar
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `AddFriction` | `magnitude` (double), `law_ids` (repeated string) | `acknowledged` | Enforces `WRITE:friction` capability. Injects Sidecar-authoritative identity (`flow_id`, `workitem_id`, `node_id`). Wraps as a FlowEvent and publishes to the Flow Event Bus friction channel. Non-blocking from the caller's perspective. |
-| `RecordTelemetry` | `event_type` (string), `payload` (bytes, max 64 KB) | `acknowledged` | Injects Sidecar-authoritative identity (`flow_id`, `workitem_id`, `node_id`). Wraps as a FlowEvent and publishes to the Flow Event Bus telemetry channel. Non-blocking from the caller's perspective. |
+| `AddFriction` | `magnitude` (double), `law_ids` (repeated string) | `acknowledged` | Enforces `WRITE:friction` capability. Injects Sidecar-authoritative identity (`namespace`, `workitem_id`, `node_id`). Wraps as a FlowEvent and publishes to the Flow Event Bus friction channel. Non-blocking from the caller's perspective. |
+| `RecordTelemetry` | `event_type` (string), `payload` (bytes, max 64 KB) | `acknowledged` | Injects Sidecar-authoritative identity (`namespace`, `workitem_id`, `node_id`). Wraps as a FlowEvent and publishes to the Flow Event Bus telemetry channel. Non-blocking from the caller's perspective. |
 
 ### Sidecar Error Responses
 
@@ -418,7 +418,7 @@ All Support Services implement:
 ## API Invariants
 
 1. All node-originated requests transit the Sidecar. No node calls a runtime service directly.
-2. Identity context (`node_id`, `workitem_id`, `flow_id`) is Sidecar-injected and cannot be overridden by node code.
+2. Identity context (`node_id`, `workitem_id`, `namespace`) is Sidecar-injected and cannot be overridden by node code.
 3. Capability enforcement is performed by the owning service, not by the Sidecar or the SDK.
 4. All errors use structured responses with stable error codes from the [Error Catalogue](./error-catalogue.md).
 5. Telemetry ingestion failures do not block or fail work execution.

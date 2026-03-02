@@ -173,23 +173,24 @@ func (s *advocateSpy) SubmitResult(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ri := req.GetRoutingInstruction()
-	if ri == nil {
-		return &flowv1.SubmitResultResponse{Accepted: true}, nil
-	}
-
-	isComplete := ri.GetType() == flowv1.RoutingType_ROUTING_TYPE_COMPLETE
-
-	if isComplete {
+	switch a := req.GetAction().(type) {
+	case *flowv1.SubmitResultRequest_Complete:
 		if s.CompleteErr != nil {
 			return nil, s.CompleteErr
 		}
+		_ = a // suppress unused warning
 		s.Completed = true
-	} else {
+	case *flowv1.SubmitResultRequest_Route:
 		if s.RouteToOutputErr != nil {
 			return nil, s.RouteToOutputErr
 		}
-		s.RoutedOutputs = append(s.RoutedOutputs, ri.GetTarget())
+		if a.Route != nil {
+			s.RoutedOutputs = append(s.RoutedOutputs, a.Route.GetTarget())
+		}
+	case nil:
+		// No action set — treat as no-op.
+	default:
+		// Suspend — no-op for advocate spy.
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }

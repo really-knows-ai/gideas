@@ -125,7 +125,7 @@ func TestAssign_Success(t *testing.T) {
 		DialFunc:    newDialFunc(fakeClient),
 	}
 
-	result, err := d.Assign(context.Background(), "step-2", "flow-1", "wi-1")
+	result, err := d.Assign(context.Background(), "step-2", "wi-1", nil)
 	if err != nil {
 		t.Fatalf("Assign() error: %v", err)
 	}
@@ -144,11 +144,15 @@ func TestAssign_Success(t *testing.T) {
 	if fakeClient.lastReq.GetContext().GetWorkitemId() != "wi-1" {
 		t.Errorf("expected workitem_id=wi-1, got %s", fakeClient.lastReq.GetContext().GetWorkitemId())
 	}
-	if fakeClient.lastReq.GetContext().GetFlowId() != "flow-1" {
-		t.Errorf("expected flow_id=flow-1, got %s", fakeClient.lastReq.GetContext().GetFlowId())
+	if fakeClient.lastReq.GetContext().GetFlowNamespace() != "default" {
+		t.Errorf("expected flow_namespace=default (namespace), got %s", fakeClient.lastReq.GetContext().GetFlowNamespace())
 	}
 	if fakeClient.lastReq.GetContext().GetNodeId() != "step-2" {
 		t.Errorf("expected node_id=step-2, got %s", fakeClient.lastReq.GetContext().GetNodeId())
+	}
+	// No metadata passed — verify it's nil/empty.
+	if len(fakeClient.lastReq.GetContext().GetMetadata()) != 0 {
+		t.Errorf("expected empty metadata, got %v", fakeClient.lastReq.GetContext().GetMetadata())
 	}
 }
 
@@ -164,7 +168,7 @@ func TestAssign_NoReadyPods(t *testing.T) {
 
 	d := New(k8s, "default")
 
-	_, err := d.Assign(context.Background(), "step-2", "flow-1", "wi-2")
+	_, err := d.Assign(context.Background(), "step-2", "wi-2", nil)
 	if err == nil {
 		t.Fatal("expected error when no ready pods")
 	}
@@ -180,7 +184,7 @@ func TestAssign_NoPods(t *testing.T) {
 
 	d := New(k8s, "default")
 
-	_, err := d.Assign(context.Background(), "step-2", "flow-1", "wi-3")
+	_, err := d.Assign(context.Background(), "step-2", "wi-3", nil)
 	if err == nil {
 		t.Fatal("expected error when no pods at all")
 	}
@@ -207,7 +211,7 @@ func TestAssign_PodRejected(t *testing.T) {
 		DialFunc:    newDialFunc(fakeClient),
 	}
 
-	_, err := d.Assign(context.Background(), "step-2", "flow-1", "wi-4")
+	_, err := d.Assign(context.Background(), "step-2", "wi-4", nil)
 	if err == nil {
 		t.Fatal("expected error when pod rejects assignment")
 	}
@@ -232,7 +236,7 @@ func TestAssign_DialFailure(t *testing.T) {
 		},
 	}
 
-	_, err := d.Assign(context.Background(), "step-2", "flow-1", "wi-5")
+	_, err := d.Assign(context.Background(), "step-2", "wi-5", nil)
 	if err == nil {
 		t.Fatal("expected error on dial failure")
 	}
@@ -259,9 +263,49 @@ func TestAssign_gRPCError(t *testing.T) {
 		DialFunc:    newDialFunc(fakeClient),
 	}
 
-	_, err := d.Assign(context.Background(), "step-2", "flow-1", "wi-6")
+	_, err := d.Assign(context.Background(), "step-2", "wi-6", nil)
 	if err == nil {
 		t.Fatal("expected error on gRPC failure")
+	}
+}
+
+func TestAssign_MetadataPropagated(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	pod := readyPod("step2-pod-meta", "step-2", "10.0.0.10")
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(pod).
+		Build()
+
+	fakeClient := &fakeSidecarClient{
+		returnAck: &flowv1gen.Ack{Accepted: true, Message: "ok"},
+	}
+
+	d := &Dispatcher{
+		K8sClient:   k8s,
+		Namespace:   "default",
+		SidecarPort: 50051,
+		DialFunc:    newDialFunc(fakeClient),
+	}
+
+	meta := map[string]string{"law_id": "law-42", "trigger": "friction"}
+	_, err := d.Assign(context.Background(), "step-2", "wi-meta", meta)
+	if err != nil {
+		t.Fatalf("Assign() error: %v", err)
+	}
+
+	// Verify metadata was included in the WorkitemContext.
+	got := fakeClient.lastReq.GetContext().GetMetadata()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 metadata entries, got %d: %v", len(got), got)
+	}
+	if got["law_id"] != "law-42" {
+		t.Errorf("expected law_id=law-42, got %s", got["law_id"])
+	}
+	if got["trigger"] != "friction" {
+		t.Errorf("expected trigger=friction, got %s", got["trigger"])
 	}
 }
 

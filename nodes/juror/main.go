@@ -316,7 +316,7 @@ func runJuror(
 	}
 
 	// ── Step 6: Complete ─────────────────────────────────────────────
-	if _, err := client.Complete(ctx, ""); err != nil {
+	if _, err := client.Complete(ctx); err != nil {
 		return fmt.Errorf("juror: complete: %w", err)
 	}
 

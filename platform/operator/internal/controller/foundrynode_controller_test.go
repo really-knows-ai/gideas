@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
@@ -96,6 +97,17 @@ var _ = Describe("FoundryNode Controller", func() {
 			Expect(deploy.Spec.Template.Spec.Containers[0].Name).To(Equal("node"))
 			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("test-image:latest"))
 			Expect(deploy.Spec.Template.Spec.Containers[1].Name).To(Equal("sidecar"))
+
+			By("Verifying node container env vars")
+			nodeEnv := deploy.Spec.Template.Spec.Containers[0].Env
+			Expect(nodeEnv).To(ContainElement(corev1.EnvVar{Name: "FLOW_NAMESPACE", Value: "default"}))
+			Expect(nodeEnv).To(ContainElement(corev1.EnvVar{Name: "FLOW_NODE_NAME", Value: resourceName}))
+			Expect(nodeEnv).To(ContainElement(corev1.EnvVar{Name: "EVENT_BUS_ADDRESS", Value: "flow-eventbus:50056"}))
+
+			By("Verifying sidecar container env vars")
+			sidecarEnv := deploy.Spec.Template.Spec.Containers[1].Env
+			Expect(sidecarEnv).To(ContainElement(corev1.EnvVar{Name: "FLOW_NAMESPACE", Value: "default"}))
+			Expect(sidecarEnv).To(ContainElement(corev1.EnvVar{Name: "EVENT_BUS_ADDRESS", Value: "flow-eventbus:50056"}))
 
 			By("Verifying the Ready condition is set")
 			var node flowv1.FoundryNode

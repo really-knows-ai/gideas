@@ -35,8 +35,8 @@ message FlowEvent {
   // "friction.threshold_crossed", "audit.artefact.version_created").
   string event_type = 4;
 
-  // Flow identity fields.
-  string flow_id = 5;
+  // Kubernetes namespace that owns this flow (one namespace = one FoundryFlow).
+  string flow_namespace = 5;
   string node_id = 6;
   string workitem_id = 7;
 

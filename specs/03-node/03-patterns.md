@@ -102,6 +102,89 @@ Nodes that integrate with external systems follow the same runtime contract as a
 
 **Fail closed on ambiguous outcomes.** If an external response is ambiguous (partial success, unknown status, timeout without confirmation), route to an error or escalation path rather than assuming success. Governance integrity depends on deterministic state — an optimistic assumption about an ambiguous external outcome can produce an artefact state that appears governed but is not.
 
+## Entry Node Pattern
+
+Entry-bound nodes admit new Workitems into a Flow from event-driven or time-driven triggers rather than from upstream routing. The node runs two concurrent concerns: an **entry loop** that watches for external signals and creates Workitems, and a **handler server** that processes the Workitems it created when the Operator assigns them back.
+
+This pattern is used by the Judiciary's [Friction Watcher](../02-flow/03-nodes-external.md#watcher-nodes) and [TTL Watcher](../02-flow/03-nodes-external.md#watcher-nodes). Any node bound to an [entry contract](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) can implement it.
+
+### StartEntry Lifecycle
+
+The SDK provides `StartEntry(entry, handler)` to launch both concerns:
+
+1. **Handler server starts.** A gRPC server begins listening for `Process` calls from the [Sidecar](./01-sidecar.md), identical to `Start(handler)`.
+2. **Entry function launches.** The entry function runs concurrently in a background goroutine with a cancellable context and an `EntryClient`.
+3. **Steady state.** Both run concurrently. The entry loop creates Workitems; the Operator assigns them; the Sidecar invokes the handler.
+4. **Shutdown.** On `SIGTERM`/`SIGINT` or entry function return, the entry context is cancelled and the gRPC server performs a graceful stop.
+
+```mermaid
+flowchart TD
+    SE["StartEntry(entry, handler)"] --> HS["Start handler gRPC server"]
+    SE --> EL["Launch entry function<br/>with EntryClient"]
+
+    EL --> CW["CreateWorkitem<br/>via Sidecar"]
+    CW --> OP["Operator admits Workitem<br/>validates entry contract"]
+    OP --> SC["Sidecar assigns Workitem<br/>back to this node"]
+    SC --> HD["Handler.Process invoked"]
+
+    SIG["SIGTERM / SIGINT /<br/>entry error"] --> CC["Cancel entry context"]
+    CC --> GS["GracefulStop gRPC server"]
+    GS --> EXIT["StartEntry returns"]
+```
+
+### EntryClient Capabilities
+
+The `EntryClient` provides two operations:
+
+**`CreateWorkitem(ctx, metadata)`** — creates a new Workitem through the Sidecar. The Sidecar enriches the request with the node's identity (namespace and node name) via its identity fallback mechanism. The Operator validates the new Workitem against the node's bound [entry contract](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) before admitting it. Returns the created Workitem ID.
+
+**`Subscribe(ctx, channel, eventType)`** — opens a streaming subscription to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus). The connection goes directly to the Event Bus service (same pattern as the existing `WatchChildren` client connection). Returns an `EventStream` that yields events matching the channel and event type filter.
+
+### Metadata Passing
+
+The entry loop attaches metadata to each Workitem at creation time via the `metadata` parameter on `CreateWorkitem`. This metadata is stored on the Workitem CRD status and propagated through to the handler via `WorkitemContext.Metadata` when the Workitem is assigned.
+
+Metadata enables the handler to correlate the assignment with the trigger event without querying external state. For example, the Friction Watcher passes the law ID from the friction event as metadata so the handler can store the `law-reference` artefact without re-querying the Event Bus.
+
+### Concurrency Model
+
+The entry loop and handler server run concurrently within the same pod, but they are not coupled by shared in-memory state:
+
+- The entry loop creates Workitems through the Sidecar. The Operator schedules them.
+- The handler receives assignments through the Sidecar. It rebuilds context from the Workitem and metadata.
+- In a multi-replica deployment, the entry loop on one replica may create a Workitem that the Operator assigns to a different replica's handler. Handler logic must not depend on being co-located with the entry loop that created the Workitem.
+
+The entry loop's context is cancelled on shutdown. Long-running subscriptions or polling loops should select on context cancellation to exit cleanly.
+
+### Deduplication
+
+Entry loops that react to events or periodic scans may encounter the same trigger condition multiple times. Duplicate Workitem creation is tolerable but wasteful.
+
+**Per-replica in-memory tracking is acceptable.** The entry loop can maintain a set of recently created trigger identifiers (e.g., law IDs with pending hearings) and skip duplicates. This tracking is best-effort — pod restarts clear the set, and different replicas maintain independent sets.
+
+**Downstream nodes handle duplicates gracefully.** The handler and downstream nodes are designed for idempotent assignment processing. A duplicate Workitem that enters the Flow produces redundant but correct work. Governance integrity is not compromised by duplicate admission.
+
+**Durable deduplication is not required.** The cost of occasional duplicate Workitems is bounded and measurable through friction accounting. Engineering complex distributed deduplication would add more friction than it prevents.
+
+### Graceful Shutdown
+
+Shutdown is ordered to prevent data loss:
+
+1. Signal received (`SIGTERM`/`SIGINT`) or entry function returns (with or without error).
+2. Entry context is cancelled. The entry loop should observe cancellation and stop creating new Workitems.
+3. The gRPC server performs `GracefulStop` — in-flight handler invocations complete, but no new assignments are accepted.
+4. `StartEntry` returns.
+
+If the entry function returns an error, shutdown is still graceful — the error is logged, and the same ordered shutdown proceeds. The error does not propagate as a panic or abrupt termination.
+
+### Example: Friction Watcher
+
+The [Friction Watcher](../02-flow/03-nodes-external.md#watcher-nodes) is the canonical entry node:
+
+- **Entry loop**: subscribes to the Event Bus friction channel for `friction.threshold_crossed` events. On each event, checks an in-memory set of pending law IDs. If the law ID is new, calls `CreateWorkitem` with `{"law_id": "<id>"}` metadata and adds the ID to the pending set.
+- **Handler**: receives the assigned hearing Workitem, reads `law_id` from `WorkitemContext.Metadata`, stores a `law-reference` artefact containing the law ID, and routes to the Tribunal via the `default` output.
+- **Shutdown**: on `SIGTERM`, the Event Bus subscription is cancelled, in-flight handler calls complete, and the pod exits cleanly.
+
 ## Anti-Patterns
 
 **Hidden mutable state across assignments.** Pod-local memory, files, or caches that persist across assignments and change handler outcomes without being reflected in Archivist-managed state. This breaks idempotent replay and audit reconstruction.
@@ -116,6 +199,8 @@ Nodes that integrate with external systems follow the same runtime contract as a
 
 **Optimistic governance assumptions.** Handlers that assume a stamp or feedback state will be in a particular condition without checking. Current state must be read from the Archivist through the SDK at the start of each assignment.
 
+**Shared mutable state between entry loop and handler.** Entry-bound nodes that pass data from the entry loop to the handler through in-memory channels or shared variables instead of through Workitem metadata. This breaks when the Operator assigns the Workitem to a different replica and makes handler behaviour non-reproducible from Workitem state alone.
+
 ## Pattern Invariants
 
 1. Handler remains correct under replay, retry, and reassignment.
@@ -126,3 +211,5 @@ Nodes that integrate with external systems follow the same runtime contract as a
 6. Gate routing discovers stamp providers from configuration, not hardcoded names.
 7. Human decision evidence is persisted on governed artefacts, not freeform context.
 8. All node-originated runtime operations remain Sidecar-mediated and service-authorised.
+9. Entry-bound nodes pass trigger context through Workitem metadata, not shared memory.
+10. Entry node handlers do not depend on co-location with the entry loop that created the Workitem.

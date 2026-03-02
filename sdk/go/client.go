@@ -9,11 +9,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const (
@@ -200,16 +202,48 @@ func (c *Client) ResumeTimer(ctx context.Context) error {
 	return nil
 }
 
-// Complete submits a routing instruction to the Operator via the Sidecar,
-// signalling that the node has finished processing. The routing type
-// ROUTING_TYPE_COMPLETE is used with the given target (which can be empty
-// for a simple completion).
-func (c *Client) Complete(ctx context.Context, target string) (bool, error) {
+// CompleteOption configures a Complete() call.
+type CompleteOption func(*flowv1.CompleteAction)
+
+// WithReason sets the completion reason (e.g. CompletionReasonCancelled).
+func WithReason(r flowv1.CompletionReason) CompleteOption {
+	return func(a *flowv1.CompleteAction) {
+		a.Reason = r
+	}
+}
+
+// SuspendOption configures a Suspend() call.
+type SuspendOption func(*flowv1.SuspendAction)
+
+// WithCondition sets a CEL expression for automatic resume evaluation.
+// Available variables: children (list with phase, completion_reason).
+// Example: children.all(c, c.phase == "Completed")
+func WithCondition(cel string) SuspendOption {
+	return func(a *flowv1.SuspendAction) {
+		a.Condition = cel
+	}
+}
+
+// WithTimeout sets the maximum duration the workitem may remain suspended.
+// Capped by the Flow CRD's maxSuspendTimeout. If the resume condition is
+// not met before the deadline, the workitem fails.
+func WithTimeout(d time.Duration) SuspendOption {
+	return func(a *flowv1.SuspendAction) {
+		a.Timeout = durationpb.New(d)
+	}
+}
+
+// Complete submits a completion action to the Operator via the Sidecar,
+// signalling that the node has finished processing.
+func (c *Client) Complete(ctx context.Context, opts ...CompleteOption) (bool, error) {
+	action := &flowv1.CompleteAction{}
+	for _, o := range opts {
+		o(action)
+	}
 	resp, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: c.workitemID,
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-			Target: target,
+		Action: &flowv1.SubmitResultRequest_Complete{
+			Complete: action,
 		},
 	})
 	if err != nil {
@@ -218,21 +252,60 @@ func (c *Client) Complete(ctx context.Context, target string) (bool, error) {
 	return resp.GetAccepted(), nil
 }
 
-// RouteToOutput submits a routing instruction that routes the workitem through
+// RouteToOutput submits a routing action that routes the workitem through
 // the named output channel of the current node. The Operator resolves the
 // output name to the target node defined in the FoundryNode CRD.
 func (c *Client) RouteToOutput(ctx context.Context, outputName string) (bool, error) {
 	resp, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: c.workitemID,
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO_OUTPUT,
-			Target: outputName,
+		Action: &flowv1.SubmitResultRequest_Route{
+			Route: &flowv1.RouteAction{
+				Target: outputName,
+				Output: true,
+			},
 		},
 	})
 	if err != nil {
 		return false, fmt.Errorf("flow sdk: route to output failed: %w", err)
 	}
 	return resp.GetAccepted(), nil
+}
+
+// Suspend submits a suspend action to the Operator via the Sidecar,
+// transitioning the workitem to the Suspended phase. The handler should
+// return nil after calling this. On resume, the workitem is re-dispatched
+// to the same node type that suspended it.
+//
+// Use WithCondition to set a CEL expression for automatic resume and
+// WithTimeout to cap the suspension duration.
+func (c *Client) Suspend(ctx context.Context, opts ...SuspendOption) error {
+	action := &flowv1.SuspendAction{}
+	for _, o := range opts {
+		o(action)
+	}
+	_, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
+		WorkitemId: c.workitemID,
+		Action: &flowv1.SubmitResultRequest_Suspend{
+			Suspend: action,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: suspend failed: %w", err)
+	}
+	return nil
+}
+
+// Resume requests that a suspended workitem be resumed. Unlike Suspend
+// (which operates on the caller's own workitem), Resume targets another
+// workitem by ID — typically a child that the caller previously suspended.
+func (c *Client) Resume(ctx context.Context, workitemID string) error {
+	_, err := c.Operator.ResumeWorkitem(ctx, &flowv1.ResumeWorkitemRequest{
+		WorkitemId: workitemID,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: resume failed: %w", err)
+	}
+	return nil
 }
 
 // GetArtefact retrieves the latest version of the named artefact.
@@ -759,7 +832,7 @@ func (c *Client) WatchChildren(ctx context.Context) (<-chan ChildLifecycleEvent,
 // workitemContextInterceptor attaches x-flow-workitem-id to every outgoing
 // gRPC call. This value is used by the Sidecar's identity injection
 // interceptor as a session lookup key. The Sidecar overwrites all identity
-// metadata (flow_id, workitem_id, node_id) with authoritative values from
+// metadata (flow_namespace, workitem_id, node_id) with authoritative values from
 // the active assignment session before forwarding to upstream services.
 // See: specs/05-reference/grpc-api.md#identity-injection
 func workitemContextInterceptor(workitemID string) grpc.UnaryClientInterceptor {

@@ -23,7 +23,7 @@ The Sidecar wraps every telemetry event in a standard envelope before publishing
 | Envelope Field | Source |
 |----------------|--------|
 | `timestamp` | Sidecar clock |
-| `flow_id` | Sidecar identity |
+| `namespace` | Sidecar environment (`FLOW_NAMESPACE`) |
 | `node_id` | Sidecar identity |
 | `workitem_id` | Current assignment |
 | `trace_id` | Distributed trace context |
@@ -34,7 +34,7 @@ Telemetry emission is non-blocking. The call returns immediately; delivery to th
 
 Friction is additive. Callers emit a magnitude and optional law attribution; the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates the raw events post-hoc across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). There is no caller-side operation selection — every emission adds to the total.
 
-[`Cite(law_ids)`](./03-sdk-legal.md#citation) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) uses to evaluate hearing thresholds and publish threshold-crossing signals to the Librarian.
+[`Cite(law_ids)`](./03-sdk-legal.md#citation) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) uses to evaluate hearing thresholds and publish threshold-crossing signals to the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node.
 
 [`AddFeedback`](./04-sdk-feedback.md#feedback-friction) transparently emits `AddFriction` with magnitude equal to the feedback depth for that item. The first feedback on an item emits 1, the second 2, the nth n. This escalating cost signal makes the adversarial loop's price visible before deadlock.
 
@@ -53,7 +53,7 @@ The Sidecar injects:
 
 - `node_id`
 - `workitem_id`
-- `flow_id`
+- `namespace`
 
 The SDK must not accept these identity fields from node code. This strict separation prevents identity spoofing and guarantees that friction is always attributed to the correct runtime context.
 
@@ -66,7 +66,7 @@ When called from a [Flow Support Service](../02-flow/04-system-services.md#flow-
 - `node_id` (`string`, optional) — the node the friction pertains to, if attributable.
 - `law_ids` (`[]string`, optional) — one or more law identifiers.
 
-The service's `flow_id` is injected from the service's own identity context.
+The service's namespace is injected from the service's own identity context.
 
 ### Recorded Event Shape
 
@@ -74,7 +74,7 @@ Regardless of calling context, every friction event is recorded with the same sh
 
 | Field | Source (node) | Source (service) |
 |-------|--------------|-----------------|
-| `flow_id` | Sidecar-injected | Service identity |
+| `namespace` | Sidecar-injected | Service identity |
 | `workitem_id` | Sidecar-injected | Caller-provided |
 | `node_id` | Sidecar-injected | Caller-provided (optional) |
 | `law_ids` | Caller-provided (optional) | Caller-provided (optional) |

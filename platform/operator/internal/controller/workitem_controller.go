@@ -23,9 +23,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/cel-go/cel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -43,6 +44,7 @@ const (
 	wiPhasePending   = "Pending"
 	wiPhaseRunning   = "Running"
 	wiPhaseRouting   = "Routing"
+	wiPhaseSuspended = "Suspended"
 	wiPhaseCompleted = "Completed"
 	// wiPhaseFailed uses the package-level phaseFailed from foundrynode_controller.go.
 
@@ -50,6 +52,11 @@ const (
 	// that has non-terminal children. The Operator re-checks periodically
 	// to resume normal timeout enforcement once all children finish.
 	childCheckInterval = 30 * time.Second
+
+	// suspendCheckInterval is the requeue interval for re-evaluating
+	// a Suspended workitem's resume condition. Used when neither timeout
+	// nor condition has been met yet.
+	suspendCheckInterval = 15 * time.Second
 )
 
 // nowFunc is a function variable for the current time.
@@ -118,11 +125,8 @@ func (r *WorkitemReconciler) publishLifecycle(workitem *flowv1.Workitem, phase s
 		})
 	}
 
-	attrs := map[string]string{}
-	if workitem.Labels != nil {
-		if flowID := workitem.Labels["flow.gideas.io/flow"]; flowID != "" {
-			attrs["flow_id"] = flowID
-		}
+	attrs := map[string]string{
+		"flow_namespace": workitem.Namespace,
 	}
 
 	r.Auditor.Submit(&flowv1gen.PublishRequest{
@@ -195,39 +199,25 @@ func (r *WorkitemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return r.reconcileRunning(ctx, req, &workitem)
 	case wiPhaseRouting:
 		return r.reconcileRouting(ctx, req, &workitem)
+	case wiPhaseSuspended:
+		return r.reconcileSuspended(ctx, &workitem)
 	default:
 		return ctrl.Result{}, nil
 	}
 }
 
-// resolveFlow fetches the FoundryFlow CRD that owns this Workitem.
-// It looks up the flow name from the Workitem's flow label, falling back
-// to listing flows in the namespace.
+// resolveFlow fetches the singleton FoundryFlow CRD in the Workitem's
+// namespace. The one-namespace-one-flow invariant (enforced by B.1) means
+// we list FoundryFlows in the namespace and expect exactly one.
 func (r *WorkitemReconciler) resolveFlow(ctx context.Context, workitem *flowv1.Workitem) (*flowv1.FoundryFlow, error) {
-	// Try the label first (set by CreateWorkitem/ImportWorkitem).
-	flowName := ""
-	if workitem.Labels != nil {
-		flowName = workitem.Labels["flow.gideas.io/flow"]
+	var flows flowv1.FoundryFlowList
+	if err := r.List(ctx, &flows, client.InNamespace(workitem.Namespace)); err != nil {
+		return nil, fmt.Errorf("list FoundryFlows: %w", err)
 	}
-
-	if flowName != "" {
-		var flow flowv1.FoundryFlow
-		key := types.NamespacedName{Namespace: workitem.Namespace, Name: flowName}
-		if err := r.Get(ctx, key, &flow); err != nil {
-			return nil, fmt.Errorf("failed to fetch FoundryFlow %q: %w", flowName, err)
-		}
-		return &flow, nil
+	if len(flows.Items) != 1 {
+		return nil, fmt.Errorf("expected exactly 1 FoundryFlow in namespace %q, found %d", workitem.Namespace, len(flows.Items))
 	}
-
-	// Fallback: find the first flow in the namespace.
-	var flowList flowv1.FoundryFlowList
-	if err := r.List(ctx, &flowList, client.InNamespace(workitem.Namespace)); err != nil {
-		return nil, fmt.Errorf("failed to list FoundryFlows: %w", err)
-	}
-	if len(flowList.Items) == 0 {
-		return nil, fmt.Errorf("no FoundryFlow found in namespace %q", workitem.Namespace)
-	}
-	return &flowList.Items[0], nil
+	return &flows.Items[0], nil
 }
 
 // resolveTimeout returns the effective timeout duration for the given node
@@ -335,8 +325,8 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 	_, err = d.Assign(
 		ctx,
 		assignee,
-		workitem.Namespace, // flow_id placeholder
-		workitem.Name,      // workitem_id
+		workitem.Name, // workitem_id
+		workitem.Status.Metadata,
 	)
 	if err != nil {
 		log.Error(err, "Failed to assign Workitem to pod",
@@ -368,7 +358,7 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 
 	// Requeue after the timeout period to check for inactivity timeout.
 	var node flowv1.FoundryNode
-	nodeKey := types.NamespacedName{Namespace: workitem.Namespace, Name: assignee}
+	nodeKey := k8stypes.NamespacedName{Namespace: workitem.Namespace, Name: assignee}
 	timeout := flow.Spec.GovernancePolicy.DefaultTimeout.Duration
 	if getErr := r.Get(ctx, nodeKey, &node); getErr == nil {
 		timeout = resolveTimeout(&node, flow)
@@ -398,7 +388,7 @@ func (r *WorkitemReconciler) reconcileRunning(ctx context.Context, req ctrl.Requ
 
 	// Resolve the effective timeout for this node.
 	var node flowv1.FoundryNode
-	nodeKey := types.NamespacedName{Namespace: req.Namespace, Name: workitem.Status.CurrentAssignee}
+	nodeKey := k8stypes.NamespacedName{Namespace: req.Namespace, Name: workitem.Status.CurrentAssignee}
 	timeout := flow.Spec.GovernancePolicy.DefaultTimeout.Duration
 	if getErr := r.Get(ctx, nodeKey, &node); getErr == nil {
 		timeout = resolveTimeout(&node, flow)
@@ -546,10 +536,53 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 	}
 
 	// Apply the transition on the fresh copy.
-	fresh.Status.Phase = result.Phase
-	fresh.Status.CurrentAssignee = result.NextAssignee
 	fresh.Status.RoutingInstruction = nil // Clear to prevent re-processing.
 	fresh.Status.AssignedAt = nil         // Clear for next assignment.
+
+	if result.Phase == wiPhaseSuspended {
+		// Suspend: keep the current assignee (re-dispatched on resume),
+		// record the suspend timestamp, condition, and timeout.
+		now := nowFunc()
+		fresh.Status.Phase = wiPhaseSuspended
+		// CurrentAssignee is preserved — the workitem resumes on the same node type.
+		fresh.Status.SuspendedAt = &now
+		fresh.Status.ResumeCondition = result.SuspendCondition
+		fresh.Status.ResumeTimeout = result.SuspendTimeout
+
+		if err := r.Status().Update(ctx, &fresh); err != nil {
+			log.Error(err, "Failed to update Workitem status to Suspended",
+				"name", workitem.Name,
+			)
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Workitem suspended",
+			"name", workitem.Name,
+			"assignee", previousAssignee,
+			"condition", result.SuspendCondition,
+			"timeout", result.SuspendTimeout,
+		)
+		r.publishAudit(ctx, "audit.workitem.suspended", workitem.Name, map[string]string{
+			"action":    "suspended",
+			"assignee":  previousAssignee,
+			"condition": result.SuspendCondition,
+			"timeout":   result.SuspendTimeout,
+		})
+		r.publishLifecycle(workitem, wiPhaseSuspended, previousAssignee)
+
+		// If a resume timeout is configured, requeue to enforce it.
+		if result.SuspendTimeout != "" {
+			if d, parseErr := time.ParseDuration(result.SuspendTimeout); parseErr == nil && d > 0 {
+				return ctrl.Result{RequeueAfter: d}, nil
+			}
+		}
+
+		return ctrl.Result{}, nil
+	}
+
+	// Non-suspend transitions: route or complete.
+	fresh.Status.Phase = result.Phase
+	fresh.Status.CurrentAssignee = result.NextAssignee
 
 	// Persist the status update.
 	if err := r.Status().Update(ctx, &fresh); err != nil {
@@ -584,6 +617,197 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// reconcileSuspended handles Workitems in the Suspended phase.
+// It enforces two resume triggers:
+//  1. Timeout: if suspendedAt + resumeTimeout has elapsed, fail with SUSPEND_TIMEOUT_EXCEEDED.
+//  2. CEL condition: if resumeCondition is set, evaluate it against child workitem states.
+//     If the condition evaluates to true, transition to Pending (resume on same node).
+//
+// If neither trigger fires, the reconciler requeues for periodic re-evaluation.
+func (r *WorkitemReconciler) reconcileSuspended(ctx context.Context, workitem *flowv1.Workitem) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	// --- 1. Timeout enforcement ---
+	if workitem.Status.SuspendedAt != nil && workitem.Status.ResumeTimeout != "" {
+		timeout, parseErr := time.ParseDuration(workitem.Status.ResumeTimeout)
+		if parseErr != nil {
+			log.Error(parseErr, "Invalid resume timeout, failing Workitem",
+				"name", workitem.Name,
+				"resumeTimeout", workitem.Status.ResumeTimeout,
+			)
+			r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+				"action": "failed",
+				"reason": "SUSPEND_TIMEOUT_EXCEEDED",
+			})
+			r.publishLifecycle(workitem, phaseFailed, workitem.Status.CurrentAssignee)
+			return r.failWorkitem(ctx, workitem, "SUSPEND_TIMEOUT_EXCEEDED")
+		}
+
+		elapsed := nowFunc().Sub(workitem.Status.SuspendedAt.Time)
+		if elapsed >= timeout {
+			log.Info("Suspend timeout exceeded, failing Workitem",
+				"name", workitem.Name,
+				"elapsed", elapsed,
+				"timeout", timeout,
+			)
+			r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+				"action": "failed",
+				"reason": "SUSPEND_TIMEOUT_EXCEEDED",
+			})
+			r.publishLifecycle(workitem, phaseFailed, workitem.Status.CurrentAssignee)
+			return r.failWorkitem(ctx, workitem, "SUSPEND_TIMEOUT_EXCEEDED")
+		}
+	}
+
+	// --- 2. CEL condition evaluation ---
+	if workitem.Status.ResumeCondition != "" {
+		met, evalErr := r.evaluateResumeCondition(ctx, workitem)
+		if evalErr != nil {
+			log.Error(evalErr, "Failed to evaluate resume condition",
+				"name", workitem.Name,
+				"condition", workitem.Status.ResumeCondition,
+			)
+			// Evaluation error is not terminal — requeue to retry.
+			return ctrl.Result{RequeueAfter: suspendCheckInterval}, nil
+		}
+
+		if met {
+			log.Info("Resume condition met, transitioning to Pending",
+				"name", workitem.Name,
+				"assignee", workitem.Status.CurrentAssignee,
+			)
+			return r.resumeWorkitem(ctx, workitem)
+		}
+	}
+
+	// --- 3. Requeue for periodic re-evaluation ---
+	// If a timeout is set, requeue at the earlier of suspendCheckInterval
+	// or the remaining timeout. Otherwise just use the check interval.
+	requeue := suspendCheckInterval
+	if workitem.Status.SuspendedAt != nil && workitem.Status.ResumeTimeout != "" {
+		if timeout, parseErr := time.ParseDuration(workitem.Status.ResumeTimeout); parseErr == nil {
+			remaining := timeout - nowFunc().Sub(workitem.Status.SuspendedAt.Time)
+			if remaining > 0 && remaining < requeue {
+				requeue = remaining
+			}
+		}
+	}
+
+	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// resumeWorkitem transitions a Suspended workitem back to Pending for
+// re-dispatch to the same node type. Clears suspend-related fields.
+func (r *WorkitemReconciler) resumeWorkitem(ctx context.Context, workitem *flowv1.Workitem) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	// Re-fetch for latest resourceVersion.
+	var fresh flowv1.Workitem
+	if err := r.Get(ctx, client.ObjectKeyFromObject(workitem), &fresh); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Only resume if still Suspended.
+	if fresh.Status.Phase != wiPhaseSuspended {
+		return ctrl.Result{}, nil
+	}
+
+	assignee := fresh.Status.CurrentAssignee
+	fresh.Status.Phase = wiPhasePending
+	fresh.Status.SuspendedAt = nil
+	fresh.Status.ResumeCondition = ""
+	fresh.Status.ResumeTimeout = ""
+
+	if err := r.Status().Update(ctx, &fresh); err != nil {
+		log.Error(err, "Failed to resume Workitem",
+			"name", workitem.Name,
+		)
+		return ctrl.Result{}, err
+	}
+
+	log.Info("Workitem resumed",
+		"name", workitem.Name,
+		"assignee", assignee,
+	)
+	r.publishAudit(ctx, "audit.workitem.resumed", workitem.Name, map[string]string{
+		"action":   "resumed",
+		"assignee": assignee,
+	})
+	r.publishLifecycle(workitem, wiPhasePending, assignee)
+
+	return ctrl.Result{}, nil
+}
+
+// evaluateResumeCondition compiles and evaluates the CEL resume condition
+// against the current child workitem states. Returns true if the condition
+// is met.
+//
+// The CEL environment exposes a single variable:
+//
+//	children: list of objects with { phase: string, completion_reason: string }
+//
+// Example condition: children.all(c, c.phase == "Completed")
+func (r *WorkitemReconciler) evaluateResumeCondition(ctx context.Context, workitem *flowv1.Workitem) (bool, error) {
+	// List child workitems.
+	var childList flowv1.WorkitemList
+	if err := r.List(ctx, &childList,
+		client.InNamespace(workitem.Namespace),
+		client.MatchingLabels{"flow.gideas.io/parent": workitem.Name},
+	); err != nil {
+		return false, fmt.Errorf("list child workitems: %w", err)
+	}
+
+	// Build the children data for CEL.
+	children := make([]map[string]any, len(childList.Items))
+	for i := range childList.Items {
+		children[i] = map[string]any{
+			"phase":             childList.Items[i].Status.Phase,
+			"completion_reason": childList.Items[i].Status.CompletionReason,
+		}
+	}
+
+	// Create the CEL environment with a `children` variable typed as
+	// list(map(string, string)). Using DynType for the list elements
+	// avoids the need for a custom CEL type adapter.
+	env, err := cel.NewEnv(
+		cel.Variable("children", cel.ListType(cel.DynType)),
+	)
+	if err != nil {
+		return false, fmt.Errorf("create CEL env: %w", err)
+	}
+
+	// Parse and check the expression.
+	ast, issues := env.Compile(workitem.Status.ResumeCondition)
+	if issues != nil && issues.Err() != nil {
+		return false, fmt.Errorf("compile CEL expression: %w", issues.Err())
+	}
+
+	// The condition must evaluate to a boolean.
+	if ast.OutputType() != cel.BoolType {
+		return false, fmt.Errorf("CEL expression must return bool, got %s", ast.OutputType())
+	}
+
+	prg, err := env.Program(ast)
+	if err != nil {
+		return false, fmt.Errorf("program CEL expression: %w", err)
+	}
+
+	// Evaluate.
+	out, _, err := prg.Eval(map[string]any{
+		"children": children,
+	})
+	if err != nil {
+		return false, fmt.Errorf("eval CEL expression: %w", err)
+	}
+
+	result, ok := out.Value().(bool)
+	if !ok {
+		return false, fmt.Errorf("CEL expression returned %T, expected bool", out.Value())
+	}
+
+	return result, nil
 }
 
 // failWorkitem transitions a Workitem to the Failed phase with a structured

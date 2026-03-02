@@ -65,16 +65,19 @@ func (s *routerSpy) SubmitResult(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ri := req.GetRoutingInstruction()
-	if ri == nil {
-		return &flowv1.SubmitResultResponse{Accepted: true}, nil
+	switch a := req.GetAction().(type) {
+	case *flowv1.SubmitResultRequest_Route:
+		if s.RouteToOutputErr != nil {
+			return nil, s.RouteToOutputErr
+		}
+		if a.Route != nil {
+			s.RoutedOutputs = append(s.RoutedOutputs, a.Route.GetTarget())
+		}
+	case nil:
+		// No action set — treat as no-op.
+	default:
+		// Complete / Suspend — no-op for router spy.
 	}
-
-	if s.RouteToOutputErr != nil {
-		return nil, s.RouteToOutputErr
-	}
-
-	s.RoutedOutputs = append(s.RoutedOutputs, ri.GetTarget())
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 

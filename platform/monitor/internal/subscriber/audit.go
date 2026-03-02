@@ -49,15 +49,16 @@ func (s *AuditSubscriber) Stop() {
 
 // auditLine is the JSON structure for each audit log entry.
 type auditLine struct {
-	EventID    string            `json:"event_id"`
-	Sequence   uint64            `json:"sequence"`
-	EventType  string            `json:"event_type"`
-	FlowID     string            `json:"flow_id"`
-	NodeID     string            `json:"node_id"`
-	WorkitemID string            `json:"workitem_id"`
-	Timestamp  string            `json:"timestamp"`
-	TraceID    string            `json:"trace_id,omitempty"`
-	Attributes map[string]string `json:"attributes,omitempty"`
+	EventID   string `json:"event_id"`
+	Sequence  uint64 `json:"sequence"`
+	EventType string `json:"event_type"`
+	// FlowNamespace holds the Kubernetes namespace that owns the flow.
+	FlowNamespace string            `json:"flow_namespace"`
+	NodeID        string            `json:"node_id"`
+	WorkitemID    string            `json:"workitem_id"`
+	Timestamp     string            `json:"timestamp"`
+	TraceID       string            `json:"trace_id,omitempty"`
+	Attributes    map[string]string `json:"attributes,omitempty"`
 }
 
 // processEvent serialises a FlowEvent as a JSON Line and writes it to stdout.
@@ -70,15 +71,15 @@ func (s *AuditSubscriber) processEvent(evt *flowv1.FlowEvent) {
 	}
 
 	line := auditLine{
-		EventID:    evt.GetEventId(),
-		Sequence:   evt.GetSequence(),
-		EventType:  evt.GetEventType(),
-		FlowID:     evt.GetFlowId(),
-		NodeID:     evt.GetNodeId(),
-		WorkitemID: evt.GetWorkitemId(),
-		Timestamp:  ts,
-		TraceID:    evt.GetTraceId(),
-		Attributes: evt.GetAttributes(),
+		EventID:       evt.GetEventId(),
+		Sequence:      evt.GetSequence(),
+		EventType:     evt.GetEventType(),
+		FlowNamespace: evt.GetFlowNamespace(),
+		NodeID:        evt.GetNodeId(),
+		WorkitemID:    evt.GetWorkitemId(),
+		Timestamp:     ts,
+		TraceID:       evt.GetTraceId(),
+		Attributes:    evt.GetAttributes(),
 	}
 
 	if err := s.output.Encode(line); err != nil {

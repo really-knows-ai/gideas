@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -52,12 +53,9 @@ func TestSubmitResult_HappyPath(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	resp, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
 		WorkitemId: "test-123",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-			Target: "",
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	if err != nil {
 		t.Fatalf("SubmitResult() returned error: %v", err)
@@ -72,7 +70,7 @@ func TestSubmitResult_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get updated workitem: %v", err)
 	}
-	if updated.Status.Phase != "Routing" {
+	if updated.Status.Phase != phaseRouting {
 		t.Fatalf("Expected phase Routing, got %s", updated.Status.Phase)
 	}
 	if updated.Status.RoutingInstruction == nil {
@@ -105,14 +103,11 @@ func TestSubmitResult_WorkitemFromMetadata(t *testing.T) {
 	srv := NewOperatorServer(k8s)
 
 	// Set workitem_id via metadata, not request body.
-	md := metadata.Pairs("x-flow-workitem-id", "test-456")
+	md := metadata.Pairs("x-flow-workitem-id", "test-456", "x-flow-namespace", "default")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	resp, err := srv.SubmitResult(ctx, &flowv1.SubmitResultRequest{
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO_OUTPUT,
-			Target: "review",
-		},
+		Action: &flowv1.SubmitResultRequest_Route{Route: &flowv1.RouteAction{Target: "review", Output: true}},
 	})
 	if err != nil {
 		t.Fatalf("SubmitResult() returned error: %v", err)
@@ -150,11 +145,9 @@ func TestSubmitResult_WorkitemNotFound(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	_, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
 		WorkitemId: "nonexistent",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	if err == nil {
 		t.Fatal("Expected error for nonexistent workitem")
@@ -221,14 +214,21 @@ func nsName(name string) types.NamespacedName {
 	return types.NamespacedName{Namespace: "default", Name: name}
 }
 
+// nsCtx returns a context carrying x-flow-namespace=default metadata.
+// Used by tests that call RPCs requiring namespace for CRD lookups.
+func nsCtx() context.Context {
+	md := metadata.Pairs("x-flow-namespace", "default")
+	return metadata.NewIncomingContext(context.Background(), md)
+}
+
 // ---------------------------------------------------------------------------
 // GetFlowTopology tests
 // ---------------------------------------------------------------------------
 
-// topoCtx creates a context with Sidecar-injected flow and node identity metadata.
-func topoCtx(flowID, nodeID string) context.Context {
+// topoCtx creates a context with Sidecar-injected namespace and node identity metadata.
+func topoCtx(namespace, nodeID string) context.Context {
 	md := metadata.Pairs(
-		"x-flow-flow-id", flowID,
+		"x-flow-namespace", namespace,
 		"x-flow-node-id", nodeID,
 		"x-flow-capabilities", "READ:flow",
 	)
@@ -292,7 +292,7 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 		Build()
 
 	srv := NewOperatorServer(k8s)
-	ctx := topoCtx("haiku-flow", "sort")
+	ctx := topoCtx("default", "sort")
 
 	resp, err := srv.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err != nil {
@@ -358,7 +358,7 @@ func TestGetFlowTopology_NonExitNode_EmptyExitContract(t *testing.T) {
 		Build()
 
 	srv := NewOperatorServer(k8s)
-	ctx := topoCtx("test-flow", "worker")
+	ctx := topoCtx("default", "worker")
 
 	resp, err := srv.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err != nil {
@@ -370,7 +370,7 @@ func TestGetFlowTopology_NonExitNode_EmptyExitContract(t *testing.T) {
 	}
 }
 
-func TestGetFlowTopology_MissingFlowID(t *testing.T) {
+func TestGetFlowTopology_MissingNamespace(t *testing.T) {
 	scheme := newScheme()
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
@@ -380,7 +380,7 @@ func TestGetFlowTopology_MissingFlowID(t *testing.T) {
 
 	_, err := srv.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err == nil {
-		t.Fatal("Expected error for missing flow_id")
+		t.Fatal("Expected error for missing namespace")
 	}
 }
 
@@ -389,7 +389,7 @@ func TestGetFlowTopology_MissingNodeID(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	md := metadata.Pairs("x-flow-flow-id", "test-flow")
+	md := metadata.Pairs("x-flow-namespace", "default")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
@@ -403,7 +403,7 @@ func TestGetFlowTopology_FlowNotFound(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.GetFlowTopology(topoCtx("nonexistent", "sort"), &flowv1.GetFlowTopologyRequest{})
+	_, err := srv.GetFlowTopology(topoCtx("empty-ns", "sort"), &flowv1.GetFlowTopologyRequest{})
 	if err == nil {
 		t.Fatal("Expected error for nonexistent flow")
 	}
@@ -428,7 +428,7 @@ func TestGetFlowTopology_NodeNotFound(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.GetFlowTopology(topoCtx("test-flow", "nonexistent"), &flowv1.GetFlowTopologyRequest{})
+	_, err := srv.GetFlowTopology(topoCtx("default", "nonexistent"), &flowv1.GetFlowTopologyRequest{})
 	if err == nil {
 		t.Fatal("Expected error for nonexistent node")
 	}
@@ -464,7 +464,7 @@ func TestGetFlowTopology_NodeCapabilities(t *testing.T) {
 		Build()
 
 	srv := NewOperatorServer(k8s)
-	ctx := topoCtx("test-flow", "validator")
+	ctx := topoCtx("default", "validator")
 
 	resp, err := srv.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err != nil {
@@ -542,7 +542,7 @@ func TestCreateWorkitem_HappyPath(t *testing.T) {
 		Build()
 
 	srv := NewOperatorServer(k8s)
-	ctx := topoCtx("test-flow", "intake")
+	ctx := topoCtx("default", "intake")
 
 	resp, err := srv.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{})
 	if err != nil {
@@ -553,9 +553,9 @@ func TestCreateWorkitem_HappyPath(t *testing.T) {
 		t.Fatal("Expected non-empty workitem_id")
 	}
 
-	// Verify prefix.
-	if !strings.HasPrefix(resp.GetWorkitemId(), "wi-test-flow-") {
-		t.Fatalf("Expected workitem_id prefix 'wi-test-flow-', got %s", resp.GetWorkitemId())
+	// Verify prefix (no longer includes flow name).
+	if !strings.HasPrefix(resp.GetWorkitemId(), "wi-") {
+		t.Fatalf("Expected workitem_id prefix 'wi-', got %s", resp.GetWorkitemId())
 	}
 
 	// Verify the CRD was created with correct status.
@@ -571,12 +571,115 @@ func TestCreateWorkitem_HappyPath(t *testing.T) {
 		t.Fatalf("Expected assignee 'intake', got %s", created.Status.CurrentAssignee)
 	}
 
-	// Verify labels.
-	if created.Labels["flow.gideas.io/flow"] != "test-flow" {
-		t.Fatalf("Expected flow label 'test-flow', got %s", created.Labels["flow.gideas.io/flow"])
+	// Verify labels — no flow.gideas.io/flow label, only creator.
+	if _, hasFlowLabel := created.Labels["flow.gideas.io/flow"]; hasFlowLabel {
+		t.Fatal("Expected no flow.gideas.io/flow label on workitem")
 	}
 	if created.Labels["flow.gideas.io/creator"] != "intake" {
 		t.Fatalf("Expected creator label 'intake', got %s", created.Labels["flow.gideas.io/creator"])
+	}
+}
+
+func TestCreateWorkitem_WithMetadata(t *testing.T) {
+	fixedTime(t)
+	scheme := newScheme()
+
+	flow := &apiv1.FoundryFlow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-flow", Namespace: "default"},
+		Spec: apiv1.FoundryFlowSpec{
+			EntryContracts:   map[string]apiv1.Contract{"main": {"doc": nil}},
+			ExitContracts:    map[string]apiv1.Contract{},
+			GovernancePolicy: apiv1.GovernancePolicy{MaxVisits: 10},
+		},
+	}
+
+	entryNode := &apiv1.FoundryNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "watcher", Namespace: "default"},
+		Spec: apiv1.FoundryNodeSpec{
+			Image:        "watcher:latest",
+			Entry:        "main",
+			Capabilities: []string{"READ:flow"},
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flow, entryNode).
+		WithStatusSubresource(&apiv1.Workitem{}).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := topoCtx("default", "watcher")
+
+	resp, err := srv.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{
+		Metadata: map[string]string{"law_id": "law-42", "trigger": "friction"},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkitem() returned error: %v", err)
+	}
+
+	// Verify the CRD stores the metadata.
+	var created apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName(resp.GetWorkitemId()), &created)
+	if err != nil {
+		t.Fatalf("Failed to get created workitem: %v", err)
+	}
+	if len(created.Status.Metadata) != 2 {
+		t.Fatalf("Expected 2 metadata entries, got %d: %v", len(created.Status.Metadata), created.Status.Metadata)
+	}
+	if created.Status.Metadata["law_id"] != "law-42" {
+		t.Fatalf("Expected metadata law_id=law-42, got %s", created.Status.Metadata["law_id"])
+	}
+	if created.Status.Metadata["trigger"] != "friction" {
+		t.Fatalf("Expected metadata trigger=friction, got %s", created.Status.Metadata["trigger"])
+	}
+}
+
+func TestCreateWorkitem_NoMetadata(t *testing.T) {
+	fixedTime(t)
+	scheme := newScheme()
+
+	flow := &apiv1.FoundryFlow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-flow", Namespace: "default"},
+		Spec: apiv1.FoundryFlowSpec{
+			EntryContracts:   map[string]apiv1.Contract{"main": {"doc": nil}},
+			ExitContracts:    map[string]apiv1.Contract{},
+			GovernancePolicy: apiv1.GovernancePolicy{MaxVisits: 10},
+		},
+	}
+
+	entryNode := &apiv1.FoundryNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "intake", Namespace: "default"},
+		Spec: apiv1.FoundryNodeSpec{
+			Image:        "intake:latest",
+			Entry:        "main",
+			Capabilities: []string{"READ:flow"},
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flow, entryNode).
+		WithStatusSubresource(&apiv1.Workitem{}).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+	ctx := topoCtx("default", "intake")
+
+	// Empty request — no metadata.
+	resp, err := srv.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{})
+	if err != nil {
+		t.Fatalf("CreateWorkitem() returned error: %v", err)
+	}
+
+	var created apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName(resp.GetWorkitemId()), &created)
+	if err != nil {
+		t.Fatalf("Failed to get created workitem: %v", err)
+	}
+	// Metadata should be nil/empty when not provided.
+	if len(created.Status.Metadata) != 0 {
+		t.Fatalf("Expected empty metadata, got %v", created.Status.Metadata)
 	}
 }
 
@@ -606,7 +709,7 @@ func TestCreateWorkitem_NodeNotEntryBound(t *testing.T) {
 		Build()
 
 	srv := NewOperatorServer(k8s)
-	ctx := topoCtx("test-flow", "worker")
+	ctx := topoCtx("default", "worker")
 
 	_, err := srv.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
@@ -616,12 +719,12 @@ func TestCreateWorkitem_NodeNotEntryBound(t *testing.T) {
 	}
 }
 
-func TestCreateWorkitem_MissingFlowID(t *testing.T) {
+func TestCreateWorkitem_MissingNamespace(t *testing.T) {
 	scheme := newScheme()
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	// Only node_id in metadata, no flow_id.
+	// Only node_id in metadata, no namespace.
 	md := metadata.Pairs("x-flow-node-id", "intake")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
@@ -634,7 +737,7 @@ func TestCreateWorkitem_MissingNodeID(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	md := metadata.Pairs("x-flow-flow-id", "test-flow")
+	md := metadata.Pairs("x-flow-namespace", "default")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{})
@@ -668,7 +771,7 @@ func TestCreateWorkitem_EntryContractNotOnFlow(t *testing.T) {
 		Build()
 
 	srv := NewOperatorServer(k8s)
-	ctx := topoCtx("test-flow", "intake")
+	ctx := topoCtx("default", "intake")
 
 	_, err := srv.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
@@ -676,102 +779,6 @@ func TestCreateWorkitem_EntryContractNotOnFlow(t *testing.T) {
 	if !strings.Contains(err.Error(), "CONTRACT_VIOLATION") {
 		t.Fatalf("Expected CONTRACT_VIOLATION error, got: %v", err)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// CreateHearingWorkitem tests
-// ---------------------------------------------------------------------------
-
-func TestCreateHearingWorkitem_HappyPath(t *testing.T) {
-	fixedTime(t)
-	scheme := newScheme()
-
-	// Tribunal node: entry-bound and has USE:jury capability.
-	tribunal := &apiv1.FoundryNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "tribunal", Namespace: "default"},
-		Spec: apiv1.FoundryNodeSpec{
-			Image:        "tribunal:latest",
-			Entry:        "hearing",
-			Capabilities: []string{"USE:jury", "USE:clerk", "READ:law"},
-		},
-	}
-
-	k8s := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(tribunal).
-		WithStatusSubresource(&apiv1.Workitem{}).
-		Build()
-
-	srv := NewOperatorServer(k8s)
-
-	resp, err := srv.CreateHearingWorkitem(context.Background(), &flowv1.CreateHearingWorkitemRequest{
-		LawId: "law-42",
-	})
-	if err != nil {
-		t.Fatalf("CreateHearingWorkitem() returned error: %v", err)
-	}
-
-	if resp.GetWorkitemId() == "" {
-		t.Fatal("Expected non-empty workitem_id")
-	}
-	if !strings.HasPrefix(resp.GetWorkitemId(), "hearing-law-42-") {
-		t.Fatalf("Expected workitem_id prefix 'hearing-law-42-', got %s", resp.GetWorkitemId())
-	}
-
-	// Verify the CRD was created.
-	var created apiv1.Workitem
-	err = k8s.Get(context.Background(), nsName(resp.GetWorkitemId()), &created)
-	if err != nil {
-		t.Fatalf("Failed to get created hearing workitem: %v", err)
-	}
-	if created.Status.Phase != phasePending {
-		t.Fatalf("Expected phase Pending, got %s", created.Status.Phase)
-	}
-	if created.Status.CurrentAssignee != "tribunal" {
-		t.Fatalf("Expected assignee 'tribunal', got %s", created.Status.CurrentAssignee)
-	}
-
-	// Verify labels.
-	if created.Labels["flow.gideas.io/type"] != "hearing" {
-		t.Fatalf("Expected type label 'hearing', got %s", created.Labels["flow.gideas.io/type"])
-	}
-	if created.Labels["flow.gideas.io/law-id"] != "law-42" {
-		t.Fatalf("Expected law-id label 'law-42', got %s", created.Labels["flow.gideas.io/law-id"])
-	}
-}
-
-func TestCreateHearingWorkitem_MissingLawID(t *testing.T) {
-	scheme := newScheme()
-	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
-	srv := NewOperatorServer(k8s)
-
-	_, err := srv.CreateHearingWorkitem(context.Background(), &flowv1.CreateHearingWorkitemRequest{})
-	assertGRPCCode(t, err, codes.InvalidArgument)
-}
-
-func TestCreateHearingWorkitem_NoTribunalNode(t *testing.T) {
-	scheme := newScheme()
-
-	// Node without USE:jury capability — not a Tribunal.
-	worker := &apiv1.FoundryNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "default"},
-		Spec: apiv1.FoundryNodeSpec{
-			Image:        "worker:latest",
-			Capabilities: []string{"READ:flow"},
-		},
-	}
-
-	k8s := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(worker).
-		Build()
-
-	srv := NewOperatorServer(k8s)
-
-	_, err := srv.CreateHearingWorkitem(context.Background(), &flowv1.CreateHearingWorkitemRequest{
-		LawId: "law-99",
-	})
-	assertGRPCCode(t, err, codes.FailedPrecondition)
 }
 
 // ---------------------------------------------------------------------------
@@ -785,7 +792,6 @@ func TestExportWorkitem_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "export-test",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/flow": "my-flow"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase: "Completed",
@@ -800,7 +806,7 @@ func TestExportWorkitem_HappyPath(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	resp, err := srv.ExportWorkitem(context.Background(), &flowv1.ExportWorkitemRequest{
+	resp, err := srv.ExportWorkitem(nsCtx(), &flowv1.ExportWorkitemRequest{
 		WorkitemId: "export-test",
 	})
 	if err != nil {
@@ -845,7 +851,7 @@ func TestExportWorkitem_NotCompleted(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ExportWorkitem(context.Background(), &flowv1.ExportWorkitemRequest{
+	_, err := srv.ExportWorkitem(nsCtx(), &flowv1.ExportWorkitemRequest{
 		WorkitemId: "running-workitem",
 	})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
@@ -856,7 +862,7 @@ func TestExportWorkitem_MissingWorkitemID(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ExportWorkitem(context.Background(), &flowv1.ExportWorkitemRequest{})
+	_, err := srv.ExportWorkitem(nsCtx(), &flowv1.ExportWorkitemRequest{})
 	assertGRPCCode(t, err, codes.InvalidArgument)
 }
 
@@ -865,7 +871,7 @@ func TestExportWorkitem_WorkitemNotFound(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ExportWorkitem(context.Background(), &flowv1.ExportWorkitemRequest{
+	_, err := srv.ExportWorkitem(nsCtx(), &flowv1.ExportWorkitemRequest{
 		WorkitemId: "nonexistent",
 	})
 	assertGRPCCode(t, err, codes.NotFound)
@@ -913,7 +919,7 @@ func TestImportWorkitem_HappyPath(t *testing.T) {
 	}
 	data, _ := json.Marshal(pkg)
 
-	resp, err := srv.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{
+	resp, err := srv.ImportWorkitem(nsCtx(), &flowv1.ImportWorkitemRequest{
 		ExportPackage: data,
 	})
 	if err != nil {
@@ -991,7 +997,7 @@ func TestImportWorkitem_WithTreaty(t *testing.T) {
 	pkg := exportPackage{WorkitemID: "remote-wi", Namespace: "remote", Phase: "Completed"}
 	data, _ := json.Marshal(pkg)
 
-	resp, err := srv.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{
+	resp, err := srv.ImportWorkitem(nsCtx(), &flowv1.ImportWorkitemRequest{
 		ExportPackage: data,
 		TreatyName:    "remote-treaty",
 	})
@@ -1025,7 +1031,7 @@ func TestImportWorkitem_TreatyWrongDirection(t *testing.T) {
 	pkg := exportPackage{WorkitemID: "wi-1", Namespace: "remote", Phase: "Completed"}
 	data, _ := json.Marshal(pkg)
 
-	_, err := srv.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{
+	_, err := srv.ImportWorkitem(nsCtx(), &flowv1.ImportWorkitemRequest{
 		ExportPackage: data,
 		TreatyName:    "export-treaty",
 	})
@@ -1037,7 +1043,7 @@ func TestImportWorkitem_EmptyPackage(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{})
+	_, err := srv.ImportWorkitem(nsCtx(), &flowv1.ImportWorkitemRequest{})
 	assertGRPCCode(t, err, codes.InvalidArgument)
 }
 
@@ -1046,7 +1052,7 @@ func TestImportWorkitem_InvalidPackageJSON(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{
+	_, err := srv.ImportWorkitem(nsCtx(), &flowv1.ImportWorkitemRequest{
 		ExportPackage: []byte("not-json"),
 	})
 	assertGRPCCode(t, err, codes.InvalidArgument)
@@ -1075,7 +1081,7 @@ func TestImportWorkitem_NoImportNodeConfigured(t *testing.T) {
 	pkg := exportPackage{WorkitemID: "wi-1", Namespace: "remote", Phase: "Completed"}
 	data, _ := json.Marshal(pkg)
 
-	_, err := srv.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{
+	_, err := srv.ImportWorkitem(nsCtx(), &flowv1.ImportWorkitemRequest{
 		ExportPackage: data,
 	})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
@@ -1113,7 +1119,7 @@ func TestImportWorkitem_ImportNodeNotEntryBound(t *testing.T) {
 	pkg := exportPackage{WorkitemID: "wi-1", Namespace: "remote", Phase: "Completed"}
 	data, _ := json.Marshal(pkg)
 
-	_, err := srv.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{
+	_, err := srv.ImportWorkitem(nsCtx(), &flowv1.ImportWorkitemRequest{
 		ExportPackage: data,
 	})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
@@ -1134,7 +1140,7 @@ func TestGetFlowTopology_CapabilityDenied(t *testing.T) {
 
 	// Node call with WRITE:artefact but NOT READ:flow.
 	md := metadata.Pairs(
-		"x-flow-flow-id", "test-flow",
+		"x-flow-namespace", "default",
 		"x-flow-node-id", "node-1",
 		"x-flow-capabilities", "WRITE:artefact,READ:artefact",
 	)
@@ -1151,7 +1157,7 @@ func TestGetFlowTopology_NodeCallNoCapabilities_Denied(t *testing.T) {
 
 	// Node identity present but no capabilities at all.
 	md := metadata.Pairs(
-		"x-flow-flow-id", "test-flow",
+		"x-flow-namespace", "default",
 		"x-flow-node-id", "node-1",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -1165,9 +1171,9 @@ func TestGetFlowTopology_NodeCallNoCapabilities_Denied(t *testing.T) {
 // operations. The caller has CREATE:workitem/child capability.
 // ---------------------------------------------------------------------------
 
-func childCtx(flowID, nodeID, workitemID string) context.Context {
+func childCtx(namespace, nodeID, workitemID string) context.Context {
 	md := metadata.Pairs(
-		"x-flow-flow-id", flowID,
+		"x-flow-namespace", namespace,
 		"x-flow-node-id", nodeID,
 		"x-flow-workitem-id", workitemID,
 		"x-flow-capabilities", "CREATE:workitem/child,READ:flow",
@@ -1176,10 +1182,11 @@ func childCtx(flowID, nodeID, workitemID string) context.Context {
 }
 
 // workitemCtx creates a context with Sidecar-injected metadata that carries
-// the workitem identity but no special capabilities.
+// the workitem identity and namespace but no special capabilities.
 func workitemCtx(workitemID string) context.Context {
 	md := metadata.Pairs(
 		"x-flow-workitem-id", workitemID,
+		"x-flow-namespace", "default",
 	)
 	return metadata.NewIncomingContext(context.Background(), md)
 }
@@ -1196,7 +1203,6 @@ func TestCreateChildWorkitem_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "parent-wi",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/flow": "test-flow"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:           "Running",
@@ -1211,7 +1217,7 @@ func TestCreateChildWorkitem_HappyPath(t *testing.T) {
 		Build()
 
 	srv := NewOperatorServer(k8s)
-	ctx := childCtx("test-flow", "clerk", "parent-wi")
+	ctx := childCtx("default", "clerk", "parent-wi")
 
 	resp, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
 	if err != nil {
@@ -1238,12 +1244,12 @@ func TestCreateChildWorkitem_HappyPath(t *testing.T) {
 		t.Fatalf("Expected ParentWorkitemID 'parent-wi', got %s", child.Status.ParentWorkitemID)
 	}
 
-	// Verify labels.
+	// Verify labels — no flow.gideas.io/flow label.
 	if child.Labels["flow.gideas.io/parent"] != "parent-wi" {
 		t.Fatalf("Expected parent label 'parent-wi', got %s", child.Labels["flow.gideas.io/parent"])
 	}
-	if child.Labels["flow.gideas.io/flow"] != "test-flow" {
-		t.Fatalf("Expected flow label 'test-flow', got %s", child.Labels["flow.gideas.io/flow"])
+	if _, hasFlowLabel := child.Labels["flow.gideas.io/flow"]; hasFlowLabel {
+		t.Fatal("Expected no flow.gideas.io/flow label on child workitem")
 	}
 	if child.Labels["flow.gideas.io/creator"] != "clerk" {
 		t.Fatalf("Expected creator label 'clerk', got %s", child.Labels["flow.gideas.io/creator"])
@@ -1257,7 +1263,7 @@ func TestCreateChildWorkitem_CapabilityDenied(t *testing.T) {
 
 	// Node call without CREATE:workitem/child capability.
 	md := metadata.Pairs(
-		"x-flow-flow-id", "test-flow",
+		"x-flow-namespace", "default",
 		"x-flow-node-id", "node-1",
 		"x-flow-workitem-id", "wi-1",
 		"x-flow-capabilities", "READ:flow,WRITE:artefact",
@@ -1275,7 +1281,7 @@ func TestCreateChildWorkitem_MissingWorkitemID(t *testing.T) {
 
 	// Has capability but no workitem_id.
 	md := metadata.Pairs(
-		"x-flow-flow-id", "test-flow",
+		"x-flow-namespace", "default",
 		"x-flow-node-id", "node-1",
 		"x-flow-capabilities", "CREATE:workitem/child",
 	)
@@ -1285,7 +1291,7 @@ func TestCreateChildWorkitem_MissingWorkitemID(t *testing.T) {
 	assertGRPCCode(t, err, codes.InvalidArgument)
 }
 
-func TestCreateChildWorkitem_MissingFlowID(t *testing.T) {
+func TestCreateChildWorkitem_MissingNamespace(t *testing.T) {
 	scheme := newScheme()
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
@@ -1307,7 +1313,7 @@ func TestCreateChildWorkitem_MissingNodeID(t *testing.T) {
 	srv := NewOperatorServer(k8s)
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "test-flow",
+		"x-flow-namespace", "default",
 		"x-flow-workitem-id", "wi-1",
 		"x-flow-capabilities", "CREATE:workitem/child",
 	)
@@ -1322,7 +1328,7 @@ func TestCreateChildWorkitem_ParentNotFound(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	ctx := childCtx("test-flow", "clerk", "nonexistent-parent")
+	ctx := childCtx("default", "clerk", "nonexistent-parent")
 
 	_, err := srv.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
 	assertGRPCCode(t, err, codes.NotFound)
@@ -1396,7 +1402,7 @@ func TestRouteChild_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get updated child: %v", err)
 	}
-	if updated.Status.Phase != "Routing" {
+	if updated.Status.Phase != phaseRouting {
 		t.Fatalf("Expected phase Routing, got %s", updated.Status.Phase)
 	}
 	if updated.Status.RoutingInstruction == nil {
@@ -1834,11 +1840,9 @@ func TestSubmitResult_CompletionGuard_ChildrenPending(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	_, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
 		WorkitemId: "parent-wi",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
 	if !strings.Contains(err.Error(), "CHILDREN_NOT_TERMINAL") {
@@ -1880,11 +1884,9 @@ func TestSubmitResult_CompletionGuard_ChildrenRunning(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	_, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
 		WorkitemId: "parent-wi",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
 	if !strings.Contains(err.Error(), "CHILDREN_NOT_TERMINAL") {
@@ -1938,11 +1940,9 @@ func TestSubmitResult_CompletionGuard_AllChildrenCompleted(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	resp, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
 		WorkitemId: "parent-wi",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	if err != nil {
 		t.Fatalf("Expected completion to succeed when all children are terminal, got: %v", err)
@@ -1974,11 +1974,9 @@ func TestSubmitResult_CompletionGuard_NoChildren(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	resp, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
 		WorkitemId: "parent-wi",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	if err != nil {
 		t.Fatalf("Expected completion to succeed with no children, got: %v", err)
@@ -2024,12 +2022,9 @@ func TestSubmitResult_CompletionGuard_NonCompleteSkipsCheck(t *testing.T) {
 	srv := NewOperatorServer(k8s)
 
 	// route_to_output does NOT trigger the completion guard.
-	resp, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
 		WorkitemId: "parent-wi",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO_OUTPUT,
-			Target: "review",
-		},
+		Action:     &flowv1.SubmitResultRequest_Route{Route: &flowv1.RouteAction{Target: "review", Output: true}},
 	})
 	if err != nil {
 		t.Fatalf("Expected route_to_output to succeed despite non-terminal child, got: %v", err)
@@ -2093,15 +2088,13 @@ func TestSubmitResult_GroupRoutingDenied_RouteToInternalGroupNode(t *testing.T) 
 	// Create context with source node identity.
 	md := metadata.Pairs(
 		"x-flow-node-id", "external-node",
+		"x-flow-namespace", "default",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: "wi-external",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
-			Target: "codify-internal",
-		},
+		Action:     &flowv1.SubmitResultRequest_Route{Route: &flowv1.RouteAction{Target: "codify-internal"}},
 	})
 	assertGRPCCode(t, err, codes.FailedPrecondition)
 	if !strings.Contains(err.Error(), "GROUP_ROUTING_DENIED") {
@@ -2154,15 +2147,12 @@ func TestSubmitResult_GroupRoutingAllowed_RouteToEntryBoundGroupNode(t *testing.
 
 	srv := NewOperatorServer(k8s)
 
-	md := metadata.Pairs("x-flow-node-id", "external-node")
+	md := metadata.Pairs("x-flow-node-id", "external-node", "x-flow-namespace", "default")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	resp, err := srv.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: "wi-external",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
-			Target: "codify-entry",
-		},
+		Action:     &flowv1.SubmitResultRequest_Route{Route: &flowv1.RouteAction{Target: "codify-entry"}},
 	})
 	if err != nil {
 		t.Fatalf("Expected route to entry-bound group node to succeed, got: %v", err)
@@ -2219,15 +2209,12 @@ func TestSubmitResult_GroupRoutingAllowed_IntraGroupRouting(t *testing.T) {
 	srv := NewOperatorServer(k8s)
 
 	// Source node is codify-a, target is codify-b — same group.
-	md := metadata.Pairs("x-flow-node-id", "codify-a")
+	md := metadata.Pairs("x-flow-node-id", "codify-a", "x-flow-namespace", "default")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	resp, err := srv.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: "wi-internal",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
-			Target: "codify-b",
-		},
+		Action:     &flowv1.SubmitResultRequest_Route{Route: &flowv1.RouteAction{Target: "codify-b"}},
 	})
 	if err != nil {
 		t.Fatalf("Expected intra-group routing to succeed, got: %v", err)
@@ -2274,15 +2261,12 @@ func TestSubmitResult_GroupRoutingAllowed_NoGroups(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	md := metadata.Pairs("x-flow-node-id", "node-a")
+	md := metadata.Pairs("x-flow-node-id", "node-a", "x-flow-namespace", "default")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	resp, err := srv.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: "wi-free",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO,
-			Target: "node-b",
-		},
+		Action:     &flowv1.SubmitResultRequest_Route{Route: &flowv1.RouteAction{Target: "node-b"}},
 	})
 	if err != nil {
 		t.Fatalf("Expected routing without groups to succeed, got: %v", err)
@@ -2338,6 +2322,7 @@ func TestRouteChild_GroupRoutingDenied(t *testing.T) {
 	md := metadata.Pairs(
 		"x-flow-workitem-id", "parent-wi",
 		"x-flow-node-id", "external-clerk",
+		"x-flow-namespace", "default",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
@@ -2381,7 +2366,7 @@ func TestValidateChildAccess_Valid(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	resp, err := srv.ValidateChildAccess(context.Background(), &flowv1.ValidateChildAccessRequest{
+	resp, err := srv.ValidateChildAccess(nsCtx(), &flowv1.ValidateChildAccessRequest{
 		ParentWorkitemId: "parent-wi",
 		ChildWorkitemId:  "child-wi",
 	})
@@ -2418,7 +2403,7 @@ func TestValidateChildAccess_WrongParent(t *testing.T) {
 
 	srv := NewOperatorServer(k8s)
 
-	resp, err := srv.ValidateChildAccess(context.Background(), &flowv1.ValidateChildAccessRequest{
+	resp, err := srv.ValidateChildAccess(nsCtx(), &flowv1.ValidateChildAccessRequest{
 		ParentWorkitemId: "wrong-parent",
 		ChildWorkitemId:  "child-wi",
 	})
@@ -2459,7 +2444,7 @@ func TestValidateChildAccess_ChildNotCompleted(t *testing.T) {
 
 			srv := NewOperatorServer(k8s)
 
-			resp, err := srv.ValidateChildAccess(context.Background(), &flowv1.ValidateChildAccessRequest{
+			resp, err := srv.ValidateChildAccess(nsCtx(), &flowv1.ValidateChildAccessRequest{
 				ParentWorkitemId: "parent-wi",
 				ChildWorkitemId:  "child-wi",
 			})
@@ -2481,7 +2466,7 @@ func TestValidateChildAccess_ChildNotFound(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ValidateChildAccess(context.Background(), &flowv1.ValidateChildAccessRequest{
+	_, err := srv.ValidateChildAccess(nsCtx(), &flowv1.ValidateChildAccessRequest{
 		ParentWorkitemId: "parent-wi",
 		ChildWorkitemId:  "nonexistent-child",
 	})
@@ -2493,7 +2478,7 @@ func TestValidateChildAccess_MissingParentID(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ValidateChildAccess(context.Background(), &flowv1.ValidateChildAccessRequest{
+	_, err := srv.ValidateChildAccess(nsCtx(), &flowv1.ValidateChildAccessRequest{
 		ChildWorkitemId: "child-wi",
 	})
 	assertGRPCCode(t, err, codes.InvalidArgument)
@@ -2504,8 +2489,244 @@ func TestValidateChildAccess_MissingChildID(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
 	srv := NewOperatorServer(k8s)
 
-	_, err := srv.ValidateChildAccess(context.Background(), &flowv1.ValidateChildAccessRequest{
+	_, err := srv.ValidateChildAccess(nsCtx(), &flowv1.ValidateChildAccessRequest{
 		ParentWorkitemId: "parent-wi",
 	})
 	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+// ---------------------------------------------------------------------------
+// Suspend timeout validation tests (SubmitResult step 3c)
+// ---------------------------------------------------------------------------
+
+func TestSubmitResult_Suspend_TimeoutExceedsMax(t *testing.T) {
+	scheme := newScheme()
+
+	flow := &apiv1.FoundryFlow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-flow", Namespace: "default"},
+		Spec: apiv1.FoundryFlowSpec{
+			EntryContracts:   map[string]apiv1.Contract{"main": {}},
+			ExitContracts:    map[string]apiv1.Contract{},
+			GovernancePolicy: apiv1.GovernancePolicy{MaxVisits: 10},
+			Suspension: &apiv1.SuspensionConfig{
+				MaxSuspendTimeout: &metav1.Duration{Duration: 10 * time.Minute},
+			},
+		},
+	}
+
+	workitem := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "wi-suspend",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "worker",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flow, workitem).
+		WithStatusSubresource(workitem).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	// 1h timeout exceeds 10m max.
+	_, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
+		WorkitemId: "wi-suspend",
+		Action: &flowv1.SubmitResultRequest_Suspend{
+			Suspend: &flowv1.SuspendAction{
+				Timeout: durationpb.New(1 * time.Hour),
+			},
+		},
+	})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+	if !strings.Contains(err.Error(), "SUSPEND_TIMEOUT_EXCEEDED") {
+		t.Fatalf("Expected SUSPEND_TIMEOUT_EXCEEDED error, got: %v", err)
+	}
+}
+
+func TestSubmitResult_Suspend_NoExplicitTimeout_UsesDefault(t *testing.T) {
+	scheme := newScheme()
+
+	flow := &apiv1.FoundryFlow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-flow", Namespace: "default"},
+		Spec: apiv1.FoundryFlowSpec{
+			EntryContracts:   map[string]apiv1.Contract{"main": {}},
+			ExitContracts:    map[string]apiv1.Contract{},
+			GovernancePolicy: apiv1.GovernancePolicy{MaxVisits: 10},
+			Suspension: &apiv1.SuspensionConfig{
+				DefaultSuspendTimeout: &metav1.Duration{Duration: 15 * time.Minute},
+				MaxSuspendTimeout:     &metav1.Duration{Duration: 1 * time.Hour},
+			},
+		},
+	}
+
+	workitem := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "wi-suspend",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "worker",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flow, workitem).
+		WithStatusSubresource(workitem).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	// No timeout specified — should apply default and succeed.
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
+		WorkitemId: "wi-suspend",
+		Action: &flowv1.SubmitResultRequest_Suspend{
+			Suspend: &flowv1.SuspendAction{
+				Condition: `children.all(c, c.phase == "Completed")`,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitResult(suspend) returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+
+	// Verify the workitem was updated with the resolved timeout.
+	var updated apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName("wi-suspend"), &updated)
+	if err != nil {
+		t.Fatalf("Failed to get updated workitem: %v", err)
+	}
+	if updated.Status.Phase != phaseRouting {
+		t.Fatalf("Expected phase Routing, got %s", updated.Status.Phase)
+	}
+	if updated.Status.RoutingInstruction == nil {
+		t.Fatal("Expected routing instruction to be set")
+	}
+	if updated.Status.RoutingInstruction.Type != suspendType {
+		t.Fatalf("Expected routing type 'suspend', got %s", updated.Status.RoutingInstruction.Type)
+	}
+	// The default timeout should have been applied by validateSuspendTimeout.
+	expectedTimeout := (15 * time.Minute).String()
+	if updated.Status.RoutingInstruction.SuspendTimeout != expectedTimeout {
+		t.Fatalf("Expected SuspendTimeout=%s (default applied), got %q",
+			expectedTimeout, updated.Status.RoutingInstruction.SuspendTimeout)
+	}
+}
+
+func TestSubmitResult_Suspend_ValidTimeout_Accepted(t *testing.T) {
+	scheme := newScheme()
+
+	flow := &apiv1.FoundryFlow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-flow", Namespace: "default"},
+		Spec: apiv1.FoundryFlowSpec{
+			EntryContracts:   map[string]apiv1.Contract{"main": {}},
+			ExitContracts:    map[string]apiv1.Contract{},
+			GovernancePolicy: apiv1.GovernancePolicy{MaxVisits: 10},
+			Suspension: &apiv1.SuspensionConfig{
+				MaxSuspendTimeout: &metav1.Duration{Duration: 1 * time.Hour},
+			},
+		},
+	}
+
+	workitem := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "wi-suspend",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "worker",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flow, workitem).
+		WithStatusSubresource(workitem).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	// 30m is within the 1h max.
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
+		WorkitemId: "wi-suspend",
+		Action: &flowv1.SubmitResultRequest_Suspend{
+			Suspend: &flowv1.SuspendAction{
+				Timeout: durationpb.New(30 * time.Minute),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitResult(suspend) returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+
+	var updated apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName("wi-suspend"), &updated)
+	if err != nil {
+		t.Fatalf("Failed to get updated workitem: %v", err)
+	}
+	if updated.Status.RoutingInstruction.Type != suspendType {
+		t.Fatalf("Expected routing type 'suspend', got %s", updated.Status.RoutingInstruction.Type)
+	}
+}
+
+func TestSubmitResult_Suspend_NoSuspensionConfig_Accepted(t *testing.T) {
+	scheme := newScheme()
+
+	// Flow without SuspensionConfig — no validation.
+	flow := &apiv1.FoundryFlow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-flow", Namespace: "default"},
+		Spec: apiv1.FoundryFlowSpec{
+			EntryContracts:   map[string]apiv1.Contract{"main": {}},
+			ExitContracts:    map[string]apiv1.Contract{},
+			GovernancePolicy: apiv1.GovernancePolicy{MaxVisits: 10},
+		},
+	}
+
+	workitem := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "wi-suspend",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase:           "Running",
+			CurrentAssignee: "worker",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flow, workitem).
+		WithStatusSubresource(workitem).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
+		WorkitemId: "wi-suspend",
+		Action: &flowv1.SubmitResultRequest_Suspend{
+			Suspend: &flowv1.SuspendAction{
+				Condition: `children.all(c, c.phase == "Completed")`,
+				Timeout:   durationpb.New(2 * time.Hour),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Expected suspend to succeed without SuspensionConfig, got: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
 }

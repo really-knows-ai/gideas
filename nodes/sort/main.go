@@ -200,7 +200,7 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 
 	// ── Step 4: All governance satisfied → complete ───────────────────
 	slog.Info("sort: all governance requirements met, completing workitem")
-	if _, err := client.Complete(ctx, ""); err != nil {
+	if _, err := client.Complete(ctx); err != nil {
 		return fmt.Errorf("sort: complete: %w", err)
 	}
 

@@ -26,10 +26,13 @@ type Label struct {
 
 // Event represents a stored event in the Event Bus.
 type Event struct {
-	ID         string
-	Sequence   uint64
-	Channel    string
-	EventType  string
+	ID        string
+	Sequence  uint64
+	Channel   string
+	EventType string
+	// FlowID holds the Kubernetes namespace that owns the flow
+	// (one namespace = one FoundryFlow). The field name and SQLite column
+	// name are kept as "flow_id" for storage compatibility.
 	FlowID     string
 	NodeID     string
 	WorkitemID string

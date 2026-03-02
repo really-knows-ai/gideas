@@ -78,9 +78,8 @@ func TestOperatorHandler_SubmitResult(t *testing.T) {
 
 	resp, err := h.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
 		WorkitemId: "wid-300",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-			Target: "next-step",
+		Action: &flowv1.SubmitResultRequest_Complete{
+			Complete: &flowv1.CompleteAction{},
 		},
 	})
 	if err != nil {
@@ -91,7 +90,7 @@ func TestOperatorHandler_SubmitResult(t *testing.T) {
 	}
 }
 
-func TestOperatorHandler_SubmitResult_NoRoutingInstruction(t *testing.T) {
+func TestOperatorHandler_SubmitResult_NoAction(t *testing.T) {
 	h := &OperatorHandler{}
 
 	resp, err := h.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
@@ -118,18 +117,6 @@ func TestOperatorHandler_CreateWorkitem(t *testing.T) {
 	}
 	if resp.GetWorkitemId() != "mock-workitem-001" {
 		t.Fatalf("expected mock-workitem-001, got %s", resp.GetWorkitemId())
-	}
-}
-
-func TestOperatorHandler_CreateHearingWorkitem(t *testing.T) {
-	h := &OperatorHandler{}
-
-	resp, err := h.CreateHearingWorkitem(context.Background(), &flowv1.CreateHearingWorkitemRequest{})
-	if err != nil {
-		t.Fatalf("CreateHearingWorkitem() returned error: %v", err)
-	}
-	if resp.GetWorkitemId() != "mock-hearing-001" {
-		t.Fatalf("expected mock-hearing-001, got %s", resp.GetWorkitemId())
 	}
 }
 

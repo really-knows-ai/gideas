@@ -3,6 +3,9 @@ gen/
 go.work.sum
 bin/
 
+# Diagram images (scratch / whiteboard exports)
+*.png
+
 # OS artifacts
 .DS_Store
 

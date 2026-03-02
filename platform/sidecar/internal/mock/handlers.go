@@ -70,15 +70,23 @@ func (h *OperatorHandler) SubmitResult(
 		workitemID = extractWorkitemID(ctx)
 	}
 
-	routingType := "unknown"
-	if req.GetRoutingInstruction() != nil {
-		routingType = req.GetRoutingInstruction().GetType().String()
+	actionStr := "unknown"
+	switch a := req.GetAction().(type) {
+	case *flowv1.SubmitResultRequest_Complete:
+		actionStr = "complete"
+	case *flowv1.SubmitResultRequest_Route:
+		if a.Route != nil && a.Route.GetOutput() {
+			actionStr = "route_to_output(" + a.Route.GetTarget() + ")"
+		} else if a.Route != nil {
+			actionStr = "route_to(" + a.Route.GetTarget() + ")"
+		}
+	case *flowv1.SubmitResultRequest_Suspend:
+		actionStr = "suspend"
 	}
 
 	slog.Info("Sidecar intercepted completion",
 		"workitem_id", workitemID,
-		"routing_type", routingType,
-		"target", req.GetRoutingInstruction().GetTarget(),
+		"action", actionStr,
 	)
 
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
@@ -89,13 +97,6 @@ func (h *OperatorHandler) CreateWorkitem(
 ) (*flowv1.CreateWorkitemResponse, error) {
 	slog.Info("Sidecar intercepted CreateWorkitem (mock)")
 	return &flowv1.CreateWorkitemResponse{WorkitemId: "mock-workitem-001"}, nil
-}
-
-func (h *OperatorHandler) CreateHearingWorkitem(
-	ctx context.Context, req *flowv1.CreateHearingWorkitemRequest,
-) (*flowv1.CreateHearingWorkitemResponse, error) {
-	slog.Info("Sidecar intercepted CreateHearingWorkitem (mock)", "law_id", req.GetLawId())
-	return &flowv1.CreateHearingWorkitemResponse{WorkitemId: "mock-hearing-001"}, nil
 }
 
 func (h *OperatorHandler) ExportWorkitem(
@@ -110,6 +111,13 @@ func (h *OperatorHandler) ImportWorkitem(
 ) (*flowv1.ImportWorkitemResponse, error) {
 	slog.Info("Sidecar intercepted ImportWorkitem (mock)", "treaty", req.GetTreatyName())
 	return &flowv1.ImportWorkitemResponse{WorkitemId: "mock-import-001"}, nil
+}
+
+func (h *OperatorHandler) ResumeWorkitem(
+	ctx context.Context, req *flowv1.ResumeWorkitemRequest,
+) (*flowv1.ResumeWorkitemResponse, error) {
+	slog.Info("Sidecar intercepted ResumeWorkitem (mock)", "workitem_id", req.GetWorkitemId())
+	return &flowv1.ResumeWorkitemResponse{Accepted: true}, nil
 }
 
 // ---------------------------------------------------------------------------

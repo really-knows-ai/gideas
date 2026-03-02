@@ -44,7 +44,7 @@ func main() {
 // It is called by the SDK server when the Sidecar forwards an AssignWork request.
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	slog.Info("null-node: Processing...",
-		"flow_id", wctx.GetFlowId(),
+		"namespace", wctx.GetFlowNamespace(),
 		"workitem_id", wctx.GetWorkitemId(),
 		"node_id", wctx.GetNodeId(),
 	)
@@ -90,7 +90,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	)
 
 	// Complete — submit routing instruction back through Sidecar -> Operator.
-	accepted, err := client.Complete(ctx, "")
+	accepted, err := client.Complete(ctx)
 	if err != nil {
 		slog.Error("null-node: completion failed", "error", err)
 		return err

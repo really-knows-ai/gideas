@@ -25,7 +25,10 @@ import (
 
 // FrictionEvent represents a single friction event row.
 type FrictionEvent struct {
-	ID         string
+	ID string
+	// FlowID holds the Kubernetes namespace that owns the flow
+	// (one namespace = one FoundryFlow). The field name and SQLite column
+	// name are kept as "flow_id" for storage compatibility.
 	FlowID     string
 	WorkitemID string
 	NodeID     string

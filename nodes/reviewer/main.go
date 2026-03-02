@@ -209,7 +209,7 @@ func handleReview(
 	// Signal completion
 	// ---------------------------------------------------------------
 
-	if _, err := client.Complete(ctx, ""); err != nil {
+	if _, err := client.Complete(ctx); err != nil {
 		return fmt.Errorf("reviewer: complete: %w", err)
 	}
 

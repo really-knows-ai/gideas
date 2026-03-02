@@ -307,7 +307,7 @@ func (s *FrictionLedgerServer) processEvent(ctx context.Context, evt *flowv1.Flo
 
 	id := s.newID()
 	event := sqlite.FrictionEvent{
-		FlowID:     evt.GetFlowId(),
+		FlowID:     evt.GetFlowNamespace(),
 		WorkitemID: evt.GetWorkitemId(),
 		NodeID:     evt.GetNodeId(),
 		Magnitude:  magnitude,
@@ -321,7 +321,7 @@ func (s *FrictionLedgerServer) processEvent(ctx context.Context, evt *flowv1.Flo
 	slog.Info("Friction event persisted",
 		"event_id", evt.GetEventId(),
 		"internal_id", id,
-		"flow_id", event.FlowID,
+		"namespace", event.FlowID,
 		"magnitude", magnitude,
 		"law_ids", lawIDs,
 	)
@@ -384,12 +384,12 @@ func (s *FrictionLedgerServer) evaluateThreshold(
 		_, err := s.eventBusClient.Publish(ctx, &flowv1.PublishRequest{
 			Channel: "friction",
 			Event: &flowv1.FlowEvent{
-				EventId:    s.newID(),
-				EventType:  "friction.threshold_crossed",
-				FlowId:     sourceEvt.GetFlowId(),
-				NodeId:     sourceEvt.GetNodeId(),
-				WorkitemId: sourceEvt.GetWorkitemId(),
-				Timestamp:  timestamppb.Now(),
+				EventId:       s.newID(),
+				EventType:     "friction.threshold_crossed",
+				FlowNamespace: sourceEvt.GetFlowNamespace(),
+				NodeId:        sourceEvt.GetNodeId(),
+				WorkitemId:    sourceEvt.GetWorkitemId(),
+				Timestamp:     timestamppb.Now(),
 				Labels: []*flowv1.Label{
 					{Key: "law_id", Value: lawID},
 				},

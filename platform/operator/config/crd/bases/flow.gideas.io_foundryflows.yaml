@@ -305,6 +305,24 @@ spec:
                   Nodes inside a group are routing-isolated: internal routing stays within the group,
                   and external routing enters only through entry-bound nodes.
                 type: object
+              suspension:
+                description: |-
+                  suspension defines suspension timeout policy for this Flow.
+                  Controls how long workitems may remain in the Suspended phase.
+                properties:
+                  defaultSuspendTimeout:
+                    description: |-
+                      defaultSuspendTimeout is applied when a node calls Suspend() without
+                      specifying a timeout via WithTimeout(). Defaults to maxSuspendTimeout
+                      if not specified.
+                    type: string
+                  maxSuspendTimeout:
+                    description: |-
+                      maxSuspendTimeout is the hard cap on suspension duration.
+                      The Operator rejects suspensions exceeding this value.
+                      Defaults to 336h (2 weeks) if not specified.
+                    type: string
+                type: object
             required:
             - entryContracts
             - exitContracts

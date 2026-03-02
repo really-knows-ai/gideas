@@ -117,7 +117,9 @@ message RetireLawResponse {
 
 message ReplicateLawsRequest {
   repeated Law laws = 1;
-  string source_flow_id = 2;
+  // Source namespace for cross-flow law replication.
+  // Identifies the Kubernetes namespace of the originating FoundryFlow.
+  string source_flow_namespace = 2;
 }
 
 message ReplicateLawsResponse {

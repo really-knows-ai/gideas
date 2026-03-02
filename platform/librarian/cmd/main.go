@@ -5,11 +5,6 @@
 // retirement, and lifecycle actions. Data is persisted to a SQLite database
 // at the path specified by LIBRARIAN_DB_PATH (default: /data/librarian.db).
 //
-// It also runs hearing triggers: subscribing to the friction channel on the
-// Event Bus for threshold-crossing events, and periodically scanning laws
-// for review-TTL-expiry. Both triggers create hearing Workitems via the
-// Operator's CreateHearingWorkitem RPC.
-//
 // Usage:
 //
 //	go run ./librarian/cmd/main.go
@@ -17,7 +12,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"fmt"
 	"log/slog"
@@ -26,7 +20,6 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
-	"time"
 
 	"github.com/gideas/flow/librarian/internal/embed"
 	"github.com/gideas/flow/librarian/internal/service"
@@ -52,14 +45,6 @@ const (
 	envOllamaModel         = "OLLAMA_MODEL"
 	envSimilarityThreshold = "LIBRARIAN_SIMILARITY_THRESHOLD"
 	envEventBusAddress     = "EVENT_BUS_ADDRESS"
-	envOperatorAddress     = "OPERATOR_ADDRESS"
-
-	// Per-tier review TTL environment variables.
-	envReviewTTLTier1 = "REVIEW_TTL_TIER1"
-	envReviewTTLTier2 = "REVIEW_TTL_TIER2"
-	envReviewTTLTier3 = "REVIEW_TTL_TIER3"
-	envReviewTTLTier4 = "REVIEW_TTL_TIER4"
-	envReviewTTLTier5 = "REVIEW_TTL_TIER5"
 )
 
 func main() {
@@ -116,12 +101,10 @@ func main() {
 	}
 
 	// -------------------------------------------------------------------
-	// Event Bus + Operator connections for hearing triggers
+	// Event Bus connection for audit publishing
 	// -------------------------------------------------------------------
 
 	var (
-		ebClient  flowv1.FlowEventBusServiceClient
-		opClient  flowv1.OperatorServiceClient
 		serverOpt []service.LibrarianOption
 		auditPub  *eventbus.AsyncPublisher
 	)
@@ -136,37 +119,12 @@ func main() {
 			slog.Error("Failed to connect to Event Bus", "address", eventBusAddr, "error", ebErr)
 			os.Exit(1)
 		}
-		ebClient = flowv1.NewFlowEventBusServiceClient(ebConn)
+		ebClient := flowv1.NewFlowEventBusServiceClient(ebConn)
 		auditPub = eventbus.NewAsyncPublisher(ebClient)
 		serverOpt = append(serverOpt, service.WithAuditPublisher(auditPub))
 		slog.Info("Event Bus connected", "address", eventBusAddr)
 	} else {
-		slog.Info("Event Bus not configured, audit publishing and friction subscription disabled")
-	}
-
-	operatorAddr := os.Getenv(envOperatorAddress)
-	if operatorAddr != "" {
-		opConn, opErr := grpc.NewClient(
-			operatorAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if opErr != nil {
-			slog.Error("Failed to connect to Operator", "address", operatorAddr, "error", opErr)
-			os.Exit(1)
-		}
-		opClient = flowv1.NewOperatorServiceClient(opConn)
-		slog.Info("Operator connected", "address", operatorAddr)
-	} else {
-		slog.Info("Operator not configured, hearing triggers disabled")
-	}
-
-	// Parse per-tier review TTLs from environment.
-	ttlConfig := service.ReviewTTLConfig{
-		Tier1: parseDuration(envReviewTTLTier1),
-		Tier2: parseDuration(envReviewTTLTier2),
-		Tier3: parseDuration(envReviewTTLTier3),
-		Tier4: parseDuration(envReviewTTLTier4),
-		Tier5: parseDuration(envReviewTTLTier5),
+		slog.Info("Event Bus not configured, audit publishing disabled")
 	}
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -183,27 +141,12 @@ func main() {
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
-	// Create a cancellable context for hearing triggers.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start hearing triggers in background.
-	hearingTrigger := service.NewHearingTrigger(service.HearingTriggerConfig{
-		Subscriber: ebClient,
-		Operator:   opClient,
-		Store:      store,
-		TTLConfig:  ttlConfig,
-		Auditor:    auditPub,
-	})
-	go hearingTrigger.Run(ctx)
-
 	// Graceful shutdown on SIGTERM/SIGINT.
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down gracefully", "signal", sig)
-		cancel() // Stop hearing triggers.
 		srv.GracefulStop()
 		if auditPub != nil {
 			auditPub.Stop()
@@ -227,19 +170,4 @@ func newLawID() string {
 		panic(fmt.Sprintf("crypto/rand failed: %v", err))
 	}
 	return fmt.Sprintf("%x", b)
-}
-
-// parseDuration reads a Go duration string from an environment variable.
-// Returns zero if unset or unparseable.
-func parseDuration(envKey string) time.Duration {
-	s := os.Getenv(envKey)
-	if s == "" {
-		return 0
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		slog.Warn("Invalid duration", "env", envKey, "value", s, "error", err)
-		return 0
-	}
-	return d
 }

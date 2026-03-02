@@ -15,11 +15,14 @@ const DefaultTimeout = 5 * time.Minute
 // Each assignment has an independent session with its own inactivity
 // timer, pause state, and cancellable handler context.
 //
+// The namespace is not per-session — it is a Sidecar-level constant
+// read from the FLOW_NAMESPACE environment variable. Sessions only
+// track the workitem and node identity for the assignment.
+//
 // See: specs/03-node/01-sidecar.md#heartbeat-and-activity-tracking
 type session struct {
 	mu sync.Mutex
 
-	flowID     string
 	workitemID string
 	nodeID     string
 
@@ -49,11 +52,10 @@ type session struct {
 // the inactivity timer. The returned context is derived from the parent and
 // will be cancelled when the inactivity timer fires.
 func newSession(
-	parent context.Context, flowID, workitemID, nodeID string, timeout time.Duration,
+	parent context.Context, workitemID, nodeID string, timeout time.Duration,
 ) (*session, context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s := &session{
-		flowID:     flowID,
 		workitemID: workitemID,
 		nodeID:     nodeID,
 		timeout:    timeout,

@@ -16,7 +16,7 @@ The Judiciary's HITL (Human-in-the-Loop) node. Three entry paths: [Deliberation 
 
 ### Assay
 
-**Superseded.** The former judicial node present in every Flow. Replaced by the [Judiciary](#judiciary) subsystem comprising orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes ([Juror](#juror), [Deliberation Gate](#deliberation-gate)), and legislative inner cycle nodes ([Clerk](#clerk), Codification nodes, [Tribunal Router](#tribunal-router), [Judiciary Gate](#judiciary-gate)). See [Judiciary](#judiciary).
+**Superseded.** The former judicial node present in every Flow. Replaced by the [Judiciary](#judiciary) subsystem comprising orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes ([Juror](#juror), [Deliberation Gate](#deliberation-gate)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher)), and legislative inner cycle nodes ([Clerk](#clerk), Codification nodes, [Tribunal Router](#tribunal-router), [Judiciary Gate](#judiciary-gate)). See [Judiciary](#judiciary).
 
 ### assignment
 
@@ -50,6 +50,10 @@ A stateless pipeline adapter that subscribes to the Flow Event Bus's telemetry a
 
 The system service that subscribes to friction events on the Flow Event Bus, maintains running friction aggregates (per-law, per-node, per-tier, per-topology-path) in SQLite, evaluates hearing thresholds, and publishes threshold-crossing signals to the friction channel. Serves `QueryFriction` as a direct gRPC API for point-to-point friction queries. Detail: [System Services](../02-flow/04-system-services.md#friction-ledger).
 
+### Friction Watcher
+
+A Judiciary watcher node. Entry-bound, long-lived process that subscribes to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) friction channel (via Sidecar) for `friction.threshold_crossed` events. When a law's accumulated friction crosses its tier's configured threshold, creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact containing the law ID, and routes to the [Tribunal](#tribunal) via its `default` output. Tracks pending hearing law IDs to prevent duplicate hearing creation. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#friction-watcher), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+
 ### Flow Event Bus
 
 The durable event distribution service in the Control Plane. Receives events from producers, persists them to a SQLite append-only log, and fans them out to all active subscribers across three channels: telemetry, audit, and friction. Detail: [System Services](../02-flow/04-system-services.md#flow-event-bus).
@@ -64,7 +68,7 @@ The SDK's managed inference wrapper for LLM-backed nodes. Provides three behavio
 
 ### Librarian
 
-The system service that manages the Flow's body of law (the Library). Stores law objects, serves law queries, runs integration conflict checks, triggers review hearings based on friction thresholds and review TTL expiry, and manages Librarian-to-Librarian replication for cross-flow law synchronisation. Detail: [System Services](../02-flow/04-system-services.md#librarian).
+The system service that manages the Flow's body of law (the Library). A pure law store and lifecycle service — stores law objects, serves law queries, runs integration conflict checks, manages law version history, and handles Librarian-to-Librarian replication for cross-flow law synchronisation. Hearing triggers are owned by dedicated watcher nodes ([Friction Watcher](#friction-watcher) and [TTL Watcher](#ttl-watcher)), not the Librarian. Detail: [System Services](../02-flow/04-system-services.md#librarian).
 
 ### node
 
@@ -80,7 +84,7 @@ The outcome a node returns after processing: `route_to_output` (named output cha
 
 ### Sidecar
 
-The Security Plane's presence in the Data Plane. An in-pod proxy that authenticates node requests, injects identity (`node_id`, `workitem_id`, `flow_id`), enforces assignment scoping, and brokers all communication between the node and runtime services. Nodes never call services directly. Detail: [Sidecar](../03-node/01-sidecar.md).
+The Security Plane's presence in the Data Plane. An in-pod proxy that authenticates node requests, injects identity (`node_id`, `workitem_id`, `namespace`), enforces assignment scoping, and brokers all communication between the node and runtime services. Nodes never call services directly. Detail: [Sidecar](../03-node/01-sidecar.md).
 
 ### topology
 
@@ -92,7 +96,7 @@ The per-node visit counter map on each Workitem. Each assignment increments the 
 
 ### Tribunal
 
-A Judiciary orchestration node with two modes. **Hearing mode**: receives hearing Workitems from the Operator (triggered by the Librarian when friction thresholds or review TTLs are crossed), assembles law evidence, fans out to [Juror](#juror) nodes, and routes to the [Deliberation Gate](#deliberation-gate) then [Tribunal Router](#tribunal-router) for tier-based routing. **Review mode**: receives petition artefacts from the [Clerk](#clerk) in the inner cycle, reviews against governance context, fans out to Juror nodes, and routes to the Deliberation Gate then [Judiciary Gate](#judiciary-gate). Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#tribunal-law-review), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+A Judiciary orchestration node with two modes. **Hearing mode**: receives hearing Workitems created by the [Friction Watcher](#friction-watcher) or [TTL Watcher](#ttl-watcher) (when friction thresholds or review TTLs are crossed), assembles law evidence, fans out to [Juror](#juror) nodes, and routes to the [Deliberation Gate](#deliberation-gate) then [Tribunal Router](#tribunal-router) for tier-based routing. **Review mode**: receives petition artefacts from the [Clerk](#clerk) in the inner cycle, reviews against governance context, fans out to Juror nodes, and routes to the Deliberation Gate then [Judiciary Gate](#judiciary-gate). Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#tribunal-law-review), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
 ### Tribunal Router
 
@@ -168,7 +172,7 @@ Any point where the system pauses for a human decision. The SDK provides the [HI
 
 ### Judiciary
 
-The umbrella term for the judicial subsystem. Comprises orchestration nodes ([Arbiter](#arbiter), [Tribunal](#tribunal), [Advocate](#advocate)), deliberation nodes ([Juror](#juror), [Deliberation Gate](#deliberation-gate)), and legislative inner cycle nodes ([Clerk](#clerk), Codification nodes, [Tribunal Router](#tribunal-router), [Judiciary Gate](#judiciary-gate)). Replaces the former "Assay" node. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking. The Judiciary resolves deadlocked feedback disputes (Arbiter), conducts review hearings and petition reviews (Tribunal), escalates to humans (Advocate), deliberates via Juror fan-out with consensus tally (Juror + Deliberation Gate), drafts and codifies law changes as petitions (Clerk + Codification nodes), routes by tier (Tribunal Router), and applies approved petitions (Judiciary Gate). All components are Operator-provisioned runtime invariants. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+The umbrella term for the judicial subsystem. Comprises orchestration nodes ([Arbiter](#arbiter), [Tribunal](#tribunal), [Advocate](#advocate)), deliberation nodes ([Juror](#juror), [Deliberation Gate](#deliberation-gate)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher)), and legislative inner cycle nodes ([Clerk](#clerk), Codification nodes, [Tribunal Router](#tribunal-router), [Judiciary Gate](#judiciary-gate)). Replaces the former "Assay" node. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking. The Judiciary resolves deadlocked feedback disputes (Arbiter), conducts review hearings and petition reviews (Tribunal), triggers hearings on friction thresholds (Friction Watcher) and TTL expiry (TTL Watcher), escalates to humans (Advocate), deliberates via Juror fan-out with consensus tally (Juror + Deliberation Gate), drafts and codifies law changes as petitions (Clerk + Codification nodes), routes by tier (Tribunal Router), and applies approved petitions (Judiciary Gate). All components are Operator-provisioned runtime invariants. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
 ### Judiciary Gate
 
@@ -292,7 +296,7 @@ A specific expression of a law's goal — prose, formal logic, executable code, 
 
 ### review hearing
 
-A judicial proceeding processed as a standard Workitem at the [Tribunal](#tribunal) in hearing mode. Triggered by the Librarian when a law's accumulated friction crosses a configured threshold or when a law's age exceeds its tier's configured review TTL. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`). The law remains active during the hearing. The Tribunal assembles evidence, fans out to [Juror](#juror) nodes, and routes through the [Deliberation Gate](#deliberation-gate) to the [Tribunal Router](#tribunal-router). For Tiers 1-2, the Tribunal Router routes to the [Clerk](#clerk) to draft a [petition](#petition) with tier-specific actions: promote, retire, or demote. For Tiers 3-5, the Tribunal Router routes to the [Advocate](#advocate) for human escalation. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
+A judicial proceeding processed as a standard Workitem at the [Tribunal](#tribunal) in hearing mode. Triggered by the [Friction Watcher](#friction-watcher) when a law's accumulated friction crosses a configured threshold, or by the [TTL Watcher](#ttl-watcher) when a law's age exceeds its tier's configured review TTL. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`). The law remains active during the hearing. The Tribunal assembles evidence, fans out to [Juror](#juror) nodes, and routes through the [Deliberation Gate](#deliberation-gate) to the [Tribunal Router](#tribunal-router). For Tiers 1-2, the Tribunal Router routes to the [Clerk](#clerk) to draft a [petition](#petition) with tier-specific actions: promote, retire, or demote. For Tiers 3-5, the Tribunal Router routes to the [Advocate](#advocate) for human escalation. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
 
 ### Ruling (Tier 2)
 
@@ -312,7 +316,11 @@ A law's level in the five-tier jurisdictional hierarchy. Tier 1 (Finding), Tier 
 
 ### TTL (Review TTL)
 
-Time-to-live. A per-tier expiry window configured on the FoundryFlow's governance policy. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing.
+Time-to-live. A per-tier expiry window configured on the FoundryFlow's governance policy. When a law's age exceeds its tier's configured review TTL, the [TTL Watcher](#ttl-watcher) node triggers a review hearing. The law remains active during the hearing.
+
+### TTL Watcher
+
+A Judiciary watcher node. Entry-bound, long-lived process that periodically polls the [Librarian](#librarian) via `QueryLaws` for laws whose age exceeds their tier's configured review TTL. On expiry, creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact containing the law ID, and routes to the [Tribunal](#tribunal) via its `default` output. Tracks pending hearing law IDs to prevent duplicate hearing creation. Per-tier TTL durations are configured via node config. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#ttl-watcher), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
 ### verdict
 
@@ -386,11 +394,12 @@ These legacy terms are explicitly out of scope in v1. They must not appear in sp
 
 | Superseded Term | Replacement | Notes |
 |-----------------|-------------|-------|
-| `Assay` | Judiciary (Arbiter, Tribunal, Advocate, Juror, Deliberation Gate, Clerk, Codification nodes, Tribunal Router, Judiciary Gate) | Single judicial node decomposed into orchestration, deliberation, and legislative inner cycle nodes. |
+| `Assay` | Judiciary (Arbiter, Tribunal, Advocate, Juror, Deliberation Gate, Clerk, Codification nodes, Tribunal Router, Judiciary Gate, Friction Watcher, TTL Watcher) | Single judicial node decomposed into orchestration, deliberation, watcher, and legislative inner cycle nodes. |
 | `Jury` (service) | Juror nodes + Deliberation Gate | Monolithic deliberation service replaced by Juror fan-out with Deliberation Gate consensus tally. |
 | `Clerk` (service) | Clerk node + Codification nodes + Judiciary Gate | Monolithic law drafting service replaced by Clerk node (petition drafter), Codification node fan-out, and Judiciary Gate (petition application). |
 | `Deliberate()` RPC | Juror fan-out via child Workitems | gRPC deliberation call replaced by externalised Workitem transitions. |
 | `DraftLaw()` RPC | Clerk node petition drafting | gRPC law drafting call replaced by Clerk node receiving Workitems. |
+| `CreateHearingWorkitem` RPC | Friction Watcher / TTL Watcher nodes using generic `CreateWorkitem` | Judiciary-specific Operator RPC replaced by entry-bound watcher nodes. |
 | `WorkitemType` | Entry/exit contracts | Flow admission is not type-gated. |
 | `spec.type` | Entry/exit contracts | No Workitem type discriminator exists. |
 | `spec.context` / `status.context` | Governed artefacts | No freeform context bag. All work context is represented by explicit Workitem state and governed artefacts. |

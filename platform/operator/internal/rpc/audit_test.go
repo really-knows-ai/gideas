@@ -69,11 +69,12 @@ func TestAudit_SubmitResult(t *testing.T) {
 	srv := NewOperatorServer(k8s)
 	srv.Auditor = pub
 
-	_, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	md := metadata.Pairs("x-flow-namespace", "default")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: "wi-audit-1",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	if err != nil {
 		t.Fatalf("SubmitResult: %v", err)
@@ -130,7 +131,7 @@ func TestAudit_CreateWorkitem(t *testing.T) {
 	srv.Auditor = pub
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-1",
+		"x-flow-namespace", "default",
 		"x-flow-node-id", "forge-node",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -170,11 +171,12 @@ func TestAudit_NilPublisher(t *testing.T) {
 
 	srv := NewOperatorServer(k8s) // No auditor set.
 
-	_, err := srv.SubmitResult(context.Background(), &flowv1.SubmitResultRequest{
+	md := metadata.Pairs("x-flow-namespace", "default")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.SubmitResult(ctx, &flowv1.SubmitResultRequest{
 		WorkitemId: "wi-nil-pub",
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
+		Action:     &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{}},
 	})
 	if err != nil {
 		t.Fatalf("SubmitResult should succeed with nil publisher: %v", err)
@@ -199,7 +201,10 @@ func TestAudit_ExportWorkitem(t *testing.T) {
 	srv := NewOperatorServer(k8s)
 	srv.Auditor = pub
 
-	_, err := srv.ExportWorkitem(context.Background(), &flowv1.ExportWorkitemRequest{
+	md := metadata.Pairs("x-flow-namespace", "default")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.ExportWorkitem(ctx, &flowv1.ExportWorkitemRequest{
 		WorkitemId: "wi-export",
 	})
 	if err != nil {
@@ -241,7 +246,7 @@ func TestAudit_CreateChildWorkitem(t *testing.T) {
 	srv.Auditor = pub
 
 	md := metadata.Pairs(
-		"x-flow-flow-id", "flow-1",
+		"x-flow-namespace", "default",
 		"x-flow-node-id", "clerk",
 		"x-flow-workitem-id", "parent-audit",
 		"x-flow-capabilities", "CREATE:workitem/child",
@@ -296,7 +301,10 @@ func TestAudit_RouteChild(t *testing.T) {
 	srv := NewOperatorServer(k8s)
 	srv.Auditor = pub
 
-	md := metadata.Pairs("x-flow-workitem-id", "parent-audit")
+	md := metadata.Pairs(
+		"x-flow-workitem-id", "parent-audit",
+		"x-flow-namespace", "default",
+	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.RouteChild(ctx, &flowv1.RouteChildRequest{

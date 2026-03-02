@@ -17,9 +17,9 @@ func TestHITLAppraise_HappyPath(t *testing.T) {
 
 	ctx := context.Background()
 	wctx := &flowv1.WorkitemContext{
-		WorkitemId: "wi-hitl-1",
-		FlowId:     "flow-1",
-		NodeId:     "hitl-appraise",
+		WorkitemId:    "wi-hitl-1",
+		FlowNamespace: "flow-1",
+		NodeId:        "hitl-appraise",
 	}
 
 	// Run handler in a goroutine — it will block on WaitForDecision.
@@ -98,9 +98,9 @@ func TestHITLAppraise_NoStampCapability(t *testing.T) {
 
 	ctx := context.Background()
 	wctx := &flowv1.WorkitemContext{
-		WorkitemId: "wi-no-stamp",
-		FlowId:     "flow-1",
-		NodeId:     "hitl-appraise",
+		WorkitemId:    "wi-no-stamp",
+		FlowNamespace: "flow-1",
+		NodeId:        "hitl-appraise",
 	}
 
 	err := handleAppraise(ctx, client, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
@@ -119,9 +119,9 @@ func TestHITLAppraise_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	wctx := &flowv1.WorkitemContext{
-		WorkitemId: "wi-cancel",
-		FlowId:     "flow-1",
-		NodeId:     "hitl-appraise",
+		WorkitemId:    "wi-cancel",
+		FlowNamespace: "flow-1",
+		NodeId:        "hitl-appraise",
 	}
 
 	errCh := make(chan error, 1)

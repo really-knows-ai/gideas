@@ -90,9 +90,16 @@ message RoutingInstruction {
 // Nodes cannot override or spoof these fields.
 // See: specs/05-reference/grpc-api.md#identity-injection
 message WorkitemContext {
-  string flow_id = 1;
+  // Kubernetes namespace that owns this flow (one namespace = one FoundryFlow).
+  // The Sidecar populates this from the FLOW_NAMESPACE environment variable.
+  string flow_namespace = 1;
   string workitem_id = 2;
   string node_id = 3;
+  // Caller-supplied key-value pairs from CreateWorkitemRequest.metadata.
+  // Stored on the Workitem CRD and propagated through to the handler.
+  // Entry-bound nodes use this to pass context (e.g. law_id) from the
+  // entry loop to the handler, which may run on a different replica.
+  map<string, string> metadata = 4;
 }
 
 // Reference to an artefact within a Workitem.

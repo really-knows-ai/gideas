@@ -48,6 +48,7 @@ Write outcomes depend on whether the `id` already exists on the Workitem:
 | Existing `id`, same `governedArtefact`, new content | Archivist stores a new version. Workitem reference unchanged. |
 | Existing `id`, same `governedArtefact`, identical content | No-op. Content hash matches an existing version — no new version is created. |
 | Existing `id`, different `governedArtefact` | **Rejected.** `governedArtefact` is immutable for a given `id`. Returns an identity conflict error. |
+| New `id`, unregistered `governedArtefact` | **Rejected.** The `governedArtefact` name must match a [GovernedArtefact](../05-reference/crds.md#governedartefact) CRD registered in the Flow. Returns an unknown governed artefact error. |
 
 The Sidecar computes the content hash before sending the write to the Archivist. The node does not compute or supply hashes.
 

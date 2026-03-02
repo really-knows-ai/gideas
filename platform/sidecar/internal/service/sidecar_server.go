@@ -42,6 +42,11 @@ const (
 type SidecarServer struct {
 	flowv1.UnimplementedSidecarServiceServer
 
+	// Namespace is the Kubernetes namespace this Sidecar runs in.
+	// Set from the FLOW_NAMESPACE environment variable. This is the
+	// flow identity boundary — one namespace = one FoundryFlow.
+	Namespace string
+
 	// NodeID is the identity of the node this Sidecar is attached to.
 	NodeID string
 
@@ -65,13 +70,14 @@ type SidecarServer struct {
 	nodeClient flowv1.NodeServiceClient
 }
 
-// NewSidecarServer creates a SidecarServer with the given node identity
-// and User Code address.
-func NewSidecarServer(nodeID, nodeAddress string) *SidecarServer {
+// NewSidecarServer creates a SidecarServer with the given namespace,
+// node identity, and User Code address.
+func NewSidecarServer(namespace, nodeID, nodeAddress string) *SidecarServer {
 	if nodeAddress == "" {
 		nodeAddress = DefaultNodeAddress
 	}
 	return &SidecarServer{
+		Namespace:   namespace,
 		NodeID:      nodeID,
 		NodeAddress: nodeAddress,
 		sessions:    make(map[string]*session),
@@ -104,9 +110,9 @@ func (s *SidecarServer) getSession(workitemID string) *session {
 
 // SessionIdentity holds the authoritative identity fields for an active
 // Workitem assignment. Returned by LookupSession for use by the identity
-// injection interceptor.
+// injection interceptor. The namespace is not included here — it is a
+// Sidecar-level constant, not per-session.
 type SessionIdentity struct {
-	FlowID     string
 	WorkitemID string
 	NodeID     string
 }
@@ -191,7 +197,6 @@ func (s *SidecarServer) LookupSession(workitemID string) *SessionIdentity {
 		return nil
 	}
 	return &SessionIdentity{
-		FlowID:     sess.flowID,
 		WorkitemID: sess.workitemID,
 		NodeID:     sess.nodeID,
 	}
@@ -293,17 +298,16 @@ func (s *SidecarServer) AssignWork(ctx context.Context, req *flowv1.AssignWorkRe
 	}
 
 	workitemID := wctx.GetWorkitemId()
-	flowID := wctx.GetFlowId()
 	nodeID := wctx.GetNodeId()
 
 	slog.Info("Received assignment from Operator",
-		"flow_id", flowID,
+		"namespace", s.Namespace,
 		"workitem_id", workitemID,
 		"node_id", nodeID,
 	)
 
 	// Create an assignment session with an inactivity timer.
-	sess, sessionCtx := newSession(ctx, flowID, workitemID, nodeID, s.timeout())
+	sess, sessionCtx := newSession(ctx, workitemID, nodeID, s.timeout())
 
 	s.mu.Lock()
 	s.sessions[workitemID] = sess
@@ -402,10 +406,10 @@ func (s *SidecarServer) AddFriction(
 		return nil, err
 	}
 
-	flowID, workitemID, nodeID := extractIdentityFromMD(ctx)
+	_, workitemID, nodeID := extractIdentityFromMD(ctx)
 
 	slog.Info("AddFriction: submitting to telemetry buffer",
-		"flow_id", flowID,
+		"namespace", s.Namespace,
 		"workitem_id", workitemID,
 		"node_id", nodeID,
 		"magnitude", req.GetMagnitude(),
@@ -413,7 +417,7 @@ func (s *SidecarServer) AddFriction(
 
 	s.TelemetryBuffer.Submit(buffer.Event{
 		Priority:   buffer.PriorityHigh,
-		FlowID:     flowID,
+		Namespace:  s.Namespace,
 		WorkitemID: workitemID,
 		NodeID:     nodeID,
 		LawIDs:     req.GetLawIds(),
@@ -434,10 +438,10 @@ func (s *SidecarServer) RecordTelemetry(
 			"telemetry buffer not configured — Event Bus not available")
 	}
 
-	flowID, workitemID, nodeID := extractIdentityFromMD(ctx)
+	_, workitemID, nodeID := extractIdentityFromMD(ctx)
 
 	slog.Info("RecordTelemetry: submitting to telemetry buffer",
-		"flow_id", flowID,
+		"namespace", s.Namespace,
 		"workitem_id", workitemID,
 		"node_id", nodeID,
 		"event_type", req.GetEventType(),
@@ -445,7 +449,7 @@ func (s *SidecarServer) RecordTelemetry(
 
 	s.TelemetryBuffer.Submit(buffer.Event{
 		Priority:   buffer.PriorityNormal,
-		FlowID:     flowID,
+		Namespace:  s.Namespace,
 		WorkitemID: workitemID,
 		NodeID:     nodeID,
 		EventType:  req.GetEventType(),
@@ -484,14 +488,17 @@ func checkCapability(ctx context.Context, required string) error {
 }
 
 // extractIdentityFromMD extracts Sidecar-injected identity from incoming
-// gRPC metadata.
-func extractIdentityFromMD(ctx context.Context) (flowID, workitemID, nodeID string) {
+// gRPC metadata. The namespace field reads x-flow-namespace; workitem_id
+// and node_id are unchanged.
+//
+//nolint:unparam // namespace reserved for future callers
+func extractIdentityFromMD(ctx context.Context) (namespace, workitemID, nodeID string) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return
 	}
-	if vals := md.Get("x-flow-flow-id"); len(vals) > 0 {
-		flowID = vals[0]
+	if vals := md.Get("x-flow-namespace"); len(vals) > 0 {
+		namespace = vals[0]
 	}
 	if vals := md.Get("x-flow-workitem-id"); len(vals) > 0 {
 		workitemID = vals[0]

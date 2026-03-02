@@ -25,7 +25,7 @@ A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own g
 
 Laws emerge from work. When a node encounters a situation that warrants a rule — a pattern, a constraint, a quality standard — it records a Tier 1 Finding through the [SDK](../04-sdk/01-sdk-core.md). Findings are ephemeral. They decay if unused. Nodes that use a law [cite](../04-sdk/03-sdk-legal.md#citation) it through the SDK, which records a low-magnitude [friction](./00-overview.md#friction) event attributed to that law. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates these events, and the [Librarian](../02-flow/04-system-services.md) periodically queries the accumulated friction on each law.
 
-Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate friction that can trigger a **review hearing**. The [Librarian](../02-flow/04-system-services.md) detects when a Finding's friction crosses a configurable threshold and triggers creation of a Workitem for review-hearing processing, routed to the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) node.
+Findings that prove useful — cited frequently across [Workitems](./03-data-model.md#workitems) — accumulate friction that can trigger a **review hearing**. The [Friction Watcher](./02-foundry-cycle.md#friction-watcher) node detects when a Finding's friction crosses a configurable threshold and creates a Workitem for review-hearing processing, routed to the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) node.
 
 The Tribunal evaluates the Finding's friction level and goal, and renders a verdict:
 
@@ -34,7 +34,7 @@ The Tribunal evaluates the Finding's friction level and goal, and renders a verd
 | **Retire** | Finding is deleted. History preserved in the audit log. |
 | **Promote** | Finding is minted as a Tier 2 Ruling — binding precedent |
 
-A Finding that does not accumulate enough friction to trigger a review hearing will enter a review hearing when its tier's configured review TTL expires.
+A Finding that does not accumulate enough friction to trigger a review hearing will enter a review hearing when its tier's configured review TTL expires, detected by the [TTL Watcher](./02-foundry-cycle.md#ttl-watcher) node.
 
 ### Administered Policy (Tier 3)
 
@@ -50,7 +50,7 @@ The [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) is the 
 
     Juror deliberation is itself a friction source. Each deliberation round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first round, 125 on the second, 625 on the third. If the Deliberation Gate cannot reach consensus and the dispute escalates to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) for human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 rounds produces 15,625. The cost curve ensures that disputes reaching the Arbiter are visibly expensive, and disputes reaching humans are dramatically so.
 
-2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [governance policy](../05-reference/crds.md#governance-policy). The law remains active during the hearing. For Tiers 1-2, the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) adjudicates directly — rendering a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow, routed through the [Advocate](./02-foundry-cycle.md#advocate-human-escalation). Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at the Tribunal.
+2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the [Friction Watcher](./02-foundry-cycle.md#friction-watcher) or [TTL Watcher](./02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [governance policy](../05-reference/crds.md#governance-policy). The law remains active during the hearing. For Tiers 1-2, the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) adjudicates directly — rendering a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow, routed through the [Advocate](./02-foundry-cycle.md#advocate-human-escalation). Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at the Tribunal.
 
 The Judiciary's verdicts are enforced by the [Contempt Guard](./03-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
@@ -76,7 +76,7 @@ Promotion is also where governance can harden in *form*, not just authority. Whe
 
 ### Decay and Retirement
 
-All law tiers can be subject to review. When a law's age exceeds its tier's configured review TTL, the Librarian triggers a review hearing. The law remains active during the hearing. The Tribunal evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger)) and the law's goal — and renders a tier-specific verdict:
+All law tiers can be subject to review. When a law's age exceeds its tier's configured review TTL, the [TTL Watcher](./02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. The law remains active during the hearing. The Tribunal evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger)) and the law's goal — and renders a tier-specific verdict:
 
 **Tier 1 Finding — review hearing:**
 
@@ -300,4 +300,4 @@ Friction is governance's economic conscience. The system emits friction transpar
 
 Friction data is law-attributable and tier-attributable. A team lead sees their local friction — which of *their* rules generate the most heat. A compliance officer sees the federated friction — which Tier 4 State Constitution laws generate the most resistance across the organisation. Every layer of governance carries a measurable price tag.
 
-Friction data feeds back into the governance process. Laws that generate disproportionate friction surface for review — the [Librarian](../02-flow/04-system-services.md) queries friction levels to trigger promotion hearings. Patterns of constitutional resistance point to laws that need amendment, consolidation, or repeal. The system surfaces the cost of its own governance, creating pressure toward improvement.
+Friction data feeds back into the governance process. Laws that generate disproportionate friction surface for review — the [Friction Watcher](./02-foundry-cycle.md#friction-watcher) node subscribes to friction threshold-crossing signals and triggers hearings. Patterns of constitutional resistance point to laws that need amendment, consolidation, or repeal. The system surfaces the cost of its own governance, creating pressure toward improvement.

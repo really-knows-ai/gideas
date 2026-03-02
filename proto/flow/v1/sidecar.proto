@@ -94,7 +94,8 @@ message Ack {
 // --- Ingestion types (migrated from monitor.proto) ---
 
 message AddFrictionRequest {
-  string flow_id = 1;
+  // Kubernetes namespace that owns this flow (one namespace = one FoundryFlow).
+  string flow_namespace = 1;
   string workitem_id = 2;
   // Optional: Sidecar-injected for node context.
   string node_id = 3;
@@ -109,7 +110,8 @@ message AddFrictionResponse {
 }
 
 message RecordTelemetryRequest {
-  string flow_id = 1;
+  // Kubernetes namespace that owns this flow (one namespace = one FoundryFlow).
+  string flow_namespace = 1;
   string node_id = 2;
   string workitem_id = 3;
   // Event type identifier.

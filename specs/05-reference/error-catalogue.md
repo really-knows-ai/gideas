@@ -111,6 +111,7 @@ Emitted when referenced data is missing or invalid.
 |------|-------------|-------|-----------------|
 | `FEEDBACK_NOT_FOUND` | `NOT_FOUND` | The specified feedback ID does not exist on the artefact. | Verify the feedback ID. The item may have been addressed by another assignment or may reference a different artefact. |
 | `LAW_NOT_FOUND` | `NOT_FOUND` | A cited law has been retired or does not exist in the Library. | The law is gone. Do not retry. If the citation was used for justification, the handler may need to find alternative governance support or propose a novel argument. |
+| `UNKNOWN_GOVERNED_ARTEFACT` | `FAILED_PRECONDITION` | The `governed_artefact` name in a `StoreArtefact` call does not match any GovernedArtefact CRD registered in the Flow. | Register a GovernedArtefact CRD with the required `metadata.name` before storing artefacts of this type. |
 | `MESSAGE_TOO_LONG` | `INVALID_ARGUMENT` | A feedback message exceeds 1024 characters, or a Finding goal exceeds the maximum length. | Reduce content length. For detailed analysis, use the Store & Link pattern — store the full analysis as an artefact and reference it in the message. |
 
 ---
@@ -146,6 +147,7 @@ Emitted when a service is temporarily unreachable.
 | Configuration (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) | No | Fix CRD configuration. |
 | Cross-flow trust (`TRUST_CHAIN_INVALID`, `TREATY_NOT_FOUND`, `NATURALISATION_REQUIRED`, `IMPORT_ADMISSION_FAILED`) | No | Fix trust configuration or process through local governance. |
 | Missing data (`FEEDBACK_NOT_FOUND`, `LAW_NOT_FOUND`) | No | Resource is absent. Adapt logic. |
+| Unregistered artefact type (`UNKNOWN_GOVERNED_ARTEFACT`) | No | Register a GovernedArtefact CRD. Configuration issue. |
 | Content limit (`MESSAGE_TOO_LONG`) | No | Reduce content length. |
 | Transient (`SERVICE_UNAVAILABLE`) | Yes | Retry with exponential backoff. |
 

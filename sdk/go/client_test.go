@@ -3,10 +3,12 @@ package flow
 import (
 	"context"
 	"testing"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const bufSize = 1024 * 1024
@@ -27,6 +29,10 @@ type spyServer struct {
 
 	// lastMD is the metadata captured from the most recent call.
 	lastMD metadata.MD
+	// lastSubmitReq is the request captured from the most recent SubmitResult call.
+	lastSubmitReq *flowv1.SubmitResultRequest
+	// lastResumeReq is the request captured from the most recent ResumeWorkitem call.
+	lastResumeReq *flowv1.ResumeWorkitemRequest
 }
 
 func (s *spyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatRequest) (*flowv1.HeartbeatResponse, error) {
@@ -38,7 +44,16 @@ func (s *spyServer) SubmitResult(
 	ctx context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastSubmitReq = req
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
+}
+
+func (s *spyServer) ResumeWorkitem(
+	ctx context.Context, req *flowv1.ResumeWorkitemRequest,
+) (*flowv1.ResumeWorkitemResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastResumeReq = req
+	return &flowv1.ResumeWorkitemResponse{Accepted: true}, nil
 }
 
 func (s *spyServer) GetFlowTopology(
@@ -346,7 +361,7 @@ func TestComplete_InjectsWorkitemMetadata(t *testing.T) {
 	const wantID = "workitem-complete-456"
 	env := setupTestEnv(t, wantID)
 
-	accepted, err := env.client.Complete(context.Background(), "next-node")
+	accepted, err := env.client.Complete(context.Background())
 	if err != nil {
 		t.Fatalf("Complete() returned error: %v", err)
 	}
@@ -710,5 +725,207 @@ func TestGetLaw_InjectsWorkitemMetadata(t *testing.T) {
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
 	if len(got) == 0 || got[0] != wantID {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Suspend Convenience Method
+// ---------------------------------------------------------------------------
+
+func TestSuspend_NoOptions(t *testing.T) {
+	const wantID = "workitem-suspend-001"
+	env := setupTestEnv(t, wantID)
+
+	err := env.client.Suspend(context.Background())
+	if err != nil {
+		t.Fatalf("Suspend() returned error: %v", err)
+	}
+
+	req := env.spy.lastSubmitReq
+	if req == nil {
+		t.Fatal("SubmitResult was not called")
+	}
+	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
+	if !ok {
+		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
+	}
+	if suspend.Suspend.GetCondition() != "" {
+		t.Fatalf("expected empty condition, got %q", suspend.Suspend.GetCondition())
+	}
+	if suspend.Suspend.GetTimeout() != nil {
+		t.Fatalf("expected nil timeout, got %v", suspend.Suspend.GetTimeout())
+	}
+}
+
+func TestSuspend_WithCondition(t *testing.T) {
+	const wantID = "workitem-suspend-002"
+	env := setupTestEnv(t, wantID)
+
+	cel := `children.all(c, c.phase == "Completed")`
+	err := env.client.Suspend(context.Background(), WithCondition(cel))
+	if err != nil {
+		t.Fatalf("Suspend() returned error: %v", err)
+	}
+
+	req := env.spy.lastSubmitReq
+	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
+	if !ok {
+		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
+	}
+	if suspend.Suspend.GetCondition() != cel {
+		t.Fatalf("condition = %q, want %q", suspend.Suspend.GetCondition(), cel)
+	}
+	if suspend.Suspend.GetTimeout() != nil {
+		t.Fatalf("expected nil timeout, got %v", suspend.Suspend.GetTimeout())
+	}
+}
+
+func TestSuspend_WithTimeout(t *testing.T) {
+	const wantID = "workitem-suspend-003"
+	env := setupTestEnv(t, wantID)
+
+	err := env.client.Suspend(context.Background(), WithTimeout(5*time.Minute))
+	if err != nil {
+		t.Fatalf("Suspend() returned error: %v", err)
+	}
+
+	req := env.spy.lastSubmitReq
+	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
+	if !ok {
+		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
+	}
+	if suspend.Suspend.GetCondition() != "" {
+		t.Fatalf("expected empty condition, got %q", suspend.Suspend.GetCondition())
+	}
+	wantTimeout := durationpb.New(5 * time.Minute)
+	if suspend.Suspend.GetTimeout().GetSeconds() != wantTimeout.GetSeconds() {
+		t.Fatalf("timeout = %v, want %v", suspend.Suspend.GetTimeout(), wantTimeout)
+	}
+}
+
+func TestSuspend_WithConditionAndTimeout(t *testing.T) {
+	const wantID = "workitem-suspend-004"
+	env := setupTestEnv(t, wantID)
+
+	cel := `children.all(c, c.phase == "Completed")`
+	err := env.client.Suspend(context.Background(),
+		WithCondition(cel),
+		WithTimeout(10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("Suspend() returned error: %v", err)
+	}
+
+	req := env.spy.lastSubmitReq
+	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
+	if !ok {
+		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
+	}
+	if suspend.Suspend.GetCondition() != cel {
+		t.Fatalf("condition = %q, want %q", suspend.Suspend.GetCondition(), cel)
+	}
+	wantTimeout := durationpb.New(10 * time.Minute)
+	if suspend.Suspend.GetTimeout().GetSeconds() != wantTimeout.GetSeconds() {
+		t.Fatalf("timeout = %v, want %v", suspend.Suspend.GetTimeout(), wantTimeout)
+	}
+
+	// Also verify metadata injection.
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Resume Convenience Method
+// ---------------------------------------------------------------------------
+
+func TestResume_SendsCorrectWorkitemID(t *testing.T) {
+	const callerID = "workitem-caller-001"
+	const targetID = "workitem-child-suspended-001"
+	env := setupTestEnv(t, callerID)
+
+	err := env.client.Resume(context.Background(), targetID)
+	if err != nil {
+		t.Fatalf("Resume() returned error: %v", err)
+	}
+
+	req := env.spy.lastResumeReq
+	if req == nil {
+		t.Fatal("ResumeWorkitem was not called")
+	}
+	if req.GetWorkitemId() != targetID {
+		t.Fatalf("workitem_id = %q, want %q", req.GetWorkitemId(), targetID)
+	}
+}
+
+func TestResume_InjectsCallerMetadata(t *testing.T) {
+	const callerID = "workitem-caller-002"
+	env := setupTestEnv(t, callerID)
+
+	err := env.client.Resume(context.Background(), "workitem-target-002")
+	if err != nil {
+		t.Fatalf("Resume() returned error: %v", err)
+	}
+
+	// The interceptor injects the caller's workitem ID, not the target's.
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 || got[0] != callerID {
+		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, callerID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Complete with WithReason
+// ---------------------------------------------------------------------------
+
+func TestComplete_WithReason(t *testing.T) {
+	const wantID = "workitem-complete-reason-001"
+	env := setupTestEnv(t, wantID)
+
+	reason := flowv1.CompletionReason_COMPLETION_REASON_CANCELLED
+	accepted, err := env.client.Complete(context.Background(), WithReason(reason))
+	if err != nil {
+		t.Fatalf("Complete(WithReason) returned error: %v", err)
+	}
+	if !accepted {
+		t.Fatal("Complete(WithReason) was not accepted")
+	}
+
+	req := env.spy.lastSubmitReq
+	if req == nil {
+		t.Fatal("SubmitResult was not called")
+	}
+	complete, ok := req.GetAction().(*flowv1.SubmitResultRequest_Complete)
+	if !ok {
+		t.Fatalf("expected CompleteAction, got %T", req.GetAction())
+	}
+	if complete.Complete.GetReason() != flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
+		t.Fatalf("reason = %v, want COMPLETION_REASON_CANCELLED", complete.Complete.GetReason())
+	}
+}
+
+func TestComplete_WithoutReason(t *testing.T) {
+	const wantID = "workitem-complete-reason-002"
+	env := setupTestEnv(t, wantID)
+
+	accepted, err := env.client.Complete(context.Background())
+	if err != nil {
+		t.Fatalf("Complete() returned error: %v", err)
+	}
+	if !accepted {
+		t.Fatal("Complete() was not accepted")
+	}
+
+	req := env.spy.lastSubmitReq
+	if req == nil {
+		t.Fatal("SubmitResult was not called")
+	}
+	complete, ok := req.GetAction().(*flowv1.SubmitResultRequest_Complete)
+	if !ok {
+		t.Fatalf("expected CompleteAction, got %T", req.GetAction())
+	}
+	if complete.Complete.GetReason() != flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED {
+		t.Fatalf("reason = %v, want COMPLETION_REASON_UNSPECIFIED", complete.Complete.GetReason())
 	}
 }

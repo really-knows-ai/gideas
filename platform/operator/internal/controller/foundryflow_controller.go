@@ -76,6 +76,24 @@ func (r *FoundryFlowReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		flow.Status.Phase = phaseInitialising
 	}
 
+	// Enforce the one-namespace-one-flow singleton invariant.
+	// A namespace must contain exactly one FoundryFlow. If multiple exist,
+	// all are degraded until the violation is resolved.
+	var allFlows flowv1.FoundryFlowList
+	if err := r.List(ctx, &allFlows, client.InNamespace(flow.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list FoundryFlows in namespace %q: %w", flow.Namespace, err)
+	}
+	if len(allFlows.Items) > 1 {
+		log.Error(nil, "Singleton violation: multiple FoundryFlows in namespace",
+			"namespace", flow.Namespace,
+			"count", len(allFlows.Items),
+		)
+		return r.setPhaseAndCondition(ctx, &flow, phaseDegraded,
+			metav1.ConditionFalse, "SingletonViolation",
+			fmt.Sprintf("namespace %q contains %d FoundryFlows; exactly 1 is required",
+				flow.Namespace, len(allFlows.Items)))
+	}
+
 	// Validate governance policy internal consistency.
 	if err := r.validateGovernancePolicy(&flow); err != nil {
 		return r.setPhaseAndCondition(ctx, &flow, phaseFailed,

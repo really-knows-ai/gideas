@@ -100,7 +100,7 @@ func TestLibrarianProxy_Cite_ForwardsAndEmitsFriction(t *testing.T) {
 
 	md := metadata.Pairs(
 		"x-flow-workitem-id", "wi-test",
-		"x-flow-flow-id", "flow-test",
+		"x-flow-namespace", "ns-test",
 		"x-flow-node-id", "node-test",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -132,8 +132,8 @@ func TestLibrarianProxy_Cite_ForwardsAndEmitsFriction(t *testing.T) {
 	if evt.GetEventType() != "friction" {
 		t.Fatalf("expected event_type=friction, got %q", evt.GetEventType())
 	}
-	if evt.GetFlowId() != "flow-test" {
-		t.Fatalf("expected flow_id=flow-test, got %q", evt.GetFlowId())
+	if evt.GetFlowNamespace() != "ns-test" {
+		t.Fatalf("expected flow_namespace=ns-test, got %q", evt.GetFlowNamespace())
 	}
 	if evt.GetWorkitemId() != "wi-test" {
 		t.Fatalf("expected workitem_id=wi-test, got %q", evt.GetWorkitemId())

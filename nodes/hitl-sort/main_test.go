@@ -27,9 +27,9 @@ func TestHITLSort_HappyPath_WithStamp(t *testing.T) {
 
 	ctx := context.Background()
 	wctx := &flowv1.WorkitemContext{
-		WorkitemId: "wi-sort-1",
-		FlowId:     "flow-1",
-		NodeId:     "hitl-sort",
+		WorkitemId:    "wi-sort-1",
+		FlowNamespace: "flow-1",
+		NodeId:        "hitl-sort",
 	}
 
 	errCh := make(chan error, 1)

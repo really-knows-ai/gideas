@@ -71,8 +71,8 @@ func (s *reviewerSpy) SubmitResult(
 ) (*flowv1.SubmitResultResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ri := req.GetRoutingInstruction()
-	if ri != nil && ri.GetType() == flowv1.RoutingType_ROUTING_TYPE_COMPLETE {
+	ri := req.GetAction()
+	if _, ok := ri.(*flowv1.SubmitResultRequest_Complete); ok {
 		s.CompleteCalls++
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil

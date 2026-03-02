@@ -17,6 +17,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"time"
 
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -58,8 +59,17 @@ type Result struct {
 	// Workitem has reached a terminal state.
 	NextAssignee string
 
-	// Phase is the target lifecycle phase: "Pending" or "Completed".
+	// Phase is the target lifecycle phase: "Pending", "Completed", or "Suspended".
 	Phase string
+
+	// SuspendCondition is the CEL expression for auto-resume.
+	// Set only when Phase is "Suspended". Empty means manual Resume() required.
+	SuspendCondition string
+
+	// SuspendTimeout is the resolved timeout duration for a suspended workitem.
+	// Set only when Phase is "Suspended". Resolved from the instruction,
+	// flow defaults, and flow max cap.
+	SuspendTimeout string
 }
 
 // Scheduler resolves routing decisions by reading FoundryNode CRDs.
@@ -131,6 +141,9 @@ func (s *Scheduler) CalculateNextStep(
 			return nil, err
 		}
 		return result, nil
+
+	case "suspend":
+		return s.handleSuspend(instruction, flow)
 
 	default:
 		return nil, &GuardError{
@@ -226,6 +239,57 @@ func (s *Scheduler) handleRouteTo(ctx context.Context, target string) (*Result, 
 	return &Result{
 		NextAssignee: target,
 		Phase:        "Pending",
+	}, nil
+}
+
+// handleSuspend processes a "suspend" instruction.
+// Suspend does not require thrash guard or exit contract checks.
+// The timeout is resolved from the instruction, flow defaults, and flow max cap:
+//  1. If the instruction specifies a timeout, use it (capped by maxSuspendTimeout).
+//  2. If no timeout is specified, apply defaultSuspendTimeout from the flow.
+//  3. If no default is configured, apply maxSuspendTimeout.
+//  4. If the flow has no SuspensionConfig at all, no timeout is applied.
+func (s *Scheduler) handleSuspend(instruction flowv1.RoutingInstruction, flow *flowv1.FoundryFlow) (*Result, error) {
+	timeout := instruction.SuspendTimeout
+	condition := instruction.SuspendCondition
+
+	// Resolve timeout from flow SuspensionConfig.
+	if flow != nil && flow.Spec.Suspension != nil {
+		cfg := flow.Spec.Suspension
+
+		if timeout == "" {
+			// No explicit timeout — apply default.
+			if cfg.DefaultSuspendTimeout != nil {
+				timeout = cfg.DefaultSuspendTimeout.Duration.String()
+			} else if cfg.MaxSuspendTimeout != nil {
+				// Default falls back to max if not explicitly configured.
+				timeout = cfg.MaxSuspendTimeout.Duration.String()
+			}
+		} else {
+			// Explicit timeout — validate against max.
+			if cfg.MaxSuspendTimeout != nil {
+				requested, err := time.ParseDuration(timeout)
+				if err != nil {
+					return nil, &GuardError{
+						Code:    "INVALID_SUSPEND",
+						Message: fmt.Sprintf("invalid suspend timeout %q: %v", timeout, err),
+					}
+				}
+				if requested > cfg.MaxSuspendTimeout.Duration {
+					return nil, &GuardError{
+						Code:    "SUSPEND_TIMEOUT_EXCEEDED",
+						Message: fmt.Sprintf("requested suspend timeout %s exceeds maxSuspendTimeout %s", timeout, cfg.MaxSuspendTimeout.Duration),
+					}
+				}
+			}
+		}
+	}
+
+	return &Result{
+		NextAssignee:     "", // Workitem stays with current assignee on resume.
+		Phase:            "Suspended",
+		SuspendCondition: condition,
+		SuspendTimeout:   timeout,
 	}, nil
 }
 
