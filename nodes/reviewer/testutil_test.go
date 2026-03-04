@@ -150,7 +150,7 @@ func newSpyClient(t *testing.T, spy *reviewerSpy) *flow.Client {
 // defaultTestConfig returns a standard reviewerConfig for tests.
 func defaultTestConfig() *reviewerConfig {
 	return &reviewerConfig{
-		InputArtefact:  "input",
+		InputArtefacts: []string{"input"},
 		ReviewArtefact: "review",
 	}
 }

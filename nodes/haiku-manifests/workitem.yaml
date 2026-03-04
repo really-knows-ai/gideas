@@ -22,8 +22,6 @@ kind: Workitem
 metadata:
   name: haiku-001
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 status:
   phase: Pending
   currentAssignee: forge

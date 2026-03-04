@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/artefacts"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -98,9 +99,11 @@ type evalTemplateQueryData struct {
 // The model (KimiK2Ollama) is created internally — model choice is a
 // code-time decision, not deploy-time config.
 func NewEvalAgent(client *flow.Client, cfg *appraiseConfig) (*EvalAgent, error) {
+	inputLabel := artefacts.InputLabel(cfg.InputArtefacts)
+
 	sysData := evalSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
-		InputArtefact:  cfg.InputArtefact,
+		InputArtefact:  inputLabel,
 	}
 
 	agent, err := buildAgent(client, "eval agent",
@@ -161,7 +164,7 @@ Your job: decide if the refusal is justified.
 
 	data := evalTemplateQueryData{
 		ReviewArtefact:   e.cfg.ReviewArtefact,
-		InputArtefact:    e.cfg.InputArtefact,
+		InputArtefact:    artefacts.InputLabel(e.cfg.InputArtefacts),
 		InputContent:     inputContent,
 		ReviewContent:    reviewContent,
 		FeedbackMessage:  fb.GetMessage(),

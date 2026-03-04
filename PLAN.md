@@ -1,6 +1,6 @@
 # Judiciary Architecture Redesign
 
-## Status: Phases 1–7.1m complete, 7.2a complete, 8.1–8.5 complete (Phase 8 done). Next: Phase 9 (New Node Implementations).
+## Status: Phases 1–8 complete. Phase 9 in progress: 9.1 (Rule Router), 9.2 (Facilitator), 9.3 (Law-Applicator), and 9.4 (HITL) complete. Cross-cutting InputArtefacts refactor complete. Next: Phase 9.5 (Clerk-Forge).
 
 This document captures the full plan for replacing the monolithic Jury service
 and Clerk platform service with a node-based judiciary that mirrors the main
@@ -1444,10 +1444,14 @@ Run `make test-all && make check-fix-all`.
 
 ##### 7.2a Judiciary GovernedArtefact CRDs ✅
 
-Added 14 judiciary GovernedArtefact CRDs to `nodes/haiku-manifests/flow.yaml`
-(lines 63-206). All have `stamps: []`, `namespace: default`,
-`app.kubernetes.io/part-of: haiku-flow`. The `petition` GovernedArtefact
+Added 14 judiciary GovernedArtefact CRDs to `nodes/haiku-manifests/flow.yaml`.
+All have `stamps: []`, `namespace: default`. The `petition` GovernedArtefact
 already existed, so 14 new (not 15).
+
+Also removed the redundant `app.kubernetes.io/part-of: haiku-flow` label from
+all resources across all four manifest files (`flow.yaml`, `configmaps.yaml`,
+`deployments.yaml`, `workitem.yaml`). Namespace scoping already binds
+resources to their flow — the label was redundant information.
 
 ##### 7.2b Judiciary FoundryNode CRDs
 
@@ -1734,46 +1738,96 @@ func WithReason(r CompletionReason) CompleteOption
 
 ---
 
-### Phase 9: New Node Implementations (Architecture Revision)
+### Cross-Cutting: InputArtefact → InputArtefacts Refactor ✅
+
+**Completed.** All main-cycle nodes that consumed a single `inputArtefact`
+config field (string) were refactored to use plural `inputArtefacts` (string
+slice), enabling nodes to consume multiple input artefacts.
+
+**Shared helper** (`nodes/internal/artefacts/fetch.go`, 49 lines):
+- `FetchInputs(ctx, client, ids)` — fetches each artefact by ID and
+  concatenates with `## <id>` Markdown headers
+- `InputLabel(ids)` — returns human-readable comma-joined label for prompt
+  templates
+
+**Nodes updated** (config `InputArtefact string` → `InputArtefacts []string`):
+- Forge (`nodes/forge/main.go`) — uses `artefacts.FetchInputs`
+- Refine (`nodes/refine/main.go`) — uses `artefacts.FetchInputs`
+- Reviewer (`nodes/reviewer/main.go`, `agent_review.go`) — uses
+  `artefacts.FetchInputs` and `artefacts.InputLabel` for prompt template data
+- Appraise (`nodes/appraise/main.go`, `agent_eval.go`) — uses
+  `artefacts.FetchInputs` and `artefacts.InputLabel`, fan-out passes combined
+  content as `"inputs"` artefact to child Reviewer nodes
+
+**Facilitator** (`nodes/facilitator/main.go`):
+- Removed `maxArtefactContentLen` constant (no artificial truncation)
+- `buildDisputeInputs` delegates to shared `FetchInputs` helper
+- `buildDisputeArtefact` returns raw content directly
+
+**Manifests** (`nodes/haiku-manifests/configmaps.yaml`):
+- Updated 4 ConfigMaps: `inputArtefact: "..."` → `inputArtefacts: ["..."]`
+  (forge-config, appraise-config, reviewer-config, refine-config)
+
+All tests pass, lint clean, build clean.
+
+---
 
 New and rewritten nodes for the revised architecture. Ordered by dependency:
 standalone/leaf nodes first, then orchestrators that create children targeting
 them, then cleanup.
 
-#### 9.1 Rule Router Node (`nodes/rule-router/`)
+#### 9.1 Rule Router Node (`nodes/rule-router/`) ✅
 
-Generic CEL-based routing node. Highest-priority new implementation because
-multiple CRD instances depend on it.
+**Completed.** Generic CEL-based routing node (3 files, 1,788 lines, 35 tests
+passing, lint clean). Highest-priority new implementation because multiple CRD
+instances depend on it.
 
 - Parses CEL rules from config at startup
 - On workitem arrival: lazily loads referenced data, evaluates rules in order,
   routes to first match
+- Five CEL environment variables (lazily loaded): `metadata`, `artefacts`,
+  `feedback` (aggregated unresolved/deadlocked/total counts), `stamps`
+  (per-artefact), `children` (phase, completion_reason, workitem_id)
+- Heuristic variable detection via `needsVar()` — only referenced variables
+  trigger RPCs
+- Structured telemetry: `foundry.rule_router.started`, `.matched`, `.no_match`
 - Dependencies: `github.com/google/cel-go`
 - Image: `rule-router:latest`
 
-Files to create:
+Files created:
 - `nodes/rule-router/main.go`
 - `nodes/rule-router/main_test.go`
 - `nodes/rule-router/testutil_test.go`
 
-#### 9.2 Facilitator Node (`nodes/facilitator/`)
+#### 9.2 Facilitator Node (`nodes/facilitator/`) ✅
 
-**New image.** Lifecycle owner for deadlock resolution. Generic -- handles any
-governed artefact's deadlocked feedback.
+**Completed.** Lifecycle owner for deadlock resolution (3 files, 3,007 lines,
+49 tests passing, lint clean). Generic — handles any governed artefact's
+deadlocked feedback.
 
 Handler logic:
 1. **First invocation** (no completed children):
-   - Read feedback history, artefact content, relevant laws, friction data
-   - Assemble evidence bundle artefact
-   - Create a reference to the disputed artefact on the child workitem
-   - `CreateChildWorkitem()` targeting the Arbiter
+   - Discovers flow topology and exit contract
+   - Scans all artefact kinds for DEADLOCKED feedback, selects highest-severity
+   - Assembles evidence: 6 child artefacts (`dispute-workitem`,
+     `dispute-details`, `dispute-artefact`, `dispute-inputs`, `appendix`,
+     `disputed-artefact`)
+   - `dispute-inputs` uses shared `artefacts.FetchInputs()` helper
+   - `CreateChildWorkitem()` targeting the Arbiter, routes child, then suspends
    - `Suspend(WithCondition("children.all(c, c.phase == \"Completed\")"))`
 2. **Post-resume** (child completed):
    - Check child's `CompletionReason`
    - If cancelled: `Complete(WithReason(cancelled))`
    - If success: `RouteToOutput("resolved")`
 
-Files to create:
+Notable design decisions:
+- GetLaw failure is non-fatal (best-effort enrichment, fallback text)
+- No-deadlock graceful exit (routes to `resolved` with warning)
+- Config: `arbiterNode` (default `"arbiter"`) and `inputArtefacts` (list)
+- Structured telemetry: `started`, `evidence_assembled`, `suspended`,
+  `resolved`, `cancelled`, `no_deadlock`
+
+Files created:
 - `nodes/facilitator/main.go`
 - `nodes/facilitator/main_test.go`
 - `nodes/facilitator/testutil_test.go`
@@ -1786,12 +1840,12 @@ Action node that applies approved petitions via the Librarian. Reads the
 
 The implementation extracts the apply logic from `nodes/judiciary-gate/main.go`.
 
-Files to create:
-- `nodes/law-applicator/main.go`
-- `nodes/law-applicator/main_test.go`
-- `nodes/law-applicator/testutil_test.go`
+Files created: ✅
+- `nodes/law-applicator/main.go` — ~265 lines (petition types, apply logic, Complete)
+- `nodes/law-applicator/main_test.go` — 18 tests (8 happy path, 10 error path)
+- `nodes/law-applicator/testutil_test.go` — spy server, setup helper, assertion helpers
 
-#### 9.4 Generic HITL Node (`nodes/hitl/`)
+#### 9.4 Generic HITL Node (`nodes/hitl/`) ✅
 
 Config-driven HITL node. One image, many CRD instances.
 
@@ -1995,17 +2049,19 @@ Phase 6 (rewrite nodes) ✅ -- depends on Phase 4+5 (all 3 superseded)
 Phase 7.1a-d (cleanup)  ✅ -- depends on Phase 6
 Phase 7.1e-i (entry SDK)✅ -- depended on FLOW_NAMESPACE_PLAN.md (satisfied)
 Phase 7.1j-m (watchers) ✅ -- depends on Phase 7.1e-i
-Phase 7.2a (GA CRDs)    ✅ -- GovernedArtefact CRDs written
+Phase 7.2a (GA CRDs)    ✅ -- GovernedArtefact CRDs written, part-of labels removed
 Phase 7.2b-d (FN CRDs)  -- depends on Phase 8+9 (node images must exist)
 Phase 7.3 (deployments)  -- depends on Phase 7.2b (CRDs define the nodes)
 Phase 7.4 (configmaps)   -- depends on Phase 9 (node configs must be known)
-Phase 7.5 (sort output)  -- depends on Phase 9.2 (facilitator must exist)
-Phase 8 (platform)       -- Suspend/Resume + CompletionReason. ✅
+Phase 7.5 (sort output)  ✅ -- unblocked (facilitator exists from 9.2)
+Phase 8 (platform)       ✅ -- Suspend/Resume + CompletionReason
                          -- proto (8.1) ✅ → Operator (8.2a-h) ✅ → Sidecar (8.3) ✅ → SDK (8.4) ✅ → Gate (8.5) ✅
-Phase 9 (new nodes)      -- depends on Phase 8
-                         -- Rule Router (9.1) first (CRD instances need it)
-                         -- Facilitator (9.2) next (unblocks 7.5 sort output)
-                         -- Law-Applicator (9.3) + HITL (9.4) standalone
+InputArtefacts refactor  ✅ -- cross-cutting config change (forge, refine, reviewer, appraise, facilitator)
+Phase 9 (new nodes)      -- depends on Phase 8. In progress.
+                         -- Rule Router (9.1) ✅
+                         -- Facilitator (9.2) ✅
+                         -- Law-Applicator (9.3) ✅
+                         -- HITL (9.4) ✅
                          -- Clerk-Forge (9.5) + Clerk-Refine (9.6) (child targets for orchestrators)
                          -- Arbiter (9.7) + Tribunal (9.8) (create Clerk children)
                          -- Advocate (9.9) standalone rewrite
@@ -2014,9 +2070,12 @@ Phase 10 (spec updates)  -- depends on Phase 9
 Phase 11 (validation)    -- depends on all above
 ```
 
-Phases 1–7.1m, 7.2a, and 8.1–8.5 are complete. Phase 8 is done. The next phase
-is Phase 9 (node implementations). Phases 7.2b–7.5 are deferred until
-Phases 8+9 produce the node images and configurations.
+Phases 1–8 are complete. Phase 9 is in progress (9.1 Rule Router, 9.2
+Facilitator, 9.3 Law-Applicator, and 9.4 HITL done). The InputArtefacts
+cross-cutting refactor is complete. Next is Phase 9.5 (Clerk-Forge). Phases
+7.2b–7.4 are deferred until Phase 9 produces the remaining node images and
+configurations. Phase 7.5 (Sort output update) is unblocked now that the
+Facilitator exists.
 
 ## Estimated Scope
 
@@ -2030,7 +2089,7 @@ Phases 8+9 produce the node images and configurations.
 | 6. Rewrite nodes | ~9 files (3 nodes x 3) | High | ✅ Complete (all 3 superseded) |
 | 7. Operator/platform/SDK/watchers | ~45 files | High | ✅ 7.1+7.2a complete |
 | 8. Platform primitives | ~15 files (proto, operator, sidecar, SDK) | High | ✅ Complete (8.1–8.5) |
-| 9. New nodes (arch revision) | ~30 files (6 new + 3 rewrites + 4 deletions + build) | High | Pending |
+| 9. New nodes (arch revision) | ~30 files (6 new + 3 rewrites + 4 deletions + build) | High | In progress (9.1–9.4 complete) |
 | 10. Specs (arch revision) | ~20-25 spec files | High | Pending |
 | 11. Validation | 0 new, full test suite | Medium | Pending |
 | **Total** | **~200 files** | | |
@@ -2048,14 +2107,14 @@ Phases 8+9 produce the node images and configurations.
 | `appraise:latest` | Existing | Main cycle + `clerk-appraise` CRD instance |
 | `refine:latest` | Existing | Main cycle + (`clerk-refine` is own image) |
 | `quench:latest` | Existing | Main cycle only |
-| `facilitator:latest` | **New** | Main cycle + `clerk-facilitator` CRD instance |
+| `facilitator:latest` | Existing | Main cycle + `clerk-facilitator` CRD instance |
 | `arbiter:latest` | Existing (major rewrite) | Single built-in instance |
 | `tribunal:latest` | Existing (major rewrite) | Hearing mode only |
 | `juror:latest` | Existing | Deliberation primitive |
 | `clerk-forge:latest` | **New** | Extends Forge + codification fan-out |
 | `clerk-refine:latest` | **New** | Extends Refine + codification fan-out |
 | `codify-smt:latest` | Existing | Formal representations |
-| `rule-router:latest` | **New** | CEL-based routing |
+| `rule-router:latest` | Existing | CEL-based routing |
 | `hitl:latest` | **New** | Generic config-driven HITL |
 | `law-applicator:latest` | **New** | Applies petitions via Librarian |
 | `advocate:latest` | Existing (major narrowing) | T4-5 Governance Flow gateway |
@@ -2141,10 +2200,11 @@ Phases 8+9 produce the node images and configurations.
 - Regenerated `gen/flow/v1/*.go`
 - SDK: `sdk/go/client.go` (modifications for Suspend/Resume/WithReason)
 
-### Files to Create (Phase 9 -- new nodes)
+### Files Created (Phase 9 -- new nodes)
 
-- `nodes/facilitator/main.go`, `main_test.go`, `testutil_test.go`
-- `nodes/rule-router/main.go`, `main_test.go`, `testutil_test.go`
+- `nodes/rule-router/main.go`, `main_test.go`, `testutil_test.go` ✅
+- `nodes/facilitator/main.go`, `main_test.go`, `testutil_test.go` ✅
+- `nodes/internal/artefacts/fetch.go` ✅ (shared helper, InputArtefacts refactor)
 - `nodes/hitl/main.go`, `main_test.go`, `testutil_test.go`
 - `nodes/clerk-forge/main.go`, `main_test.go`, `testutil_test.go`
 - `nodes/clerk-refine/main.go`, `main_test.go`, `testutil_test.go`

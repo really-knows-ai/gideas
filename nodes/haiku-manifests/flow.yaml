@@ -33,8 +33,6 @@ kind: GovernedArtefact
 metadata:
   name: haiku
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps:
     - linter
@@ -46,8 +44,6 @@ kind: GovernedArtefact
 metadata:
   name: petition
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -56,8 +52,6 @@ kind: GovernedArtefact
 metadata:
   name: review-data
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -70,8 +64,6 @@ kind: GovernedArtefact
 metadata:
   name: question
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -80,8 +72,6 @@ kind: GovernedArtefact
 metadata:
   name: evidence
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -90,8 +80,6 @@ kind: GovernedArtefact
 metadata:
   name: allowed-outcomes
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -100,8 +88,6 @@ kind: GovernedArtefact
 metadata:
   name: prior-round-reasoning
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -110,8 +96,6 @@ kind: GovernedArtefact
 metadata:
   name: verdict
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -120,8 +104,6 @@ kind: GovernedArtefact
 metadata:
   name: verdict-context
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -130,8 +112,6 @@ kind: GovernedArtefact
 metadata:
   name: deliberation-result
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -140,8 +120,6 @@ kind: GovernedArtefact
 metadata:
   name: round-count
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -150,8 +128,6 @@ kind: GovernedArtefact
 metadata:
   name: law-reference
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -160,8 +136,6 @@ kind: GovernedArtefact
 metadata:
   name: codification-goal
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -170,8 +144,6 @@ kind: GovernedArtefact
 metadata:
   name: codification-result
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -180,8 +152,6 @@ kind: GovernedArtefact
 metadata:
   name: advocate-context
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -190,8 +160,6 @@ kind: GovernedArtefact
 metadata:
   name: human-decision
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -200,8 +168,6 @@ kind: GovernedArtefact
 metadata:
   name: approval-stamp
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   stamps: []
 ---
@@ -210,8 +176,6 @@ kind: FoundryFlow
 metadata:
   name: haiku-flow
   namespace: default
-  labels:
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   entryContracts:
     # The petition must exist when the workitem enters the flow.
@@ -237,7 +201,6 @@ metadata:
   name: forge
   namespace: default
   labels:
-    app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
   image: forge:latest
@@ -256,7 +219,6 @@ metadata:
   name: sort
   namespace: default
   labels:
-    app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
   image: sort:latest
@@ -279,7 +241,6 @@ metadata:
   name: quench
   namespace: default
   labels:
-    app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
   image: haiku-quench:latest
@@ -296,7 +257,6 @@ metadata:
   name: appraise
   namespace: default
   labels:
-    app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
   image: appraise:latest
@@ -317,7 +277,6 @@ metadata:
   name: reviewer
   namespace: default
   labels:
-    app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
   image: reviewer:latest
@@ -332,7 +291,6 @@ metadata:
   name: refine
   namespace: default
   labels:
-    app.kubernetes.io/part-of: haiku-flow
     flow.gideas.io/flow-name: haiku-flow
 spec:
   image: refine:latest

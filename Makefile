@@ -65,7 +65,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-forge build-sort build-friction-watcher build-ttl-watcher build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
+build: build-sidecar build-null-node build-forge build-sort build-friction-watcher build-ttl-watcher build-rule-router build-facilitator build-hitl build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -73,7 +73,7 @@ build-sidecar: ## Build the Sidecar binary.
 
 .PHONY: build-null-node
 build-null-node: ## Build the Null Node binary.
-	go build -o bin/null-node ./nodes/null-node/cmd
+	go build -o bin/null-node ./nodes/null-node
 
 .PHONY: build-forge
 build-forge: ## Build the Forge node binary.
@@ -90,6 +90,18 @@ build-friction-watcher: ## Build the Friction Watcher node binary.
 .PHONY: build-ttl-watcher
 build-ttl-watcher: ## Build the TTL Watcher node binary.
 	CGO_ENABLED=1 go build -o bin/ttl-watcher ./nodes/ttl-watcher
+
+.PHONY: build-rule-router
+build-rule-router: ## Build the Rule Router node binary.
+	CGO_ENABLED=1 go build -o bin/rule-router ./nodes/rule-router
+
+.PHONY: build-facilitator
+build-facilitator: ## Build the Facilitator node binary.
+	CGO_ENABLED=1 go build -o bin/facilitator ./nodes/facilitator
+
+.PHONY: build-hitl
+build-hitl: ## Build the HITL node binary.
+	CGO_ENABLED=1 go build -o bin/hitl ./nodes/hitl
 
 .PHONY: build-archivist
 build-archivist: ## Build the Archivist binary.
