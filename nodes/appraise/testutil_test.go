@@ -426,7 +426,7 @@ func newSpyClient(t *testing.T, spy *appraiseSpy) *flow.Client {
 // defaultTestConfig returns a standard appraiseConfig for tests.
 func defaultTestConfig() *appraiseConfig {
 	return &appraiseConfig{
-		InputArtefact:    "petition",
+		InputArtefacts:   []string{"petition"},
 		ReviewArtefact:   "haiku",
 		GovernedArtefact: "haiku",
 		StampName:        "review",

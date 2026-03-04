@@ -16,7 +16,8 @@
 //
 // Configuration is loaded from a ConfigMap-mounted YAML file:
 //
-//	inputArtefact:  "input"
+//	inputArtefacts:
+//	  - "input"
 //	reviewArtefact: "review"
 package main
 
@@ -28,6 +29,7 @@ import (
 	"os"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/artefacts"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
@@ -35,8 +37,8 @@ import (
 // reviewerConfig holds the node's configuration, loaded from a
 // ConfigMap-mounted YAML file via nodeconfig.Load.
 type reviewerConfig struct {
-	InputArtefact  string `yaml:"inputArtefact"`  // artefact ID for the input (e.g. "input")
-	ReviewArtefact string `yaml:"reviewArtefact"` // artefact ID for the artefact under review (e.g. "review")
+	InputArtefacts []string `yaml:"inputArtefacts"` // artefact IDs for the input (e.g. ["input"])
+	ReviewArtefact string   `yaml:"reviewArtefact"` // artefact ID for the artefact under review (e.g. "review")
 }
 
 // Convention artefact IDs shared between the parent Appraise orchestrator
@@ -120,11 +122,10 @@ func handleReview(
 	// Read artefacts from parent
 	// ---------------------------------------------------------------
 
-	inputResp, err := client.GetArtefact(ctx, cfg.InputArtefact)
+	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", cfg.InputArtefact, err)
+		return fmt.Errorf("reviewer: read inputs: %w", err)
 	}
-	inputContent := string(inputResp.GetContent())
 
 	reviewResp, err := client.GetArtefact(ctx, cfg.ReviewArtefact)
 	if err != nil {

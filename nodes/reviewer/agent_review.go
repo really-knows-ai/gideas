@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/gideas/flow/nodes/internal/artefacts"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -169,9 +170,11 @@ type reviewTemplateQueryData struct {
 // optional division prompt suffix. The model (KimiK2Ollama) is created
 // internally — model choice is a code-time decision, not deploy-time config.
 func NewReviewAgent(client *flow.Client, cfg *reviewerConfig, divisionPromptSuffix string) (*ReviewAgent, error) {
+	inputLabel := artefacts.InputLabel(cfg.InputArtefacts)
+
 	sysData := reviewSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
-		InputArtefact:  cfg.InputArtefact,
+		InputArtefact:  inputLabel,
 		DivisionSuffix: divisionPromptSuffix,
 	}
 
@@ -236,9 +239,11 @@ func (r *ReviewAgent) Run(
 		exampleLawID = laws[0].ID
 	}
 
+	inputLabel := artefacts.InputLabel(r.cfg.InputArtefacts)
+
 	data := reviewTemplateQueryData{
-		InputArtefact:       r.cfg.InputArtefact,
-		InputArtefactUpper:  strings.ToUpper(r.cfg.InputArtefact),
+		InputArtefact:       inputLabel,
+		InputArtefactUpper:  strings.ToUpper(inputLabel),
 		ReviewArtefact:      r.cfg.ReviewArtefact,
 		ReviewArtefactUpper: strings.ToUpper(r.cfg.ReviewArtefact),
 		InputContent:        inputContent,

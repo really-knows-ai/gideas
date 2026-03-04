@@ -25,7 +25,6 @@ metadata:
   namespace: default
   labels:
     app.kubernetes.io/name: forge
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
@@ -83,7 +82,6 @@ metadata:
   namespace: default
   labels:
     app.kubernetes.io/name: haiku-quench
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
@@ -125,7 +123,6 @@ metadata:
   namespace: default
   labels:
     app.kubernetes.io/name: sort
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
@@ -175,7 +172,6 @@ metadata:
   namespace: default
   labels:
     app.kubernetes.io/name: appraise
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
@@ -233,7 +229,6 @@ metadata:
   namespace: default
   labels:
     app.kubernetes.io/name: reviewer
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:
@@ -285,7 +280,6 @@ metadata:
   namespace: default
   labels:
     app.kubernetes.io/name: refine
-    app.kubernetes.io/part-of: haiku-flow
 spec:
   replicas: 1
   selector:

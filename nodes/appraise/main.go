@@ -1,7 +1,7 @@
 // Appraise is the review orchestrator node of the Foundry Cycle.
 //
-// It reads an input artefact (e.g. "petition") and a review artefact (e.g.
-// "haiku"), then orchestrates division-aware governance review using a
+// It reads one or more input artefacts (e.g. "petition") and a review artefact
+// (e.g. "haiku"), then orchestrates division-aware governance review using a
 // fan-out pattern.
 //
 // Appraise operates in three phases:
@@ -23,7 +23,8 @@
 //
 // Configuration is loaded from a ConfigMap-mounted YAML file:
 //
-//	inputArtefact:    "petition"
+//	inputArtefacts:
+//	  - "petition"
 //	reviewArtefact:   "haiku"
 //	governedArtefact: "haiku"
 //	stampName:        "review"
@@ -44,6 +45,7 @@ import (
 	"text/template"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/artefacts"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
@@ -51,7 +53,7 @@ import (
 // appraiseConfig holds the node's configuration, loaded from a
 // ConfigMap-mounted YAML file via nodeconfig.Load.
 type appraiseConfig struct {
-	InputArtefact    string            `yaml:"inputArtefact"`    // artefact ID to read as input (e.g. "petition")
+	InputArtefacts   []string          `yaml:"inputArtefacts"`   // artefact IDs to read as input (e.g. ["petition"])
 	ReviewArtefact   string            `yaml:"reviewArtefact"`   // artefact ID to review (e.g. "haiku")
 	GovernedArtefact string            `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
 	StampName        string            `yaml:"stampName"`        // stamp to apply (e.g. "review")
@@ -264,11 +266,10 @@ func handleAppraise(
 	// Pre-inference: read artefacts, query laws, get existing feedback
 	// ---------------------------------------------------------------
 
-	inputResp, err := client.GetArtefact(ctx, cfg.InputArtefact)
+	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
 	if err != nil {
-		return fmt.Errorf("appraise: read %s: %w", cfg.InputArtefact, err)
+		return fmt.Errorf("appraise: read inputs: %w", err)
 	}
-	inputContent := string(inputResp.GetContent())
 
 	reviewResp, err := client.GetArtefact(ctx, cfg.ReviewArtefact)
 	if err != nil {
@@ -277,7 +278,7 @@ func handleAppraise(
 	reviewContent := string(reviewResp.GetContent())
 
 	slog.Info("appraise: reviewing",
-		"input_artefact", cfg.InputArtefact,
+		"input_artefacts", cfg.InputArtefacts,
 		"review_artefact", cfg.ReviewArtefact,
 	)
 
@@ -471,7 +472,7 @@ func fanOutReview(
 		task := flow.FanOutTask{
 			TargetNode: cfg.ReviewerNode,
 			Artefacts: []flow.ChildArtefact{
-				{ID: cfg.InputArtefact, GovernedArtefact: "review-data", Content: []byte(inputContent)},
+				{ID: "inputs", GovernedArtefact: "review-data", Content: []byte(inputContent)},
 				{ID: cfg.ReviewArtefact, GovernedArtefact: "review-data", Content: []byte(reviewContent)},
 				{ID: artefactLaws, GovernedArtefact: "review-data", Content: lawsJSON},
 				{ID: artefactHistory, GovernedArtefact: "review-data", Content: historyJSON},

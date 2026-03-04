@@ -36,6 +36,9 @@ The "Walking Skeleton" and reference components.
 ├── nodes/                # Standard Node Implementations
 │   ├── forge/            # Content Generation Node (concrete ForgeAgent)
 │   ├── sort/             # Governance Triage Node
+│   ├── rule-router/      # CEL-based Routing Node (judiciary routing)
+│   ├── facilitator/      # Deadlock Resolution Lifecycle Node (judiciary)
+│   ├── hitl/             # Generic Config-Driven HITL Node (one image, many CRD instances)
 │   ├── friction-watcher/ # Judiciary Entry Node (friction threshold events)
 │   ├── ttl-watcher/      # Judiciary Entry Node (law TTL expiry)
 │   └── null-node/        # Verification Node (Phase 1)

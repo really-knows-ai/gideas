@@ -1,8 +1,8 @@
 // Forge is the creator node of the Foundry Cycle.
 //
-// It reads an input artefact (e.g. "petition"), queries governance laws, and
-// generates content using an LLM via the FoundryAgent abstraction. The
-// generated content is stored as an output artefact and routed onward.
+// It reads one or more input artefacts (e.g. "petition"), queries governance
+// laws, and generates content using an LLM via the FoundryAgent abstraction.
+// The generated content is stored as an output artefact and routed onward.
 //
 // Forge uses FoundryAgent with a concrete ForgeAgent to wrap the LLM call,
 // providing:
@@ -13,7 +13,8 @@
 //
 // Configuration is loaded from a ConfigMap-mounted YAML file:
 //
-//	inputArtefact:    "petition"
+//	inputArtefacts:
+//	  - "petition"
 //	outputArtefact:   "haiku"
 //	governedArtefact: "haiku"
 //	outputField:      "haiku"
@@ -26,6 +27,7 @@ import (
 	"os"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/artefacts"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
@@ -33,10 +35,10 @@ import (
 // forgeConfig holds the node's configuration, loaded from a ConfigMap-mounted
 // YAML file via nodeconfig.Load.
 type forgeConfig struct {
-	InputArtefact    string `yaml:"inputArtefact"`    // artefact ID to read (e.g. "petition")
-	OutputArtefact   string `yaml:"outputArtefact"`   // artefact ID to write (e.g. "haiku")
-	GovernedArtefact string `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
-	OutputField      string `yaml:"outputField"`      // JSON key to extract from validated output
+	InputArtefacts   []string `yaml:"inputArtefacts"`   // artefact IDs to read as input (e.g. ["petition"])
+	OutputArtefact   string   `yaml:"outputArtefact"`   // artefact ID to write (e.g. "haiku")
+	GovernedArtefact string   `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
+	OutputField      string   `yaml:"outputField"`      // JSON key to extract from validated output
 }
 
 func main() {
@@ -78,13 +80,12 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 // handleForge performs the core forge logic: read input, query laws, generate
 // content, store output, and route onward.
 func handleForge(ctx context.Context, client *flow.Client, agent *ForgeAgent, cfg *forgeConfig) error {
-	// Read the input artefact.
-	inputResp, err := client.GetArtefact(ctx, cfg.InputArtefact)
+	// Read the input artefacts.
+	input, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
 	if err != nil {
-		return fmt.Errorf("forge: read %s: %w", cfg.InputArtefact, err)
+		return fmt.Errorf("forge: read inputs: %w", err)
 	}
-	input := string(inputResp.GetContent())
-	slog.Info("forge: read input", "artefact", cfg.InputArtefact, "content", input)
+	slog.Info("forge: read inputs", "artefacts", cfg.InputArtefacts)
 
 	// Query laws for governance (if any exist).
 	laws, _ := client.QueryLaws(ctx, cfg.GovernedArtefact, "")

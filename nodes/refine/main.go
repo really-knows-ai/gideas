@@ -25,7 +25,8 @@
 //
 // Configuration is loaded from a ConfigMap-mounted YAML file:
 //
-//	inputArtefact:    "petition"
+//	inputArtefacts:
+//	  - "petition"
 //	outputArtefact:   "haiku"
 //	governedArtefact: "haiku"
 //	outputField:      "haiku"
@@ -41,6 +42,7 @@ import (
 	"text/template"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/artefacts"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
@@ -48,10 +50,10 @@ import (
 // refineConfig holds the node's configuration, loaded from a
 // ConfigMap-mounted YAML file via nodeconfig.Load.
 type refineConfig struct {
-	InputArtefact    string `yaml:"inputArtefact"`    // artefact ID for the creative brief (e.g. "petition")
-	OutputArtefact   string `yaml:"outputArtefact"`   // artefact ID to revise and store back (e.g. "haiku")
-	GovernedArtefact string `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
-	OutputField      string `yaml:"outputField"`      // JSON key in revision output (e.g. "haiku")
+	InputArtefacts   []string `yaml:"inputArtefacts"`   // artefact IDs for the creative brief (e.g. ["petition"])
+	OutputArtefact   string   `yaml:"outputArtefact"`   // artefact ID to revise and store back (e.g. "haiku")
+	GovernedArtefact string   `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
+	OutputField      string   `yaml:"outputField"`      // JSON key in revision output (e.g. "haiku")
 }
 
 const (
@@ -186,11 +188,10 @@ func handleRefine(
 	// Pre-inference: read artefacts, query laws, get existing feedback
 	// ---------------------------------------------------------------
 
-	inputResp, err := client.GetArtefact(ctx, cfg.InputArtefact)
+	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
 	if err != nil {
-		return fmt.Errorf("refine: read %s: %w", cfg.InputArtefact, err)
+		return fmt.Errorf("refine: read inputs: %w", err)
 	}
-	inputContent := string(inputResp.GetContent())
 
 	outputResp, err := client.GetArtefact(ctx, cfg.OutputArtefact)
 	if err != nil {
@@ -199,7 +200,7 @@ func handleRefine(
 	reviewContent := string(outputResp.GetContent())
 
 	slog.Info("refine: context",
-		"input_artefact", cfg.InputArtefact,
+		"input_artefacts", cfg.InputArtefacts,
 		"output_artefact", cfg.OutputArtefact,
 	)
 

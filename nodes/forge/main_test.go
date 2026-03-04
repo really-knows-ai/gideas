@@ -46,7 +46,7 @@ func newTestForgeAgent(t *testing.T, mm *mockModel, cfg *forgeConfig) *ForgeAgen
 
 func defaultTestConfig() *forgeConfig {
 	return &forgeConfig{
-		InputArtefact:    "petition",
+		InputArtefacts:   []string{"petition"},
 		OutputArtefact:   "haiku",
 		GovernedArtefact: "haiku",
 		OutputField:      "haiku",
@@ -159,7 +159,7 @@ func TestForgeAgent_RejectsAdditionalProperties(t *testing.T) {
 
 func TestForgeAgent_CustomOutputField(t *testing.T) {
 	cfg := &forgeConfig{
-		InputArtefact:    "petition",
+		InputArtefacts:   []string{"petition"},
 		OutputArtefact:   "document",
 		GovernedArtefact: "document",
 		OutputField:      "document",

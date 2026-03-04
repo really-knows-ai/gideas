@@ -232,7 +232,7 @@ func newSpyClient(t *testing.T, spy *refineSpy) *flow.Client {
 // defaultTestConfig returns a standard refineConfig for tests.
 func defaultTestConfig() *refineConfig {
 	return &refineConfig{
-		InputArtefact:    "petition",
+		InputArtefacts:   []string{"petition"},
 		OutputArtefact:   "haiku",
 		GovernedArtefact: "haiku",
 		OutputField:      "haiku",
