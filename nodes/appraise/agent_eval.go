@@ -11,6 +11,9 @@ import (
 	flow "github.com/gideas/flow/sdk/go"
 )
 
+// Compile-time assertion: EvalAgent implements flow.EvalContract.
+var _ flow.EvalContract = (*EvalAgent)(nil)
+
 // ---------------------------------------------------------------------------
 // EvalAgent — concrete agent for fix/refusal evaluation (Phase 1)
 // ---------------------------------------------------------------------------
@@ -98,8 +101,21 @@ type evalTemplateQueryData struct {
 // NewEvalAgent creates an EvalAgent with the given client and config.
 // The model (KimiK2Ollama) is created internally — model choice is a
 // code-time decision, not deploy-time config.
+//
+// If cfg.EvalSystemPrompt or cfg.EvalQueryTemplate are non-empty, they
+// override the baked-in defaults.
 func NewEvalAgent(client *flow.Client, cfg *appraiseConfig) (*EvalAgent, error) {
 	inputLabel := artefacts.InputLabel(cfg.InputArtefacts)
+
+	sysTmplStr := evalSystemPromptTemplate
+	if cfg.EvalSystemPrompt != "" {
+		sysTmplStr = cfg.EvalSystemPrompt
+	}
+
+	queryTmplStr := evalQueryPromptTemplate
+	if cfg.EvalQueryTemplate != "" {
+		queryTmplStr = cfg.EvalQueryTemplate
+	}
 
 	sysData := evalSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
@@ -107,8 +123,8 @@ func NewEvalAgent(client *flow.Client, cfg *appraiseConfig) (*EvalAgent, error) 
 	}
 
 	agent, err := buildAgent(client, "eval agent",
-		evalSystemPromptTemplate, sysData,
-		evalQueryPromptTemplate, evalSchema)
+		sysTmplStr, sysData,
+		queryTmplStr, evalSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +140,7 @@ func (e *EvalAgent) Run(
 	ctx context.Context,
 	fb *flowv1.FeedbackItem,
 	inputContent, reviewContent, kind string,
-) (*evalOutput, error) {
+) (*flow.EvalResult, error) {
 	// Build history block.
 	var historyBlock strings.Builder
 	for _, ev := range fb.GetHistory() {
@@ -184,5 +200,8 @@ Your job: decide if the refusal is justified.
 		return nil, fmt.Errorf("eval agent: unmarshal output: %w", err)
 	}
 
-	return &out, nil
+	return &flow.EvalResult{
+		Verdict: out.Verdict,
+		Reason:  out.Reason,
+	}, nil
 }

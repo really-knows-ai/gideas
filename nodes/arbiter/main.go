@@ -1,32 +1,31 @@
 // Arbiter is the deadlock resolution node of the Foundry Judiciary.
 //
-// When the Sort node detects that a feedback cycle has deadlocked (feedback
-// depth exceeds threshold), it routes the Workitem to the Arbiter. The
-// Arbiter gathers evidence from both sides of the dispute, fans out to
-// Juror nodes for deliberation, and routes to the Deliberation Gate for
-// consensus tallying.
+// When the Facilitator detects that a feedback cycle has deadlocked, it
+// assembles an evidence-bundle artefact and routes the Workitem to the
+// Arbiter. The Arbiter frames a question, fans out to Juror nodes for
+// deliberation, tallies votes, and resolves the dispute.
 //
-// The algorithm:
+// The handler uses a two-invocation pattern:
 //
-//  1. Discover flow topology and artefact kinds from the exit contract.
-//  2. For each artefact kind, scan feedback for DEADLOCKED items.
-//  3. Assemble evidence: feedback debate history, artefact content excerpt,
-//     cited laws from both sides, and friction cost summary.
-//  4. Frame the question: "Should the reviewer's feedback be upheld, or
-//     should the refiner's refusal stand?"
-//  5. Fan out to Juror nodes with question, evidence, and allowed outcomes.
-//  6. Await Juror children and route to Deliberation Gate.
-//  7. Store verdict-context artefact for downstream Clerk consumption.
+//  1. First invocation: run a deliberation loop (up to maxRounds),
+//     fan out to Jurors each round, and tally votes.
+//     - Resolved (consensus outcome = "resolved"): Complete() directly.
+//     - Consensus (law change needed): synthesize prose decision, store
+//     verdict-context, create Clerk child, Suspend().
+//     - Hung (max rounds exhausted): RouteToOutput("hung").
 //
-// The Arbiter no longer calls Deliberate() or DraftLaw() directly. Verdict
-// tallying is handled by the Deliberation Gate. Law minting and ruling
-// linkage are handled downstream by the Clerk and Judiciary Gate.
+//  2. Post-resume: check the Clerk child's CompletionReason.
+//     - Cancelled → Complete(WithReason(cancelled)).
+//     - Success → Complete().
 //
-// Configuration (YAML via NODE_CONFIG_PATH, default /etc/foundry/node-config.yaml):
+// Configuration (YAML via NODE_CONFIG_PATH):
 //
-//	jurySize:     5                # number of jurors to fan out to
-//	jurorNode:    juror            # name of the Juror FoundryNode
-//	gateOutput:   deliberation-gate  # output name for routing to the Deliberation Gate
+//	jurySize:            5                 # jurors per round
+//	jurorNode:           juror             # FoundryNode for juror children
+//	consensusStrategy:   SIMPLE_MAJORITY   # SIMPLE_MAJORITY | SUPER_MAJORITY | UNANIMITY
+//	maxRounds:           3                 # max deliberation rounds
+//	clerkNode:           clerk-forge       # FoundryNode for clerk child
+//	hungOutput:          hung              # output name when max rounds exhausted
 package main
 
 import (
@@ -40,6 +39,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/tally"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -48,29 +48,37 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	// Artefacts written on each child Workitem for the Juror.
-	artefactQuestion   = "question"
-	artefactEvidence   = "evidence"
-	artefactOutcomes   = "allowed-outcomes"
-	artefactPriorRound = "prior-round-reasoning"
+	// artefactEvidenceBundle is the pre-assembled evidence artefact written
+	// by the Facilitator.
+	artefactEvidenceBundle = "evidence-bundle"
 
-	// Artefacts written on the parent Workitem for downstream consumers.
+	// artefactVerdictContext is the prose verdict-context artefact stored
+	// on the Clerk child for downstream consumption.
 	artefactVerdictContext = "verdict-context"
 )
 
 // ---------------------------------------------------------------------------
-// Well-known output names
+// Well-known outcomes
 // ---------------------------------------------------------------------------
 
 const (
-	// outputGate is the default output name for routing to the Deliberation Gate.
-	outputGate = "deliberation-gate"
+	// outcomeResolved indicates the jury decided no law change is needed.
+	outcomeResolved = "resolved"
 
-	// defaultJurorNode is the default FoundryNode name for the Juror.
-	defaultJurorNode = "juror"
+	// outcomeLawChange indicates the jury decided a law change is needed.
+	outcomeLawChange = "law-change"
+)
 
-	// defaultJurySize is the fallback number of jurors to fan out to.
-	defaultJurySize int32 = 5
+// ---------------------------------------------------------------------------
+// Defaults
+// ---------------------------------------------------------------------------
+
+const (
+	defaultJurySize   int32 = 5
+	defaultJurorNode        = "juror"
+	defaultClerkNode        = "clerk-forge"
+	defaultHungOutput       = "hung"
+	defaultMaxRounds        = 3
 )
 
 // ---------------------------------------------------------------------------
@@ -79,19 +87,14 @@ const (
 
 // arbiterConfig holds the Arbiter's runtime configuration.
 type arbiterConfig struct {
-	// JurySize is the number of jurors to fan out to. Default: 5.
-	JurySize int32 `yaml:"jurySize"`
-
-	// JurorNode is the FoundryNode name to route child Workitems to.
-	// Default: "juror".
-	JurorNode string `yaml:"jurorNode"`
-
-	// GateOutput is the output name for routing to the Deliberation Gate
-	// after fan-out is complete. Default: "deliberation-gate".
-	GateOutput string `yaml:"gateOutput"`
+	JurySize          int32  `yaml:"jurySize"`
+	JurorNode         string `yaml:"jurorNode"`
+	ConsensusStrategy string `yaml:"consensusStrategy"`
+	MaxRounds         int    `yaml:"maxRounds"`
+	ClerkNode         string `yaml:"clerkNode"`
+	HungOutput        string `yaml:"hungOutput"`
 }
 
-// jurySize returns the effective jury size, applying the default when unset.
 func (c *arbiterConfig) jurySize() int32 {
 	if c.JurySize < 1 {
 		return defaultJurySize
@@ -99,7 +102,6 @@ func (c *arbiterConfig) jurySize() int32 {
 	return c.JurySize
 }
 
-// jurorNode returns the effective juror node name.
 func (c *arbiterConfig) jurorNode() string {
 	if c.JurorNode == "" {
 		return defaultJurorNode
@@ -107,29 +109,45 @@ func (c *arbiterConfig) jurorNode() string {
 	return c.JurorNode
 }
 
-// gateOutput returns the effective gate output name.
-func (c *arbiterConfig) gateOutput() string {
-	if c.GateOutput == "" {
-		return outputGate
+func (c *arbiterConfig) clerkNode() string {
+	if c.ClerkNode == "" {
+		return defaultClerkNode
 	}
-	return c.GateOutput
+	return c.ClerkNode
+}
+
+func (c *arbiterConfig) hungOutput() string {
+	if c.HungOutput == "" {
+		return defaultHungOutput
+	}
+	return c.HungOutput
+}
+
+func (c *arbiterConfig) maxRounds() int {
+	if c.MaxRounds < 1 {
+		return defaultMaxRounds
+	}
+	return c.MaxRounds
+}
+
+func (c *arbiterConfig) consensusStrategy() flowv1.ConsensusStrategy {
+	return nodeconfig.ParseConsensusStrategy(c.ConsensusStrategy)
 }
 
 // ---------------------------------------------------------------------------
-// Verdict Context (written for downstream Clerk consumption)
+// Verdict Context (prose-only)
 // ---------------------------------------------------------------------------
 
-// verdictContext carries the context that produced the verdict. Written by
-// the Arbiter so that the downstream Clerk knows how to draft the petition.
+// verdictContext carries the Arbiter's prose decision for downstream Clerk
+// consumption. Two fields only — no structured fields.
 type verdictContext struct {
-	Trigger        string   `json:"trigger"`
-	SourceWorkitem string   `json:"source_workitem"` //nolint:tagliatelle
-	Goal           string   `json:"goal"`
-	AppliesTo      []string `json:"applies_to"`
-	Tier           int32    `json:"tier"`
-	Action         string   `json:"action"`
-	FeedbackIDs    []string `json:"feedback_ids"` // deadlocked feedback IDs for ruling linkage
+	Trigger  string `json:"trigger"`
+	Decision string `json:"decision"`
 }
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 func main() {
 	slog.Info("arbiter: starting")
@@ -160,225 +178,303 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	return handleArbiter(ctx, client, cfg)
 }
 
-// handleArbiter contains the Arbiter's core logic, separated from handler
+// ---------------------------------------------------------------------------
+// Core logic
+// ---------------------------------------------------------------------------
+
+// handleArbiter contains all Arbiter logic, separated from handler
 // boilerplate for testability.
+//
+// Phase detection: if GetChildren returns any completed children, this is a
+// post-resume invocation. Otherwise it is the first invocation.
 func handleArbiter(ctx context.Context, client *flow.Client, cfg *arbiterConfig) error {
+	// ── Heartbeat ────────────────────────────────────────────────────
 	_, _ = client.Heartbeat(ctx)
 
-	// ── Step 1: Discover topology ────────────────────────────────────
-	topology, err := client.GetFlowTopology(ctx)
+	// ── Phase detection ──────────────────────────────────────────────
+	// Use the raw Operator stub because the SDK's GetChildren() strips
+	// CompletionReason from the response.
+	resp, err := client.Operator.GetChildren(ctx, &flowv1.GetChildrenRequest{})
 	if err != nil {
-		return fmt.Errorf("arbiter: get flow topology: %w", err)
+		return fmt.Errorf("arbiter: get children: %w", err)
 	}
 
-	exitContract := topology.GetExitContract()
+	children := resp.GetChildren()
+	if hasCompletedChild(children) {
+		return handlePostResume(ctx, client, children)
+	}
 
-	// ── Step 2: For each artefact kind, find DEADLOCKED feedback ─────
-	for kind := range exitContract {
-		deadlockedItems, err := findDeadlockedFeedback(ctx, client, kind)
-		if err != nil {
-			return err
+	return handleFirstInvocation(ctx, client, cfg)
+}
+
+// hasCompletedChild returns true if at least one child is in the Completed
+// phase, indicating this is a post-resume invocation.
+func hasCompletedChild(children []*flowv1.ChildWorkitemStatus) bool {
+	for _, ch := range children {
+		if ch.GetPhase() == flow.PhaseCompleted {
+			return true
 		}
-		if len(deadlockedItems) == 0 {
-			continue
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// First invocation — deliberation loop
+// ---------------------------------------------------------------------------
+
+func handleFirstInvocation(ctx context.Context, client *flow.Client, cfg *arbiterConfig) error {
+	// ── Step 1: Read evidence-bundle artefact ────────────────────────
+	evidenceResp, err := client.GetArtefact(ctx, artefactEvidenceBundle)
+	if err != nil {
+		return fmt.Errorf("arbiter: read evidence-bundle: %w", err)
+	}
+	evidence := string(evidenceResp.GetContent())
+
+	// ── Step 2: Frame question ──────────────────────────────────────
+	question := "Should the reviewer's feedback be upheld (requiring a law change), " +
+		"or should the dispute be resolved without a law change?"
+	allowedOutcomes := []string{outcomeLawChange, outcomeResolved}
+
+	// ── Step 3: Deliberation loop ───────────────────────────────────
+	tallyCfg := tally.TallyConfig{
+		ConsensusStrategy: cfg.consensusStrategy(),
+		MaxRounds:         cfg.maxRounds(),
+		JurySize:          int(cfg.jurySize()),
+		JurorNode:         cfg.jurorNode(),
+	}
+
+	var priorReasoning string
+	var lastResult tally.TallyResult
+
+	for round := 1; round <= tallyCfg.MaxRounds; round++ {
+		slog.Info("arbiter: deliberation round",
+			"round", round,
+			"max_rounds", tallyCfg.MaxRounds,
+		)
+
+		// Build fan-out tasks.
+		input := tally.RoundInput{
+			Question:            question,
+			Evidence:            evidence,
+			AllowedOutcomes:     allowedOutcomes,
+			PriorRoundReasoning: priorReasoning,
+		}
+		tasks, buildErr := tally.BuildFanOutTasks(tallyCfg, input)
+		if buildErr != nil {
+			return fmt.Errorf("arbiter: build fan-out tasks (round %d): %w", round, buildErr)
 		}
 
-		// ── Step 3: Gather evidence ──────────────────────────────────
-		evidence, err := assembleEvidence(ctx, client, kind, deadlockedItems)
-		if err != nil {
-			return err
+		// Fan out to jurors.
+		roundChildren, fanErr := client.FanOut(ctx, tasks)
+		if fanErr != nil {
+			return fmt.Errorf("arbiter: fan-out (round %d): %w", round, fanErr)
 		}
 
-		// ── Step 4: Frame question and fan out to Jurors ─────────────
-		question := "Should the reviewer's feedback be upheld, or should the refiner's refusal stand?"
-		allowedOutcomes := []string{"favour_refiner", "favour_reviewer"}
-
-		outcomesJSON, err := json.Marshal(allowedOutcomes)
-		if err != nil {
-			return fmt.Errorf("arbiter: marshal allowed-outcomes: %w", err)
+		// Await all children (returns all children, including prior rounds).
+		allCompleted, awaitErr := client.AwaitChildren(ctx, flow.WithPollingInterval(time.Millisecond))
+		if awaitErr != nil {
+			return fmt.Errorf("arbiter: await children (round %d): %w", round, awaitErr)
 		}
 
-		// Build fan-out tasks — one per juror.
-		tasks := make([]flow.FanOutTask, cfg.jurySize())
-		for i := range tasks {
-			tasks[i] = flow.FanOutTask{
-				TargetNode: cfg.jurorNode(),
-				Artefacts: []flow.ChildArtefact{
-					{ID: artefactQuestion, Content: []byte(question)},
-					{ID: artefactEvidence, Content: []byte(evidence)},
-					{ID: artefactOutcomes, Content: outcomesJSON},
-				},
+		// Filter to only this round's children for vote collection.
+		roundChildIDs := make(map[string]bool, len(roundChildren))
+		for _, ch := range roundChildren {
+			roundChildIDs[ch.ID()] = true
+		}
+		roundCompleted := make([]flow.ChildWorkitemStatus, 0, len(roundChildren))
+		for _, ch := range allCompleted {
+			if roundChildIDs[ch.WorkitemID] {
+				roundCompleted = append(roundCompleted, ch)
 			}
 		}
 
-		// Fan out.
-		if _, err := client.FanOut(ctx, tasks); err != nil {
-			return fmt.Errorf("arbiter: juror fan-out: %w", err)
+		// Collect votes from this round's children only.
+		votes, collectErr := tally.CollectVotes(ctx, client, roundCompleted)
+		if collectErr != nil {
+			return fmt.Errorf("arbiter: collect votes (round %d): %w", round, collectErr)
 		}
 
-		// ── Step 5: Await juror children ─────────────────────────────
-		if _, err := client.AwaitChildren(ctx, flow.WithPollingInterval(time.Millisecond)); err != nil {
-			return fmt.Errorf("arbiter: await juror children: %w", err)
-		}
+		// Tally votes.
+		result := tally.Tally(votes, tallyCfg.ConsensusStrategy)
+		result.Round = round
+		lastResult = result
 
-		// ── Step 6: Store verdict-context for downstream Clerk ───────
-		vctx := verdictContext{
-			Trigger:     "deadlock-resolution",
-			Goal:        synthesizeGoal(kind, deadlockedItems),
-			AppliesTo:   []string{kind},
-			Tier:        int32(flowv1.LawTier_LAW_TIER_RULING),
-			Action:      "create",
-			FeedbackIDs: feedbackIDs(deadlockedItems),
-		}
-		vctxJSON, err := json.Marshal(vctx)
-		if err != nil {
-			return fmt.Errorf("arbiter: marshal verdict-context: %w", err)
-		}
-		if _, err := client.StoreArtefact(ctx, artefactVerdictContext, "", vctxJSON); err != nil {
-			return fmt.Errorf("arbiter: store verdict-context: %w", err)
-		}
-
-		// ── Step 7: Route to Deliberation Gate ───────────────────────
-		slog.Info("arbiter: fan-out complete, routing to deliberation gate",
-			"artefact_kind", kind,
-			"juror_count", cfg.jurySize(),
+		slog.Info("arbiter: tally result",
+			"round", round,
+			"consensus", result.IsConsensus,
+			"outcome", result.Outcome,
+			"vote_count", len(votes),
 		)
-		if _, err := client.RouteToOutput(ctx, cfg.gateOutput()); err != nil {
-			return fmt.Errorf("arbiter: route to deliberation gate: %w", err)
+
+		if result.IsConsensus {
+			break
+		}
+
+		// Hung this round — build prior-round reasoning for retry.
+		if round < tallyCfg.MaxRounds {
+			priorReasoning = tally.SummariseRound(votes)
+		}
+	}
+
+	// ── Step 4: Post-loop outcomes ──────────────────────────────────
+	return handleDeliberationOutcome(ctx, client, cfg, lastResult)
+}
+
+// handleDeliberationOutcome branches on the tally result.
+func handleDeliberationOutcome(
+	ctx context.Context,
+	client *flow.Client,
+	cfg *arbiterConfig,
+	result tally.TallyResult,
+) error {
+	// Hung — max rounds exhausted with no consensus.
+	if result.IsHung {
+		slog.Info("arbiter: hung after max rounds, routing to hung output")
+		if _, err := client.RouteToOutput(ctx, cfg.hungOutput()); err != nil {
+			return fmt.Errorf("arbiter: route to hung: %w", err)
 		}
 		return nil
 	}
 
-	// No deadlocked feedback found (shouldn't happen, but handle gracefully).
-	slog.Warn("arbiter: no deadlocked feedback found, routing to deliberation gate")
-	if _, err := client.RouteToOutput(ctx, cfg.gateOutput()); err != nil {
-		return fmt.Errorf("arbiter: route to gate (no deadlock): %w", err)
+	// Resolved — jury says no law change needed.
+	if result.Outcome == outcomeResolved {
+		slog.Info("arbiter: resolved, completing")
+		if _, err := client.Complete(ctx); err != nil {
+			return fmt.Errorf("arbiter: complete (resolved): %w", err)
+		}
+		return nil
 	}
+
+	// Consensus for law change — create Clerk child and suspend.
+	return spawnClerkAndSuspend(ctx, client, cfg, result)
+}
+
+// spawnClerkAndSuspend synthesizes the prose verdict-context, creates a
+// Clerk child with the verdict-context artefact, and suspends.
+func spawnClerkAndSuspend(
+	ctx context.Context,
+	client *flow.Client,
+	cfg *arbiterConfig,
+	result tally.TallyResult,
+) error {
+	// Synthesize prose decision from jury reasoning.
+	decision := synthesizeDecision(result)
+
+	vctx := verdictContext{
+		Trigger:  "deadlock-resolution",
+		Decision: decision,
+	}
+	vctxJSON, err := json.Marshal(vctx)
+	if err != nil {
+		return fmt.Errorf("arbiter: marshal verdict-context: %w", err)
+	}
+
+	// Create Clerk child.
+	child, err := client.CreateChildWorkitem(ctx)
+	if err != nil {
+		return fmt.Errorf("arbiter: create clerk child: %w", err)
+	}
+
+	// Store verdict-context on the child.
+	if _, err := child.StoreArtefact(ctx, artefactVerdictContext, "", vctxJSON); err != nil {
+		return fmt.Errorf("arbiter: store verdict-context on child: %w", err)
+	}
+
+	// Route child to clerk node.
+	if _, err := child.RouteTo(ctx, cfg.clerkNode()); err != nil {
+		return fmt.Errorf("arbiter: route child to clerk: %w", err)
+	}
+
+	slog.Info("arbiter: clerk child created, suspending",
+		"child_id", child.ID(),
+		"clerk_node", cfg.clerkNode(),
+	)
+
+	// Suspend until clerk child completes.
+	if err := client.Suspend(ctx,
+		flow.WithCondition(`children.all(c, c.phase == "Completed")`),
+	); err != nil {
+		return fmt.Errorf("arbiter: suspend: %w", err)
+	}
+
 	return nil
 }
 
-// findDeadlockedFeedback scans feedback items for the given artefact kind
-// and returns those in DEADLOCKED state.
-func findDeadlockedFeedback(
-	ctx context.Context, client *flow.Client, artefactID string,
-) ([]*flowv1.FeedbackItem, error) {
-	items, err := client.GetFeedback(ctx, artefactID)
-	if err != nil {
-		return nil, fmt.Errorf("arbiter: get feedback for %s: %w", artefactID, err)
-	}
+// synthesizeDecision builds a natural-language decision summary from jury
+// votes. This is the prose that the downstream Clerk uses to draft the
+// petition.
+func synthesizeDecision(result tally.TallyResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The jury reached consensus for %q after %d round(s). ", result.Outcome, result.Round)
 
-	var deadlocked []*flowv1.FeedbackItem
-	for _, item := range items {
-		if item.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
-			deadlocked = append(deadlocked, item)
+	// Collect reasoning from jurors who voted for the winning outcome.
+	var supporting []string
+	for _, v := range result.Votes {
+		if v.Outcome == result.Outcome && v.Reasoning != "" {
+			supporting = append(supporting, v.Reasoning)
 		}
 	}
-	return deadlocked, nil
+
+	if len(supporting) > 0 {
+		b.WriteString("Supporting arguments: ")
+		for i, reason := range supporting {
+			if i > 0 {
+				b.WriteString("; ")
+			}
+			b.WriteString(reason)
+		}
+		b.WriteString(".")
+	}
+
+	return b.String()
 }
 
-// assembleEvidence builds a markdown evidence bundle for the Jurors.
-func assembleEvidence(
+// ---------------------------------------------------------------------------
+// Post-resume — check Clerk child outcome
+// ---------------------------------------------------------------------------
+
+// handlePostResume runs after the Operator re-dispatches the Arbiter because
+// the suspend condition was met (clerk child completed). It checks the
+// child's CompletionReason and completes accordingly.
+func handlePostResume(
 	ctx context.Context,
 	client *flow.Client,
-	artefactKind string,
-	deadlockedItems []*flowv1.FeedbackItem,
-) (string, error) {
-	var b strings.Builder
-
-	// ── Artefact content excerpt ─────────────────────────────────────
-	b.WriteString("## Artefact\n\n")
-	artefactResp, err := client.GetArtefact(ctx, artefactKind)
-	if err != nil {
-		return "", fmt.Errorf("arbiter: get artefact %s: %w", artefactKind, err)
-	}
-	content := string(artefactResp.GetContent())
-	if len(content) > 2000 {
-		content = content[:2000] + "\n\n[... truncated ...]"
-	}
-	b.WriteString(content)
-	b.WriteString("\n\n")
-
-	// ── Feedback debate history ──────────────────────────────────────
-	b.WriteString("## Deadlocked Feedback\n\n")
-	for _, item := range deadlockedItems {
-		fmt.Fprintf(&b, "### Feedback: %s\n\n", item.GetId())
-		fmt.Fprintf(&b, "- **Source**: %s\n", item.GetSource())
-		fmt.Fprintf(&b, "- **Severity**: %s\n", item.GetSeverity().String())
-		fmt.Fprintf(&b, "- **Message**: %s\n\n", item.GetMessage())
-
-		if j := item.GetJustification(); j != nil {
-			b.WriteString("**Justification**:\n")
-			if c := j.GetCitation(); c != nil {
-				fmt.Fprintf(&b, "- Citation: law_ids=%v\n", c.GetCitationIds())
-			}
-			if n := j.GetNovelArgument(); n != nil {
-				fmt.Fprintf(&b, "- Novel argument: %s\n", n.GetArgument())
-			}
-			b.WriteString("\n")
+	children []*flowv1.ChildWorkitemStatus,
+) error {
+	// Find the first completed child.
+	var completed *flowv1.ChildWorkitemStatus
+	for _, ch := range children {
+		if ch.GetPhase() == flow.PhaseCompleted {
+			completed = ch
+			break
 		}
+	}
 
-		b.WriteString("**Debate History**:\n\n")
-		for _, event := range item.GetHistory() {
-			fmt.Fprintf(&b, "- [%s] %s: %s\n",
-				event.GetAction(),
-				event.GetActor(),
-				event.GetMessage())
+	if completed == nil {
+		return fmt.Errorf("arbiter: post-resume but no completed child found")
+	}
+
+	slog.Info("arbiter: post-resume",
+		"child_id", completed.GetWorkitemId(),
+		"completion_reason", completed.GetCompletionReason().String(),
+	)
+
+	reason := completed.GetCompletionReason()
+
+	if reason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
+		slog.Info("arbiter: clerk child cancelled, propagating cancellation")
+		if _, err := client.Complete(ctx, flow.WithReason(
+			flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
+		)); err != nil {
+			return fmt.Errorf("arbiter: complete with cancelled: %w", err)
 		}
-		b.WriteString("\n")
+		return nil
 	}
 
-	// ── Cited laws from both sides ───────────────────────────────────
-	b.WriteString("## Relevant Laws\n\n")
-	laws, err := client.QueryLaws(ctx, artefactKind, "")
-	if err != nil {
-		return "", fmt.Errorf("arbiter: query laws for %s: %w", artefactKind, err)
+	// Success — clerk completed normally.
+	slog.Info("arbiter: clerk child succeeded, completing")
+	if _, err := client.Complete(ctx); err != nil {
+		return fmt.Errorf("arbiter: complete (post-resume): %w", err)
 	}
-	for _, law := range laws {
-		fmt.Fprintf(&b, "### %s (Tier %d)\n\n", law.GetId(), int32(law.GetTier()))
-		fmt.Fprintf(&b, "- **Goal**: %s\n", law.GetGoal())
-		for _, rep := range law.GetRepresentations() {
-			fmt.Fprintf(&b, "- **%s**: %s\n", rep.GetType(), rep.GetContent())
-		}
-		b.WriteString("\n")
-	}
-
-	// ── Friction cost summary ────────────────────────────────────────
-	b.WriteString("## Friction Summary\n\n")
-	friction, err := client.QueryFriction(ctx, &flowv1.FrictionFilter{})
-	if err != nil {
-		return "", fmt.Errorf("arbiter: query friction: %w", err)
-	}
-	if len(friction) == 0 {
-		b.WriteString("No friction data available.\n\n")
-	} else {
-		for _, agg := range friction {
-			fmt.Fprintf(&b, "- law=%s node=%s events=%d magnitude=%.2f\n",
-				agg.GetLawId(), agg.GetNodeId(), agg.GetEventCount(), agg.GetTotalMagnitude())
-		}
-		b.WriteString("\n")
-	}
-
-	return b.String(), nil
-}
-
-// synthesizeGoal builds a goal string from the dispute context.
-func synthesizeGoal(
-	artefactKind string,
-	deadlockedItems []*flowv1.FeedbackItem,
-) string {
-	if len(deadlockedItems) == 0 {
-		return fmt.Sprintf("Ruling on %s dispute", artefactKind)
-	}
-	first := deadlockedItems[0]
-	return fmt.Sprintf("Ruling on %s dispute (feedback %s from %s)",
-		artefactKind, first.GetId(), first.GetSource())
-}
-
-// feedbackIDs extracts the IDs from a slice of feedback items.
-func feedbackIDs(items []*flowv1.FeedbackItem) []string {
-	ids := make([]string, len(items))
-	for i, item := range items {
-		ids[i] = item.GetId()
-	}
-	return ids
+	return nil
 }

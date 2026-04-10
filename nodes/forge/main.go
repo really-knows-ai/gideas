@@ -27,7 +27,7 @@ import (
 	"os"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal/artefacts"
+	"github.com/gideas/flow/nodes/internal/handlers"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
@@ -39,6 +39,8 @@ type forgeConfig struct {
 	OutputArtefact   string   `yaml:"outputArtefact"`   // artefact ID to write (e.g. "haiku")
 	GovernedArtefact string   `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
 	OutputField      string   `yaml:"outputField"`      // JSON key to extract from validated output
+	SystemPrompt     string   `yaml:"systemPrompt"`     // optional: overrides baked-in system prompt template
+	QueryTemplate    string   `yaml:"queryTemplate"`    // optional: overrides baked-in query prompt template
 }
 
 func main() {
@@ -74,45 +76,11 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("forge: create agent: %w", err)
 	}
 
-	return handleForge(ctx, client, agent, cfg)
-}
-
-// handleForge performs the core forge logic: read input, query laws, generate
-// content, store output, and route onward.
-func handleForge(ctx context.Context, client *flow.Client, agent *ForgeAgent, cfg *forgeConfig) error {
-	// Read the input artefacts.
-	input, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
-	if err != nil {
-		return fmt.Errorf("forge: read inputs: %w", err)
-	}
-	slog.Info("forge: read inputs", "artefacts", cfg.InputArtefacts)
-
-	// Query laws for governance (if any exist).
-	laws, _ := client.QueryLaws(ctx, cfg.GovernedArtefact, "")
-
-	// Generate content via the ForgeAgent.
-	result, err := agent.Run(ctx, input, laws)
-	if err != nil {
-		return fmt.Errorf("forge: agent run: %w", err)
-	}
-	slog.Info("forge: generated content", "field", cfg.OutputField, "content", result)
-
-	// Store the output artefact.
-	storeResp, err := client.StoreArtefact(ctx, cfg.OutputArtefact, cfg.GovernedArtefact, []byte(result))
-	if err != nil {
-		return fmt.Errorf("forge: store %s: %w", cfg.OutputArtefact, err)
-	}
-	slog.Info("forge: stored artefact",
-		"artefact", cfg.OutputArtefact,
-		"version_hash", storeResp.GetVersionHash(),
-		"is_new_version", storeResp.GetIsNewVersion(),
-	)
-
-	// Route onward.
-	if _, err := client.RouteToOutput(ctx, "default"); err != nil {
-		return fmt.Errorf("forge: route to output: %w", err)
+	handlerCfg := handlers.ForgeConfig{
+		InputArtefacts:   cfg.InputArtefacts,
+		OutputArtefact:   cfg.OutputArtefact,
+		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	slog.Info("forge: routed to output")
-	return nil
+	return handlers.HandleForge(ctx, client, agent, handlerCfg)
 }

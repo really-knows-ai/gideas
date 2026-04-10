@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"sync"
@@ -59,21 +58,6 @@ type appraiseSpy struct {
 	ArtefactContents map[string]string      // artefact ID -> content
 	FeedbackItems    []*flowv1.FeedbackItem // feedback items returned by GetFeedback
 	Laws             []*flowv1.Law          // laws returned by QueryLaws
-
-	// Fan-out operation records.
-	PauseTimerCalls  int // number of PauseTimer calls
-	ResumeTimerCalls int // number of ResumeTimer calls
-
-	// Child workitem tracking.
-	childCounter   int                           // auto-incrementing child ID
-	ChildArtefacts map[string]map[string][]byte  // childID -> artefactID -> content
-	ChildRoutes    map[string]string             // childID -> target node
-	ChildStatuses  []*flowv1.ChildWorkitemStatus // configurable GetChildren response
-	FanOutTasks    []fanOutRecord                // ordered record of fan-out calls
-
-	// Configurable child review outputs keyed by child workitem ID.
-	// If set, GetArtefact with TargetWorkitemId will use these.
-	ChildReviewOutputs map[string][]byte // childID -> review-output JSON
 }
 
 type addedFeedbackItem struct {
@@ -88,14 +72,6 @@ type recordedFinding struct {
 	Representations []*flowv1.Representation
 }
 
-// fanOutRecord captures a single CreateChildWorkitem + StoreArtefact +
-// RouteChild sequence for assertion.
-type fanOutRecord struct {
-	ChildID    string
-	TargetNode string
-	Artefacts  map[string][]byte // artefactID -> content
-}
-
 func newAppraiseSpy() *appraiseSpy {
 	return &appraiseSpy{
 		RejectedFixes:    make(map[string]string),
@@ -104,9 +80,6 @@ func newAppraiseSpy() *appraiseSpy {
 			"petition": "test-petition",
 			"haiku":    "test-content",
 		},
-		ChildArtefacts:     make(map[string]map[string][]byte),
-		ChildRoutes:        make(map[string]string),
-		ChildReviewOutputs: make(map[string][]byte),
 	}
 }
 
@@ -125,7 +98,6 @@ func (s *appraiseSpy) PauseTimer(
 ) (*flowv1.PauseTimerResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.PauseTimerCalls++
 	return &flowv1.PauseTimerResponse{Acknowledged: true}, nil
 }
 
@@ -134,7 +106,6 @@ func (s *appraiseSpy) ResumeTimer(
 ) (*flowv1.ResumeTimerResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ResumeTimerCalls++
 	return &flowv1.ResumeTimerResponse{Acknowledged: true}, nil
 }
 
@@ -155,98 +126,12 @@ func (s *appraiseSpy) SubmitResult(
 }
 
 // ---------------------------------------------------------------------------
-// Operator methods (fan-out support)
-// ---------------------------------------------------------------------------
-
-func (s *appraiseSpy) CreateChildWorkitem(
-	_ context.Context, _ *flowv1.CreateChildWorkitemRequest,
-) (*flowv1.CreateChildWorkitemResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.childCounter++
-	childID := fmt.Sprintf("child-%04d", s.childCounter)
-	s.ChildArtefacts[childID] = make(map[string][]byte)
-	return &flowv1.CreateChildWorkitemResponse{
-		ChildWorkitemId: childID,
-	}, nil
-}
-
-func (s *appraiseSpy) RouteChild(
-	_ context.Context, req *flowv1.RouteChildRequest,
-) (*flowv1.RouteChildResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	childID := req.GetChildWorkitemId()
-	target := req.GetRoutingInstruction().GetTarget()
-	s.ChildRoutes[childID] = target
-
-	// Record the fan-out task.
-	s.FanOutTasks = append(s.FanOutTasks, fanOutRecord{
-		ChildID:    childID,
-		TargetNode: target,
-		Artefacts:  s.ChildArtefacts[childID],
-	})
-	return &flowv1.RouteChildResponse{Accepted: true}, nil
-}
-
-func (s *appraiseSpy) GetChildren(
-	_ context.Context, _ *flowv1.GetChildrenRequest,
-) (*flowv1.GetChildrenResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// If ChildStatuses is configured, use it.
-	if s.ChildStatuses != nil {
-		return &flowv1.GetChildrenResponse{Children: s.ChildStatuses}, nil
-	}
-
-	// Default: all created children are Completed.
-	children := make([]*flowv1.ChildWorkitemStatus, 0, len(s.ChildArtefacts))
-	for childID := range s.ChildArtefacts {
-		children = append(children, &flowv1.ChildWorkitemStatus{
-			WorkitemId: childID,
-			Phase:      "Completed",
-		})
-	}
-	return &flowv1.GetChildrenResponse{Children: children}, nil
-}
-
-// ---------------------------------------------------------------------------
 // Archivist methods
 // ---------------------------------------------------------------------------
 
 func (s *appraiseSpy) GetArtefact(
 	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
-	// If requesting from a child workitem, serve from child artefacts or
-	// ChildReviewOutputs.
-	if targetID := req.GetTargetWorkitemId(); targetID != "" {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-
-		// Check ChildReviewOutputs first (pre-configured responses).
-		if raw, ok := s.ChildReviewOutputs[targetID]; ok && req.GetArtefactId() == artefactReviewOutput {
-			return &flowv1.GetArtefactResponse{
-				Content:     raw,
-				VersionHash: "child-hash",
-			}, nil
-		}
-
-		// Fall back to stored child artefacts.
-		if arts, ok := s.ChildArtefacts[targetID]; ok {
-			if content, ok := arts[req.GetArtefactId()]; ok {
-				return &flowv1.GetArtefactResponse{
-					Content:     content,
-					VersionHash: "child-hash",
-				}, nil
-			}
-		}
-		return &flowv1.GetArtefactResponse{
-			Content:     nil,
-			VersionHash: "",
-		}, nil
-	}
-
 	// Parent artefact read.
 	content := "test-content"
 	if s.ArtefactContents != nil {
@@ -261,17 +146,8 @@ func (s *appraiseSpy) GetArtefact(
 }
 
 func (s *appraiseSpy) StoreArtefact(
-	_ context.Context, req *flowv1.StoreArtefactRequest,
+	_ context.Context, _ *flowv1.StoreArtefactRequest,
 ) (*flowv1.StoreArtefactResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// If storing on a child workitem (via FanOut), track it.
-	wid := req.GetWorkitemId()
-	if arts, ok := s.ChildArtefacts[wid]; ok {
-		arts[req.GetArtefactId()] = req.GetContent()
-	}
-
 	return &flowv1.StoreArtefactResponse{
 		VersionHash:  "new-hash",
 		IsNewVersion: true,
@@ -432,17 +308,6 @@ func defaultTestConfig() *appraiseConfig {
 		StampName:        "review",
 		ReviewerNode:     "reviewer",
 		DivisionPrompts:  map[string]string{},
-	}
-}
-
-// setupChildReviewOutputs pre-configures the spy to return review-output
-// artefacts for child workitems. The outputs are keyed by the order children
-// are created (child-0001, child-0002, ...).
-func setupChildReviewOutputs(spy *appraiseSpy, outputs ...reviewOutput) {
-	for i, out := range outputs {
-		childID := fmt.Sprintf("child-%04d", i+1)
-		raw, _ := json.Marshal(out)
-		spy.ChildReviewOutputs[childID] = raw
 	}
 }
 

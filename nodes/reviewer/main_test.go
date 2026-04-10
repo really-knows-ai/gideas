@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gideas/flow/nodes/internal/handlers"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -23,7 +24,7 @@ func TestReviewAgent_ValidOutput(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -47,7 +48,7 @@ func TestReviewAgent_EmptyFeedback(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -68,7 +69,7 @@ func TestReviewAgent_RejectsInvalidSeverity(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err == nil {
@@ -89,7 +90,7 @@ func TestReviewAgent_RejectsEmptyMessage(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err == nil {
@@ -107,7 +108,7 @@ func TestReviewAgent_RejectsAdditionalProperties(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err == nil {
@@ -129,13 +130,13 @@ func TestReviewAgent_PromptContainsLawsAndHistory(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
-	laws := []lawData{
+	laws := []flow.ReviewLaw{
 		{ID: "law-1", Tier: 2, Goal: "Must evoke a season"},
 		{ID: "law-2", Tier: 1, Goal: "Use natural imagery"},
 	}
-	history := []historyData{
+	history := []flow.ReviewHistory{
 		{State: "RESOLVED", Message: "old issue fixed"},
 	}
 
@@ -172,7 +173,7 @@ func TestReviewAgent_PromptOmitsEmptySections(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -199,7 +200,7 @@ func TestReviewAgent_DivisionSuffixInSystemPrompt(t *testing.T) {
 	}
 
 	suffix := "Pay special attention to information disclosure and injection risks."
-	agent := newTestReviewAgent(t, mp, spy, cfg, suffix)
+	agent := newTestReviewAgent(t, mp, spy, cfg, suffix, nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -222,7 +223,7 @@ func TestReviewAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -246,7 +247,7 @@ func TestReviewAgent_SystemPromptContainsConfig(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -260,30 +261,12 @@ func TestReviewAgent_SystemPromptContainsConfig(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — handleReview: Integration
+// Tests — Agent Integration
 // ---------------------------------------------------------------------------
 
-func TestHandleReview_HappyPath(t *testing.T) {
+func TestReviewAgent_HappyPath(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newReviewerSpy()
-
-	// Set up artefact contents the handler will read.
-	lawsJSON, _ := json.Marshal([]lawData{
-		{ID: "law-1", Tier: 2, Goal: "Must evoke a season"},
-	})
-	historyJSON, _ := json.Marshal([]historyData{
-		{State: "RESOLVED", Message: "old issue fixed"},
-	})
-	divisionJSON, _ := json.Marshal(divisionData{
-		Name:         "security",
-		PromptSuffix: "Focus on security risks.",
-	})
-
-	spy.ArtefactContents["input"] = []byte("write about autumn")
-	spy.ArtefactContents["review"] = []byte("autumn moon\nsilent night")
-	spy.ArtefactContents["laws"] = lawsJSON
-	spy.ArtefactContents["history"] = historyJSON
-	spy.ArtefactContents["division"] = divisionJSON
 
 	mp := &mockModel{
 		output: &flow.InferOutput{
@@ -295,15 +278,14 @@ func TestHandleReview_HappyPath(t *testing.T) {
 	client := newSpyClient(t, spy)
 
 	// Create agent with division suffix and override model.
-	agent, err := NewReviewAgent(client, cfg, "Focus on security risks.")
+	agent, err := NewReviewAgent(client, cfg, "Focus on security risks.", nil)
 	if err != nil {
 		t.Fatalf("NewReviewAgent() failed: %v", err)
 	}
 	flow.OverrideModelForTest(agent.agent, mp)
 
-	// Simulate handleReview's artefact reading + agent invocation + output storage.
-	laws := []lawData{{ID: "law-1", Tier: 2, Goal: "Must evoke a season"}}
-	history := []historyData{{State: "RESOLVED", Message: "old issue fixed"}}
+	laws := []flow.ReviewLaw{{ID: "law-1", Tier: 2, Goal: "Must evoke a season"}}
+	history := []flow.ReviewHistory{{State: "RESOLVED", Message: "old issue fixed"}}
 
 	out, err := agent.Run(context.Background(), "write about autumn", "autumn moon\nsilent night", laws, history)
 	if err != nil {
@@ -317,14 +299,14 @@ func TestHandleReview_HappyPath(t *testing.T) {
 		t.Fatalf("expected 'weak imagery', got %q", out.Feedback[0].Message)
 	}
 
-	// Verify the review-output can be serialized.
+	// Verify the review result can be serialized.
 	outJSON, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("failed to marshal review output: %v", err)
 	}
 
 	// Verify it round-trips.
-	var parsed reviewOutput
+	var parsed flow.ReviewResult
 	if err := json.Unmarshal(outJSON, &parsed); err != nil {
 		t.Fatalf("failed to unmarshal review output: %v", err)
 	}
@@ -333,7 +315,7 @@ func TestHandleReview_HappyPath(t *testing.T) {
 	}
 }
 
-func TestHandleReview_EmptyLaws(t *testing.T) {
+func TestReviewAgent_EmptyLaws(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newReviewerSpy()
 	mp := &mockModel{
@@ -343,7 +325,7 @@ func TestHandleReview_EmptyLaws(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	// Empty laws — reviewer should still work.
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
@@ -355,7 +337,7 @@ func TestHandleReview_EmptyLaws(t *testing.T) {
 	}
 }
 
-func TestHandleReview_ReviewOutputFormat(t *testing.T) {
+func TestReviewAgent_ReviewOutputFormat(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newReviewerSpy()
 	mp := &mockModel{
@@ -368,10 +350,10 @@ func TestHandleReview_ReviewOutputFormat(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "")
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content",
-		[]lawData{{ID: "law-1", Tier: 2, Goal: "test"}},
+		[]flow.ReviewLaw{{ID: "law-1", Tier: 2, Goal: "test"}},
 		nil,
 	)
 	if err != nil {
@@ -406,7 +388,7 @@ func TestHandleReview_ReviewOutputFormat(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — Division artefact deserialization
+// Tests — Handler types deserialization (handlers package types)
 // ---------------------------------------------------------------------------
 
 func TestDivisionData_Deserialization(t *testing.T) {
@@ -438,7 +420,7 @@ func TestDivisionData_Deserialization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var d divisionData
+			var d handlers.DivisionData
 			if err := json.Unmarshal([]byte(tt.json), &d); err != nil {
 				t.Fatalf("unmarshal failed: %v", err)
 			}
@@ -454,7 +436,7 @@ func TestDivisionData_Deserialization(t *testing.T) {
 
 func TestLawData_Deserialization(t *testing.T) {
 	input := `[{"id":"law-1","tier":2,"goal":"Must evoke a season"},{"id":"law-2","tier":1,"goal":"Use imagery"}]`
-	var laws []lawData
+	var laws []handlers.LawData
 	if err := json.Unmarshal([]byte(input), &laws); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
@@ -468,7 +450,7 @@ func TestLawData_Deserialization(t *testing.T) {
 
 func TestHistoryData_Deserialization(t *testing.T) {
 	input := `[{"state":"RESOLVED","message":"old issue fixed"}]`
-	var history []historyData
+	var history []handlers.HistoryData
 	if err := json.Unmarshal([]byte(input), &history); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
@@ -477,5 +459,127 @@ func TestHistoryData_Deserialization(t *testing.T) {
 	}
 	if history[0].State != "RESOLVED" || history[0].Message != "old issue fixed" {
 		t.Fatalf("unexpected history[0]: %+v", history[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — ConfigMap prompt overrides
+// ---------------------------------------------------------------------------
+
+func TestReviewAgent_SystemPromptOverride(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newReviewerSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	customSystem := `You are a custom reviewer.
+{{- if .DivisionSuffix}}
+
+{{.DivisionSuffix}}
+{{- end}}`
+
+	opts := &ReviewAgentOpts{SystemPrompt: customSystem}
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", opts)
+
+	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if !strings.Contains(mp.capturedSystem, "custom reviewer") {
+		t.Errorf("system prompt should contain custom override, got:\n%s", mp.capturedSystem)
+	}
+	// The default template text should NOT be present.
+	if strings.Contains(mp.capturedSystem, "governed creative pipeline") {
+		t.Errorf("system prompt should not contain default template text when overridden, got:\n%s", mp.capturedSystem)
+	}
+}
+
+func TestReviewAgent_QueryTemplateOverride(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newReviewerSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	customQuery := `CUSTOM QUERY: {{.InputContent}} | {{.ReviewContent}}`
+
+	opts := &ReviewAgentOpts{QueryTemplate: customQuery}
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", opts)
+
+	_, err := agent.Run(context.Background(), "my petition", "my content", nil, nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	query := string(mp.capturedQuery)
+	if !strings.Contains(query, "CUSTOM QUERY:") {
+		t.Errorf("query should contain custom override, got:\n%s", query)
+	}
+	if !strings.Contains(query, "my petition") {
+		t.Errorf("query should contain input content, got:\n%s", query)
+	}
+	if !strings.Contains(query, "my content") {
+		t.Errorf("query should contain review content, got:\n%s", query)
+	}
+}
+
+func TestReviewAgent_NilOptsUsesDefaults(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newReviewerSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	// nil opts — should use baked-in defaults.
+	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+
+	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if !strings.Contains(mp.capturedSystem, "governed creative pipeline") {
+		t.Errorf("system prompt should contain default template text, got:\n%s", mp.capturedSystem)
+	}
+}
+
+func TestReviewAgent_SystemPromptOverrideWithDivisionSuffix(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newReviewerSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	customSystem := `Custom reviewer.
+{{- if .DivisionSuffix}}
+
+Division: {{.DivisionSuffix}}
+{{- end}}`
+
+	suffix := "Focus on security."
+	opts := &ReviewAgentOpts{SystemPrompt: customSystem}
+	agent := newTestReviewAgent(t, mp, spy, cfg, suffix, opts)
+
+	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if !strings.Contains(mp.capturedSystem, "Division: Focus on security.") {
+		t.Errorf("system prompt should render division suffix in custom template, got:\n%s", mp.capturedSystem)
 	}
 }

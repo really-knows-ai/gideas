@@ -19,6 +19,8 @@
 //	inputArtefacts:
 //	  - "input"
 //	reviewArtefact: "review"
+//	systemPrompt: ""      # optional override for system prompt template
+//	queryTemplate: ""     # optional override for query prompt template
 package main
 
 import (
@@ -29,7 +31,7 @@ import (
 	"os"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal/artefacts"
+	"github.com/gideas/flow/nodes/internal/handlers"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 )
@@ -39,35 +41,8 @@ import (
 type reviewerConfig struct {
 	InputArtefacts []string `yaml:"inputArtefacts"` // artefact IDs for the input (e.g. ["input"])
 	ReviewArtefact string   `yaml:"reviewArtefact"` // artefact ID for the artefact under review (e.g. "review")
-}
-
-// Convention artefact IDs shared between the parent Appraise orchestrator
-// and the child Reviewer node. These are not configurable.
-const (
-	artefactLaws         = "laws"
-	artefactHistory      = "history"
-	artefactDivision     = "division"
-	artefactReviewOutput = "review-output"
-)
-
-// divisionData is the JSON structure passed via the "division" artefact.
-type divisionData struct {
-	Name         string `json:"name"`
-	PromptSuffix string `json:"promptSuffix"`
-}
-
-// lawData is the minimal law representation passed via the "laws" artefact.
-// Only the fields the ReviewAgent needs are included.
-type lawData struct {
-	ID   string `json:"id"`
-	Tier int32  `json:"tier"`
-	Goal string `json:"goal"`
-}
-
-// historyData is a single feedback history item passed via the "history" artefact.
-type historyData struct {
-	State   string `json:"state"`
-	Message string `json:"message"`
+	SystemPrompt   string   `yaml:"systemPrompt"`   // optional override for the system prompt template
+	QueryTemplate  string   `yaml:"queryTemplate"`  // optional override for the query prompt template
 }
 
 // ---------------------------------------------------------------------------
@@ -104,119 +79,32 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("reviewer: load config: %w", err)
 	}
 
-	return handleReview(ctx, client, cfg)
-}
-
-// ---------------------------------------------------------------------------
-// Core Logic
-// ---------------------------------------------------------------------------
-
-// handleReview performs the Reviewer's single responsibility: fresh review
-// against a set of laws for a specific division.
-func handleReview(
-	ctx context.Context,
-	client *flow.Client,
-	cfg *reviewerConfig,
-) error {
-	// ---------------------------------------------------------------
-	// Read artefacts from parent
-	// ---------------------------------------------------------------
-
-	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
+	// Read the division artefact before constructing the agent so the
+	// division prompt suffix is baked into the system prompt.
+	divisionResp, err := client.GetArtefact(ctx, handlers.ArtefactDivision)
 	if err != nil {
-		return fmt.Errorf("reviewer: read inputs: %w", err)
+		return fmt.Errorf("reviewer: read %s: %w", handlers.ArtefactDivision, err)
 	}
 
-	reviewResp, err := client.GetArtefact(ctx, cfg.ReviewArtefact)
-	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", cfg.ReviewArtefact, err)
-	}
-	reviewContent := string(reviewResp.GetContent())
-
-	// Read and deserialize laws.
-	lawsResp, err := client.GetArtefact(ctx, artefactLaws)
-	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", artefactLaws, err)
-	}
-
-	var laws []lawData
-	if err := json.Unmarshal(lawsResp.GetContent(), &laws); err != nil {
-		return fmt.Errorf("reviewer: unmarshal laws: %w", err)
-	}
-
-	// Read and deserialize history.
-	historyResp, err := client.GetArtefact(ctx, artefactHistory)
-	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", artefactHistory, err)
-	}
-
-	var history []historyData
-	if err := json.Unmarshal(historyResp.GetContent(), &history); err != nil {
-		return fmt.Errorf("reviewer: unmarshal history: %w", err)
-	}
-
-	// Read and deserialize division.
-	divisionResp, err := client.GetArtefact(ctx, artefactDivision)
-	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", artefactDivision, err)
-	}
-
-	var division divisionData
+	var division handlers.DivisionData
 	if err := json.Unmarshal(divisionResp.GetContent(), &division); err != nil {
 		return fmt.Errorf("reviewer: unmarshal division: %w", err)
 	}
 
-	slog.Info("reviewer: reviewing",
-		"division", division.Name,
-		"law_count", len(laws),
-		"history_count", len(history),
-	)
-
-	// ---------------------------------------------------------------
-	// Build and run ReviewAgent
-	// ---------------------------------------------------------------
-
-	agent, err := NewReviewAgent(client, cfg, division.PromptSuffix)
+	// Construct the agent with division suffix and optional prompt overrides.
+	opts := &ReviewAgentOpts{
+		SystemPrompt:  cfg.SystemPrompt,
+		QueryTemplate: cfg.QueryTemplate,
+	}
+	agent, err := NewReviewAgent(client, cfg, division.PromptSuffix, opts)
 	if err != nil {
 		return fmt.Errorf("reviewer: create review agent: %w", err)
 	}
 
-	out, err := agent.Run(ctx, inputContent, reviewContent, laws, history)
-	if err != nil {
-		return fmt.Errorf("reviewer: review run: %w", err)
+	handlerCfg := handlers.ReviewConfig{
+		InputArtefacts: cfg.InputArtefacts,
+		ReviewArtefact: cfg.ReviewArtefact,
 	}
 
-	slog.Info("reviewer: review complete",
-		"division", division.Name,
-		"feedback_count", len(out.Feedback),
-	)
-
-	// ---------------------------------------------------------------
-	// Store review-output artefact for parent to collect
-	// ---------------------------------------------------------------
-
-	outJSON, err := json.Marshal(out)
-	if err != nil {
-		return fmt.Errorf("reviewer: marshal review output: %w", err)
-	}
-
-	// The governed artefact for child data transfer is "review-data" —
-	// internal plumbing, not a governed work product.
-	if _, err := client.StoreArtefact(ctx, artefactReviewOutput, "review-data", outJSON); err != nil {
-		return fmt.Errorf("reviewer: store %s: %w", artefactReviewOutput, err)
-	}
-
-	// ---------------------------------------------------------------
-	// Signal completion
-	// ---------------------------------------------------------------
-
-	if _, err := client.Complete(ctx); err != nil {
-		return fmt.Errorf("reviewer: complete: %w", err)
-	}
-
-	slog.Info("reviewer: completed",
-		"division", division.Name,
-		"workitem_id", os.Getenv(flow.EnvWorkitemID),
-	)
-	return nil
+	return handlers.HandleReview(ctx, client, agent, handlerCfg)
 }
