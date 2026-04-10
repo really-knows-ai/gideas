@@ -10,6 +10,9 @@ import (
 	flow "github.com/gideas/flow/sdk/go"
 )
 
+// Compile-time assertion: FindingAgent implements flow.FindingContract.
+var _ flow.FindingContract = (*FindingAgent)(nil)
+
 // ---------------------------------------------------------------------------
 // FindingAgent — concrete agent for learning capture (Phase 3)
 // ---------------------------------------------------------------------------
@@ -111,15 +114,28 @@ type findingTemplateQueryData struct {
 // NewFindingAgent creates a FindingAgent with the given client and config.
 // The model (KimiK2Ollama) is created internally — model choice is a
 // code-time decision, not deploy-time config.
+//
+// If cfg.FindingSystemPrompt or cfg.FindingQueryTemplate are non-empty,
+// they override the baked-in defaults.
 func NewFindingAgent(client *flow.Client, cfg *appraiseConfig) (*FindingAgent, error) {
+	sysTmplStr := findingSystemPromptTemplate
+	if cfg.FindingSystemPrompt != "" {
+		sysTmplStr = cfg.FindingSystemPrompt
+	}
+
+	queryTmplStr := findingQueryPromptTemplate
+	if cfg.FindingQueryTemplate != "" {
+		queryTmplStr = cfg.FindingQueryTemplate
+	}
+
 	sysData := findingSystemData{
 		ReviewArtefact:   cfg.ReviewArtefact,
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
 	agent, err := buildAgent(client, "finding agent",
-		findingSystemPromptTemplate, sysData,
-		findingQueryPromptTemplate, findingSchema)
+		sysTmplStr, sysData,
+		queryTmplStr, findingSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +149,7 @@ func NewFindingAgent(client *flow.Client, cfg *appraiseConfig) (*FindingAgent, e
 func (f *FindingAgent) Run(
 	ctx context.Context,
 	items []*flowv1.FeedbackItem,
-) (*findingsOutput, error) {
+) (*flow.FindingsResult, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -190,5 +206,15 @@ func (f *FindingAgent) Run(
 		return nil, fmt.Errorf("finding agent: unmarshal output: %w", err)
 	}
 
-	return &out, nil
+	// Map internal types to contract types.
+	findings := make([]flow.Finding, len(out.Findings))
+	for i, f := range out.Findings {
+		findings[i] = flow.Finding{
+			Goal:      f.Goal,
+			AppliesTo: f.AppliesTo,
+			Rationale: f.Rationale,
+		}
+	}
+
+	return &flow.FindingsResult{Findings: findings}, nil
 }

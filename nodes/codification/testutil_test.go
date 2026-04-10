@@ -19,8 +19,9 @@ import (
 // Spy Server
 // ---------------------------------------------------------------------------
 
-// clerkSpy implements the gRPC services the Clerk node depends on.
-type clerkSpy struct {
+// codificationSpy implements the gRPC services the Codification node depends
+// on: Sidecar, Operator, and Archivist.
+type codificationSpy struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
@@ -33,10 +34,8 @@ type clerkSpy struct {
 	// Configurable child artefacts: "childID:artefactID" → content.
 	ChildArtefacts map[string][]byte
 
-	// Configurable feedback items returned by GetFeedback.
-	FeedbackItems []*flowv1.FeedbackItem
-
 	// Configurable children returned by GetChildren (for AwaitChildren).
+	// When nil, auto-generates completed children from CreatedChildren.
 	Children []*flowv1.ChildWorkitemStatus
 
 	// Auto-created child IDs (returned by CreateChildWorkitem).
@@ -49,7 +48,6 @@ type clerkSpy struct {
 	CreateChildErr   error
 	RouteChildErr    error
 	GetChildrenErr   error
-	GetFeedbackErr   error
 
 	// Recorded operations.
 	StoredArtefacts      map[string][]byte // artefactID → content
@@ -64,8 +62,8 @@ type routedChild struct {
 	TargetNode string
 }
 
-func newClerkSpy() *clerkSpy {
-	return &clerkSpy{
+func newCodificationSpy() *codificationSpy {
+	return &codificationSpy{
 		Artefacts:            make(map[string][]byte),
 		ChildArtefacts:       make(map[string][]byte),
 		StoredArtefacts:      make(map[string][]byte),
@@ -77,25 +75,25 @@ func newClerkSpy() *clerkSpy {
 // Sidecar methods
 // ---------------------------------------------------------------------------
 
-func (s *clerkSpy) Heartbeat(
+func (s *codificationSpy) Heartbeat(
 	_ context.Context, _ *flowv1.HeartbeatRequest,
 ) (*flowv1.HeartbeatResponse, error) {
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
-func (s *clerkSpy) PauseTimer(
+func (s *codificationSpy) PauseTimer(
 	_ context.Context, _ *flowv1.PauseTimerRequest,
 ) (*flowv1.PauseTimerResponse, error) {
 	return &flowv1.PauseTimerResponse{Acknowledged: true}, nil
 }
 
-func (s *clerkSpy) ResumeTimer(
+func (s *codificationSpy) ResumeTimer(
 	_ context.Context, _ *flowv1.ResumeTimerRequest,
 ) (*flowv1.ResumeTimerResponse, error) {
 	return &flowv1.ResumeTimerResponse{Acknowledged: true}, nil
 }
 
-func (s *clerkSpy) SubmitResult(
+func (s *codificationSpy) SubmitResult(
 	_ context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
 	s.mu.Lock()
@@ -112,12 +110,12 @@ func (s *clerkSpy) SubmitResult(
 	case nil:
 		// No action set — treat as no-op.
 	default:
-		// Complete / Suspend — no-op for clerk spy.
+		// Complete / Suspend — no-op.
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 
-func (s *clerkSpy) RecordTelemetry(
+func (s *codificationSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
@@ -127,7 +125,7 @@ func (s *clerkSpy) RecordTelemetry(
 // Operator methods
 // ---------------------------------------------------------------------------
 
-func (s *clerkSpy) CreateChildWorkitem(
+func (s *codificationSpy) CreateChildWorkitem(
 	_ context.Context, _ *flowv1.CreateChildWorkitemRequest,
 ) (*flowv1.CreateChildWorkitemResponse, error) {
 	s.mu.Lock()
@@ -143,7 +141,7 @@ func (s *clerkSpy) CreateChildWorkitem(
 	return &flowv1.CreateChildWorkitemResponse{ChildWorkitemId: childID}, nil
 }
 
-func (s *clerkSpy) RouteChild(
+func (s *codificationSpy) RouteChild(
 	_ context.Context, req *flowv1.RouteChildRequest,
 ) (*flowv1.RouteChildResponse, error) {
 	s.mu.Lock()
@@ -160,7 +158,7 @@ func (s *clerkSpy) RouteChild(
 	return &flowv1.RouteChildResponse{Accepted: true}, nil
 }
 
-func (s *clerkSpy) GetChildren(
+func (s *codificationSpy) GetChildren(
 	_ context.Context, _ *flowv1.GetChildrenRequest,
 ) (*flowv1.GetChildrenResponse, error) {
 	s.mu.Lock()
@@ -190,7 +188,7 @@ func (s *clerkSpy) GetChildren(
 // Archivist methods
 // ---------------------------------------------------------------------------
 
-func (s *clerkSpy) GetArtefact(
+func (s *codificationSpy) GetArtefact(
 	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
 	if s.GetArtefactErr != nil {
@@ -215,7 +213,7 @@ func (s *clerkSpy) GetArtefact(
 	return &flowv1.GetArtefactResponse{Content: content}, nil
 }
 
-func (s *clerkSpy) StoreArtefact(
+func (s *codificationSpy) StoreArtefact(
 	_ context.Context, req *flowv1.StoreArtefactRequest,
 ) (*flowv1.StoreArtefactResponse, error) {
 	s.mu.Lock()
@@ -238,21 +236,6 @@ func (s *clerkSpy) StoreArtefact(
 	}, nil
 }
 
-func (s *clerkSpy) GetFeedback(
-	_ context.Context, _ *flowv1.GetFeedbackRequest,
-) (*flowv1.GetFeedbackResponse, error) {
-	if s.GetFeedbackErr != nil {
-		return nil, s.GetFeedbackErr
-	}
-	return &flowv1.GetFeedbackResponse{FeedbackItems: s.FeedbackItems}, nil
-}
-
-func (s *clerkSpy) ListArtefacts(
-	_ context.Context, _ *flowv1.ListArtefactsRequest,
-) (*flowv1.ListArtefactsResponse, error) {
-	return &flowv1.ListArtefactsResponse{}, nil
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -261,7 +244,7 @@ func newLocalListener() (net.Listener, error) {
 	return net.Listen("tcp", "127.0.0.1:0")
 }
 
-func newSpyGRPCServer(spy *clerkSpy) *grpc.Server {
+func newSpyGRPCServer(spy *codificationSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
 	flowv1.RegisterOperatorServiceServer(srv, spy)
@@ -269,7 +252,7 @@ func newSpyGRPCServer(spy *clerkSpy) *grpc.Server {
 	return srv
 }
 
-func setupClerkTest(t *testing.T, spy *clerkSpy) *flow.Client {
+func setupCodificationTest(t *testing.T, spy *codificationSpy) *flow.Client {
 	t.Helper()
 
 	lis, err := newLocalListener()
@@ -294,18 +277,86 @@ func setupClerkTest(t *testing.T, spy *clerkSpy) *flow.Client {
 	return client
 }
 
-// seedClerkArtefacts populates the spy with standard Clerk input artefacts.
-func seedClerkArtefacts(spy *clerkSpy, deliberation *deliberationResult, vctx *verdictContext) {
-	deliberationJSON, _ := json.Marshal(deliberation)
-	spy.Artefacts[artefactDeliberationResult] = deliberationJSON
+// ---------------------------------------------------------------------------
+// Seed Helpers
+// ---------------------------------------------------------------------------
 
-	vctxJSON, _ := json.Marshal(vctx)
-	spy.Artefacts[artefactVerdictContext] = vctxJSON
+// seedPetition populates the spy with a petition artefact containing the
+// given changes.
+func seedPetition(spy *codificationSpy, changes ...petitionChange) {
+	pet := petition{
+		Petition: petitionBody{
+			Context: petitionContext{
+				Trigger:         "deadlock-resolution",
+				VerdictDecision: "favour_refiner",
+				Justification:   "Strong argument for change",
+			},
+			Changes:            changes,
+			ProseJustification: "Test prose justification",
+		},
+	}
+	data, _ := json.Marshal(pet)
+	spy.Artefacts[defaultPetitionArtefact] = data
 }
 
-// seedCodificationResults populates the spy with codification child
-// artefacts so CollectArtefacts can find them.
-func seedCodificationResults(spy *clerkSpy, childID string, rep petitionRep) {
-	repJSON, _ := json.Marshal(rep)
-	spy.ChildArtefacts[childID+":"+artefactCodificationResult] = repJSON
+// seedCodificationResult populates the spy with a codification-result child
+// artefact so CollectArtefacts can find it.
+func seedCodificationResult(spy *codificationSpy, childID, typ, content string) {
+	cr := codificationResult{
+		Type:    typ,
+		Content: content,
+	}
+	data, _ := json.Marshal(cr)
+	spy.ChildArtefacts[childID+":"+artefactCodificationResult] = data
+}
+
+// defaultTestConfig returns a codificationConfig suitable for most tests.
+func defaultTestConfig() *codificationConfig {
+	return &codificationConfig{
+		CodificationNodes: []string{"codify-smt"},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Assertion Helpers
+// ---------------------------------------------------------------------------
+
+// assertRoutedTo verifies the spy recorded exactly one route to the expected
+// output name.
+func assertRoutedTo(t *testing.T, spy *codificationSpy, expected string) {
+	t.Helper()
+	if len(spy.RoutedOutputs) != 1 {
+		t.Fatalf("expected 1 routed output, got %d: %v", len(spy.RoutedOutputs), spy.RoutedOutputs)
+	}
+	if spy.RoutedOutputs[0] != expected {
+		t.Errorf("routed to %q, want %q", spy.RoutedOutputs[0], expected)
+	}
+}
+
+// storedPetition extracts and unmarshals the stored petition from the spy.
+func storedPetition(t *testing.T, spy *codificationSpy) petition {
+	t.Helper()
+	raw, ok := spy.StoredArtefacts[defaultPetitionArtefact]
+	if !ok {
+		t.Fatal("petition artefact was not stored")
+	}
+	var pet petition
+	if err := json.Unmarshal(raw, &pet); err != nil {
+		t.Fatalf("unmarshal stored petition: %v", err)
+	}
+	return pet
+}
+
+// containsSubstring checks if s contains substr.
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && contains(s, substr))
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

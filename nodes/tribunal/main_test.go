@@ -8,252 +8,246 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/tally"
 )
 
-// testCustomGate is a test-only constant to avoid goconst complaints.
-const testCustomGate = "custom-gate"
-
-// ===========================================================================
-// Hearing Mode Tests
-// ===========================================================================
-
-// ---------------------------------------------------------------------------
-// Fan-out and routing
-// ---------------------------------------------------------------------------
-
-func TestHearing_FanOutCount(t *testing.T) {
+func TestTribunal_HappyPath_ConsensusRound1_ClerkChildAndComplete(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
+	seedJurorVerdict(spy, "child-1", outcomePromote, "Strong evidence of durable value")
+	seedJurorVerdict(spy, "child-2", outcomePromote, "Friction suggests promotion")
+	seedJurorVerdict(spy, "child-3", outcomeRetire, "Retirement would simplify the system")
+
 	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 3, JurorNode: "test-juror"}
+	cfg := defaultTestConfig()
 
 	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
+		t.Fatalf("handleTribunal: %v", err)
 	}
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	if len(spy.CreatedChildren) != 3 {
-		t.Fatalf("expected 3 children, got %d", len(spy.CreatedChildren))
+	if len(spy.CreatedChildren) != 4 {
+		t.Fatalf("expected 4 children (3 jurors + 1 clerk), got %d", len(spy.CreatedChildren))
 	}
-	for _, rc := range spy.RoutedChildren {
-		if rc.TargetNode != "test-juror" {
-			t.Fatalf("expected child routed to test-juror, got %s", rc.TargetNode)
+	if len(spy.RoutedChildren) != 4 {
+		t.Fatalf("expected 4 routed children, got %d", len(spy.RoutedChildren))
+	}
+	for i := range 3 {
+		if spy.RoutedChildren[i].TargetNode != defaultJurorNode {
+			t.Fatalf("juror child %d routed to %q, want %q", i, spy.RoutedChildren[i].TargetNode, defaultJurorNode)
+		}
+	}
+	if spy.RoutedChildren[3].TargetNode != defaultClerkNode {
+		t.Fatalf("clerk child routed to %q, want %q", spy.RoutedChildren[3].TargetNode, defaultClerkNode)
+	}
+
+	assertCompleted(t, spy)
+	if len(spy.RoutedOutputs) != 0 {
+		t.Fatalf("unexpected routed outputs: %v", spy.RoutedOutputs)
+	}
+	if !spy.PauseTimerCalled || !spy.ResumeTimerCalled {
+		t.Fatalf("expected AwaitChildren to pause and resume timer")
+	}
+
+	vctx, _ := clerkChildVerdictContext(t, spy)
+	if vctx.Trigger != "hearing" {
+		t.Fatalf("trigger = %q, want hearing", vctx.Trigger)
+	}
+	if !strings.Contains(vctx.Decision, "law-under-review-001") {
+		t.Fatalf("decision does not mention law id: %q", vctx.Decision)
+	}
+}
+
+func TestTribunal_HungAfterMaxRounds_RoutesToHung(t *testing.T) {
+	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
+	seedJurorVerdict(spy, "child-1", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-2", outcomeRetire, "retire")
+	seedJurorVerdict(spy, "child-3", "abstain", "unclear")
+
+	client := setupTribunalTest(t, spy)
+	cfg := defaultTestConfig()
+
+	if err := handleTribunal(context.Background(), client, cfg); err != nil {
+		t.Fatalf("handleTribunal: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	assertRoutedTo(t, spy, defaultHungOutput)
+	if len(spy.CompletedReasons) != 0 {
+		t.Fatalf("unexpected completions: %v", spy.CompletedReasons)
+	}
+	if len(spy.CreatedChildren) != 3 {
+		t.Fatalf("expected 3 juror children only, got %d", len(spy.CreatedChildren))
+	}
+}
+
+func TestTribunal_MultiRoundRetry_ConsensusRound2(t *testing.T) {
+	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
+	seedJurorVerdict(spy, "child-1", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-2", outcomeRetire, "retire")
+	seedJurorVerdict(spy, "child-3", "abstain", "unclear")
+	seedJurorVerdict(spy, "child-4", outcomePromote, "peer arguments changed my view")
+	seedJurorVerdict(spy, "child-5", outcomePromote, "promotion best fits the evidence")
+	seedJurorVerdict(spy, "child-6", outcomeRetire, "still prefer retirement")
+
+	client := setupTribunalTest(t, spy)
+	cfg := &tribunalConfig{JurySize: 3, MaxRounds: 2}
+
+	if err := handleTribunal(context.Background(), client, cfg); err != nil {
+		t.Fatalf("handleTribunal: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	if len(spy.CreatedChildren) != 7 {
+		t.Fatalf("expected 7 children, got %d", len(spy.CreatedChildren))
+	}
+	assertCompleted(t, spy)
+
+	for _, childID := range []string{"child-4", "child-5", "child-6"} {
+		content, ok := spy.ChildStoredArtefacts[childID+":"+tally.ArtefactPriorRound]
+		if !ok {
+			t.Fatalf("missing prior-round-reasoning on %s", childID)
+		}
+		if !strings.Contains(string(content), "Prior round reasoning") {
+			t.Fatalf("unexpected prior-round-reasoning on %s: %q", childID, string(content))
+		}
+	}
+	for _, childID := range []string{"child-1", "child-2", "child-3"} {
+		if _, ok := spy.ChildStoredArtefacts[childID+":"+tally.ArtefactPriorRound]; ok {
+			t.Fatalf("round 1 child %s unexpectedly had prior-round-reasoning", childID)
 		}
 	}
 }
 
-func TestHearing_DefaultConfig(t *testing.T) {
+func TestTribunal_VerdictContextIsProseOnly(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{} // all defaults
+	seedJurorVerdict(spy, "child-1", outcomePromote, "Strong precedent for promotion")
+	seedJurorVerdict(spy, "child-2", outcomePromote, "The law has proven durable")
+	seedJurorVerdict(spy, "child-3", outcomeRetire, "Retirement would reduce noise")
 
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
+	client := setupTribunalTest(t, spy)
+	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+		t.Fatalf("handleTribunal: %v", err)
 	}
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Default jury size is 5.
-	if len(spy.CreatedChildren) != 5 {
-		t.Fatalf("expected 5 children (default), got %d", len(spy.CreatedChildren))
-	}
-	// Default juror node is "juror".
-	if len(spy.RoutedChildren) > 0 && spy.RoutedChildren[0].TargetNode != "juror" {
-		t.Fatalf("expected child routed to juror (default), got %s", spy.RoutedChildren[0].TargetNode)
-	}
-	// Default gate output is "deliberation-gate".
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "deliberation-gate" {
-		t.Fatalf("expected route to deliberation-gate (default), got %v", spy.RoutedOutputs)
-	}
-}
-
-func TestHearing_RoutesToDeliberationGate(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{GateOutput: testCustomGate}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != testCustomGate {
-		t.Fatalf("expected route to custom-gate, got %v", spy.RoutedOutputs)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Child artefacts (question, evidence, allowed-outcomes)
-// ---------------------------------------------------------------------------
-
-func TestHearing_ChildArtefacts_Tier1(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	if len(spy.CreatedChildren) != 1 {
-		t.Fatalf("expected 1 child, got %d", len(spy.CreatedChildren))
-	}
-
-	childID := spy.CreatedChildren[0]
-
-	// Question artefact.
-	question := string(spy.ChildStoredArtefacts[childID+":question"])
-	if !strings.Contains(question, "Finding") {
-		t.Errorf("expected question to mention Finding, got: %s", question)
-	}
-
-	// Evidence artefact.
-	evidence := string(spy.ChildStoredArtefacts[childID+":evidence"])
-	if !strings.Contains(evidence, "Law Under Review") {
-		t.Errorf("expected evidence to contain 'Law Under Review', got: %s", evidence)
-	}
-	if !strings.Contains(evidence, "law-under-review-001") {
-		t.Errorf("expected evidence to contain law ID")
-	}
-
-	// Allowed-outcomes artefact.
-	outcomesRaw := spy.ChildStoredArtefacts[childID+":allowed-outcomes"]
-	var outcomes []string
-	if err := json.Unmarshal(outcomesRaw, &outcomes); err != nil {
-		t.Fatalf("parse allowed-outcomes: %v", err)
-	}
-	if len(outcomes) != 2 || outcomes[0] != "promote" || outcomes[1] != "retire" {
-		t.Fatalf("expected [promote, retire] for Tier 1, got %v", outcomes)
-	}
-}
-
-func TestHearing_ChildArtefacts_Tier2(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_RULING)
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	childID := spy.CreatedChildren[0]
-
-	// Question should mention Ruling.
-	question := string(spy.ChildStoredArtefacts[childID+":question"])
-	if !strings.Contains(question, "Ruling") {
-		t.Errorf("expected question to mention Ruling, got: %s", question)
-	}
-
-	// Tier 2 should have 3 outcomes: promote, retire, demote.
-	outcomesRaw := spy.ChildStoredArtefacts[childID+":allowed-outcomes"]
-	var outcomes []string
-	if err := json.Unmarshal(outcomesRaw, &outcomes); err != nil {
-		t.Fatalf("parse allowed-outcomes: %v", err)
-	}
-	if len(outcomes) != 3 {
-		t.Fatalf("expected 3 allowed outcomes for Tier 2, got %v", outcomes)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Verdict context artefact
-// ---------------------------------------------------------------------------
-
-func TestHearing_StoresVerdictContext(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	vctx := spy.getStoredVerdictContext()
-	if vctx == nil {
-		t.Fatal("expected verdict-context artefact to be stored")
-	}
+	vctx, raw := clerkChildVerdictContext(t, spy)
 	if vctx.Trigger != "hearing" {
-		t.Errorf("expected trigger=hearing, got %s", vctx.Trigger)
+		t.Fatalf("trigger = %q, want hearing", vctx.Trigger)
 	}
-	if vctx.LawID != "law-under-review-001" {
-		t.Errorf("expected law_id=law-under-review-001, got %s", vctx.LawID)
+	if vctx.Decision == "" {
+		t.Fatal("expected non-empty decision")
 	}
-	if vctx.Goal != "Haiku must contain a seasonal reference" {
-		t.Errorf("expected goal to match law, got %s", vctx.Goal)
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		t.Fatalf("unmarshal raw verdict-context: %v", err)
 	}
-	if len(vctx.AppliesTo) != 1 || vctx.AppliesTo[0] != "haiku" {
-		t.Errorf("expected applies_to=[haiku], got %v", vctx.AppliesTo)
+	if len(fields) != 2 {
+		t.Fatalf("expected exactly 2 verdict-context fields, got %v", fields)
 	}
-	if vctx.Tier != int32(flowv1.LawTier_LAW_TIER_FINDING) {
-		t.Errorf("expected tier=%d, got %d",
-			int32(flowv1.LawTier_LAW_TIER_FINDING), vctx.Tier)
+	for _, required := range []string{"trigger", "decision"} {
+		if _, ok := fields[required]; !ok {
+			t.Fatalf("missing required verdict-context field %q in %v", required, fields)
+		}
+	}
+	for _, forbidden := range []string{"law_id", "goal", "tier", "action", "applies_to"} {
+		if _, ok := fields[forbidden]; ok {
+			t.Fatalf("unexpected structured field %q in %v", forbidden, fields)
+		}
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Timer pause/resume (via AwaitChildren)
-// ---------------------------------------------------------------------------
-
-func TestHearing_PausesAndResumesTimer(t *testing.T) {
+func TestTribunal_FireAndForget_CompletesWithoutSuspending(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
+	seedJurorVerdict(spy, "child-1", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-2", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-3", outcomeRetire, "retire")
 
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
+	client := setupTribunalTest(t, spy)
+	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+		t.Fatalf("handleTribunal: %v", err)
 	}
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	if !spy.PauseTimerCalled {
-		t.Error("expected PauseTimer to be called during AwaitChildren")
+	assertCompleted(t, spy)
+	if len(spy.CreatedChildren) != 4 {
+		t.Fatalf("expected clerk child to be created before completion, got %d children", len(spy.CreatedChildren))
 	}
-	if !spy.ResumeTimerCalled {
-		t.Error("expected ResumeTimer to be called after AwaitChildren")
+	if len(spy.RoutedOutputs) != 0 {
+		t.Fatalf("unexpected route-to-output calls: %v", spy.RoutedOutputs)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Evidence assembly
-// ---------------------------------------------------------------------------
+func TestTribunal_TierBasedQuestionFraming(t *testing.T) {
+	tests := []struct {
+		name         string
+		tier         flowv1.LawTier
+		wantQuestion string
+		wantOutcomes []string
+	}{
+		{
+			name:         "finding",
+			tier:         flowv1.LawTier_LAW_TIER_FINDING,
+			wantQuestion: "Finding",
+			wantOutcomes: []string{outcomePromote, outcomeRetire},
+		},
+		{
+			name:         "ruling",
+			tier:         flowv1.LawTier_LAW_TIER_RULING,
+			wantQuestion: "Ruling",
+			wantOutcomes: []string{outcomePromote, outcomeRetire, outcomeDemote},
+		},
+	}
 
-func TestHearing_EvidenceContainsLawAndFriction(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			question, outcomes := frameHearingQuestion(tt.tier)
+			if !strings.Contains(question, tt.wantQuestion) {
+				t.Fatalf("question %q does not contain %q", question, tt.wantQuestion)
+			}
+			if fmt.Sprint(outcomes) != fmt.Sprint(tt.wantOutcomes) {
+				t.Fatalf("outcomes = %v, want %v", outcomes, tt.wantOutcomes)
+			}
+		})
+	}
+}
+
+func TestTribunal_EvidenceAssemblyContainsLawFrictionAndRelatedLaws(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	spy.FrictionAggregates = []*flowv1.FrictionAggregate{
-		{LawId: "law-under-review-001", NodeId: "sort", EventCount: 3, TotalMagnitude: 7.5},
-	}
-	spy.RelatedLaws = []*flowv1.Law{
-		{Id: "law-related-001", Goal: "Related law", Tier: flowv1.LawTier_LAW_TIER_RULING},
-	}
+	spy.Friction = []*flowv1.FrictionAggregate{{
+		LawId:          "law-under-review-001",
+		NodeId:         "sort",
+		EventCount:     3,
+		TotalMagnitude: 7.5,
+	}}
+	spy.RelatedLaws = []*flowv1.Law{{
+		Id:   "law-related-001",
+		Goal: "Related law goal",
+		Tier: flowv1.LawTier_LAW_TIER_RULING,
+	}}
+	seedJurorVerdict(spy, "child-1", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-2", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-3", outcomeRetire, "retire")
 
 	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
+	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+		t.Fatalf("handleTribunal: %v", err)
 	}
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	childID := spy.CreatedChildren[0]
-	evidence := string(spy.ChildStoredArtefacts[childID+":evidence"])
-
-	sections := []string{
+	evidence := string(spy.ChildStoredArtefacts["child-1:"+tally.ArtefactEvidence])
+	for _, want := range []string{
 		"## Law Under Review",
 		"law-under-review-001",
 		"seasonal reference",
@@ -261,462 +255,171 @@ func TestHearing_EvidenceContainsLawAndFriction(t *testing.T) {
 		"magnitude=7.50",
 		"## Related Laws",
 		"law-related-001",
-	}
-	for _, section := range sections {
-		if !strings.Contains(evidence, section) {
-			t.Errorf("evidence missing section %q", section)
+	} {
+		if !strings.Contains(evidence, want) {
+			t.Fatalf("evidence missing %q", want)
 		}
 	}
 }
 
-// ---------------------------------------------------------------------------
-// frameHearingQuestion unit tests
-// ---------------------------------------------------------------------------
-
-func TestFrameHearingQuestion_Tier1(t *testing.T) {
-	q, outcomes := frameHearingQuestion(flowv1.LawTier_LAW_TIER_FINDING)
-	if !strings.Contains(q, "Finding") {
-		t.Errorf("expected 'Finding' in question, got: %s", q)
-	}
-	if len(outcomes) != 2 {
-		t.Fatalf("expected 2 outcomes for Tier 1, got %v", outcomes)
-	}
-}
-
-func TestFrameHearingQuestion_Tier2(t *testing.T) {
-	q, outcomes := frameHearingQuestion(flowv1.LawTier_LAW_TIER_RULING)
-	if !strings.Contains(q, "Ruling") {
-		t.Errorf("expected 'Ruling' in question, got: %s", q)
-	}
-	if len(outcomes) != 3 {
-		t.Fatalf("expected 3 outcomes for Tier 2, got %v", outcomes)
-	}
-}
-
-// ===========================================================================
-// Review Mode Tests
-// ===========================================================================
-
-func TestReview_FanOutCount(t *testing.T) {
-	spy := newReviewModeSpy()
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 3, JurorNode: "test-juror"}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	if len(spy.CreatedChildren) != 3 {
-		t.Fatalf("expected 3 children in review mode, got %d", len(spy.CreatedChildren))
-	}
-	for _, rc := range spy.RoutedChildren {
-		if rc.TargetNode != "test-juror" {
-			t.Fatalf("expected child routed to test-juror, got %s", rc.TargetNode)
-		}
-	}
-}
-
-func TestReview_RoutesToDeliberationGate(t *testing.T) {
-	spy := newReviewModeSpy()
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{GateOutput: testCustomGate}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != testCustomGate {
-		t.Fatalf("expected route to custom-gate, got %v", spy.RoutedOutputs)
-	}
-}
-
-func TestReview_ChildArtefacts(t *testing.T) {
-	spy := newReviewModeSpy()
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	childID := spy.CreatedChildren[0]
-
-	// Question should be about approve/reject.
-	question := string(spy.ChildStoredArtefacts[childID+":question"])
-	if !strings.Contains(question, "approved or rejected") {
-		t.Errorf("expected review question to mention approve/reject, got: %s", question)
-	}
-
-	// Evidence should contain petition content.
-	evidence := string(spy.ChildStoredArtefacts[childID+":evidence"])
-	if !strings.Contains(evidence, "Petition Under Review") {
-		t.Errorf("expected evidence to contain 'Petition Under Review', got: %s", evidence)
-	}
-	if !strings.Contains(evidence, "Verdict Context") {
-		t.Errorf("expected evidence to contain 'Verdict Context'")
-	}
-
-	// Allowed-outcomes should be [approve, reject].
-	outcomesRaw := spy.ChildStoredArtefacts[childID+":allowed-outcomes"]
-	var outcomes []string
-	if err := json.Unmarshal(outcomesRaw, &outcomes); err != nil {
-		t.Fatalf("parse allowed-outcomes: %v", err)
-	}
-	if len(outcomes) != 2 || outcomes[0] != "approve" || outcomes[1] != "reject" {
-		t.Fatalf("expected [approve, reject], got %v", outcomes)
-	}
-}
-
-func TestReview_DoesNotStoreVerdictContext(t *testing.T) {
-	spy := newReviewModeSpy()
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	// Review mode should NOT store a new verdict-context (it already exists).
-	if _, ok := spy.StoredArtefacts[artefactVerdictContext]; ok {
-		t.Error("review mode should not store a new verdict-context artefact")
-	}
-}
-
-func TestReview_PausesAndResumesTimer(t *testing.T) {
-	spy := newReviewModeSpy()
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	if !spy.PauseTimerCalled {
-		t.Error("expected PauseTimer to be called during AwaitChildren")
-	}
-	if !spy.ResumeTimerCalled {
-		t.Error("expected ResumeTimer to be called after AwaitChildren")
-	}
-}
-
-// ===========================================================================
-// Mode Detection Tests
-// ===========================================================================
-
-func TestModeDetection_PetitionPresent_TriggersReview(t *testing.T) {
-	// When both petition and law-reference are present, review mode wins.
-	spy := newReviewModeSpy()
-	spy.Artefacts["law-reference"] = []byte("law-001") // also set law-reference
-
-	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	// In review mode, question should mention approve/reject.
-	childID := spy.CreatedChildren[0]
-	question := string(spy.ChildStoredArtefacts[childID+":question"])
-	if !strings.Contains(question, "approved or rejected") {
-		t.Error("expected review mode when petition artefact is present")
-	}
-}
-
-func TestModeDetection_NoPetition_TriggersHearing(t *testing.T) {
+func TestTribunal_Error_MissingLawReferenceArtefact(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
+	delete(spy.Artefacts, artefactLawReference)
+
 	client := setupTribunalTest(t, spy)
-	cfg := &tribunalConfig{JurySize: 1}
-
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
-		t.Fatalf("handleTribunal() error: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	// In hearing mode, question should mention Finding.
-	childID := spy.CreatedChildren[0]
-	question := string(spy.ChildStoredArtefacts[childID+":question"])
-	if !strings.Contains(question, "Finding") {
-		t.Error("expected hearing mode when petition artefact is absent")
-	}
-}
-
-// ===========================================================================
-// Error Propagation Tests (Hearing Mode)
-// ===========================================================================
-
-func TestHearing_Error_GetArtefactFails(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	spy.GetArtefactErr = fmt.Errorf("artefact unavailable")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{})
+	err := handleTribunal(context.Background(), client, defaultTestConfig())
 	if err == nil {
-		t.Fatal("expected error from GetArtefact failure")
+		t.Fatal("expected error")
 	}
 }
 
-func TestHearing_Error_EmptyLawReference(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	spy.Artefacts["law-reference"] = []byte("")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{})
-	if err == nil {
-		t.Fatal("expected error for empty law reference")
-	}
-	if !strings.Contains(err.Error(), "empty") {
-		t.Errorf("expected 'empty' in error, got: %v", err)
-	}
-}
-
-func TestHearing_Error_GetLawFails(t *testing.T) {
+func TestTribunal_Error_GetLawFails(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
 	spy.GetLawErr = fmt.Errorf("librarian unavailable")
-	client := setupTribunalTest(t, spy)
 
-	err := handleTribunal(context.Background(), client, &tribunalConfig{})
+	client := setupTribunalTest(t, spy)
+	err := handleTribunal(context.Background(), client, defaultTestConfig())
 	if err == nil {
-		t.Fatal("expected error from GetLaw failure")
+		t.Fatal("expected error")
 	}
 }
 
-func TestHearing_Error_QueryFrictionFails(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	spy.QueryFrictionErr = fmt.Errorf("friction ledger unavailable")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{})
-	if err == nil {
-		t.Fatal("expected error from QueryFriction failure")
-	}
-}
-
-func TestHearing_Error_FanOutFails(t *testing.T) {
+func TestTribunal_Error_FanOutFails(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
 	spy.CreateChildErr = fmt.Errorf("cannot create child")
-	client := setupTribunalTest(t, spy)
 
+	client := setupTribunalTest(t, spy)
 	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
 	if err == nil {
-		t.Fatal("expected error from FanOut failure")
+		t.Fatal("expected error")
 	}
 }
 
-func TestHearing_Error_AwaitChildrenFails(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	spy.GetChildrenErr = fmt.Errorf("cannot get children")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
-	if err == nil {
-		t.Fatal("expected error from AwaitChildren failure")
-	}
-}
-
-func TestHearing_Error_StoreVerdictContextFails(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	spy.StoreArtefactErr = fmt.Errorf("archivist unavailable")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
-	if err == nil {
-		t.Fatal("expected error from StoreArtefact failure")
-	}
-}
-
-func TestHearing_Error_RouteToGateFails(t *testing.T) {
-	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	spy.RouteToOutputErr = fmt.Errorf("routing rejected")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
-	if err == nil {
-		t.Fatal("expected error from RouteToOutput failure")
-	}
-}
-
-// ===========================================================================
-// Error Propagation Tests (Review Mode)
-// ===========================================================================
-
-func TestReview_Error_GetVerdictContextFails(t *testing.T) {
-	// Create a spy with petition present but verdict-context absent.
-	spy := newReviewModeSpy()
-	delete(spy.Artefacts, "verdict-context")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
-	if err == nil {
-		t.Fatal("expected error when verdict-context is missing in review mode")
-	}
-}
-
-func TestReview_Error_FanOutFails(t *testing.T) {
-	spy := newReviewModeSpy()
-	spy.CreateChildErr = fmt.Errorf("cannot create child")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
-	if err == nil {
-		t.Fatal("expected error from FanOut failure in review mode")
-	}
-}
-
-func TestReview_Error_RouteToGateFails(t *testing.T) {
-	spy := newReviewModeSpy()
-	spy.RouteToOutputErr = fmt.Errorf("routing rejected")
-	client := setupTribunalTest(t, spy)
-
-	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
-	if err == nil {
-		t.Fatal("expected error from RouteToOutput failure in review mode")
-	}
-}
-
-// ===========================================================================
-// Config Tests
-// ===========================================================================
-
-func TestConfig_Defaults(t *testing.T) {
-	cfg := &tribunalConfig{}
-
-	if cfg.jurySize() != 5 {
-		t.Errorf("expected default jurySize=5, got %d", cfg.jurySize())
-	}
-	if cfg.jurorNode() != "juror" {
-		t.Errorf("expected default jurorNode=juror, got %s", cfg.jurorNode())
-	}
-	if cfg.gateOutput() != "deliberation-gate" {
-		t.Errorf("expected default gateOutput=deliberation-gate, got %s", cfg.gateOutput())
-	}
-}
-
-func TestConfig_Custom(t *testing.T) {
-	cfg := &tribunalConfig{
-		JurySize:   7,
-		JurorNode:  "custom-juror",
-		GateOutput: testCustomGate,
-	}
-
-	if cfg.jurySize() != 7 {
-		t.Errorf("expected jurySize=7, got %d", cfg.jurySize())
-	}
-	if cfg.jurorNode() != "custom-juror" {
-		t.Errorf("expected jurorNode=custom-juror, got %s", cfg.jurorNode())
-	}
-	if cfg.gateOutput() != testCustomGate {
-		t.Errorf("expected gateOutput=custom-gate, got %s", cfg.gateOutput())
-	}
-}
-
-// ===========================================================================
-// assembleHearingEvidence unit tests
-// ===========================================================================
-
-func TestAssembleHearingEvidence_NoFriction(t *testing.T) {
-	law := &flowv1.Law{
-		Id:   "law-001",
-		Goal: "test goal",
-		Tier: flowv1.LawTier_LAW_TIER_FINDING,
-	}
-
-	evidence := assembleHearingEvidence(law, nil, nil)
-	if !strings.Contains(evidence, "No friction data") {
-		t.Error("expected 'No friction data' in evidence with nil friction")
-	}
-	if !strings.Contains(evidence, "No related laws") {
-		t.Error("expected 'No related laws' in evidence with nil related laws")
-	}
-}
-
-func TestAssembleHearingEvidence_WithData(t *testing.T) {
-	law := &flowv1.Law{
-		Id:        "law-001",
-		Goal:      "test goal",
-		Tier:      flowv1.LawTier_LAW_TIER_RULING,
-		AppliesTo: []string{"haiku"},
-		Representations: []*flowv1.Representation{
-			{Type: "text/markdown", Content: "markdown content"},
+func TestTribunal_ConsensusStrategies(t *testing.T) {
+	tests := []struct {
+		name      string
+		strategy  string
+		votes     []string
+		wantRoute bool
+	}{
+		{
+			name:      "simple majority consensus",
+			strategy:  "SIMPLE_MAJORITY",
+			votes:     []string{outcomePromote, outcomePromote, outcomeRetire},
+			wantRoute: false,
+		},
+		{
+			name:      "unanimity hangs",
+			strategy:  "UNANIMITY",
+			votes:     []string{outcomePromote, outcomePromote, outcomeRetire},
+			wantRoute: true,
 		},
 	}
-	friction := []*flowv1.FrictionAggregate{
-		{NodeId: "sort", EventCount: 5, TotalMagnitude: 12.5},
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
+			for i, vote := range tt.votes {
+				seedJurorVerdict(spy, fmt.Sprintf("child-%d", i+1), vote, vote)
+			}
+
+			client := setupTribunalTest(t, spy)
+			cfg := &tribunalConfig{JurySize: 3, MaxRounds: 1, ConsensusStrategy: tt.strategy}
+
+			if err := handleTribunal(context.Background(), client, cfg); err != nil {
+				t.Fatalf("handleTribunal: %v", err)
+			}
+
+			spy.mu.Lock()
+			defer spy.mu.Unlock()
+
+			if tt.wantRoute {
+				assertRoutedTo(t, spy, defaultHungOutput)
+				return
+			}
+			assertCompleted(t, spy)
+		})
 	}
-	related := []*flowv1.Law{
-		{Id: "law-002", Goal: "related goal", Tier: flowv1.LawTier_LAW_TIER_FINDING},
+}
+
+func TestTribunal_ConfigDefaultsAndCustomConfig(t *testing.T) {
+	defaults := &tribunalConfig{}
+	if defaults.jurySize() != defaultJurySize {
+		t.Fatalf("jurySize default = %d, want %d", defaults.jurySize(), defaultJurySize)
+	}
+	if defaults.jurorNode() != defaultJurorNode {
+		t.Fatalf("jurorNode default = %q, want %q", defaults.jurorNode(), defaultJurorNode)
+	}
+	if defaults.clerkNode() != defaultClerkNode {
+		t.Fatalf("clerkNode default = %q, want %q", defaults.clerkNode(), defaultClerkNode)
+	}
+	if defaults.hungOutput() != defaultHungOutput {
+		t.Fatalf("hungOutput default = %q, want %q", defaults.hungOutput(), defaultHungOutput)
+	}
+	if defaults.maxRounds() != defaultMaxRounds {
+		t.Fatalf("maxRounds default = %d, want %d", defaults.maxRounds(), defaultMaxRounds)
 	}
 
-	evidence := assembleHearingEvidence(law, friction, related)
-
-	checks := []string{
-		"law-001",
-		"test goal",
-		"haiku",
-		"markdown content",
-		"magnitude=12.50",
-		"law-002",
-		"related goal",
+	custom := &tribunalConfig{
+		JurySize:          7,
+		JurorNode:         "jury-box",
+		ConsensusStrategy: "UNANIMITY",
+		MaxRounds:         4,
+		ClerkNode:         "clerk-special",
+		HungOutput:        "needs-human",
 	}
-	for _, check := range checks {
-		if !strings.Contains(evidence, check) {
-			t.Errorf("evidence missing %q", check)
+	if custom.jurySize() != 7 || custom.jurorNode() != "jury-box" || custom.maxRounds() != 4 {
+		t.Fatal("custom numeric/string config not applied")
+	}
+	if custom.clerkNode() != "clerk-special" || custom.hungOutput() != "needs-human" {
+		t.Fatal("custom routing config not applied")
+	}
+	if custom.consensusStrategy() != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_UNANIMITY {
+		t.Fatal("custom consensus strategy not parsed")
+	}
+}
+
+func TestTribunal_NoReviewMode_PetitionArtefactNotRead(t *testing.T) {
+	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
+	spy.Artefacts["petition"] = []byte("should be ignored")
+	seedJurorVerdict(spy, "child-1", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-2", outcomePromote, "promote")
+	seedJurorVerdict(spy, "child-3", outcomeRetire, "retire")
+
+	client := setupTribunalTest(t, spy)
+	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+		t.Fatalf("handleTribunal: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	for _, req := range spy.GetArtefactRequests {
+		if req == "petition" {
+			t.Fatal("tribunal should not read petition artefact in hearing-only mode")
 		}
+	}
+}
+
+func TestAssembleHearingEvidence_NoFriction(t *testing.T) {
+	law := &flowv1.Law{Id: "law-001", Goal: "test goal", Tier: flowv1.LawTier_LAW_TIER_FINDING}
+	evidence := assembleHearingEvidence(law, nil, nil)
+	if !strings.Contains(evidence, "No friction data") {
+		t.Fatal("expected no friction message")
+	}
+	if !strings.Contains(evidence, "No related laws") {
+		t.Fatal("expected no related laws message")
 	}
 }
 
 func TestAssembleHearingEvidence_SkipsSelf(t *testing.T) {
 	law := &flowv1.Law{Id: "law-001", Goal: "test"}
-	related := []*flowv1.Law{
-		{Id: "law-001", Goal: "self"},
-		{Id: "law-002", Goal: "other"},
-	}
-
+	related := []*flowv1.Law{{Id: "law-001", Goal: "self"}, {Id: "law-002", Goal: "other"}}
 	evidence := assembleHearingEvidence(law, nil, related)
-	// "self" appears in the related section only if the self-entry is NOT skipped.
-	// Check that law-002 is present but count occurrences carefully.
+	if strings.Contains(evidence, "self") {
+		t.Fatal("expected self law to be skipped from related laws")
+	}
 	if !strings.Contains(evidence, "law-002") {
-		t.Error("expected law-002 in related laws")
-	}
-}
-
-// ===========================================================================
-// assembleReviewEvidence unit tests
-// ===========================================================================
-
-func TestAssembleReviewEvidence(t *testing.T) {
-	evidence := assembleReviewEvidence("petition content here", "verdict context here")
-
-	if !strings.Contains(evidence, "Petition Under Review") {
-		t.Error("expected 'Petition Under Review' header")
-	}
-	if !strings.Contains(evidence, "petition content here") {
-		t.Error("expected petition content in evidence")
-	}
-	if !strings.Contains(evidence, "Verdict Context") {
-		t.Error("expected 'Verdict Context' header")
-	}
-	if !strings.Contains(evidence, "verdict context here") {
-		t.Error("expected verdict context content in evidence")
+		t.Fatal("expected related law in evidence")
 	}
 }

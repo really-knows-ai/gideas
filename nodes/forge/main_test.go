@@ -299,3 +299,130 @@ func TestForgeOutputSchema(t *testing.T) {
 		t.Fatalf("schema should require minLength 1, got: %s", schema)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests — ConfigMap Prompt Overrides
+// ---------------------------------------------------------------------------
+
+func TestForgeAgent_CustomSystemPromptOverride(t *testing.T) {
+	customPrompt := `You are a poet. Output JSON with key "{{.OutputField}}".`
+	cfg := &forgeConfig{
+		InputArtefacts:   []string{"petition"},
+		OutputArtefact:   "haiku",
+		GovernedArtefact: "haiku",
+		OutputField:      "haiku",
+		SystemPrompt:     customPrompt,
+	}
+
+	mm := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"haiku": "custom prompt haiku"}`),
+			Cost: &flow.CostMetadata{
+				Model:        "test-model",
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   100,
+			},
+		},
+	}
+
+	agent := newTestForgeAgent(t, mm, cfg)
+
+	_, err := agent.Run(context.Background(), "write a haiku", nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	// The captured system prompt should contain the custom text, not the default.
+	if !strings.Contains(mm.capturedSystem, "You are a poet") {
+		t.Fatalf("system prompt should contain custom override, got: %s", mm.capturedSystem)
+	}
+	if strings.Contains(mm.capturedSystem, "You are a creative writer") {
+		t.Fatalf("system prompt should NOT contain default text when overridden, got: %s", mm.capturedSystem)
+	}
+	// Template interpolation should still work — OutputField should be expanded.
+	if !strings.Contains(mm.capturedSystem, `"haiku"`) {
+		t.Fatalf("system prompt should interpolate OutputField, got: %s", mm.capturedSystem)
+	}
+}
+
+func TestForgeAgent_CustomQueryTemplateOverride(t *testing.T) {
+	customQuery := `Custom brief: {{.Input}}`
+	cfg := &forgeConfig{
+		InputArtefacts:   []string{"petition"},
+		OutputArtefact:   "haiku",
+		GovernedArtefact: "haiku",
+		OutputField:      "haiku",
+		QueryTemplate:    customQuery,
+	}
+
+	mm := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"haiku": "custom query haiku"}`),
+			Cost: &flow.CostMetadata{
+				Model:        "test-model",
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   100,
+			},
+		},
+	}
+
+	agent := newTestForgeAgent(t, mm, cfg)
+
+	_, err := agent.Run(context.Background(), "write about cherry blossoms", nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	query := string(mm.capturedQuery)
+	if !strings.Contains(query, "Custom brief:") {
+		t.Fatalf("query prompt should contain custom template text, got: %s", query)
+	}
+	if !strings.Contains(query, "write about cherry blossoms") {
+		t.Fatalf("query prompt should contain the input, got: %s", query)
+	}
+	// Should NOT contain the default "Request:" prefix.
+	if strings.Contains(query, "Request:") {
+		t.Fatalf("query prompt should NOT contain default template text when overridden, got: %s", query)
+	}
+}
+
+func TestForgeAgent_EmptyOverridesUseDefaults(t *testing.T) {
+	cfg := &forgeConfig{
+		InputArtefacts:   []string{"petition"},
+		OutputArtefact:   "haiku",
+		GovernedArtefact: "haiku",
+		OutputField:      "haiku",
+		SystemPrompt:     "", // empty — should use default
+		QueryTemplate:    "", // empty — should use default
+	}
+
+	mm := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"haiku": "default prompt haiku"}`),
+			Cost: &flow.CostMetadata{
+				Model:        "test-model",
+				InputTokens:  10,
+				OutputTokens: 5,
+				DurationMs:   100,
+			},
+		},
+	}
+
+	agent := newTestForgeAgent(t, mm, cfg)
+
+	_, err := agent.Run(context.Background(), "write a haiku about rain", nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	// System prompt should contain the default text.
+	if !strings.Contains(mm.capturedSystem, "You are a creative writer") {
+		t.Fatalf("system prompt should use default when override is empty, got: %s", mm.capturedSystem)
+	}
+	// Query prompt should contain the default "Request:" prefix.
+	if !strings.Contains(string(mm.capturedQuery), "Request:") {
+		t.Fatalf("query prompt should use default when override is empty, got: %s", mm.capturedQuery)
+	}
+}

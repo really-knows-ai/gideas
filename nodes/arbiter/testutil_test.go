@@ -9,88 +9,84 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/tally"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// newLocalListener creates a TCP listener on an ephemeral localhost port.
-func newLocalListener() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
-}
+// ---------------------------------------------------------------------------
+// Spy Server
+// ---------------------------------------------------------------------------
 
-// newSpyGRPCServer creates a gRPC server with the arbiterSpy registered
-// for the five Foundry Flow service interfaces the Arbiter depends on.
-func newSpyGRPCServer(spy *arbiterSpy) *grpc.Server {
-	srv := grpc.NewServer()
-	flowv1.RegisterSidecarServiceServer(srv, spy)
-	flowv1.RegisterOperatorServiceServer(srv, spy)
-	flowv1.RegisterArchivistServiceServer(srv, spy)
-	flowv1.RegisterLibrarianServiceServer(srv, spy)
-	flowv1.RegisterFrictionLedgerServiceServer(srv, spy)
-	return srv
-}
-
-// arbiterSpy captures calls to service operations for test assertions.
-// It supports the fan-out pattern: CreateChildWorkitem, RouteChild,
-// GetChildren, PauseTimer/ResumeTimer, and child artefact storage.
+// arbiterSpy implements the gRPC services the Arbiter depends on:
+// Sidecar, Operator, and Archivist.
 type arbiterSpy struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
-	flowv1.UnimplementedLibrarianServiceServer
-	flowv1.UnimplementedFrictionLedgerServiceServer
 
 	mu sync.Mutex
 
-	// Configurable topology response.
-	TopologyResponse *flowv1.GetFlowTopologyResponse
+	// ── Configurable inputs ─────────────────────────────────────────
 
-	// Configurable feedback items returned by GetFeedback.
-	FeedbackItems []*flowv1.FeedbackItem
+	// Artefacts holds parent artefact content keyed by artefact ID.
+	Artefacts map[string][]byte
 
-	// Configurable artefact content returned by GetArtefact.
-	ArtefactContent []byte
+	// ChildArtefacts holds child artefact content keyed as
+	// "childID:artefactID".
+	ChildArtefacts map[string][]byte
 
-	// Configurable laws returned by QueryLaws.
-	Laws []*flowv1.Law
-
-	// Configurable friction aggregates returned by QueryFriction.
-	FrictionAggregates []*flowv1.FrictionAggregate
-
-	// Configurable children returned by GetChildren (for AwaitChildren).
-	// If nil, auto-generates completed children from CreatedChildren.
+	// Children is returned by GetChildren. When non-nil, overrides
+	// auto-generation from CreatedChildren. Use this for post-resume
+	// tests where CompletionReason must be set.
 	Children []*flowv1.ChildWorkitemStatus
 
-	// Auto-created child IDs (returned by CreateChildWorkitem).
+	// nextChildID auto-increments for CreateChildWorkitem.
 	nextChildID int
 
-	// Configurable error returns.
-	GetFlowTopologyErr error
-	GetFeedbackErr     error
-	GetArtefactErr     error
-	QueryLawsErr       error
-	QueryFrictionErr   error
-	RouteToOutputErr   error
-	CreateChildErr     error
-	RouteChildErr      error
-	GetChildrenErr     error
-	StoreArtefactErr   error
+	// ── Configurable error returns ──────────────────────────────────
 
-	// Recorded operations for assertions.
-	RoutedOutputs        []string
-	StoreArtefactCalls   []storeArtefactRecord
-	CreatedChildren      []string
-	RoutedChildren       []routedChild
-	ChildStoredArtefacts map[string][]byte // "childID:artefactID" → content
-	PauseTimerCalled     bool
-	ResumeTimerCalled    bool
+	GetArtefactErr   error
+	StoreArtefactErr error
+	CreateChildErr   error
+	RouteChildErr    error
+	GetChildrenErr   error
+	CompleteErr      error
+	SuspendErr       error
+	RouteToOutputErr error
+
+	// ── Recorded operations ─────────────────────────────────────────
+
+	// CompletedReasons records CompletionReason from Complete actions.
+	CompletedReasons []flowv1.CompletionReason
+
+	// SuspendActions records suspend conditions.
+	SuspendActions []suspendRecord
+
+	// RoutedOutputs records output names from RouteToOutput actions.
+	RoutedOutputs []string
+
+	// CreatedChildren records child workitem IDs.
+	CreatedChildren []string
+
+	// RoutedChildren records child routing instructions.
+	RoutedChildren []routedChild
+
+	// ChildStoredArtefacts records artefact content stored on child
+	// workitems, keyed as "childID:artefactID".
+	ChildStoredArtefacts map[string][]byte
+
+	// PauseTimerCalled tracks whether PauseTimer was invoked.
+	PauseTimerCalled bool
+
+	// ResumeTimerCalled tracks whether ResumeTimer was invoked.
+	ResumeTimerCalled bool
 }
 
-type storeArtefactRecord struct {
-	ArtefactID string
-	Content    []byte
+type suspendRecord struct {
+	Condition string
 }
 
 type routedChild struct {
@@ -100,54 +96,10 @@ type routedChild struct {
 
 func newArbiterSpy() *arbiterSpy {
 	return &arbiterSpy{
-		TopologyResponse:     defaultArbiterTopology(),
-		ArtefactContent:      []byte("sample artefact content"),
+		Artefacts:            make(map[string][]byte),
+		ChildArtefacts:       make(map[string][]byte),
 		ChildStoredArtefacts: make(map[string][]byte),
 	}
-}
-
-// defaultArbiterTopology returns a topology appropriate for arbiter tests.
-func defaultArbiterTopology() *flowv1.GetFlowTopologyResponse {
-	return &flowv1.GetFlowTopologyResponse{
-		Self: &flowv1.FlowNode{
-			Name: "arbiter",
-			Outputs: []*flowv1.FlowOutput{
-				{Name: "deliberation-gate", Target: "deliberation-gate"},
-			},
-		},
-		Nodes: map[string]*flowv1.FlowNode{
-			"arbiter":           {Name: "arbiter"},
-			"deliberation-gate": {Name: "deliberation-gate"},
-		},
-		ExitContract: map[string]*flowv1.StampRequirements{
-			"haiku": {Stamps: []string{"linter", "review", "approval"}},
-		},
-	}
-}
-
-// setupArbiterTest creates a flow.Client backed by the spy.
-func setupArbiterTest(t *testing.T, spy *arbiterSpy) *flow.Client {
-	t.Helper()
-
-	lis, err := newLocalListener()
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
-
-	srv := newSpyGRPCServer(spy)
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(func() { srv.GracefulStop() })
-
-	t.Setenv(flow.EnvWorkitemID, "test-workitem")
-	client, err := flow.NewClient(
-		flow.WithSidecarAddress(lis.Addr().String()),
-	)
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-
-	return client
 }
 
 // ---------------------------------------------------------------------------
@@ -192,10 +144,29 @@ func (s *arbiterSpy) SubmitResult(
 		if a.Route != nil {
 			s.RoutedOutputs = append(s.RoutedOutputs, a.Route.GetTarget())
 		}
+
+	case *flowv1.SubmitResultRequest_Complete:
+		if s.CompleteErr != nil {
+			return nil, s.CompleteErr
+		}
+		reason := flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED
+		if a.Complete != nil {
+			reason = a.Complete.GetReason()
+		}
+		s.CompletedReasons = append(s.CompletedReasons, reason)
+
+	case *flowv1.SubmitResultRequest_Suspend:
+		if s.SuspendErr != nil {
+			return nil, s.SuspendErr
+		}
+		rec := suspendRecord{}
+		if a.Suspend != nil {
+			rec.Condition = a.Suspend.GetCondition()
+		}
+		s.SuspendActions = append(s.SuspendActions, rec)
+
 	case nil:
 		// No action set — treat as no-op.
-	default:
-		// Complete / Suspend — no-op for arbiter spy.
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
@@ -209,15 +180,6 @@ func (s *arbiterSpy) RecordTelemetry(
 // ---------------------------------------------------------------------------
 // Operator methods
 // ---------------------------------------------------------------------------
-
-func (s *arbiterSpy) GetFlowTopology(
-	_ context.Context, _ *flowv1.GetFlowTopologyRequest,
-) (*flowv1.GetFlowTopologyResponse, error) {
-	if s.GetFlowTopologyErr != nil {
-		return nil, s.GetFlowTopologyErr
-	}
-	return s.TopologyResponse, nil
-}
 
 func (s *arbiterSpy) CreateChildWorkitem(
 	_ context.Context, _ *flowv1.CreateChildWorkitemRequest,
@@ -292,16 +254,23 @@ func (s *arbiterSpy) GetArtefact(
 	// Child artefact request (has TargetWorkitemId).
 	if target := req.GetTargetWorkitemId(); target != "" {
 		key := target + ":" + req.GetArtefactId()
-		content, ok := s.ChildStoredArtefacts[key]
+		content, ok := s.ChildArtefacts[key]
 		if !ok {
-			return nil, status.Errorf(codes.NotFound, "child artefact %q not found", key)
+			// Also check ChildStoredArtefacts (written during the test run).
+			content, ok = s.ChildStoredArtefacts[key]
+			if !ok {
+				return nil, status.Errorf(codes.NotFound, "child artefact %q not found", key)
+			}
 		}
 		return &flowv1.GetArtefactResponse{Content: content}, nil
 	}
 
-	return &flowv1.GetArtefactResponse{
-		Content: s.ArtefactContent,
-	}, nil
+	// Parent artefact request.
+	content, ok := s.Artefacts[req.GetArtefactId()]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "artefact %q not found", req.GetArtefactId())
+	}
+	return &flowv1.GetArtefactResponse{Content: content}, nil
 }
 
 func (s *arbiterSpy) StoreArtefact(
@@ -314,76 +283,141 @@ func (s *arbiterSpy) StoreArtefact(
 		return nil, s.StoreArtefactErr
 	}
 
-	// Distinguish between parent and child artefact stores.
-	if req.GetWorkitemId() != "" && req.GetWorkitemId() != "test-workitem" {
+	// Child artefact store (workitem ID differs from test parent).
+	if req.GetWorkitemId() != "" && req.GetWorkitemId() != testWorkitemID {
 		key := req.GetWorkitemId() + ":" + req.GetArtefactId()
 		s.ChildStoredArtefacts[key] = req.GetContent()
-	} else {
-		s.StoreArtefactCalls = append(s.StoreArtefactCalls, storeArtefactRecord{
-			ArtefactID: req.GetArtefactId(),
-			Content:    req.GetContent(),
-		})
 	}
 	return &flowv1.StoreArtefactResponse{
-		VersionHash:  "mock-hash",
+		VersionHash:  "test-hash",
 		IsNewVersion: true,
 	}, nil
 }
 
-func (s *arbiterSpy) GetFeedback(
-	_ context.Context, _ *flowv1.GetFeedbackRequest,
-) (*flowv1.GetFeedbackResponse, error) {
-	if s.GetFeedbackErr != nil {
-		return nil, s.GetFeedbackErr
+// ---------------------------------------------------------------------------
+// Test setup
+// ---------------------------------------------------------------------------
+
+const testWorkitemID = "test-workitem"
+
+func newLocalListener() (net.Listener, error) {
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
+func newSpyGRPCServer(spy *arbiterSpy) *grpc.Server {
+	srv := grpc.NewServer()
+	flowv1.RegisterSidecarServiceServer(srv, spy)
+	flowv1.RegisterOperatorServiceServer(srv, spy)
+	flowv1.RegisterArchivistServiceServer(srv, spy)
+	return srv
+}
+
+func setupArbiterTest(t *testing.T, spy *arbiterSpy) *flow.Client {
+	t.Helper()
+
+	lis, err := newLocalListener()
+	if err != nil {
+		t.Fatalf("newLocalListener: %v", err)
 	}
-	return &flowv1.GetFeedbackResponse{
-		FeedbackItems: s.FeedbackItems,
-	}, nil
+
+	srv := newSpyGRPCServer(spy)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.GracefulStop() })
+
+	t.Setenv(flow.EnvWorkitemID, testWorkitemID)
+
+	client, err := flow.NewClient(
+		flow.WithSidecarAddress(lis.Addr().String()),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	return client
 }
 
 // ---------------------------------------------------------------------------
-// Librarian methods
+// Seed Helpers
 // ---------------------------------------------------------------------------
 
-func (s *arbiterSpy) QueryLaws(
-	_ context.Context, _ *flowv1.QueryLawsRequest,
-) (*flowv1.QueryLawsResponse, error) {
-	if s.QueryLawsErr != nil {
-		return nil, s.QueryLawsErr
+// seedEvidence populates the spy with an evidence-bundle artefact.
+func seedEvidence(spy *arbiterSpy, content string) {
+	spy.Artefacts[artefactEvidenceBundle] = []byte(content)
+}
+
+// seedJurorVerdict populates the spy with a verdict artefact on a child
+// workitem so that CollectVotes / CollectArtefacts can read it.
+func seedJurorVerdict(spy *arbiterSpy, childID, outcome, reasoning string) {
+	v := tally.JurorVote{Outcome: outcome, Reasoning: reasoning}
+	data, _ := json.Marshal(v)
+	spy.ChildArtefacts[childID+":"+tally.ArtefactVerdict] = data
+}
+
+// defaultTestConfig returns an arbiterConfig suitable for most tests:
+// 3 jurors, 1 round, simple majority.
+func defaultTestConfig() *arbiterConfig {
+	return &arbiterConfig{
+		JurySize:  3,
+		MaxRounds: 1,
 	}
-	return &flowv1.QueryLawsResponse{Laws: s.Laws}, nil
 }
 
 // ---------------------------------------------------------------------------
-// FrictionLedger methods
+// Assertion Helpers
 // ---------------------------------------------------------------------------
 
-func (s *arbiterSpy) QueryFriction(
-	_ context.Context, _ *flowv1.QueryFrictionRequest,
-) (*flowv1.QueryFrictionResponse, error) {
-	if s.QueryFrictionErr != nil {
-		return nil, s.QueryFrictionErr
+// assertSuspended verifies the spy recorded exactly one suspend action.
+func assertSuspended(t *testing.T, spy *arbiterSpy) {
+	t.Helper()
+	if len(spy.SuspendActions) != 1 {
+		t.Fatalf("expected 1 suspend action, got %d", len(spy.SuspendActions))
 	}
-	return &flowv1.QueryFrictionResponse{
-		FrictionAggregates: s.FrictionAggregates,
-	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-// getStoredVerdictContext parses the verdict-context artefact from the spy's
-// recorded store calls. Returns nil if not found.
-func (s *arbiterSpy) getStoredVerdictContext() *verdictContext {
-	for _, call := range s.StoreArtefactCalls {
-		if call.ArtefactID == artefactVerdictContext {
-			var vctx verdictContext
-			if err := json.Unmarshal(call.Content, &vctx); err != nil {
-				return nil
-			}
-			return &vctx
-		}
+// assertCompleted verifies the spy recorded exactly one completion with the
+// expected reason.
+func assertCompleted(t *testing.T, spy *arbiterSpy, reason flowv1.CompletionReason) {
+	t.Helper()
+	if len(spy.CompletedReasons) != 1 {
+		t.Fatalf("expected 1 completion, got %d: %v", len(spy.CompletedReasons), spy.CompletedReasons)
 	}
-	return nil
+	if spy.CompletedReasons[0] != reason {
+		t.Errorf("completion reason = %v, want %v", spy.CompletedReasons[0], reason)
+	}
+}
+
+// assertRoutedTo verifies the spy recorded exactly one route to the expected
+// output name.
+func assertRoutedTo(t *testing.T, spy *arbiterSpy, expected string) {
+	t.Helper()
+	if len(spy.RoutedOutputs) != 1 {
+		t.Fatalf("expected 1 routed output, got %d: %v", len(spy.RoutedOutputs), spy.RoutedOutputs)
+	}
+	if spy.RoutedOutputs[0] != expected {
+		t.Errorf("routed to %q, want %q", spy.RoutedOutputs[0], expected)
+	}
+}
+
+// clerkChildVerdictContext extracts and unmarshals the verdict-context
+// artefact stored on the clerk child.
+func clerkChildVerdictContext(t *testing.T, spy *arbiterSpy) verdictContext {
+	t.Helper()
+
+	// Find the clerk child (the last created child after juror children).
+	if len(spy.CreatedChildren) == 0 {
+		t.Fatal("no children created")
+	}
+	clerkChildID := spy.CreatedChildren[len(spy.CreatedChildren)-1]
+
+	key := clerkChildID + ":" + artefactVerdictContext
+	raw, ok := spy.ChildStoredArtefacts[key]
+	if !ok {
+		t.Fatalf("verdict-context not stored on clerk child %s", clerkChildID)
+	}
+	var vctx verdictContext
+	if err := json.Unmarshal(raw, &vctx); err != nil {
+		t.Fatalf("unmarshal verdict-context: %v", err)
+	}
+	return vctx
 }

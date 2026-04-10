@@ -10,6 +10,9 @@ import (
 	flow "github.com/gideas/flow/sdk/go"
 )
 
+// Compile-time assertion: TriageAgent implements flow.TriageContract.
+var _ flow.TriageContract = (*TriageAgent)(nil)
+
 // ---------------------------------------------------------------------------
 // TriageAgent — concrete agent for per-item triage (Phase 1)
 // ---------------------------------------------------------------------------
@@ -132,14 +135,26 @@ type triageTemplateQueryData struct {
 
 // NewTriageAgent creates a TriageAgent with the given client and config.
 // The model (GptOss120bOllama) is created internally by buildAgent.
+// If cfg provides non-empty TriageSystemPrompt or TriageQueryTemplate
+// overrides, those replace the baked-in defaults.
 func NewTriageAgent(client *flow.Client, cfg *refineConfig) (*TriageAgent, error) {
 	sysData := triageSystemData{
 		OutputArtefact: cfg.OutputArtefact,
 	}
 
+	sysTmpl := triageSystemPromptTemplate
+	if cfg.TriageSystemPrompt != "" {
+		sysTmpl = cfg.TriageSystemPrompt
+	}
+
+	queryTmpl := triageQueryPromptTemplate
+	if cfg.TriageQueryTemplate != "" {
+		queryTmpl = cfg.TriageQueryTemplate
+	}
+
 	agent, err := buildAgent(client, "triage agent",
-		triageSystemPromptTemplate, sysData,
-		triageQueryPromptTemplate, triageSchema)
+		sysTmpl, sysData,
+		queryTmpl, triageSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +168,7 @@ func (t *TriageAgent) Run(
 	fb *flowv1.FeedbackItem,
 	inputContent, reviewContent string,
 	laws []*flowv1.Law,
-) (*triageOutput, error) {
+) (*flow.TriageResult, error) {
 	// Build history block.
 	var historyBlock strings.Builder
 	for _, ev := range fb.GetHistory() {
@@ -190,5 +205,11 @@ func (t *TriageAgent) Run(
 		return nil, fmt.Errorf("triage agent: unmarshal output: %w", err)
 	}
 
-	return &out, nil
+	return &flow.TriageResult{
+		Decision:          out.Decision,
+		Message:           out.Message,
+		JustificationType: out.JustificationType,
+		CitationIDs:       out.CitationIDs,
+		Argument:          out.Argument,
+	}, nil
 }

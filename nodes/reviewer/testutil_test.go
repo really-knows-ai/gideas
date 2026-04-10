@@ -187,13 +187,14 @@ func defaultCost() *flow.CostMetadata {
 }
 
 // newTestReviewAgent creates a ReviewAgent with the mock model injected.
+// opts may be nil to use baked-in defaults.
 func newTestReviewAgent(
 	t *testing.T, mm *mockModel, spy *reviewerSpy,
-	cfg *reviewerConfig, divisionSuffix string,
+	cfg *reviewerConfig, divisionSuffix string, opts *ReviewAgentOpts,
 ) *ReviewAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
-	agent, err := NewReviewAgent(client, cfg, divisionSuffix)
+	agent, err := NewReviewAgent(client, cfg, divisionSuffix, opts)
 	if err != nil {
 		t.Fatalf("NewReviewAgent() failed: %v", err)
 	}

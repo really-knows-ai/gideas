@@ -12,6 +12,9 @@ import (
 	flow "github.com/gideas/flow/sdk/go"
 )
 
+// Compile-time assertion: ReviewAgent implements flow.ReviewContract.
+var _ flow.ReviewContract = (*ReviewAgent)(nil)
+
 // ---------------------------------------------------------------------------
 // ReviewAgent — concrete agent for fresh review (Phase 2)
 // ---------------------------------------------------------------------------
@@ -24,13 +27,16 @@ type ReviewAgent struct {
 	cfg   *reviewerConfig
 }
 
-// reviewOutput is the Go representation of the reviewSchema-validated JSON.
-type reviewOutput struct {
-	Feedback []reviewItem `json:"feedback"`
+// reviewRawOutput is the Go representation of the reviewSchema-validated JSON.
+// It maps the snake_case JSON wire format to the SDK's ReviewResult/ReviewFeedback
+// types.
+type reviewRawOutput struct {
+	Feedback []reviewRawItem `json:"feedback"`
 }
 
-// reviewItem is a single feedback observation from the fresh review.
-type reviewItem struct {
+// reviewRawItem is a single feedback observation from the fresh review in
+// wire-format (snake_case).
+type reviewRawItem struct {
 	Message   string   `json:"message"`
 	Severity  string   `json:"severity"`
 	CitedLaws []string `json:"cited_laws"`
@@ -166,11 +172,29 @@ type reviewTemplateQueryData struct {
 	ExampleLawID        string
 }
 
+// ReviewAgentOpts holds optional overrides for ReviewAgent construction.
+// Zero values mean "use baked-in defaults".
+type ReviewAgentOpts struct {
+	SystemPrompt  string // override the default system prompt template
+	QueryTemplate string // override the default query prompt template
+}
+
 // NewReviewAgent creates a ReviewAgent with the given client, config, and
 // optional division prompt suffix. The model (KimiK2Ollama) is created
 // internally — model choice is a code-time decision, not deploy-time config.
-func NewReviewAgent(client *flow.Client, cfg *reviewerConfig, divisionPromptSuffix string) (*ReviewAgent, error) {
+//
+// opts may be nil to use all baked-in defaults.
+func NewReviewAgent(
+	client *flow.Client, cfg *reviewerConfig,
+	divisionPromptSuffix string, opts *ReviewAgentOpts,
+) (*ReviewAgent, error) {
 	inputLabel := artefacts.InputLabel(cfg.InputArtefacts)
+
+	// Resolve system prompt template (override or default).
+	systemTmplSrc := reviewSystemPromptTemplate
+	if opts != nil && opts.SystemPrompt != "" {
+		systemTmplSrc = opts.SystemPrompt
+	}
 
 	sysData := reviewSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
@@ -179,7 +203,7 @@ func NewReviewAgent(client *flow.Client, cfg *reviewerConfig, divisionPromptSuff
 	}
 
 	// 1. Render system prompt with config + division suffix.
-	sysTmpl, err := template.New("system").Parse(reviewSystemPromptTemplate)
+	sysTmpl, err := template.New("system").Parse(systemTmplSrc)
 	if err != nil {
 		return nil, fmt.Errorf("review agent: parse system template: %w", err)
 	}
@@ -189,8 +213,14 @@ func NewReviewAgent(client *flow.Client, cfg *reviewerConfig, divisionPromptSuff
 		return nil, fmt.Errorf("review agent: render system prompt: %w", err)
 	}
 
+	// Resolve query prompt template (override or default).
+	queryTmplSrc := reviewQueryPromptTemplate
+	if opts != nil && opts.QueryTemplate != "" {
+		queryTmplSrc = opts.QueryTemplate
+	}
+
 	// 2. Parse query template.
-	queryTmpl, err := template.New("query").Parse(reviewQueryPromptTemplate)
+	queryTmpl, err := template.New("query").Parse(queryTmplSrc)
 	if err != nil {
 		return nil, fmt.Errorf("review agent: parse query template: %w", err)
 	}
@@ -209,13 +239,13 @@ func NewReviewAgent(client *flow.Client, cfg *reviewerConfig, divisionPromptSuff
 	return &ReviewAgent{agent: agent, cfg: cfg}, nil
 }
 
-// Run performs a fresh review and returns the review output.
+// Run performs a fresh review and returns the review result.
 func (r *ReviewAgent) Run(
 	ctx context.Context,
 	inputContent, reviewContent string,
-	laws []lawData,
-	history []historyData,
-) (*reviewOutput, error) {
+	laws []flow.ReviewLaw,
+	history []flow.ReviewHistory,
+) (*flow.ReviewResult, error) {
 	// Build law block.
 	var lawBlock strings.Builder
 	if len(laws) > 0 {
@@ -258,10 +288,22 @@ func (r *ReviewAgent) Run(
 		return nil, err
 	}
 
-	var out reviewOutput
-	if err := json.Unmarshal(raw, &out); err != nil {
+	var rawOut reviewRawOutput
+	if err := json.Unmarshal(raw, &rawOut); err != nil {
 		return nil, fmt.Errorf("review agent: unmarshal output: %w", err)
 	}
 
-	return &out, nil
+	// Map wire-format items to SDK types.
+	result := &flow.ReviewResult{
+		Feedback: make([]flow.ReviewFeedback, len(rawOut.Feedback)),
+	}
+	for i, item := range rawOut.Feedback {
+		result.Feedback[i] = flow.ReviewFeedback{
+			Message:   item.Message,
+			Severity:  item.Severity,
+			CitedLaws: item.CitedLaws,
+		}
+	}
+
+	return result, nil
 }

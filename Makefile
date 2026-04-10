@@ -50,7 +50,7 @@ test-librarian: ## Run Librarian unit tests.
 	CGO_ENABLED=1 go test -v ./platform/librarian/...
 
 .PHONY: test-nodes
-test-nodes: ## Run Node unit tests (forge, sort, friction-watcher, ttl-watcher).
+test-nodes: ## Run Node unit tests across the shared nodes module.
 	CGO_ENABLED=1 go test -v ./nodes/...
 
 .PHONY: test-operator
@@ -65,7 +65,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-forge build-sort build-friction-watcher build-ttl-watcher build-rule-router build-facilitator build-hitl build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
+build: build-sidecar build-null-node build-forge build-sort build-appraise build-reviewer build-refine build-advocate build-arbiter build-juror build-codify-smt build-codification build-rule-router build-facilitator build-hitl build-law-applicator build-tribunal build-friction-watcher build-ttl-watcher build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -82,6 +82,38 @@ build-forge: ## Build the Forge node binary.
 .PHONY: build-sort
 build-sort: ## Build the Sort node binary.
 	CGO_ENABLED=1 go build -o bin/sort ./nodes/sort
+
+.PHONY: build-appraise
+build-appraise: ## Build the Appraise node binary.
+	CGO_ENABLED=1 go build -o bin/appraise ./nodes/appraise
+
+.PHONY: build-reviewer
+build-reviewer: ## Build the Reviewer node binary.
+	CGO_ENABLED=1 go build -o bin/reviewer ./nodes/reviewer
+
+.PHONY: build-refine
+build-refine: ## Build the Refine node binary.
+	CGO_ENABLED=1 go build -o bin/refine ./nodes/refine
+
+.PHONY: build-advocate
+build-advocate: ## Build the Advocate node binary.
+	CGO_ENABLED=1 go build -o bin/advocate ./nodes/advocate
+
+.PHONY: build-arbiter
+build-arbiter: ## Build the Arbiter node binary.
+	CGO_ENABLED=1 go build -o bin/arbiter ./nodes/arbiter
+
+.PHONY: build-juror
+build-juror: ## Build the Juror node binary.
+	CGO_ENABLED=1 go build -o bin/juror ./nodes/juror
+
+.PHONY: build-codify-smt
+build-codify-smt: ## Build the codify-smt node binary.
+	CGO_ENABLED=1 go build -o bin/codify-smt ./nodes/codify-smt
+
+.PHONY: build-codification
+build-codification: ## Build the Codification node binary.
+	CGO_ENABLED=1 go build -o bin/codification ./nodes/codification
 
 .PHONY: build-friction-watcher
 build-friction-watcher: ## Build the Friction Watcher node binary.
@@ -102,6 +134,14 @@ build-facilitator: ## Build the Facilitator node binary.
 .PHONY: build-hitl
 build-hitl: ## Build the HITL node binary.
 	CGO_ENABLED=1 go build -o bin/hitl ./nodes/hitl
+
+.PHONY: build-law-applicator
+build-law-applicator: ## Build the Law Applicator node binary.
+	CGO_ENABLED=1 go build -o bin/law-applicator ./nodes/law-applicator
+
+.PHONY: build-tribunal
+build-tribunal: ## Build the Tribunal node binary.
+	CGO_ENABLED=1 go build -o bin/tribunal ./nodes/tribunal
 
 .PHONY: build-archivist
 build-archivist: ## Build the Archivist binary.

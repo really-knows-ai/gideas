@@ -10,6 +10,9 @@ import (
 	flow "github.com/gideas/flow/sdk/go"
 )
 
+// Compile-time assertion: RevisionAgent implements flow.RevisionContract.
+var _ flow.RevisionContract = (*RevisionAgent)(nil)
+
 // ---------------------------------------------------------------------------
 // RevisionAgent — concrete agent for content revision (Phase 2)
 // ---------------------------------------------------------------------------
@@ -104,17 +107,29 @@ type revisionTemplateQueryData struct {
 
 // NewRevisionAgent creates a RevisionAgent with the given client and config.
 // The model (GptOss120bOllama) is created internally by buildAgent.
+// If cfg provides non-empty RevisionSystemPrompt or RevisionQueryTemplate
+// overrides, those replace the baked-in defaults.
 func NewRevisionAgent(client *flow.Client, cfg *refineConfig) (*RevisionAgent, error) {
 	sysData := revisionSystemData{
 		OutputArtefact: cfg.OutputArtefact,
 		OutputField:    cfg.OutputField,
 	}
 
+	sysTmpl := revisionSystemPromptTemplate
+	if cfg.RevisionSystemPrompt != "" {
+		sysTmpl = cfg.RevisionSystemPrompt
+	}
+
+	queryTmpl := revisionQueryPromptTemplate
+	if cfg.RevisionQueryTemplate != "" {
+		queryTmpl = cfg.RevisionQueryTemplate
+	}
+
 	schema := revisionOutputSchema(cfg.OutputField)
 
 	agent, err := buildAgent(client, "revision agent",
-		revisionSystemPromptTemplate, sysData,
-		revisionQueryPromptTemplate, schema)
+		sysTmpl, sysData,
+		queryTmpl, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +143,7 @@ func (r *RevisionAgent) Run(
 	ctx context.Context,
 	inputContent, reviewContent string,
 	laws []*flowv1.Law,
-	actioned []actionedItem,
+	fixes []flow.ActionedFeedback,
 ) (string, error) {
 	// Build law block.
 	var lawBlock strings.Builder
@@ -141,8 +156,8 @@ func (r *RevisionAgent) Run(
 
 	// Build fix block.
 	var fixBlock strings.Builder
-	for _, a := range actioned {
-		fmt.Fprintf(&fixBlock, "- Feedback: %s\n  Fix: %s\n\n", a.Message, a.FixDesc)
+	for _, a := range fixes {
+		fmt.Fprintf(&fixBlock, "- Feedback: %s\n  Fix: %s\n\n", a.Message, a.FixDescription)
 	}
 
 	data := revisionTemplateQueryData{

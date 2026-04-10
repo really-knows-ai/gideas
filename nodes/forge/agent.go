@@ -16,6 +16,9 @@ import (
 // ForgeAgent — concrete agent for content generation
 // ---------------------------------------------------------------------------
 
+// Compile-time interface assertion: ForgeAgent must satisfy ForgeContract.
+var _ flow.ForgeContract = (*ForgeAgent)(nil)
+
 // ForgeAgent wraps a flow.Agent with forge-specific schema, prompts, and
 // a typed Run() interface. It is the concrete agent for the Forge node.
 type ForgeAgent struct {
@@ -75,9 +78,18 @@ func forgeOutputSchema(outputField string) []byte {
 // NewForgeAgent creates a ForgeAgent with the given client and config.
 // The model (GptOss120bOllama) is created internally — model choice is a
 // code-time decision, not configuration.
+//
+// If cfg.SystemPrompt is non-empty it replaces the baked-in default system
+// prompt template. Likewise cfg.QueryTemplate replaces the default query
+// prompt template.
 func NewForgeAgent(client *flow.Client, cfg *forgeConfig) (*ForgeAgent, error) {
-	// 1. Render system prompt with config params.
-	sysTmpl, err := template.New("system").Parse(forgeSystemPromptTemplate)
+	// 1. Choose system prompt template — config override or baked-in default.
+	sysPromptSrc := forgeSystemPromptTemplate
+	if cfg.SystemPrompt != "" {
+		sysPromptSrc = cfg.SystemPrompt
+	}
+
+	sysTmpl, err := template.New("system").Parse(sysPromptSrc)
 	if err != nil {
 		return nil, fmt.Errorf("forge agent: parse system template: %w", err)
 	}
@@ -92,8 +104,13 @@ func NewForgeAgent(client *flow.Client, cfg *forgeConfig) (*ForgeAgent, error) {
 	}
 	systemPrompt := sysBuf.String()
 
-	// 2. Parse query template.
-	queryTmpl, err := template.New("query").Parse(forgeQueryPromptTemplate)
+	// 2. Choose query template — config override or baked-in default.
+	querySrc := forgeQueryPromptTemplate
+	if cfg.QueryTemplate != "" {
+		querySrc = cfg.QueryTemplate
+	}
+
+	queryTmpl, err := template.New("query").Parse(querySrc)
 	if err != nil {
 		return nil, fmt.Errorf("forge agent: parse query template: %w", err)
 	}
