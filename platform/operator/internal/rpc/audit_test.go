@@ -183,45 +183,6 @@ func TestAudit_NilPublisher(t *testing.T) {
 	}
 }
 
-func TestAudit_ExportWorkitem(t *testing.T) {
-	scheme := newScheme()
-	spy, pub, stop := newTestAuditor()
-	defer stop()
-
-	workitem := &apiv1.Workitem{
-		ObjectMeta: metav1.ObjectMeta{Name: "wi-export", Namespace: "default"},
-		Status:     apiv1.WorkitemStatus{Phase: "Completed"},
-	}
-	k8s := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(workitem).
-		WithStatusSubresource(workitem).
-		Build()
-
-	srv := NewOperatorServer(k8s)
-	srv.Auditor = pub
-
-	md := metadata.Pairs("x-flow-namespace", "default")
-	ctx := metadata.NewIncomingContext(context.Background(), md)
-
-	_, err := srv.ExportWorkitem(ctx, &flowv1.ExportWorkitemRequest{
-		WorkitemId: "wi-export",
-	})
-	if err != nil {
-		t.Fatalf("ExportWorkitem: %v", err)
-	}
-
-	stop()
-
-	if spy.count() != 1 {
-		t.Fatalf("expected 1 audit event, got %d", spy.count())
-	}
-	evt := spy.last().GetEvent()
-	if evt.GetEventType() != "audit.workitem.exported" {
-		t.Fatalf("expected audit.workitem.exported, got %q", evt.GetEventType())
-	}
-}
-
 func TestAudit_CreateChildWorkitem(t *testing.T) {
 	scheme := newScheme()
 	spy, pub, stop := newTestAuditor()

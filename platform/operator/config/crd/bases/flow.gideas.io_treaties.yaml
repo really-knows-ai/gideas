@@ -48,6 +48,14 @@ spec:
           spec:
             description: spec defines the desired state of Treaty
             properties:
+              allowedImportTypes:
+                description: |-
+                  allowedImportTypes constrains which of the receiving Flow's published
+                  crossFlow.importTypes the remote Flow may use. If empty, all published
+                  import types are permitted.
+                items:
+                  type: string
+                type: array
               allowedSubjects:
                 description: |-
                   allowedSubjects are the permitted identity subjects on imported certificates.

@@ -43,11 +43,6 @@ type FoundryFlowSpec struct {
 	// +kubebuilder:validation:Required
 	ExitContracts map[string]Contract `json:"exitContracts"`
 
-	// importNode is the name of the FoundryNode that receives cross-flow imported Workitems.
-	// Must reference an existing entry-bound node. If absent, cross-flow import is disabled.
-	// +optional
-	ImportNode string `json:"importNode,omitempty"`
-
 	// governancePolicy defines governance thresholds and timers for this Flow.
 	// +kubebuilder:validation:Required
 	GovernancePolicy GovernancePolicy `json:"governancePolicy"`
@@ -233,15 +228,35 @@ type EventBusRetentionPolicy struct {
 
 // CrossFlowConfig defines cross-flow trust and naturalisation settings.
 type CrossFlowConfig struct {
-	// stateRootCA is the PEM-encoded State Root CA certificate.
-	// Present when the Flow operates under a Governance Flow.
+	// federationCA is the PEM-encoded Federation CA certificate.
+	// Present when the Flow operates within a Federation.
 	// +optional
-	StateRootCA string `json:"stateRootCA,omitempty"`
+	FederationCA string `json:"federationCA,omitempty"`
+
+	// importTypes publishes the Flow's supported cross-flow import types.
+	// Each import type maps to an entry-bound node and optional per-artefact
+	// foreign stamp requirements.
+	// +optional
+	ImportTypes map[string]ImportTypeSpec `json:"importTypes,omitempty"`
 
 	// naturalisation defines the policy for naturalising imported artefacts and stamps
 	// at treaty boundaries.
 	// +optional
 	Naturalisation *NaturalisationConfig `json:"naturalisation,omitempty"`
+}
+
+// ImportTypeSpec defines one published cross-flow import type.
+type ImportTypeSpec struct {
+	// node is the name of the FoundryNode that receives imported Workitems for
+	// this import type. Must reference an existing entry-bound node.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Node string `json:"node"`
+
+	// requireForeignStamps defines per-governed-artefact foreign stamp
+	// requirements that the Embassy must verify before materialising the import.
+	// +optional
+	RequireForeignStamps Contract `json:"requireForeignStamps,omitempty"`
 }
 
 // NaturalisationConfig defines the policy for naturalising imported artefacts and stamps.

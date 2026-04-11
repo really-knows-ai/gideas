@@ -45,6 +45,12 @@ type TreatySpec struct {
 	// +optional
 	AllowedSubjects []string `json:"allowedSubjects,omitempty"`
 
+	// allowedImportTypes constrains which of the receiving Flow's published
+	// crossFlow.importTypes the remote Flow may use. If empty, all published
+	// import types are permitted.
+	// +optional
+	AllowedImportTypes []string `json:"allowedImportTypes,omitempty"`
+
 	// maxBundleSize is the maximum size of export/import bundles.
 	// +optional
 	MaxBundleSize string `json:"maxBundleSize,omitempty"`

@@ -253,7 +253,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 
 			// Clean up infrastructure resources (envtest does not run garbage collection).
 			By("Cleanup infrastructure Deployments and Services")
-			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian"}
+			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian", "flow-embassy"}
 			for _, name := range infraNames {
 				deploy := &appsv1.Deployment{}
 				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, deploy); err == nil {
@@ -419,6 +419,42 @@ var _ = Describe("FoundryFlow Controller", func() {
 				Namespace: testNamespace,
 			}, &svc)).To(Succeed())
 			Expect(svc.Spec.Ports[0].Port).To(Equal(int32(50058)))
+		})
+
+		It("should create Embassy Deployment and Service", func() {
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the Embassy Deployment exists")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-embassy",
+				Namespace: testNamespace,
+			}, &deploy)).To(Succeed())
+			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal(embassyImage))
+
+			By("Verifying Embassy env vars")
+			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
+			Expect(envMap).To(HaveKeyWithValue("EVENT_BUS_ADDRESS", "flow-eventbus:50056"))
+			Expect(envMap).To(HaveKeyWithValue("OPERATOR_ADDRESS", "flow-operator:50052"))
+			Expect(envMap).To(HaveKeyWithValue("EMBASSY_PORT", "50059"))
+
+			By("Verifying the Embassy Service exists")
+			var svc corev1.Service
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-embassy",
+				Namespace: testNamespace,
+			}, &svc)).To(Succeed())
+			Expect(svc.Spec.Ports[0].Port).To(Equal(int32(50059)))
+			Expect(svc.Spec.Ports[0].Name).To(Equal("grpc"))
 		})
 
 		It("should set owner references on infrastructure resources", func() {

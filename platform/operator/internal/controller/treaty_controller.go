@@ -72,6 +72,12 @@ func (r *TreatyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			"CACertInvalid", err.Error())
 	}
 
+	// Validate allowed import types against the receiving Flow's published types.
+	if err := r.validateAllowedImportTypes(ctx, &treaty); err != nil {
+		return r.setCondition(ctx, &treaty, metav1.ConditionFalse,
+			"AllowedImportTypesInvalid", err.Error())
+	}
+
 	// All validations passed.
 	return r.setCondition(ctx, &treaty, metav1.ConditionTrue,
 		"Reconciled", fmt.Sprintf("Treaty with remote %q (%s) validated", treaty.Spec.RemoteName, treaty.Spec.Direction))
@@ -91,6 +97,36 @@ func (r *TreatyReconciler) validateCACert(treaty *flowv1.Treaty) error {
 
 	if !cert.IsCA {
 		return fmt.Errorf("caCert is not a CA certificate")
+	}
+
+	return nil
+}
+
+// validateAllowedImportTypes ensures every Treaty allowedImportTypes entry is
+// published by the receiving namespace's singleton FoundryFlow.
+func (r *TreatyReconciler) validateAllowedImportTypes(ctx context.Context, treaty *flowv1.Treaty) error {
+	if len(treaty.Spec.AllowedImportTypes) == 0 {
+		return nil
+	}
+
+	var flows flowv1.FoundryFlowList
+	if err := r.List(ctx, &flows, client.InNamespace(treaty.Namespace)); err != nil {
+		return fmt.Errorf("could not list FoundryFlows: %w", err)
+	}
+
+	if len(flows.Items) != 1 {
+		return fmt.Errorf("namespace %q must contain exactly 1 FoundryFlow to validate allowedImportTypes, found %d", treaty.Namespace, len(flows.Items))
+	}
+
+	publishedImportTypes := map[string]flowv1.ImportTypeSpec{}
+	if flows.Items[0].Spec.CrossFlow != nil {
+		publishedImportTypes = flows.Items[0].Spec.CrossFlow.ImportTypes
+	}
+
+	for _, importType := range treaty.Spec.AllowedImportTypes {
+		if _, ok := publishedImportTypes[importType]; !ok {
+			return fmt.Errorf("allowedImportTypes value %q is not published by FoundryFlow %q", importType, flows.Items[0].Name)
+		}
 	}
 
 	return nil

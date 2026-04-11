@@ -38,7 +38,7 @@ import (
 //
 // Responsibilities:
 //   - Validate configuration completeness (contracts, governance policy, cross-flow settings).
-//   - Validate referential integrity (routing targets, importNode, stamp vocabulary).
+//   - Validate referential integrity (routing targets, import types, stamp vocabulary).
 //   - Manage phase status (Initialising -> Ready / Degraded / Failed).
 //   - Set status conditions reflecting reconciliation health.
 type FoundryFlowReconciler struct {
@@ -106,10 +106,10 @@ func (r *FoundryFlowReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			metav1.ConditionFalse, "ContractValidationFailed", err.Error())
 	}
 
-	// Validate importNode reference.
-	if err := r.validateImportNode(ctx, &flow); err != nil {
+	// Validate cross-flow import type references.
+	if err := r.validateImportTypes(ctx, &flow); err != nil {
 		return r.setPhaseAndCondition(ctx, &flow, phaseFailed,
-			metav1.ConditionFalse, "ImportNodeInvalid", err.Error())
+			metav1.ConditionFalse, "ImportTypesInvalid", err.Error())
 	}
 
 	// Validate NodeGroup configuration (membership, contracts, routing isolation).
@@ -204,23 +204,24 @@ func (r *FoundryFlowReconciler) validateContractStamps(
 	return nil
 }
 
-// validateImportNode validates the importNode reference if present.
-func (r *FoundryFlowReconciler) validateImportNode(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	if flow.Spec.ImportNode == "" {
+// validateImportTypes validates crossFlow.importTypes references if present.
+func (r *FoundryFlowReconciler) validateImportTypes(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	if flow.Spec.CrossFlow == nil || len(flow.Spec.CrossFlow.ImportTypes) == 0 {
 		return nil
 	}
 
-	var node flowv1.FoundryNode
-	if err := r.Get(ctx, types.NamespacedName{
-		Name:      flow.Spec.ImportNode,
-		Namespace: flow.Namespace,
-	}, &node); err != nil {
-		return fmt.Errorf("importNode %q does not reference an existing FoundryNode", flow.Spec.ImportNode)
-	}
+	for importType, spec := range flow.Spec.CrossFlow.ImportTypes {
+		var node flowv1.FoundryNode
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      spec.Node,
+			Namespace: flow.Namespace,
+		}, &node); err != nil {
+			return fmt.Errorf("crossFlow.importTypes[%q].node %q does not reference an existing FoundryNode", importType, spec.Node)
+		}
 
-	// importNode must be entry-bound.
-	if node.Spec.Entry == "" {
-		return fmt.Errorf("importNode %q must have an entry contract binding", flow.Spec.ImportNode)
+		if node.Spec.Entry == "" {
+			return fmt.Errorf("crossFlow.importTypes[%q].node %q must have an entry contract binding", importType, spec.Node)
+		}
 	}
 
 	return nil
