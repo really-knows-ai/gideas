@@ -11,7 +11,7 @@ Nodes are execution actors in the data plane. Control-plane authority remains wi
 - Nodes return one routing instruction at the end of each assignment.
 - Nodes do not mutate Workitem lifecycle fields directly.
 - Nodes admitting new Workitems through local creation must be bound to an entry contract.
-- Cross-flow import admission targets configured `importNode`, which must be entry-bound.
+- Cross-flow import admission is handled by the [Embassy](./06-cross-flow.md), which routes to the node configured for the import type in `crossFlow.importTypes`. Import type nodes must be entry-bound.
 - Runtime-triggered review-hearing admission targets the Tribunal's mandatory hearing entry binding.
 
 Every node, including externally integrated nodes, runs inside the same control and governance contract.
@@ -79,73 +79,79 @@ Gate nodes in the reference arrangement discover stamp-provider routing targets 
 
 The [Judiciary](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem) is a standard subsystem in every Flow. All Judiciary nodes are Operator-provisioned. The Judiciary is routable and cannot be omitted from the runtime.
 
-The Judiciary comprises orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes (Juror, Deliberation Gate), watcher nodes (Friction Watcher, TTL Watcher), and a legislative inner cycle (Clerk, Codification nodes, Tribunal Router, Judiciary Gate). All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking.
+The Judiciary comprises a lifecycle node ([Facilitator](../01-concepts/02-foundry-cycle.md#facilitator)), orchestration nodes ([Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-hearing-conductor)), deliberation nodes ([Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent)), watcher nodes ([Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher), [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher), petition-outcome-watcher), a legislative inner cycle (the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) using [Codification](../01-concepts/02-foundry-cycle.md#codification-nodes), [Rule Router](../01-concepts/02-foundry-cycle.md#rule-router), and [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) nodes), and generic [HITL](../01-concepts/02-foundry-cycle.md#hitl-nodes) nodes for human review. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking.
+
+### Lifecycle Node
+
+**[Facilitator](../01-concepts/02-foundry-cycle.md#facilitator)** — owns the deadlock resolution lifecycle. When Sort detects deadlocked feedback, it routes to the Facilitator. The Facilitator gathers evidence (feedback history, artefact content, relevant laws, friction data), packages it into an evidence bundle artefact, creates a child Workitem for the Arbiter, and calls [Suspend](./02-workitem.md#suspendresume). When the Arbiter child completes, the Facilitator resumes and routes `resolved` back to Sort. The same `facilitator:latest` image serves both the main cycle and the Clerk cycle as different CRD instances.
 
 ### Orchestration Nodes
 
-**[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver)** — resolves deadlocked feedback disputes. Governed-work Workitems are *routed* to the Arbiter (via `route_to`) by the gate node. The governed-work Workitem is already in flight — the Arbiter assembles evidence (artefact content, feedback history, relevant laws, friction data), fans out to [Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) nodes using child Workitems, and collects their verdicts. The Workitem then routes to the [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) for consensus tally. On consensus (or after HITL resolution), the verdict flows to the [Clerk](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) to draft a petition. The Workitem returns to Sort for re-evaluation in the reference arrangement.
+**[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver)** — resolves deadlocked feedback disputes. Receives a child Workitem from the Facilitator with a pre-assembled evidence bundle. Fans out to [Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) nodes using child Workitems, tallies their verdicts internally, and handles multi-round retry internally. Three outcomes: (1) Resolved — calls `Complete()`. (2) Consensus — creates a child Workitem for the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) with a `verdict-context` artefact and calls [Suspend](./02-workitem.md#suspendresume). (3) Hung — routes to [hitl-resolve](../01-concepts/02-foundry-cycle.md#hitl-nodes).
 
-**[Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-hearing-conductor)** — conducts review hearings and petition reviews. Operates in two modes:
+**[Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-hearing-conductor)** — conducts review hearings on laws. The [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) or [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher) creates a *new* hearing Workitem, admitted through the Tribunal's entry binding. The hearing Workitem carries a single `law-reference` artefact — a built-in [GovernedArtefact](../05-reference/crds.md#governedartefact) provisioned by the Operator alongside the Tribunal, whose content is a plain-text string containing the law ID under review. The Tribunal assembles evidence, fans out to Juror nodes, tallies verdicts internally, and handles retry internally. On consensus, creates a child Workitem for the Clerk cycle with a `verdict-context` artefact and **Completes** (fire-and-forget). On hung jury, routes to [hitl-resolve](../01-concepts/02-foundry-cycle.md#hitl-nodes). Friction hearings can target any tier, including imported Tier 4-5 laws.
 
-- **Hearing mode.** The [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) or [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher) creates a *new* hearing Workitem, admitted through the Tribunal's entry binding. The hearing Workitem carries a single `law-reference` artefact — a built-in [GovernedArtefact](../05-reference/crds.md#governedartefact) provisioned by the Operator alongside the Tribunal, whose content is a plain-text string containing the law ID under review. The Tribunal assembles evidence, fans out to [Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) nodes, and routes to the [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally). On consensus, the [Tribunal Router](../01-concepts/02-foundry-cycle.md#tribunal-router) routes by tier. The governed-work Workitem that prompted the hearing is unaffected.
-- **Review mode.** When the [Clerk](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) drafts a petition and routes it for review, the Tribunal reads the petition artefact, reviews it against governance context, fans out to Juror nodes, and routes to the Deliberation Gate. On consensus, the Workitem flows to the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate).
-
-The Tribunal is both entry-bound (hearing admission) and exit-bound (hearing completion) for hearing Workitems.
-
-**[Advocate](../01-concepts/02-foundry-cycle.md#advocate-human-escalation)** — the Judiciary's human-in-the-loop escalation point. Receives hung jury escalations (from [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally)), Tier 3+ hearing outcomes (from [Tribunal Router](../01-concepts/02-foundry-cycle.md#tribunal-router)), Tier 3 petition ratifications (from [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate)), and Tier 4-5 appeals. The Advocate uses the SDK's [HITL pattern](../04-sdk/08-sdk-hitl.md) to expose a queue interface for human reviewers. HITL decisions route to the [Clerk](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) so they are codified as petitions and go through the normal review cycle.
-
-The two primary paths are distinguished by admission mechanism: deadlock-escalated Workitems arrive at the Arbiter through routing; hearing Workitems arrive at the Tribunal through entry-contract admission as new Workitems created by the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) or [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher).
+The two primary paths are distinguished by admission mechanism: deadlock-escalated Workitems arrive at the Facilitator through routing (which delegates to the Arbiter via child Workitems); hearing Workitems arrive at the Tribunal through entry-contract admission as new Workitems created by the Friction Watcher or TTL Watcher.
 
 ### Deliberation Nodes
 
 **[Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent)** — the deliberation primitive. A single Juror node image loads different agent configurations at fan-out time to maximise diversity of judicial philosophy for the jury size required. Each Juror receives a child Workitem containing the question, evidence, prior-round reasoning (if a retry), and allowed outcomes. It runs a [FoundryAgent](../04-sdk/07-sdk-agent.md) with the loaded judicial personality and produces a structured verdict artefact (outcome + reasoning). Per-juror cost accounting is automatic — each juror's inference steps emit `foundry.cost.llm` telemetry events with attribution tags (`juror`, `round`, `severity`, `feedback_id`).
 
-**[Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally)** — generic consensus tally node. Reads juror verdict artefacts from the Workitem, applies the configured consensus strategy (simple majority, super-majority, or unanimity), and tracks the round count. Three well-known outputs: `consensus`, `retry`, `hung`. The Deliberation Gate does not know about tiers, petitions, or law semantics — it tallies votes and routes.
+### Clerk Cycle Nodes
 
-### Legislative Inner Cycle Nodes
+The [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) mirrors the main cycle. It uses the same node images (Forge, Sort, Appraise, Refine, Facilitator) as different CRD instances with different configs — primarily different agent prompts loaded from ConfigMaps. Key nodes:
 
-**[Clerk](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter)** — drafts and revises [petition](../01-concepts/02-foundry-cycle.md#petition-artefact) artefacts (structured YAML/Markdown documents describing proposed law changes). Receives verdict and context artefacts, drafts the petition with prose description, fans out to [Codification](../01-concepts/02-foundry-cycle.md#codification-nodes) nodes for formal representations, collects results, and assembles the complete petition. The petition then routes to the Tribunal for review. On revision (feedback via the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate)), the Clerk reads the feedback, revises the petition, re-fans-out for codification, and re-routes to the Tribunal.
+**clerk-forge** (`forge:latest`) — receives a `verdict-context` artefact, interprets the court's prose decision into a structured petition.
 
-**[Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes)** — produce formal representations of laws. Each receives a child Workitem containing the law goal and context as artefacts, produces a formal representation in its declared output format (Rego, SMT-LIB, etc.), and calls `Complete()`. The Clerk fans out to the appropriate Codification nodes based on which representations are needed.
+**[Codification](../01-concepts/02-foundry-cycle.md#codification-nodes)** (`codification:latest`) — reads the petition, fans out to codify-\* nodes per-change for non-retire changes, collects formal representations, attaches them to the originating changes, routes to clerk-sort.
 
-**[Tribunal Router](../01-concepts/02-foundry-cycle.md#tribunal-router)** — handles post-hearing routing. After the Deliberation Gate reaches consensus on a hearing, reads the verdict artefacts and law-reference artefact (for tier context) and routes: Tier 1–2 verdict to Clerk, Tier 3+ to Advocate.
+**clerk-sort** (`sort:latest`) — petition feedback triage.
 
-**[Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate)** — mirrors Sort for the judiciary's inner cycle. Checks feedback resolution on the petition artefact and routes: approved Tier 1–2 applies via the Librarian, rejected or unresolved routes back to Clerk, approved Tier 3 routes to Advocate for HITL ratification, Tier 4–5 routes to Advocate then Governance Flow.
+**clerk-appraise** (`appraise:latest`) — automated petition review.
+
+**clerk-refine** (`refine:latest`) — petition revision.
+
+**clerk-facilitator** (`facilitator:latest`) — handles deadlocked petition feedback.
+
+**clerk-done-router** ([Rule Router](../01-concepts/02-foundry-cycle.md#rule-router)) — post-approval tier routing: T1-2 to law-applicator, T3-5 to hitl-appraise.
+
+**hitl-gate** ([Rule Router](../01-concepts/02-foundry-cycle.md#rule-router)) — post-HITL routing: T3 to law-applicator, T4-5 to law-applicator then Embassy.
+
+**[law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator)** — applies approved petitions via Librarian. For T4-5, creates a [dispute record](../01-concepts/03-data-model.md#dispute-records) and routes to the [Embassy](./06-cross-flow.md).
+
+### HITL Nodes
+
+**[HITL nodes](../01-concepts/02-foundry-cycle.md#hitl-nodes)** — generic, config-driven human-in-the-loop nodes. A single `hitl:latest` image derives behaviour from CRD configuration: outputs become user choices, `WRITE:feedback` enables feedback, exit-node config enables cancellation via `Complete(WithReason(cancelled))`. Instances: hitl-appraise (T3-5 petition review), arbiter-hitl-resolve (Arbiter hung jury), tribunal-hitl-resolve (Tribunal hung jury).
 
 ### Watcher Nodes
 
 **[Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher)** — entry-bound watcher node that subscribes to the [Flow Event Bus](./04-system-services.md#flow-event-bus) friction channel for `friction.threshold_crossed` events. When a law's accumulated friction crosses its tier's configured threshold, creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact, and routes to the Tribunal via its `default` output. Tracks pending hearing law IDs to prevent duplicates.
 
-**[TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher)** — entry-bound watcher node that periodically polls the [Librarian](./04-system-services.md#librarian) via `QueryLaws` for laws exceeding their tier's configured review TTL. On expiry, creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact, and routes to the Tribunal via its `default` output. Tracks pending hearing law IDs to prevent duplicates. Per-tier TTL durations are configured via node config.
+**[TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher)** — entry-bound watcher node that periodically polls the [Librarian](./04-system-services.md#librarian) via `QueryLaws` for laws exceeding their tier's configured review TTL. On expiry, creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact, and routes to the Tribunal via its `default` output. Tracks pending hearing law IDs to prevent duplicates. Per-tier TTL durations are configured via node config. Only Tier 1-2 laws have TTLs; Tier 3-5 laws are not subject to TTL-based review.
+
+**petition-outcome-watcher** — entry-bound watcher node that monitors [Federation](./08-federation.md) publication and rejection outcomes for exported `law-petition`s. On acceptance, it retires the matching dispute record and resumes Workitems held in `pending-hold`. On rejection, it retires the dispute record, creates a new Clerk-cycle Workitem with the rejection report as context, and resumes held Workitems.
+
+### Boundary Node
+
+**[Embassy](./06-cross-flow.md)** — the standard cross-flow boundary node, present in every Flow. Handles outbound export and inbound import of Workitems using a signed manifest and streamed package protocol. The Embassy is operator-provisioned and runs as a persistent entry node. See [Cross-Flow Collaboration](./06-cross-flow.md) for the full protocol. The [Federation service](./08-federation.md) is a separate platform service, not a node.
 
 ### Judiciary Node Capabilities
 
 Arbiter and Tribunal capabilities are fixed by the runtime (not configurable by the Flow Architect):
 
-- `WRITE:law/tier2` — resolve Tier 1-2 conflicts and mint Tier 2 Rulings via Clerk petition.
+- `WRITE:law/tier2` — resolve Tier 1-2 conflicts and mint Tier 2 Rulings via Clerk cycle.
 - `READ:law` — query the Library for law context.
 - Friction queries, feedback resolution, and stamp application for hearing artefacts.
-- Propose Tier 3 changes for human ratification (routed to Advocate).
-- Appeal Tier 4-5 conflicts to Governance Flow authorities (routed to Advocate).
 
 The Arbiter and Tribunal do not write Tier 1 Findings by convention; their role is judicial, not observational.
 
-Judiciary Gate capabilities are fixed by the runtime:
+law-applicator capabilities are fixed by the runtime:
 
-- `WRITE:law/tier2` — apply approved Tier 1-2 petitions to the Library via the Librarian (`WriteLaw`/`RetireLaw`).
-- `READ:law` — query the Library for context during feedback resolution checks.
+- `WRITE:law/tier3` — apply approved petitions to the Library via the Librarian (`WriteLaw`/`RetireLaw`). The tier3 ceiling covers Tier 1 and Tier 2.
+- `READ:law` — query the Library for context.
+- `CREATE:dispute-record` — create dispute records for T4-5 petitions.
 
-Clerk capabilities are fixed by the runtime:
-
-- `READ:law` — query existing laws for context during drafting.
-- Fan-out to Codification nodes via child Workitems.
-
-Advocate capabilities are fixed by the runtime:
-
-- `READ:law` — query the Library for law context.
-- `USE:queue/server` — enables the HITL queue interface and Federated Queue Mesh.
-- Petition HITL for Tier 3 ratification.
-- File appeals to the Governance Flow via the Librarian for Tier 4-5 conflicts.
+Clerk cycle node capabilities mirror their main-cycle counterparts with petition-specific CRD configs.
 
 ## External Integration Nodes
 
@@ -197,7 +203,7 @@ All node deployments preserve these invariants:
 3. Routing outcomes are limited to `route_to_output`, `route_to`, or `complete`.
 4. Law writing is capability-gated; nodes without a `WRITE:law/tierN` capability grant cannot write laws.
 5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
-6. The Judiciary is always present: all Judiciary nodes (Arbiter, Tribunal, Advocate, Juror, Deliberation Gate, Clerk, Codification, Tribunal Router, Judiciary Gate, Friction Watcher, TTL Watcher) are Operator-provisioned and constrained to resolve/propose/appeal at their authority ceiling.
+6. The Judiciary is always present: all Judiciary nodes (Facilitator, Arbiter, Tribunal, Juror, Clerk cycle nodes, Codification, Rule Router, law-applicator, HITL, Friction Watcher, TTL Watcher) and the Embassy are Operator-provisioned. Judiciary nodes are constrained to resolve/propose/petition at their authority ceiling.
 7. Hearing Workitems are standard Workitems (no `WorkitemType` or `spec.type`) with Tribunal entry/exit bindings.
 8. Stamp authority is capability-scoped by governed artefact name and stamp name.
 9. Stamps are write-once per artefact version hash.

@@ -13,6 +13,8 @@ All runtime services expose gRPC APIs. Node-originated calls are mediated by the
 | [Flow Event Bus](#flow-event-bus-api) | Durable event distribution across telemetry, audit, friction, and workitem channels | Sidecar (publish), all services (publish/subscribe) |
 | [Friction Ledger](#friction-ledger-api) | Friction aggregation, threshold evaluation, friction queries | Sidecar (on behalf of nodes), Librarian, Friction Ledger publishes to Bus |
 | [Sidecar](#sidecar-mediated-sdk-paths) | Authentication proxy, identity injection, local validation | Node handlers (via SDK) |
+| [Embassy](#embassy-api) | Cross-flow Workitem transfer: manifest preflight, package streaming, naturalisation | Operator, Sidecar (on behalf of nodes), remote Embassies |
+| [Federation](#federation-api) | Federation membership, law publication, conflict rejection, distribution | Embassy, Librarian, authority publishers |
 | [Support Services](#support-service-api) | Pluggable capabilities (e.g. codification) | Sidecar (on behalf of nodes), system services |
 | [QueuePeer](#queuepeer-api) | Federated Queue Mesh inter-pod communication | HITL node replicas (peer-to-peer) |
 
@@ -37,8 +39,7 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `ExportWorkitem` | `workitem_id` | `export_package` | Assembles an export package from the completed Workitem: artefact content (scoped by exit contract), passport stamps, Workitem metadata, and provenance chain. The Operator signs the package with the Flow's identity material and includes the certificate chain. |
-| `ImportWorkitem` | `export_package`, `treaty_name?` | `workitem_id` or structured error | Validates and materialises a Workitem from an export package. Verifies the package signature against the certificate chain (State Root for siblings, Treaty `caCert` for non-siblings), enforces `allowedSubjects` and `maxBundleSize` from the Treaty if applicable, validates the materialised Workitem against the configured `importNode`'s entry contract, and creates the Workitem in `Pending`. |
+| `NotifyExportReady` | `workitem_id` | `acknowledged` | Signals the Operator that a Workitem has completed its exit contract and is eligible for cross-flow export via the Embassy. The Operator marks the Workitem as export-ready. |
 
 ### Routing Instruction Shape
 
@@ -67,7 +68,7 @@ The Operator API handles Workitem control-plane mutations. All node-facing metho
 | Thrash budget exceeded | `THRASH_BUDGET_EXCEEDED` | `FAILED_PRECONDITION` |
 | Entry contract not satisfied (CreateWorkitem) | `CONTRACT_VIOLATION` | `FAILED_PRECONDITION` |
 | Creating node not entry-bound | `ENTRY_NOT_BOUND` | `FAILED_PRECONDITION` |
-| Imported Workitem does not satisfy import node's entry contract | `IMPORT_ADMISSION_FAILED` | `FAILED_PRECONDITION` |
+| Imported Workitem does not satisfy import type node's entry contract | `IMPORT_ADMISSION_FAILED` | `FAILED_PRECONDITION` |
 | Parent `Complete()` with non-terminal children | `CHILDREN_NOT_TERMINAL` | `FAILED_PRECONDITION` |
 | Child Workitem not owned by caller's current Workitem | `CHILD_NOT_OWNED` | `FAILED_PRECONDITION` |
 | Write or re-route on a child that has already been routed | `CHILD_ALREADY_ROUTED` | `FAILED_PRECONDITION` |
@@ -143,7 +144,7 @@ The Archivist API manages artefact lifecycle and provenance. All node-facing met
 
 ## Librarian API
 
-The Librarian API manages the Flow's body of law. Node-facing methods are reached through the Sidecar. The Librarian also exposes inter-service methods for the Operator and for cross-flow replication.
+The Librarian API manages the Flow's body of law. Node-facing methods are reached through the Sidecar. The Librarian also exposes service-facing methods for law application, dispute-record tracking, and federation publication distribution.
 
 ### Node-Facing Methods (via Sidecar)
 
@@ -157,10 +158,12 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `GetLaw` | `law_id` | `law` | Returns the full law object by identifier. Used by Judiciary nodes for hearing evidence retrieval. |
-| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law (Tier 2 Ruling applied by the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) from an approved petition, Tier 3+ applied by administrator or Governance Flow). During hearing processing, the law is created in an inactive state pending hearing completion. |
+| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law written by the [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) or by administrator action. If the source petition carried a `petition_id`, that provenance is stored on the written law. |
 | `RetireLaw` | `law_id` | `acknowledged` | Removes a law from the active Library. History is preserved in the audit log. |
-| `ReplicateLaws` | `laws[]`, `source_flow_namespace` | `integration_results[]` | Receives higher-tier laws from a remote Librarian for integration. `source_flow_namespace` carries the source namespace for cross-flow replication. Triggers the two-stage conflict protocol. |
-| `ApplyLifecycleAction` | `law_id`, `verdict` | `acknowledged` | Applies the outcome of a review hearing (promote, retire, demote) to the specified law. Called by the Operator after Tribunal hearing completion. This action activates any law created during the hearing. |
+| `CreateDisputeRecord` | `petition_id`, `cited_law_ids[]` | `dispute_record_id` | Creates a dispute record for an approved T4-5 petition before Embassy export. |
+| `RetireDisputeRecord` | `petition_id` | `acknowledged` | Retires the active dispute record for the specified petition. Used when the petition outcome is known. |
+| `QueryDisputeRecords` | `petition_id?`, `law_id?`, `status?` | `records[]` | Returns dispute records by petition, cited law, or status. Used by Sort and petition-outcome-watcher flows. |
+| `IntegratePublishedLaw` | `law`, `source_flow_identity`, `publication_scope` | `integration_result` | Receives a published law from the Federation service for local integration. Triggers the two-stage conflict protocol. |
 
 ### Librarian Error Responses
 
@@ -341,16 +344,84 @@ These methods were previously on `FlowMonitorService`. They now live on `Sidecar
 
 ## Judiciary Shared Types
 
-The Judiciary subsystem uses node-based Workitem transitions instead of dedicated gRPC services. Deliberation and codification are externalised into the flow topology — [Juror nodes](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) receive child Workitems, produce verdict artefacts, and call `Complete()`; the [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) tallies votes; the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) drafts petitions and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes). No Jury or Clerk gRPC API exists.
+The Judiciary subsystem uses node-based Workitem transitions instead of dedicated gRPC services. Deliberation and codification are externalised into the flow topology — [Juror nodes](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) receive child Workitems, produce verdict artefacts, and call `Complete()`; the Arbiter and Tribunal tally votes internally; the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) drafts petitions and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes). No Jury or Clerk gRPC API exists.
 
 Shared judiciary types are defined in `judiciary.proto`:
 
 | Type | Kind | Description |
 |------|------|-------------|
-| `ConsensusStrategy` | enum | `SIMPLE_MAJORITY` (>50%), `SUPER_MAJORITY` (>=66%), `UNANIMITY` (100%). Configured on the Deliberation Gate. |
+| `ConsensusStrategy` | enum | `SIMPLE_MAJORITY` (>50%), `SUPER_MAJORITY` (>=66%), `UNANIMITY` (100%). Configured on the Arbiter and Tribunal for internal tally. |
 | `JurorJustification` | message | Per-Juror verdict record: `juror_id` (opaque), `outcome` (the Juror's vote), `reasoning` (the Juror's justification). Stored as artefacts on child Workitems. |
 
 Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+
+---
+
+## Embassy API
+
+The Embassy is the cross-flow gateway node responsible for Workitem import/export. It replaces the former Operator-centric `ExportWorkitem`/`ImportWorkitem` methods with a manifest-preflight and package-streaming protocol. The Embassy is Operator-provisioned and holds cross-flow transfer capabilities.
+
+### Transfer Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `PreflightManifest` | `manifest` (import type, artefact list, stamp summary, source identity, treaty reference) | `accepted` or `rejection_reason` | Validates an inbound transfer request before streaming begins. Checks: import type exists in `crossFlow.importTypes`, treaty permits the import type (if applicable via `allowedImportTypes`), bundle size within limits, source identity validates against trust root (Federation CA for federation-member exchange, Treaty `caCert` for Treaty exchange). Returns rejection reason on failure. |
+| `StreamPackage` | `stream PackageChunk` (header + content chunks + trailer with digest) | `import_result` (workitem_id or structured error) | Streams the export package to the receiving Embassy. The header carries the manifest reference from preflight. Content chunks carry artefact bytes, passport stamps, and provenance chain. The trailer carries a package digest. The Embassy verifies `SHA256(chunks) == digest`, applies naturalisation policy, routes the materialised Workitem to the import type's configured node, and validates the entry contract. |
+| `ExportPackage` | `workitem_id`, `import_type` | `stream PackageChunk` | Assembles and streams an export package from a completed Workitem. Artefact content is scoped by the exit contract. The Embassy signs the package with the Flow's identity material and includes the certificate chain. |
+
+### Embassy Error Responses
+
+| Condition | Error | gRPC Status |
+|-----------|-------|-------------|
+| Import type not found in `crossFlow.importTypes` | `UNKNOWN_IMPORT_TYPE` | `FAILED_PRECONDITION` |
+| Preflight manifest rejected (treaty, size, identity) | `HEADER_REJECTED` | `FAILED_PRECONDITION` |
+| Foreign attestation stamps fail chain verification | `FOREIGN_STAMP_INVALID` | `PERMISSION_DENIED` |
+| Package content digest does not match trailer | `PACKAGE_DIGEST_MISMATCH` | `DATA_LOSS` |
+| Treaty does not permit the requested import type | `TREATY_IMPORT_TYPE_DENIED` | `PERMISSION_DENIED` |
+| Naturalisation of imported stamps or artefacts failed | `NATURALISATION_FAILURE` | `FAILED_PRECONDITION` |
+
+---
+
+## Federation API
+
+The Federation service manages membership, law publication, and distribution across Flows that share a common Federation. Authority publishers submit laws for publication admission; the Federation validates role and scope, detects conflicts, and distributes accepted laws to member Flows' Librarians. The Federation also exposes petition-outcome events that the petition-outcome-watcher consumes.
+
+### Membership Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `RegisterMember` | `flow_namespace`, `embassy_endpoint`, `federation_ca_cert` | `membership_id`, `state_scope` | Registers a Flow as a member of the Federation. Returns the assigned membership identifier and state scope (the federation-defined group this Flow belongs to). |
+| `DeregisterMember` | `membership_id` | `acknowledged` | Removes a Flow from Federation membership. Published laws from this Flow remain in the Federation catalogue until explicitly withdrawn. |
+| `ListMembers` | `state_scope?` | `members[]` | Lists Federation members, optionally filtered by state scope. |
+
+### Publication Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `SubmitPublication` | `law`, `publisher_identity`, `state_scope` | `publication_id` or structured rejection report | Submits a law for publication admission. The publisher must be an authorised authority publisher for the target state scope. The Federation validates the law, checks for conflicts with existing published laws, and either accepts it for distribution or rejects it with structured feedback. |
+| `WithdrawPublication` | `publication_id` | `acknowledged` | Withdraws a previously published law from the Federation catalogue. Member Flows are notified to retire the law. |
+
+### Distribution Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `DistributeLaw` | `publication_id`, `target_state_scope?` | `distribution_results[]` | Distributes an accepted published law to the target member Flows. Distribution is delivered to each member Flow's Librarian for integration and local materialisation as Tier 4 or Tier 5. |
+| `GetPublishedLaws` | `state_scope?`, `tier?` | `published_laws[]` | Returns published laws from the Federation catalogue, optionally filtered by state scope and tier. |
+
+### Outcome Event Methods
+
+| Method | Request | Response | Description |
+|--------|---------|----------|-------------|
+| `WatchPetitionOutcomes` | `cursor?`, `petition_id?` | `stream outcome_events[]` | Streams publication accept/reject outcomes correlated by `petition_id`. Consumed by petition-outcome-watcher to retire dispute records and resume held Workitems. |
+
+### Federation Error Responses
+
+| Condition | Error | gRPC Status |
+|-----------|-------|-------------|
+| Publisher not authorised for the target state scope | `UNAUTHORISED_PUBLISH` | `PERMISSION_DENIED` |
+| Published law conflicts with an existing published law in the same scope | `CONFLICTING_PUBLISHED_LAW` | `FAILED_PRECONDITION` |
+| State scope identifier not recognised by the Federation | `UNKNOWN_STATE_SCOPE` | `NOT_FOUND` |
+| Publication rejected by conflict review or policy | `PUBLICATION_REJECTED` | `FAILED_PRECONDITION` |
 
 ---
 
@@ -425,7 +496,9 @@ All Support Services implement:
 6. State-mutating operations return structured errors with no state change on rejection.
 7. gRPC status codes map to error categories: `PERMISSION_DENIED` for capability failures, `FAILED_PRECONDITION` for guard violations, `NOT_FOUND` for missing resources, `ALREADY_EXISTS` for write-once violations, `UNAVAILABLE` for transient service failures, `INVALID_ARGUMENT` for malformed input, `DATA_LOSS` for integrity failures, `DEADLINE_EXCEEDED` for timeout failures, `UNAUTHENTICATED` for identity failures.
 8. Inter-service calls (Operator-Archivist, Librarian-Friction Ledger) use the same error model as node-facing calls.
-9. Configuration errors (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) are caught at CRD admission time and do not appear in runtime gRPC responses. See [Error Catalogue](./error-catalogue.md#configuration-and-validation-errors).
+9. Configuration errors (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_TYPE_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) are caught at CRD admission time and do not appear in runtime gRPC responses. See [Error Catalogue](./error-catalogue.md#configuration-and-validation-errors).
+10. Embassy transfer uses a two-phase protocol: manifest preflight then package streaming. No Workitem is materialised until the full package is verified.
+11. Federation publication distribution is a Federation-to-Librarian service path, not an Embassy `law-petition` import.
 
 ---
 
@@ -442,4 +515,6 @@ These are the default port assignments for the reference implementation. All gRP
 | Flow Event Bus | 50056 | gRPC |
 | Friction Ledger | 50057 | gRPC |
 | Librarian | 50058 | gRPC |
+| Embassy | 50059 | gRPC |
+| Federation | 50060 | gRPC |
 | Flow Monitor | 2112 | HTTP (`/metrics`) |

@@ -33,7 +33,7 @@ flowchart TB
 FoundryFlow defines the executable shape of a Flow:
 
 - Entry behaviour: named entry contracts and required entry conditions.
-- Topology: optional `importNode`, NodeGroups, and routing validity constraints.
+- Topology: optional `crossFlow.importTypes`, NodeGroups, and routing validity constraints.
 - Completion behaviour: named exit contracts and export implications.
 - Governance policy limits: thresholds and timers used by runtime guards.
 - Cross-flow policy: trust topology and naturalisation requirements.
@@ -51,7 +51,7 @@ Routing is valid only when the target is discoverable in Flow configuration.
 The Flow graph is configurable, but it must remain internally coherent:
 
 - Every referenced routing target must exist.
-- If `importNode` is configured, it must exist and be entry-bound.
+- If `crossFlow.importTypes` is configured, each referenced node must exist and be entry-bound.
 - Cycles are allowed and controlled by timeout and thrash policies.
 
 ```mermaid
@@ -142,15 +142,16 @@ Review-hearing processing is configured through mandatory Tribunal bindings:
 
 Deadlock-escalated governed-work Workitems remain separate from hearing Workitems and continue through Sort after Arbiter adjudication in the reference arrangement.
 
-## Import Node Semantics
+## Cross-Flow Import Types
 
-`importNode` defines where imported Workitems enter execution in the receiving Flow.
+`spec.crossFlow.importTypes` defines how imported Workitems enter execution in the receiving Flow. It is a map of import type names to `{node, requireForeignStamps}`. The receiving Flow publishes each import type with its target node and the foreign-stamp requirements that must be verified before the Embassy materialises the Workitem. `law-petition` is the only currently reserved built-in import type.
 
-- `importNode` must reference an existing FoundryNode.
+- Each importType entry must reference an existing FoundryNode via `node`.
 - The referenced node must be bound to an entry contract.
+- `requireForeignStamps` is keyed by governed artefact name and lists the required foreign stamp names for that artefact (for example `petition: [approval, judiciary-consensus]`).
 - Successful import creates the Workitem in `Pending`.
-- The Operator schedules the imported Workitem to `importNode` immediately when capacity allows.
-- If `importNode` is missing, unknown, or not entry-bound, import admission is rejected.
+- The Operator schedules the imported Workitem to the importType's configured node immediately when capacity allows.
+- If the importType's node is missing, unknown, or not entry-bound, import admission is rejected.
 
 ## Entry and Exit Contract Semantics
 
@@ -162,7 +163,7 @@ Entry and exit contracts are defined per governed artefact name. Each name maps 
 
 Contract usage by boundary:
 
-- Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `importNode` (cross-flow import), and for the Tribunal's hearing entry binding (review-hearing processing).
+- Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `crossFlow.importTypes` nodes (cross-flow import), and for the Tribunal's hearing entry binding (review-hearing processing).
 - Exit contracts gate `complete()` for exit-bound nodes.
 
 If multiple artefacts with a required governed artefact name exist, all must satisfy that name's requirements.
@@ -248,7 +249,7 @@ Flow Support Services are declared via dedicated CRDs that define provided capab
 - Support Services must implement standard `healthz`/`readyz` endpoints.
 - Nodes consume Support Service capabilities via `USE:support/<service>/<capability>` grants on their FoundryNode `capabilities` field, following the same capability-grant pattern as stamp and law capabilities.
 
-The [Clerk node](./03-nodes-external.md#the-judiciary--standard-subsystem) discovers available Codification Services from Flow configuration and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems. Other nodes discover Support Services through their granted capabilities.
+The [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) discovers available Codification Services from Flow configuration and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems. Other nodes discover Support Services through their granted capabilities.
 
 Support Service CRD field-level definitions are in [CRD Reference](../05-reference/crds.md).
 
@@ -256,12 +257,13 @@ Support Service CRD field-level definitions are in [CRD Reference](../05-referen
 
 Cross-flow configuration defines trust relationships and authority treatment at boundaries.
 
-- Sibling flows under a shared State Root can accept imported stamps as immediately authoritative after chain verification when names satisfy local requirements.
-- Treaty and non-sibling crossings preserve imported stamps for provenance and audit only; local authority begins with naturalisation and required local checks.
+- Federation-member crossings and Treaty crossings use the same naturalisation model. In both cases, foreign stamps remain provenance-only after verification.
+- The Embassy verifies the foreign stamps required by the selected import type and emits local `imported-*` attestation stamps that local contracts may recognise.
+- The difference between the two topologies is the trust source: federation root for federation-member exchange, Treaty-pinned CA for Treaty exchange.
 
 Treaty trust is directed. A configured edge from Flow A to Flow B does not imply Flow B to Flow A.
 
-Export scope at exit completion is constrained by bound exit-contract governed artefact names:
+Export scope at Embassy handoff is constrained by the Embassy's bound exit-contract governed artefact names:
 
 - Only artefacts whose governed artefact names are listed in the bound exit contract are exported.
 - Empty contract exports metadata only.
@@ -302,7 +304,7 @@ These policies are behavioural inputs to Operator and service runtime logic and 
 Configuration is admitted only when invariants hold:
 
 - Every routing reference resolves to a valid target.
-- If import is configured, `importNode` is present, routable, and entry-bound.
+- If import is configured, each `crossFlow.importTypes` node is present, routable, and entry-bound.
 - Entry and exit bindings reference existing entry/exit contracts.
 - Capability grants are syntactically valid and enforceable.
 - Cross-flow trust declarations are structurally complete for the configured topology.
@@ -333,7 +335,7 @@ All Flow configurations must preserve these invariants:
 7. Cross-flow verifiability and local authority remain distinct and topology-dependent.
 8. Export scope is constrained by bound exit-contract governed artefact name entries.
 9. Workitem admission is constrained by bound entry-contract governed artefact name entries.
-10. Imported Workitems begin in `Pending` and are first-scheduled to configured `importNode` when capacity allows.
+10. Imported Workitems begin in `Pending` and are first-scheduled to the configured `crossFlow.importTypes` node when capacity allows.
 11. Support Service capabilities are node-granted and Sidecar-mediated.
 12. NodeGroups enforce routing isolation — routing from outside a group to a non-entry-bound node inside the group is rejected.
 13. A node can belong to at most one NodeGroup.

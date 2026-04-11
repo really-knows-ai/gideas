@@ -56,6 +56,18 @@ Runtime interactions separate business execution from persistence authority:
 
 Node code may call external business services over the data-plane network path. That does not change Flow runtime authority boundaries: authenticated runtime operations still pass through Sidecar mediation.
 
+## Node Categories
+
+Nodes fall into five categories based on their runtime role:
+
+- **Business nodes** — execute assignment-scoped work (content generation, review, refinement). Examples: [Forge](../01-concepts/02-foundry-cycle.md#forge-creator), [Appraise](../01-concepts/02-foundry-cycle.md#appraise-reviewer), [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner).
+- **Gate nodes** — evaluate governance state and route accordingly. Example: [Sort](../01-concepts/02-foundry-cycle.md#sort-gate).
+- **Judiciary nodes** — resolve disputes, conduct hearings, codify rulings, and apply law changes. Examples: [Facilitator](../01-concepts/02-foundry-cycle.md#facilitator), [Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-hearing-conductor), [Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent), [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) nodes, [Rule Router](../01-concepts/02-foundry-cycle.md#rule-router), [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator).
+- **HITL nodes** — human-in-the-loop decision points using the [generic config-driven HITL pattern](../04-sdk/08-sdk-hitl.md). Examples: hitl-appraise, arbiter-hitl-resolve, tribunal-hitl-resolve.
+- **Embassy** — the standard [cross-flow boundary node](../02-flow/06-cross-flow.md), present in every Flow. Handles outbound export and inbound import of Workitems using a signed manifest and streamed package protocol. The Embassy is a first-class node pattern because it owns a node-to-node transfer protocol (Embassy-to-Embassy) that operates outside Sidecar mediation for the cross-flow transfer itself, while still using Sidecar-mediated paths for local service access (Archivist, Operator).
+
+[Federation service](../02-flow/08-federation.md) interactions (membership, published-law distribution, authority endpoint discovery) are external platform-service relationships, not node-local routing. Nodes do not interact with the Federation service directly — the Embassy queries it for authority endpoints, and the Librarian receives distributed laws from it.
+
 ## Ownership and Mutation Boundaries
 
 Mutation authority is intentionally split and enforced at runtime boundaries:
@@ -75,7 +87,7 @@ Completion semantics are configuration-bound:
 Law and stamp access is capability-gated:
 
 - A node without a `WRITE:law/tierN` capability grant cannot write laws regardless of its role. In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) node reads laws for context seeding and does not write them.
-- The [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) resolves Tier 1-2 conflicts (via the Arbiter), proposes Tier 3 changes and appeals Tier 4-5 conflicts (via the Advocate), and codifies rulings (via the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter), which drafts petitions and fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes)).
+- The [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) resolves Tier 1-2 conflicts (via the Arbiter with internal tally), proposes Tier 3 changes (via [HITL nodes](../01-concepts/02-foundry-cycle.md#hitl-nodes)), petitions Tier 4-5 changes (via [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) and [Embassy](../02-flow/06-cross-flow.md) `law-petition` export), and codifies rulings (via the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle), which drafts petitions, fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes), and routes through [Rule Router](../01-concepts/02-foundry-cycle.md#rule-router) for tier-based dispatch).
 
 ## Relationship to SDK Documents
 

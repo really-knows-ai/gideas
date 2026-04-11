@@ -20,12 +20,12 @@ flowchart TD
 
     subgraph gov["Governance Plane"]
         direction LR
-        Librarian ~~~ Judiciary["Judiciary<br/>(Arbiter, Tribunal, Advocate,<br/>Juror, Deliberation Gate, Clerk,<br/>Codification, Tribunal Router,<br/>Judiciary Gate)"]
+        Librarian ~~~ Judiciary["Judiciary<br/>(Facilitator, Arbiter, Tribunal,<br/>Juror, Clerk cycle, Rule Router,<br/>HITL, law-applicator, Codification)"]
     end
 
     subgraph fed["Federation Plane"]
         direction LR
-        Treaties ~~~ Export[Export / Import] ~~~ Nat[Naturalisation]
+        Embassy[Embassy] ~~~ FedSvc[Federation Service] ~~~ Treaties ~~~ Nat[Naturalisation]
     end
 
     subgraph sec["Security Plane"]
@@ -89,21 +89,27 @@ The legal lifecycle. The Governance Plane manages the discovery, enforcement, an
 
 The [Librarian](../02-flow/04-system-services.md#librarian) manages the Flow's body of [law](./03-data-model.md#laws) — storing, embedding, and serving laws to nodes that query for applicable governance. The Librarian is a pure law store and lifecycle service — it stores, indexes, and serves laws, and manages integration conflict checks for cross-flow law replication. Hearing triggers are owned by dedicated watcher nodes: the [Friction Watcher](./02-foundry-cycle.md#friction-watcher) subscribes to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) friction channel for threshold-crossing signals and creates hearing Workitems, while the [TTL Watcher](./02-foundry-cycle.md#ttl-watcher) polls the Librarian for laws exceeding their review TTL. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates friction events and publishes threshold-crossing signals to the friction channel.
 
-The [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) provides judicial review. It is a standard runtime subsystem whose deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step is auditable with full friction tracking. Orchestration nodes ([Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor), [Advocate](./02-foundry-cycle.md#advocate-human-escalation)) assemble evidence and fan out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for multi-agent deliberation. The [Deliberation Gate](./02-foundry-cycle.md#deliberation-gate-consensus-tally) tallies verdicts and routes to consensus, retry, or hung. The [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node drafts petitions and fans out to [Codification](./02-foundry-cycle.md#codification-nodes) nodes for formal representations. The [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate) checks feedback resolution and applies approved petitions via the Librarian. When feedback deadlocks — the same point argued back and forth beyond a threshold — the Arbiter fans out to Juror nodes, the Deliberation Gate tallies their verdicts, and the Clerk drafts a binding ruling as a petition. Precedent accumulates in the Library, and future Workitems are governed by it.
+The [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) provides judicial review. It is a standard runtime subsystem whose deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step is auditable with full friction tracking. The [Facilitator](./02-foundry-cycle.md#facilitator) owns the deadlock resolution lifecycle: it assembles an evidence bundle, creates a child Workitem for the [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), and suspends until the Arbiter completes. The Arbiter and [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) are orchestrators that fan out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes, tally verdicts, and handle multi-round retry internally. On consensus, they create a child Workitem for the [Clerk cycle](./02-foundry-cycle.md#clerk-cycle) — a legislative inner cycle that mirrors the main cycle using the same node images (Forge, Sort, Appraise, Refine, Facilitator) with different CRD configs. A standalone [Codification](./02-foundry-cycle.md#codification-nodes) node handles formal representation fan-out. [Rule Router](./02-foundry-cycle.md#rule-router) instances provide tier-based routing, and [law-applicator](./02-foundry-cycle.md#law-applicator) applies approved petitions via the Librarian. Generic [HITL](./02-foundry-cycle.md#hitl-nodes) nodes handle human review at multiple points: petition approval, hung jury resolution, and cancellation.
 
-Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from the Flow's own legislative authority. Tiers 4 and 5 arrive from the [Governance Flow](./04-governance.md), synchronised into each Flow's Library as organisational and federal policy. The Library stores all tiers with equal indifference; nodes query and interpret them the same way regardless of origin.
+Tiers 1, 2, and 3 are local — they emerge from work within the Flow or from the Flow's own legislative authority. Tiers 4 and 5 arrive from external authority publishers via the [Federation service](../02-flow/08-federation.md), materialised into each Flow's Library as organisational and federal policy. The Library stores all tiers with equal indifference; nodes query and interpret them the same way regardless of origin.
 
 ### Federation Plane
 
-Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace. When work needs to cross a Flow boundary, it is exported from one Flow and imported into another as a new Workitem, with a full chain-of-custody reset at the border. The bound exit contract shapes the export bundle: only artefacts whose kinds are listed in that contract are transferred, and an empty contract exports no artefacts.
+Cross-flow trust and collaboration. Flows are sovereign — a Workitem belongs to its namespace. When work needs to cross a Flow boundary, the [Embassy](../02-flow/06-cross-flow.md) — each Flow's standard boundary node — handles the transfer. The sending Embassy packages artefacts and sends a signed manifest; the receiving Embassy preflights, requests the full package, creates a new local Workitem, and applies naturalisation stamps. The bound exit contract shapes the export bundle: only artefacts whose governed artefact names are listed in that contract are transferred, and an empty contract exports no artefacts.
+
+The Federation Plane has two distinct responsibilities:
+
+**Workitem transfer** is handled by the Embassy. Every Flow has an operator-provisioned Embassy instance that manages outbound export and inbound import. The receiving Flow publishes `crossFlow.importTypes` — a map of import type names to entry-bound nodes — and senders target those stable import type names, never internal node names. `law-petition` is the only reserved built-in import type (used for higher-authority escalation). Federation-member and Treaty-based exchange use the same Embassy manifest + package protocol; only the trust source differs.
+
+**Law publication and distribution** is handled by the [Federation service](../02-flow/08-federation.md). When an authority Flow marks an approved local Tier 3 law as `published`, the Federation service validates the publication, runs conflict detection, and distributes accepted laws to subscriber Flows. State-level publications materialise as Tier 4; federation-level publications materialise as Tier 5. Published law distribution is not an Embassy import type — it is a separate Federation service path.
 
 Cross-flow relationships are governed by distinct trust models:
 
-**Federated trust** operates through the [Governance Flow](./04-governance.md). The Governance Flow acts as the State Root Certificate Authority, issuing intermediate CA certificates to each Sibling Flow's Operator. All Flows in the organisation share a common trust root, and any stamp from any sibling is cryptographically verifiable by tracing the certificate chain to the State Root. For sibling exchange, those imported stamps are immediately authoritative after chain verification and can satisfy local stamp requirements when names match. The Governance Flow also publishes Tier 4 State Constitution laws and synchronises Tier 5 Federal Accords, ensuring all sibling Flows operate under consistent higher-tier governance.
+**Federated trust** operates through the [Federation](./04-governance.md). Joining a federation establishes Flow identity, trust-root discovery, endpoint discovery, and membership. The federation provides the trust root — all member Flows share a common certificate authority, and any stamp from any member is cryptographically verifiable by tracing the certificate chain to the federation root. The Embassy verifies required foreign stamps and emits local `imported-<stamp>` attestations; downstream local contracts rely on these attested local stamps while foreign stamps remain for provenance.
 
-**Treaty-based trust** enables collaboration between Flows that do not share a Governance Flow — typically across organisational boundaries. A [Treaty](../02-flow/06-cross-flow.md) is a bilateral agreement between two Flows that permits Workitem export in one direction. The agreement is bilateral (both Flows consent to the terms), but the resulting trust is unidirectional — a treaty allowing Flow A to export to Flow B does not allow Flow B to export to Flow A. Two-way exchange requires two separate treaties. The receiving Flow pins the foreign Flow's CA certificate and validates that the export package was signed by the source Flow's Operator identity.
+**Treaty-based trust** enables collaboration between Flows that do not share federation membership — typically across organisational boundaries. A [Treaty](../02-flow/06-cross-flow.md) is a directed trust policy that constrains which `importType`s a remote Flow may use. The receiving Flow pins the foreign Flow's CA certificate and validates that the Embassy manifest was signed by the source Flow's identity. Treaties may further constrain `allowedImportTypes` for the relationship.
 
-Cross-flow verifiability and local authority are distinct. Sibling imports under a shared State Root can be authoritative immediately after certificate-chain verification. Treaty imports preserve foreign stamps for provenance and audit, then begin local authority with naturalisation and any local checks the receiving Flow requires. Details of the export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
+Embassy-to-Embassy connections use mTLS. The signed manifest carries per-transfer claims and artefact inventory. Federation membership or Treaty policy authorises the remote Flow and its import types; this is not embedded in the certificate. Details of the Embassy transfer protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
 
 ---
 
@@ -118,14 +124,15 @@ Each concern in the system maps to exactly one plane. When a node executes work,
 | Routing decisions | Control | Flow Operator |
 | Artefact lifecycle | Data | Archivist |
 | Law lifecycle | Governance | Librarian |
-| Dispute resolution | Governance | Judiciary (Arbiter, Tribunal, Advocate) |
+| Dispute resolution | Governance | Judiciary (Facilitator, Arbiter, Tribunal, HITL) |
 | Authentication | Security | Sidecar |
 | Cryptographic stamps | Security | Sidecar |
 | Event distribution | Control | Flow Event Bus |
 | Friction aggregation and threshold signals | Control | Friction Ledger |
 | Metrics export and audit pipeline | Control | Flow Monitor |
-| Cross-flow transfer | Federation | Export / Import |
-| Tier 4/5 law authority | Federation | Governance Flow |
+| Cross-flow Workitem transfer | Federation | Embassy |
+| Law publication and distribution | Federation | Federation service |
+| Tier 4/5 law authority | Federation | Federation service (authority publishers) |
 | Configuration and deployment | Management | CRDs, deployment tooling |
 
 ---
@@ -178,7 +185,7 @@ CRDs provide the watch-driven consistency the Operator needs for state transitio
 
 Every node pod runs with a Sidecar that holds its cryptographic identity. The node container has no credentials — it cannot authenticate to any Flow service directly. All authenticated communication passes through the Sidecar, which brokers identity on the node's behalf using platform-native credentials and, in federated deployments, mutual authentication certificates.
 
-In federated deployments, the trust chain is hierarchical: the [Governance Flow](./04-governance.md) holds the State Root CA and issues intermediate CA certificates to each Sibling Flow's Operator, which in turn issues mutual authentication certificates to its node Sidecars. The resulting chain — Sidecar, Sibling Operator CA, State Root CA — makes every stamp verifiable across the entire organisation.
+In federated deployments, the trust chain is hierarchical: the [Federation](./04-governance.md) holds the trust root and issues intermediate CA certificates to each member Flow's Operator, which in turn issues mutual authentication certificates to its node Sidecars. The resulting chain — Sidecar, Flow Operator CA, Federation Root CA — makes every stamp verifiable across the entire federation.
 
 Passport stamps carry the Sidecar's signature and certificate chain, making them independently verifiable. Exit contract checks validate stamps by cryptographic chain, not by trusting the network path the Workitem travelled.
 

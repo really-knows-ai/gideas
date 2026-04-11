@@ -65,6 +65,7 @@ The SDK is organised into domain-specific surfaces, each backed by a runtime ser
 | [Telemetry](./06-sdk-telemetry.md) | Friction, metrics, traces, custom events | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
 | [Agent](./07-sdk-agent.md) | Managed inference wrapper | Operator + Flow Monitor (via Sidecar) | Automatic heartbeat, schema validation, atomic cost accounting |
 | [HITL](./08-sdk-hitl.md) | Queue management, REST API, Federated Queue Mesh | Node-local (queue) + Operator (via Sidecar) | `USE:queue/server` capability, persistent queue, escalation |
+| [Cross-Flow](./09-sdk-cross-flow.md) | Embassy manifest/package, import type registration, naturalisation | Embassy + Operator (via Sidecar) | `crossFlow.importTypes` mapping, `imported-*` attestation stamps |
 
 All surfaces share the same trust model: SDK calls transit the Sidecar, which authenticates and proxies to the authoritative service.
 
@@ -83,7 +84,7 @@ All surfaces share the same trust model: SDK calls transit the Sidecar, which au
 
 Specialised subtypes extend `FlowSupportService` with domain-specific contracts. `CodificationService` inherits from `FlowSupportService` and adds the `encode` capability contract for translating law goals into formal representations during [governance hardening](../01-concepts/04-governance.md#precedent).
 
-Note: codification processing uses the Workitem model — the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems, and each Codification node invokes its backing Codification Service's `Encode` method. The `FlowSupportService` base class is retained for non-codification support services such as notification relays and external integrations.
+Note: codification processing uses the Workitem model — the [Codification orchestrator](../01-concepts/02-foundry-cycle.md#codification-nodes) fans out to Codification nodes via child Workitems, and each Codification node invokes its backing Codification Service's `Encode` method. The `FlowSupportService` base class is retained for non-codification support services such as notification relays and external integrations.
 
 ## Failure and Error Model
 
@@ -129,3 +130,4 @@ The SDK documents define behavioural contracts and API semantics. Implementation
 8. The SDK does not expose Kubernetes CRD field paths or direct service addresses.
 9. `FlowSupportService` is a distinct SDK surface from the Workitem-scoped handler contract.
 10. No SDK surface provides a freeform context bag, `WorkitemType`, or `spec.type` discriminator.
+11. Cross-flow import and export are exposed through the [Cross-Flow SDK surface](./09-sdk-cross-flow.md). Node handlers see imported Workitems as normal assignments with `imported-*` attestation stamps.

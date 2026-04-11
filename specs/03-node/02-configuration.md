@@ -67,7 +67,7 @@ Entry and exit bindings connect a node to named [contracts](../02-flow/05-config
 **Entry binding** (`entry`) connects a node to a named entry contract. Entry-bound nodes participate in Workitem admission paths:
 
 - Local Workitem creation admits through the creating node's entry binding.
-- Cross-flow import admits through the configured [`importNode`](../02-flow/05-configuration.md#import-node-semantics), which must be entry-bound.
+- Cross-flow import admits through the matching [`crossFlow.importTypes`](../02-flow/05-configuration.md#cross-flow-import-types) entry, whose target node must be entry-bound.
 - Review-hearing admission uses the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem)'s hearing entry binding.
 
 **Exit binding** (`exit`) connects a node to a named exit contract and grants `complete()` eligibility. Only exit-bound nodes may call `complete()` — non-exit nodes that attempt completion receive a synchronous error. When an exit node calls `complete()`, the [Operator validates](../02-flow/01-operator.md#exit-contract-enforcement) the Workitem against the bound exit contract. The node does not choose which contract to validate.
@@ -121,7 +121,7 @@ The Operator validates configuration at admission time and rejects invalid confi
 
 - Unknown contract references (entry or exit binding names not defined in FoundryFlow).
 - Missing or unresolvable routing targets.
-- Invalid `importNode` reference (node does not exist or is not entry-bound).
+- Invalid `crossFlow.importTypes` target reference (node does not exist or is not entry-bound).
 - Syntactically invalid capability strings.
 - Configurations that violate entry/exit binding invariants (e.g., exit binding without a valid contract).
 
@@ -148,7 +148,7 @@ Behavioural changes are applied through configuration evolution (CRD updates), n
 3. Entry admission and exit completion are contract-bound; contracts are fixed by binding, not chosen at runtime.
 4. Capability enforcement is exact by verb, resource, governed artefact name, and stamp name.
 5. Stamp authority is capability-scoped (`STAMP:artefact/<governed-artefact-name>/<stamp-name>`) and write-once per artefact version.
-6. Import intake starts at configured `importNode`, which must exist and be entry-bound.
+6. Import intake starts at the target node declared for the matching `crossFlow.importTypes` entry, which must exist and be entry-bound.
 7. Timeout measures inactivity, not total execution time.
 8. Invalid configuration is rejected at admission; partial application does not occur.
 9. No configuration path reintroduces `WorkitemType`, `spec.type`, or freeform context bag semantics.
