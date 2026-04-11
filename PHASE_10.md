@@ -1,5 +1,9 @@
 # Phase 10 - Specification Updates (Embassy, Federation, and Cross-Flow Revision)
 
+Status: complete and reviewed.
+
+This phase is done. The next active implementation phase is `PHASE_11.md`.
+
 This phase rewrites the specs around Embassy, Federation membership / roles,
 `law-petition`, published law distribution, Treaties for non-federation
 exchange, and Embassy-issued `imported-*` naturalisation stamps.

@@ -9,7 +9,8 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 - Phases 1-8 are complete.
 - Phase 9 implementation is complete.
 - Phase 9.10 (`Rewrite Advocate`) is cancelled / superseded by the Embassy + Federation redesign.
-- Next active work: `PHASE_10.md`.
+- Phase 10 specification rewrite is complete and reviewed.
+- Next active work: `PHASE_11.md`.
 
 ## Planning Files
 
@@ -24,8 +25,8 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 
 ## Active Execution Order
 
-1. `PHASE_10.md` - rewrite the specs around Embassy, Federation membership / roles, `law-petition`, published law distribution, `crossFlow.importTypes`, Treaties for non-federation exchange, and `imported-*` naturalisation.
-2. `PHASE_11.md` - land Embassy CRD / proto / operator / SDK foundations.
+1. `PHASE_10.md` - complete and reviewed: specs rewritten around Embassy, Federation membership / roles, `law-petition`, published law distribution, `crossFlow.importTypes`, Treaties for non-federation exchange, and `imported-*` naturalisation.
+2. `PHASE_11.md` - next active phase: land Embassy CRD / proto / operator / SDK foundations.
 3. `PHASE_12.md` - land Federation proto / service schema / publication lifecycle / dispute record foundations.
 4. `PHASE_13.md` - implement `nodes/embassy/`, Federation service, petition-outcome-watcher, and Clerk / authority wiring.
 5. `PHASE_14.md` - write judiciary FoundryNode CRDs, Deployments, and ConfigMaps.
