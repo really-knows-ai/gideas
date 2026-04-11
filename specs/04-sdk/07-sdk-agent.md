@@ -185,7 +185,7 @@ Cost accounting per Juror is automatic. Each Juror's `foundry.cost.llm` events c
 
 These tags are included in the `RecordTelemetry` payload alongside the standard cost fields. The [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates Juror costs per juror, per round, and per dispute — enabling operators to quantify the cost of judicial deliberation and identify expensive dispute patterns.
 
-Parallel Juror execution uses the standard [fan-out](../04-sdk/05-sdk-workitems.md) pattern — the [Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver) (or [Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-hearing-conductor)) creates child Workitems for each Juror. Each Juror's FoundryAgent instance maintains its own heartbeat loop and cost accounting independently. The deliberation mechanism does not require special SDK surface — it is a composition of FoundryAgent instances running as independent nodes in the flow topology, with the [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) tallying their verdicts.
+Parallel Juror execution uses the standard [fan-out](../04-sdk/05-sdk-workitems.md) pattern — the [Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-path-deadlock-resolution) (or [Tribunal](../01-concepts/02-foundry-cycle.md#hearing-path)) creates child Workitems for each Juror. Each Juror's FoundryAgent instance maintains its own heartbeat loop and cost accounting independently. The deliberation mechanism does not require special SDK surface — it is a composition of FoundryAgent instances running as independent nodes in the flow topology, with the Arbiter or Tribunal tallying verdicts internally.
 
 ## FoundryAgent Invariants
 

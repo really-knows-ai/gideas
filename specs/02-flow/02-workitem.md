@@ -83,7 +83,7 @@ Thrash and deadlock are distinct mechanisms with different sources and outcomes.
 - **Feedback deadlock** is governance dispute detection on artefact feedback history.
   - Source of truth: Archivist feedback records via SDK queries.
   - Enforcement actor: gate node routing logic under configured deadlock threshold policy (the reference [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node in the standard arrangement).
-  - Outcome: Workitem routes to the [Arbiter](./03-nodes-external.md#the-judiciary--standard-subsystem) for adjudication.
+  - Outcome: Workitem routes to the [Facilitator](./03-nodes-external.md#the-judiciary--standard-subsystem) for deadlock lifecycle management, which delegates to the Arbiter via child Workitems.
 
 Thrash failure and governance deadlock escalation are never treated as equivalent transitions.
 
@@ -121,7 +121,7 @@ Entry admission and exit completion are Workitem boundary transitions controlled
 - Only nodes bound to an entry contract can admit Workitems into a Flow lifecycle.
 - Entry checks validate the bound entry contract against current artefact state in the Archivist.
 - Entry and exit contracts use the same per-name validation shape.
-- Cross-flow import admission creates Workitems in `Pending`, then Operator schedules first assignment to configured `importNode` when capacity allows.
+- Cross-flow import admission is handled by the [Embassy](./06-cross-flow.md), which creates Workitems in `Pending` and routes to the node configured for the import type in `crossFlow.importTypes` when capacity allows.
 - Review-hearing admission uses the Tribunal's hearing entry binding, then Operator schedules first assignment to the Tribunal when capacity allows.
 
 ## Exit Completion Interaction
@@ -160,7 +160,7 @@ sequenceDiagram
     OP-->>SC: accept or reject completion
 ```
 
-When completion triggers cross-flow export, only governed artefact names listed in the bound exit contract are export-eligible. Empty contract completion exports metadata only.
+Cross-flow export is not triggered by arbitrary node completion. Export becomes possible only when a Workitem is routed to the [Embassy](./06-cross-flow.md), whose bound exit contract defines which governed artefact names are export-eligible. An empty contract exports metadata only.
 
 ## No Workitem Context Bag
 
@@ -247,7 +247,7 @@ All Flow runtimes preserve these Workitem invariants:
 10. Cross-flow export scope follows bound exit-contract governed artefact name entries.
 11. Workitems expose no freeform context bag.
 12. Workitem admission is constrained by bound entry-contract governed artefact name entries.
-13. Imported Workitems are created in `Pending` and first-scheduled to configured `importNode` when capacity allows.
+13. Imported Workitems are created in `Pending` by the Embassy and routed to the node configured for the import type in `crossFlow.importTypes`.
 14. Child Workitems carry `ParentWorkitemID` and a `flow.gideas.io/parent` label, both Operator-managed and immutable after creation.
 15. Child Workitems use simple `Complete()` with no exit contract validation.
 16. A parent Workitem cannot complete while any child is in non-terminal state (`CHILDREN_NOT_TERMINAL` guard).

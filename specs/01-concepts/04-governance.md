@@ -9,8 +9,8 @@ A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./
 | Authority | Function | Institutional Counterpart |
 |--------|----------|--------------------------|
 | **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/tier1` capability ([Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) — Tier 1 [Findings](./03-data-model.md#law-tiers) |
-| **Judiciary** | Resolves disputes, codifies precedent | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) — [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver) (disputes), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) (hearings), [Advocate](./02-foundry-cycle.md#advocate-human-escalation) (escalation) — Tier 2 [Rulings](./03-data-model.md#law-tiers) |
-| **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Governance Flow](#the-governance-flow) (Tier 4), Federation (Tier 5) |
+| **Judiciary** | Resolves disputes, codifies precedent | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) — [Facilitator](./02-foundry-cycle.md#facilitator) (lifecycle), [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver) (disputes), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) (hearings), [HITL nodes](./02-foundry-cycle.md#hitl-nodes) (human review) — Tier 2 [Rulings](./03-data-model.md#law-tiers) |
+| **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Federation authority publishers](#federation-and-published-law-distribution) (Tier 4/5) |
 | **Executive** | Enforces compliance | Gate node ([Sort](./02-foundry-cycle.md#sort-gate) in the reference arrangement), [Exit Contract](./03-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
 
 Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./03-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough [friction](./00-overview.md#friction), the [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
@@ -19,7 +19,7 @@ Law hardens through these branches in sequence. Nodes observe patterns during wo
 
 ## Standalone Governance
 
-A standalone Flow (no [Governance Flow](#the-governance-flow)) manages its own governance through complementary mechanisms.
+A standalone Flow (no [federation membership](#federation-and-published-law-distribution)) manages its own governance through complementary mechanisms.
 
 ### Organic Discovery (Tiers 1–2)
 
@@ -46,11 +46,11 @@ The [Librarian](../02-flow/04-system-services.md) admits externally applied laws
 
 The [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) is the judicial branch. It is invoked when governance reaches an impasse:
 
-1. **Feedback deadlock.** When a gate node determines that a [feedback](./03-data-model.md#feedback) item's history depth warrants escalation, it transitions the item to `deadlocked` and routes the Workitem to the [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate). The Arbiter assembles evidence and fans out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for multi-agent deliberation — examining the investigative history (the forced-choice justifications, the citations, the novel arguments). The [Deliberation Gate](./02-foundry-cycle.md#deliberation-gate-consensus-tally) tallies the verdicts. On consensus, the [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node drafts a petition to retire the conflicting laws and mint a new Tier 2 Ruling. The petition goes through the judiciary's inner cycle (Tribunal review, Judiciary Gate) before the law is applied via the Librarian. The feedback item's `linkedRuling` is set to this Ruling regardless of which side the Arbiter favours.
+1. **Feedback deadlock.** When a gate node determines that a [feedback](./03-data-model.md#feedback) item's history depth warrants escalation, it transitions the item to `deadlocked` and routes the Workitem to the [Facilitator](./02-foundry-cycle.md#facilitator). In the [reference arrangement](./02-foundry-cycle.md), this gate role is performed by [Sort](./02-foundry-cycle.md#sort-gate). The Facilitator assembles an evidence bundle, creates a child Workitem for the [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), and suspends. The Arbiter fans out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for multi-agent deliberation — examining the investigative history (the forced-choice justifications, the citations, the novel arguments) — and tallies the verdicts internally. On consensus, the Arbiter creates a child Workitem for the [Clerk cycle](./02-foundry-cycle.md#clerk-cycle), which drafts a petition to retire the conflicting laws and mint a new Tier 2 Ruling. The petition goes through the Clerk cycle's quality process before the law is applied via the Librarian by [law-applicator](./02-foundry-cycle.md#law-applicator). The feedback item's `linkedRuling` is set to this Ruling regardless of which side the Arbiter favours.
 
-    Juror deliberation is itself a friction source. Each deliberation round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first round, 125 on the second, 625 on the third. If the Deliberation Gate cannot reach consensus and the dispute escalates to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) for human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 rounds produces 15,625. The cost curve ensures that disputes reaching the Arbiter are visibly expensive, and disputes reaching humans are dramatically so.
+    Juror deliberation is itself a friction source. Each deliberation round emits [friction](./03-data-model.md#friction) with magnitude = depth ^ (round + 1), where depth is the feedback depth at escalation. A depth-5 item costs 25 on the first round, 125 on the second, 625 on the third. If the Arbiter cannot reach consensus and the dispute escalates to a [HITL node](./02-foundry-cycle.md#hitl-nodes) for human intervention, a single friction event is emitted with magnitude = depth ^ (rounds * 2) — a depth-5 item after 3 rounds produces 15,625. The cost curve ensures that disputes reaching the Arbiter are visibly expensive, and disputes reaching humans are dramatically so.
 
-2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a law's age exceeds its tier's configured review TTL, the [Friction Watcher](./02-foundry-cycle.md#friction-watcher) or [TTL Watcher](./02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`) in the FoundryFlow [governance policy](../05-reference/crds.md#governance-policy). The law remains active during the hearing. For Tiers 1-2, the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) adjudicates directly — rendering a tier-specific verdict: Tier 1 laws can be promoted or retired; Tier 2 laws can be promoted, retired, or demoted. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow, routed through the [Advocate](./02-foundry-cycle.md#advocate-human-escalation). Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator. Hearing Workitems are self-contained at the Tribunal.
+2. **Review hearing.** When a law's accumulated friction crosses its tier's configured threshold, or when a Tier 1-2 law's age exceeds its configured review TTL, the [Friction Watcher](./02-foundry-cycle.md#friction-watcher) or [TTL Watcher](./02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. Friction thresholds are configurable for every law tier; review TTLs apply only to Tier 1 Findings and Tier 2 Rulings in the FoundryFlow [governance policy](../05-reference/crds.md#governance-policy). The law remains active during the hearing. The [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) fans out to Jurors, tallies internally, and on consensus creates a child Workitem for the [Clerk cycle](./02-foundry-cycle.md#clerk-cycle) with a `verdict-context` artefact (fire-and-forget). Friction hearings can target any tier, including imported Tier 4-5 laws — a hearing verdict on a T4-5 law feeds a Clerk cycle that later routes through [law-applicator](./02-foundry-cycle.md#law-applicator) and the [Embassy](../02-flow/06-cross-flow.md) as a `law-petition` to the authority. On hung jury, the Tribunal routes to a [HITL node](./02-foundry-cycle.md#hitl-nodes). Hearing Workitems carry a `law-reference` artefact containing the law ID under review. They do not introduce a Workitem subtype or a `spec.type` discriminator.
 
 The Judiciary's verdicts are enforced by the [Contempt Guard](./03-data-model.md#contempt-guard). Once a ruling is linked to a feedback item, the losing side must accept the verdict — [Archivist](../02-flow/04-system-services.md) rejects contradictory transitions with `CONTEMPT_VIOLATION`.
 
@@ -67,16 +67,16 @@ The promotion path runs upward through the tiers:
 ```mermaid
 flowchart LR
     T1["Tier 1<br/>Finding"] -->|"friction threshold<br/>+ Tribunal verdict"| T2["Tier 2<br/>Ruling"]
-    T2 -->|"Tribunal proposal<br/>+ HITL ratification<br/>via Advocate"| T3["Tier 3<br/>Local Statute"]
+    T2 -->|"Tribunal proposal<br/>+ HITL ratification"| T3["Tier 3<br/>Local Statute"]
 ```
 
-Tier 1 to Tier 2 is automatic upon the Tribunal's verdict. Tier 2 to Tier 3 is never automatic — the Tribunal can propose a statute via the Advocate, but a human must ratify it. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
+Tier 1 to Tier 2 is automatic upon the Tribunal's verdict. Tier 2 to Tier 3 is never automatic — the Tribunal can propose a statute, but a human must ratify it via [HITL review](./02-foundry-cycle.md#hitl-nodes) in the Clerk cycle. This boundary is absolute. Statutes auto-retire conflicting lower-tier laws, and that power requires human judgement.
 
 Promotion is also where governance can harden in *form*, not just authority. When promoted, a Finding can gain new [representations](./03-data-model.md#representations) — for example, formal logic alongside the original prose — increasing enforceability without changing its goal. Representation lifecycle responsibilities — including specialised [translation services](../02-flow/04-system-services.md#codification-services) that translate goals into formal representations — are defined in [System Services](../02-flow/04-system-services.md).
 
 ### Decay and Retirement
 
-All law tiers can be subject to review. When a law's age exceeds its tier's configured review TTL, the [TTL Watcher](./02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. The law remains active during the hearing. The Tribunal evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger)) and the law's goal — and renders a tier-specific verdict:
+All law tiers can be reviewed, but not all tiers use the same trigger. Tier 1-2 laws can be reviewed by TTL expiry or friction thresholds; Tier 3-5 laws are reviewed through friction-triggered hearings or explicit authority action. The law remains active during the hearing. The Tribunal evaluates the case — considering the law's accumulated [friction](./00-overview.md#friction) (queried from the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger)) and the law's goal — and renders a tier-specific verdict:
 
 **Tier 1 Finding — review hearing:**
 
@@ -90,7 +90,7 @@ All law tiers can be subject to review. When a law's age exceeds its tier's conf
 | Verdict | Effect |
 |---------|--------|
 | **Retire** | Ruling is deleted. History preserved in the audit log. |
-| **Promote** | Ruling is petitioned to HITL via the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) for Tier 3 Local Statute ratification. |
+| **Promote** | Ruling is petitioned for HITL ratification via [hitl-appraise](./02-foundry-cycle.md#hitl-nodes) in the Clerk cycle for Tier 3 Local Statute ratification. |
 | **Demote** | Ruling drops to Tier 1 Finding. |
 
 Every review hearing produces a decisive outcome — promote, retire, or demote.
@@ -103,11 +103,11 @@ When nodes cite conflicting laws during Workitem processing — not at integrati
 
 | Conflict | Resolution |
 |----------|------------|
-| **Tier 1 vs Tier 2** (cross-tier) | The Arbiter fans out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for deliberation. Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but the Arbiter still adjudicates. The [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) drafts a petition for a new Tier 2 Ruling consolidating the surviving position. Originals retired after the petition is approved. |
-| **Same tier** (Tier 1 vs Tier 1, or Tier 2 vs Tier 2) | The Arbiter fans out to Juror nodes and the Clerk drafts a petition for a new Tier 2 Ruling consolidating the conflicting laws. Originals retired after the petition is approved. |
-| **Tier 1–2 vs Tier 3** | The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, the Arbiter routes to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) to petition HITL with a proposed clarification or amendment. |
-| **Tier 3 vs Tier 3** | The Arbiter drafts a *proposal* for a consolidated Tier 3 statute and routes to the Advocate to petition HITL. On rejection, the conflict persists — every future Workitem that encounters the same conflict generates another HITL escalation and more friction until the humans act. |
-| **Tier 4 or Tier 5 involvement** | The Advocate files an *appeal* to the [Governance Flow](#the-governance-flow) via the Librarian. |
+| **Tier 1 vs Tier 2** (cross-tier) | The Arbiter fans out to [Juror](./02-foundry-cycle.md#juror-judicial-agent) nodes for deliberation. Supremacy heavily informs the outcome — the higher-tier law carries greater authority — but the Arbiter still adjudicates. The [Clerk cycle](./02-foundry-cycle.md#clerk-cycle) drafts a petition for a new Tier 2 Ruling consolidating the surviving position. Originals retired after the petition is approved. |
+| **Same tier** (Tier 1 vs Tier 1, or Tier 2 vs Tier 2) | The Arbiter fans out to Juror nodes and the Clerk cycle drafts a petition for a new Tier 2 Ruling consolidating the conflicting laws. Originals retired after the petition is approved. |
+| **Tier 1–2 vs Tier 3** | The lower-tier law is retired. If the conflict reveals ambiguity or a gap in the Tier 3 statute, the Clerk cycle drafts a T3 petition routed to [HITL review](./02-foundry-cycle.md#hitl-nodes) for a proposed clarification or amendment. |
+| **Tier 3 vs Tier 3** | The Clerk cycle drafts a *proposal* for a consolidated Tier 3 statute, routed to [HITL review](./02-foundry-cycle.md#hitl-nodes). On rejection, the conflict persists — every future Workitem that encounters the same conflict generates another HITL escalation and more friction until the humans act. |
+| **Tier 4 or Tier 5 involvement** | The Clerk cycle drafts a `law-petition` that [law-applicator](./02-foundry-cycle.md#law-applicator) routes to the [Embassy](../02-flow/06-cross-flow.md) for export to the relevant authority Flow. A [dispute record](./03-data-model.md#dispute-records) is created, and affected Workitems are held in `pending-hold` until the authority responds. |
 
 ### Judiciary Authority Ceiling
 
@@ -115,25 +115,30 @@ The Judiciary's power is constitutionally bounded. The Arbiter and Tribunal shar
 
 | Tier range | Authority | Action |
 |------------|-----------|--------|
-| Tier 1 | **None** (by convention) | The Arbiter and Tribunal hold `WRITE:law/tier2` (which covers Tier 1), but do not write Findings — their role is judicial, not observational. Tier 2 Rulings are the exclusive output of their authority, drafted by the [Clerk](./02-foundry-cycle.md#clerk-petition-drafter) node and applied by the [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate) via the Librarian. |
-| Tier 2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings through the petition process (Clerk drafts, Tribunal reviews, Judiciary Gate applies). |
-| Tier 3 | **Propose** | Drafts a proposal. Routes to the [Advocate](./02-foundry-cycle.md#advocate-human-escalation) for HITL ratification. |
-| Tier 4–5 | **Appeal** | Routes to the Advocate, which files an appeal to the Governance Flow. Cannot directly modify. |
+| Tier 1 | **None** (by convention) | The Arbiter and Tribunal hold `WRITE:law/tier2` (which covers Tier 1), but do not write Findings — their role is judicial, not observational. Tier 2 Rulings are the exclusive output of their authority, drafted by the [Clerk cycle](./02-foundry-cycle.md#clerk-cycle) and applied by [law-applicator](./02-foundry-cycle.md#law-applicator) via the Librarian. |
+| Tier 2 | **Resolve** | Full judicial authority. Can retire, consolidate, and mint new Tier 2 Rulings through the petition process (Clerk cycle drafts, reviews, law-applicator applies). |
+| Tier 3 | **Propose** | Drafts a proposal. Routes to [HITL review](./02-foundry-cycle.md#hitl-nodes) in the Clerk cycle for ratification. |
+| Tier 4–5 | **Petition** | Drafts a `law-petition`. [law-applicator](./02-foundry-cycle.md#law-applicator) creates a [dispute record](./03-data-model.md#dispute-records) and routes to the [Embassy](../02-flow/06-cross-flow.md) for export to the relevant authority Flow. Cannot directly modify. |
 
-When a human rejects a Tier 3 proposal via the Advocate, the conflicting statutes remain active. Every future Workitem that hits the same conflict generates another Judiciary invocation, another HITL escalation via the Advocate, and more [friction](./00-overview.md#friction). The system does not force the humans' hand. It measures the cost of the decision until someone acts.
+When a human rejects a Tier 3 proposal via HITL review, the conflicting statutes remain active. Every future Workitem that hits the same conflict generates another Judiciary invocation, another HITL escalation, and more [friction](./00-overview.md#friction). The system does not force the humans' hand. It measures the cost of the decision until someone acts.
 
 ---
 
-## The Governance Flow
+## Federation and Published Law Distribution
 
-The Governance Flow is a dedicated, pre-configured [Flow](./00-overview.md) that runs in its own namespace. It uses the same runtime, the same CRDs, and the same operator as any other Flow, but its purpose is constitutional: creating and managing state law, and integrating federal authorities.
+There is no special Governance Flow runtime. Ordinary Flows join a [Federation](../02-flow/08-federation.md) that defines trust, membership, and role / relationship policy. The federation model replaces the previous Governance Flow design entirely.
 
-### State Root Certificate Authority
+### Federation Membership
 
-The Governance Flow holds the self-signed Root CA keypair for the State trust hierarchy. It issues intermediate CA certificates to each Sibling Flow's Operator, establishing a hub-and-spoke trust model:
+When a Flow joins a federation, it gains:
+
+- **Identity** — a verified Flow identity within the federation namespace.
+- **Trust root** — the federation root CA. The federation issues intermediate CA certificates to each member Flow's Operator, establishing a shared trust hierarchy.
+- **Endpoint discovery** — the ability to discover and communicate with other member Flows.
+- **State membership** — assignment to one or more states (federation-defined groups of Flows that share organisational relationships).
 
 ```text
-Governance Flow (Root CA)
+Federation (Root CA)
   ├─ Flow A Operator (Intermediate CA)
   │   ├─ Forge Node (Leaf)
   │   └─ Quench Node (Leaf)
@@ -144,65 +149,71 @@ Governance Flow (Root CA)
       └─ Optimize Node (Leaf)
 ```
 
-Sibling Flows share a common trust root. A [stamp](./03-data-model.md#passports-and-stamps) produced by any node in any sibling is cryptographically verifiable by tracing the certificate chain back to the State Root — without direct peer relationships between the siblings. This eliminates N-squared scaling: adding a new sibling requires a single certificate exchange with the Governance Flow, not reconfiguration of every existing Flow.
+Member Flows share a common trust root. A [stamp](./03-data-model.md#passports-and-stamps) produced by any node in any member Flow is cryptographically verifiable by tracing the certificate chain back to the federation root — without direct peer relationships between the members. Adding a new member requires a single certificate exchange with the federation, not reconfiguration of every existing Flow.
 
-Sibling Operators bootstrap trust by anchoring each Sibling's intermediate CA to the State Root. Operator-level onboarding, key management, and certificate lifecycle details are covered in [Flow Operator](../02-flow/01-operator.md).
+### States and Organisational Units
 
-### Legislator (Tier 4 Authority)
+**States** are federation-defined groups of Flows. Sibling relationships derive from shared state membership, not a dedicated state Flow. A state might represent a business unit, a department, or a geographic region. Flows may belong to multiple states.
 
-The Governance Flow's governed [artefacts](./03-data-model.md#artefacts) are laws. It is subject to the same [Foundry Cycle](./02-foundry-cycle.md) as any other Flow — creation, validation, review, and refinement of law drafts, with the Judiciary resolving disputes.
+### Authority Publisher Roles
 
-The legislative process follows the standard cycle with one critical addition: a HITL gate at the exit node. No Tier 4 State Constitution law is enacted without human ratification. The ratified law is minted as a Law CRD and published to all Sibling Flows.
+Federation policy designates **authority publisher** roles that determine which Flows may publish local Tier 3 laws outward:
 
-The Governance Flow holds exclusive write authority for Tier 4 laws. Sibling Flows consume them as read-only.
+- **State-level authority** — publishes laws that materialise as Tier 4 in subscriber Flows within the same state.
+- **Federation-level authority** — publishes laws that materialise as Tier 5 across the entire federation.
 
-### Diplomat (Federation Gateway)
+Authority Flows are ordinary Flows. They run the same runtime and the same governance model as any other Flow. The only distinction is a federation-assigned publisher role that grants the right to publish laws outward.
 
-The Governance Flow maintains persistent connections to upstream Federal authorities. It pulls Tier 5 Federal Accord packages on a configurable schedule, verifies signatures, and integrates them into the State Library. If two Federal authorities publish conflicting laws, the conflict is flagged for manual resolution, and the Governance Flow halts integration of the conflicting package until the contradiction is resolved at the Federal level.
+### Publication Lifecycle
 
-After syncing, the Governance Flow publishes a State Library snapshot containing all Tier 4 State Constitution laws and Tier 5 Federal Accords. Sibling Flows' [Librarians](../02-flow/04-system-services.md) consume this snapshot to stay current with higher-tier governance.
+When an authority Flow marks an approved local Tier 3 law as `published`, the following sequence occurs:
 
----
+1. **Submission** — the law is submitted to the [Federation service](../02-flow/08-federation.md) for publication admission.
+2. **Validation** — the Federation service validates role / scope / relationship constraints and runs conflict detection against other published laws.
+3. **Acceptance or rejection** — if accepted, the law is distributed to subscriber Flows. If rejected, a structured conflict / authorisation report is returned to the source Flow.
+4. **Materialisation** — accepted state publications materialise as Tier 4 laws in subscriber Flows. Accepted federation-wide publications materialise as Tier 5 laws. The law remains Tier 3 in its source Flow.
 
-### Legislative Process
+### Higher-Authority Escalation
 
-The Governance Flow's Workitems are petitions for legislative action, and its governed artefacts are law drafts that, when approved, become binding Tier 4 State Constitution laws.
+Escalation flows in the opposite direction from publication. When a Flow's Clerk cycle produces a T4-5 petition (challenging or requesting changes to an imported law), the [law-applicator](./02-foundry-cycle.md#law-applicator) creates a [dispute record](./03-data-model.md#dispute-records) and routes to the [Embassy](../02-flow/06-cross-flow.md) for export as a `law-petition` to the relevant authority Flow (determined by federation policy).
 
-#### Inputs
+The originating Flow does not wait for remote deliberation. The local Workitem completes after handoff, and affected Workitems are held in `pending-hold` (suspended, keyed on the `petition_id`) until the authority accepts or rejects the petition.
 
-Petitions arrive from multiple sources:
+The authority Flow receives the `law-petition` through its Embassy and processes it through its own governance cycle. If the authority approves and publishes a new or amended law, the `petition_id` is carried in the law's provenance metadata, enabling the originating Flow's [petition-outcome-watcher](../02-flow/08-federation.md#petition-outcome-watcher) to match the published law to the active dispute record.
 
-| Source | Petition Type | Example |
-|--------|--------------|---------|
-| Sibling Flow (Judiciary appeal) | Conflict resolution | "Tier 4 law X conflicts with operational needs — request amendment or clarification" |
-| Sibling Flow (promotion) | Cross-Flow pattern with State-wide relevance | "Pattern P observed across multiple Flows — propose as Tier 4 State Constitution" |
-| Human administrator | Policy change | "All Flows must enforce code coverage thresholds" |
+### The Escalation Chain
 
-#### Processing
+```mermaid
+flowchart TD
+    Node["Node<br/>(discovers conflict)"] --> Facilitator["Facilitator<br/>(lifecycle owner)"]
+    Facilitator --> Arbiter["Arbiter<br/>(deadlock resolver)"]
+    Arbiter -->|"Tier 1-2:<br/>resolve via<br/>Clerk cycle"| Library["Flow Library"]
+    Arbiter -->|"Tier 3:<br/>Clerk cycle +<br/>HITL review"| HITL["HITL node<br/>(human ratification)"]
+    HITL -->|"approved"| LA["law-applicator"]
+    LA --> Library
+    Arbiter -->|"Tier 4-5:<br/>Clerk cycle +<br/>HITL review"| HITL2["HITL node"]
+    HITL2 -->|"approved"| LA2["law-applicator<br/>(dispute record)"]
+    LA2 --> Embassy["Embassy<br/>(law-petition export)"]
+    Embassy --> Authority["Authority Flow<br/>(processes petition)"]
+    Authority -->|"publishes law"| FedSvc["Federation service<br/>(distributes)"]
+    FedSvc --> Subscribers["Subscriber Flows<br/>(materialise T4/T5)"]
+```
 
-The petition enters the standard [Foundry Cycle](./02-foundry-cycle.md). The creating node drafts the law. Validation checks formal constraints against existing Tier 4 laws. Review evaluates consistency, unintended consequences, and conflicts with existing governance. The gate node applies a HITL checkpoint — a human legislative authority reviews and ratifies before the law is enacted.
+Nodes raise issues. The Facilitator assembles evidence and delegates to the Arbiter. The Arbiter adjudicates within its tier — fanning out to Juror nodes for deliberation, with the Clerk cycle drafting petitions and law-applicator applying approved laws. HITL nodes provide human review for T3+ petitions. For T4-5 petitions, law-applicator creates a dispute record and routes to the Embassy for export to the authority Flow. The authority Flow legislates within its scope. The Federation service distributes accepted publications. The escalation path sends the conflict to the institution with the authority to resolve it.
 
-The output is a new or amended Tier 4 Law CRD, published to all Sibling Flows via the State Library snapshot.
+### Law Integration Protocol
 
-#### Self-Governance
+When published laws are distributed to a subscriber Flow, the receiving [Librarian](../02-flow/04-system-services.md) runs a two-stage conflict check before integration.
 
-The Governance Flow is itself governed. Its own Tier 3 statutes define how legislation is drafted, what quorum is required for ratification, and what review standards apply. This is recursive but finite — the Governance Flow's internal laws are administered by its own Flow Architect, not produced by another Governance Flow.
-
----
-
-## Law Integration Protocol
-
-When higher-tier laws are pushed to a Sibling Flow — via Librarian-to-Librarian replication — the receiving [Librarian](../02-flow/04-system-services.md) runs a two-stage conflict check before integration.
-
-### Stage 1: Semantic Search
+#### Stage 1: Semantic Search
 
 The Librarian queries its semantic index for all existing laws above a configurable similarity threshold. This finds laws that are *semantically related* to the incoming law — potential conflicts, overlaps, or redundancies.
 
-### Stage 2: Conflict Evaluation
+#### Stage 2: Conflict Evaluation
 
 Each candidate from the semantic search is evaluated by an LLM for actual contradiction. Semantic similarity does not always mean conflict. Two laws about code style may be related but compatible. The LLM determines whether there is a genuine contradiction.
 
-### Resolution by Tier
+#### Resolution by Tier
 
 If a conflict is confirmed, resolution depends on the tier of the conflicting local law:
 
@@ -211,9 +222,9 @@ If a conflict is confirmed, resolution depends on the tier of the conflicting lo
 | **Tier 1 or Tier 2** | Immediate retirement. The lower-tier law is replaced by the incoming higher-tier law. No human intervention. The local law is retired; history is preserved in the audit log. |
 | **Tier 3** | Integration paused. HITL notification. Supremacy is not optional — the local statute *must* change — but the Flow can request a **grace period**. |
 
-### Grace Period
+#### Grace Period
 
-The grace period is a formalised exemption. It acknowledges that organisations need time to adapt — the same way a team might need runway to upgrade a dependency when architecture mandates a new version. Foundry Flow makes this formal and trackable.
+The grace period is a formalised exemption. It acknowledges that organisations need time to adapt. Foundry Flow makes this formal and trackable.
 
 During the grace period:
 
@@ -231,66 +242,29 @@ The [exit contract](./03-data-model.md#entry-and-exit-contracts) enforces compli
 
 ---
 
-## Escalation Across Boundaries
-
-Escalation is the mechanism by which conflicts that exceed a Flow's judicial authority reach the institutions that can resolve them.
-
-### Flow to Governance Flow
-
-When a Sibling Flow's [Advocate](./02-foundry-cycle.md#advocate-human-escalation) node encounters a conflict involving Tier 4 or Tier 5 laws, it files an **appeal** — a cross-Flow message via the Librarian — to the Governance Flow.
-
-- **Tier 4 conflict:** The Governance Flow can repeal or amend its own Tier 4 laws to resolve the issue. The amendment enters the Governance Flow's [Foundry Cycle](./02-foundry-cycle.md) and, if ratified, propagates to all sibling Flows.
-- **Tier 5 conflict:** The Governance Flow escalates the appeal to the relevant Federal authority.
-
-### Governance Flow to Federation
-
-Federal authorities operate their own Governance Flows — full [Foundry Cycle](./02-foundry-cycle.md) deployments whose governed artefacts are Tier 5 Federal Accords. When a Governance Flow appeals a Tier 5 conflict, the Federal authority deliberates and produces one of two outcomes:
-
-| Outcome | Effect |
-|---------|--------|
-| **Global amendment** | The Federal authority ratifies an update to the Tier 5 package. The amendment propagates to all subscribing Governance Flows. |
-| **Exemption** | The Federal authority issues a time-boxed risk acceptance. The exemption carries a mandatory expiry. On expiry, the law integrates automatically and the exemption lapses. |
-
-### The Escalation Chain
-
-```mermaid
-flowchart TD
-    Node["Node<br/>(discovers conflict)"] --> Arbiter["Arbiter<br/>(deadlock resolver)"]
-    Arbiter -->|"Tier 2:<br/>resolve via<br/>Clerk petition"| Library["Flow Library"]
-    Arbiter -->|"Tier 3+:<br/>escalate"| Advocate["Advocate<br/>(human escalation)"]
-    Advocate -->|"Tier 3:<br/>propose to HITL"| HITL["HITL<br/>(human ratification)"]
-    HITL --> Library
-    Advocate -->|"Tier 4-5:<br/>appeal"| GovFlow["Governance Flow<br/>(State authority)"]
-    GovFlow -->|"Tier 4:<br/>amend"| GovCycle["Foundry Cycle<br/>(legislative process)"]
-    GovCycle --> Propagate["Propagate to<br/>all Siblings"]
-    GovFlow -->|"Tier 5:<br/>escalate"| Federal["Federal Authority"]
-    Federal --> FedPropagate["Propagate to<br/>all Governance Flows"]
-```
-
-Nodes raise issues. The Arbiter adjudicates within its tier — fanning out to Juror nodes for deliberation, with the Clerk drafting petitions and the Judiciary Gate applying approved laws. The Advocate escalates beyond the Judiciary's authority ceiling — presenting Tier 3 proposals to humans and filing Tier 4-5 appeals to the Governance Flow. The Governance Flow legislates within the State. The Federation legislates across States. The escalation path sends the conflict to the institution with the authority to resolve it.
-
----
-
 ## Standalone vs Federated
 
-| Capability | Standalone Flow | Federated Flow (under Governance Flow) |
-|------------|----------------|--------------------------------|
+| Capability | Standalone Flow | Federated Flow |
+|------------|----------------|----------------|
 | **Law tiers** | Tiers 1, 2, 3 | Tiers 1, 2, 3, 4, 5 |
-| **Tier 3 authority** | Administrator (declarative configuration) | Administrator or local legislative cycle |
-| **Tier 4–5** | Do not exist | Published by Governance Flow / Federation |
-| **Trust root** | Flow Operator (self-signed) | State Root CA (Governance Flow) |
-| **Cross-Flow stamps** | Treaty crossings preserve provenance; local authority starts at naturalisation | Sibling crossings are authoritative after shared-root chain verification; Treaty crossings still naturalise |
-| **Escalation ceiling** | Arbiter resolves at Tier 2, Advocate proposes Tier 3, no higher | Advocate appeals to Governance Flow for Tier 4–5 |
+| **Tier 3 authority** | Administrator (declarative configuration) | Administrator or local legislative cycle. May publish for distribution. |
+| **Tier 4–5** | Do not exist | Materialised from authority Flow publications via Federation service |
+| **Trust root** | Flow Operator (self-signed) | Federation Root CA |
+| **Cross-Flow stamps** | Treaty crossings: Embassy verifies and applies `imported-*` attestations | Federation member crossings: same Embassy naturalisation with federation trust root; Treaty crossings: same protocol with pinned certificate |
+| **Escalation ceiling** | Arbiter resolves at Tier 2, HITL proposes Tier 3, no higher | HITL approves T4-5 petitions → Embassy exports `law-petition` to authority Flow |
+| **Dispute records** | Not applicable (no T4-5 laws) | Created by law-applicator for T4-5 petitions; Sort routes to `pending-hold` |
 
-A standalone Flow is fully self-contained. It can be deployed, operated, and governed without any external dependency. Federation adds higher-tier governance and cross-Flow trust, but the core governance model — organic discovery, judicial review, administered policy — is identical in both configurations.
+A standalone Flow is fully self-contained. It can be deployed, operated, and governed without any external dependency. Federation adds higher-tier governance, cross-Flow trust, and published law distribution, but the core governance model — organic discovery, judicial review, administered policy — is identical in both configurations.
 
 ---
 
 ## Treaties
 
-[Treaties](../02-flow/06-cross-flow.md) enable collaboration between Flows that do not share a Governance Flow — typically across organisational boundaries. Where Federation provides implicit trust through a shared Root CA, a Treaty provides explicit trust through a bilateral agreement with unidirectional execution. Two-way exchange requires two separate Treaties.
+[Treaties](../02-flow/06-cross-flow.md) enable collaboration between Flows that do not share federation membership — typically across organisational boundaries. Where federation provides implicit trust through a shared root CA, a Treaty provides explicit trust through a directed trust policy with constrained import types.
 
-The governance implication at Treaty boundaries is **naturalisation**: when a [Workitem](./03-data-model.md#workitems) crosses between non-sibling Flows, foreign [stamps](./03-data-model.md#passports-and-stamps) are preserved for audit but do not satisfy local stamp requirements. The importing Flow applies a naturalisation stamp and begins a new chain of custody under its own trust root. Sibling Flows do not require Treaties; under shared-root verification, sibling stamps can satisfy local requirements immediately when names match. The structural details and the full export-import protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
+A Treaty is a directed trust policy — the receiving Flow defines which `importType`s the remote Flow may use. Two-way exchange requires two separate Treaties.
+
+The governance implication at Treaty boundaries is **naturalisation**: when a [Workitem](./03-data-model.md#workitems) crosses via the [Embassy](../02-flow/06-cross-flow.md), foreign [stamps](./03-data-model.md#passports-and-stamps) are preserved for provenance and audit. The receiving Embassy verifies required foreign stamps and applies local `imported-<stamp>` attestations. Downstream local contracts rely on these attested local stamps; foreign stamps remain for audit only. Federation-member crossings use the same Embassy protocol with the federation trust root instead of a pinned certificate. The structural details and the full Embassy transfer protocol are covered in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md).
 
 ---
 

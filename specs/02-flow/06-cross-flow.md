@@ -1,59 +1,99 @@
 # Cross-Flow Collaboration
 
-Cross-flow collaboration defines how sovereign Flows exchange work, provenance, and higher-tier [governance](../01-concepts/04-governance.md) without collapsing control-plane boundaries.
+Cross-flow collaboration defines how sovereign Flows exchange work and provenance without collapsing control-plane boundaries. The [Embassy](#embassy) handles Workitem transfer. The [Federation service](./08-federation.md) handles published-law distribution. These are separate runtime paths.
 
 ## Boundary Model
 
 Each Flow is a sovereignty boundary for [Workitems](./02-workitem.md) and governance execution.
 
 - Intra-flow routing moves one Workitem between nodes in one Flow.
-- Cross-flow transfer exports a package and creates a new Workitem lifecycle in the receiving Flow.
+- Cross-flow transfer exports a package via the Embassy and creates a new Workitem lifecycle in the receiving Flow.
 - Cross-flow collaboration is copy-on-write by design.
 
 The source Workitem and imported Workitem are related by provenance, not shared lifecycle ownership.
 
-## Export, Transfer, and Import Lifecycle
+## Embassy
 
-Cross-flow exchange follows a three-stage lifecycle:
+The Embassy is the standard cross-flow boundary node, present in every Flow. It is operator-provisioned and runs as a persistent entry node (watcher-style `StartEntry` process) with two jobs:
 
-1. **Export**: an exit path in the source Flow emits an export package.
-2. **Transfer**: package is transmitted over configured trust channel.
-3. **Import**: receiving Flow validates and materialises a new Workitem.
+- **Outbound export** — package local work for another Flow, send a signed manifest first, and stream the full package only after the remote Embassy accepts it.
+- **Inbound import** — receive a signed manifest, preflight the declared `importType`, request the full package, verify it, create a new local Workitem, unpack artefacts, apply naturalisation stamps, and route onward.
+
+### Transfer Protocol
+
+Embassy-to-Embassy transfer follows a header-first protocol:
+
+1. **Manifest** — the sending Embassy sends a signed manifest containing: `importType`, source/target Flow identity, transfer ID and expiry, artefact inventory (governed name, digest, size, representation metadata), and the foreign stamps for each artefact.
+2. **Preflight** — the receiving Embassy validates the manifest: is the `importType` declared in `crossFlow.importTypes`? Does the trust source (federation membership or Treaty) authorise this sender? Are the declared artefacts admissible?
+3. **Package streaming** — if preflight passes, the receiving Embassy requests the full package. The sending Embassy streams artefact content.
+4. **Verification** — the receiving Embassy verifies content digests against the manifest inventory.
+5. **Materialisation** — the receiving Embassy creates a new local Workitem, unpacks artefacts into the Archivist, and applies naturalisation stamps.
+6. **Routing** — the receiving Embassy routes the new Workitem to the node configured for the `importType` in `crossFlow.importTypes`.
 
 ```mermaid
-flowchart LR
-    SF["Source Flow<br/>exit completion"] --> EX["Export package"]
-    EX --> TR["Transfer channel"]
-    TR --> IM["Import validation"]
-    IM --> PD["Create Pending<br/>Workitem"]
-    PD --> IN["Schedule importNode<br/>when capacity allows"]
-    IN --> RW["Receiving Flow<br/>new Workitem lifecycle"]
+sequenceDiagram
+    participant SE as Sending Embassy
+    participant RE as Receiving Embassy
+    participant AR as Archivist
+    participant OP as Operator
+
+    SE->>RE: signed manifest (importType, artefacts, stamps)
+    RE->>RE: preflight (importType, trust, admissibility)
+    RE-->>SE: accept / reject
+    SE->>RE: stream package (artefact content)
+    RE->>RE: verify digests
+    RE->>AR: store artefacts
+    RE->>RE: apply naturalisation stamps
+    RE->>OP: create Pending Workitem
+    OP->>OP: route to configured import type node
 ```
 
-Import is idempotent. Replayed packages must not create duplicate effective outcomes.
+### Import Types
 
-Import admission is entry-contract bound.
+The receiving Flow publishes `crossFlow.importTypes` — a map of import type names to configuration:
 
-- The receiving Flow resolves `importNode` from Flow configuration.
-- `importNode` must exist and be bound to an entry contract.
-- The receiving Flow validates the imported Workitem against that bound entry contract.
-- On success, the Workitem is created in `Pending`.
-- The Operator then schedules the Workitem to `importNode` immediately when capacity allows.
+```yaml
+crossFlow:
+  importTypes:
+    law-petition:
+      node: clerk-sort
+      requireForeignStamps:
+        petition:
+          - approval
+          - judiciary-consensus
+```
+
+`law-petition` is the only currently reserved built-in `importType`. Additional `importType`s are flow-defined. The `node` value is entirely receiver-defined. The resolved `node` must reference an existing entry-bound FoundryNode. Senders target the public `importType`, never the receiving Flow's private node names.
+
+### Naturalisation
+
+Embassy naturalisation converts imported provenance into locally attested governance state:
+
+- For each required foreign stamp declared in `requireForeignStamps`, the Embassy verifies the stamp's cryptographic chain against the trust source (federation root or Treaty-pinned CA).
+- If all required stamps validate, the Embassy applies a local `imported-<stamp>` attestation stamp for each verified foreign stamp on the imported artefact.
+- Foreign stamps remain attached for provenance and audit.
+- Downstream local contracts rely on the `imported-*` attestation stamps, not on the foreign stamps directly.
+
+Naturalisation is a per-stamp local attestation process. The Embassy does not re-sign foreign content — it attests that specific foreign stamps were valid at import time.
+
+### Scope Boundary
+
+Embassy handles Workitem transfer (`law-petition` and any other published import types). Published law distribution is a [Federation service](./08-federation.md) responsibility, not an Embassy `importType`.
 
 ## Trust Topologies
 
-Cross-flow trust has two runtime topologies:
+Cross-flow trust has two runtime topologies that share the same Embassy protocol:
 
-- **Sibling topology**: Flows under a shared Governance Flow trust root.
-- **Treaty topology**: non-sibling or cross-organisation exchange through directed agreements.
+- **Federation-member topology**: Flows that share federation membership and a common trust root.
+- **Treaty topology**: non-federation or cross-organisation exchange through directed trust policies.
 
-Sibling Flows do not require Treaties for exchange under shared-root trust.
+Federation-member Flows do not require Treaties for exchange under shared-root trust.
 
 ```mermaid
 flowchart TD
-    subgraph Sibling["Sibling topology"]
-        GR["State Root"] --> FA["Flow A"]
-        GR --> FB["Flow B"]
+    subgraph Federation["Federation-member topology"]
+        FR["Federation Root"] --> FA["Flow A"]
+        FR --> FB["Flow B"]
     end
 
     subgraph Treaty["Treaty topology"]
@@ -62,37 +102,19 @@ flowchart TD
     end
 ```
 
-## Stamp Verifiability and Local Authority
+### Federation-Member Exchange
 
-Imported stamp handling separates verifiability from authority:
+Federation membership establishes the trust root. The Embassy verifies manifests against the federation root CA. Embassy-to-Embassy connections use mTLS. Federation membership or Treaty policy authorises the remote Flow and its import types; this is not embedded in the certificate and does not require a JWT-style bearer token.
 
-1. **Verifiability**: can the stamp chain be cryptographically validated?
-2. **Authority**: does this imported stamp satisfy local governance requirements?
+### Treaty-Based Exchange
 
-Verifiability is chain-validation dependent and topology-agnostic. Authority is topology-dependent:
+A Treaty is a directed trust policy that enables collaboration between Flows that do not share federation membership. Treaties are receiver-enforced:
 
-- Sibling/shared-root crossing: imported stamps are authoritative when chain validation succeeds and names satisfy local requirements.
-- Treaty/non-sibling crossing: imported stamps are preserved for provenance and audit, but are not authoritative for local requirement satisfaction until naturalisation and local checks complete.
+- The receiving Flow defines a Treaty CRD referencing the remote Flow and pinning the remote Flow's CA certificate.
+- The Treaty may constrain `allowedImportTypes` — which of the receiving Flow's published `importType`s the remote Flow may use.
+- Reverse direction requires a distinct Treaty.
 
-## Naturalisation
-
-Naturalisation converts imported provenance into locally authoritative governance state where required.
-
-- Required for treaty/non-sibling imports.
-- Applies local validation and local checkpointing before imported work can satisfy local exit requirements.
-- Preserves foreign provenance while establishing local chain-of-custody.
-
-Naturalisation is a governance process, not a cryptographic replacement. Original imported evidence remains queryable.
-
-## Treaties and Directionality
-
-A Treaty is a directed trust policy and execution path.
-
-- A Treaty from Flow A to Flow B grants one-way import authority in that direction. In this configuration, Flow B defines a Treaty CRD with `direction: import` (referencing Flow A) to authorize admission.
-- Reverse direction requires a distinct Treaty from Flow B to Flow A.
-- Directed edges allow bilateral collaboration without implicit reciprocal trust.
-
-Treaties are receiver-enforced policy boundaries for non-sibling collaboration.
+Treaties use the same Embassy manifest + package protocol. The only difference from federation-member exchange is the trust source: Treaty-pinned CA instead of federation root CA.
 
 ## Exit Export Scope
 
@@ -104,36 +126,11 @@ Export scope is constrained by exit contract semantics.
 
 This behaviour is consistent with exit-completion semantics in [Workitems](./02-workitem.md) and [Configuration Semantics](./05-configuration.md).
 
-## Export Package Structure
-
-The export package is the unit of cross-flow transfer. It carries the Workitem's portable state and a cryptographic chain tying the package to its source Flow.
-
-An export package contains:
-
-| Component | Description |
-|-----------|-------------|
-| Workitem metadata | Identifier, provenance chain (parent Workitem references). |
-| Artefact content | Content bytes for each governed artefact name listed in the bound exit contract. Names not listed are excluded. |
-| Passport stamps | All stamps on exported artefacts — the full provenance record. |
-| Package signature | The source Flow's Operator signs the package using the Flow's identity material. |
-| Certificate chain | The Operator's certificate chain, rooted in the Flow's CA (or the State Root CA for sibling Flows). |
-
-The Operator signs the export package because it represents the Flow as a sovereign authority. The Operator's identity is the Flow's identity — the same certificate that authenticates inter-service and cross-flow communication. Node identities are internal to the Flow and are not exposed across Flow boundaries.
-
-### Verification at Import
-
-The receiving Flow validates the export package before materialising a Workitem:
-
-1. **Chain verification** — the package signature is verified against the certificate chain. For sibling imports, the chain traces to the shared State Root CA. For treaty imports, the chain traces to the CA certificate pinned in the Treaty CRD's `caCert` field.
-2. **Subject filtering** — if the Treaty CRD specifies `allowedSubjects`, the signing certificate's subject must match one of the listed values. If `allowedSubjects` is empty, any subject under the pinned CA is accepted.
-3. **Bundle size enforcement** — if the Treaty CRD specifies `maxBundleSize`, the package must not exceed it.
-4. **Entry contract validation** — the receiving Flow validates the materialised Workitem against the configured `importNode`'s bound entry contract.
-
 ## Law Integration Protocol
 
-Higher-tier law integration occurs through [Librarian](./04-system-services.md#librarian)-to-Librarian replication.
+Higher-tier law integration occurs through [Federation service](./08-federation.md) distribution, not through Embassy import.
 
-Integration performs two stages before activation:
+Integration at the receiving Flow's [Librarian](./04-system-services.md#librarian) performs two stages before activation:
 
 1. Semantic search for potentially conflicting local laws.
 2. LLM contradiction evaluation for true conflict determination.
@@ -157,31 +154,32 @@ Integration-time law conflict handling and runtime dispute escalation are distin
 
 Judiciary authority remains bounded across boundaries:
 
-- Resolve at Tier 2 by minting rulings via Clerk petition.
-- Propose Tier 3 changes for human ratification via the Advocate.
-- Appeal Tier 4-5 conflicts through the Advocate to governance channels.
+- Resolve at Tier 2 by minting rulings via the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle).
+- Propose Tier 3 changes for human ratification via [HITL review](../01-concepts/02-foundry-cycle.md#hitl-nodes).
+- Petition Tier 4-5 changes via [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) and Embassy `law-petition` export.
 
 Runtime conflict outcomes are tier-pair specific and align with [Governance](../01-concepts/04-governance.md):
 
 | Conflict tier combination | Runtime outcome |
 |---------------------------|-----------------|
-| Tier 1 vs Tier 2 | The Arbiter fans out to Juror nodes for deliberation with supremacy weighting, the verdict flows to the Clerk to draft a Tier 2 Ruling petition that consolidates the surviving position, and retires the originals. |
-| Tier 1 vs Tier 1, Tier 2 vs Tier 2 | The Arbiter fans out to Juror nodes, the verdict flows to the Clerk to draft a Tier 2 Ruling petition that consolidates the conflicting laws and retires the originals. |
-| Tier 1-2 vs Tier 3 | The lower-tier law retires. If the conflict exposes ambiguity or a gap in Tier 3, the Arbiter routes to the Advocate to petition HITL with a proposed clarification or amendment. |
-| Tier 3 vs Tier 3 | The Arbiter drafts a consolidated Tier 3 proposal and routes to the Advocate to petition HITL. If rejected, the conflict persists — every future Workitem that hits the same conflict generates another HITL escalation and more friction until the humans act. |
-| Tier 4 or Tier 5 involvement | The Advocate files an appeal through the Librarian to Governance Flow authorities. Tier 4 can be repealed or amended by Governance Flow; Tier 5 appeals escalate to the relevant Federal authority. |
+| Tier 1 vs Tier 2 | The Arbiter fans out to Juror nodes for deliberation with supremacy weighting, the Clerk cycle drafts a Tier 2 Ruling petition that consolidates the surviving position, and retires the originals. |
+| Tier 1 vs Tier 1, Tier 2 vs Tier 2 | The Arbiter fans out to Juror nodes, the Clerk cycle drafts a Tier 2 Ruling petition that consolidates the conflicting laws and retires the originals. |
+| Tier 1-2 vs Tier 3 | The lower-tier law retires. If the conflict exposes ambiguity or a gap in Tier 3, the Clerk cycle drafts a T3 petition routed to HITL review for a proposed clarification or amendment. |
+| Tier 3 vs Tier 3 | The Clerk cycle drafts a consolidated Tier 3 proposal routed to HITL review. If rejected, the conflict persists — every future Workitem that hits the same conflict generates another HITL escalation and more friction until the humans act. |
+| Tier 4 or Tier 5 involvement | The Clerk cycle drafts a `law-petition`. law-applicator creates a [dispute record](../01-concepts/03-data-model.md#dispute-records), routes to the Embassy for export to the relevant authority Flow. |
 
 Supremacy heavily informs outcomes, but does not bypass Judiciary deliberation in runtime disputes.
 
 ```mermaid
 flowchart TD
-    RT["Runtime conflict"] --> ARB["Arbiter"]
-    ARB -->|"Tier 1-2"| RS["Resolve locally<br/>via Clerk petition"]
-    ARB -->|"Tier 3+"| ADV["Advocate"]
-    ADV -->|"Tier 3"| PR["Propose to HITL"]
-    ADV -->|"Tier 4-5"| AP["Appeal to Governance Flow"]
+    RT["Runtime conflict"] --> FAC["Facilitator"]
+    FAC --> ARB["Arbiter"]
+    ARB -->|"Tier 1-2"| RS["Resolve locally<br/>via Clerk cycle"]
+    ARB -->|"Tier 3"| HITL["HITL review"]
+    ARB -->|"Tier 4-5"| LA["law-applicator<br/>+ dispute record"]
+    LA --> EMB["Embassy<br/>law-petition export"]
 
-    LI["Incoming higher-tier law"] --> IP["Integration protocol"]
+    LI["Incoming published law"] --> IP["Federation service<br/>distribution"]
     IP --> T12["Retire conflicting Tier 1-2"]
     IP --> T3["Tier 3 grace or forced integration"]
 ```
@@ -190,10 +188,13 @@ flowchart TD
 
 Cross-flow operations fail and recover through explicit policies:
 
-- Transfer interruption: package remains retriable without duplicate effective import.
-- Partial import failure: receiving Flow rejects activation and records structured failure.
+- Transfer interruption: manifest remains retriable; package streaming is resumable without duplicate effective import.
+- Partial import failure: receiving Embassy rejects activation and records structured failure.
 - Validation failure: package is quarantined or rejected according to policy.
-- Import-node misconfiguration (`importNode` missing, unknown, or not entry-bound): import is rejected as configuration error.
+- Import type misconfiguration (`crossFlow.importTypes` node missing, unknown, or not entry-bound): import is rejected as configuration error.
+- Unknown import type (sender requests type not in `crossFlow.importTypes`): manifest rejected at preflight.
+- Foreign stamp validation failure: naturalisation fails and import is rejected.
+- Package digest mismatch: import rejected after content verification.
 - Destination unavailability: retries with backoff until retry budget exhaustion.
 - LLM contradiction evaluator unavailability: law integration retries with backoff while keeping incoming law inactive in queued state.
 
@@ -205,16 +206,18 @@ All cross-flow deployments preserve these invariants:
 
 1. Cross-flow exchange is copy-on-write and starts a separate Workitem lifecycle.
 2. Intra-flow routing and cross-flow transfer are distinct mechanisms.
-3. Imported stamp verifiability and local authority are separate concerns.
-4. Sibling/shared-root imports can be immediately authoritative after valid chain verification.
-5. Treaty/non-sibling imports require naturalisation for local authority.
-6. Treaty trust edges are directed; bidirectional exchange requires two treaties.
-7. Bound exit-contract governed artefact name entries constrain export scope.
-8. Empty exit contracts export metadata only.
-9. Higher-tier law integration uses semantic search plus LLM contradiction evaluation.
-10. Tier 3 integration conflicts support grace-period semantics before forced integration.
-11. Runtime law conflicts route through the Judiciary's judicial process.
-12. Cross-flow events are audit-visible and retry-safe.
-13. Successful imports create `Pending` Workitems and first-schedule them to configured `importNode` when capacity allows.
+3. Every Flow has an operator-provisioned Embassy for cross-flow boundary management.
+4. Embassy transfer uses a header-first protocol: signed manifest, preflight, then package streaming.
+5. `law-petition` is the only reserved built-in import type; all others are flow-defined.
+6. Federation-member and Treaty exchange use the same Embassy protocol; only the trust source differs.
+7. Embassy applies `imported-<stamp>` attestation stamps for verified foreign stamps; foreign stamps remain for provenance.
+8. Treaty trust edges are directed; bidirectional exchange requires two treaties. Treaties may constrain `allowedImportTypes`.
+9. Bound exit-contract governed artefact name entries constrain export scope.
+10. Empty exit contracts export metadata only.
+11. Published law distribution is a Federation service responsibility, not an Embassy import type.
+12. Higher-tier law integration uses semantic search plus LLM contradiction evaluation.
+13. Tier 3 integration conflicts support grace-period semantics before forced integration.
+14. Runtime law conflicts route through the Judiciary's judicial process.
+15. Cross-flow events are audit-visible and retry-safe.
 
 Schema and wire definitions are specified in [CRD Reference](../05-reference/crds.md) and [gRPC API](../05-reference/grpc-api.md). Error outcomes map to [Error Catalogue](../05-reference/error-catalogue.md). Node-level implementation patterns are detailed in [Node Configuration](../03-node/02-configuration.md) and [Node Patterns](../03-node/03-patterns.md).

@@ -6,12 +6,12 @@ All custom resources use API group `flow.gideas.io/v1` and are namespace-scoped.
 
 | CRD | Owner | Purpose |
 |-----|-------|---------|
-| [FoundryFlow](#foundryflow) | Flow Architect / Operator | Flow-wide contracts, governance policy, cross-flow settings |
+| [FoundryFlow](#foundryflow) | Flow Architect / Operator | Flow-wide contracts, governance policy, cross-flow settings, Federation membership |
 | [FoundryNode](#foundrynode) | Flow Architect / Operator | Node-local behaviour, capabilities, routing outputs, contract bindings |
 | [Workitem](#workitem) | Operator (sole mutator) | Workitem lifecycle state, assignment, routing |
 | [GovernedArtefact](#governedartefact) | Flow Architect | Governed artefact registration and stamp vocabulary |
 | [Law](#law) | Librarian / Judiciary / nodes | Law goal, representations, tier, lifecycle metadata |
-| [Treaty](#treaty) | Flow Architect | Directed cross-flow trust policy |
+| [Treaty](#treaty) | Flow Architect | Directed cross-flow trust policy (including allowed import types) |
 | [FlowSupportService](#flowsupportservice) | Flow Architect / Operator | Support Service capability declaration and infrastructure |
 | [CodificationService](#codificationservice) | Flow Architect / Operator | Codification Service: output format declaration and deployment |
 
@@ -28,9 +28,8 @@ The FoundryFlow CRD defines the executable shape of a Flow. The [Operator](../02
 | `entryContracts` | `map[string]Contract` | yes | Named entry contracts. Each contract is a [Contract shape](#contract-shape). At least one entry contract must be defined. |
 | `exitContracts` | `map[string]Contract` | yes | Named exit contracts. Each contract is a [Contract shape](#contract-shape). |
 | `nodeGroups` | `map[string]NodeGroup` | no | Named NodeGroups defining sub-topology boundaries. Each key is a group name; each value is a [NodeGroup shape](#nodegroup-shape). See [NodeGroups](../02-flow/05-configuration.md#nodegroups). |
-| `importNode` | `string` | no | Name of the FoundryNode that receives cross-flow imported Workitems. Must reference an existing entry-bound node. If absent, cross-flow import is disabled. |
 | `governancePolicy` | `GovernancePolicy` | yes | Governance thresholds and timers. See [governance policy](#governance-policy). |
-| `crossFlow` | `CrossFlowConfig` | no | Cross-flow trust and naturalisation settings. See [cross-flow configuration](#cross-flow-configuration). |
+| `crossFlow` | `CrossFlowConfig` | no | Cross-flow trust, import types, and naturalisation settings. See [cross-flow configuration](#cross-flow-configuration). |
 | `eventBus` | `EventBusConfig` | no | Flow Event Bus configuration. See [Event Bus configuration](#event-bus-configuration). |
 
 ### The Judiciary
@@ -41,9 +40,9 @@ The Judiciary is a runtime-mandated subsystem — the Operator provisions it wit
 
 | Node | Role | Provisioning |
 |---|---|---|
-| **[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver)** | Resolves deadlocked feedback disputes. Assembles evidence, fans out to Juror nodes using child Workitems, collects verdicts, routes to Deliberation Gate. On consensus, the verdict flows to the Clerk to draft a petition. | Operator-provisioned |
-| **[Tribunal](../01-concepts/02-foundry-cycle.md#tribunal-law-review)** | Conducts review hearings ([Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher)/[TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher)-triggered) and petition reviews (inner cycle). Both modes fan out to Juror nodes. Hearing mode routes to Deliberation Gate then Tribunal Router. Review mode routes to Deliberation Gate then Judiciary Gate. | Operator-provisioned |
-| **[Advocate](../01-concepts/02-foundry-cycle.md#advocate-human-escalation)** | Human escalation point. Three entry paths: Deliberation Gate (hung verdict), Tribunal Router (Tier 3+ hearing), Judiciary Gate (Tier 3 ratification). Routes HITL decisions to Clerk for petition codification. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. | Operator-provisioned |
+| **[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-path-deadlock-resolution)** | Resolves deadlocked feedback disputes. Receives child Workitems from the Facilitator, fans out to Juror nodes, tallies internally for consensus, and either resolves within existing law or creates a Clerk-cycle child for petition drafting. | Operator-provisioned |
+| **[Tribunal](../01-concepts/02-foundry-cycle.md#hearing-path)** | Conducts review hearings triggered by [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) or [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher). Fans out to Juror nodes, tallies internally, and on consensus creates a Clerk-cycle child Workitem carrying `verdict-context`. | Operator-provisioned |
+| **[Embassy](../02-flow/06-cross-flow.md#embassy)** | Cross-flow boundary node. Handles manifest preflight, package streaming, import type routing via `crossFlow.importTypes`, treaty enforcement, and naturalisation into local `imported-*` attestations. Published-law distribution is handled separately by the Federation service. | Operator-provisioned |
 
 **Watcher Nodes:**
 
@@ -57,20 +56,21 @@ The Judiciary is a runtime-mandated subsystem — the Operator provisions it wit
 | Node | Role | Provisioning |
 |---|---|---|
 | **[Juror](../01-concepts/02-foundry-cycle.md#juror-judicial-agent)** | Single image, configurable judicial philosophy. Receives child Workitems with question, evidence, and prior-round reasoning. Produces verdict + reasoning artefact. Used by both Arbiter and Tribunal fan-out. | Operator-provisioned |
-| **[Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally)** | Generic consensus tally node. Reads Juror verdict artefacts, applies consensus strategy, tracks round count. Three well-known outputs: `consensus`, `retry`, `hung`. | Operator-provisioned |
 
 **Legislative Inner Cycle Nodes:**
 
 | Node | Role | Provisioning |
 |---|---|---|
-| **[Clerk](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter)** | Drafts/revises [petition artefacts](../01-concepts/02-foundry-cycle.md#petition-artefact) (YAML/Markdown). Fans out to Codification nodes for formal representations. Assembles complete petition and routes to Tribunal for review. | Operator-provisioned |
-| **[Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes)** | Each produces a formal representation in its declared output format (Rego, SMT-LIB, etc.). Receive child Workitems from Clerk. | Operator-provisioned |
-| **[Tribunal Router](../01-concepts/02-foundry-cycle.md#tribunal-router)** | Tier-aware routing after Tribunal hearing deliberation. Routes Tier 1-2 verdicts to Clerk, Tier 3+ to Advocate. | Operator-provisioned |
-| **[Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate)** | Mirrors Sort for the judiciary inner cycle. Checks feedback resolution on petition artefacts, applies approved petitions via Librarian, or routes back to Clerk for revision, or escalates by tier. | Operator-provisioned |
+| **[Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle)** | The petition drafting and approval cycle. It drafts and revises [petition artefacts](../01-concepts/02-foundry-cycle.md#petition-artefact), fans out to Codification nodes for formal representations, routes through review and HITL stages, and finishes in law-applicator or Embassy handoff depending on tier. | Operator-provisioned |
+| **[Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes)** | Each produces a formal representation in its declared output format (Rego, SMT-LIB, etc.). Receive child Workitems from the Clerk cycle. | Operator-provisioned |
+| **[Rule Router](../02-flow/05-configuration.md#routing-semantics)** | Generic CEL-based routing node. In the judiciary it performs tier-based Clerk-cycle routing such as `clerk-done-router` and `hitl-gate`. | Operator-provisioned |
+| **[law-applicator](../01-concepts/02-foundry-cycle.md#clerk-cycle)** | Applies approved petitions. For T1-3 petitions it writes or retires laws through the Librarian; for T4-5 petitions it creates a dispute record and routes to Embassy for `law-petition` export. | Operator-provisioned |
+| **[HITL node](../04-sdk/08-sdk-hitl.md)** | Generic config-driven Human-in-the-Loop node. Used for hung-jury resolution and for human approval in the Clerk cycle's Tier 3-5 petition path. Single image, multiple CRD instances. | Operator-provisioned |
+| **[Facilitator](../01-concepts/02-foundry-cycle.md#arbiter-path-deadlock-resolution)** | Deadlock resolution lifecycle node. Assembles evidence, creates an Arbiter child Workitem, suspends, resumes, and routes the result back into the parent Flow. | Operator-provisioned |
 
-The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `WRITE:law/tier2`, `READ:law`, `WRITE:friction`, `CREATE:workitem/child`, feedback resolution capabilities, stamp application for hearing artefacts, and access to all registered [CodificationService](#codificationservice) instances (the Operator internally manages their `USE:support/<name>/encode` capability for each). The Clerk node holds `WRITE:law/tier2`, `READ:law`, `CREATE:workitem/child`, and access to CodificationService instances for fan-out. The Judiciary Gate holds `WRITE:law/tier2` and `READ:law` for applying approved petitions via the Librarian. The Advocate holds `USE:queue/server` and `spec.storage` for HITL queue persistence, and is deployed as a StatefulSet with a Headless Service.
+The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `READ:law`, `WRITE:friction`, `CREATE:workitem/child`, and the feedback-resolution capabilities needed for their flows. Clerk-cycle nodes hold the read, write, child-workitem, and codification capabilities required for petition drafting and review. The law-applicator holds the Librarian capabilities needed to apply T1-3 petitions and create dispute records for T4-5 petitions. HITL nodes hold `USE:queue/server` and the storage needed for queue persistence. The Embassy holds the cross-flow transfer capabilities and storage needed for manifest preflight, package staging, and import materialisation; it is a separate boundary node, not part of the Judiciary capability bundle.
 
-The Operator also provisions a `law-reference` GovernedArtefact alongside the Tribunal. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The Tribunal's hearing entry contract requires a single `law-reference` artefact; its hearing exit contract requires it to still be present. The Operator also provisions a `petition` GovernedArtefact for the inner cycle. The [petition artefact](../01-concepts/02-foundry-cycle.md#petition-artefact) is a YAML/Markdown GovernedArtefact containing the complete proposed change set (context, verdict, justification, and formal representations).
+The Operator also provisions a `law-reference` GovernedArtefact alongside the Tribunal. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The Tribunal's hearing entry contract requires a single `law-reference` artefact; its hearing exit contract requires it to still be present. The Operator also provisions a `petition` GovernedArtefact for the inner cycle. The [petition artefact](../01-concepts/02-foundry-cycle.md#petition-artefact) is a YAML/Markdown GovernedArtefact containing the complete proposed change set (`petition_id`, context, changes, and formal representations where applicable). Dispute records are Library entities used to track active T4-5 petitions while authority outcomes are pending.
 
 ### Governance Policy
 
@@ -80,7 +80,7 @@ The Operator also provisions a `law-reference` GovernedArtefact alongside the Tr
 | `defaultTimeout` | `duration` | yes | Default inactivity timeout for node assignments. Used as the fallback when no node-specific timeout is set in FoundryNode. |
 | `maxTimeout` | `duration` | yes | Maximum inactivity timeout for node assignments. No node-specific timeout can exceed this value. Must be >= `defaultTimeout`. |
 | `frictionThresholds` | `FrictionThresholds` | no | Per-tier friction thresholds that trigger review hearings. |
-| `reviewTTLs` | `ReviewTTLs` | no | Per-tier time-to-live durations that trigger review hearings. |
+| `reviewTTLs` | `ReviewTTLs` | no | Tier 1-2 time-to-live durations that trigger review hearings. |
 | `retentionPolicy` | `RetentionPolicy` | no | Retention duration for terminal Workitems before garbage collection. |
 
 ### FrictionThresholds
@@ -93,7 +93,7 @@ The Operator also provisions a `law-reference` GovernedArtefact alongside the Tr
 | `tier4` | `float` | no | Accumulated friction threshold for Tier 4 laws (State Constitutions). |
 | `tier5` | `float` | no | Accumulated friction threshold for Tier 5 laws (Federal Accords). |
 
-When a law's accumulated friction crosses its tier's configured threshold, the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node triggers a review hearing. For Tiers 1-2, the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow.
+When a law's accumulated friction crosses its tier's configured threshold, the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node triggers a review hearing. For Tiers 1-2, the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or the Federation authority publisher.
 
 ### ReviewTTLs
 
@@ -101,11 +101,8 @@ When a law's accumulated friction crosses its tier's configured threshold, the [
 |-------|------|----------|-------------|
 | `tier1` | `duration` | no | Time-to-live for Tier 1 laws (Findings). |
 | `tier2` | `duration` | no | Time-to-live for Tier 2 laws (Rulings). |
-| `tier3` | `duration` | no | Time-to-live for Tier 3 laws (Local Statutes). |
-| `tier4` | `duration` | no | Time-to-live for Tier 4 laws (State Constitutions). |
-| `tier5` | `duration` | no | Time-to-live for Tier 5 laws (Federal Accords). |
 
-When a law's age exceeds its tier's configured TTL, the [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. The law remains active during the hearing. Like friction thresholds, Tiers 1-2 hearings are adjudicated by the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem); Tiers 3-5 produce petitions.
+When a law's age exceeds its configured TTL, the [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher) node triggers a review hearing. TTL-based review applies only to Tier 1 Findings and Tier 2 Rulings. Tier 3-5 laws are reviewed through friction-triggered hearings or explicit authority action, not TTL expiry.
 
 ### RetentionPolicy
 
@@ -117,15 +114,15 @@ When a law's age exceeds its tier's configured TTL, the [TTL Watcher](../01-conc
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `stateRootCA` | `string` | no | PEM-encoded State Root CA certificate. Present when the Flow operates under a Governance Flow. |
-| `naturalisation` | `NaturalisationConfig` | no | Policy for naturalising imported artefacts and stamps at treaty boundaries. |
+| `federationCA` | `string` | no | PEM-encoded Federation CA certificate. Present when the Flow operates within a Federation. Replaces the former `stateRootCA`. |
+| `importTypes` | `map[string]ImportTypeConfig` | no | Named import type map. Each key is an import type name; each value is an [ImportTypeConfig](#importtypeconfig). The import type `law-petition` is a reserved built-in (used by the Judiciary for cross-flow petition submission). If the map is absent or empty, cross-flow import is disabled. |
 
-### NaturalisationConfig
+### ImportTypeConfig
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `autoNaturalise` | `bool` | no | When `true`, imported stamps from sibling Flows are automatically authoritative after chain verification. Default `true` for sibling Flows. |
-| `requireLocalStamps` | `[]string` | no | List of local stamp names that must be applied to imported artefacts during naturalisation at treaty boundaries. |
+| `node` | `string` | yes | Name of the FoundryNode that receives Workitems imported under this import type. Must reference an existing entry-bound node. |
+| `requireForeignStamps` | `map[string][]string` | no | Per-governed-artefact foreign stamp requirements. Each key is a governed artefact name and each value lists the foreign stamp names that the Embassy must verify before it materialises the Workitem and emits local `imported-*` attestations. Empty or absent means no foreign stamps are required for that import type. |
 
 ### Event Bus Configuration
 
@@ -286,7 +283,7 @@ The GovernedArtefact CRD registers a governed artefact and declares its stamp vo
 
 ## Law
 
-The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by the [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) via the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) (with `WRITE:law/tier2`), which drafts petitions, fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes), and routes approved petitions through the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) to the Librarian; Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Governance Flow and Federation. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
+The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by the [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) via the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle), which drafts petitions, fans out to Codification nodes where needed, and routes approved T1-3 petitions through the law-applicator to the Librarian; Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Federation service as published laws. A law that is under active dispute (referenced by a dispute record) cannot be retired or demoted until the dispute is resolved. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
 
 ### `spec`
 
@@ -319,7 +316,7 @@ Any mutation to any part of the law — goal, representations, or metadata — p
 
 ## Treaty
 
-The Treaty CRD defines a directed trust policy for cross-flow collaboration between non-sibling Flows. Detail: [Cross-Flow](../02-flow/06-cross-flow.md), [Governance](../01-concepts/04-governance.md#treaties).
+The Treaty CRD defines a directed trust policy for cross-flow collaboration between Flows that do not share federation membership. Treaties also declare which `crossFlow.importTypes` the remote Flow is permitted to use when importing. Detail: [Cross-Flow](../02-flow/06-cross-flow.md), [Governance](../01-concepts/04-governance.md#treaties).
 
 ### `spec`
 
@@ -329,6 +326,7 @@ The Treaty CRD defines a directed trust policy for cross-flow collaboration betw
 | `direction` | `string` | yes | `import` (this Flow receives from remote), `export` (this Flow sends to remote). Bidirectional exchange requires two Treaty CRDs. Note: a Treaty with `direction: import` in Flow B corresponds to "a Treaty from Flow A to Flow B" in cross-flow descriptions. |
 | `caCert` | `string` | yes | PEM-encoded CA certificate of the remote Flow's trust root. Used for chain verification of imported stamps and packages. |
 | `allowedSubjects` | `[]string` | no | Permitted identity subjects on imported certificates. If empty, all subjects under the CA are accepted. |
+| `allowedImportTypes` | `[]string` | no | Import type names from `crossFlow.importTypes` that this treaty permits the remote Flow to use. If empty, all configured import types are permitted. The reserved `law-petition` import type must be explicitly listed to be allowed. |
 | `maxBundleSize` | `string` | no | Maximum size of export/import bundles. |
 
 ---
@@ -362,7 +360,7 @@ Specialised CRDs (e.g. [CodificationService](#codificationservice)) share the sa
 
 ## CodificationService
 
-The CodificationService CRD declares a [Codification Service](../02-flow/04-system-services.md#codification-services) — a specialised Flow Support Service that translates law goals into formal representations. Each CodificationService instance produces exactly one representation type, declared via `outputFormat`. The [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) fans out to Codification nodes via child Workitems; the CodificationService CRD declares the infrastructure for each codification node.
+The CodificationService CRD declares a [Codification Service](../02-flow/04-system-services.md#codification-services) — a specialised Flow Support Service that translates law goals into formal representations. Each CodificationService instance produces exactly one representation type, declared via `outputFormat`. The [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) fans out to Codification nodes via child Workitems; the CodificationService CRD declares the infrastructure for each codification node.
 
 The CodificationService shares the base deployment fields of FlowSupportService (image, deployment strategy, replicas, storage, resources). Its provided capability is always `encode` — the Operator enforces this implicitly; no `providesCapabilities` field is declared.
 
@@ -385,7 +383,7 @@ The CodificationService shares the base deployment fields of FlowSupportService 
 | `availableReplicas` | `integer` | Current number of ready replicas. |
 | `conditions` | `[]Condition` | Standard Kubernetes conditions. |
 
-The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator internally manages the Judiciary's `USE:support/<name>/encode` capability for each registered CodificationService instance; the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) fans out to these instances via child Workitems during petition drafting. Other nodes that need direct access to a Codification Service require an explicit `USE:support/<name>/encode` grant on their FoundryNode `capabilities`.
+The Operator reconciles CodificationService CRDs identically to FlowSupportService for deployment lifecycle (pod provisioning, health management, scaling). The Operator internally manages the Judiciary's `USE:support/<name>/encode` capability for each registered CodificationService instance; the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) fans out to these instances via child Workitems during petition drafting. Other nodes that need direct access to a Codification Service require an explicit `USE:support/<name>/encode` grant on their FoundryNode `capabilities`.
 
 ---
 
@@ -472,7 +470,7 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 | Rejection condition | Affected CRD | Error |
 |---------------------|--------------|-------|
 | Routing target references a node that does not exist | FoundryFlow, FoundryNode | `SCHEMA_VALIDATION_FAILED` |
-| `importNode` references a nonexistent or non-entry-bound node | FoundryFlow | `IMPORT_NODE_INVALID` |
+| `crossFlow.importTypes` entry references a nonexistent or non-entry-bound node | FoundryFlow | `IMPORT_TYPE_NODE_INVALID` |
 | Entry or exit binding references a contract name not defined on the FoundryFlow | FoundryNode | `UNKNOWN_CONTRACT` |
 | Capability string uses invalid verb, missing qualifier, or unknown syntax | FoundryNode | `INVALID_CAPABILITY` |
 | Exit binding present without a valid contract reference | FoundryNode | `SCHEMA_VALIDATION_FAILED` |
@@ -496,8 +494,10 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 4. Entry and exit contracts share the same [Contract shape](#contract-shape) and evaluation semantics.
 5. Capability enforcement is exact — verb, resource, governed artefact name, and stamp name must match the grant.
 6. Laws are single objects; any `spec` mutation produces a new content-hash version.
-7. Treaty trust is directed — a single CRD represents one direction of trust.
+7. Treaty trust is directed — a single CRD represents one direction of trust. Treaties also govern which import types are permitted.
 8. Invalid configuration is rejected at admission; partial application does not occur.
 9. Stamp vocabulary on GovernedArtefact defines which stamp names are meaningful; contracts select from that vocabulary.
 10. Child Workitem `parentWorkitemID` is immutable after creation. The `flow.gideas.io/parent` label is set by the Operator at creation time.
 11. NodeGroups are inline on FoundryFlow. A node belongs to at most one group.
+12. `crossFlow.importTypes` replaces the former `importNode` field. Each import type maps to an entry-bound node and optional foreign stamp requirements. The `law-petition` import type is reserved for judiciary cross-flow petition submission.
+13. A dispute record prevents retirement or demotion of the referenced law until the dispute is resolved.

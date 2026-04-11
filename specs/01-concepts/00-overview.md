@@ -36,7 +36,9 @@ A **[law](./03-data-model.md#laws)** is a governance rule with a textual **goal*
 
 The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. [Flow Architects](../05-reference/glossary.md#flow-architect) adapt it to their context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
 
-The Judiciary is the exception — it is a standard runtime subsystem present in every Flow, not a swappable reference implementation. It comprises orchestration nodes ([Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor), [Advocate](./02-foundry-cycle.md#advocate-human-escalation)), deliberation nodes ([Juror](./02-foundry-cycle.md#juror-judicial-agent), [Deliberation Gate](./02-foundry-cycle.md#deliberation-gate-consensus-tally)), watcher nodes ([Friction Watcher](./02-foundry-cycle.md#friction-watcher), [TTL Watcher](./02-foundry-cycle.md#ttl-watcher)), and a legislative inner cycle ([Clerk](./02-foundry-cycle.md#clerk-petition-drafter), [Codification](./02-foundry-cycle.md#codification-nodes), [Tribunal Router](./02-foundry-cycle.md#tribunal-router), [Judiciary Gate](./02-foundry-cycle.md#judiciary-gate)).
+The Judiciary is the exception — it is a standard runtime subsystem present in every Flow, not a swappable reference implementation. It comprises lifecycle nodes ([Facilitator](./02-foundry-cycle.md#facilitator)), orchestration nodes ([Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor)), deliberation nodes ([Juror](./02-foundry-cycle.md#juror-judicial-agent)), watcher nodes ([Friction Watcher](./02-foundry-cycle.md#friction-watcher), [TTL Watcher](./02-foundry-cycle.md#ttl-watcher)), a legislative inner cycle (the [Clerk cycle](./02-foundry-cycle.md#clerk-cycle) using [Codification](./02-foundry-cycle.md#codification-nodes), [Rule Router](./02-foundry-cycle.md#rule-router), and [law-applicator](./02-foundry-cycle.md#law-applicator) nodes), and generic [HITL](./02-foundry-cycle.md#hitl-nodes) nodes for human review.
+
+The [Embassy](../02-flow/06-cross-flow.md) is the standard cross-flow boundary node, present in every Flow. It handles outbound export and inbound import of Workitems — including `law-petition`s for higher-authority escalation — using a signed manifest and streamed package protocol. The [Federation service](../02-flow/08-federation.md) is a separate platform service that manages inter-flow trust, membership, state groupings, authority publisher roles, and published-law distribution.
 
 The standard library provides configurable reference implementations for each role as container images. The platform enforces behaviour through capabilities and configuration, not node names.
 
@@ -59,24 +61,28 @@ Laws are tiered by authority and lifecycle:
 | Tier | Name | Source | Lifecycle |
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
-| 2 | **Ruling** | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (Arbiter and Tribunal nodes, via the Clerk node) | Binding precedent. Minted when disputes are resolved. |
+| 2 | **Ruling** | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (via the Clerk cycle and law-applicator) | Binding precedent. Minted when disputes are resolved. |
 | 3 | **Local Statute** | [Flow Architect](../05-reference/glossary.md#flow-architect) | Local policy. Human-administered or via local legislative cycle. |
-| 4 | **State Constitution** | [Governance Flow](./04-governance.md) | Organisational policy. Applies to all Flows in the Governance Flow's instance. |
-| 5 | **Federal Accord** | Federation | Cross-organisation. Synchronised from upstream Federal authorities. |
+| 4 | **State Constitution** | [Federation](./04-governance.md) (state-level authority publisher) | Organisational policy. Published by an authority Flow and distributed to subscriber Flows within the same state by the [Federation service](../02-flow/08-federation.md). |
+| 5 | **Federal Accord** | [Federation](./04-governance.md) (federation-level authority publisher) | Cross-organisation. Published by a federation-level authority Flow and distributed to all subscriber Flows by the [Federation service](../02-flow/08-federation.md). |
 
 Tier 1 Findings are the raw material. They emerge from work — a reviewer notices a pattern, a refiner articulates a principle. If a Finding proves useful (cited frequently across Workitems), it accumulates [friction](./03-data-model.md#friction) attributed to it. When that friction crosses a configured threshold, the [Friction Watcher](./02-foundry-cycle.md#friction-watcher) node triggers a review hearing that can promote it to a Tier 2 Ruling through the [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) node. Laws that generate disproportionate friction surface for review — the system makes the cost of its own governance visible.
 
 The system naturally hardens soft rules into strict ones. A Tier 1 Finding begins as prose and, when promoted, can acquire additional [representations](./03-data-model.md#representations) — formal logic, executable validators — through specialised [translation services](../02-flow/04-system-services.md#codification-services). Authority increases through the tier system; enforceability increases through representation.
 
-### The Governance Flow
+### Federation and Cross-Flow Governance
 
-Tiers 1 and 2 emerge from within a Flow. Tier 3 is the Flow's own legislative authority. Tiers 4 and 5 arrive from above.
+Tiers 1 and 2 emerge from within a Flow. Tier 3 is the Flow's own legislative authority. Tiers 4 and 5 arrive from external authority publishers via the [Federation service](../02-flow/08-federation.md).
 
-A standalone Flow (no [Governance Flow](./04-governance.md)) manages its own Tier 3 Local Statutes as CRDs applied by an administrator. Tiers 4 and 5 do not exist in this configuration.
+A standalone Flow (no federation membership) manages its own Tier 3 Local Statutes as CRDs applied by an administrator. Tiers 4 and 5 do not exist in this configuration.
 
-Under a Governance Flow, the [Governance Flow](./04-governance.md) is a dedicated Flow whose governed artefacts are the laws themselves. It produces Tier 4 State Constitution laws through the same [Foundry Cycle](./02-foundry-cycle.md) as any other Flow, and synchronises Tier 5 Federal Accords from upstream authorities. Sibling Flows receive these laws via their Librarians, ensuring every Flow in the organisation operates under a consistent body of higher-tier governance.
+When a Flow joins a [Federation](./04-governance.md), it gains identity, trust-root discovery, and membership in a governed topology. The Federation defines **states** — groups of Flows that share organisational relationships — and designates **authority publisher** roles that determine which Flows may publish local Tier 3 laws outward. A state-level authority publishes laws that materialise as Tier 4 in subscriber Flows; a federation-level authority publishes laws that materialise as Tier 5 across the federation.
 
-The Governance Flow also serves as the **State Root Certificate Authority**. It issues intermediate CA certificates to each Sibling Flow's Operator, establishing a shared trust hierarchy. Any stamp produced by any node in any sibling Flow is cryptographically verifiable by tracing the certificate chain back to the State Root.
+Published law distribution is a Federation service responsibility. When an authority Flow marks an approved local Tier 3 law as `published`, the Federation service validates the publication, runs conflict detection, and distributes accepted laws to subscriber Flows.
+
+Higher-authority escalation flows in the opposite direction: a Flow's Clerk cycle can produce a `law-petition` that the [Embassy](../02-flow/06-cross-flow.md) exports to the relevant authority Flow. The authority Flow processes the petition through its own governance cycle. The originating Flow does not wait for remote deliberation — it creates a [dispute record](./03-data-model.md#dispute-records) and routes affected Workitems to `pending-hold` until the authority accepts or rejects the petition.
+
+Federation membership also establishes a shared trust hierarchy. The federation trust root enables cross-flow stamp verification: any stamp produced by any node in any member Flow is cryptographically verifiable by tracing the certificate chain back to the federation root. Non-federation cross-flow exchange uses [Treaties](../02-flow/06-cross-flow.md) — directed trust policies that constrain which `importType`s a remote Flow may use.
 
 ---
 
@@ -90,7 +96,7 @@ As a Workitem moves through the cycle, nodes apply [stamps](#stamps) to the arte
 
 ### Exit Contracts
 
-Exit contracts are defined per governed artefact name. For each name, a contract specifies a list of required stamp names; an empty list means artefacts of that governed artefact name must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required governed artefact name, all of them must satisfy that name's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the exit-bound node calls `complete()`, and the Operator checks the bound exit contract against each required governed artefact name. If any requirement is unsatisfied, the Workitem cannot exit. When completion triggers cross-flow export, only artefacts whose governed artefact names are listed in the bound exit contract are exported.
+Exit contracts are defined per governed artefact name. For each name, a contract specifies a list of required stamp names; an empty list means artefacts of that governed artefact name must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required governed artefact name, all of them must satisfy that name's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the exit-bound node calls `complete()`, and the Operator checks the bound exit contract against each required governed artefact name. If any requirement is unsatisfied, the Workitem cannot exit. When a Workitem is handed to the Embassy for cross-flow transfer, only artefacts whose governed artefact names are listed in the Embassy's bound exit contract are exported.
 
 ```mermaid
 sequenceDiagram

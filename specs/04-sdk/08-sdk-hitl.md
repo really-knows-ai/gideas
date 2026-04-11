@@ -2,7 +2,7 @@
 
 The HITL (Human-in-the-Loop) SDK surface provides managed infrastructure for nodes that require human decisions during Workitem processing. Any node can become an HITL node by declaring the `USE:queue/server` [capability](../03-node/02-configuration.md#capability-grants) and configuring persistent storage. The SDK provides queue management, REST API exposure, persistence, and the Federated Queue Mesh for horizontal scaling.
 
-The Judiciary's [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is a concrete HITL node for judicial escalation. User-defined HITL nodes compose the same SDK pattern with domain-specific decision logic.
+HITL is a generic, config-driven pattern. Any node that declares `USE:queue/server` becomes an HITL node. Domain-specific decision logic — judicial escalation, content approval, compliance review, or any other human-decision workflow — is expressed entirely through node configuration: outputs become choices, `WRITE:feedback` enables feedback recording, and exit-node config enables cancellation paths.
 
 ## HITL Runtime Role
 
@@ -358,18 +358,20 @@ Telemetry tracks status transitions. The consuming layer (Dashboard/BFF) correla
 
 ### Friction
 
-HITL involvement emits friction at magnitude `depth ^ (rounds * 2)`, where `depth` is the feedback item's history depth and `rounds` is the number of deliberation rounds that preceded human review. This makes human intervention the most expensive governance signal, creating a natural pressure to resolve disputes through automated deliberation before reaching human review. Friction emission is the responsibility of the node that routes to the HITL node (e.g., the Arbiter), not the HITL node itself.
+HITL involvement emits friction at magnitude `depth ^ (rounds * 2)`, where `depth` is the feedback item's history depth and `rounds` is the number of deliberation rounds that preceded human review. This makes human intervention the most expensive governance signal, creating a natural pressure to resolve disputes through automated deliberation before reaching human review. Friction emission is the responsibility of the node that routes to the HITL node, not the HITL node itself.
 
-## Advocate: Judiciary HITL Node
+## Config-Driven HITL Pattern
 
-The [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is the Judiciary's concrete HITL node. It is a standard HITL node using the SDK pattern described in this document, with domain-specific logic for judicial escalation:
+The HITL node is fully generic. All domain-specific behaviour is expressed through FoundryNode CRD configuration — there is no special SDK subclass or Judiciary-specific HITL variant:
 
-- Receives Workitems from the [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) (hung verdict — consensus not reached after maximum deliberation rounds), the [Tribunal Router](../01-concepts/02-foundry-cycle.md#tribunal-router) (Tier 3+ hearing verdicts requiring human ratification or appeal), and the [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) (approved Tier 3 petitions requiring HITL ratification before application).
-- Parks Workitems in the HITL queue for human decision.
-- The human reviewer (via Dashboard/BFF) reviews the judicial context and renders a decision.
-- The Advocate records the decision on artefacts and routes based on the human verdict.
+| Configuration aspect | CRD mechanism | Effect |
+|---|---|---|
+| **Decision choices** | `spec.outputs` | Each named output becomes a routing choice the human selects. E.g., `approved`, `rejected`, `needs-revision`. |
+| **Feedback recording** | `WRITE:feedback` capability | When granted, the HITL handler records the human's justification as feedback on governed artefacts before routing. |
+| **Cancellation** | Exit-node config (`spec.exit`) | When the HITL node is bound to an exit contract, `cancel` becomes a valid decision that completes the Workitem at the exit boundary. |
+| **Escalation** | `timeout` output + escalation deadline | Standard deadline-driven routing to the next escalation tier (see [Escalation Patterns](#escalation-patterns)). |
 
-For Tier 3 proposals, the human ratifies or rejects the proposed law change. For Tier 4-5 appeals, the Advocate routes to the [Governance Flow](../01-concepts/04-governance.md#the-governance-flow). HITL decisions route to the [Clerk node](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter) so they are codified as petitions and go through the normal review cycle. The Advocate's routing topology is defined by the Operator at provisioning time.
+A single HITL container image serves all use cases. The Operator provisions distinct FoundryNode CRD instances with different output topologies, capability grants, and contract bindings. The node handler code is identical — it parks, waits for a human decision, records the outcome, and routes to the selected output.
 
 ## HITL SDK Invariants
 

@@ -67,9 +67,9 @@ Emitted by the [Archivist](../02-flow/04-system-services.md#archivist) when gove
 | `INVALID_STATE_TRANSITION` | `FAILED_PRECONDITION` | The requested feedback state transition is not permitted from the item's current state. The Archivist enforces the [feedback state machine](../01-concepts/03-data-model.md#feedback-lifecycle) — only explicitly listed transitions are valid. | Do not retry. Check the feedback item's current state and use the correct transition operation. |
 | `ARTEFACT_CORRUPTED` | `DATA_LOSS` | The SHA-256 hash of retrieved artefact content does not match the stored version hash. The Sidecar detected the mismatch on read. | Do not use the content. Report the corruption through telemetry. This indicates a storage integrity issue requiring operational investigation. |
 | `ARTEFACT_KIND_CONFLICT` | `INVALID_ARGUMENT` | An operation referenced an existing artefact `id` with a different `governed_artefact` than previously established. An artefact's governed artefact is immutable for a given `id` within a Workitem. | Do not retry. The artefact `id` is already bound to a different governed artefact. Use a different `id` for the new artefact, or use the existing governed artefact. |
-| `DELIBERATION_HUNG` | `FAILED_PRECONDITION` | The [Deliberation Gate](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally) failed to reach consensus within the configured maximum deliberation rounds. The Deliberation Gate routes to its `hung` output — the Arbiter routes to the [Advocate](../01-concepts/02-foundry-cycle.md#advocate-human-escalation) for human escalation; the Tribunal routes to the Advocate for HITL resolution. | Not directly retriable by nodes. The Deliberation Gate handles hung verdict routing internally. |
-| `JUROR_INFERENCE_FAILED` | `INTERNAL` | A [Juror node's](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) inference call failed during deliberation. | Transient — the Juror node may be retried via the fan-out parent. If persistent, the child Workitem fails and the Deliberation Gate accounts for the missing verdict. |
-| `LAW_WRITE_FAILED` | `INTERNAL` | The [Judiciary Gate](../01-concepts/02-foundry-cycle.md#judiciary-gate) failed to persist an approved petition's law changes via the Librarian's `WriteLaw` method. | The Judiciary Gate may retry internally. Persistent failures block the petition from being applied. |
+| `DELIBERATION_HUNG` | `FAILED_PRECONDITION` | The internal tally on the Arbiter or Tribunal failed to reach consensus within the configured maximum deliberation rounds. The orchestrating node routes to its `hung` output — the Arbiter routes to the [HITL node](../04-sdk/08-sdk-hitl.md) for human escalation; the Tribunal routes to the HITL node for resolution. | Not directly retriable by nodes. The orchestrating node handles hung verdict routing internally. |
+| `JUROR_INFERENCE_FAILED` | `INTERNAL` | A [Juror node's](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem) inference call failed during deliberation. | Transient — the Juror node may be retried via the fan-out parent. If persistent, the child Workitem fails and the Arbiter or Tribunal accounts for the missing verdict according to its internal tally policy. |
+| `LAW_WRITE_FAILED` | `INTERNAL` | The [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) failed to persist an approved petition's law changes via the Librarian's `WriteLaw` method. | The law-applicator may retry internally. Persistent failures block the petition from being applied. |
 | `QUEUE_ITEM_NOT_FOUND` | `NOT_FOUND` | A queue operation referenced an item that does not exist on the target shard. | Verify the item ID. The item may have been decided or may reside on a different shard. |
 | `QUEUE_ITEM_ALREADY_CLAIMED` | `ALREADY_EXISTS` | An attempt to claim a queue item that is already in `claimed` state. | The item is already claimed. Wait for it to be released or decided. |
 | `QUEUE_ITEM_INVALID_STATE` | `FAILED_PRECONDITION` | A queue state transition was attempted from an invalid state. For example, deciding or releasing an item that is not in `claimed` state. | Check the item's current state and use the correct operation. |
@@ -85,7 +85,7 @@ Emitted at CRD admission time by the Operator, or at request time when configura
 |------|-------------|-------|-----------------|
 | `INVALID_CAPABILITY` | `INVALID_ARGUMENT` | A capability string in the FoundryNode CRD uses an invalid verb, is missing a required qualifier, or has unknown syntax. | Fix the capability string. The Operator does not reconcile a FoundryNode with syntactically invalid capabilities. See [capability syntax](./crds.md#capability-syntax). |
 | `UNKNOWN_CONTRACT` | `INVALID_ARGUMENT` | A node's entry or exit binding references a contract name not defined in the FoundryFlow's `entryContracts` or `exitContracts`. | Fix the binding to reference an existing contract, or add the contract to the FoundryFlow CRD. |
-| `IMPORT_NODE_INVALID` | `INVALID_ARGUMENT` | The `importNode` field references a node that does not exist, or the referenced node is not bound to an entry contract. | Fix the `importNode` reference or add an entry binding to the target node. Cross-flow import is rejected until this is resolved. |
+| `IMPORT_TYPE_NODE_INVALID` | `INVALID_ARGUMENT` | A `crossFlow.importTypes` entry references a node that does not exist, or the referenced node is not bound to an entry contract. | Fix the import type's `node` reference or add an entry binding to the target node. Cross-flow import for that import type is rejected until this is resolved. |
 | `SCHEMA_VALIDATION_FAILED` | `INVALID_ARGUMENT` | CRD admission validation failed — missing required fields, invalid field types, constraint violations, or structural inconsistencies. | Fix the CRD content. The Operator provides a descriptive message identifying the specific validation failure. |
 
 ---
@@ -96,10 +96,38 @@ Emitted during cross-flow exchange, trust verification, and law integration.
 
 | Code | gRPC Status | Cause | Caller Response |
 |------|-------------|-------|-----------------|
-| `TRUST_CHAIN_INVALID` | `PERMISSION_DENIED` | The certificate chain on an imported stamp or package does not validate against the expected trust root (State Root CA for siblings, Treaty CA for non-siblings). | Reject the import. Investigate certificate configuration. This may indicate an expired certificate, a misconfigured trust root, or a security incident. |
-| `TREATY_NOT_FOUND` | `NOT_FOUND` | A cross-flow operation was attempted between non-sibling Flows with no Treaty configured for the required direction. | Configure a Treaty CRD for the required direction before attempting the exchange. |
+| `TRUST_CHAIN_INVALID` | `PERMISSION_DENIED` | The certificate chain on an imported stamp or package does not validate against the expected trust root (Federation CA for federation-member exchange, Treaty CA for Treaty exchange). | Reject the import. Investigate certificate configuration. This may indicate an expired certificate, a misconfigured trust root, or a security incident. |
+| `TREATY_NOT_FOUND` | `NOT_FOUND` | A cross-flow operation was attempted between Flows with no Treaty configured for the required non-federation direction. | Configure a Treaty CRD for the required direction before attempting the exchange. |
 | `NATURALISATION_REQUIRED` | `FAILED_PRECONDITION` | Imported stamps from a treaty crossing do not carry local governance authority. The stamps are preserved for provenance but do not satisfy local stamp requirements. | Process the Workitem through the local governance loop. The normal routing cycle drives the Workitem to nodes configured to provide local stamps. |
-| `IMPORT_ADMISSION_FAILED` | `FAILED_PRECONDITION` | The imported Workitem does not satisfy the import node's bound entry contract. | The receiving Flow rejected the import. Review the import node's entry contract requirements and the exported artefact state. |
+| `IMPORT_ADMISSION_FAILED` | `FAILED_PRECONDITION` | The imported Workitem does not satisfy the import type node's bound entry contract. | The receiving Flow rejected the import. Review the import type node's entry contract requirements and the exported artefact state. |
+
+---
+
+## Embassy Transfer Errors
+
+Emitted by the [Embassy](./grpc-api.md#embassy-api) during cross-flow Workitem transfer (manifest preflight and package streaming).
+
+| Code | gRPC Status | Cause | Caller Response |
+|------|-------------|-------|-----------------|
+| `UNKNOWN_IMPORT_TYPE` | `FAILED_PRECONDITION` | The import type specified in the manifest does not exist in the receiving Flow's `crossFlow.importTypes` configuration. | Do not retry. The receiving Flow does not accept this import type. Verify the import type name and the receiving Flow's configuration. |
+| `HEADER_REJECTED` | `FAILED_PRECONDITION` | The manifest preflight was rejected — the treaty does not permit the import type, the bundle size exceeds limits, or the source identity failed validation. | Do not retry without fixing the rejection cause. Check treaty `allowedImportTypes`, `maxBundleSize`, and identity material. |
+| `FOREIGN_STAMP_INVALID` | `PERMISSION_DENIED` | Foreign attestation stamps on the imported package failed chain verification against the expected trust root. | Reject the import. The stamps may be from an untrusted source. Investigate the certificate chain. |
+| `PACKAGE_DIGEST_MISMATCH` | `DATA_LOSS` | The SHA-256 digest of the streamed package content does not match the trailer digest. | The package was corrupted in transit. Retry the full transfer. |
+| `TREATY_IMPORT_TYPE_DENIED` | `PERMISSION_DENIED` | The Treaty's `allowedImportTypes` does not include the requested import type. | Do not retry. The treaty must be updated to permit this import type. |
+| `NATURALISATION_FAILURE` | `FAILED_PRECONDITION` | The Embassy failed to emit the required local `imported-*` attestations after verifying foreign stamps, or the naturalisation process encountered an irrecoverable error. | Do not retry without investigating the import-type stamp requirements, trust material, and the state of the imported artefacts. |
+
+---
+
+## Federation Publication Errors
+
+Emitted by the [Federation service](./grpc-api.md#federation-api) during law publication, conflict resolution, and distribution.
+
+| Code | gRPC Status | Cause | Caller Response |
+|------|-------------|-------|-----------------|
+| `UNAUTHORISED_PUBLISH` | `PERMISSION_DENIED` | The publisher is not an authorised authority publisher for the target state scope. | Do not retry. The publisher's identity does not have publication rights for this scope. |
+| `CONFLICTING_PUBLISHED_LAW` | `FAILED_PRECONDITION` | The submitted law conflicts with an existing published law in the same Federation state scope. | Resolve the conflict by revising the submission or withdrawing the conflicting publication if you control it. The publication is rejected during admission; there is no separate conflict-reject RPC. |
+| `UNKNOWN_STATE_SCOPE` | `NOT_FOUND` | The state scope identifier is not recognised by the Federation. | Verify the state scope name. The Federation may need to be configured with this scope. |
+| `PUBLICATION_REJECTED` | `FAILED_PRECONDITION` | The publication was rejected by Federation conflict review or policy validation. | Do not retry without addressing the rejection reason. Review the rejection details in the response message. |
 
 ---
 
@@ -140,12 +168,15 @@ Emitted when a service is temporarily unreachable.
 | State machine (`INVALID_STATE_TRANSITION`) | No | Check current state, use correct operation. |
 | Data integrity (`ARTEFACT_CORRUPTED`) | No | Report and investigate. |
 | Identity conflict (`ARTEFACT_KIND_CONFLICT`) | No | Use correct `id`/`governed_artefact` pairing. |
-| Jury deliberation (`DELIBERATION_HUNG`, `JUROR_INFERENCE_FAILED`) | No | Handled internally by the Judiciary. Hung verdict routes to the Advocate. |
-| Judiciary Gate (`LAW_WRITE_FAILED`) | Possibly | Judiciary Gate may retry internally. Persistent failure blocks petition application. |
+| Jury deliberation (`DELIBERATION_HUNG`, `JUROR_INFERENCE_FAILED`) | No | Handled internally by the Judiciary. Hung verdict routes to the HITL node. |
+| law-applicator (`LAW_WRITE_FAILED`) | Possibly | law-applicator may retry internally. Persistent failure blocks petition application. |
 | Queue (`QUEUE_ITEM_NOT_FOUND`, `QUEUE_ITEM_ALREADY_CLAIMED`, `QUEUE_ITEM_INVALID_STATE`) | No | Verify item state. |
 | Queue availability (`QUEUE_UNAVAILABLE`) | Yes | Retry with backoff. Shard may recover. |
-| Configuration (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) | No | Fix CRD configuration. |
+| Configuration (`INVALID_CAPABILITY`, `UNKNOWN_CONTRACT`, `IMPORT_TYPE_NODE_INVALID`, `SCHEMA_VALIDATION_FAILED`) | No | Fix CRD configuration. |
 | Cross-flow trust (`TRUST_CHAIN_INVALID`, `TREATY_NOT_FOUND`, `NATURALISATION_REQUIRED`, `IMPORT_ADMISSION_FAILED`) | No | Fix trust configuration or process through local governance. |
+| Embassy transfer (`UNKNOWN_IMPORT_TYPE`, `HEADER_REJECTED`, `FOREIGN_STAMP_INVALID`, `TREATY_IMPORT_TYPE_DENIED`, `NATURALISATION_FAILURE`) | No | Fix import type configuration, treaty permissions, or identity material. |
+| Embassy integrity (`PACKAGE_DIGEST_MISMATCH`) | Yes | Retry the full transfer. |
+| Federation publication (`UNAUTHORISED_PUBLISH`, `CONFLICTING_PUBLISHED_LAW`, `UNKNOWN_STATE_SCOPE`, `PUBLICATION_REJECTED`) | No | Fix publisher authorisation, resolve conflicts, or verify state scope. |
 | Missing data (`FEEDBACK_NOT_FOUND`, `LAW_NOT_FOUND`) | No | Resource is absent. Adapt logic. |
 | Unregistered artefact type (`UNKNOWN_GOVERNED_ARTEFACT`) | No | Register a GovernedArtefact CRD. Configuration issue. |
 | Content limit (`MESSAGE_TOO_LONG`) | No | Reduce content length. |

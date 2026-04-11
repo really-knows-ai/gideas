@@ -59,16 +59,16 @@ Node selection policy can vary by deployment (capacity, readiness, fairness stra
 Workitem admission into a Flow lifecycle is entry-contract bound.
 
 - Local creation admission (nodes originating new Workitems) is enforced against the admitting node's bound entry contract.
-- Cross-flow import admission (receiving Flow) is enforced against configured `importNode` and its bound entry contract.
+- Cross-flow import admission (receiving Flow) is enforced against the node configured for the import type in `crossFlow.importTypes` and its bound entry contract. The [Embassy](./06-cross-flow.md) handles manifest verification, package transfer, and naturalisation before routing to the configured node.
 - Review-hearing admission is enforced against the Tribunal's bound hearing entry contract.
 - Entry and exit contracts share the same validation shape: per governed artefact name, required stamp-name list, empty list as presence-only, empty contract as no artefact requirements.
 
 Admission outcomes:
 
-1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses configured `importNode`; review-hearing admission uses Tribunal hearing entry binding).
+1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses the node configured for the import type in `crossFlow.importTypes`; review-hearing admission uses Tribunal hearing entry binding).
 2. Validate Workitem artefacts against per-name requirements.
 3. On success, admit Workitem into `Pending` lifecycle state.
-4. For cross-flow import, schedule first assignment to configured `importNode` when capacity allows.
+4. For cross-flow import, route to the node configured for the import type when capacity allows.
 5. For review-hearing admission, schedule first assignment to the Tribunal when capacity allows.
 6. On failure, reject admission with structured contract-validation errors.
 
@@ -136,13 +136,15 @@ Validation semantics:
 
 On validation failure, completion is rejected and the Workitem does not transition to `Completed`.
 
-## Cross-Flow Collaboration and Treaties
+## Cross-Flow Collaboration
 
-The Operator is the gateway for work crossing Flow boundaries. It manages the assembly and signing of export bundles and the verification and admission of import bundles.
+The Operator provisions and manages the [Embassy](./06-cross-flow.md) — the standard cross-flow boundary node present in every Flow. The Operator's responsibilities in cross-flow collaboration:
 
-- **Export**: When a Workitem completes and is configured for export, the Operator assembles the export package. It filters artefacts by the bound exit contract, includes all provenance (stamps, feedback, version history), signs the package with the Flow's identity material, and attaches the certificate chain.
-- **Import**: The Operator receives export packages, verifies the cryptographic signature against the appropriate trust root (State Root for siblings, Treaty CA for non-siblings), and validates the materialised Workitem against the configured `importNode`'s entry contract.
-- **Treaty Enforcement**: For non-sibling transfers, the Operator enforces Treaty constraints (allowed subjects, bundle size limits) during import admission.
+- **Embassy provisioning**: The Operator auto-provisions the Embassy node and validates `crossFlow.importTypes` configuration (ensuring referenced nodes exist and are entry-bound).
+- **Federation trust projection**: In federated deployments, the Operator projects federation trust material and endpoint configuration to the Embassy.
+- **Export scope**: When a Workitem completes and routes to the Embassy for export, the exit contract shapes the export bundle — only governed artefact names listed in the bound exit contract are transferred.
+
+The Embassy handles the transfer protocol directly (signed manifests, package streaming, naturalisation). The Operator does not mediate individual transfers. The [Federation service](./08-federation.md) handles published-law distribution separately — this is not an Operator responsibility.
 
 The technical specifications for these operations are detailed in the [gRPC API Reference](../05-reference/grpc-api.md#service-facing-methods), and the collaboration models are covered in [Cross-Flow Collaboration](./06-cross-flow.md).
 
@@ -164,7 +166,7 @@ Recovery policy can tune retry budgets and backoff strategy, but it cannot viola
 The Operator is the trust anchor manager for its Flow execution boundary.
 
 - In standalone topology, Operator manages local trust-chain issuance for runtime participants.
-- Under a Governance Flow, Operator participates in accession and receives intermediate authority anchored to the shared State Root.
+- Under federation membership, Operator participates in accession and receives intermediate authority anchored to the federation trust root.
 - Operator rotates and applies runtime trust material according to policy windows.
 
 Trust lifecycle details, treaty boundaries, and cross-flow authority semantics are defined in [Cross-Flow Collaboration](./06-cross-flow.md).

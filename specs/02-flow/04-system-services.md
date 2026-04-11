@@ -13,6 +13,7 @@ Each service owns one primary concern:
 - **Flow Monitor**: pipeline adapter for metrics export (Prometheus) and audit log emission (JSON Lines to stdout).
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
 - **Flow Support Services**: optional, Flow-Architect-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the worked example in this spec.
+- **Federation Service**: cross-Flow law distribution, federation membership management, and federation trust root (federation root CA) coordination. Covered in detail in [Federation](./08-federation.md).
 
 No service duplicates another service's source of truth.
 
@@ -32,7 +33,7 @@ flowchart TD
     EB --> FM["Flow Monitor"]
     FL --> EB
 
-    LB <-->|"law sync and appeals"| XFL["Cross-flow Librarian"]
+    LB <-->|"law sync via Federation"| FED["Federation Service"]
 ```
 
 ## Flow Event Bus
@@ -193,7 +194,7 @@ Tier is part of legal authority, but retrieval remains one law body with one ide
 
 ### Integration and Conflict Checks
 
-When higher-tier laws arrive from cross-flow replication, the Librarian performs a two-stage conflict protocol:
+When higher-tier laws arrive from Federation service distribution, the Librarian performs a two-stage conflict protocol:
 
 1. Semantic search for candidate contradictions, scoped by `appliesTo` — a law governing `"haiku"` is not conflict-checked against a law governing `"python-source"`. Global laws are conflict-checked against all laws regardless of scope.
 2. LLM contradiction evaluation of candidates to determine actual contradiction.
@@ -212,8 +213,9 @@ The Librarian is a pure law store and lifecycle service. It does not own hearing
 The Librarian's law lifecycle responsibilities:
 
 - Store, index, and serve laws to nodes and services.
-- Manage integration conflict checks for cross-flow law replication.
-- Apply law lifecycle actions (promote, retire, demote) when called by the Operator after hearing completion.
+- Manage integration conflict checks for Federation service law distribution.
+- Persist law writes and retirements requested by nodes such as [law-applicator](./03-nodes-external.md#the-judiciary--standard-subsystem).
+- Create, query, and retire dispute records for T4-5 petition tracking.
 - Manage law version history and content-hash versioning.
 
 ## Archivist
@@ -265,7 +267,7 @@ Flow Support Services are optional containers deployed by the Flow Architect tha
 
 Support Services do not process Workitems — they expose gRPC capabilities consumed by nodes and system services through different access paths:
 
-- Nodes consume Support Services through [Sidecar](../03-node/01-sidecar.md) mediation, preserving the platform invariant that nodes never call services directly. Judiciary nodes (Arbiter, Tribunal, Advocate) are nodes and access Support Services through their Sidecars.
+- Nodes consume Support Services through [Sidecar](../03-node/01-sidecar.md) mediation, preserving the platform invariant that nodes never call services directly. Judiciary nodes (Arbiter, Tribunal) and HITL nodes are nodes and access Support Services through their Sidecars.
 - System services discover and consume Support Services via the Flow configuration and direct service-to-service gRPC.
 
 Support Services are declared via their own CRD, which specifies:
@@ -290,24 +292,24 @@ Codification Services are a Flow Support Service specialisation for governance h
 
 Each Codification Service is declared via its own [CodificationService CRD](../05-reference/crds.md#codificationservice), which specifies exactly one `outputFormat` — the MIME type of the representation the service produces (e.g., `application/smt-lib` for formal logic, `application/rego` for policy-as-code). The Operator manages CodificationService deployments identically to other Support Services.
 
-Codification Services are consumed by the [Clerk node](./03-nodes-external.md#the-judiciary--standard-subsystem) during petition drafting. The Clerk fans out to Codification nodes (which wrap Codification Services) via child Workitems. Each Codification node receives a child Workitem, invokes its backing Codification Service's `Encode` method, and returns the formal representation.
+Codification Services are consumed by the [Clerk cycle](./03-nodes-external.md#the-judiciary--standard-subsystem) (clerk-forge) during petition drafting. The Clerk cycle fans out to Codification nodes (which wrap Codification Services) via child Workitems. Each Codification node receives a child Workitem, invokes its backing Codification Service's `Encode` method, and returns the formal representation.
 
 Codification Services expose a single `Encode` [gRPC method](../05-reference/grpc-api.md#codification-service-api):
 
-1. The [Clerk node](./03-nodes-external.md#the-judiciary--standard-subsystem) receives a verdict and context artefacts and drafts the petition's prose representation — the goal and its `text/markdown` content.
-2. The Clerk fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems. Each Codification node discovers its backing Codification Service and probes the service's `readyz` endpoint.
+1. The [Clerk cycle](./03-nodes-external.md#the-judiciary--standard-subsystem) (clerk-forge) receives a verdict and context artefacts and drafts the petition's prose representation — the goal and its `text/markdown` content.
+2. The Clerk cycle fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems. Each Codification node discovers its backing Codification Service and probes the service's `readyz` endpoint.
 3. Each Codification node dispatches an `Encode` request to its backing service. Each request carries the law goal and context. Each service returns a single typed representation in its declared `outputFormat`.
 4. The Codification node produces the representation as an artefact on its child Workitem and calls `Complete()`.
-5. The Clerk collects child results. If a Codification node fails, the Clerk logs the failure and omits that representation — the petition proceeds without it.
-6. The Clerk assembles the petition with the prose representation plus all successfully returned formal representations.
+5. The Clerk cycle collects child results. If a Codification node fails, the Clerk cycle logs the failure and omits that representation — the petition proceeds without it.
+6. The Clerk cycle assembles the petition with the prose representation plus all successfully returned formal representations.
 
-The Judiciary (via the [Clerk node](./03-nodes-external.md#the-judiciary--standard-subsystem)) decides what the petition says; each Codification Service translates the goal into its declared formal syntax.
+The Judiciary (via the [Clerk cycle](./03-nodes-external.md#the-judiciary--standard-subsystem)) decides what the petition says; each Codification Service translates the goal into its declared formal syntax.
 
-Flow Architects deploy zero or more CodificationService CRDs. Each declares exactly one `outputFormat` — `codify-smt` outputs `application/smt-lib`, `codify-rego` outputs `application/rego`. If no CodificationService is registered or none are ready at the time of petition drafting, the Clerk assembles petitions with prose representations only — governance hardening through codification is optional, not a platform requirement.
+Flow Architects deploy zero or more CodificationService CRDs. Each declares exactly one `outputFormat` — `codify-smt` outputs `application/smt-lib`, `codify-rego` outputs `application/rego`. If no CodificationService is registered or none are ready at the time of petition drafting, the Clerk cycle assembles petitions with prose representations only — governance hardening through codification is optional, not a platform requirement.
 
 ```mermaid
 sequenceDiagram
-    participant CL as Clerk node
+    participant CL as Clerk cycle
     participant SC as Sidecar
     participant CN as Codification Node
     participant CS as Codification Service
@@ -347,16 +349,14 @@ The hearing follows the node-based Judiciary topology:
 
 1. A watcher node ([Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) or [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem)) creates a hearing Workitem via `CreateWorkitem`, stores a `law-reference` artefact, and routes to the Tribunal.
 2. The Tribunal assembles evidence and fans out to [Juror](./03-nodes-external.md#the-judiciary--standard-subsystem) nodes.
-3. Juror verdicts are collected and the Workitem routes to the [Deliberation Gate](./03-nodes-external.md#the-judiciary--standard-subsystem).
-4. On consensus, the [Tribunal Router](./03-nodes-external.md#the-judiciary--standard-subsystem) reads the tier from the law-reference artefact and routes accordingly:
-   - Tier 1–2 verdict: route to the [Clerk](./03-nodes-external.md#the-judiciary--standard-subsystem) to draft a petition.
-   - Tier 3+: route to the [Advocate](./03-nodes-external.md#the-judiciary--standard-subsystem) for petition or appeal.
-4. If the Clerk drafts a petition, it enters the judiciary inner cycle: Clerk drafts, fans out to Codification nodes, routes to the Tribunal for review (review mode), Deliberation Gate tallies, and the [Judiciary Gate](./03-nodes-external.md#the-judiciary--standard-subsystem) checks feedback resolution. On approval, the Judiciary Gate applies the petition to the Library via the Librarian (`WriteLaw`/`RetireLaw`). The law is created in a pending state and remains inactive until ratification.
-5. The Tribunal calls `complete()`. The Operator validates the hearing exit contract and applies completion state; the Librarian applies resulting law lifecycle actions, activating the new law.
+3. Juror verdicts are collected and the Arbiter/Tribunal performs an internal tally.
+4. On consensus, the Tribunal creates a child Workitem for the [Clerk cycle](./03-nodes-external.md#the-judiciary--standard-subsystem), attaching a `verdict-context` artefact that captures the hearing decision.
+5. The Clerk cycle drafts and reviews the resulting petition, then applies local T1-3 changes via the [law-applicator](./03-nodes-external.md#the-judiciary--standard-subsystem) or exports approved T4-5 petitions through the [Embassy](./03-nodes-external.md#the-judiciary--standard-subsystem) as `law-petition`s.
+6. The Tribunal calls `complete()` after handing the work to the Clerk cycle. The hearing completes locally; the downstream Clerk cycle runs independently.
 
 Trigger ownership is distributed to dedicated watcher nodes:
 
-- Friction-threshold trigger (all tiers) -> [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) subscribes to friction channel (via Sidecar), receives threshold-crossing signal from Friction Ledger. Creates hearing Workitem via `CreateWorkitem` and routes to Tribunal. For Tiers 1-2, the Tribunal adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or Governance Flow via the Advocate.
+- Friction-threshold trigger (all tiers) -> [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) subscribes to friction channel (via Sidecar), receives threshold-crossing signal from Friction Ledger, creates a hearing Workitem via `CreateWorkitem`, and routes to Tribunal. On consensus, the Tribunal creates a Clerk-cycle child Workitem; if that petition later targets T4-5 law, the Clerk cycle exits through Embassy as a `law-petition`.
 - Review-TTL-expiry trigger -> [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) polls Librarian for laws exceeding tier's configured review TTL. Creates hearing Workitem via `CreateWorkitem` and routes to Tribunal. The law remains active during the hearing.
 
 Execution and adjudication path:
@@ -365,10 +365,9 @@ Execution and adjudication path:
 2. Operator admits and assigns the hearing Workitem to the Tribunal using the Tribunal's bound hearing entry contract.
 3. The Tribunal retrieves the law's friction data from the Friction Ledger (via Sidecar) and legal context from the Librarian.
 4. The Tribunal fans out to [Juror](./03-nodes-external.md#the-judiciary--standard-subsystem) nodes for deliberation using child Workitems.
-5. Juror verdicts are collected and the Workitem routes to the [Deliberation Gate](./03-nodes-external.md#the-judiciary--standard-subsystem) for consensus tally.
-6. On consensus, the [Tribunal Router](./03-nodes-external.md#the-judiciary--standard-subsystem) routes by tier. For a **Promote** verdict at Tier 1-2, the [Clerk](./03-nodes-external.md#the-judiciary--standard-subsystem) drafts a petition, fans out to [Codification nodes](./03-nodes-external.md#the-judiciary--standard-subsystem) for formal representations, and routes to the Tribunal for review. The petition enters the judiciary inner cycle.
-7. The [Judiciary Gate](./03-nodes-external.md#the-judiciary--standard-subsystem) applies approved petitions to the Librarian (via `WriteLaw`). For Retire or Demote verdicts, the Judiciary Gate calls `RetireLaw` or modifies the law's tier via the Librarian without codification.
-8. The Tribunal calls `complete()`. Operator validates the hearing exit contract and applies completion state; Librarian applies resulting law lifecycle actions, activating the new law.
+5. Juror verdicts are collected and the Arbiter/Tribunal performs an internal tally for consensus.
+6. On consensus, the Tribunal creates a Clerk-cycle child Workitem carrying a `verdict-context` artefact. The child Workitem enters the judiciary inner cycle for petition drafting, codification, review, tier-based routing, and law application or Embassy export.
+7. The Tribunal calls `complete()`. Operator validates the hearing exit contract and applies completion state. Any resulting law lifecycle actions occur in the downstream Clerk-cycle child.
 
 ```mermaid
 sequenceDiagram
@@ -376,11 +375,10 @@ sequenceDiagram
     participant OP as Operator
     participant TB as Tribunal
     participant JR as Juror nodes
-    participant DG as Deliberation Gate
-    participant TR as Tribunal Router
-    participant CL as Clerk node
+    participant CL as Clerk cycle
     participant CN as Codification nodes
-    participant JG as Judiciary Gate
+    participant LA as Law-Applicator
+    participant EM as Embassy
     participant SC as Sidecar
     participant FL as Friction Ledger
     participant LB as Librarian
@@ -402,27 +400,25 @@ sequenceDiagram
     SC-->>TB: law versions and tiers
     TB->>JR: fan-out child Workitems
     JR-->>TB: collect verdict artefacts
-    TB->>DG: route to Deliberation Gate
-    DG->>DG: tally votes
-    DG->>TR: consensus -> Tribunal Router
-    TR->>TR: read tier from law-reference
-    opt Tier 1-2 verdict
-        TR->>CL: route to Clerk
-        CL->>CL: draft petition (prose)
-        CL->>CN: fan-out to Codification nodes
-        CN-->>CL: collect formal representations
-        CL->>TB: route petition to Tribunal (review mode)
-        TB->>JR: fan-out for review deliberation
-        JR-->>TB: collect review verdicts
-        TB->>DG: route to Deliberation Gate
-        DG->>JG: consensus -> Judiciary Gate
-        JG->>SC: WriteLaw / RetireLaw
+    TB->>TB: internal tally
+    TB->>SC: CreateChild (Clerk cycle + verdict-context)
+    SC->>OP: CreateChild
+    OP->>CL: assign Clerk-cycle child
+    CL->>CL: draft petition
+    CL->>CN: fan-out to Codification nodes
+    CN-->>CL: collect formal representations
+    CL->>LA: approved petition
+    opt Tier 1-3 petition
+        LA->>SC: WriteLaw / RetireLaw
         SC->>LB: persist law changes
+    end
+    opt Tier 4-5 petition
+        LA->>EM: route to Embassy
+        EM->>EM: export as law-petition
     end
     TB->>SC: complete()
     SC-->>OP: complete()
     OP->>OP: validate hearing exit contract
-    OP->>LB: apply lifecycle action
 ```
 
 Review hearing verdicts are tier-specific:
@@ -464,7 +460,7 @@ Detailed runbooks are specified in [Operations](./07-operations.md).
 
 Core call paths are stable:
 
-- Operator <-> Librarian: law lifecycle events, hearing completion coordination.
+- Federation service <-> Librarian: published law distribution and integration handoff.
 - Operator <-> Archivist: completion validation queries and artefact presence checks.
 - Sidecar <-> Archivist: artefact read/write/query lifecycle operations.
 - Sidecar <-> Librarian: law retrieval and legal-context queries.
@@ -493,7 +489,7 @@ Service outages degrade behaviour predictably:
 - Flow Monitor unavailable: metrics export and audit log emission pause. Friction aggregation and hearing threshold evaluation are unaffected (those are Friction Ledger-owned). Alerting is raised.
 - Flow Event Bus unavailable: event distribution pauses. Sidecars buffer events locally and retry. Friction Ledger's `QueryFriction` continues to serve from persisted aggregation data. Friction Watcher hearing threshold evaluation is paused for new events but the Friction Watcher's subscription will replay missed events within the retention window on Bus recovery.
 - Friction Ledger unavailable: friction aggregation pauses. Raw friction events accumulate in the Bus's telemetry channel log within the retention window. On Friction Ledger recovery, it replays from its last-seen sequence number. Threshold-crossing signals are delayed but not lost. `QueryFriction` calls from the Tribunal return errors; hearing evidence retrieval is blocked until recovery.
-- Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; the Clerk node proceeds with whatever representations succeeded (prose at minimum).
+- Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; the Clerk cycle (clerk-forge) proceeds with whatever representations succeeded (prose at minimum).
 
 Fail-open behaviour is prohibited for governance integrity paths.
 
@@ -510,7 +506,7 @@ All deployments preserve these service invariants:
 7. Hearing adjudication remains a Tribunal responsibility, not a service-local shortcut.
 8. Friction is first-class and queryable by source attribution.
 9. Backup ownership boundaries are explicit between services and cluster administration.
-10. Cross-flow law integration preserves tiered supremacy, grace-period semantics, and audit continuity.
+10. Federation service law distribution preserves tiered supremacy, grace-period semantics, and audit continuity.
 11. Flow Support Services are optional, Flow-Architect-deployed, and do not process Workitems.
 12. Codification Services are optional; their absence degrades governance hardening to prose-only petitions.
 13. The Flow Event Bus is durable. Events are persisted to SQLite before fan-out. Retention is per-channel and operator-configurable.

@@ -70,7 +70,7 @@ Human decision points are modelled as explicit runtime states within the assignm
 
 Escalation patterns (manager/director chains, delegation, pool-based routing) are built on top of the basic HITL pattern by composing queue management with routing logic.
 
-The SDK provides the [`USE:queue/server` capability and HITL pattern](../04-sdk/08-sdk-hitl.md) — a managed infrastructure for queue persistence, REST API exposure, federated queue mesh, and escalation chains. The Judiciary's [Advocate](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) is a concrete HITL node using this SDK pattern. User-defined HITL nodes compose the same SDK pattern with domain-specific logic.
+The SDK provides the [`USE:queue/server` capability and HITL pattern](../04-sdk/08-sdk-hitl.md) — a managed infrastructure for queue persistence, REST API exposure, federated queue mesh, and escalation chains. The Judiciary's [HITL nodes](../02-flow/03-nodes-external.md#hitl-nodes) (hitl-appraise, arbiter-hitl-resolve, tribunal-hitl-resolve) are concrete instances using this SDK pattern. User-defined HITL nodes compose the same SDK pattern with domain-specific logic.
 
 ## Long-Running and Agent Patterns
 
@@ -98,7 +98,7 @@ Nodes that integrate with external systems follow the same runtime contract as a
 
 **Correlation identifiers.** External requests should carry identifiers traceable back to the Workitem ID and assignment context. This enables end-to-end audit reconstruction across Flow and external system boundaries.
 
-**Cross-flow sovereignty transfer uses export/import.** When work needs to move to another Flow, use the [cross-flow exchange](../02-flow/06-cross-flow.md) mechanism (export at an exit node, import at the receiving Flow's `importNode`). Do not simulate cross-flow transfer with local routing shortcuts or direct service calls between Flows.
+**Cross-flow sovereignty transfer uses the Embassy.** When work needs to move to another Flow, use the [Embassy](../02-flow/06-cross-flow.md) transfer protocol (export via the sending Embassy, import via the receiving Embassy which routes to the node configured for the `importType` in `crossFlow.importTypes`). Do not simulate cross-flow transfer with local routing shortcuts or direct service calls between Flows.
 
 **Fail closed on ambiguous outcomes.** If an external response is ambiguous (partial success, unknown status, timeout without confirmation), route to an error or escalation path rather than assuming success. Governance integrity depends on deterministic state — an optimistic assumption about an ambiguous external outcome can produce an artefact state that appears governed but is not.
 
@@ -185,6 +185,58 @@ The [Friction Watcher](../02-flow/03-nodes-external.md#watcher-nodes) is the can
 - **Handler**: receives the assigned hearing Workitem, reads `law_id` from `WorkitemContext.Metadata`, stores a `law-reference` artefact containing the law ID, and routes to the Tribunal via the `default` output.
 - **Shutdown**: on `SIGTERM`, the Event Bus subscription is cancelled, in-flight handler calls complete, and the pod exits cleanly.
 
+## Embassy Import/Export Pattern
+
+The [Embassy](../02-flow/06-cross-flow.md) is the standard cross-flow boundary node. It implements a distinct transfer protocol that operates directly between Embassy instances (not through the Sidecar for the Embassy-to-Embassy wire protocol), while using Sidecar-mediated paths for all local service access.
+
+### Export Path
+
+When a Workitem completes at an exit node and routes to the Embassy for export:
+
+1. The Embassy reads governed artefacts and stamps from the Archivist (via Sidecar) for the artefact names listed in the bound exit contract.
+2. The Embassy constructs a signed manifest containing: `importType`, source/target Flow identity, transfer ID, artefact inventory (governed name, digest, size), and foreign stamps.
+3. For `law-petition` exports, the Embassy queries the [Federation service](../02-flow/08-federation.md) for the appropriate authority Flow endpoint (scope-aware routing).
+4. The Embassy sends the manifest to the receiving Embassy and awaits preflight acceptance.
+5. On acceptance, the Embassy streams the artefact package to the receiving Embassy.
+
+### Import Path (`law-petition` and Other Import Types)
+
+When the receiving Embassy receives an inbound transfer:
+
+1. **Signed manifest preflight** — the Embassy validates the manifest: is the `importType` declared in `crossFlow.importTypes`? Does the trust source (federation membership or Treaty) authorise this sender? Are the declared artefacts admissible?
+2. **Streamed package transfer** — on preflight acceptance, the Embassy requests and receives the full artefact package from the sending Embassy.
+3. **Local Workitem materialisation** — the Embassy creates a new local Workitem via the Operator (Sidecar-mediated), unpacks artefacts into the Archivist (Sidecar-mediated).
+4. **Naturalisation stamps** — the Embassy verifies required foreign stamps against the trust source and applies local `imported-<stamp>` attestation stamps for each verified foreign stamp.
+5. **Routing to configured import type node** — the Embassy routes the new Workitem to the node configured for the `importType` in `crossFlow.importTypes`. The target node must be entry-bound.
+
+```mermaid
+flowchart TD
+    subgraph Export["Export (sending Flow)"]
+        EX1["Exit node completes"] --> EX2["Embassy reads artefacts<br/>via Sidecar"]
+        EX2 --> EX3["Build signed manifest"]
+        EX3 --> EX4["Send manifest to<br/>receiving Embassy"]
+        EX4 --> EX5["Stream package on accept"]
+    end
+
+    subgraph Import["Import (receiving Flow)"]
+        IM1["Receive manifest"] --> IM2["Preflight validation<br/>(importType, trust, admissibility)"]
+        IM2 --> IM3["Receive package stream"]
+        IM3 --> IM4["Create Workitem +<br/>store artefacts via Sidecar"]
+        IM4 --> IM5["Apply naturalisation stamps"]
+        IM5 --> IM6["Route to configured<br/>import type node"]
+    end
+
+    EX5 -.->|"Embassy-to-Embassy<br/>transfer protocol"| IM1
+```
+
+### `law-petition` Import Type
+
+`law-petition` is the only reserved built-in import type. It is used for higher-authority escalation when the Clerk cycle produces a T4-5 petition. The [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) creates a [dispute record](../01-concepts/03-data-model.md#dispute-records) and routes to the Embassy, which exports the petition as a `law-petition` to the authority Flow. The receiving Flow's `crossFlow.importTypes` configuration determines which entry-bound node receives the petition.
+
+### Federation Service Interactions
+
+[Federation service](../02-flow/08-federation.md) interactions are external platform-service relationships, not node-local routing. The Embassy queries the Federation service for authority endpoints; the Librarian receives distributed laws from it. Neither path is an Embassy `importType` — published law distribution is a Federation service responsibility.
+
 ## Anti-Patterns
 
 **Hidden mutable state across assignments.** Pod-local memory, files, or caches that persist across assignments and change handler outcomes without being reflected in Archivist-managed state. This breaks idempotent replay and audit reconstruction.
@@ -213,3 +265,5 @@ The [Friction Watcher](../02-flow/03-nodes-external.md#watcher-nodes) is the can
 8. All node-originated runtime operations remain Sidecar-mediated and service-authorised.
 9. Entry-bound nodes pass trigger context through Workitem metadata, not shared memory.
 10. Entry node handlers do not depend on co-location with the entry loop that created the Workitem.
+11. Cross-flow transfer uses the Embassy protocol (manifest preflight, package streaming, naturalisation), not direct service calls or local routing shortcuts.
+12. Federation service interactions are external platform-service relationships, not node-local routing or Embassy import types.

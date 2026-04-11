@@ -29,7 +29,9 @@ flowchart TD
 
     SS --> FM
 
-    LB --> XF["Cross-flow channel<br/>export import law sync"]
+    OP --> EMB["Embassy<br/>cross-flow boundary"]
+    EMB --> XF["Cross-flow channel<br/>export import"]
+    LB --> FS["Federation Service<br/>law publication"]
 ```
 
 ## Runtime Loop
@@ -77,7 +79,7 @@ The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrange
 
 The runtime enforces behaviour through configuration and capabilities, not node names. [Forge](../01-concepts/02-foundry-cycle.md#forge-creator), [Sort](../01-concepts/02-foundry-cycle.md#sort-gate), and [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner) describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
 
-The [Judiciary](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem) is the exception: it is a standard runtime subsystem present in every Flow, comprising orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes (Juror, Deliberation Gate), and a legislative inner cycle (Clerk, Codification nodes, Tribunal Router, Judiciary Gate).
+The [Judiciary](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem) is the exception: it is a standard runtime subsystem present in every Flow, comprising a lifecycle node (Facilitator), orchestration nodes (Arbiter, Tribunal), deliberation nodes (Juror), watcher nodes (Friction Watcher, TTL Watcher, petition-outcome-watcher), a legislative inner cycle (the Clerk cycle using Codification, Rule Router, and law-applicator nodes), and generic HITL nodes for human review. The [Embassy](./06-cross-flow.md) is the standard cross-flow boundary node in every Flow. The [Federation service](./08-federation.md) manages inter-flow trust, membership, and published-law distribution.
 
 ## Governance Runtime Mechanics
 
@@ -88,7 +90,7 @@ The [Judiciary](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsy
 - Stamp names are named governance checkpoints chosen by the Flow Architect; the platform attaches no built-in semantics to names.
 - Stamp-provider routing is configuration-discovered. A node granted `READ:flow` capability can query the topology to discover stamp-to-node mappings at runtime.
 - `approval` is a naming convention used by the [reference arrangement](../01-concepts/02-foundry-cycle.md), not a privileged system stamp.
-- Judiciary authority is bounded: resolve conflicts involving Tier 1-2 laws by minting Tier 2 Rulings (via Clerk petition), propose at Tier 3 (via Advocate), appeal at Tier 4-5 (via Advocate).
+- Judiciary authority is bounded: resolve conflicts involving Tier 1-2 laws by minting Tier 2 Rulings (via Clerk cycle), propose at Tier 3 (via HITL review), petition at Tier 4-5 (via Embassy `law-petition` export).
 
 In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node uses these platform mechanisms to implement gate routing: unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward the Arbiter, missing stamps toward the configured provider, and fully satisfied governance toward exit completion. Deadlocked feedback is unresolved by state, so gate implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
 
@@ -104,7 +106,7 @@ Exit completion is configuration-bound:
 - A required governed artefact name with an empty stamp list means presence-only.
 - A contract with no artefact entries imposes no artefact requirements.
 
-When completion triggers cross-flow export, only governed artefact names listed in the bound exit contract are exported. An empty contract exports metadata only.
+When a Workitem is handed to the [Embassy](./06-cross-flow.md) for cross-flow transfer, only governed artefact names listed in the Embassy's bound exit contract are exported. An empty contract exports metadata only.
 
 ## Data Ownership Boundaries
 
@@ -125,12 +127,12 @@ Local routing and cross-flow transfer are different runtime mechanisms:
 - Local routing moves one Workitem between nodes inside one Flow.
 - Cross-flow transfer exports a bundle and creates a new Workitem lifecycle in the receiving Flow.
 - Export/import is copy-on-write across sovereignty boundaries.
-- Successful import creates a `Pending` Workitem that is first-scheduled to configured `importNode` when capacity allows.
+- Successful import creates a `Pending` Workitem that is first-scheduled to the node configured for the import type in `crossFlow.importTypes` when capacity allows.
 
-Imported stamps are always cryptographically verifiable when chain validation succeeds. Local governance authority depends on topology:
+Imported stamps are always cryptographically verifiable when chain validation succeeds. The receiving [Embassy](./06-cross-flow.md) verifies required foreign stamps and applies local `imported-<stamp>` attestation stamps. Downstream local contracts rely on these attested local stamps; foreign stamps remain for provenance and audit. Trust roots differ by topology:
 
-- Sibling flows under a shared State Root: imported stamps are immediately authoritative when stamp names match local requirements.
-- Treaty or non-sibling crossings: imported stamps are provenance-only until naturalisation and required local checks are completed.
+- Federation members: trust rooted in the federation root CA.
+- Treaty crossings: trust rooted in the Treaty's pinned certificate.
 
 ```mermaid
 flowchart LR
@@ -138,12 +140,12 @@ flowchart LR
         W1["Workitem A"] --> N1["Node X"] --> N2["Node Y"] --> T1["Exit node"]
     end
 
-    T1 -->|"complete + export"| BND["Boundary"]
+    T1 -->|"route to Embassy"| BND["Embassy"]
 
     subgraph Remote["Receiving Flow"]
         IMP["Import bundle"] --> W2["Workitem B<br/>Pending"]
-        W2 --> IN["Assign configured<br/>importNode"]
-        IN --> NAT["Naturalisation and local checks"]
+        W2 --> EMB["Embassy<br/>naturalisation"]
+        EMB --> IN["Route to configured<br/>import type node"]
     end
 
     BND --> IMP
@@ -174,7 +176,7 @@ The following invariants hold for every Flow deployment:
 9. Artefact provenance (versions, stamps, feedback) is Archivist-owned, not Workitem-owned.
 10. The Judiciary is always present and cannot exceed its authority ceiling.
 11. Cross-flow verifiability and local authority are distinct and topology-dependent.
-12. Imported Workitems are created in `Pending` and first-scheduled to configured `importNode` when capacity allows.
+12. Imported Workitems are created in `Pending` by the Embassy and routed to the node configured for the import type in `crossFlow.importTypes`.
 13. Flow Support Services are consumed through Sidecar mediation by nodes and do not process Workitems.
 
 These invariants are elaborated normatively in the remaining `02-flow` documents.

@@ -4,27 +4,39 @@
 
 ### Arbiter
 
-A Judiciary orchestration node that resolves deadlocked feedback disputes. Receives Workitems routed by Sort when feedback depth exceeds the configured threshold. Assembles evidence (artefact content, feedback history, relevant laws, friction data), fans out to [Juror](#juror) nodes using child Workitems, and collects their verdicts. Routes to the [Deliberation Gate](#deliberation-gate) for consensus tally. On consensus, the verdict flows to the [Clerk](#clerk) to draft a [petition](#petition). The feedback item's `linkedRuling` is set to the resulting Tier 2 Ruling, and the Workitem routes back to Sort. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#arbiter-deadlock-resolver), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+A Judiciary orchestration node that resolves deadlocked feedback disputes. Receives child Workitems from the [Facilitator](#facilitator) containing an evidence bundle, fans out to [Juror](#juror) nodes, and tallies verdicts internally. On consensus it either resolves the dispute within existing law or creates a [Clerk cycle](#clerk-cycle) child to draft the required [petition](#petition); on hung outcomes it routes to a [HITL node](#hitl-node). Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#arbiter-path-deadlock-resolution), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
 ### Archivist
 
 The system service that manages artefact lifecycle data — version history, passport stamps, and feedback in an embedded relational database (SQLite in the reference implementation); raw content bytes in a content-addressed blob store. The single source of truth for all artefact provenance. Detail: [System Services](../02-flow/04-system-services.md#archivist).
 
-### Advocate
-
-The Judiciary's HITL (Human-in-the-Loop) node. Three entry paths: [Deliberation Gate](#deliberation-gate) (hung verdict), [Tribunal Router](#tribunal-router) (Tier 3+ hearing), [Judiciary Gate](#judiciary-gate) (Tier 3 ratification). HITL decisions route to the [Clerk](#clerk) node for petition codification. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability to expose a persistent queue for human decision. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#advocate-human-escalation), [SDK HITL](../04-sdk/08-sdk-hitl.md).
-
 ### Assay
 
-**Superseded.** The former judicial node present in every Flow. Replaced by the [Judiciary](#judiciary) subsystem comprising orchestration nodes (Arbiter, Tribunal, Advocate), deliberation nodes ([Juror](#juror), [Deliberation Gate](#deliberation-gate)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher)), and legislative inner cycle nodes ([Clerk](#clerk), Codification nodes, [Tribunal Router](#tribunal-router), [Judiciary Gate](#judiciary-gate)). See [Judiciary](#judiciary).
+**Superseded.** The former judicial node present in every Flow. Replaced by the [Judiciary](#judiciary) subsystem comprising orchestration nodes (Arbiter, Tribunal), deliberation nodes ([Juror](#juror)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher), [petition-outcome-watcher](#petition-outcome-watcher)), and legislative inner cycle nodes ([Clerk cycle](#clerk-cycle), Codification nodes, [Rule Router](#rule-router), [law-applicator](#law-applicator), [HITL node](#hitl-node), [Facilitator](#facilitator)). Cross-flow transfer is handled separately by the [Embassy](#embassy). See [Judiciary](#judiciary).
 
 ### assignment
 
 The binding of a single Workitem to a single node for processing. A Workitem has exactly one assignee at a time. The Sidecar establishes an assignment session and all SDK calls are automatically scoped to it. Detail: [Operator](../02-flow/01-operator.md), [SDK Core](../04-sdk/01-sdk-core.md).
 
-### Clerk
+### Clerk cycle
 
-A Judiciary node in the legislative inner cycle. Drafts and revises [petition](#petition) artefacts (YAML/Markdown) containing proposed law changes. Fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes) via child Workitems for formal representations (Rego, SMT-LIB, etc.), assembles the complete petition, and routes to the Tribunal for review. On revision (feedback from Tribunal via [Judiciary Gate](#judiciary-gate)), reads feedback and revises the petition. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#clerk-petition-drafter), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+The petition drafting and approval cycle in the Judiciary's legislative inner cycle. It is composed of ordinary node instances (`clerk-forge`, `codification`, `clerk-sort`, `clerk-refine`, `clerk-appraise`, `clerk-done-router`, `hitl-appraise`, `hitl-gate`, and [law-applicator](#law-applicator)), not a standalone Clerk service or node. The cycle drafts and revises [petition](#petition) artefacts, fans out to Codification nodes for formal representations, reviews feedback, and then either applies approved T1-3 changes locally or exports approved T4-5 petitions through the [Embassy](#embassy). Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+
+### crossFlow.importTypes
+
+A map on the FoundryFlow CRD's `spec.crossFlow` that defines named import types for cross-flow Workitem reception. Each key is an import type name; each value specifies a target node (must be entry-bound) and optional per-artefact foreign-stamp requirements. Replaces the former `importNode` field. The `law-petition` import type is reserved for judiciary cross-flow petition submission. If the map is absent or empty, cross-flow import is disabled. Detail: [CRDs](./crds.md#cross-flow-configuration).
+
+### Embassy
+
+The operator-provisioned cross-flow boundary node present in every Flow. It handles manifest preflight, package streaming, inbound Workitem materialisation, `crossFlow.importTypes` routing, Treaty enforcement, and naturalisation of verified foreign stamps into local `imported-*` attestations. Embassy transfers Workitems such as `law-petition`; it does not distribute published laws, which is a [Federation](#federation) service responsibility. Detail: [Cross-Flow](../02-flow/06-cross-flow.md#embassy), [gRPC API](./grpc-api.md#embassy-api).
+
+### Facilitator
+
+A Judiciary lifecycle node for deadlock resolution. It assembles an evidence bundle, creates a child Workitem for the [Arbiter](#arbiter), suspends while the child runs, then resumes and routes the result back into the parent Flow. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#arbiter-path-deadlock-resolution), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+
+### Federation
+
+The control-plane authority that manages inter-Flow membership, trust-root discovery, state groupings, authority publisher roles, petition-routing policy, and published-law distribution. A Federation replaces the former Governance Flow runtime concept: member Flows remain ordinary Flows, while the Federation service governs how T4-T5 authority relationships and publication work across them. Detail: [Governance](../01-concepts/04-governance.md#federation-membership), [Federation](../02-flow/08-federation.md), [gRPC API](./grpc-api.md#federation-api).
 
 ### Flow
 
@@ -68,7 +80,7 @@ The SDK's managed inference wrapper for LLM-backed nodes. Provides three behavio
 
 ### Librarian
 
-The system service that manages the Flow's body of law (the Library). A pure law store and lifecycle service — stores law objects, serves law queries, runs integration conflict checks, manages law version history, and handles Librarian-to-Librarian replication for cross-flow law synchronisation. Hearing triggers are owned by dedicated watcher nodes ([Friction Watcher](#friction-watcher) and [TTL Watcher](#ttl-watcher)), not the Librarian. Detail: [System Services](../02-flow/04-system-services.md#librarian).
+The system service that manages the Flow's body of law (the Library). A pure law store and lifecycle service — stores law objects, serves law queries, runs integration conflict checks for Federation-published laws, manages dispute records, and maintains law version history. Hearing triggers are owned by dedicated watcher nodes ([Friction Watcher](#friction-watcher) and [TTL Watcher](#ttl-watcher)), not the Librarian. Detail: [System Services](../02-flow/04-system-services.md#librarian).
 
 ### node
 
@@ -77,6 +89,10 @@ A stateless worker that processes Workitems. Node pods persist for efficiency (m
 ### Operator (Flow Operator)
 
 The Kubernetes controller that reconciles FoundryFlow and FoundryNode CRDs, assigns Workitems to nodes, validates routing outcomes, enforces entry and exit contracts, and manages the Workitem lifecycle state machine. The Operator is the sole authority for Workitem control-plane persistence. Detail: [Operator](../02-flow/01-operator.md).
+
+### Rule Router
+
+A generic CEL-based routing node. It reads Workitem state, evaluates ordered rules, and routes to the first matching output without mutating state. In the judiciary it is used for tier-based Clerk-cycle routing such as `clerk-done-router` and `hitl-gate`. Detail: [Node Patterns](../03-node/03-patterns.md), [Configuration](../02-flow/05-configuration.md#routing-semantics).
 
 ### routing instruction
 
@@ -96,11 +112,7 @@ The per-node visit counter map on each Workitem. Each assignment increments the 
 
 ### Tribunal
 
-A Judiciary orchestration node with two modes. **Hearing mode**: receives hearing Workitems created by the [Friction Watcher](#friction-watcher) or [TTL Watcher](#ttl-watcher) (when friction thresholds or review TTLs are crossed), assembles law evidence, fans out to [Juror](#juror) nodes, and routes to the [Deliberation Gate](#deliberation-gate) then [Tribunal Router](#tribunal-router) for tier-based routing. **Review mode**: receives petition artefacts from the [Clerk](#clerk) in the inner cycle, reviews against governance context, fans out to Juror nodes, and routes to the Deliberation Gate then [Judiciary Gate](#judiciary-gate). Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#tribunal-law-review), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
-
-### Tribunal Router
-
-A Judiciary node for tier-aware routing after Tribunal hearing deliberation. Reads the tier from the law-reference artefact and the verdict from the [Deliberation Gate](#deliberation-gate). Routes Tier 1-2 verdicts to the [Clerk](#clerk) (to draft a [petition](#petition)); routes Tier 3+ to the [Advocate](#advocate) for human escalation. The Tribunal Router operates only in the hearing path — petition review uses the [Judiciary Gate](#judiciary-gate) instead. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#tribunal-router), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+A Judiciary orchestration node for review hearings. It receives hearing Workitems created by the [Friction Watcher](#friction-watcher) or [TTL Watcher](#ttl-watcher), assembles law evidence, fans out to [Juror](#juror) nodes, tallies votes internally, and on consensus creates a [Clerk cycle](#clerk-cycle) child Workitem carrying the court's `verdict-context`. The hearing Workitem then completes; the downstream Clerk cycle continues independently. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#hearing-path), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
 ---
 
@@ -168,31 +180,43 @@ An artefact type registered via a GovernedArtefact CRD, identified by `metadata.
 
 ### HITL (Human-in-the-Loop)
 
-Any point where the system pauses for a human decision. The SDK provides the [HITL pattern](../04-sdk/08-sdk-hitl.md) — managed infrastructure for queue persistence, REST API, and the Federated Queue Mesh. The Judiciary's [Advocate](#advocate) is the concrete HITL node for judicial escalation. User-defined HITL nodes compose the same SDK pattern with domain-specific logic.
+Any point where the system pauses for a human decision. The SDK provides the [HITL pattern](../04-sdk/08-sdk-hitl.md) — managed infrastructure for queue persistence, REST API, and the Federated Queue Mesh. The [HITL node](#hitl-node) is the concrete generic config-driven implementation for judicial escalation. User-defined HITL nodes compose the same SDK pattern with domain-specific logic.
+
+### HITL node
+
+A generic config-driven Human-in-the-Loop node. Single image, multiple CRD instances. It is used for hung-jury resolution and for human approval in the Clerk cycle's Tier 3-5 petition path. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. Replaces the old Advocate-specific human boundary with a reusable node pattern. Detail: [SDK HITL](../04-sdk/08-sdk-hitl.md).
 
 ### Judiciary
 
-The umbrella term for the judicial subsystem. Comprises orchestration nodes ([Arbiter](#arbiter), [Tribunal](#tribunal), [Advocate](#advocate)), deliberation nodes ([Juror](#juror), [Deliberation Gate](#deliberation-gate)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher)), and legislative inner cycle nodes ([Clerk](#clerk), Codification nodes, [Tribunal Router](#tribunal-router), [Judiciary Gate](#judiciary-gate)). Replaces the former "Assay" node. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking. The Judiciary resolves deadlocked feedback disputes (Arbiter), conducts review hearings and petition reviews (Tribunal), triggers hearings on friction thresholds (Friction Watcher) and TTL expiry (TTL Watcher), escalates to humans (Advocate), deliberates via Juror fan-out with consensus tally (Juror + Deliberation Gate), drafts and codifies law changes as petitions (Clerk + Codification nodes), routes by tier (Tribunal Router), and applies approved petitions (Judiciary Gate). All components are Operator-provisioned runtime invariants. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+The umbrella term for the judicial subsystem. It comprises orchestration nodes ([Arbiter](#arbiter), [Tribunal](#tribunal)), deliberation nodes ([Juror](#juror)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher), [petition-outcome-watcher](#petition-outcome-watcher)), and legislative inner-cycle nodes ([Clerk cycle](#clerk-cycle), Codification nodes, [Rule Router](#rule-router), [law-applicator](#law-applicator), [HITL node](#hitl-node), [Facilitator](#facilitator)). The Judiciary resolves deadlocked feedback, conducts review hearings, drafts petitions, and routes approved work by tier; the separate [Embassy](#embassy) boundary node handles T4-T5 `law-petition` transfer. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
-### Judiciary Gate
+### authority publisher
 
-A Judiciary node in the legislative inner cycle. Mirrors [Sort](#sort-reference-arrangement) for the judiciary inner cycle — checks feedback resolution on [petition](#petition) artefacts after Tribunal review. Routing: approved petition with all feedback resolved (Tier 1-2) applies the petition via the Librarian (`WriteLaw`/`RetireLaw`); rejected or unresolved feedback routes back to the [Clerk](#clerk) for revision; approved Tier 3 routes to HITL ratification; Tier 4-5 routes to the [Advocate](#advocate) and Governance Flow. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#judiciary-gate), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+A federation-assigned role that grants an ordinary Flow permission to publish approved local Tier 3 laws outward. State-level authority publishers produce Tier 4 materialisations in subscriber Flows; federation-level authority publishers produce Tier 5 materialisations. Detail: [Governance](../01-concepts/04-governance.md#authority-publisher-roles), [Federation](../02-flow/08-federation.md).
+
+### law-applicator
+
+An action node in the Judiciary's legislative inner cycle. For approved T1-3 petitions it writes or retires laws through the Librarian. For approved T4-5 petitions it creates a [dispute record](../01-concepts/03-data-model.md#dispute-records) linking the `petition_id` to cited law IDs, then routes the Workitem to the [Embassy](#embassy) for `law-petition` export to the appropriate authority Flow. Replaces the former Judiciary Gate. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+
+### law-petition
+
+The reserved built-in import type in `crossFlow.importTypes` for higher-authority petition submission. A Flow uses it when the [law-applicator](#law-applicator) routes an approved T4-5 petition to its [Embassy](#embassy), which exports the petition to the authority Flow selected by federation policy or allowed by Treaty policy. It is not used for published-law distribution.
 
 ### Juror
 
 A Judiciary deliberation node. Single image with configurable judicial philosophy — loads different agent configurations at fan-out time to maximise diversity. Receives child Workitems with question, evidence, and prior-round reasoning (if retry). Runs a [FoundryAgent](#foundryagent) with the loaded judicial personality and produces a structured verdict artefact (outcome + reasoning). Used by both Arbiter and Tribunal fan-out. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#juror-judicial-agent), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
 
-### Deliberation Gate
-
-A Judiciary deliberation node. Generic consensus tally — reads Juror verdict artefacts from the parent Workitem, applies the configured consensus strategy (`SIMPLE_MAJORITY`, `SUPER_MAJORITY`, `UNANIMITY`), and tracks the round count. Three well-known outputs: `consensus` (verdict reached), `retry` (another deliberation round back to the fan-out parent), `hung` (max rounds exceeded without consensus, routes to [Advocate](#advocate)). The Deliberation Gate is generic — it does not know about tiers, petitions, or law semantics. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#deliberation-gate-consensus-tally), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
-
 ### passport
 
 The collection of stamps on a specific artefact version. Tracks which governance checkpoints have been satisfied for that content hash. Stored in the Archivist's database, not on the Workitem CRD. Detail: [Data Model](../01-concepts/03-data-model.md#passports-and-stamps).
 
+### petition-outcome-watcher
+
+A watcher node that monitors Federation publication and rejection outcomes for exported `law-petition`s. It retires dispute records, resumes Workitems held in `pending-hold`, and creates follow-up Clerk-cycle Workitems when an authority rejects a petition. Detail: [Federation](../02-flow/08-federation.md#petition-outcome-watcher), [Nodes](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem).
+
 ### Petition
 
-A structured YAML/Markdown [GovernedArtefact](./crds.md#governedartefact) containing a complete proposed law change set. Drafted by the [Clerk](#clerk) node and reviewed by the [Tribunal](#tribunal) in the judiciary's inner cycle. Contains context (trigger, source Workitem, verdict, justification), and one or more proposed changes (create, retire, demote), each with tier, goal, `appliesTo`, and formal representations from [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes). The petition is human-readable for HITL reviewers. Approved petitions are applied by the [Judiciary Gate](#judiciary-gate) via the Librarian. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#petition-artefact), [Data Model](../01-concepts/03-data-model.md#governed-artefacts).
+A structured YAML/Markdown [GovernedArtefact](./crds.md#governedartefact) containing a complete proposed law change set. Drafted by the [Clerk cycle](#clerk-cycle), reviewed within that cycle, and identified by a stable `petition_id` used for cross-flow correlation. A petition carries context plus one or more changes (`create`, `update`, `retire`, `demote`), and non-retire changes may include formal representations produced by Codification nodes. Approved petitions are either applied locally by the [law-applicator](#law-applicator) or exported through the [Embassy](#embassy) as `law-petition`s. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#petition-artefact), [Data Model](../01-concepts/03-data-model.md#laws).
 
 ### QueueManager
 
@@ -220,7 +244,7 @@ The unit of work. A Kubernetes CRD with no `spec` block — all mutable state li
 
 ### appeal
 
-The mechanism by which the [Advocate](#advocate) escalates conflicts involving Tier 4 or Tier 5 laws to the Governance Flow via the Librarian. The Judiciary cannot directly modify laws above its judicial tier. Detail: [Governance](../01-concepts/04-governance.md#escalation-across-boundaries).
+The higher-authority escalation path for T4-T5 conflicts. The local [law-applicator](#law-applicator) creates a dispute record and routes the approved petition to the [Embassy](#embassy), which exports it as a `law-petition` to the authority Flow selected by federation policy. The local Flow does not directly modify external-authority laws. Detail: [Governance](../01-concepts/04-governance.md#higher-authority-escalation).
 
 ### `appliesTo`
 
@@ -246,9 +270,13 @@ The Archivist-enforced mechanism that prevents overriding judicially-linked ruli
 
 The state a feedback item enters when the gate node determines its history depth warrants escalation. The gate node transitions the item to `deadlocked` and routes the Workitem to the [Arbiter](#arbiter) for judicial review. Distinct from the Thrash Guard, which detects infrastructure-level loops across the whole Workitem.
 
+### dispute record
+
+A Library entity representing an active T4-T5 `law-petition` whose authority outcome is still pending. It links a `petition_id` to the cited law IDs under dispute and is retired when the petition outcome is known. Sort uses active dispute records to route affected Workitems to `pending-hold` instead of re-deadlocking them. Detail: [Data Model](../01-concepts/03-data-model.md#dispute-records), [Federation](../02-flow/08-federation.md#petition-outcome-watcher).
+
 ### Federal Accord (Tier 5)
 
-A law synchronised from upstream Federal authorities. Applies across all Governance Flow instances in the network. The highest tier of law. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
+A law published by a federation-level authority Flow and distributed by the [Federation](#federation) service to subscriber Flows, where it materialises as Tier 5. The highest authority tier in a member Flow. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 ### Finding (Tier 1)
 
@@ -296,15 +324,15 @@ A specific expression of a law's goal — prose, formal logic, executable code, 
 
 ### review hearing
 
-A judicial proceeding processed as a standard Workitem at the [Tribunal](#tribunal) in hearing mode. Triggered by the [Friction Watcher](#friction-watcher) when a law's accumulated friction crosses a configured threshold, or by the [TTL Watcher](#ttl-watcher) when a law's age exceeds its tier's configured review TTL. Friction thresholds and review TTLs are configurable per law tier (`tier1` through `tier5`). The law remains active during the hearing. The Tribunal assembles evidence, fans out to [Juror](#juror) nodes, and routes through the [Deliberation Gate](#deliberation-gate) to the [Tribunal Router](#tribunal-router). For Tiers 1-2, the Tribunal Router routes to the [Clerk](#clerk) to draft a [petition](#petition) with tier-specific actions: promote, retire, or demote. For Tiers 3-5, the Tribunal Router routes to the [Advocate](#advocate) for human escalation. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
+A judicial proceeding processed as a standard Workitem at the [Tribunal](#tribunal). Triggered by the [Friction Watcher](#friction-watcher) when a law's accumulated friction crosses a configured threshold, or by the [TTL Watcher](#ttl-watcher) when a law's age exceeds its tier's configured review TTL. The Tribunal assembles evidence, fans out to [Juror](#juror) nodes, tallies internally, and on consensus creates a child Workitem for the [Clerk cycle](#clerk-cycle). That Clerk cycle later applies local changes or exports a `law-petition` through the [Embassy](#embassy), depending on tier. Detail: [Governance](../01-concepts/04-governance.md#decay-and-retirement).
 
 ### Ruling (Tier 2)
 
-Binding precedent created by the [Judiciary](#judiciary) from approved [petitions](#petition) — the [Clerk](#clerk) drafts the petition, the Tribunal reviews it, and the [Judiciary Gate](#judiciary-gate) applies it via the Librarian. Requires a formal review hearing before retirement. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
+Binding precedent created within a single Flow by the [Judiciary](#judiciary) from an approved Tier 2 [petition](#petition). The [Clerk cycle](#clerk-cycle) drafts the petition and the [law-applicator](#law-applicator) applies it via the Librarian. Requires a formal review hearing before retirement. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 ### State Constitution (Tier 4)
 
-Organisational policy produced by the Governance Flow through the standard Foundry Cycle with HITL ratification. Applies to all Sibling Flows under the Governance Flow. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
+A law published by a state-level authority Flow and distributed by the [Federation](#federation) service to subscriber Flows in the same state, where it materialises as Tier 4. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 ### supremacy
 
@@ -316,7 +344,7 @@ A law's level in the five-tier jurisdictional hierarchy. Tier 1 (Finding), Tier 
 
 ### TTL (Review TTL)
 
-Time-to-live. A per-tier expiry window configured on the FoundryFlow's governance policy. When a law's age exceeds its tier's configured review TTL, the [TTL Watcher](#ttl-watcher) node triggers a review hearing. The law remains active during the hearing.
+Time-to-live. A Tier 1-2 expiry window configured on the FoundryFlow's governance policy. When a Tier 1 Finding or Tier 2 Ruling exceeds its configured review TTL, the [TTL Watcher](#ttl-watcher) node triggers a review hearing. The law remains active during the hearing.
 
 ### TTL Watcher
 
@@ -324,7 +352,7 @@ A Judiciary watcher node. Entry-bound, long-lived process that periodically poll
 
 ### verdict
 
-The consensus outcome produced by the [Deliberation Gate](#deliberation-gate) after [Juror](#juror) fan-out. In hearing mode, tier-specific: promote, retire (Tier 1), or demote (Tier 2). In deadlock resolution, determines which side the [Arbiter](#arbiter) favours. The verdict is stored as an artefact on the Workitem and flows to the [Clerk](#clerk) for [petition](#petition) drafting.
+The reasoned decision produced by the [Arbiter](#arbiter) or [Tribunal](#tribunal) after [Juror](#juror) fan-out and internal tally. Verdicts are stored as artefacts and drive the next step in the judicial process: feedback resolution, Clerk-cycle petition drafting, or HITL resolution on hung outcomes.
 
 ---
 
@@ -332,27 +360,23 @@ The consensus outcome produced by the [Deliberation Gate](#deliberation-gate) af
 
 ### cross-flow stamp authority
 
-The rules governing whether imported stamps satisfy local stamp requirements. Topology-dependent: sibling stamps are authoritative after shared-root chain verification; treaty stamps are provenance-only until naturalisation. Detail: [Cross-Flow](../02-flow/06-cross-flow.md).
-
-### Governance Flow
-
-A dedicated, pre-configured Flow whose governed artefacts are laws. Produces Tier 4 State Constitution laws, synchronises Tier 5 Federal Accords, and serves as the State Root Certificate Authority. Uses the same runtime and CRDs as any other Flow. Detail: [Governance](../01-concepts/04-governance.md#the-governance-flow).
+The rules governing whether imported stamps satisfy local stamp requirements. Foreign stamps never satisfy local contracts directly. The [Embassy](#embassy) verifies required foreign stamps against the federation trust root or Treaty-pinned CA, then emits local `imported-*` attestations that local contracts may recognise. Detail: [Cross-Flow](../02-flow/06-cross-flow.md).
 
 ### naturalisation
 
-The process by which imported artefacts and stamps gain local governance standing in a receiving Flow. At treaty boundaries, foreign stamps are preserved for audit but do not satisfy local requirements until the receiving Flow naturalises them. Detail: [Cross-Flow](../02-flow/06-cross-flow.md).
+The process by which imported artefacts and foreign stamps gain local governance standing in a receiving Flow. After verifying the required foreign stamps, the [Embassy](#embassy) applies local `imported-*` attestation stamps. Foreign stamps remain for provenance and audit, while local contracts evaluate the attested local stamps. Detail: [Cross-Flow](../02-flow/06-cross-flow.md).
 
 ### Sibling Flow
 
-A Flow that shares a Governance Flow (and therefore a State Root CA) with other Flows. Sibling Flows share implicit trust through the common root — imported stamps are authoritative after chain verification when stamp names match. Sibling Flows do not require treaties.
+A Flow that shares membership in at least one federation-defined state with another Flow. Sibling relationships derive from shared state membership and federation policy, not from a dedicated Governance Flow runtime. Federation-member exchange between sibling Flows uses the federation trust root; Treaties are only needed for non-federation exchange.
 
 ### State Root
 
-The self-signed Root CA keypair held by the Governance Flow. Issues intermediate CA certificates to each Sibling Flow's Operator, establishing a shared trust hierarchy. Detail: [Governance](../01-concepts/04-governance.md#state-root-certificate-authority).
+**Superseded.** Replaced by the federation trust root. In the current model, the [Federation](#federation) service holds the root CA and issues intermediate CA certificates to member Flows.
 
 ### treaty
 
-A directed trust policy enabling collaboration between Flows that do not share a Governance Flow. Declared via a [Treaty CRD](./crds.md#treaty) — each CRD represents one direction of trust (import or export). Two-way exchange requires two Treaty CRDs. Detail: [Governance](../01-concepts/04-governance.md#treaties), [Cross-Flow](../02-flow/06-cross-flow.md).
+A directed trust policy enabling collaboration between Flows that do not share federation membership. Declared via a [Treaty CRD](./crds.md#treaty), each Treaty represents one direction of trust and may constrain which import types the remote Flow may use. Two-way exchange requires two Treaty CRDs. Detail: [Governance](../01-concepts/04-governance.md#higher-authority-escalation), [Cross-Flow](../02-flow/06-cross-flow.md).
 
 ---
 
@@ -368,7 +392,7 @@ The structured grammar for capability grants: `VERB:RESOURCE[/QUALIFIER]`. Verbs
 
 ### entry binding
 
-A FoundryNode CRD field (`entry`) that references a named entry contract on the FoundryFlow. Nodes with entry bindings serve as admission points: local Workitem creation, cross-flow import (via `importNode`), and review-hearing intake. Detail: [Configuration](../02-flow/05-configuration.md).
+A FoundryNode CRD field (`entry`) that references a named entry contract on the FoundryFlow. Nodes with entry bindings serve as admission points for local Workitem creation, cross-flow import via `crossFlow.importTypes`, and review-hearing intake. Detail: [Configuration](../02-flow/05-configuration.md).
 
 ### entry contract
 
@@ -380,11 +404,11 @@ A FoundryNode CRD field (`exit`) that references a named exit contract on the Fo
 
 ### exit contract
 
-A named set of governed-artefact requirements that a Workitem must satisfy for completion. Defined on the FoundryFlow CRD (`exitContracts`). Enforced by the Operator when an exit node calls `complete()`. When completion triggers cross-flow export, only governed artefacts listed in the contract are exported. Detail: [Data Model](../01-concepts/03-data-model.md#entry-and-exit-contracts), [Configuration](../02-flow/05-configuration.md).
+A named set of governed-artefact requirements that a Workitem must satisfy for completion. Defined on the FoundryFlow CRD (`exitContracts`). Enforced by the Operator when an exit node calls `complete()`. When the Embassy performs cross-flow export, only governed artefacts listed in its bound exit contract are exported. Detail: [Data Model](../01-concepts/03-data-model.md#entry-and-exit-contracts), [Configuration](../02-flow/05-configuration.md).
 
 ### import node
 
-The node designated in the FoundryFlow CRD (`importNode`) as the entry point for cross-flow imported Workitems. Must reference a FoundryNode bound to an entry contract. Imported Workitems are created in `Pending` and first-scheduled to this node when capacity allows. Detail: [Configuration](../02-flow/05-configuration.md), [Cross-Flow](../02-flow/06-cross-flow.md).
+**Superseded.** The former single-node cross-flow intake field on the FoundryFlow CRD. Replaced by `crossFlow.importTypes`, which maps each published import type to an entry-bound target node and optional foreign-stamp requirements.
 
 ---
 
@@ -394,16 +418,16 @@ These legacy terms are explicitly out of scope in v1. They must not appear in sp
 
 | Superseded Term | Replacement | Notes |
 |-----------------|-------------|-------|
-| `Assay` | Judiciary (Arbiter, Tribunal, Advocate, Juror, Deliberation Gate, Clerk, Codification nodes, Tribunal Router, Judiciary Gate, Friction Watcher, TTL Watcher) | Single judicial node decomposed into orchestration, deliberation, watcher, and legislative inner cycle nodes. |
-| `Jury` (service) | Juror nodes + Deliberation Gate | Monolithic deliberation service replaced by Juror fan-out with Deliberation Gate consensus tally. |
-| `Clerk` (service) | Clerk node + Codification nodes + Judiciary Gate | Monolithic law drafting service replaced by Clerk node (petition drafter), Codification node fan-out, and Judiciary Gate (petition application). |
+| `Assay` | Judiciary (Arbiter, Tribunal, Embassy, Juror, Facilitator, Clerk cycle, Codification nodes, Rule Router, law-applicator, HITL node, Friction Watcher, TTL Watcher) | Single judicial node decomposed into orchestration, deliberation, watcher, and legislative inner-cycle nodes. |
+| `Jury` (service) | Juror nodes + orchestrator-internal tally | Monolithic deliberation service replaced by Juror fan-out with Arbiter/Tribunal tallying verdicts internally. |
+| `Clerk` (service) | Clerk cycle + Codification nodes + law-applicator | Monolithic law drafting service replaced by node-based petition drafting, codification, review, and application. |
 | `Deliberate()` RPC | Juror fan-out via child Workitems | gRPC deliberation call replaced by externalised Workitem transitions. |
-| `DraftLaw()` RPC | Clerk node petition drafting | gRPC law drafting call replaced by Clerk node receiving Workitems. |
+| `DraftLaw()` RPC | Clerk-cycle petition drafting via Workitems | gRPC law drafting call replaced by node-based Clerk-cycle execution. |
 | `CreateHearingWorkitem` RPC | Friction Watcher / TTL Watcher nodes using generic `CreateWorkitem` | Judiciary-specific Operator RPC replaced by entry-bound watcher nodes. |
 | `WorkitemType` | Entry/exit contracts | Flow admission is not type-gated. |
 | `spec.type` | Entry/exit contracts | No Workitem type discriminator exists. |
 | `spec.context` / `status.context` | Governed artefacts | No freeform context bag. All work context is represented by explicit Workitem state and governed artefacts. |
-| `entryNode` | `importNode` + entry bindings | Import entry is `importNode`; local admission uses entry-bound nodes. |
+| `entryNode` | `crossFlow.importTypes` + entry bindings | Import entry is published per import type; local admission uses entry-bound nodes. |
 | `terminalContract` / `terminalContracts` | `exitContracts` + exit bindings | Exit contracts are named on the FoundryFlow; nodes bind to them via `exit`. |
 | node `terminal` binding | `exit` binding | Nodes are exit-bound via the `exit` field, not a `terminal` flag. |
 | Law Groups (`group` field) | Single-object multi-representation law | A law is one object with a goal and multiple representations, not a group of linked CRDs. |

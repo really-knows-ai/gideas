@@ -47,8 +47,8 @@ Flow Administrators track at least these metric families:
 
 - Assignment and queue health: queue depth, assignment latency, running duration.
 - Transition outcomes: completion rate, failure rate, timeout rate, thrash rate.
-- Governance flow: deadlock escalation count, hearing trigger count, ruling application rate.
-- Cross-flow health: export/import success rate, transfer retry rate, integration conflict rate.
+- Federation service: deadlock escalation count, hearing trigger count, ruling application rate.
+- Cross-flow health: federation member publication success rate, crossFlow.importTypes resolution rate, transfer retry rate, integration conflict rate.
 
 Friction operations are first-class:
 
@@ -62,7 +62,7 @@ Node emission interfaces are defined in [SDK Telemetry](../04-sdk/06-sdk-telemet
 
 Alert classes map to operational impact:
 
-- **Availability**: assignment stalls, service unavailability, import/export channel disruption.
+- **Availability**: assignment stalls, service unavailability, Embassy endpoint disruption, federation member publication/import channel disruption.
 - **Integrity**: audit stream gaps, provenance mismatch, verification failure.
 - **Governance**: deadlock surge, hearing backlog, unresolved conflict accumulation.
 - **Capacity**: sustained queue growth, storage pressure, saturation on Operator or service dependencies.
@@ -89,7 +89,7 @@ All operational error handling maps to [Error Catalogue](../05-reference/error-c
 
 - Flow Administrators must use documented error families and remediation paths.
 - Runbooks must not introduce undocumented failure codes or ad-hoc semantics.
-- Source attribution (Operator, Sidecar, node, system service, transfer path) must be preserved in incident records.
+- Source attribution (Operator, Sidecar, node, system service, federation transfer path) must be preserved in incident records.
 
 gRPC surface failure semantics are defined in [gRPC API](../05-reference/grpc-api.md).
 
@@ -123,7 +123,8 @@ Post-restore verification must include:
 - Stamp-to-version hash consistency.
 - Feedback history continuity.
 - Law lineage and tier state continuity.
-- Cross-flow package lineage and authority semantics continuity.
+- Federation member Flow package lineage and authority semantics continuity.
+- Embassy endpoint reachability and federation membership state consistency.
 
 Degraded mode is acceptable only with explicit alerting and documented risk window.
 
@@ -135,16 +136,17 @@ Operational changes must preserve runtime invariants during rollout.
 - Validate compatibility of Operator, Sidecar, and service interfaces before full rollout.
 - Rollback plans must preserve audit continuity and governance state integrity.
 
-Change windows must include verification of exit-contract enforcement, routing guards, and cross-flow boundary behaviour.
+Change windows must include verification of exit-contract enforcement, routing guards, Embassy endpoint health, and federation boundary behaviour.
 
 ## Testing and Operational Verification
 
 Operational verification includes both conformance and failure-path testing:
 
 - Happy-path throughput checks.
-- Failure injection for timeout, unavailable service, invalid routing, and transfer interruption.
+- Failure injection for timeout, unavailable service, invalid routing, and federation transfer interruption.
 - Backup/restore drills with full post-restore integrity checks.
-- Cross-flow drills validating verifiability-versus-authority semantics.
+- Federation drills validating verifiability-versus-authority semantics across member Flows.
+- Embassy endpoint failover and federation membership reconciliation drills.
 
 Test outcomes should be tracked as operational evidence, not one-off release notes.
 
@@ -168,7 +170,7 @@ All production operations preserve these invariants:
 4. etcd/CRD backup remains a cluster-admin responsibility.
 5. Restore procedures preserve stamp, feedback, and law lineage integrity.
 6. Error handling follows shared [Error Catalogue](../05-reference/error-catalogue.md) semantics.
-7. Cross-flow operations preserve provenance chain and topology-dependent authority.
+7. Federation operations preserve provenance chain and topology-dependent authority across member Flows.
 8. Failure-path testing is required alongside happy-path validation.
 9. Recovery readiness is continuously validated through drills.
 

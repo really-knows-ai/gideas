@@ -145,15 +145,27 @@ The node cannot directly set lifecycle states, modify assignment fields, alter t
 
 ## Cross-Flow Related SDK Paths
 
-[Cross-flow transfer](../02-flow/06-cross-flow.md) is an Operator-level mechanism. From the node handler's perspective, an imported Workitem looks like any other assignment — the handler receives a `Workitem` snapshot and processes it using the same SDK operations.
+[Cross-flow transfer](../02-flow/06-cross-flow.md) is an [Embassy](../02-flow/06-cross-flow.md#embassy)-level mechanism. From the node handler's perspective, an imported Workitem looks like any other assignment — the handler receives a `Workitem` snapshot and processes it using the same SDK operations. The full SDK surface for cross-flow operations is defined in [SDK Cross-Flow](./09-sdk-cross-flow.md).
 
-Import-specific behaviours are transparent to the node:
+### Embassy Materialisation
 
-- Imported artefacts are already persisted in the local [Archivist](../02-flow/04-system-services.md#archivist) by the time the handler sees them.
-- Imported stamps are preserved on the artefact passport. Whether they satisfy local stamp requirements depends on [trust topology](../02-flow/06-cross-flow.md#trust-topologies) (sibling vs treaty), but this evaluation happens at the Operator level during contract checks, not in node code.
-- [Naturalisation](../02-flow/06-cross-flow.md#naturalisation) requirements are expressed through entry contracts and local stamp requirements. The node processes the Workitem normally — if local stamps are needed, the normal routing loop drives the Workitem to the nodes configured to provide them.
+When the receiving Embassy accepts an inbound transfer, it creates a new local Workitem and unpacks artefacts into the local [Archivist](../02-flow/04-system-services.md#archivist). By the time a node handler receives the assignment, all imported artefacts are already persisted locally — the handler reads them through standard [Artefact SDK](./02-sdk-artefacts.md) operations with no awareness that the content originated from another Flow.
 
-Export is triggered by exit completion. When a handler calls `Complete()` on an exit-bound node and the [exit contract](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) is satisfied, the Operator handles the export bundle creation. The node does not call an export method or specify a destination — export configuration is Flow-level, not node-level.
+### Naturalisation and `imported-*` Attestation Stamps
+
+The Embassy applies [naturalisation](../02-flow/06-cross-flow.md#naturalisation) during materialisation. For each required foreign stamp that validates against the trust source (federation root or Treaty-pinned CA), the Embassy applies a local `imported-<stamp>` attestation stamp on the imported artefact. What local code sees after naturalisation:
+
+- `imported-*` attestation stamps are present on artefact passports and are indistinguishable from any other local stamp in SDK queries.
+- Foreign stamps remain attached for provenance and audit but downstream local contracts rely on the `imported-*` stamps, not on the foreign stamps directly.
+- Whether `imported-*` stamps satisfy local entry or routing contracts depends on the Flow's contract configuration, evaluated at the Operator level — not in node code.
+
+### Imported Petitions via `crossFlow.importTypes`
+
+Imported Workitems enter the receiving Flow through the node configured for the matching import type in [`crossFlow.importTypes`](../02-flow/06-cross-flow.md#import-types). For example, a `law-petition` import type routes to the configured entry-bound node (e.g. a sort or triage node). The receiving node sees a normal Workitem assignment with `imported-*` attestation stamps on its artefacts. The node does not need to know the Workitem was imported — it processes based on artefact content and stamp state like any other assignment.
+
+### Export
+
+Export is triggered by explicit handoff to the [Embassy](../02-flow/06-cross-flow.md#embassy), not by generic exit completion. A node such as [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) stores the petition artefact and any supporting state, then routes the Workitem to Embassy. The Embassy validates its own boundary requirements, creates the export bundle, and performs the transfer. The node does not call an export method or specify a destination — routing and federation or Treaty policy determine the remote target.
 
 ## Workitem SDK Invariants
 
@@ -164,8 +176,9 @@ Export is triggered by exit completion. When a handler calls `Complete()` on an 
 5. Local Workitem creation requires an entry contract binding on the creating node.
 6. The [Operator](../02-flow/01-operator.md) owns lifecycle transitions, routing validation, and contract enforcement.
 7. Thrash guard state is hidden from nodes.
-8. Cross-flow import and export are transparent to node handlers.
-9. Child Workitem creation requires `CREATE:workitem/child` capability.
-10. The `ChildWorkitem` handle is the sole interface for mutating a child before routing. Once routed, the child is immutable from the parent's perspective.
-11. Cross-Workitem artefact reads are read-only, parent-scoped, and completion-gated.
-12. `WatchChildren()` is a streaming subscription to the Flow Event Bus `WORKITEM` channel filtered by `parent_workitem_id`.
+8. Cross-flow import is transparent to node handlers. Imported Workitems carry `imported-*` attestation stamps applied by the Embassy during naturalisation.
+9. Outbound cross-flow transfer is performed by the Embassy after an explicit node handoff; nodes do not call an export SDK method.
+10. Child Workitem creation requires `CREATE:workitem/child` capability.
+11. The `ChildWorkitem` handle is the sole interface for mutating a child before routing. Once routed, the child is immutable from the parent's perspective.
+12. Cross-Workitem artefact reads are read-only, parent-scoped, and completion-gated.
+13. `WatchChildren()` is a streaming subscription to the Flow Event Bus `WORKITEM` channel filtered by `parent_workitem_id`.

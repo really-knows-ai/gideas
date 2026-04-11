@@ -182,6 +182,19 @@ Node code may call external business services (APIs, databases, third-party plat
 
 External integration does not change Flow runtime authority boundaries. Authenticated operations against Flow runtime services (artefact writes, stamp requests, routing instructions) still pass through Sidecar mediation regardless of what external calls the node makes. A node that calls an external LLM for generation and then stores the result as an artefact uses the external network path for the LLM call and the Sidecar-mediated path for the artefact store.
 
+## Embassy Boundary
+
+The [Embassy](../02-flow/06-cross-flow.md) is the standard cross-flow boundary node and presents a clear boundary with Sidecar mediation:
+
+- **Sidecar-mediated local operations.** The Embassy uses the Sidecar for all local service access — Archivist (artefact storage, naturalisation stamps), Operator (Workitem creation, routing instructions), Librarian (law queries), and telemetry. These follow the same trust boundary as any other node.
+- **Embassy-owned transfer protocol.** Embassy-to-Embassy communication (signed manifest preflight, package streaming, digest verification) is a node-owned protocol that operates directly between Embassy instances, not through the Sidecar. The Sidecar does not mediate the cross-flow transfer wire protocol.
+
+This separation is intentional: the Sidecar mediates authenticated access to local Flow services; the Embassy handles cross-flow transfer directly because the transfer protocol is a node-to-node concern between sovereign Flows with their own trust material.
+
+## Federation Service Interactions
+
+[Federation service](../02-flow/08-federation.md) interactions — membership management, published-law distribution, authority endpoint discovery — are external platform-service relationships, not Sidecar-mediated node operations. The Embassy queries the Federation service for authority Flow endpoints when exporting `law-petition`s. The Librarian receives distributed laws from the Federation service. Neither interaction transits the Sidecar — these are platform-service-to-platform-service paths outside the node runtime boundary.
+
 ## Sidecar Invariants
 
 1. Sidecar is the sole authenticated mediation path for node-originated runtime operations.
@@ -196,3 +209,5 @@ External integration does not change Flow runtime authority boundaries. Authenti
 10. External business service calls bypass the Sidecar; authenticated runtime operations do not.
 11. Flow Support Service access is Sidecar-mediated for nodes, using the same trust boundary as system service calls.
 12. Telemetry from the Sidecar is transport-level observability; governance audit events are service-owned.
+13. Embassy-to-Embassy transfer protocol is node-owned and does not transit the Sidecar; Embassy local service access (Archivist, Operator) remains Sidecar-mediated.
+14. Federation service interactions are external platform-service relationships, not Sidecar-mediated node operations.
