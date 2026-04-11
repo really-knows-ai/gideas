@@ -38,9 +38,11 @@ const (
 	frictionLedgerImage  = "ghcr.io/gideas/flow/frictionledger:latest"
 	flowMonitorImage     = "ghcr.io/gideas/flow/monitor:latest"
 	librarianImage       = "ghcr.io/gideas/flow/librarian:latest"
+	embassyImage         = "ghcr.io/gideas/flow/embassy:latest"
 	eventBusPort         = 50056
 	frictionLedgerPort   = 50057
 	librarianPort        = 50058
+	embassyPort          = 50059
 	flowMonitorHTTPPort  = 2112
 	infraStorageSize     = "1Gi"
 	monitorStorageSize   = "100Mi"
@@ -48,9 +50,11 @@ const (
 	frictionLedgerSvcNm  = "flow-frictionledger"
 	flowMonitorSvcName   = "flow-monitor"
 	librarianSvcName     = "flow-librarian"
+	embassySvcName       = "flow-embassy"
 	eventBusDBPath       = "/data/eventbus.db"
 	frictionLedgerDBPath = "/data/frictionledger.db"
 	librarianDBPath      = "/data/librarian.db"
+	embassyDataPath      = "/data"
 	monitorCheckpointPth = "/data/monitor-checkpoint.json"
 	operatorSvcName      = "flow-operator"
 	operatorPort         = 50052
@@ -79,6 +83,10 @@ func (r *FoundryFlowReconciler) reconcileInfrastructure(ctx context.Context, flo
 
 	if err := r.reconcileLibrarian(ctx, flow); err != nil {
 		return fmt.Errorf("could not reconcile Librarian: %w", err)
+	}
+
+	if err := r.reconcileEmbassy(ctx, flow); err != nil {
+		return fmt.Errorf("could not reconcile Embassy: %w", err)
 	}
 
 	return nil
@@ -414,6 +422,75 @@ func (r *FoundryFlowReconciler) librarianEnvVars(flow *flowv1.FoundryFlow) []cor
 	ttlEnv("REVIEW_TTL_TIER5", ttls.Tier5)
 
 	return envs
+}
+
+// -----------------------------------------------------------------------
+// Embassy
+// -----------------------------------------------------------------------
+
+func (r *FoundryFlowReconciler) reconcileEmbassy(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	if err := r.reconcileEmbassyDeployment(ctx, flow); err != nil {
+		return err
+	}
+	return r.reconcileService(ctx, flow, embassySvcName, embassyPort, "grpc")
+}
+
+func (r *FoundryFlowReconciler) reconcileEmbassyDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	replicas := int32(1)
+	labels := infraLabels(embassySvcName)
+
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      embassySvcName,
+			Namespace: flow.Namespace,
+		},
+	}
+
+	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+		deploy.Labels = labels
+		deploy.Spec.Replicas = &replicas
+		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		deploy.Spec.Template = corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name:            "embassy",
+					Image:           embassyImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Ports: []corev1.ContainerPort{{
+						Name:          "grpc",
+						ContainerPort: int32(embassyPort),
+						Protocol:      corev1.ProtocolTCP,
+					}},
+					Env:          r.embassyEnvVars(),
+					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: embassyDataPath}},
+				}},
+				Volumes: []corev1.Volume{{
+					Name: "data",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				}},
+			},
+		}
+		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("could not reconcile Embassy Deployment: %w", err)
+	}
+
+	logf.FromContext(ctx).Info("Reconciled Embassy Deployment",
+		"name", deploy.Name, "result", result,
+	)
+	return nil
+}
+
+func (r *FoundryFlowReconciler) embassyEnvVars() []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "EMBASSY_PORT", Value: fmt.Sprintf("%d", embassyPort)},
+		{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
+		{Name: "OPERATOR_ADDRESS", Value: fmt.Sprintf("%s:%d", operatorSvcName, operatorPort)},
+	}
 }
 
 // -----------------------------------------------------------------------

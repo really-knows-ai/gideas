@@ -50,6 +50,39 @@ spec:
                 description: crossFlow defines cross-flow trust and naturalisation
                   settings.
                 properties:
+                  federationCA:
+                    description: |-
+                      federationCA is the PEM-encoded Federation CA certificate.
+                      Present when the Flow operates within a Federation.
+                    type: string
+                  importTypes:
+                    additionalProperties:
+                      description: ImportTypeSpec defines one published cross-flow
+                        import type.
+                      properties:
+                        node:
+                          description: |-
+                            node is the name of the FoundryNode that receives imported Workitems for
+                            this import type. Must reference an existing entry-bound node.
+                          minLength: 1
+                          type: string
+                        requireForeignStamps:
+                          additionalProperties:
+                            items:
+                              type: string
+                            type: array
+                          description: |-
+                            requireForeignStamps defines per-governed-artefact foreign stamp
+                            requirements that the Embassy must verify before materialising the import.
+                          type: object
+                      required:
+                      - node
+                      type: object
+                    description: |-
+                      importTypes publishes the Flow's supported cross-flow import types.
+                      Each import type maps to an entry-bound node and optional per-artefact
+                      foreign stamp requirements.
+                    type: object
                   naturalisation:
                     description: |-
                       naturalisation defines the policy for naturalising imported artefacts and stamps
@@ -69,11 +102,6 @@ spec:
                           type: string
                         type: array
                     type: object
-                  stateRootCA:
-                    description: |-
-                      stateRootCA is the PEM-encoded State Root CA certificate.
-                      Present when the Flow operates under a Governance Flow.
-                    type: string
                 type: object
               entryContracts:
                 additionalProperties:
@@ -241,11 +269,6 @@ spec:
                 - maxTimeout
                 - maxVisits
                 type: object
-              importNode:
-                description: |-
-                  importNode is the name of the FoundryNode that receives cross-flow imported Workitems.
-                  Must reference an existing entry-bound node. If absent, cross-flow import is disabled.
-                type: string
               nodeGroups:
                 additionalProperties:
                   description: |-

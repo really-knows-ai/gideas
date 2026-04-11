@@ -91,24 +91,6 @@ func (p *OperatorProxy) CreateWorkitem(
 	return p.client.CreateWorkitem(outCtx, req)
 }
 
-// ExportWorkitem forwards to the Operator.
-func (p *OperatorProxy) ExportWorkitem(
-	ctx context.Context, req *flowv1.ExportWorkitemRequest,
-) (*flowv1.ExportWorkitemResponse, error) {
-	outCtx := propagateMetadata(ctx)
-	slog.Info("Forwarding ExportWorkitem to Operator", "workitem_id", req.GetWorkitemId())
-	return p.client.ExportWorkitem(outCtx, req)
-}
-
-// ImportWorkitem forwards to the Operator.
-func (p *OperatorProxy) ImportWorkitem(
-	ctx context.Context, req *flowv1.ImportWorkitemRequest,
-) (*flowv1.ImportWorkitemResponse, error) {
-	outCtx := propagateMetadata(ctx)
-	slog.Info("Forwarding ImportWorkitem to Operator", "treaty", req.GetTreatyName())
-	return p.client.ImportWorkitem(outCtx, req)
-}
-
 // GetFlowTopology forwards the topology discovery request to the Operator.
 // Identity metadata (namespace, node_id) is propagated from the incoming
 // Sidecar-enriched context so the Operator can resolve the calling node's

@@ -61,14 +61,6 @@ service OperatorService {
   // is Completed. On Operator failure the caller should fail closed.
   rpc ValidateChildAccess(ValidateChildAccessRequest) returns (ValidateChildAccessResponse);
 
-  // Assembles an export package from a completed Workitem: artefact content
-  // (scoped by exit contract), passport stamps, metadata, and provenance chain.
-  rpc ExportWorkitem(ExportWorkitemRequest) returns (ExportWorkitemResponse);
-
-  // Validates and materialises a Workitem from an export package. Verifies
-  // signatures, enforces Treaty constraints, and validates against the
-  // configured importNode's entry contract.
-  rpc ImportWorkitem(ImportWorkitemRequest) returns (ImportWorkitemResponse);
 }
 
 // --- Request/Response Messages ---
@@ -134,24 +126,6 @@ message SubmitResultResponse {
 }
 
 message CreateWorkitemResponse {
-  string workitem_id = 1;
-}
-
-message ExportWorkitemRequest {
-  string workitem_id = 1;
-}
-
-message ExportWorkitemResponse {
-  bytes export_package = 1;
-}
-
-message ImportWorkitemRequest {
-  bytes export_package = 1;
-  // Optional treaty name for non-sibling crossings.
-  string treaty_name = 2;
-}
-
-message ImportWorkitemResponse {
   string workitem_id = 1;
 }
 

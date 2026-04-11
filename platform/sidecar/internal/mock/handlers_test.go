@@ -120,32 +120,6 @@ func TestOperatorHandler_CreateWorkitem(t *testing.T) {
 	}
 }
 
-func TestOperatorHandler_ExportWorkitem(t *testing.T) {
-	h := &OperatorHandler{}
-
-	resp, err := h.ExportWorkitem(context.Background(), &flowv1.ExportWorkitemRequest{
-		WorkitemId: "wid-export",
-	})
-	if err != nil {
-		t.Fatalf("ExportWorkitem() returned error: %v", err)
-	}
-	if string(resp.GetExportPackage()) != "{}" {
-		t.Fatalf("expected empty JSON object, got %s", resp.GetExportPackage())
-	}
-}
-
-func TestOperatorHandler_ImportWorkitem(t *testing.T) {
-	h := &OperatorHandler{}
-
-	resp, err := h.ImportWorkitem(context.Background(), &flowv1.ImportWorkitemRequest{})
-	if err != nil {
-		t.Fatalf("ImportWorkitem() returned error: %v", err)
-	}
-	if resp.GetWorkitemId() != "mock-import-001" {
-		t.Fatalf("expected mock-import-001, got %s", resp.GetWorkitemId())
-	}
-}
-
 // ---------------------------------------------------------------------------
 // ArchivistHandler
 // ---------------------------------------------------------------------------

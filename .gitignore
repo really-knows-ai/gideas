@@ -1,5 +1,4 @@
 node_modules/
-gen/
 go.work.sum
 bin/
 

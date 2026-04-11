@@ -99,20 +99,6 @@ func (h *OperatorHandler) CreateWorkitem(
 	return &flowv1.CreateWorkitemResponse{WorkitemId: "mock-workitem-001"}, nil
 }
 
-func (h *OperatorHandler) ExportWorkitem(
-	ctx context.Context, req *flowv1.ExportWorkitemRequest,
-) (*flowv1.ExportWorkitemResponse, error) {
-	slog.Info("Sidecar intercepted ExportWorkitem (mock)", "workitem_id", req.GetWorkitemId())
-	return &flowv1.ExportWorkitemResponse{ExportPackage: []byte("{}")}, nil
-}
-
-func (h *OperatorHandler) ImportWorkitem(
-	ctx context.Context, req *flowv1.ImportWorkitemRequest,
-) (*flowv1.ImportWorkitemResponse, error) {
-	slog.Info("Sidecar intercepted ImportWorkitem (mock)", "treaty", req.GetTreatyName())
-	return &flowv1.ImportWorkitemResponse{WorkitemId: "mock-import-001"}, nil
-}
-
 func (h *OperatorHandler) ResumeWorkitem(
 	ctx context.Context, req *flowv1.ResumeWorkitemRequest,
 ) (*flowv1.ResumeWorkitemResponse, error) {

@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "google/protobuf/timestamp.proto";
+
+// EmbassyService handles cross-flow transfer preflight and package streaming.
+// It is the Embassy-specific wire contract for Flow-to-Flow Workitem exchange.
+service EmbassyService {
+  // Validates an inbound manifest before package streaming begins.
+  rpc PreflightManifest(PreflightManifestRequest) returns (PreflightManifestResponse);
+
+  // Streams an export package to the receiving Embassy after preflight passes.
+  rpc StreamPackage(stream PackageChunk) returns (StreamPackageResponse);
+
+  // Assembles and streams an export package for the requested import type.
+  rpc ExportPackage(ExportPackageRequest) returns (stream PackageChunk);
+}
+
+// PreflightManifestRequest carries the signed transfer manifest and optional
+// Treaty reference used for receiver-side trust evaluation.
+message PreflightManifestRequest {
+  TransferManifest manifest = 1;
+  string treaty_name = 2;
+}
+
+// PreflightManifestResponse reports whether the receiver accepted the manifest.
+message PreflightManifestResponse {
+  bool accepted = 1;
+  string rejection_reason = 2;
+  string transfer_id = 3;
+}
+
+// ExportPackageRequest asks the Embassy to assemble an outbound package for a
+// completed Workitem constrained by the target import type.
+message ExportPackageRequest {
+  string workitem_id = 1;
+  string import_type = 2;
+}
+
+// StreamPackageResponse reports the import outcome after streaming completes.
+message StreamPackageResponse {
+  string workitem_id = 1;
+  string error_reason = 2;
+}
+
+// TransferManifest is the header-first declaration of a cross-flow transfer.
+message TransferManifest {
+  string import_type = 1;
+  string source_flow = 2;
+  string target_flow = 3;
+  string transfer_id = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  repeated ArtefactManifest artefacts = 6;
+}
+
+// ArtefactManifest describes one exported artefact in the transfer inventory.
+message ArtefactManifest {
+  string governed_artefact = 1;
+  string digest = 2;
+  int64 size_bytes = 3;
+  map<string, string> representation_metadata = 4;
+  repeated ForeignStamp foreign_stamps = 5;
+}
+
+// ForeignStamp summarises one foreign attestation attached to an artefact.
+message ForeignStamp {
+  string stamp_name = 1;
+  string issuer = 2;
+  string subject = 3;
+  string digest = 4;
+}
+
+// PackageChunk carries the manifest header, streamed content, and final trailer.
+message PackageChunk {
+  oneof chunk {
+    TransferManifest manifest = 1;
+    bytes content = 2;
+    PackageTrailer trailer = 3;
+  }
+}
+
+// PackageTrailer closes the stream with the full package digest.
+message PackageTrailer {
+  string package_digest = 1;
+}
