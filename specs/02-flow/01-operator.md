@@ -59,16 +59,16 @@ Node selection policy can vary by deployment (capacity, readiness, fairness stra
 Workitem admission into a Flow lifecycle is entry-contract bound.
 
 - Local creation admission (nodes originating new Workitems) is enforced against the admitting node's bound entry contract.
-- Cross-flow import admission (receiving Flow) is enforced against the node configured for the import type in `crossFlow.importTypes` and its bound entry contract. The [Embassy](./06-cross-flow.md) handles manifest verification, package transfer, and naturalisation before routing to the configured node.
+- Cross-flow import admission (receiving Flow) is enforced against the node resolved for the effective import type (platform-owned system or flow-authored `crossFlow.importTypes`) and its bound entry contract. The [Embassy](./06-cross-flow.md) handles manifest verification, package transfer, and naturalisation before routing to the resolved node.
 - Review-hearing admission is enforced against the Tribunal's bound hearing entry contract.
 - Entry and exit contracts share the same validation shape: per governed artefact name, required stamp-name list, empty list as presence-only, empty contract as no artefact requirements.
 
 Admission outcomes:
 
-1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses the node configured for the import type in `crossFlow.importTypes`; review-hearing admission uses Tribunal hearing entry binding).
+1. Resolve admission target and bound entry contract (local creation uses admitting node; cross-flow import uses the node resolved for the effective import type; review-hearing admission uses Tribunal hearing entry binding).
 2. Validate Workitem artefacts against per-name requirements.
 3. On success, admit Workitem into `Pending` lifecycle state.
-4. For cross-flow import, route to the node configured for the import type when capacity allows.
+4. For cross-flow import, route according to the resolved effective import-type policy when capacity allows.
 5. For review-hearing admission, schedule first assignment to the Tribunal when capacity allows.
 6. On failure, reject admission with structured contract-validation errors.
 

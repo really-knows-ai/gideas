@@ -462,7 +462,7 @@ func (r *FoundryFlowReconciler) reconcileEmbassyDeployment(ctx context.Context, 
 						ContainerPort: int32(embassyPort),
 						Protocol:      corev1.ProtocolTCP,
 					}},
-					Env:          r.embassyEnvVars(),
+					Env:          r.embassyEnvVars(flow),
 					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: embassyDataPath}},
 				}},
 				Volumes: []corev1.Volume{{
@@ -485,12 +485,60 @@ func (r *FoundryFlowReconciler) reconcileEmbassyDeployment(ctx context.Context, 
 	return nil
 }
 
-func (r *FoundryFlowReconciler) embassyEnvVars() []corev1.EnvVar {
-	return []corev1.EnvVar{
+func (r *FoundryFlowReconciler) embassyEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
+	envs := []corev1.EnvVar{
 		{Name: "EMBASSY_PORT", Value: fmt.Sprintf("%d", embassyPort)},
 		{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
 		{Name: "OPERATOR_ADDRESS", Value: fmt.Sprintf("%s:%d", operatorSvcName, operatorPort)},
 	}
+
+	if flow == nil || flow.Spec.CrossFlow == nil {
+		return append(envs, builtInImportTypeEnvVar(), flowImportTypesEnvVar(nil))
+	}
+
+	if flow.Spec.CrossFlow.FederationCA != "" {
+		envs = append(envs, corev1.EnvVar{Name: "EMBASSY_FEDERATION_CA_PEM", Value: flow.Spec.CrossFlow.FederationCA})
+	}
+
+	if flow.Spec.CrossFlow.Naturalisation != nil {
+		if data, err := json.Marshal(flow.Spec.CrossFlow.Naturalisation); err == nil {
+			envs = append(envs, corev1.EnvVar{Name: "EMBASSY_NATURALISATION_CONFIG", Value: string(data)})
+		}
+	}
+
+	envs = append(envs, builtInImportTypeEnvVar(), flowImportTypesEnvVar(flow.Spec.CrossFlow.ImportTypes))
+	return envs
+}
+
+func builtInImportTypeEnvVar() corev1.EnvVar {
+	type builtInImportTypeConfig struct {
+		BuiltIn bool `json:"builtIn"`
+	}
+
+	configs := map[string]builtInImportTypeConfig{}
+	for name, importType := range builtInImportTypes() {
+		configs[name] = builtInImportTypeConfig{BuiltIn: importType.BuiltIn}
+	}
+
+	data, err := json.Marshal(configs)
+	if err != nil {
+		return corev1.EnvVar{Name: "EMBASSY_SYSTEM_IMPORT_TYPES", Value: "{}"}
+	}
+
+	return corev1.EnvVar{Name: "EMBASSY_SYSTEM_IMPORT_TYPES", Value: string(data)}
+}
+
+func flowImportTypesEnvVar(importTypes map[string]flowv1.ImportTypeSpec) corev1.EnvVar {
+	if len(importTypes) == 0 {
+		return corev1.EnvVar{Name: "EMBASSY_FLOW_IMPORT_TYPES", Value: "{}"}
+	}
+
+	data, err := json.Marshal(importTypes)
+	if err != nil {
+		return corev1.EnvVar{Name: "EMBASSY_FLOW_IMPORT_TYPES", Value: "{}"}
+	}
+
+	return corev1.EnvVar{Name: "EMBASSY_FLOW_IMPORT_TYPES", Value: string(data)}
 }
 
 // -----------------------------------------------------------------------

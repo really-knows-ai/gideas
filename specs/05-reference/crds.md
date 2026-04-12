@@ -42,7 +42,7 @@ The Judiciary is a runtime-mandated subsystem — the Operator provisions it wit
 |---|---|---|
 | **[Arbiter](../01-concepts/02-foundry-cycle.md#arbiter-path-deadlock-resolution)** | Resolves deadlocked feedback disputes. Receives child Workitems from the Facilitator, fans out to Juror nodes, tallies internally for consensus, and either resolves within existing law or creates a Clerk-cycle child for petition drafting. | Operator-provisioned |
 | **[Tribunal](../01-concepts/02-foundry-cycle.md#hearing-path)** | Conducts review hearings triggered by [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) or [TTL Watcher](../01-concepts/02-foundry-cycle.md#ttl-watcher). Fans out to Juror nodes, tallies internally, and on consensus creates a Clerk-cycle child Workitem carrying `verdict-context`. | Operator-provisioned |
-| **[Embassy](../02-flow/06-cross-flow.md#embassy)** | Cross-flow boundary node. Handles manifest preflight, package streaming, import type routing via `crossFlow.importTypes`, treaty enforcement, and naturalisation into local `imported-*` attestations. Published-law distribution is handled separately by the Federation service. | Operator-provisioned |
+| **[Embassy](../02-flow/06-cross-flow.md#embassy)** | Cross-flow boundary node. Handles manifest preflight, package streaming, effective import-type routing (built-in system plus flow-authored types), treaty enforcement, and naturalisation into local `imported-*` attestations. Published-law distribution is handled separately by the Federation service. | Operator-provisioned |
 
 **Watcher Nodes:**
 
@@ -115,7 +115,7 @@ When a law's age exceeds its configured TTL, the [TTL Watcher](../01-concepts/02
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `federationCA` | `string` | no | PEM-encoded Federation CA certificate. Present when the Flow operates within a Federation. Replaces the former `stateRootCA`. |
-| `importTypes` | `map[string]ImportTypeConfig` | no | Named import type map. Each key is an import type name; each value is an [ImportTypeConfig](#importtypeconfig). The import type `law-petition` is a reserved built-in (used by the Judiciary for cross-flow petition submission). If the map is absent or empty, cross-flow import is disabled. |
+| `importTypes` | `map[string]ImportTypeConfig` | no | Flow-authored import type extension map. Each key is a custom import type name; each value is an [ImportTypeConfig](#importtypeconfig). Built-in system import types (currently `law-petition`) live in the same effective namespace but are not authored in this map. If the map is absent or empty, only built-in system import types remain available. |
 
 ### ImportTypeConfig
 
@@ -316,7 +316,7 @@ Any mutation to any part of the law — goal, representations, or metadata — p
 
 ## Treaty
 
-The Treaty CRD defines a directed trust policy for cross-flow collaboration between Flows that do not share federation membership. Treaties also declare which `crossFlow.importTypes` the remote Flow is permitted to use when importing. Detail: [Cross-Flow](../02-flow/06-cross-flow.md), [Governance](../01-concepts/04-governance.md#treaties).
+The Treaty CRD defines a directed trust policy for cross-flow collaboration between Flows that do not share federation membership. Treaties also declare which effective import types on the receiving Flow (built-in system or flow-authored) the remote Flow is permitted to use when importing. Detail: [Cross-Flow](../02-flow/06-cross-flow.md), [Governance](../01-concepts/04-governance.md#treaties).
 
 ### `spec`
 
@@ -326,7 +326,7 @@ The Treaty CRD defines a directed trust policy for cross-flow collaboration betw
 | `direction` | `string` | yes | `import` (this Flow receives from remote), `export` (this Flow sends to remote). Bidirectional exchange requires two Treaty CRDs. Note: a Treaty with `direction: import` in Flow B corresponds to "a Treaty from Flow A to Flow B" in cross-flow descriptions. |
 | `caCert` | `string` | yes | PEM-encoded CA certificate of the remote Flow's trust root. Used for chain verification of imported stamps and packages. |
 | `allowedSubjects` | `[]string` | no | Permitted identity subjects on imported certificates. If empty, all subjects under the CA are accepted. |
-| `allowedImportTypes` | `[]string` | no | Import type names from `crossFlow.importTypes` that this treaty permits the remote Flow to use. If empty, all configured import types are permitted. The reserved `law-petition` import type must be explicitly listed to be allowed. |
+| `allowedImportTypes` | `[]string` | no | Import type names from the receiving Flow's effective import-type namespace that this treaty permits the remote Flow to use. If empty, all effective import types are permitted. Built-in system import types such as `law-petition` must be explicitly listed to be allowed. |
 | `maxBundleSize` | `string` | no | Maximum size of export/import bundles. |
 
 ---
@@ -499,5 +499,5 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 9. Stamp vocabulary on GovernedArtefact defines which stamp names are meaningful; contracts select from that vocabulary.
 10. Child Workitem `parentWorkitemID` is immutable after creation. The `flow.gideas.io/parent` label is set by the Operator at creation time.
 11. NodeGroups are inline on FoundryFlow. A node belongs to at most one group.
-12. `crossFlow.importTypes` replaces the former `importNode` field. Each import type maps to an entry-bound node and optional foreign stamp requirements. The `law-petition` import type is reserved for judiciary cross-flow petition submission.
+12. `crossFlow.importTypes` replaces the former `importNode` field for flow-authored import types. Built-in system import types (currently `law-petition`) share the same effective namespace but are platform-owned rather than YAML-authored.
 13. A dispute record prevents retirement or demotion of the referenced law until the dispute is resolved.

@@ -65,7 +65,7 @@ The SDK is organised into domain-specific surfaces, each backed by a runtime ser
 | [Telemetry](./06-sdk-telemetry.md) | Friction, metrics, traces, custom events | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
 | [Agent](./07-sdk-agent.md) | Managed inference wrapper | Operator + Flow Monitor (via Sidecar) | Automatic heartbeat, schema validation, atomic cost accounting |
 | [HITL](./08-sdk-hitl.md) | Queue management, REST API, Federated Queue Mesh | Node-local (queue) + Operator (via Sidecar) | `USE:queue/server` capability, persistent queue, escalation |
-| [Cross-Flow](./09-sdk-cross-flow.md) | Embassy manifest/package, import type registration, naturalisation | Embassy + Operator (via Sidecar) | `crossFlow.importTypes` mapping, `imported-*` attestation stamps |
+| [Cross-Flow](./09-sdk-cross-flow.md) | Embassy manifest/package, import type resolution, naturalisation | Embassy + Operator (via Sidecar) | built-in + flow-authored import type registry, `imported-*` attestation stamps |
 
 All surfaces share the same trust model: SDK calls transit the Sidecar, which authenticates and proxies to the authoritative service.
 

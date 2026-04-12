@@ -24,7 +24,7 @@ When the receiving Embassy accepts an inbound manifest and streams the full pack
 1. **Workitem creation** — the Embassy creates a new local Workitem in `Pending` state. This is a separate lifecycle object — it is not a continuation of the source Workitem.
 2. **Artefact unpacking** — the Embassy stores each artefact from the package into the local [Archivist](../02-flow/04-system-services.md#archivist). Content digests are verified against the manifest inventory.
 3. **Naturalisation** — for each required foreign stamp declared in `requireForeignStamps`, the Embassy verifies the stamp's cryptographic chain against the trust source (federation root or Treaty-pinned CA). If verification succeeds, the Embassy applies a local `imported-<stamp>` attestation stamp on the artefact.
-4. **Routing** — the Embassy routes the new Workitem to the node configured for the matching `importType` in `crossFlow.importTypes`.
+4. **Routing** — the Embassy routes the new Workitem according to the resolved effective import-type policy.
 
 By the time a node handler receives the assignment, all artefacts are persisted locally and `imported-*` stamps are applied. The handler uses standard SDK operations with no awareness of the Workitem's foreign origin.
 
@@ -38,27 +38,21 @@ Naturalisation converts foreign provenance into locally attested governance stat
 
 Naturalisation is a per-stamp attestation. The Embassy does not re-sign foreign content — it attests that specific foreign stamps were valid at import time.
 
-## Import Type Registration: `crossFlow.importTypes`
+## Import Type Registration and Resolution
 
-The receiving Flow publishes `crossFlow.importTypes` on the [FoundryFlow CRD](../05-reference/crds.md#foundryflow) — a map of import type names to configuration:
+The receiving Flow publishes `crossFlow.importTypes` on the [FoundryFlow CRD](../05-reference/crds.md#foundryflow) as the flow-authored extension set of import types:
 
 ```yaml
 crossFlow:
   importTypes:
-    law-petition:
-      node: clerk-sort
-      requireForeignStamps:
-        petition:
-          - approval
-          - judiciary-consensus
     external-submission:
       node: intake-triage
       requireForeignStamps: {}
 ```
 
-Each import type maps to an entry-bound node in the receiving Flow. The Operator validates at admission time that each referenced node exists and has an entry binding. Senders target the public import type name, never the receiving Flow's internal node names.
+Each flow-authored import type maps to an entry-bound node in the receiving Flow. The Operator validates at admission time that each referenced node exists and has an entry binding. Senders target the public import type name, never the receiving Flow's internal node names.
 
-`law-petition` is the only reserved built-in import type. All other import types are flow-defined. The `node` value is entirely receiver-defined and may point to any entry-bound FoundryNode — a sort node, a triage node, or any domain-appropriate entry point.
+`law-petition` is the only currently defined built-in system import type. It lives in the same effective namespace as flow-authored import types, but it is always present/configured per Flow by the platform and is not declared in YAML. Embassy resolves import types against the merged registry: built-in system import types plus flow-authored `crossFlow.importTypes`.
 
 ### How Imported Petitions Enter the Receiving Flow
 
@@ -67,7 +61,7 @@ For `law-petition` imports specifically:
 1. The sending Flow's law-applicator routes a petition Workitem to its Embassy boundary.
 2. The sending Embassy packages the petition artefact (with its stamps) and sends the manifest to the receiving Embassy.
 3. The receiving Embassy validates the manifest, streams the package, materialises the Workitem, and applies `imported-*` stamps.
-4. The Workitem routes to the node configured for `law-petition` in `crossFlow.importTypes` (e.g., `clerk-sort`).
+4. The Workitem routes according to the platform-owned `law-petition` intake policy for the receiving Flow.
 5. The receiving node sees a normal Workitem with `imported-approval` and `imported-judiciary-consensus` stamps on the petition artefact. It processes based on artefact content and stamp state.
 
 ## SDK Surface Boundaries
@@ -85,8 +79,8 @@ The node implementer's responsibility is limited to: handing export work to Emba
 
 1. Export is triggered by routing a Workitem to Embassy, not by an SDK method. The Embassy handles packaging and transfer.
 2. Import materialisation is Embassy-internal. Node handlers see normal Workitem assignments with locally-attested `imported-*` stamps.
-3. `crossFlow.importTypes` maps import type names to entry-bound nodes. Senders target public import type names, never internal node names.
-4. `law-petition` is the only reserved built-in import type. All others are flow-defined.
+3. Embassy resolves imports against one effective namespace composed of built-in system import types plus flow-authored `crossFlow.importTypes`. Senders target public import type names, never internal node names.
+4. `law-petition` is the only currently defined built-in system import type. Flow architects do not declare it in YAML.
 5. Naturalisation applies `imported-<stamp>` attestation stamps for each verified foreign stamp. Foreign stamps remain for provenance.
 6. Local contracts evaluate `imported-*` stamps at the Operator level, not in node code.
 7. Node handlers do not specify destination Flows, target Embassies, or import types.

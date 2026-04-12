@@ -67,7 +67,7 @@ Entry and exit bindings connect a node to named [contracts](../02-flow/05-config
 **Entry binding** (`entry`) connects a node to a named entry contract. Entry-bound nodes participate in Workitem admission paths:
 
 - Local Workitem creation admits through the creating node's entry binding.
-- Cross-flow import admits through the matching [`crossFlow.importTypes`](../02-flow/05-configuration.md#cross-flow-import-types) entry, whose target node must be entry-bound.
+- Cross-flow import admits through the resolved effective import-type policy. For flow-authored [`crossFlow.importTypes`](../02-flow/05-configuration.md#cross-flow-import-types) entries, the target node must be entry-bound.
 - Review-hearing admission uses the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem)'s hearing entry binding.
 
 **Exit binding** (`exit`) connects a node to a named exit contract and grants `complete()` eligibility. Only exit-bound nodes may call `complete()` — non-exit nodes that attempt completion receive a synchronous error. When an exit node calls `complete()`, the [Operator validates](../02-flow/01-operator.md#exit-contract-enforcement) the Workitem against the bound exit contract. The node does not choose which contract to validate.

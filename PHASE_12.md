@@ -4,7 +4,7 @@ This phase lays down the Federation service contract, configuration model, and
 the operator/SDK integration needed before the Federation service can be
 implemented.
 
-#### 12.1 Federation Wire Protocol
+## 12.1 Federation Wire Protocol
 
 - Create `proto/flow/v1/federation.proto` for federation join / bootstrap,
   membership snapshots, publication submission, rejection reports, and law
@@ -12,7 +12,7 @@ implemented.
 - Define:
   - federation join and trust bootstrap,
   - state / group membership and relationship discovery,
-  - petition target discovery for `law-petition`,
+  - petition target discovery for the built-in system `law-petition` import type,
   - published-law submission + accept/reject response,
   - structured publication conflict / rejection report,
   - accepted law distribution to subscribers.
@@ -20,7 +20,7 @@ implemented.
   subscriber Flows.
 - Regenerate `gen/flow/v1/`.
 
-#### 12.2 Federation Service Schema and API Types
+## 12.2 Federation Service Schema and API Types
 
 - Define federation membership, trust bootstrap, state / organisational-unit
   groupings, authority publisher roles, petition-routing relationships, and
@@ -29,19 +29,20 @@ implemented.
   - only authorised publisher Flows may publish local Tier 3 laws outward,
   - federation publication roles must be unambiguous for a given Flow.
 
-#### 12.3 Operator and SDK Support (Federation)
+## 12.3 Operator and SDK Support (Federation)
 
 - Operator:
   - project federation trust material and topology/config needed by Embassy,
   - stop owning the higher-tier law publication lifecycle.
 - Federation plumbing:
   - define how source Flows submit `published` Tier 3 laws and receive
-    rejection reports,
+     rejection reports,
   - define how subscriber Flows ingest accepted Tier 4 / Tier 5 publications,
   - keep Federation interactions outside node-local routing except where
-    Embassy needs target discovery.
+    Embassy needs target discovery for built-in system import paths such as
+    `law-petition`.
 
-#### 12.4 Dispute Record Support
+## 12.4 Dispute Record Support
 
 - Add `CreateDisputeRecord`, `RetireDisputeRecord`, and `GetActiveDisputes`
   RPCs to the Librarian proto.
@@ -50,7 +51,7 @@ implemented.
 - Extend Sort's evaluation path to query active dispute records and route to
   `pending-hold` when cited laws are in dispute.
 
-#### 12.5 Petition-Outcome-Watcher Foundations
+## 12.5 Petition-Outcome-Watcher Foundations
 
 - Define the Federation event contract that the petition-outcome-watcher
   subscribes to (acceptance and rejection events carrying `petition_id`).

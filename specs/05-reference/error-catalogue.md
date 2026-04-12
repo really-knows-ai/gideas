@@ -109,7 +109,7 @@ Emitted by the [Embassy](./grpc-api.md#embassy-api) during cross-flow Workitem t
 
 | Code | gRPC Status | Cause | Caller Response |
 |------|-------------|-------|-----------------|
-| `UNKNOWN_IMPORT_TYPE` | `FAILED_PRECONDITION` | The import type specified in the manifest does not exist in the receiving Flow's `crossFlow.importTypes` configuration. | Do not retry. The receiving Flow does not accept this import type. Verify the import type name and the receiving Flow's configuration. |
+| `UNKNOWN_IMPORT_TYPE` | `FAILED_PRECONDITION` | The import type specified in the manifest does not exist in the receiving Flow's effective import-type registry (built-in system plus flow-authored types). | Do not retry. The receiving Flow does not accept this import type. Verify the import type name and the receiving Flow's configuration. |
 | `HEADER_REJECTED` | `FAILED_PRECONDITION` | The manifest preflight was rejected — the treaty does not permit the import type, the bundle size exceeds limits, or the source identity failed validation. | Do not retry without fixing the rejection cause. Check treaty `allowedImportTypes`, `maxBundleSize`, and identity material. |
 | `FOREIGN_STAMP_INVALID` | `PERMISSION_DENIED` | Foreign attestation stamps on the imported package failed chain verification against the expected trust root. | Reject the import. The stamps may be from an untrusted source. Investigate the certificate chain. |
 | `PACKAGE_DIGEST_MISMATCH` | `DATA_LOSS` | The SHA-256 digest of the streamed package content does not match the trailer digest. | The package was corrupted in transit. Retry the full transfer. |

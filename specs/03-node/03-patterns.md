@@ -98,7 +98,7 @@ Nodes that integrate with external systems follow the same runtime contract as a
 
 **Correlation identifiers.** External requests should carry identifiers traceable back to the Workitem ID and assignment context. This enables end-to-end audit reconstruction across Flow and external system boundaries.
 
-**Cross-flow sovereignty transfer uses the Embassy.** When work needs to move to another Flow, use the [Embassy](../02-flow/06-cross-flow.md) transfer protocol (export via the sending Embassy, import via the receiving Embassy which routes to the node configured for the `importType` in `crossFlow.importTypes`). Do not simulate cross-flow transfer with local routing shortcuts or direct service calls between Flows.
+**Cross-flow sovereignty transfer uses the Embassy.** When work needs to move to another Flow, use the [Embassy](../02-flow/06-cross-flow.md) transfer protocol (export via the sending Embassy, import via the receiving Embassy which routes according to the resolved effective import-type policy). Do not simulate cross-flow transfer with local routing shortcuts or direct service calls between Flows.
 
 **Fail closed on ambiguous outcomes.** If an external response is ambiguous (partial success, unknown status, timeout without confirmation), route to an error or escalation path rather than assuming success. Governance integrity depends on deterministic state — an optimistic assumption about an ambiguous external outcome can produce an artefact state that appears governed but is not.
 
@@ -203,11 +203,11 @@ When a Workitem completes at an exit node and routes to the Embassy for export:
 
 When the receiving Embassy receives an inbound transfer:
 
-1. **Signed manifest preflight** — the Embassy validates the manifest: is the `importType` declared in `crossFlow.importTypes`? Does the trust source (federation membership or Treaty) authorise this sender? Are the declared artefacts admissible?
+1. **Signed manifest preflight** — the Embassy validates the manifest: does the `importType` exist in the effective import-type registry (built-in system or flow-authored)? Does the trust source (federation membership or Treaty) authorise this sender? Are the declared artefacts admissible?
 2. **Streamed package transfer** — on preflight acceptance, the Embassy requests and receives the full artefact package from the sending Embassy.
 3. **Local Workitem materialisation** — the Embassy creates a new local Workitem via the Operator (Sidecar-mediated), unpacks artefacts into the Archivist (Sidecar-mediated).
 4. **Naturalisation stamps** — the Embassy verifies required foreign stamps against the trust source and applies local `imported-<stamp>` attestation stamps for each verified foreign stamp.
-5. **Routing to configured import type node** — the Embassy routes the new Workitem to the node configured for the `importType` in `crossFlow.importTypes`. The target node must be entry-bound.
+5. **Routing to resolved import target** — the Embassy routes the new Workitem according to the effective import-type policy. Any flow-authored target node must be entry-bound.
 
 ```mermaid
 flowchart TD
@@ -231,7 +231,7 @@ flowchart TD
 
 ### `law-petition` Import Type
 
-`law-petition` is the only reserved built-in import type. It is used for higher-authority escalation when the Clerk cycle produces a T4-5 petition. The [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) creates a [dispute record](../01-concepts/03-data-model.md#dispute-records) and routes to the Embassy, which exports the petition as a `law-petition` to the authority Flow. The receiving Flow's `crossFlow.importTypes` configuration determines which entry-bound node receives the petition.
+`law-petition` is the only currently defined built-in system import type. It is used for higher-authority escalation when the Clerk cycle produces a T4-5 petition. The [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) creates a [dispute record](../01-concepts/03-data-model.md#dispute-records) and routes to the Embassy, which exports the petition as a `law-petition` to the authority Flow. The receiving Flow handles the petition through platform-owned Embassy/judiciary configuration rather than a user-authored `crossFlow.importTypes` entry.
 
 ### Federation Service Interactions
 

@@ -118,13 +118,10 @@ func (r *TreatyReconciler) validateAllowedImportTypes(ctx context.Context, treat
 		return fmt.Errorf("namespace %q must contain exactly 1 FoundryFlow to validate allowedImportTypes, found %d", treaty.Namespace, len(flows.Items))
 	}
 
-	publishedImportTypes := map[string]flowv1.ImportTypeSpec{}
-	if flows.Items[0].Spec.CrossFlow != nil {
-		publishedImportTypes = flows.Items[0].Spec.CrossFlow.ImportTypes
-	}
+	effectiveImportTypes := effectiveImportTypes(&flows.Items[0])
 
 	for _, importType := range treaty.Spec.AllowedImportTypes {
-		if _, ok := publishedImportTypes[importType]; !ok {
+		if _, ok := effectiveImportTypes[importType]; !ok {
 			return fmt.Errorf("allowedImportTypes value %q is not published by FoundryFlow %q", importType, flows.Items[0].Name)
 		}
 	}

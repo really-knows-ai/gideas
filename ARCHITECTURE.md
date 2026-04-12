@@ -7,8 +7,9 @@ sequencing lives in `PLAN.md` and `PHASE_10.md` onward.
 ## Status
 
 - Phase 9 implementation is complete.
-- The Embassy / Federation / cross-flow redesign is planned but not yet implemented.
-- Active work begins with `PHASE_10.md`.
+- The Embassy / Federation / cross-flow redesign is in progress.
+- Phase 11 Embassy foundations are complete under the corrected platform-owned node/import-type model.
+- Active work moves next to `PHASE_12.md` Federation foundations.
 
 ## Motivation
 
@@ -97,9 +98,9 @@ tracking.
 | Federation | **Dedicated federation service + ordinary Flows** | Joining a federation establishes trust, membership, discovery, and role / relationship policy. There is no special Governance Flow runtime. |
 | State model | **States are federation-defined groups of Flows** | Sibling relationships and state-level publication derive from shared group membership, not a dedicated state Flow. |
 | Embassy | **Standard cross-flow boundary node** | Every Flow has an operator-provisioned Embassy that handles outbound export, inbound intake, package verification, naturalisation, and onward routing. Replaces Advocate. |
-| Higher-authority escalation | **Built-in `law-petition` import type via Embassy** | Upward petitions are imported Workitems addressed to the relevant authority Flow, not ad hoc governance RPCs. |
-| Cross-flow intake config | **`crossFlow.importTypes` map** | Receiving Flows publish `importType -> {node, requireForeignStamps}`. `node` must be entry-bound. Senders target stable `importType`s, not internal node names. |
-| Import type naming | **Flow-specific by default, only `law-petition` reserved initially** | The receiving Flow owns its published `importType` API surface. Built-in subsystem routes reserve as little surface as possible; custom Flows define their own additional types. |
+| Higher-authority escalation | **Built-in system `law-petition` import type via Embassy** | Upward petitions are imported Workitems addressed to the relevant authority Flow through a platform-owned import type, not ad hoc governance RPCs or flow-authored YAML config. |
+| Cross-flow intake config | **Platform-owned + flow-authored import type registry** | Effective Embassy intake resolves against built-in system import types plus the Flow's `crossFlow.importTypes` extension map. Flow-authored entries still publish `importType -> {node, requireForeignStamps}` and `node` must be entry-bound. |
+| Import type ownership | **Two ownership classes in one namespace** | Platform-owned import types (for example `law-petition`) are always present/configured per Flow and are not user-editable. Flow architects may add additional custom import types in `crossFlow.importTypes`. |
 | Treaty scope | **Directed trust policy + allowed import types for non-federation exchange** | Treaties remain receiver-enforced one-way trust boundaries outside a federation and may constrain which `importType`s a remote Flow may use. |
 | Cross-flow auth | **mTLS + signed Embassy manifest** | mTLS authenticates the Embassy-to-Embassy channel. Trust roots come from federation membership or Treaty policy. No JWT/bearer-token layer is required. |
 | Naturalisation | **Per-stamp local attestation (`imported-*`)** | Embassy verifies each required foreign stamp and emits a local `imported-<stamp>` attestation. Local contracts rely on the attested local stamps; foreign stamps remain provenance only. |
@@ -230,28 +231,33 @@ a persistent entry node (watcher-style `StartEntry` process) with two jobs:
   `importType`, request the full package, verify it, create a new local
   Workitem, unpack artefacts, apply naturalisation stamps, and route onward.
 
-**Flow config** (`FoundryFlow.spec.crossFlow.importTypes`):
+**Flow config** (`FoundryFlow.spec.crossFlow.importTypes`) defines only the
+flow-authored extension set:
 
 ```yaml
 crossFlow:
   importTypes:
-    law-petition:
-      node: clerk-sort   # receiver-defined; this example assumes the reference Clerk cycle
+    external-submission:
+      node: intake-triage
       requireForeignStamps:
-        petition:
+        submission:
           - approval
-          - judiciary-consensus
 ```
 
-`law-petition` is the only currently reserved built-in `importType`.
-Additional `importType`s are flow-defined. The `node` value is entirely
-receiver-defined — `clerk-sort` is illustrative for Flows that mirror the
-reference Clerk cycle. Authority Flows are free to point `law-petition` at any
-entry-bound node that can process imported petitions.
+`law-petition` is a built-in system `importType`. It exists in the same
+namespace as flow-authored import types, but it is not declared in YAML and may
+not be overridden by the flow architect. The platform provisions and configures
+it per Flow in the same way it provisions/configures the built-in judiciary
+subsystem and Embassy itself.
 
-The map key is the receiving Flow's published `importType`. The resolved `node`
-must reference an existing entry-bound FoundryNode. Senders target the public
-`importType`, never the receiving Flow's private node names.
+Additional `importType`s are flow-authored and declared in
+`crossFlow.importTypes`. Their `node` values are receiver-defined and must
+reference entry-bound FoundryNodes.
+
+Embassy resolves imports against the merged effective import-type registry:
+built-in system import types plus the receiving Flow's published
+`crossFlow.importTypes`. Senders target public `importType`s, never private node
+names.
 
 **Manifest/header** -- signed by the sending Flow and sent before the full
 package. Includes at minimum `importType`, source/target flow identity,
@@ -276,8 +282,8 @@ membership or Treaty policy authorises the remote Flow and import types; this
 is not embedded in the certificate and does not require a JWT-style bearer
 token.
 
-**Scope boundary** -- Embassy handles Workitem transfer (`law-petition` and any
-other published import types). Published law distribution is a Federation
+**Scope boundary** -- Embassy handles Workitem transfer (built-in
+`law-petition` plus any flow-authored import types). Published law distribution is a Federation
 service responsibility, not an Embassy `importType`.
 
 ### Federation Service
@@ -385,7 +391,7 @@ cancellation propagates up the chain via `Complete(WithReason(cancelled))`.
 
 ### Main Cycle (with Judiciary Entry)
 
-```
+```text
 [forge] --> [sort] --> needs quench -----> [quench] --> [sort]
                    |-> needs refinement -> [refine] --> [sort]
                    |-> needs appraise ---> [appraise] --> [sort]
@@ -408,7 +414,7 @@ Facilitator resumes and routes `resolved` back to Sort.
 
 ### Arbiter Path (Deadlock Resolution)
 
-```
+```text
 [facilitator] -- CreateChild --> [arbiter] --[fan-out]--> [juror](s)
                                     |           (internal tally, internal retry)
                                     |
@@ -451,7 +457,7 @@ completes. Facilitator resumes and routes to Sort.
 
 ### Tribunal Path (Watcher-Triggered Hearing)
 
-```
+```text
 [friction-watcher] --+
                      +--> [tribunal] --[fan-out]--> [juror](s)
 [ttl-watcher] -------+        |          (internal tally, internal retry)
@@ -491,7 +497,7 @@ A petition is a governed artefact that goes through the same quality process
 as any other work product. A standalone Codification node sits between
 Forge/Refine and Sort to handle formal representation fan-out.
 
-```
+```text
 [clerk-forge] --> [codification] --[fan-out]--> [codifiers]
                        |
                        v
@@ -748,7 +754,7 @@ rather than each independently re-escalating through the Facilitator → Arbiter
 | Suspend/Resume | New `SuspendAction` on `SubmitResult`, `ResumeWorkitem` RPC. Operator `Suspended` phase, CEL condition evaluation, timeout enforcement. SDK `Suspend()`/`Resume()` methods. |
 | CompletionReason | `CompletionReason` enum on `CompleteAction`. Distinguishes success from cancellation. Stored on workitem status. |
 | Flow CRD suspension config | `spec.suspension.maxSuspendTimeout`, `spec.suspension.defaultSuspendTimeout`. |
-| Cross-flow import type config | `spec.crossFlow.importTypes` publishes `importType -> {node, requireForeignStamps}` and replaces the old `importNode` field. |
+| Cross-flow import type config | `spec.crossFlow.importTypes` publishes the flow-authored extension set `importType -> {node, requireForeignStamps}` and replaces the old `importNode` field. Built-in system import types (for example `law-petition`) live in the same effective namespace but are platform-owned rather than YAML-authored. |
 | Embassy transfer protocol | Signed manifest/header + streamed package transfer, shared by federation-member and Treaty-based exchange. Treaties may constrain `allowedImportTypes`. |
 | Published law admission / distribution | Source Flows submit local Tier 3 laws marked `published`; accepted laws materialise as Tier 4 or Tier 5 in subscribers, rejected publications return structured reports. |
 

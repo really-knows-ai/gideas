@@ -25,7 +25,7 @@ Core goals:
 - Define publication submission, conflict rejection, and non-blocking
   higher-authority escalation (including dispute records for in-flight petitions).
 
-#### 10.1 Core Concept Specs
+## 10.1 Core Concept Specs
 
 | File | Changes |
 |---|---|
@@ -35,7 +35,7 @@ Core goals:
 | `specs/01-concepts/03-data-model.md` | Restore Tier 4 / Tier 5 as state-published vs federation-published external laws. Define `published` local laws, petition correlation IDs, dispute records (for in-flight petitions), and imported foreign provenance vs local `imported-*` attestation stamps. |
 | `specs/01-concepts/04-governance.md` | Rewrite governance around Federation membership, states / organisational units, authority publisher roles, upward `law-petition`s, and downward publication. Remove Governance Flow as a special runtime. |
 
-#### 10.2 Platform Specs
+## 10.2 Platform Specs
 
 | File | Changes |
 |---|---|
@@ -49,7 +49,7 @@ Core goals:
 | `specs/02-flow/07-operations.md` | Update operational guidance for Embassy endpoints plus Federation membership, publication flows, and validation / rejection handling. |
 | `specs/02-flow/08-federation.md` | **New file.** Define federation membership, trust bootstrap, state groupings, authority publisher roles, petition-routing relationships, publication admission, conflict rejection, and Tier 4 / Tier 5 distribution. |
 
-#### 10.3 Node and SDK Specs
+## 10.3 Node and SDK Specs
 
 | File | Changes |
 |---|---|
@@ -61,7 +61,7 @@ Core goals:
 | `specs/04-sdk/08-sdk-hitl.md` | Delete the Advocate section. HITL becomes fully generic with no Judiciary-specific boundary node. |
 | `specs/04-sdk/09-sdk-cross-flow.md` | **New file.** Define Embassy manifest/package transfer, `law-petition` handoff, staging / materialisation responsibilities, and naturalisation semantics for node implementers. |
 
-#### 10.4 Reference Specs
+## 10.4 Reference Specs
 
 | File | Changes |
 |---|---|

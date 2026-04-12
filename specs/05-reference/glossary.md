@@ -24,11 +24,11 @@ The petition drafting and approval cycle in the Judiciary's legislative inner cy
 
 ### crossFlow.importTypes
 
-A map on the FoundryFlow CRD's `spec.crossFlow` that defines named import types for cross-flow Workitem reception. Each key is an import type name; each value specifies a target node (must be entry-bound) and optional per-artefact foreign-stamp requirements. Replaces the former `importNode` field. The `law-petition` import type is reserved for judiciary cross-flow petition submission. If the map is absent or empty, cross-flow import is disabled. Detail: [CRDs](./crds.md#cross-flow-configuration).
+A map on the FoundryFlow CRD's `spec.crossFlow` that defines the flow-authored/custom import type extension set for cross-flow Workitem reception. Each key is an import type name; each value specifies a target node (must be entry-bound) and optional per-artefact foreign-stamp requirements. Replaces the former `importNode` field. Built-in system import types such as `law-petition` live in the same effective namespace but are not authored in this map. Detail: [CRDs](./crds.md#cross-flow-configuration).
 
 ### Embassy
 
-The operator-provisioned cross-flow boundary node present in every Flow. It handles manifest preflight, package streaming, inbound Workitem materialisation, `crossFlow.importTypes` routing, Treaty enforcement, and naturalisation of verified foreign stamps into local `imported-*` attestations. Embassy transfers Workitems such as `law-petition`; it does not distribute published laws, which is a [Federation](#federation) service responsibility. Detail: [Cross-Flow](../02-flow/06-cross-flow.md#embassy), [gRPC API](./grpc-api.md#embassy-api).
+The operator-provisioned cross-flow boundary node present in every Flow. It handles manifest preflight, package streaming, inbound Workitem materialisation, effective import-type routing (built-in system plus flow-authored), Treaty enforcement, and naturalisation of verified foreign stamps into local `imported-*` attestations. Embassy transfers Workitems such as `law-petition`; it does not distribute published laws, which is a [Federation](#federation) service responsibility. Detail: [Cross-Flow](../02-flow/06-cross-flow.md#embassy), [gRPC API](./grpc-api.md#embassy-api).
 
 ### Facilitator
 
@@ -200,7 +200,7 @@ An action node in the Judiciary's legislative inner cycle. For approved T1-3 pet
 
 ### law-petition
 
-The reserved built-in import type in `crossFlow.importTypes` for higher-authority petition submission. A Flow uses it when the [law-applicator](#law-applicator) routes an approved T4-5 petition to its [Embassy](#embassy), which exports the petition to the authority Flow selected by federation policy or allowed by Treaty policy. It is not used for published-law distribution.
+The built-in system import type for higher-authority petition submission. It exists in the same effective import-type namespace as flow-authored `crossFlow.importTypes`, but it is always present/configured per Flow by the platform rather than authored in YAML. A Flow uses it when the [law-applicator](#law-applicator) routes an approved T4-5 petition to its [Embassy](#embassy), which exports the petition to the authority Flow selected by federation policy or allowed by Treaty policy. It is not used for published-law distribution.
 
 ### Juror
 

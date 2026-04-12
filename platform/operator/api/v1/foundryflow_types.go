@@ -233,9 +233,10 @@ type CrossFlowConfig struct {
 	// +optional
 	FederationCA string `json:"federationCA,omitempty"`
 
-	// importTypes publishes the Flow's supported cross-flow import types.
-	// Each import type maps to an entry-bound node and optional per-artefact
-	// foreign stamp requirements.
+	// importTypes publishes the Flow's flow-authored cross-flow import types.
+	// Built-in system import types are always present/configured by the platform
+	// and are not declared in this map. Each flow-authored import type maps to an
+	// entry-bound node and optional per-artefact foreign stamp requirements.
 	// +optional
 	ImportTypes map[string]ImportTypeSpec `json:"importTypes,omitempty"`
 
@@ -245,7 +246,7 @@ type CrossFlowConfig struct {
 	Naturalisation *NaturalisationConfig `json:"naturalisation,omitempty"`
 }
 
-// ImportTypeSpec defines one published cross-flow import type.
+// ImportTypeSpec defines one flow-authored cross-flow import type.
 type ImportTypeSpec struct {
 	// node is the name of the FoundryNode that receives imported Workitems for
 	// this import type. Must reference an existing entry-bound node.

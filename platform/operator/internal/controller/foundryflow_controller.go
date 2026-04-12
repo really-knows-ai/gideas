@@ -211,6 +211,10 @@ func (r *FoundryFlowReconciler) validateImportTypes(ctx context.Context, flow *f
 	}
 
 	for importType, spec := range flow.Spec.CrossFlow.ImportTypes {
+		if isBuiltInImportType(importType) {
+			return fmt.Errorf("crossFlow.importTypes[%q] is invalid: %q is a built-in system import type and must not be user-defined", importType, importType)
+		}
+
 		var node flowv1.FoundryNode
 		if err := r.Get(ctx, types.NamespacedName{
 			Name:      spec.Node,

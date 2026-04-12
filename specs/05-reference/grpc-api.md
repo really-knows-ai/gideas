@@ -365,15 +365,15 @@ The Embassy is the cross-flow gateway node responsible for Workitem import/expor
 
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
-| `PreflightManifest` | `manifest` (import type, artefact list, stamp summary, source identity, treaty reference) | `accepted` or `rejection_reason` | Validates an inbound transfer request before streaming begins. Checks: import type exists in `crossFlow.importTypes`, treaty permits the import type (if applicable via `allowedImportTypes`), bundle size within limits, source identity validates against trust root (Federation CA for federation-member exchange, Treaty `caCert` for Treaty exchange). Returns rejection reason on failure. |
-| `StreamPackage` | `stream PackageChunk` (header + content chunks + trailer with digest) | `import_result` (workitem_id or structured error) | Streams the export package to the receiving Embassy. The header carries the manifest reference from preflight. Content chunks carry artefact bytes, passport stamps, and provenance chain. The trailer carries a package digest. The Embassy verifies `SHA256(chunks) == digest`, applies naturalisation policy, routes the materialised Workitem to the import type's configured node, and validates the entry contract. |
+| `PreflightManifest` | `manifest` (import type, artefact list, stamp summary, source identity, treaty reference) | `accepted` or `rejection_reason` | Validates an inbound transfer request before streaming begins. Checks: import type exists in the receiving Flow's effective import-type registry (built-in system plus flow-authored), treaty permits the import type (if applicable via `allowedImportTypes`), bundle size within limits, source identity validates against trust root (Federation CA for federation-member exchange, Treaty `caCert` for Treaty exchange). Returns rejection reason on failure. |
+| `StreamPackage` | `stream PackageChunk` (header + content chunks + trailer with digest) | `import_result` (workitem_id or structured error) | Streams the export package to the receiving Embassy. The header carries the manifest reference from preflight. Content chunks carry artefact bytes, passport stamps, and provenance chain. The trailer carries a package digest. The Embassy verifies `SHA256(chunks) == digest`, applies naturalisation policy, routes the materialised Workitem according to the resolved effective import-type policy, and validates the entry contract. |
 | `ExportPackage` | `workitem_id`, `import_type` | `stream PackageChunk` | Assembles and streams an export package from a completed Workitem. Artefact content is scoped by the exit contract. The Embassy signs the package with the Flow's identity material and includes the certificate chain. |
 
 ### Embassy Error Responses
 
 | Condition | Error | gRPC Status |
 |-----------|-------|-------------|
-| Import type not found in `crossFlow.importTypes` | `UNKNOWN_IMPORT_TYPE` | `FAILED_PRECONDITION` |
+| Import type not found in the receiving Flow's effective import-type registry | `UNKNOWN_IMPORT_TYPE` | `FAILED_PRECONDITION` |
 | Preflight manifest rejected (treaty, size, identity) | `HEADER_REJECTED` | `FAILED_PRECONDITION` |
 | Foreign attestation stamps fail chain verification | `FOREIGN_STAMP_INVALID` | `PERMISSION_DENIED` |
 | Package content digest does not match trailer | `PACKAGE_DIGEST_MISMATCH` | `DATA_LOSS` |

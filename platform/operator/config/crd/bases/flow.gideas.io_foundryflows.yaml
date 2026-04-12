@@ -57,7 +57,7 @@ spec:
                     type: string
                   importTypes:
                     additionalProperties:
-                      description: ImportTypeSpec defines one published cross-flow
+                      description: ImportTypeSpec defines one flow-authored cross-flow
                         import type.
                       properties:
                         node:
@@ -79,9 +79,10 @@ spec:
                       - node
                       type: object
                     description: |-
-                      importTypes publishes the Flow's supported cross-flow import types.
-                      Each import type maps to an entry-bound node and optional per-artefact
-                      foreign stamp requirements.
+                      importTypes publishes the Flow's flow-authored cross-flow import types.
+                      Built-in system import types are always present/configured by the platform
+                      and are not declared in this map. Each flow-authored import type maps to an
+                      entry-bound node and optional per-artefact foreign stamp requirements.
                     type: object
                   naturalisation:
                     description: |-

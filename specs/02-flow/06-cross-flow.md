@@ -24,11 +24,11 @@ The Embassy is the standard cross-flow boundary node, present in every Flow. It 
 Embassy-to-Embassy transfer follows a header-first protocol:
 
 1. **Manifest** — the sending Embassy sends a signed manifest containing: `importType`, source/target Flow identity, transfer ID and expiry, artefact inventory (governed name, digest, size, representation metadata), and the foreign stamps for each artefact.
-2. **Preflight** — the receiving Embassy validates the manifest: is the `importType` declared in `crossFlow.importTypes`? Does the trust source (federation membership or Treaty) authorise this sender? Are the declared artefacts admissible?
+2. **Preflight** — the receiving Embassy validates the manifest: does the `importType` exist in the effective import-type registry (built-in system import types plus flow-authored `crossFlow.importTypes`)? Does the trust source (federation membership or Treaty) authorise this sender? Are the declared artefacts admissible?
 3. **Package streaming** — if preflight passes, the receiving Embassy requests the full package. The sending Embassy streams artefact content.
 4. **Verification** — the receiving Embassy verifies content digests against the manifest inventory.
 5. **Materialisation** — the receiving Embassy creates a new local Workitem, unpacks artefacts into the Archivist, and applies naturalisation stamps.
-6. **Routing** — the receiving Embassy routes the new Workitem to the node configured for the `importType` in `crossFlow.importTypes`.
+6. **Routing** — the receiving Embassy routes the new Workitem according to the resolved effective import-type policy.
 
 ```mermaid
 sequenceDiagram
@@ -45,25 +45,26 @@ sequenceDiagram
     RE->>AR: store artefacts
     RE->>RE: apply naturalisation stamps
     RE->>OP: create Pending Workitem
-    OP->>OP: route to configured import type node
+    OP->>OP: route via effective import-type policy
 ```
 
 ### Import Types
 
-The receiving Flow publishes `crossFlow.importTypes` — a map of import type names to configuration:
+The receiving Flow publishes `crossFlow.importTypes` as the flow-authored extension set of import types:
 
 ```yaml
 crossFlow:
   importTypes:
-    law-petition:
-      node: clerk-sort
+    external-submission:
+      node: intake-triage
       requireForeignStamps:
-        petition:
+        submission:
           - approval
-          - judiciary-consensus
 ```
 
-`law-petition` is the only currently reserved built-in `importType`. Additional `importType`s are flow-defined. The `node` value is entirely receiver-defined. The resolved `node` must reference an existing entry-bound FoundryNode. Senders target the public `importType`, never the receiving Flow's private node names.
+`law-petition` is the only currently defined built-in system `importType`. It exists in the same effective namespace as flow-authored import types, but it is always present/configured per Flow by the platform and is not declared in YAML. Additional `importType`s are flow-defined through `crossFlow.importTypes`. For flow-authored entries, the `node` value is receiver-defined and must reference an existing entry-bound FoundryNode. Senders target public `importType`s, never the receiving Flow's private node names.
+
+Embassy resolves imports against the merged effective import-type registry: built-in system import types plus the receiving Flow's published `crossFlow.importTypes`.
 
 ### Naturalisation
 
@@ -78,7 +79,7 @@ Naturalisation is a per-stamp local attestation process. The Embassy does not re
 
 ### Scope Boundary
 
-Embassy handles Workitem transfer (`law-petition` and any other published import types). Published law distribution is a [Federation service](./08-federation.md) responsibility, not an Embassy `importType`.
+Embassy handles Workitem transfer (built-in `law-petition` plus any flow-authored import types). Published law distribution is a [Federation service](./08-federation.md) responsibility, not an Embassy `importType`.
 
 ## Trust Topologies
 
@@ -111,7 +112,7 @@ Federation membership establishes the trust root. The Embassy verifies manifests
 A Treaty is a directed trust policy that enables collaboration between Flows that do not share federation membership. Treaties are receiver-enforced:
 
 - The receiving Flow defines a Treaty CRD referencing the remote Flow and pinning the remote Flow's CA certificate.
-- The Treaty may constrain `allowedImportTypes` — which of the receiving Flow's published `importType`s the remote Flow may use.
+- The Treaty may constrain `allowedImportTypes` — which effective import types on the receiving Flow (built-in system or flow-authored) the remote Flow may use.
 - Reverse direction requires a distinct Treaty.
 
 Treaties use the same Embassy manifest + package protocol. The only difference from federation-member exchange is the trust source: Treaty-pinned CA instead of federation root CA.
@@ -191,8 +192,8 @@ Cross-flow operations fail and recover through explicit policies:
 - Transfer interruption: manifest remains retriable; package streaming is resumable without duplicate effective import.
 - Partial import failure: receiving Embassy rejects activation and records structured failure.
 - Validation failure: package is quarantined or rejected according to policy.
-- Import type misconfiguration (`crossFlow.importTypes` node missing, unknown, or not entry-bound): import is rejected as configuration error.
-- Unknown import type (sender requests type not in `crossFlow.importTypes`): manifest rejected at preflight.
+- Import type misconfiguration (a flow-authored `crossFlow.importTypes` node is missing, unknown, or not entry-bound): import is rejected as configuration error.
+- Unknown import type (sender requests a type not in the effective import-type registry): manifest rejected at preflight.
 - Foreign stamp validation failure: naturalisation fails and import is rejected.
 - Package digest mismatch: import rejected after content verification.
 - Destination unavailability: retries with backoff until retry budget exhaustion.
@@ -208,7 +209,7 @@ All cross-flow deployments preserve these invariants:
 2. Intra-flow routing and cross-flow transfer are distinct mechanisms.
 3. Every Flow has an operator-provisioned Embassy for cross-flow boundary management.
 4. Embassy transfer uses a header-first protocol: signed manifest, preflight, then package streaming.
-5. `law-petition` is the only reserved built-in import type; all others are flow-defined.
+5. Import types live in one effective namespace composed of built-in system import types plus flow-authored `crossFlow.importTypes`. `law-petition` is the only currently defined built-in system import type.
 6. Federation-member and Treaty exchange use the same Embassy protocol; only the trust source differs.
 7. Embassy applies `imported-<stamp>` attestation stamps for verified foreign stamps; foreign stamps remain for provenance.
 8. Treaty trust edges are directed; bidirectional exchange requires two treaties. Treaties may constrain `allowedImportTypes`.

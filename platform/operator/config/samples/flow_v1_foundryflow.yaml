@@ -23,10 +23,10 @@ spec:
       ZXhhbXBsZQ==
       -----END CERTIFICATE-----
     importTypes:
-      law-petition:
-        node: intake
+      external-submission:
+        node: intake-triage
         requireForeignStamps:
-          petition:
+          submission:
             - approval
   eventBusConfig:
     retention:
