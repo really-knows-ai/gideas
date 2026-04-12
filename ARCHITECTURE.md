@@ -9,7 +9,8 @@ sequencing lives in `PLAN.md` and `PHASE_10.md` onward.
 - Phase 9 implementation is complete.
 - The Embassy / Federation / cross-flow redesign is in progress.
 - Phase 11 Embassy foundations are complete under the corrected platform-owned node/import-type model.
-- Active work moves next to `PHASE_12.md` Federation foundations.
+- Phase 12 Federation foundations are complete (proto, service schema, publication lifecycle, dispute records).
+- Active work moves next to `PHASE_13.md` Embassy node, Federation service, and Clerk/authority wiring.
 
 ## Motivation
 
