@@ -200,6 +200,17 @@ var _ = Describe("FoundryFlow Controller", func() {
 				Expect(k8sClient.Create(ctx, ns)).To(Succeed())
 			}
 
+			By("creating the intake node used by custom import types")
+			var intakeNode flowv1.FoundryNode
+			getErr := k8sClient.Get(ctx, types.NamespacedName{Name: "intake-triage", Namespace: testNamespace}, &intakeNode)
+			if getErr != nil && errors.IsNotFound(getErr) {
+				intakeNode = flowv1.FoundryNode{
+					ObjectMeta: metav1.ObjectMeta{Name: "intake-triage", Namespace: testNamespace},
+					Spec:       flowv1.FoundryNodeSpec{Image: "triage:latest", Entry: "default"},
+				}
+				Expect(k8sClient.Create(ctx, &intakeNode)).To(Succeed())
+			}
+
 			By("creating a FoundryFlow with EventBusConfig and governance thresholds")
 			var existingFlow flowv1.FoundryFlow
 			err := k8sClient.Get(ctx, typeNamespacedName, &existingFlow)
@@ -207,6 +218,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 				tier1Threshold := resource.MustParse("100")
 				tier2Threshold := resource.MustParse("50.5")
 				tier1TTL := metav1.Duration{Duration: 24 * time.Hour}
+				autoNaturalise := false
 				flowResource := &flowv1.FoundryFlow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
@@ -237,6 +249,16 @@ var _ = Describe("FoundryFlow Controller", func() {
 								"audit":     {Duration: "168h"},
 							},
 						},
+						CrossFlow: &flowv1.CrossFlowConfig{
+							FederationCA: "-----BEGIN CERTIFICATE-----\nZmFrZS1mZWRlcmF0aW9uLWNh\n-----END CERTIFICATE-----",
+							ImportTypes: map[string]flowv1.ImportTypeSpec{
+								"external-submission": {Node: "intake-triage"},
+							},
+							Naturalisation: &flowv1.NaturalisationConfig{
+								AutoNaturalise:     &autoNaturalise,
+								RequireLocalStamps: []string{"import-reviewed", "import-attested"},
+							},
+						},
 					},
 				}
 				Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
@@ -263,6 +285,11 @@ var _ = Describe("FoundryFlow Controller", func() {
 				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, svc); err == nil {
 					_ = k8sClient.Delete(ctx, svc)
 				}
+			}
+
+			intakeNode := &flowv1.FoundryNode{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "intake-triage", Namespace: testNamespace}, intakeNode); err == nil {
+				_ = k8sClient.Delete(ctx, intakeNode)
 			}
 		})
 
@@ -455,6 +482,79 @@ var _ = Describe("FoundryFlow Controller", func() {
 			}, &svc)).To(Succeed())
 			Expect(svc.Spec.Ports[0].Port).To(Equal(int32(50059)))
 			Expect(svc.Spec.Ports[0].Name).To(Equal("grpc"))
+		})
+
+		It("should project Embassy trust inputs from cross-flow config", func() {
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying Embassy trust env vars")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-embassy",
+				Namespace: testNamespace,
+			}, &deploy)).To(Succeed())
+
+			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
+			Expect(envMap).To(HaveKeyWithValue(
+				"EMBASSY_FEDERATION_CA_PEM",
+				"-----BEGIN CERTIFICATE-----\nZmFrZS1mZWRlcmF0aW9uLWNh\n-----END CERTIFICATE-----",
+			))
+		})
+
+		It("should project Embassy naturalisation and system import type config", func() {
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying Embassy naturalisation and import type env vars")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-embassy",
+				Namespace: testNamespace,
+			}, &deploy)).To(Succeed())
+
+			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
+			Expect(envMap).To(HaveKey("EMBASSY_NATURALISATION_CONFIG"))
+			Expect(envMap).To(HaveKey("EMBASSY_SYSTEM_IMPORT_TYPES"))
+			Expect(envMap).To(HaveKey("EMBASSY_FLOW_IMPORT_TYPES"))
+
+			var naturalisation struct {
+				AutoNaturalise     bool     `json:"autoNaturalise"`
+				RequireLocalStamps []string `json:"requireLocalStamps"`
+			}
+			Expect(json.Unmarshal([]byte(envMap["EMBASSY_NATURALISATION_CONFIG"]), &naturalisation)).To(Succeed())
+			Expect(naturalisation.AutoNaturalise).To(BeFalse())
+			Expect(naturalisation.RequireLocalStamps).To(ConsistOf("import-reviewed", "import-attested"))
+
+			var systemImportTypes map[string]struct {
+				BuiltIn bool `json:"builtIn"`
+			}
+			Expect(json.Unmarshal([]byte(envMap["EMBASSY_SYSTEM_IMPORT_TYPES"]), &systemImportTypes)).To(Succeed())
+			Expect(systemImportTypes).To(HaveKey("law-petition"))
+			Expect(systemImportTypes["law-petition"].BuiltIn).To(BeTrue())
+
+			var flowImportTypes map[string]struct {
+				Node string `json:"node"`
+			}
+			Expect(json.Unmarshal([]byte(envMap["EMBASSY_FLOW_IMPORT_TYPES"]), &flowImportTypes)).To(Succeed())
+			Expect(flowImportTypes).To(HaveKey("external-submission"))
+			Expect(flowImportTypes["external-submission"].Node).To(Equal("intake-triage"))
 		})
 
 		It("should set owner references on infrastructure resources", func() {

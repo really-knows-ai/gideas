@@ -127,7 +127,7 @@ Local routing and cross-flow transfer are different runtime mechanisms:
 - Local routing moves one Workitem between nodes inside one Flow.
 - Cross-flow transfer exports a bundle and creates a new Workitem lifecycle in the receiving Flow.
 - Export/import is copy-on-write across sovereignty boundaries.
-- Successful import creates a `Pending` Workitem that is first-scheduled to the node configured for the import type in `crossFlow.importTypes` when capacity allows.
+- Successful import creates a `Pending` Workitem that is first-scheduled according to the resolved effective import-type policy (platform-owned or flow-authored) when capacity allows.
 
 Imported stamps are always cryptographically verifiable when chain validation succeeds. The receiving [Embassy](./06-cross-flow.md) verifies required foreign stamps and applies local `imported-<stamp>` attestation stamps. Downstream local contracts rely on these attested local stamps; foreign stamps remain for provenance and audit. Trust roots differ by topology:
 
@@ -176,7 +176,7 @@ The following invariants hold for every Flow deployment:
 9. Artefact provenance (versions, stamps, feedback) is Archivist-owned, not Workitem-owned.
 10. The Judiciary is always present and cannot exceed its authority ceiling.
 11. Cross-flow verifiability and local authority are distinct and topology-dependent.
-12. Imported Workitems are created in `Pending` by the Embassy and routed to the node configured for the import type in `crossFlow.importTypes`.
+12. Imported Workitems are created in `Pending` by the Embassy and routed according to the resolved effective import-type policy.
 13. Flow Support Services are consumed through Sidecar mediation by nodes and do not process Workitems.
 
 These invariants are elaborated normatively in the remaining `02-flow` documents.

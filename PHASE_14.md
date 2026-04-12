@@ -15,7 +15,7 @@ Historical Phase 7 context is preserved in `PHASES_01_09.md`.
 
 ## Remaining
 
-#### 14.1 Judiciary FoundryNode CRDs
+## 14.1 Judiciary FoundryNode CRDs
 
 Write FoundryNode CRD definitions for all judiciary nodes now that images and
 contracts are finalised.
@@ -58,12 +58,12 @@ contracts are finalised.
 | **Codification** | | | |
 | `codify-smt` | codify-smt:latest | Computation | Formal law representations (SMT-LIB) |
 
-#### 14.2 Judiciary NodeGroup
+## 14.2 Judiciary NodeGroup
 
 Add a `judiciary` NodeGroup to the FoundryFlow CRD with the judiciary nodes
 and appropriate entry/exit contracts.
 
-#### 14.3 Judiciary Deployments
+## 14.3 Judiciary Deployments
 
 Add Deployment manifests for all judiciary nodes to
 `nodes/haiku-manifests/deployments.yaml`. Each follows the existing pattern:
@@ -72,7 +72,7 @@ connection env vars and ConfigMap volume mounts. Embassy is operator-provisioned
 and is not added manually to this manifest set. The Federation service is
 platform-level and is outside the node deployment manifests.
 
-#### 14.4 Judiciary ConfigMaps
+## 14.4 Judiciary ConfigMaps
 
 Add ConfigMap manifests for judiciary nodes to
 `nodes/haiku-manifests/configmaps.yaml`. Key configurations:
@@ -97,10 +97,11 @@ Add ConfigMap manifests for judiciary nodes to
 | `law-applicator` | (minimal -- reads petition artefact, tier-aware: T1-3 applies laws, T4-5 creates dispute record) |
 
 Embassy config is not hand-authored in this ConfigMap file. The Operator derives
-Embassy behaviour from `FoundryFlow.spec.crossFlow`, projected Federation /
-Treaty trust material, and any Embassy-specific runtime settings introduced in
-Phase 13.
+Embassy behaviour from platform-owned system configuration (including built-in
+import types), `FoundryFlow.spec.crossFlow` for flow-authored import types,
+projected Federation / Treaty trust material, and any Embassy-specific runtime
+settings introduced in Phase 13.
 
-#### 14.5 Update PLAN.md
+## 14.5 Update PLAN.md
 
 Mark Phase 14 complete and update status.

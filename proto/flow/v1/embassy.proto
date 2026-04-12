@@ -54,6 +54,16 @@ message TransferManifest {
   string transfer_id = 4;
   google.protobuf.Timestamp expires_at = 5;
   repeated ArtefactManifest artefacts = 6;
+  ManifestSignature signature = 7;
+}
+
+// ManifestSignature carries the Embassy identity material used to sign the
+// transfer manifest.
+message ManifestSignature {
+  string algorithm = 1;
+  bytes signature = 2;
+  string subject = 3;
+  repeated string certificate_chain_pem = 4;
 }
 
 // ArtefactManifest describes one exported artefact in the transfer inventory.

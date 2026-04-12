@@ -50,9 +50,9 @@ spec:
             properties:
               allowedImportTypes:
                 description: |-
-                  allowedImportTypes constrains which of the receiving Flow's published
-                  crossFlow.importTypes the remote Flow may use. If empty, all published
-                  import types are permitted.
+                  allowedImportTypes constrains which import types from the receiving Flow's
+                  effective import-type namespace the remote Flow may use. If empty, all
+                  effective import types are permitted.
                 items:
                   type: string
                 type: array

@@ -159,9 +159,9 @@ The Embassy applies [naturalisation](../02-flow/06-cross-flow.md#naturalisation)
 - Foreign stamps remain attached for provenance and audit but downstream local contracts rely on the `imported-*` stamps, not on the foreign stamps directly.
 - Whether `imported-*` stamps satisfy local entry or routing contracts depends on the Flow's contract configuration, evaluated at the Operator level — not in node code.
 
-### Imported Petitions via `crossFlow.importTypes`
+### Imported Petitions via Effective Import-Type Resolution
 
-Imported Workitems enter the receiving Flow through the node configured for the matching import type in [`crossFlow.importTypes`](../02-flow/06-cross-flow.md#import-types). For example, a `law-petition` import type routes to the configured entry-bound node (e.g. a sort or triage node). The receiving node sees a normal Workitem assignment with `imported-*` attestation stamps on its artefacts. The node does not need to know the Workitem was imported — it processes based on artefact content and stamp state like any other assignment.
+Imported Workitems enter the receiving Flow through the node or path resolved for the matching effective import type. Flow-authored import types use [`crossFlow.importTypes`](../02-flow/06-cross-flow.md#import-types). Built-in system import types such as `law-petition` are always present/configured per Flow by the platform rather than user-authored in YAML. In either case, the receiving node sees a normal Workitem assignment with `imported-*` attestation stamps on its artefacts. The node does not need to know the Workitem was imported — it processes based on artefact content and stamp state like any other assignment.
 
 ### Export
 

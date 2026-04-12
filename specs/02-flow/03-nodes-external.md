@@ -11,7 +11,7 @@ Nodes are execution actors in the data plane. Control-plane authority remains wi
 - Nodes return one routing instruction at the end of each assignment.
 - Nodes do not mutate Workitem lifecycle fields directly.
 - Nodes admitting new Workitems through local creation must be bound to an entry contract.
-- Cross-flow import admission is handled by the [Embassy](./06-cross-flow.md), which routes to the node configured for the import type in `crossFlow.importTypes`. Import type nodes must be entry-bound.
+- Cross-flow import admission is handled by the [Embassy](./06-cross-flow.md), which routes according to the resolved effective import-type policy. Any target node for a flow-authored import type must be entry-bound.
 - Runtime-triggered review-hearing admission targets the Tribunal's mandatory hearing entry binding.
 
 Every node, including externally integrated nodes, runs inside the same control and governance contract.

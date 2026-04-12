@@ -121,7 +121,7 @@ Entry admission and exit completion are Workitem boundary transitions controlled
 - Only nodes bound to an entry contract can admit Workitems into a Flow lifecycle.
 - Entry checks validate the bound entry contract against current artefact state in the Archivist.
 - Entry and exit contracts use the same per-name validation shape.
-- Cross-flow import admission is handled by the [Embassy](./06-cross-flow.md), which creates Workitems in `Pending` and routes to the node configured for the import type in `crossFlow.importTypes` when capacity allows.
+- Cross-flow import admission is handled by the [Embassy](./06-cross-flow.md), which creates Workitems in `Pending` and routes according to the resolved effective import-type policy when capacity allows.
 - Review-hearing admission uses the Tribunal's hearing entry binding, then Operator schedules first assignment to the Tribunal when capacity allows.
 
 ## Exit Completion Interaction
@@ -247,7 +247,7 @@ All Flow runtimes preserve these Workitem invariants:
 10. Cross-flow export scope follows bound exit-contract governed artefact name entries.
 11. Workitems expose no freeform context bag.
 12. Workitem admission is constrained by bound entry-contract governed artefact name entries.
-13. Imported Workitems are created in `Pending` by the Embassy and routed to the node configured for the import type in `crossFlow.importTypes`.
+13. Imported Workitems are created in `Pending` by the Embassy and routed according to the resolved effective import-type policy.
 14. Child Workitems carry `ParentWorkitemID` and a `flow.gideas.io/parent` label, both Operator-managed and immutable after creation.
 15. Child Workitems use simple `Complete()` with no exit contract validation.
 16. A parent Workitem cannot complete while any child is in non-terminal state (`CHILDREN_NOT_TERMINAL` guard).

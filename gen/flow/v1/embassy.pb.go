@@ -253,6 +253,7 @@ type TransferManifest struct {
 	TransferId    string                 `protobuf:"bytes,4,opt,name=transfer_id,json=transferId,proto3" json:"transfer_id,omitempty"`
 	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	Artefacts     []*ArtefactManifest    `protobuf:"bytes,6,rep,name=artefacts,proto3" json:"artefacts,omitempty"`
+	Signature     *ManifestSignature     `protobuf:"bytes,7,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -329,6 +330,83 @@ func (x *TransferManifest) GetArtefacts() []*ArtefactManifest {
 	return nil
 }
 
+func (x *TransferManifest) GetSignature() *ManifestSignature {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+// ManifestSignature carries the Embassy identity material used to sign the
+// transfer manifest.
+type ManifestSignature struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Algorithm           string                 `protobuf:"bytes,1,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	Signature           []byte                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	Subject             string                 `protobuf:"bytes,3,opt,name=subject,proto3" json:"subject,omitempty"`
+	CertificateChainPem []string               `protobuf:"bytes,4,rep,name=certificate_chain_pem,json=certificateChainPem,proto3" json:"certificate_chain_pem,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ManifestSignature) Reset() {
+	*x = ManifestSignature{}
+	mi := &file_flow_v1_embassy_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ManifestSignature) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ManifestSignature) ProtoMessage() {}
+
+func (x *ManifestSignature) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_embassy_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ManifestSignature.ProtoReflect.Descriptor instead.
+func (*ManifestSignature) Descriptor() ([]byte, []int) {
+	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ManifestSignature) GetAlgorithm() string {
+	if x != nil {
+		return x.Algorithm
+	}
+	return ""
+}
+
+func (x *ManifestSignature) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *ManifestSignature) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *ManifestSignature) GetCertificateChainPem() []string {
+	if x != nil {
+		return x.CertificateChainPem
+	}
+	return nil
+}
+
 // ArtefactManifest describes one exported artefact in the transfer inventory.
 type ArtefactManifest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
@@ -343,7 +421,7 @@ type ArtefactManifest struct {
 
 func (x *ArtefactManifest) Reset() {
 	*x = ArtefactManifest{}
-	mi := &file_flow_v1_embassy_proto_msgTypes[5]
+	mi := &file_flow_v1_embassy_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -355,7 +433,7 @@ func (x *ArtefactManifest) String() string {
 func (*ArtefactManifest) ProtoMessage() {}
 
 func (x *ArtefactManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_embassy_proto_msgTypes[5]
+	mi := &file_flow_v1_embassy_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -368,7 +446,7 @@ func (x *ArtefactManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtefactManifest.ProtoReflect.Descriptor instead.
 func (*ArtefactManifest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{5}
+	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ArtefactManifest) GetGovernedArtefact() string {
@@ -419,7 +497,7 @@ type ForeignStamp struct {
 
 func (x *ForeignStamp) Reset() {
 	*x = ForeignStamp{}
-	mi := &file_flow_v1_embassy_proto_msgTypes[6]
+	mi := &file_flow_v1_embassy_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -431,7 +509,7 @@ func (x *ForeignStamp) String() string {
 func (*ForeignStamp) ProtoMessage() {}
 
 func (x *ForeignStamp) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_embassy_proto_msgTypes[6]
+	mi := &file_flow_v1_embassy_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -444,7 +522,7 @@ func (x *ForeignStamp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForeignStamp.ProtoReflect.Descriptor instead.
 func (*ForeignStamp) Descriptor() ([]byte, []int) {
-	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{6}
+	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ForeignStamp) GetStampName() string {
@@ -490,7 +568,7 @@ type PackageChunk struct {
 
 func (x *PackageChunk) Reset() {
 	*x = PackageChunk{}
-	mi := &file_flow_v1_embassy_proto_msgTypes[7]
+	mi := &file_flow_v1_embassy_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -502,7 +580,7 @@ func (x *PackageChunk) String() string {
 func (*PackageChunk) ProtoMessage() {}
 
 func (x *PackageChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_embassy_proto_msgTypes[7]
+	mi := &file_flow_v1_embassy_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -515,7 +593,7 @@ func (x *PackageChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PackageChunk.ProtoReflect.Descriptor instead.
 func (*PackageChunk) Descriptor() ([]byte, []int) {
-	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{7}
+	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PackageChunk) GetChunk() isPackageChunk_Chunk {
@@ -584,7 +662,7 @@ type PackageTrailer struct {
 
 func (x *PackageTrailer) Reset() {
 	*x = PackageTrailer{}
-	mi := &file_flow_v1_embassy_proto_msgTypes[8]
+	mi := &file_flow_v1_embassy_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -596,7 +674,7 @@ func (x *PackageTrailer) String() string {
 func (*PackageTrailer) ProtoMessage() {}
 
 func (x *PackageTrailer) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_embassy_proto_msgTypes[8]
+	mi := &file_flow_v1_embassy_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -609,7 +687,7 @@ func (x *PackageTrailer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PackageTrailer.ProtoReflect.Descriptor instead.
 func (*PackageTrailer) Descriptor() ([]byte, []int) {
-	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{8}
+	return file_flow_v1_embassy_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PackageTrailer) GetPackageDigest() string {
@@ -641,7 +719,7 @@ const file_flow_v1_embassy_proto_rawDesc = "" +
 	"\x15StreamPackageResponse\x12\x1f\n" +
 	"\vworkitem_id\x18\x01 \x01(\tR\n" +
 	"workitemId\x12!\n" +
-	"\ferror_reason\x18\x02 \x01(\tR\verrorReason\"\x8a\x02\n" +
+	"\ferror_reason\x18\x02 \x01(\tR\verrorReason\"\xc4\x02\n" +
 	"\x10TransferManifest\x12\x1f\n" +
 	"\vimport_type\x18\x01 \x01(\tR\n" +
 	"importType\x12\x1f\n" +
@@ -653,7 +731,13 @@ const file_flow_v1_embassy_proto_rawDesc = "" +
 	"transferId\x129\n" +
 	"\n" +
 	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x127\n" +
-	"\tartefacts\x18\x06 \x03(\v2\x19.flow.v1.ArtefactManifestR\tartefacts\"\xef\x02\n" +
+	"\tartefacts\x18\x06 \x03(\v2\x19.flow.v1.ArtefactManifestR\tartefacts\x128\n" +
+	"\tsignature\x18\a \x01(\v2\x1a.flow.v1.ManifestSignatureR\tsignature\"\x9d\x01\n" +
+	"\x11ManifestSignature\x12\x1c\n" +
+	"\talgorithm\x18\x01 \x01(\tR\talgorithm\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\x12\x18\n" +
+	"\asubject\x18\x03 \x01(\tR\asubject\x122\n" +
+	"\x15certificate_chain_pem\x18\x04 \x03(\tR\x13certificateChainPem\"\xef\x02\n" +
 	"\x10ArtefactManifest\x12+\n" +
 	"\x11governed_artefact\x18\x01 \x01(\tR\x10governedArtefact\x12\x16\n" +
 	"\x06digest\x18\x02 \x01(\tR\x06digest\x12\x1d\n" +
@@ -695,39 +779,41 @@ func file_flow_v1_embassy_proto_rawDescGZIP() []byte {
 	return file_flow_v1_embassy_proto_rawDescData
 }
 
-var file_flow_v1_embassy_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_flow_v1_embassy_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_flow_v1_embassy_proto_goTypes = []any{
 	(*PreflightManifestRequest)(nil),  // 0: flow.v1.PreflightManifestRequest
 	(*PreflightManifestResponse)(nil), // 1: flow.v1.PreflightManifestResponse
 	(*ExportPackageRequest)(nil),      // 2: flow.v1.ExportPackageRequest
 	(*StreamPackageResponse)(nil),     // 3: flow.v1.StreamPackageResponse
 	(*TransferManifest)(nil),          // 4: flow.v1.TransferManifest
-	(*ArtefactManifest)(nil),          // 5: flow.v1.ArtefactManifest
-	(*ForeignStamp)(nil),              // 6: flow.v1.ForeignStamp
-	(*PackageChunk)(nil),              // 7: flow.v1.PackageChunk
-	(*PackageTrailer)(nil),            // 8: flow.v1.PackageTrailer
-	nil,                               // 9: flow.v1.ArtefactManifest.RepresentationMetadataEntry
-	(*timestamppb.Timestamp)(nil),     // 10: google.protobuf.Timestamp
+	(*ManifestSignature)(nil),         // 5: flow.v1.ManifestSignature
+	(*ArtefactManifest)(nil),          // 6: flow.v1.ArtefactManifest
+	(*ForeignStamp)(nil),              // 7: flow.v1.ForeignStamp
+	(*PackageChunk)(nil),              // 8: flow.v1.PackageChunk
+	(*PackageTrailer)(nil),            // 9: flow.v1.PackageTrailer
+	nil,                               // 10: flow.v1.ArtefactManifest.RepresentationMetadataEntry
+	(*timestamppb.Timestamp)(nil),     // 11: google.protobuf.Timestamp
 }
 var file_flow_v1_embassy_proto_depIdxs = []int32{
 	4,  // 0: flow.v1.PreflightManifestRequest.manifest:type_name -> flow.v1.TransferManifest
-	10, // 1: flow.v1.TransferManifest.expires_at:type_name -> google.protobuf.Timestamp
-	5,  // 2: flow.v1.TransferManifest.artefacts:type_name -> flow.v1.ArtefactManifest
-	9,  // 3: flow.v1.ArtefactManifest.representation_metadata:type_name -> flow.v1.ArtefactManifest.RepresentationMetadataEntry
-	6,  // 4: flow.v1.ArtefactManifest.foreign_stamps:type_name -> flow.v1.ForeignStamp
-	4,  // 5: flow.v1.PackageChunk.manifest:type_name -> flow.v1.TransferManifest
-	8,  // 6: flow.v1.PackageChunk.trailer:type_name -> flow.v1.PackageTrailer
-	0,  // 7: flow.v1.EmbassyService.PreflightManifest:input_type -> flow.v1.PreflightManifestRequest
-	7,  // 8: flow.v1.EmbassyService.StreamPackage:input_type -> flow.v1.PackageChunk
-	2,  // 9: flow.v1.EmbassyService.ExportPackage:input_type -> flow.v1.ExportPackageRequest
-	1,  // 10: flow.v1.EmbassyService.PreflightManifest:output_type -> flow.v1.PreflightManifestResponse
-	3,  // 11: flow.v1.EmbassyService.StreamPackage:output_type -> flow.v1.StreamPackageResponse
-	7,  // 12: flow.v1.EmbassyService.ExportPackage:output_type -> flow.v1.PackageChunk
-	10, // [10:13] is the sub-list for method output_type
-	7,  // [7:10] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	11, // 1: flow.v1.TransferManifest.expires_at:type_name -> google.protobuf.Timestamp
+	6,  // 2: flow.v1.TransferManifest.artefacts:type_name -> flow.v1.ArtefactManifest
+	5,  // 3: flow.v1.TransferManifest.signature:type_name -> flow.v1.ManifestSignature
+	10, // 4: flow.v1.ArtefactManifest.representation_metadata:type_name -> flow.v1.ArtefactManifest.RepresentationMetadataEntry
+	7,  // 5: flow.v1.ArtefactManifest.foreign_stamps:type_name -> flow.v1.ForeignStamp
+	4,  // 6: flow.v1.PackageChunk.manifest:type_name -> flow.v1.TransferManifest
+	9,  // 7: flow.v1.PackageChunk.trailer:type_name -> flow.v1.PackageTrailer
+	0,  // 8: flow.v1.EmbassyService.PreflightManifest:input_type -> flow.v1.PreflightManifestRequest
+	8,  // 9: flow.v1.EmbassyService.StreamPackage:input_type -> flow.v1.PackageChunk
+	2,  // 10: flow.v1.EmbassyService.ExportPackage:input_type -> flow.v1.ExportPackageRequest
+	1,  // 11: flow.v1.EmbassyService.PreflightManifest:output_type -> flow.v1.PreflightManifestResponse
+	3,  // 12: flow.v1.EmbassyService.StreamPackage:output_type -> flow.v1.StreamPackageResponse
+	8,  // 13: flow.v1.EmbassyService.ExportPackage:output_type -> flow.v1.PackageChunk
+	11, // [11:14] is the sub-list for method output_type
+	8,  // [8:11] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_embassy_proto_init() }
@@ -735,7 +821,7 @@ func file_flow_v1_embassy_proto_init() {
 	if File_flow_v1_embassy_proto != nil {
 		return
 	}
-	file_flow_v1_embassy_proto_msgTypes[7].OneofWrappers = []any{
+	file_flow_v1_embassy_proto_msgTypes[8].OneofWrappers = []any{
 		(*PackageChunk_Manifest)(nil),
 		(*PackageChunk_Content)(nil),
 		(*PackageChunk_Trailer)(nil),
@@ -746,7 +832,7 @@ func file_flow_v1_embassy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_embassy_proto_rawDesc), len(file_flow_v1_embassy_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

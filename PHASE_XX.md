@@ -4,7 +4,7 @@ This phase removes superseded cross-flow pieces, deletes `nodes/advocate/`,
 removes stale Governance Flow assumptions, and runs the final quality gates for
 the Embassy + Federation redesign.
 
-#### XX.1 Remove Superseded Cross-Flow Pieces
+## XX.1 Remove Superseded Cross-Flow Pieces
 
 - Delete `nodes/advocate/`.
 - Remove any remaining stale routing/config that points at Advocate.
@@ -14,7 +14,7 @@ the Embassy + Federation redesign.
 - Remove obsolete Governance Flow runtime terminology and any direct higher-tier
   law publication assumptions superseded by the Federation service.
 
-#### XX.2 Quality Gates and Consistency Sweep
+## XX.2 Quality Gates and Consistency Sweep
 
 - `make test-all` -- all tests pass.
 - `make check-fix-all` -- all lint/tidy clean.

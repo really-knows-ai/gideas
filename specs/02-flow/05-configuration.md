@@ -144,14 +144,14 @@ Deadlock-escalated governed-work Workitems remain separate from hearing Workitem
 
 ## Cross-Flow Import Types
 
-`spec.crossFlow.importTypes` defines how imported Workitems enter execution in the receiving Flow. It is a map of import type names to `{node, requireForeignStamps}`. The receiving Flow publishes each import type with its target node and the foreign-stamp requirements that must be verified before the Embassy materialises the Workitem. `law-petition` is the only currently reserved built-in import type.
+`spec.crossFlow.importTypes` defines the flow-authored extension set for how imported Workitems enter execution in the receiving Flow. It is a map of custom import type names to `{node, requireForeignStamps}`. The receiving Flow publishes each custom import type with its target node and the foreign-stamp requirements that must be verified before the Embassy materialises the Workitem. Built-in system import types (currently `law-petition`) live in the same effective namespace but are always present/configured per Flow by the platform rather than authored in YAML.
 
-- Each importType entry must reference an existing FoundryNode via `node`.
+- Each flow-authored importType entry must reference an existing FoundryNode via `node`.
 - The referenced node must be bound to an entry contract.
 - `requireForeignStamps` is keyed by governed artefact name and lists the required foreign stamp names for that artefact (for example `petition: [approval, judiciary-consensus]`).
 - Successful import creates the Workitem in `Pending`.
-- The Operator schedules the imported Workitem to the importType's configured node immediately when capacity allows.
-- If the importType's node is missing, unknown, or not entry-bound, import admission is rejected.
+- The Operator schedules the imported Workitem according to the resolved effective import-type policy immediately when capacity allows.
+- If a flow-authored importType's node is missing, unknown, or not entry-bound, import admission is rejected.
 
 ## Entry and Exit Contract Semantics
 
@@ -163,7 +163,7 @@ Entry and exit contracts are defined per governed artefact name. Each name maps 
 
 Contract usage by boundary:
 
-- Entry contracts gate Workitem admission for entry-bound nodes (local creation), for configured `crossFlow.importTypes` nodes (cross-flow import), and for the Tribunal's hearing entry binding (review-hearing processing).
+- Entry contracts gate Workitem admission for entry-bound nodes (local creation), for flow-authored `crossFlow.importTypes` targets and built-in system import-type targets (cross-flow import), and for the Tribunal's hearing entry binding (review-hearing processing).
 - Exit contracts gate `complete()` for exit-bound nodes.
 
 If multiple artefacts with a required governed artefact name exist, all must satisfy that name's requirements.
