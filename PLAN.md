@@ -11,7 +11,8 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 - Phase 9.10 (`Rewrite Advocate`) is cancelled / superseded by the Embassy + Federation redesign.
 - Phase 10 specification rewrite is complete and reviewed.
 - Phase 11 implementation is complete and reviewed against the corrected built-in import type model.
-- Next active work: `PHASE_12.md`.
+- Phase 12 Federation foundations are complete (proto, service schema, publication lifecycle, dispute records, SDK client, petition-outcome helpers, architectural guard tests).
+- Next active work: `PHASE_13.md`.
 
 ### Phase 11 Landed
 
@@ -38,8 +39,8 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 
 1. `PHASE_10.md` - complete and reviewed: specs rewritten around Embassy, Federation membership / roles, `law-petition`, published law distribution, `crossFlow.importTypes`, Treaties for non-federation exchange, and `imported-*` naturalisation.
 2. `PHASE_11.md` - complete: Embassy CRD / proto / operator / SDK foundations aligned around platform-owned Embassy / judiciary nodes and built-in import types.
-3. `PHASE_12.md` - next active phase: land Federation proto / service schema / publication lifecycle / dispute record foundations.
-4. `PHASE_13.md` - implement `nodes/embassy/`, Federation service, petition-outcome-watcher, and Clerk / authority wiring.
+3. `PHASE_12.md` - complete: Federation proto / service schema / publication lifecycle / dispute record foundations landed.
+4. `PHASE_13.md` - next active phase: implement `nodes/embassy/`, Federation service, petition-outcome-watcher, Librarian `ReplicateLaws`, law-applicator T4-5 wiring, and operator/sidecar integration.
 5. `PHASE_14.md` - write judiciary FoundryNode CRDs, Deployments, and ConfigMaps.
 6. `PHASE_XX.md` - delete Advocate, remove stale `importNode` / Governance Flow paths, and run final quality gates.
 
