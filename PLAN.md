@@ -13,6 +13,16 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 - Phase 11 implementation is complete and reviewed against the corrected built-in import type model.
 - Next active work: `PHASE_12.md`.
 
+### Phase 11 Landed
+
+- `FoundryFlow.spec.crossFlow.importTypes` and `Treaty.spec.allowedImportTypes` are implemented as the Embassy configuration foundation.
+- Built-in system import types are modelled explicitly: `law-petition` is always present/configured per Flow, rejected from user YAML, and allowed in Treaty policy.
+- `proto/flow/v1/embassy.proto` exists with signed manifest/header fields, artefact inventory, foreign stamp records, preflight, and streamed package transfer.
+- The old Operator-centric `ExportWorkitem` / `ImportWorkitem` path has been removed from active proto/operator/sidecar usage.
+- The Operator now validates the effective import-type model and auto-provisions Embassy infrastructure with projected trust/system config.
+- The SDK now includes Embassy client, server, staging/materialisation, import-type resolution, and trust-policy foundations.
+- Specs and planning docs are aligned to the platform-owned Embassy / judiciary node and built-in import type model.
+
 ## Planning Files
 
 - `ARCHITECTURE.md` - target-state judiciary, Embassy, and Federation architecture; topology; node inventory; publication model; and current open items.
