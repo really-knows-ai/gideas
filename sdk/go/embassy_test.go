@@ -3,12 +3,10 @@ package flow
 import (
 	"context"
 	"io"
-	"net"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 type embassySpyServer struct {
@@ -69,37 +67,14 @@ func (s *embassySpyServer) ExportPackage(
 func setupEmbassyTestClient(t *testing.T, spy *embassySpyServer) *EmbassyClient {
 	t.Helper()
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
+	conn := setupStandaloneGRPCTestConn(t, func(srv *grpc.Server) {
+		flowv1.RegisterEmbassyServiceServer(srv, spy)
+	})
 
-	srv := grpc.NewServer()
-	flowv1.RegisterEmbassyServiceServer(srv, spy)
-	go func() { _ = srv.Serve(lis) }()
-
-	conn, err := grpc.NewClient(
-		"passthrough:///bufnet-embassy",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "tcp", lis.Addr().String())
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("failed to dial embassy server: %v", err)
-	}
-
-	client := &EmbassyClient{
+	return &EmbassyClient{
 		conn:    conn,
 		embassy: flowv1.NewEmbassyServiceClient(conn),
 	}
-
-	t.Cleanup(func() {
-		_ = client.Close()
-		srv.GracefulStop()
-	})
-
-	return client
 }
 
 func TestEmbassyClient_PreflightManifest_Success(t *testing.T) {

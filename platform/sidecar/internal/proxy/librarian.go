@@ -144,6 +144,13 @@ func (p *LibrarianProxy) ApplyLifecycleAction(
 	return p.client.ApplyLifecycleAction(propagateMetadata(ctx), req)
 }
 
+// GetActiveDisputes forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) GetActiveDisputes(
+	ctx context.Context, req *flowv1.GetActiveDisputesRequest,
+) (*flowv1.GetActiveDisputesResponse, error) {
+	return p.client.GetActiveDisputes(propagateMetadata(ctx), req)
+}
+
 // ---------------------------------------------------------------------------
 // Identity extraction from metadata
 // ---------------------------------------------------------------------------

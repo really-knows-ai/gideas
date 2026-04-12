@@ -1,0 +1,259 @@
+syntax = "proto3";
+
+package flow.v1;
+
+option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
+
+import "google/protobuf/timestamp.proto";
+import "flow/v1/common.proto";
+
+// FederationService is the control-plane authority for Flow federations.
+// It manages membership, endpoint discovery, published law distribution,
+// and petition-outcome events.
+service FederationService {
+  // Joins a Flow to the federation. Returns intermediate CA, config, and
+  // state assignments.
+  rpc JoinFederation(JoinFederationRequest) returns (JoinFederationResponse);
+
+  // Removes a Flow from the federation.
+  rpc LeaveFederation(LeaveFederationRequest) returns (LeaveFederationResponse);
+
+  // Returns the current membership snapshot for a Flow.
+  rpc GetMembership(GetMembershipRequest) returns (GetMembershipResponse);
+
+  // Returns Flow endpoints, optionally filtered by state.
+  rpc DiscoverEndpoints(DiscoverEndpointsRequest) returns (DiscoverEndpointsResponse);
+
+  // Returns the authority Flow identity and Embassy endpoint for a given
+  // petition scope/domain.
+  rpc GetPetitionTarget(GetPetitionTargetRequest) returns (GetPetitionTargetResponse);
+
+  // Submits a local Tier 3 law for publication admission. Returns accept
+  // or a structured rejection report.
+  rpc SubmitPublication(SubmitPublicationRequest) returns (SubmitPublicationResponse);
+
+  // Server-streaming: distributes published laws to subscriber Flows with
+  // materialisation tier and provenance.
+  rpc SubscribeLawUpdates(SubscribeLawUpdatesRequest) returns (stream PublishedLawEvent);
+
+  // Server-streaming: delivers petition outcome events (accepted/rejected)
+  // to subscriber Flows.
+  rpc SubscribePetitionOutcomes(SubscribePetitionOutcomesRequest) returns (stream PetitionOutcomeEvent);
+}
+
+// --- Membership RPCs ---
+
+// JoinFederationRequest carries the bootstrap token and Flow identity used
+// to authenticate the joining Flow.
+message JoinFederationRequest {
+  // Bootstrap token issued out-of-band for initial authentication.
+  string bootstrap_token = 1;
+  // Flow identity (e.g. namespace or SPIFFE ID).
+  string flow_identity = 2;
+  // Embassy endpoint address for this Flow.
+  string embassy_endpoint = 3;
+}
+
+// JoinFederationResponse returns the intermediate CA, federation config,
+// and the state assignments for the joined Flow.
+message JoinFederationResponse {
+  // Intermediate CA certificate PEM for federation mTLS.
+  string intermediate_ca_pem = 1;
+  // Federation-wide configuration.
+  FederationConfig federation_config = 2;
+  // States this Flow is assigned to.
+  repeated State states = 3;
+  // Publisher roles assigned to this Flow.
+  repeated PublisherRole publisher_roles = 4;
+}
+
+// LeaveFederationRequest identifies the Flow leaving the federation.
+message LeaveFederationRequest {
+  string flow_identity = 1;
+}
+
+// LeaveFederationResponse acknowledges the departure.
+message LeaveFederationResponse {
+  bool acknowledged = 1;
+}
+
+// GetMembershipRequest asks for the current membership snapshot.
+message GetMembershipRequest {
+  string flow_identity = 1;
+}
+
+// GetMembershipResponse returns the full membership snapshot for the Flow.
+message GetMembershipResponse {
+  FederationMember member = 1;
+}
+
+// --- Supporting Messages ---
+
+// FederationConfig carries federation-wide settings distributed to members.
+message FederationConfig {
+  // Unique federation identifier.
+  string federation_id = 1;
+  // Human-readable federation name.
+  string federation_name = 2;
+  // Root CA PEM used for federation-wide mTLS trust.
+  string root_ca_pem = 3;
+}
+
+// FederationMember represents a single Flow's membership snapshot.
+message FederationMember {
+  // Flow identity within the federation.
+  string flow_identity = 1;
+  // States the Flow belongs to.
+  repeated State states = 2;
+  // Publisher roles assigned to the Flow.
+  repeated PublisherRole publisher_roles = 3;
+  // Embassy endpoint for cross-flow communication.
+  string embassy_endpoint = 4;
+  // Timestamp of last membership refresh.
+  google.protobuf.Timestamp last_refreshed = 5;
+}
+
+// State is a federation-defined organisational group of Flows.
+// Sibling relationships derive from shared state membership.
+message State {
+  // Unique state identifier within the federation.
+  string state_id = 1;
+  // Human-readable state name.
+  string name = 2;
+}
+
+// PublisherRole defines a Flow's authority to publish laws within a scope.
+message PublisherRole {
+  // Domain scope (e.g. "security", "architecture").
+  string scope = 1;
+  // Publication level: "state" (Tier 4) or "federation" (Tier 5).
+  string level = 2;
+}
+
+// --- Discovery RPCs ---
+
+// DiscoverEndpointsRequest optionally filters by state.
+message DiscoverEndpointsRequest {
+  // Optional state filter. Empty returns all federation endpoints.
+  string state_filter = 1;
+}
+
+// DiscoverEndpointsResponse returns matching Flow endpoints.
+message DiscoverEndpointsResponse {
+  repeated FlowEndpoint endpoints = 1;
+}
+
+// FlowEndpoint describes a reachable Flow within the federation.
+message FlowEndpoint {
+  // Flow identity within the federation.
+  string flow_identity = 1;
+  // Embassy gRPC address (host:port).
+  string embassy_address = 2;
+  // States the Flow belongs to.
+  repeated string state_ids = 3;
+}
+
+// GetPetitionTargetRequest asks for the authority Flow that handles
+// petitions for a given scope/domain.
+message GetPetitionTargetRequest {
+  // Domain scope (e.g. "security", "architecture").
+  string scope = 1;
+}
+
+// GetPetitionTargetResponse returns the authority Flow and its Embassy
+// endpoint for the requested scope.
+message GetPetitionTargetResponse {
+  // Authority Flow identity.
+  string authority_flow_identity = 1;
+  // Embassy endpoint for the authority Flow.
+  string embassy_endpoint = 2;
+}
+
+// --- Publication RPCs ---
+
+// SubmitPublicationRequest carries a law and the source Flow identity for
+// publication admission.
+message SubmitPublicationRequest {
+  // The law to publish.
+  Law law = 1;
+  // Identity of the Flow submitting the publication.
+  string source_flow_identity = 2;
+}
+
+// SubmitPublicationResponse reports whether the publication was accepted.
+message SubmitPublicationResponse {
+  bool accepted = 1;
+  // Present only when accepted is false.
+  PublicationRejection rejection = 2;
+}
+
+// PublicationRejection describes why a publication was rejected.
+message PublicationRejection {
+  // Structured reason for the rejection.
+  PublicationRejectionReason reason = 1;
+  // Law references that conflict with the submitted law.
+  repeated string conflicting_law_ids = 2;
+  // Human-readable remediation guidance.
+  string remediation_text = 3;
+}
+
+// PublicationRejectionReason enumerates publication rejection causes.
+enum PublicationRejectionReason {
+  PUBLICATION_REJECTION_REASON_UNSPECIFIED = 0;
+  // The submitting Flow lacks the required publisher role.
+  PUBLICATION_REJECTION_REASON_UNAUTHORISED = 1;
+  // The law conflicts with existing published laws.
+  PUBLICATION_REJECTION_REASON_CONFLICT = 2;
+  // The law's scope/domain is outside the publisher's authority.
+  PUBLICATION_REJECTION_REASON_OUT_OF_SCOPE = 3;
+}
+
+// SubscribeLawUpdatesRequest identifies the subscribing Flow.
+message SubscribeLawUpdatesRequest {
+  string subscriber_flow_identity = 1;
+}
+
+// PublishedLawEvent carries a distributed law with materialisation metadata.
+message PublishedLawEvent {
+  // The published law.
+  Law law = 1;
+  // The tier at which the subscriber should materialise this law.
+  LawTier materialisation_tier = 2;
+  // Petition ID that originated this law change (provenance threading).
+  // Empty if the law was not produced by a cross-flow petition.
+  string petition_id = 3;
+  // Identity of the Flow that published this law.
+  string publisher_flow_identity = 4;
+  // Timestamp of publication acceptance.
+  google.protobuf.Timestamp published_at = 5;
+}
+
+// --- Petition-Outcome Events ---
+
+// SubscribePetitionOutcomesRequest identifies the subscribing Flow.
+message SubscribePetitionOutcomesRequest {
+  string subscriber_flow_identity = 1;
+}
+
+// PetitionOutcome enumerates the possible outcomes of a cross-flow petition.
+enum PetitionOutcome {
+  PETITION_OUTCOME_UNSPECIFIED = 0;
+  PETITION_OUTCOME_ACCEPTED = 1;
+  PETITION_OUTCOME_REJECTED = 2;
+}
+
+// PetitionOutcomeEvent notifies a subscriber that a petition has been
+// resolved by the authority.
+message PetitionOutcomeEvent {
+  // The stable petition identifier linking back to the originating petition.
+  string petition_id = 1;
+  // The outcome of the petition.
+  PetitionOutcome outcome = 2;
+  // Present only when outcome is REJECTED.
+  PublicationRejection rejection = 3;
+  // Present only when outcome is ACCEPTED. References the published law
+  // that resulted from the petition.
+  string published_law_id = 4;
+  // Timestamp of the outcome determination.
+  google.protobuf.Timestamp resolved_at = 5;
+}

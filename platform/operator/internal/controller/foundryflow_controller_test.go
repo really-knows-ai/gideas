@@ -581,6 +581,128 @@ var _ = Describe("FoundryFlow Controller", func() {
 		})
 	})
 
+	Context("When projecting federation config to Embassy", func() {
+		const resourceName = "test-flow-fed"
+		const testNamespace = "fed-proj-test"
+
+		ctx := context.Background()
+
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: testNamespace,
+		}
+
+		BeforeEach(func() {
+			By("creating the test namespace")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: testNamespace},
+			}
+			var existing corev1.Namespace
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: testNamespace}, &existing); errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			}
+
+			By("creating a FoundryFlow with federation config")
+			var existingFlow flowv1.FoundryFlow
+			err := k8sClient.Get(ctx, typeNamespacedName, &existingFlow)
+			if err != nil && errors.IsNotFound(err) {
+				flowResource := &flowv1.FoundryFlow{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      resourceName,
+						Namespace: testNamespace,
+					},
+					Spec: flowv1.FoundryFlowSpec{
+						EntryContracts: map[string]flowv1.Contract{
+							"default": {},
+						},
+						ExitContracts: map[string]flowv1.Contract{
+							"default": {},
+						},
+						GovernancePolicy: flowv1.GovernancePolicy{
+							MaxVisits:      10,
+							DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+							MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+						},
+						CrossFlow: &flowv1.CrossFlowConfig{
+							FederationCA: "-----BEGIN CERTIFICATE-----\nZmFrZS1mZWRlcmF0aW9uLWNh\n-----END CERTIFICATE-----",
+							Federation: &flowv1.FederationConfig{
+								Identity:           "flow-alpha",
+								States:             []string{"california", "nevada"},
+								FederationEndpoint: "federation.example.com:50061",
+								PublisherRoles: []flowv1.FederationPublisherRole{
+									{Scope: "security", Level: "state"},
+								},
+							},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			resource := &flowv1.FoundryFlow{}
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Cleanup the specific resource instance FoundryFlow")
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			By("Cleanup infrastructure Deployments and Services")
+			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian", "flow-embassy"}
+			for _, name := range infraNames {
+				deploy := &appsv1.Deployment{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, deploy); err == nil {
+					_ = k8sClient.Delete(ctx, deploy)
+				}
+				svc := &corev1.Service{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, svc); err == nil {
+					_ = k8sClient.Delete(ctx, svc)
+				}
+			}
+		})
+
+		It("should project federation identity, endpoint, and states to Embassy env vars", func() {
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying Embassy federation env vars")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-embassy",
+				Namespace: testNamespace,
+			}, &deploy)).To(Succeed())
+
+			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
+
+			By("Verifying EMBASSY_FEDERATION_IDENTITY")
+			Expect(envMap).To(HaveKeyWithValue("EMBASSY_FEDERATION_IDENTITY", "flow-alpha"))
+
+			By("Verifying EMBASSY_FEDERATION_ENDPOINT")
+			Expect(envMap).To(HaveKeyWithValue("EMBASSY_FEDERATION_ENDPOINT", "federation.example.com:50061"))
+
+			By("Verifying EMBASSY_FEDERATION_STATES is JSON-encoded list")
+			Expect(envMap).To(HaveKey("EMBASSY_FEDERATION_STATES"))
+			var states []string
+			Expect(json.Unmarshal([]byte(envMap["EMBASSY_FEDERATION_STATES"]), &states)).To(Succeed())
+			Expect(states).To(ConsistOf("california", "nevada"))
+
+			By("Verifying existing EMBASSY_FEDERATION_CA_PEM is still set")
+			Expect(envMap).To(HaveKeyWithValue(
+				"EMBASSY_FEDERATION_CA_PEM",
+				"-----BEGIN CERTIFICATE-----\nZmFrZS1mZWRlcmF0aW9uLWNh\n-----END CERTIFICATE-----",
+			))
+		})
+	})
+
 	Context("When NodeGroup validation fails", func() {
 		const testNamespace = "nodegroup-test"
 

@@ -244,6 +244,50 @@ type CrossFlowConfig struct {
 	// at treaty boundaries.
 	// +optional
 	Naturalisation *NaturalisationConfig `json:"naturalisation,omitempty"`
+
+	// federation defines the Flow's federation membership, identity, state assignments,
+	// and publisher roles. When set, the Flow participates in a Federation.
+	// +optional
+	Federation *FederationConfig `json:"federation,omitempty"`
+}
+
+// FederationConfig defines a Flow's federation membership and identity.
+type FederationConfig struct {
+	// identity is the Flow's unique identity within the Federation.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Identity string `json:"identity"`
+
+	// states is the list of federation-defined state names this Flow belongs to.
+	// States are organisational groups; sibling relationships derive from shared membership.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	States []string `json:"states"`
+
+	// publisherRoles defines the authority publisher roles for this Flow.
+	// Each role specifies a domain scope and whether the authority is state-level
+	// or federation-level.
+	// +optional
+	PublisherRoles []FederationPublisherRole `json:"publisherRoles,omitempty"`
+
+	// federationEndpoint is the address of the Federation service.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	FederationEndpoint string `json:"federationEndpoint"`
+}
+
+// FederationPublisherRole defines a single publisher authority role.
+type FederationPublisherRole struct {
+	// scope is the domain this role covers (e.g. "security", "compliance").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Scope string `json:"scope"`
+
+	// level is the authority level: "state" for state-level publication (Tier 4)
+	// or "federation" for federation-wide publication (Tier 5).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=state;federation
+	Level string `json:"level"`
 }
 
 // ImportTypeSpec defines one flow-authored cross-flow import type.

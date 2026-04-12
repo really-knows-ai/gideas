@@ -112,6 +112,12 @@ func (r *FoundryFlowReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			metav1.ConditionFalse, "ImportTypesInvalid", err.Error())
 	}
 
+	// Validate federation config if present.
+	if err := r.validateFederationConfig(&flow); err != nil {
+		return r.setPhaseAndCondition(ctx, &flow, phaseFailed,
+			metav1.ConditionFalse, "FederationConfigInvalid", err.Error())
+	}
+
 	// Validate NodeGroup configuration (membership, contracts, routing isolation).
 	if err := r.validateNodeGroups(ctx, &flow); err != nil {
 		return r.setPhaseAndCondition(ctx, &flow, phaseDegraded,
@@ -225,6 +231,38 @@ func (r *FoundryFlowReconciler) validateImportTypes(ctx context.Context, flow *f
 
 		if node.Spec.Entry == "" {
 			return fmt.Errorf("crossFlow.importTypes[%q].node %q must have an entry contract binding", importType, spec.Node)
+		}
+	}
+
+	return nil
+}
+
+// validateFederationConfig checks federation configuration internal consistency.
+func (r *FoundryFlowReconciler) validateFederationConfig(flow *flowv1.FoundryFlow) error {
+	if flow.Spec.CrossFlow == nil || flow.Spec.CrossFlow.Federation == nil {
+		return nil
+	}
+
+	fed := flow.Spec.CrossFlow.Federation
+
+	if fed.Identity == "" {
+		return fmt.Errorf("crossFlow.federation.identity must be non-empty when federation config is set")
+	}
+
+	if len(fed.States) == 0 {
+		return fmt.Errorf("crossFlow.federation.states must be non-empty when federation config is set")
+	}
+
+	if fed.FederationEndpoint == "" {
+		return fmt.Errorf("crossFlow.federation.federationEndpoint must be non-empty when federation config is set")
+	}
+
+	for i, role := range fed.PublisherRoles {
+		if role.Scope == "" {
+			return fmt.Errorf("crossFlow.federation.publisherRoles[%d].scope must be non-empty", i)
+		}
+		if role.Level != "state" && role.Level != "federation" {
+			return fmt.Errorf("crossFlow.federation.publisherRoles[%d].level must be \"state\" or \"federation\", got %q", i, role.Level)
 		}
 	}
 

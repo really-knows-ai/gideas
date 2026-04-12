@@ -28,6 +28,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
@@ -45,6 +46,11 @@ const (
 
 	// outputRefine is the well-known output name for routing to refinement.
 	outputRefine = "refine"
+
+	// pendingHoldTimeout is the suspension timeout for workitems held
+	// pending a dispute resolution. Defaults to 2 weeks (the platform's
+	// default max suspend timeout).
+	pendingHoldTimeout = 336 * time.Hour
 )
 
 // sortConfig holds Sort's runtime configuration, loaded from a YAML file.
@@ -124,11 +130,26 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 		requiredStamps := requirements.GetStamps()
 
 		// ── Step 1: Check deadlock FIRST ──────────────────────────────
-		deadlocked, err := checkDeadlock(ctx, client, kind, threshold)
+		deadlockedItem, err := checkDeadlock(ctx, client, kind, threshold)
 		if err != nil {
 			return err
 		}
-		if deadlocked {
+		if deadlockedItem != nil {
+			// Check if any cited laws have active dispute records.
+			// If so, suspend (pending-hold) instead of routing to arbiter.
+			if petitionID, ok := findActiveDisputeForFeedback(ctx, client, deadlockedItem); ok {
+				slog.Info("sort: suspending pending-hold (active dispute record)",
+					"artefact_kind", kind,
+					"petition_id", petitionID)
+				condition := fmt.Sprintf("dispute_retired(%q)", petitionID)
+				if err := client.Suspend(ctx,
+					flow.WithCondition(condition),
+					flow.WithTimeout(pendingHoldTimeout),
+				); err != nil {
+					return fmt.Errorf("sort: suspend pending-hold: %w", err)
+				}
+				return nil
+			}
 			slog.Info("sort: routing to arbiter (deadlocked feedback)",
 				"artefact_kind", kind)
 			_, err = client.RouteToOutput(ctx, outputArbiter)
@@ -289,20 +310,58 @@ func hasUnresolvedFeedbackFrom(
 	return false, nil
 }
 
+// findActiveDisputeForFeedback extracts law IDs from the deadlocked feedback
+// item's citation justification and queries the Librarian for active dispute
+// records. If any cited law has an active dispute, the petition_id of the
+// first matching dispute record is returned.
+//
+// Returns ("", false) when there is no citation, no cited law IDs, or no
+// active dispute records matching any cited law. Errors from GetActiveDisputes
+// are logged and treated as "no dispute found" to keep the arbiter path as
+// the safe fallback.
+func findActiveDisputeForFeedback(
+	ctx context.Context, client *flow.Client, item *flowv1.FeedbackItem,
+) (string, bool) {
+	citation := item.GetJustification().GetCitation()
+	if citation == nil {
+		return "", false
+	}
+	lawIDs := citation.GetCitationIds()
+	if len(lawIDs) == 0 {
+		return "", false
+	}
+
+	// Query each cited law for an active dispute record.
+	for _, lawID := range lawIDs {
+		resp, err := client.Librarian.GetActiveDisputes(ctx,
+			&flowv1.GetActiveDisputesRequest{LawId: lawID})
+		if err != nil {
+			slog.Warn("sort: GetActiveDisputes failed, falling back to arbiter",
+				"law_id", lawID, "error", err)
+			continue
+		}
+		if len(resp.GetRecords()) > 0 {
+			return resp.GetRecords()[0].GetPetitionId(), true
+		}
+	}
+	return "", false
+}
+
 // checkDeadlock scans feedback items for deadlock conditions on the
 // specified artefact kind.
 //
 // For each non-resolved feedback item:
-//   - If already DEADLOCKED → return true (route to Arbiter, no state change).
-//   - If depth >= threshold → call DeadlockFeedback(), return true.
+//   - If already DEADLOCKED → return the item (route to Arbiter, no state change).
+//   - If depth >= threshold → call DeadlockFeedback(), return the item.
 //
-// First match wins — one routing decision per Sort invocation.
+// First match wins — one routing decision per Sort invocation. Returns nil
+// when no feedback item is deadlocked.
 func checkDeadlock(
 	ctx context.Context, client *flow.Client, artefactID string, threshold int32,
-) (bool, error) {
+) (*flowv1.FeedbackItem, error) {
 	items, err := client.GetFeedback(ctx, artefactID)
 	if err != nil {
-		return false, fmt.Errorf("sort: get feedback: %w", err)
+		return nil, fmt.Errorf("sort: get feedback: %w", err)
 	}
 
 	for _, item := range items {
@@ -314,12 +373,12 @@ func checkDeadlock(
 		if item.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
 			slog.Info("sort: found deadlocked feedback item",
 				"feedback_id", item.GetId())
-			return true, nil
+			return item, nil
 		}
 
 		depth, err := client.GetFeedbackDepth(ctx, item.GetId())
 		if err != nil {
-			return false, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"sort: get feedback depth for %s: %w", item.GetId(), err)
 		}
 
@@ -329,14 +388,14 @@ func checkDeadlock(
 				"depth", depth,
 				"threshold", threshold)
 			if _, err := client.DeadlockFeedback(ctx, item.GetId()); err != nil {
-				return false, fmt.Errorf(
+				return nil, fmt.Errorf(
 					"sort: deadlock feedback %s: %w", item.GetId(), err)
 			}
-			return true, nil
+			return item, nil
 		}
 	}
 
-	return false, nil
+	return nil, nil
 }
 
 // parseNodeOrder parses a comma-separated node order string into a string

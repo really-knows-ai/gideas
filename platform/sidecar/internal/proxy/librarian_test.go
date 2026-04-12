@@ -13,10 +13,11 @@ import (
 // captureLibrarianServer captures Librarian RPC calls for assertions.
 type captureLibrarianServer struct {
 	flowv1.UnimplementedLibrarianServiceServer
-	lastCiteReq   *flowv1.CiteRequest
-	lastQueryReq  *flowv1.QueryLawsRequest
-	lastGetLawReq *flowv1.GetLawRequest
-	capturedMD    metadata.MD
+	lastCiteReq              *flowv1.CiteRequest
+	lastQueryReq             *flowv1.QueryLawsRequest
+	lastGetLawReq            *flowv1.GetLawRequest
+	lastGetActiveDisputesReq *flowv1.GetActiveDisputesRequest
+	capturedMD               metadata.MD
 }
 
 func (s *captureLibrarianServer) QueryLaws(
@@ -45,6 +46,20 @@ func (s *captureLibrarianServer) GetLaw(
 		s.capturedMD = md
 	}
 	return &flowv1.GetLawResponse{Law: &flowv1.Law{Id: req.GetLawId()}}, nil
+}
+
+func (s *captureLibrarianServer) GetActiveDisputes(
+	ctx context.Context, req *flowv1.GetActiveDisputesRequest,
+) (*flowv1.GetActiveDisputesResponse, error) {
+	s.lastGetActiveDisputesReq = req
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		s.capturedMD = md
+	}
+	return &flowv1.GetActiveDisputesResponse{
+		Records: []*flowv1.DisputeRecord{
+			{PetitionId: "pet-1", CitedLawIds: []string{"law-a"}},
+		},
+	}, nil
 }
 
 // captureEventBusForLibrarian captures Event Bus Publish calls for assertions.
@@ -186,5 +201,42 @@ func TestLibrarianProxy_GetLaw_Passthrough(t *testing.T) {
 	}
 	if resp.GetLaw().GetId() != "law-123" {
 		t.Fatalf("expected law_id=law-123, got %q", resp.GetLaw().GetId())
+	}
+}
+
+func TestLibrarianProxy_GetActiveDisputes_Passthrough(t *testing.T) {
+	env := setupLibrarianProxy(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", "wi-dispute-test")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := env.proxy.GetActiveDisputes(ctx, &flowv1.GetActiveDisputesRequest{
+		LawId: "law-a",
+	})
+	if err != nil {
+		t.Fatalf("GetActiveDisputes: %v", err)
+	}
+
+	// Verify request was forwarded to Librarian backend.
+	if env.librarianSpy.lastGetActiveDisputesReq == nil {
+		t.Fatal("GetActiveDisputes was not forwarded to Librarian")
+	}
+	if env.librarianSpy.lastGetActiveDisputesReq.GetLawId() != "law-a" {
+		t.Fatalf("expected law_id=law-a forwarded, got %q",
+			env.librarianSpy.lastGetActiveDisputesReq.GetLawId())
+	}
+
+	// Verify response is returned unmodified.
+	if len(resp.GetRecords()) != 1 {
+		t.Fatalf("expected 1 dispute record, got %d", len(resp.GetRecords()))
+	}
+	if resp.GetRecords()[0].GetPetitionId() != "pet-1" {
+		t.Fatalf("expected petition_id=pet-1, got %q", resp.GetRecords()[0].GetPetitionId())
+	}
+
+	// Verify metadata propagation.
+	vals := env.librarianSpy.capturedMD.Get("x-flow-workitem-id")
+	if len(vals) != 1 || vals[0] != "wi-dispute-test" {
+		t.Fatalf("expected metadata propagation, got %v", vals)
 	}
 }

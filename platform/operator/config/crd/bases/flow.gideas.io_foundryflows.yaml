@@ -50,6 +50,61 @@ spec:
                 description: crossFlow defines cross-flow trust and naturalisation
                   settings.
                 properties:
+                  federation:
+                    description: |-
+                      federation defines the Flow's federation membership, identity, state assignments,
+                      and publisher roles. When set, the Flow participates in a Federation.
+                    properties:
+                      federationEndpoint:
+                        description: federationEndpoint is the address of the Federation
+                          service.
+                        minLength: 1
+                        type: string
+                      identity:
+                        description: identity is the Flow's unique identity within
+                          the Federation.
+                        minLength: 1
+                        type: string
+                      publisherRoles:
+                        description: |-
+                          publisherRoles defines the authority publisher roles for this Flow.
+                          Each role specifies a domain scope and whether the authority is state-level
+                          or federation-level.
+                        items:
+                          description: FederationPublisherRole defines a single publisher
+                            authority role.
+                          properties:
+                            level:
+                              description: |-
+                                level is the authority level: "state" for state-level publication (Tier 4)
+                                or "federation" for federation-wide publication (Tier 5).
+                              enum:
+                              - state
+                              - federation
+                              type: string
+                            scope:
+                              description: scope is the domain this role covers (e.g.
+                                "security", "compliance").
+                              minLength: 1
+                              type: string
+                          required:
+                          - level
+                          - scope
+                          type: object
+                        type: array
+                      states:
+                        description: |-
+                          states is the list of federation-defined state names this Flow belongs to.
+                          States are organisational groups; sibling relationships derive from shared membership.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - federationEndpoint
+                    - identity
+                    - states
+                    type: object
                   federationCA:
                     description: |-
                       federationCA is the PEM-encoded Federation CA certificate.

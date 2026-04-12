@@ -191,3 +191,70 @@ func TestAudit_NilPublisher(t *testing.T) {
 		t.Fatalf("unexpected error with nil publisher: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Dispute Record Audit Events
+// ---------------------------------------------------------------------------
+
+func TestAudit_CreateDisputeRecord(t *testing.T) {
+	srv, pub := newTestServerWithAudit(t)
+	ctx := context.Background()
+
+	_, err := srv.CreateDisputeRecord(ctx, &flowv1.CreateDisputeRecordRequest{
+		PetitionId:  "petition-audit-1",
+		CitedLawIds: []string{"law-a", "law-b"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDisputeRecord: %v", err)
+	}
+
+	if pub.count() != 1 {
+		t.Fatalf("expected 1 audit event, got %d", pub.count())
+	}
+	last := pub.last()
+	if last.GetChannel() != "audit" {
+		t.Fatalf("expected audit channel, got %q", last.GetChannel())
+	}
+	evt := last.GetEvent()
+	if evt.GetEventType() != "audit.dispute.created" {
+		t.Fatalf("expected audit.dispute.created, got %q", evt.GetEventType())
+	}
+	if evt.GetAttributes()["petition_id"] != "petition-audit-1" {
+		t.Fatalf("expected petition_id attribute, got %v", evt.GetAttributes())
+	}
+	if evt.GetAttributes()["cited_law_ids"] != "law-a,law-b" {
+		t.Fatalf("expected cited_law_ids attribute, got %v", evt.GetAttributes())
+	}
+}
+
+func TestAudit_RetireDisputeRecord(t *testing.T) {
+	srv, pub := newTestServerWithAudit(t)
+	ctx := context.Background()
+
+	// Create first (generates 1 audit event).
+	if _, err := srv.CreateDisputeRecord(ctx, &flowv1.CreateDisputeRecordRequest{
+		PetitionId:  "petition-audit-2",
+		CitedLawIds: []string{"law-c"},
+	}); err != nil {
+		t.Fatalf("CreateDisputeRecord: %v", err)
+	}
+
+	// Retire (generates 2nd audit event).
+	if _, err := srv.RetireDisputeRecord(ctx, &flowv1.RetireDisputeRecordRequest{
+		PetitionId: "petition-audit-2",
+	}); err != nil {
+		t.Fatalf("RetireDisputeRecord: %v", err)
+	}
+
+	if pub.count() != 2 {
+		t.Fatalf("expected 2 audit events, got %d", pub.count())
+	}
+	last := pub.last()
+	evt := last.GetEvent()
+	if evt.GetEventType() != "audit.dispute.retired" {
+		t.Fatalf("expected audit.dispute.retired, got %q", evt.GetEventType())
+	}
+	if evt.GetAttributes()["petition_id"] != "petition-audit-2" {
+		t.Fatalf("expected petition_id attribute, got %v", evt.GetAttributes())
+	}
+}
