@@ -506,6 +506,16 @@ func (r *FoundryFlowReconciler) embassyEnvVars(flow *flowv1.FoundryFlow) []corev
 		}
 	}
 
+	// Project federation config to Embassy when present.
+	if fed := flow.Spec.CrossFlow.Federation; fed != nil {
+		envs = append(envs, corev1.EnvVar{Name: "EMBASSY_FEDERATION_IDENTITY", Value: fed.Identity})
+		envs = append(envs, corev1.EnvVar{Name: "EMBASSY_FEDERATION_ENDPOINT", Value: fed.FederationEndpoint})
+
+		if data, err := json.Marshal(fed.States); err == nil {
+			envs = append(envs, corev1.EnvVar{Name: "EMBASSY_FEDERATION_STATES", Value: string(data)})
+		}
+	}
+
 	envs = append(envs, builtInImportTypeEnvVar(), flowImportTypesEnvVar(flow.Spec.CrossFlow.ImportTypes))
 	return envs
 }

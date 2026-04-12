@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net"
+	"slices"
 	"sync"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -50,6 +51,9 @@ type sortSpy struct {
 	// Configurable feedback depths: feedback ID → depth.
 	FeedbackDepths map[string]int32
 
+	// Configurable dispute records returned by GetActiveDisputes.
+	DisputeRecords []*flowv1.DisputeRecord
+
 	// Configurable error returns for specific operations.
 	GetFlowTopologyErr  error
 	HasStampErr         error
@@ -59,12 +63,17 @@ type sortSpy struct {
 	RouteToOutputErr    error
 	StampArtefactErr    error
 	CompleteErr         error
+	GetActiveDisputeErr error
+	SuspendErr          error
 
 	// Recorded operations for assertions.
-	DeadlockedIDs []string // feedback IDs that were deadlocked
-	StampedNames  []string // stamp names applied
-	RoutedOutputs []string // output names routed to
-	Completed     bool     // whether Complete was called
+	DeadlockedIDs           []string // feedback IDs that were deadlocked
+	StampedNames            []string // stamp names applied
+	RoutedOutputs           []string // output names routed to
+	Completed               bool     // whether Complete was called
+	Suspended               bool     // whether Suspend was called
+	SuspendCondition        string   // CEL condition from the last Suspend
+	GetActiveDisputesLawIDs []string // law IDs passed to GetActiveDisputes calls
 }
 
 func newSortSpy() *sortSpy {
@@ -154,8 +163,14 @@ func (s *sortSpy) SubmitResult(
 		}
 	case nil:
 		// No action set — treat as no-op.
-	default:
-		// Suspend — no-op for sort spy.
+	case *flowv1.SubmitResultRequest_Suspend:
+		if s.SuspendErr != nil {
+			return nil, s.SuspendErr
+		}
+		s.Suspended = true
+		if a.Suspend != nil {
+			s.SuspendCondition = a.Suspend.GetCondition()
+		}
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
@@ -251,4 +266,32 @@ func (s *sortSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Librarian methods
+// ---------------------------------------------------------------------------
+
+func (s *sortSpy) GetActiveDisputes(
+	_ context.Context, req *flowv1.GetActiveDisputesRequest,
+) (*flowv1.GetActiveDisputesResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.GetActiveDisputeErr != nil {
+		return nil, s.GetActiveDisputeErr
+	}
+	if lawID := req.GetLawId(); lawID != "" {
+		s.GetActiveDisputesLawIDs = append(s.GetActiveDisputesLawIDs, lawID)
+	}
+	// Filter dispute records by cited law ID if provided.
+	if req.GetLawId() == "" {
+		return &flowv1.GetActiveDisputesResponse{Records: s.DisputeRecords}, nil
+	}
+	var matched []*flowv1.DisputeRecord
+	for _, r := range s.DisputeRecords {
+		if slices.Contains(r.GetCitedLawIds(), req.GetLawId()) {
+			matched = append(matched, r)
+		}
+	}
+	return &flowv1.GetActiveDisputesResponse{Records: matched}, nil
 }

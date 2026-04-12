@@ -5,6 +5,7 @@ package flow.v1;
 option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
 
 import "flow/v1/common.proto";
+import "google/protobuf/timestamp.proto";
 
 // LibrarianService manages the Flow's body of law.
 // Node-facing methods are reached through the Sidecar.
@@ -47,6 +48,20 @@ service LibrarianService {
   // Applies the outcome of a review hearing (promote, retire, demote)
   // to the specified law. Called by the Operator after Tribunal hearing completion.
   rpc ApplyLifecycleAction(ApplyLifecycleActionRequest) returns (ApplyLifecycleActionResponse);
+
+  // --- Dispute Record Methods ---
+
+  // Creates a dispute record linking a petition to the laws it cites.
+  // Called by law-applicator on the T4-5 path before routing to Embassy.
+  rpc CreateDisputeRecord(CreateDisputeRecordRequest) returns (CreateDisputeRecordResponse);
+
+  // Retires a dispute record when a petition outcome is resolved.
+  // Called by the petition-outcome-watcher on acceptance or rejection.
+  rpc RetireDisputeRecord(RetireDisputeRecordRequest) returns (RetireDisputeRecordResponse);
+
+  // Returns active dispute records, optionally filtered by a cited law ID.
+  // Called by Sort to check for pending disputes before deadlock routing.
+  rpc GetActiveDisputes(GetActiveDisputesRequest) returns (GetActiveDisputesResponse);
 }
 
 // --- Node-Facing ---
@@ -133,4 +148,58 @@ message ApplyLifecycleActionRequest {
 
 message ApplyLifecycleActionResponse {
   bool acknowledged = 1;
+}
+
+// --- Dispute Record Messages ---
+
+// Status of a dispute record.
+enum DisputeStatus {
+  DISPUTE_STATUS_UNSPECIFIED = 0;
+  DISPUTE_STATUS_ACTIVE = 1;
+  DISPUTE_STATUS_RETIRED = 2;
+}
+
+// A dispute record links a cross-flow petition to the laws it cites.
+// It is a Library entity distinct from laws -- it carries no governance
+// weight and does not appear in the law hierarchy.
+// See: ARCHITECTURE.md#dispute-records
+message DisputeRecord {
+  // The stable identifier linking to the petition artefact.
+  string petition_id = 1;
+  // The law IDs whose conflicts prompted the petition.
+  repeated string cited_law_ids = 2;
+  // Timestamp when the dispute record was created.
+  google.protobuf.Timestamp created_at = 3;
+  // Current status of the dispute record.
+  DisputeStatus status = 4;
+}
+
+message CreateDisputeRecordRequest {
+  // The petition artefact's stable identifier.
+  string petition_id = 1;
+  // The law IDs cited in the petition's changes.
+  repeated string cited_law_ids = 2;
+}
+
+message CreateDisputeRecordResponse {
+  DisputeRecord record = 1;
+}
+
+message RetireDisputeRecordRequest {
+  // The petition ID of the dispute record to retire.
+  string petition_id = 1;
+}
+
+message RetireDisputeRecordResponse {
+  bool acknowledged = 1;
+}
+
+message GetActiveDisputesRequest {
+  // Optional: filter to disputes citing this specific law ID.
+  // Empty means return all active disputes.
+  string law_id = 1;
+}
+
+message GetActiveDisputesResponse {
+  repeated DisputeRecord records = 1;
 }

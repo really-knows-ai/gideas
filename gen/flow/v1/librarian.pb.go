@@ -9,6 +9,7 @@ package flowv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -20,6 +21,56 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+// Status of a dispute record.
+type DisputeStatus int32
+
+const (
+	DisputeStatus_DISPUTE_STATUS_UNSPECIFIED DisputeStatus = 0
+	DisputeStatus_DISPUTE_STATUS_ACTIVE      DisputeStatus = 1
+	DisputeStatus_DISPUTE_STATUS_RETIRED     DisputeStatus = 2
+)
+
+// Enum value maps for DisputeStatus.
+var (
+	DisputeStatus_name = map[int32]string{
+		0: "DISPUTE_STATUS_UNSPECIFIED",
+		1: "DISPUTE_STATUS_ACTIVE",
+		2: "DISPUTE_STATUS_RETIRED",
+	}
+	DisputeStatus_value = map[string]int32{
+		"DISPUTE_STATUS_UNSPECIFIED": 0,
+		"DISPUTE_STATUS_ACTIVE":      1,
+		"DISPUTE_STATUS_RETIRED":     2,
+	}
+)
+
+func (x DisputeStatus) Enum() *DisputeStatus {
+	p := new(DisputeStatus)
+	*p = x
+	return p
+}
+
+func (x DisputeStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DisputeStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_flow_v1_librarian_proto_enumTypes[0].Descriptor()
+}
+
+func (DisputeStatus) Type() protoreflect.EnumType {
+	return &file_flow_v1_librarian_proto_enumTypes[0]
+}
+
+func (x DisputeStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DisputeStatus.Descriptor instead.
+func (DisputeStatus) EnumDescriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{0}
+}
 
 type QueryLawsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -832,11 +883,364 @@ func (x *ApplyLifecycleActionResponse) GetAcknowledged() bool {
 	return false
 }
 
+// A dispute record links a cross-flow petition to the laws it cites.
+// It is a Library entity distinct from laws -- it carries no governance
+// weight and does not appear in the law hierarchy.
+// See: ARCHITECTURE.md#dispute-records
+type DisputeRecord struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The stable identifier linking to the petition artefact.
+	PetitionId string `protobuf:"bytes,1,opt,name=petition_id,json=petitionId,proto3" json:"petition_id,omitempty"`
+	// The law IDs whose conflicts prompted the petition.
+	CitedLawIds []string `protobuf:"bytes,2,rep,name=cited_law_ids,json=citedLawIds,proto3" json:"cited_law_ids,omitempty"`
+	// Timestamp when the dispute record was created.
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Current status of the dispute record.
+	Status        DisputeStatus `protobuf:"varint,4,opt,name=status,proto3,enum=flow.v1.DisputeStatus" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisputeRecord) Reset() {
+	*x = DisputeRecord{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisputeRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisputeRecord) ProtoMessage() {}
+
+func (x *DisputeRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisputeRecord.ProtoReflect.Descriptor instead.
+func (*DisputeRecord) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *DisputeRecord) GetPetitionId() string {
+	if x != nil {
+		return x.PetitionId
+	}
+	return ""
+}
+
+func (x *DisputeRecord) GetCitedLawIds() []string {
+	if x != nil {
+		return x.CitedLawIds
+	}
+	return nil
+}
+
+func (x *DisputeRecord) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *DisputeRecord) GetStatus() DisputeStatus {
+	if x != nil {
+		return x.Status
+	}
+	return DisputeStatus_DISPUTE_STATUS_UNSPECIFIED
+}
+
+type CreateDisputeRecordRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The petition artefact's stable identifier.
+	PetitionId string `protobuf:"bytes,1,opt,name=petition_id,json=petitionId,proto3" json:"petition_id,omitempty"`
+	// The law IDs cited in the petition's changes.
+	CitedLawIds   []string `protobuf:"bytes,2,rep,name=cited_law_ids,json=citedLawIds,proto3" json:"cited_law_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateDisputeRecordRequest) Reset() {
+	*x = CreateDisputeRecordRequest{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDisputeRecordRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDisputeRecordRequest) ProtoMessage() {}
+
+func (x *CreateDisputeRecordRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDisputeRecordRequest.ProtoReflect.Descriptor instead.
+func (*CreateDisputeRecordRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *CreateDisputeRecordRequest) GetPetitionId() string {
+	if x != nil {
+		return x.PetitionId
+	}
+	return ""
+}
+
+func (x *CreateDisputeRecordRequest) GetCitedLawIds() []string {
+	if x != nil {
+		return x.CitedLawIds
+	}
+	return nil
+}
+
+type CreateDisputeRecordResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Record        *DisputeRecord         `protobuf:"bytes,1,opt,name=record,proto3" json:"record,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateDisputeRecordResponse) Reset() {
+	*x = CreateDisputeRecordResponse{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDisputeRecordResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDisputeRecordResponse) ProtoMessage() {}
+
+func (x *CreateDisputeRecordResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDisputeRecordResponse.ProtoReflect.Descriptor instead.
+func (*CreateDisputeRecordResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *CreateDisputeRecordResponse) GetRecord() *DisputeRecord {
+	if x != nil {
+		return x.Record
+	}
+	return nil
+}
+
+type RetireDisputeRecordRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The petition ID of the dispute record to retire.
+	PetitionId    string `protobuf:"bytes,1,opt,name=petition_id,json=petitionId,proto3" json:"petition_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetireDisputeRecordRequest) Reset() {
+	*x = RetireDisputeRecordRequest{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetireDisputeRecordRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetireDisputeRecordRequest) ProtoMessage() {}
+
+func (x *RetireDisputeRecordRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetireDisputeRecordRequest.ProtoReflect.Descriptor instead.
+func (*RetireDisputeRecordRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *RetireDisputeRecordRequest) GetPetitionId() string {
+	if x != nil {
+		return x.PetitionId
+	}
+	return ""
+}
+
+type RetireDisputeRecordResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Acknowledged  bool                   `protobuf:"varint,1,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetireDisputeRecordResponse) Reset() {
+	*x = RetireDisputeRecordResponse{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetireDisputeRecordResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetireDisputeRecordResponse) ProtoMessage() {}
+
+func (x *RetireDisputeRecordResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetireDisputeRecordResponse.ProtoReflect.Descriptor instead.
+func (*RetireDisputeRecordResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *RetireDisputeRecordResponse) GetAcknowledged() bool {
+	if x != nil {
+		return x.Acknowledged
+	}
+	return false
+}
+
+type GetActiveDisputesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Optional: filter to disputes citing this specific law ID.
+	// Empty means return all active disputes.
+	LawId         string `protobuf:"bytes,1,opt,name=law_id,json=lawId,proto3" json:"law_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetActiveDisputesRequest) Reset() {
+	*x = GetActiveDisputesRequest{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetActiveDisputesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetActiveDisputesRequest) ProtoMessage() {}
+
+func (x *GetActiveDisputesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetActiveDisputesRequest.ProtoReflect.Descriptor instead.
+func (*GetActiveDisputesRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GetActiveDisputesRequest) GetLawId() string {
+	if x != nil {
+		return x.LawId
+	}
+	return ""
+}
+
+type GetActiveDisputesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Records       []*DisputeRecord       `protobuf:"bytes,1,rep,name=records,proto3" json:"records,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetActiveDisputesResponse) Reset() {
+	*x = GetActiveDisputesResponse{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetActiveDisputesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetActiveDisputesResponse) ProtoMessage() {}
+
+func (x *GetActiveDisputesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetActiveDisputesResponse.ProtoReflect.Descriptor instead.
+func (*GetActiveDisputesResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *GetActiveDisputesResponse) GetRecords() []*DisputeRecord {
+	if x != nil {
+		return x.Records
+	}
+	return nil
+}
+
 var File_flow_v1_librarian_proto protoreflect.FileDescriptor
 
 const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\n" +
-	"\x17flow/v1/librarian.proto\x12\aflow.v1\x1a\x14flow/v1/common.proto\">\n" +
+	"\x17flow/v1/librarian.proto\x12\aflow.v1\x1a\x14flow/v1/common.proto\x1a\x1fgoogle/protobuf/timestamp.proto\">\n" +
 	"\x10QueryLawsRequest\x12*\n" +
 	"\x06filter\x18\x01 \x01(\v2\x12.flow.v1.LawFilterR\x06filter\"\x85\x01\n" +
 	"\tLawFilter\x12+\n" +
@@ -878,7 +1282,33 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\x06law_id\x18\x01 \x01(\tR\x05lawId\x12*\n" +
 	"\averdict\x18\x02 \x01(\x0e2\x10.flow.v1.VerdictR\averdict\"B\n" +
 	"\x1cApplyLifecycleActionResponse\x12\"\n" +
-	"\facknowledged\x18\x01 \x01(\bR\facknowledged2\xd0\x04\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"\xbf\x01\n" +
+	"\rDisputeRecord\x12\x1f\n" +
+	"\vpetition_id\x18\x01 \x01(\tR\n" +
+	"petitionId\x12\"\n" +
+	"\rcited_law_ids\x18\x02 \x03(\tR\vcitedLawIds\x129\n" +
+	"\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12.\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x16.flow.v1.DisputeStatusR\x06status\"a\n" +
+	"\x1aCreateDisputeRecordRequest\x12\x1f\n" +
+	"\vpetition_id\x18\x01 \x01(\tR\n" +
+	"petitionId\x12\"\n" +
+	"\rcited_law_ids\x18\x02 \x03(\tR\vcitedLawIds\"M\n" +
+	"\x1bCreateDisputeRecordResponse\x12.\n" +
+	"\x06record\x18\x01 \x01(\v2\x16.flow.v1.DisputeRecordR\x06record\"=\n" +
+	"\x1aRetireDisputeRecordRequest\x12\x1f\n" +
+	"\vpetition_id\x18\x01 \x01(\tR\n" +
+	"petitionId\"A\n" +
+	"\x1bRetireDisputeRecordResponse\x12\"\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"1\n" +
+	"\x18GetActiveDisputesRequest\x12\x15\n" +
+	"\x06law_id\x18\x01 \x01(\tR\x05lawId\"M\n" +
+	"\x19GetActiveDisputesResponse\x120\n" +
+	"\arecords\x18\x01 \x03(\v2\x16.flow.v1.DisputeRecordR\arecords*f\n" +
+	"\rDisputeStatus\x12\x1e\n" +
+	"\x1aDISPUTE_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15DISPUTE_STATUS_ACTIVE\x10\x01\x12\x1a\n" +
+	"\x16DISPUTE_STATUS_RETIRED\x10\x022\xf0\x06\n" +
 	"\x10LibrarianService\x12B\n" +
 	"\tQueryLaws\x12\x19.flow.v1.QueryLawsRequest\x1a\x1a.flow.v1.QueryLawsResponse\x123\n" +
 	"\x04Cite\x12\x14.flow.v1.CiteRequest\x1a\x15.flow.v1.CiteResponse\x12N\n" +
@@ -887,7 +1317,10 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\bWriteLaw\x12\x18.flow.v1.WriteLawRequest\x1a\x19.flow.v1.WriteLawResponse\x12B\n" +
 	"\tRetireLaw\x12\x19.flow.v1.RetireLawRequest\x1a\x1a.flow.v1.RetireLawResponse\x12N\n" +
 	"\rReplicateLaws\x12\x1d.flow.v1.ReplicateLawsRequest\x1a\x1e.flow.v1.ReplicateLawsResponse\x12c\n" +
-	"\x14ApplyLifecycleAction\x12$.flow.v1.ApplyLifecycleActionRequest\x1a%.flow.v1.ApplyLifecycleActionResponseB\x85\x01\n" +
+	"\x14ApplyLifecycleAction\x12$.flow.v1.ApplyLifecycleActionRequest\x1a%.flow.v1.ApplyLifecycleActionResponse\x12`\n" +
+	"\x13CreateDisputeRecord\x12#.flow.v1.CreateDisputeRecordRequest\x1a$.flow.v1.CreateDisputeRecordResponse\x12`\n" +
+	"\x13RetireDisputeRecord\x12#.flow.v1.RetireDisputeRecordRequest\x1a$.flow.v1.RetireDisputeRecordResponse\x12Z\n" +
+	"\x11GetActiveDisputes\x12!.flow.v1.GetActiveDisputesRequest\x1a\".flow.v1.GetActiveDisputesResponseB\x85\x01\n" +
 	"\vcom.flow.v1B\x0eLibrarianProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
@@ -902,60 +1335,80 @@ func file_flow_v1_librarian_proto_rawDescGZIP() []byte {
 	return file_flow_v1_librarian_proto_rawDescData
 }
 
-var file_flow_v1_librarian_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_flow_v1_librarian_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_flow_v1_librarian_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_flow_v1_librarian_proto_goTypes = []any{
-	(*QueryLawsRequest)(nil),             // 0: flow.v1.QueryLawsRequest
-	(*LawFilter)(nil),                    // 1: flow.v1.LawFilter
-	(*QueryLawsResponse)(nil),            // 2: flow.v1.QueryLawsResponse
-	(*CiteRequest)(nil),                  // 3: flow.v1.CiteRequest
-	(*CiteResponse)(nil),                 // 4: flow.v1.CiteResponse
-	(*RecordFindingRequest)(nil),         // 5: flow.v1.RecordFindingRequest
-	(*RecordFindingResponse)(nil),        // 6: flow.v1.RecordFindingResponse
-	(*GetLawRequest)(nil),                // 7: flow.v1.GetLawRequest
-	(*GetLawResponse)(nil),               // 8: flow.v1.GetLawResponse
-	(*WriteLawRequest)(nil),              // 9: flow.v1.WriteLawRequest
-	(*WriteLawResponse)(nil),             // 10: flow.v1.WriteLawResponse
-	(*RetireLawRequest)(nil),             // 11: flow.v1.RetireLawRequest
-	(*RetireLawResponse)(nil),            // 12: flow.v1.RetireLawResponse
-	(*ReplicateLawsRequest)(nil),         // 13: flow.v1.ReplicateLawsRequest
-	(*ReplicateLawsResponse)(nil),        // 14: flow.v1.ReplicateLawsResponse
-	(*ApplyLifecycleActionRequest)(nil),  // 15: flow.v1.ApplyLifecycleActionRequest
-	(*ApplyLifecycleActionResponse)(nil), // 16: flow.v1.ApplyLifecycleActionResponse
-	(*Law)(nil),                          // 17: flow.v1.Law
-	(*Representation)(nil),               // 18: flow.v1.Representation
-	(*IntegrationResult)(nil),            // 19: flow.v1.IntegrationResult
-	(Verdict)(0),                         // 20: flow.v1.Verdict
+	(DisputeStatus)(0),                   // 0: flow.v1.DisputeStatus
+	(*QueryLawsRequest)(nil),             // 1: flow.v1.QueryLawsRequest
+	(*LawFilter)(nil),                    // 2: flow.v1.LawFilter
+	(*QueryLawsResponse)(nil),            // 3: flow.v1.QueryLawsResponse
+	(*CiteRequest)(nil),                  // 4: flow.v1.CiteRequest
+	(*CiteResponse)(nil),                 // 5: flow.v1.CiteResponse
+	(*RecordFindingRequest)(nil),         // 6: flow.v1.RecordFindingRequest
+	(*RecordFindingResponse)(nil),        // 7: flow.v1.RecordFindingResponse
+	(*GetLawRequest)(nil),                // 8: flow.v1.GetLawRequest
+	(*GetLawResponse)(nil),               // 9: flow.v1.GetLawResponse
+	(*WriteLawRequest)(nil),              // 10: flow.v1.WriteLawRequest
+	(*WriteLawResponse)(nil),             // 11: flow.v1.WriteLawResponse
+	(*RetireLawRequest)(nil),             // 12: flow.v1.RetireLawRequest
+	(*RetireLawResponse)(nil),            // 13: flow.v1.RetireLawResponse
+	(*ReplicateLawsRequest)(nil),         // 14: flow.v1.ReplicateLawsRequest
+	(*ReplicateLawsResponse)(nil),        // 15: flow.v1.ReplicateLawsResponse
+	(*ApplyLifecycleActionRequest)(nil),  // 16: flow.v1.ApplyLifecycleActionRequest
+	(*ApplyLifecycleActionResponse)(nil), // 17: flow.v1.ApplyLifecycleActionResponse
+	(*DisputeRecord)(nil),                // 18: flow.v1.DisputeRecord
+	(*CreateDisputeRecordRequest)(nil),   // 19: flow.v1.CreateDisputeRecordRequest
+	(*CreateDisputeRecordResponse)(nil),  // 20: flow.v1.CreateDisputeRecordResponse
+	(*RetireDisputeRecordRequest)(nil),   // 21: flow.v1.RetireDisputeRecordRequest
+	(*RetireDisputeRecordResponse)(nil),  // 22: flow.v1.RetireDisputeRecordResponse
+	(*GetActiveDisputesRequest)(nil),     // 23: flow.v1.GetActiveDisputesRequest
+	(*GetActiveDisputesResponse)(nil),    // 24: flow.v1.GetActiveDisputesResponse
+	(*Law)(nil),                          // 25: flow.v1.Law
+	(*Representation)(nil),               // 26: flow.v1.Representation
+	(*IntegrationResult)(nil),            // 27: flow.v1.IntegrationResult
+	(Verdict)(0),                         // 28: flow.v1.Verdict
+	(*timestamppb.Timestamp)(nil),        // 29: google.protobuf.Timestamp
 }
 var file_flow_v1_librarian_proto_depIdxs = []int32{
-	1,  // 0: flow.v1.QueryLawsRequest.filter:type_name -> flow.v1.LawFilter
-	17, // 1: flow.v1.QueryLawsResponse.laws:type_name -> flow.v1.Law
-	18, // 2: flow.v1.RecordFindingRequest.representations:type_name -> flow.v1.Representation
-	17, // 3: flow.v1.GetLawResponse.law:type_name -> flow.v1.Law
-	17, // 4: flow.v1.WriteLawRequest.law:type_name -> flow.v1.Law
-	17, // 5: flow.v1.ReplicateLawsRequest.laws:type_name -> flow.v1.Law
-	19, // 6: flow.v1.ReplicateLawsResponse.integration_results:type_name -> flow.v1.IntegrationResult
-	20, // 7: flow.v1.ApplyLifecycleActionRequest.verdict:type_name -> flow.v1.Verdict
-	0,  // 8: flow.v1.LibrarianService.QueryLaws:input_type -> flow.v1.QueryLawsRequest
-	3,  // 9: flow.v1.LibrarianService.Cite:input_type -> flow.v1.CiteRequest
-	5,  // 10: flow.v1.LibrarianService.RecordFinding:input_type -> flow.v1.RecordFindingRequest
-	7,  // 11: flow.v1.LibrarianService.GetLaw:input_type -> flow.v1.GetLawRequest
-	9,  // 12: flow.v1.LibrarianService.WriteLaw:input_type -> flow.v1.WriteLawRequest
-	11, // 13: flow.v1.LibrarianService.RetireLaw:input_type -> flow.v1.RetireLawRequest
-	13, // 14: flow.v1.LibrarianService.ReplicateLaws:input_type -> flow.v1.ReplicateLawsRequest
-	15, // 15: flow.v1.LibrarianService.ApplyLifecycleAction:input_type -> flow.v1.ApplyLifecycleActionRequest
-	2,  // 16: flow.v1.LibrarianService.QueryLaws:output_type -> flow.v1.QueryLawsResponse
-	4,  // 17: flow.v1.LibrarianService.Cite:output_type -> flow.v1.CiteResponse
-	6,  // 18: flow.v1.LibrarianService.RecordFinding:output_type -> flow.v1.RecordFindingResponse
-	8,  // 19: flow.v1.LibrarianService.GetLaw:output_type -> flow.v1.GetLawResponse
-	10, // 20: flow.v1.LibrarianService.WriteLaw:output_type -> flow.v1.WriteLawResponse
-	12, // 21: flow.v1.LibrarianService.RetireLaw:output_type -> flow.v1.RetireLawResponse
-	14, // 22: flow.v1.LibrarianService.ReplicateLaws:output_type -> flow.v1.ReplicateLawsResponse
-	16, // 23: flow.v1.LibrarianService.ApplyLifecycleAction:output_type -> flow.v1.ApplyLifecycleActionResponse
-	16, // [16:24] is the sub-list for method output_type
-	8,  // [8:16] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	2,  // 0: flow.v1.QueryLawsRequest.filter:type_name -> flow.v1.LawFilter
+	25, // 1: flow.v1.QueryLawsResponse.laws:type_name -> flow.v1.Law
+	26, // 2: flow.v1.RecordFindingRequest.representations:type_name -> flow.v1.Representation
+	25, // 3: flow.v1.GetLawResponse.law:type_name -> flow.v1.Law
+	25, // 4: flow.v1.WriteLawRequest.law:type_name -> flow.v1.Law
+	25, // 5: flow.v1.ReplicateLawsRequest.laws:type_name -> flow.v1.Law
+	27, // 6: flow.v1.ReplicateLawsResponse.integration_results:type_name -> flow.v1.IntegrationResult
+	28, // 7: flow.v1.ApplyLifecycleActionRequest.verdict:type_name -> flow.v1.Verdict
+	29, // 8: flow.v1.DisputeRecord.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 9: flow.v1.DisputeRecord.status:type_name -> flow.v1.DisputeStatus
+	18, // 10: flow.v1.CreateDisputeRecordResponse.record:type_name -> flow.v1.DisputeRecord
+	18, // 11: flow.v1.GetActiveDisputesResponse.records:type_name -> flow.v1.DisputeRecord
+	1,  // 12: flow.v1.LibrarianService.QueryLaws:input_type -> flow.v1.QueryLawsRequest
+	4,  // 13: flow.v1.LibrarianService.Cite:input_type -> flow.v1.CiteRequest
+	6,  // 14: flow.v1.LibrarianService.RecordFinding:input_type -> flow.v1.RecordFindingRequest
+	8,  // 15: flow.v1.LibrarianService.GetLaw:input_type -> flow.v1.GetLawRequest
+	10, // 16: flow.v1.LibrarianService.WriteLaw:input_type -> flow.v1.WriteLawRequest
+	12, // 17: flow.v1.LibrarianService.RetireLaw:input_type -> flow.v1.RetireLawRequest
+	14, // 18: flow.v1.LibrarianService.ReplicateLaws:input_type -> flow.v1.ReplicateLawsRequest
+	16, // 19: flow.v1.LibrarianService.ApplyLifecycleAction:input_type -> flow.v1.ApplyLifecycleActionRequest
+	19, // 20: flow.v1.LibrarianService.CreateDisputeRecord:input_type -> flow.v1.CreateDisputeRecordRequest
+	21, // 21: flow.v1.LibrarianService.RetireDisputeRecord:input_type -> flow.v1.RetireDisputeRecordRequest
+	23, // 22: flow.v1.LibrarianService.GetActiveDisputes:input_type -> flow.v1.GetActiveDisputesRequest
+	3,  // 23: flow.v1.LibrarianService.QueryLaws:output_type -> flow.v1.QueryLawsResponse
+	5,  // 24: flow.v1.LibrarianService.Cite:output_type -> flow.v1.CiteResponse
+	7,  // 25: flow.v1.LibrarianService.RecordFinding:output_type -> flow.v1.RecordFindingResponse
+	9,  // 26: flow.v1.LibrarianService.GetLaw:output_type -> flow.v1.GetLawResponse
+	11, // 27: flow.v1.LibrarianService.WriteLaw:output_type -> flow.v1.WriteLawResponse
+	13, // 28: flow.v1.LibrarianService.RetireLaw:output_type -> flow.v1.RetireLawResponse
+	15, // 29: flow.v1.LibrarianService.ReplicateLaws:output_type -> flow.v1.ReplicateLawsResponse
+	17, // 30: flow.v1.LibrarianService.ApplyLifecycleAction:output_type -> flow.v1.ApplyLifecycleActionResponse
+	20, // 31: flow.v1.LibrarianService.CreateDisputeRecord:output_type -> flow.v1.CreateDisputeRecordResponse
+	22, // 32: flow.v1.LibrarianService.RetireDisputeRecord:output_type -> flow.v1.RetireDisputeRecordResponse
+	24, // 33: flow.v1.LibrarianService.GetActiveDisputes:output_type -> flow.v1.GetActiveDisputesResponse
+	23, // [23:34] is the sub-list for method output_type
+	12, // [12:23] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_librarian_proto_init() }
@@ -969,13 +1422,14 @@ func file_flow_v1_librarian_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_librarian_proto_rawDesc), len(file_flow_v1_librarian_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   17,
+			NumEnums:      1,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_flow_v1_librarian_proto_goTypes,
 		DependencyIndexes: file_flow_v1_librarian_proto_depIdxs,
+		EnumInfos:         file_flow_v1_librarian_proto_enumTypes,
 		MessageInfos:      file_flow_v1_librarian_proto_msgTypes,
 	}.Build()
 	File_flow_v1_librarian_proto = out.File

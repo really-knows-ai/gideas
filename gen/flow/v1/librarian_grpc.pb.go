@@ -27,6 +27,9 @@ const (
 	LibrarianService_RetireLaw_FullMethodName            = "/flow.v1.LibrarianService/RetireLaw"
 	LibrarianService_ReplicateLaws_FullMethodName        = "/flow.v1.LibrarianService/ReplicateLaws"
 	LibrarianService_ApplyLifecycleAction_FullMethodName = "/flow.v1.LibrarianService/ApplyLifecycleAction"
+	LibrarianService_CreateDisputeRecord_FullMethodName  = "/flow.v1.LibrarianService/CreateDisputeRecord"
+	LibrarianService_RetireDisputeRecord_FullMethodName  = "/flow.v1.LibrarianService/RetireDisputeRecord"
+	LibrarianService_GetActiveDisputes_FullMethodName    = "/flow.v1.LibrarianService/GetActiveDisputes"
 )
 
 // LibrarianServiceClient is the client API for LibrarianService service.
@@ -63,6 +66,15 @@ type LibrarianServiceClient interface {
 	// Applies the outcome of a review hearing (promote, retire, demote)
 	// to the specified law. Called by the Operator after Tribunal hearing completion.
 	ApplyLifecycleAction(ctx context.Context, in *ApplyLifecycleActionRequest, opts ...grpc.CallOption) (*ApplyLifecycleActionResponse, error)
+	// Creates a dispute record linking a petition to the laws it cites.
+	// Called by law-applicator on the T4-5 path before routing to Embassy.
+	CreateDisputeRecord(ctx context.Context, in *CreateDisputeRecordRequest, opts ...grpc.CallOption) (*CreateDisputeRecordResponse, error)
+	// Retires a dispute record when a petition outcome is resolved.
+	// Called by the petition-outcome-watcher on acceptance or rejection.
+	RetireDisputeRecord(ctx context.Context, in *RetireDisputeRecordRequest, opts ...grpc.CallOption) (*RetireDisputeRecordResponse, error)
+	// Returns active dispute records, optionally filtered by a cited law ID.
+	// Called by Sort to check for pending disputes before deadlock routing.
+	GetActiveDisputes(ctx context.Context, in *GetActiveDisputesRequest, opts ...grpc.CallOption) (*GetActiveDisputesResponse, error)
 }
 
 type librarianServiceClient struct {
@@ -153,6 +165,36 @@ func (c *librarianServiceClient) ApplyLifecycleAction(ctx context.Context, in *A
 	return out, nil
 }
 
+func (c *librarianServiceClient) CreateDisputeRecord(ctx context.Context, in *CreateDisputeRecordRequest, opts ...grpc.CallOption) (*CreateDisputeRecordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateDisputeRecordResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_CreateDisputeRecord_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *librarianServiceClient) RetireDisputeRecord(ctx context.Context, in *RetireDisputeRecordRequest, opts ...grpc.CallOption) (*RetireDisputeRecordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetireDisputeRecordResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_RetireDisputeRecord_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *librarianServiceClient) GetActiveDisputes(ctx context.Context, in *GetActiveDisputesRequest, opts ...grpc.CallOption) (*GetActiveDisputesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetActiveDisputesResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_GetActiveDisputes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LibrarianServiceServer is the server API for LibrarianService service.
 // All implementations must embed UnimplementedLibrarianServiceServer
 // for forward compatibility.
@@ -187,6 +229,15 @@ type LibrarianServiceServer interface {
 	// Applies the outcome of a review hearing (promote, retire, demote)
 	// to the specified law. Called by the Operator after Tribunal hearing completion.
 	ApplyLifecycleAction(context.Context, *ApplyLifecycleActionRequest) (*ApplyLifecycleActionResponse, error)
+	// Creates a dispute record linking a petition to the laws it cites.
+	// Called by law-applicator on the T4-5 path before routing to Embassy.
+	CreateDisputeRecord(context.Context, *CreateDisputeRecordRequest) (*CreateDisputeRecordResponse, error)
+	// Retires a dispute record when a petition outcome is resolved.
+	// Called by the petition-outcome-watcher on acceptance or rejection.
+	RetireDisputeRecord(context.Context, *RetireDisputeRecordRequest) (*RetireDisputeRecordResponse, error)
+	// Returns active dispute records, optionally filtered by a cited law ID.
+	// Called by Sort to check for pending disputes before deadlock routing.
+	GetActiveDisputes(context.Context, *GetActiveDisputesRequest) (*GetActiveDisputesResponse, error)
 	mustEmbedUnimplementedLibrarianServiceServer()
 }
 
@@ -220,6 +271,15 @@ func (UnimplementedLibrarianServiceServer) ReplicateLaws(context.Context, *Repli
 }
 func (UnimplementedLibrarianServiceServer) ApplyLifecycleAction(context.Context, *ApplyLifecycleActionRequest) (*ApplyLifecycleActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyLifecycleAction not implemented")
+}
+func (UnimplementedLibrarianServiceServer) CreateDisputeRecord(context.Context, *CreateDisputeRecordRequest) (*CreateDisputeRecordResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateDisputeRecord not implemented")
+}
+func (UnimplementedLibrarianServiceServer) RetireDisputeRecord(context.Context, *RetireDisputeRecordRequest) (*RetireDisputeRecordResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RetireDisputeRecord not implemented")
+}
+func (UnimplementedLibrarianServiceServer) GetActiveDisputes(context.Context, *GetActiveDisputesRequest) (*GetActiveDisputesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActiveDisputes not implemented")
 }
 func (UnimplementedLibrarianServiceServer) mustEmbedUnimplementedLibrarianServiceServer() {}
 func (UnimplementedLibrarianServiceServer) testEmbeddedByValue()                          {}
@@ -386,6 +446,60 @@ func _LibrarianService_ApplyLifecycleAction_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LibrarianService_CreateDisputeRecord_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateDisputeRecordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).CreateDisputeRecord(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_CreateDisputeRecord_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).CreateDisputeRecord(ctx, req.(*CreateDisputeRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LibrarianService_RetireDisputeRecord_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetireDisputeRecordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).RetireDisputeRecord(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_RetireDisputeRecord_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).RetireDisputeRecord(ctx, req.(*RetireDisputeRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LibrarianService_GetActiveDisputes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActiveDisputesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).GetActiveDisputes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_GetActiveDisputes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).GetActiveDisputes(ctx, req.(*GetActiveDisputesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // LibrarianService_ServiceDesc is the grpc.ServiceDesc for LibrarianService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -424,6 +538,18 @@ var LibrarianService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ApplyLifecycleAction",
 			Handler:    _LibrarianService_ApplyLifecycleAction_Handler,
+		},
+		{
+			MethodName: "CreateDisputeRecord",
+			Handler:    _LibrarianService_CreateDisputeRecord_Handler,
+		},
+		{
+			MethodName: "RetireDisputeRecord",
+			Handler:    _LibrarianService_RetireDisputeRecord_Handler,
+		},
+		{
+			MethodName: "GetActiveDisputes",
+			Handler:    _LibrarianService_GetActiveDisputes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

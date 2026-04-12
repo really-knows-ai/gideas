@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -657,5 +658,160 @@ func TestSort_Error_CompleteFails(t *testing.T) {
 	err := handleSort(context.Background(), client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from Complete failure")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Dispute record / pending-hold tests (Slice 12.5.2)
+// ---------------------------------------------------------------------------
+
+func TestSort_DeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["linter"] = true
+	// Feedback is deadlocked with a citation referencing law-42.
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:    "fb-dl",
+			State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			Justification: &flowv1.Justification{
+				Kind: &flowv1.Justification_Citation{
+					Citation: &flowv1.Citation{
+						CitationIds: []string{"law-42"},
+					},
+				},
+			},
+		},
+	}
+	// Active dispute record citing law-42.
+	spy.DisputeRecords = []*flowv1.DisputeRecord{
+		{PetitionId: "pet-abc", CitedLawIds: []string{"law-42"}},
+	}
+	client := setupSortTest(t, spy)
+
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+		t.Fatalf("handleSort() error: %v", err)
+	}
+
+	// Should Suspend (pending-hold), NOT route to arbiter.
+	if !spy.Suspended {
+		t.Fatal("expected Suspend() to be called for pending-hold")
+	}
+	if len(spy.RoutedOutputs) != 0 {
+		t.Fatalf("expected no routing (should suspend), got %v", spy.RoutedOutputs)
+	}
+	// Suspension condition should reference the petition_id.
+	if spy.SuspendCondition == "" {
+		t.Fatal("expected non-empty suspend condition with petition_id")
+	}
+	if !strings.Contains(spy.SuspendCondition, "pet-abc") {
+		t.Fatalf("expected suspend condition to contain petition_id 'pet-abc', got %q",
+			spy.SuspendCondition)
+	}
+}
+
+func TestSort_DeadlockedNoActiveDispute_RoutesToArbiter(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["linter"] = true
+	// Feedback is deadlocked with a citation referencing law-99.
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:    "fb-dl2",
+			State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			Justification: &flowv1.Justification{
+				Kind: &flowv1.Justification_Citation{
+					Citation: &flowv1.Citation{
+						CitationIds: []string{"law-99"},
+					},
+				},
+			},
+		},
+	}
+	// No dispute records — empty list.
+	spy.DisputeRecords = nil
+	client := setupSortTest(t, spy)
+
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+		t.Fatalf("handleSort() error: %v", err)
+	}
+
+	// Should route to arbiter as before (regression guard).
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
+	}
+	if spy.Suspended {
+		t.Fatal("expected no Suspend when no active dispute")
+	}
+}
+
+func TestSort_NewlyDeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["linter"] = true
+	// Feedback is NEW (not yet deadlocked) but depth exceeds threshold.
+	// The citation references law-42 which has an active dispute.
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:    "fb-new",
+			State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
+			Justification: &flowv1.Justification{
+				Kind: &flowv1.Justification_Citation{
+					Citation: &flowv1.Citation{
+						CitationIds: []string{"law-42"},
+					},
+				},
+			},
+		},
+	}
+	spy.FeedbackDepths["fb-new"] = 5 // Exceeds threshold of 3.
+	spy.DisputeRecords = []*flowv1.DisputeRecord{
+		{PetitionId: "pet-xyz", CitedLawIds: []string{"law-42"}},
+	}
+	client := setupSortTest(t, spy)
+
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+		t.Fatalf("handleSort() error: %v", err)
+	}
+
+	// Should deadlock the feedback item first, then suspend.
+	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-new" {
+		t.Fatalf("expected fb-new deadlocked, got %v", spy.DeadlockedIDs)
+	}
+	if !spy.Suspended {
+		t.Fatal("expected Suspend() for pending-hold")
+	}
+	if len(spy.RoutedOutputs) != 0 {
+		t.Fatalf("expected no routing (should suspend), got %v", spy.RoutedOutputs)
+	}
+	if !strings.Contains(spy.SuspendCondition, "pet-xyz") {
+		t.Fatalf("expected suspend condition to reference petition_id 'pet-xyz', got %q",
+			spy.SuspendCondition)
+	}
+}
+
+func TestSort_DeadlockedNoCitation_RoutesToArbiter(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["linter"] = true
+	// Feedback is deadlocked but has no citation (no law IDs to check).
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:    "fb-nocite",
+			State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+		},
+	}
+	// Even with dispute records, no citation means no match.
+	spy.DisputeRecords = []*flowv1.DisputeRecord{
+		{PetitionId: "pet-other", CitedLawIds: []string{"law-42"}},
+	}
+	client := setupSortTest(t, spy)
+
+	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+		t.Fatalf("handleSort() error: %v", err)
+	}
+
+	// No citation → no dispute query → route to arbiter.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
+		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
+	}
+	if spy.Suspended {
+		t.Fatal("expected no Suspend when no citation on deadlocked feedback")
 	}
 }
