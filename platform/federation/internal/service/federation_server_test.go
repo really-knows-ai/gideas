@@ -624,3 +624,185 @@ func TestDiscoverEndpoints_EmptyFederation_ReturnsEmptyList(t *testing.T) {
 		t.Errorf("endpoints count = %d, want 0", len(resp.GetEndpoints()))
 	}
 }
+
+// --- GetPetitionTarget Tests ---
+
+func TestGetPetitionTarget_StateLevelScope_ReturnsAuthority(t *testing.T) {
+	// Pre-load a member with a state-level publisher role for "education".
+	authority := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-authority",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-authority",
+			EmbassyEndpoint: "flow-authority-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: "state"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, authority)
+
+	resp, err := srv.GetPetitionTarget(context.Background(), &flowv1.GetPetitionTargetRequest{
+		Scope: "education",
+	})
+	if err != nil {
+		t.Fatalf("GetPetitionTarget returned error: %v", err)
+	}
+
+	if resp.GetAuthorityFlowIdentity() != "flow-authority" {
+		t.Errorf("authority_flow_identity = %q, want %q", resp.GetAuthorityFlowIdentity(), "flow-authority")
+	}
+	if resp.GetEmbassyEndpoint() != "flow-authority-embassy:50059" {
+		t.Errorf("embassy_endpoint = %q, want %q", resp.GetEmbassyEndpoint(), "flow-authority-embassy:50059")
+	}
+}
+
+func TestGetPetitionTarget_FederationLevelScope_ReturnsAuthority(t *testing.T) {
+	// Pre-load a member with a federation-level publisher role for "security".
+	authority := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-fed-authority",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-fed-authority",
+			EmbassyEndpoint: "flow-fed-authority-embassy:50059",
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "security", Level: "federation"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, authority)
+
+	resp, err := srv.GetPetitionTarget(context.Background(), &flowv1.GetPetitionTargetRequest{
+		Scope: "security",
+	})
+	if err != nil {
+		t.Fatalf("GetPetitionTarget returned error: %v", err)
+	}
+
+	if resp.GetAuthorityFlowIdentity() != "flow-fed-authority" {
+		t.Errorf("authority_flow_identity = %q, want %q", resp.GetAuthorityFlowIdentity(), "flow-fed-authority")
+	}
+	if resp.GetEmbassyEndpoint() != "flow-fed-authority-embassy:50059" {
+		t.Errorf("embassy_endpoint = %q, want %q", resp.GetEmbassyEndpoint(), "flow-fed-authority-embassy:50059")
+	}
+}
+
+func TestGetPetitionTarget_UnknownScope_NotFound(t *testing.T) {
+	// Pre-load a member with a publisher role for "education" -- not "health".
+	member := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testFlowAlpha,
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: "state"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, member)
+
+	_, err := srv.GetPetitionTarget(context.Background(), &flowv1.GetPetitionTargetRequest{
+		Scope: "health",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown scope, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
+		t.Errorf("expected NotFound, got %v", err)
+	}
+}
+
+func TestGetPetitionTarget_NoMembers_NotFound(t *testing.T) {
+	// Empty federation -- no members at all.
+	srv := newTestServer(t)
+
+	_, err := srv.GetPetitionTarget(context.Background(), &flowv1.GetPetitionTargetRequest{
+		Scope: "education",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty federation, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
+		t.Errorf("expected NotFound, got %v", err)
+	}
+}
+
+func TestGetPetitionTarget_EmptyScope_InvalidArgument(t *testing.T) {
+	srv := newTestServer(t)
+
+	_, err := srv.GetPetitionTarget(context.Background(), &flowv1.GetPetitionTargetRequest{
+		Scope: "",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty scope, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestGetPetitionTarget_MultipleMembers_ReturnsMatchingAuthority(t *testing.T) {
+	// Pre-load two members with different scopes: ensure the correct one
+	// is returned for each scope.
+	eduAuthority := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-edu",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-edu",
+			EmbassyEndpoint: "flow-edu-embassy:50059",
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: "state"},
+			},
+		},
+	}
+	secAuthority := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sec",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sec",
+			EmbassyEndpoint: "flow-sec-embassy:50059",
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "security", Level: "federation"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, eduAuthority, secAuthority)
+
+	// Request "education" scope -- should get flow-edu.
+	resp, err := srv.GetPetitionTarget(context.Background(), &flowv1.GetPetitionTargetRequest{
+		Scope: "education",
+	})
+	if err != nil {
+		t.Fatalf("GetPetitionTarget(education) returned error: %v", err)
+	}
+	if resp.GetAuthorityFlowIdentity() != "flow-edu" {
+		t.Errorf("authority_flow_identity = %q, want %q", resp.GetAuthorityFlowIdentity(), "flow-edu")
+	}
+
+	// Request "security" scope -- should get flow-sec.
+	resp, err = srv.GetPetitionTarget(context.Background(), &flowv1.GetPetitionTargetRequest{
+		Scope: "security",
+	})
+	if err != nil {
+		t.Fatalf("GetPetitionTarget(security) returned error: %v", err)
+	}
+	if resp.GetAuthorityFlowIdentity() != "flow-sec" {
+		t.Errorf("authority_flow_identity = %q, want %q", resp.GetAuthorityFlowIdentity(), "flow-sec")
+	}
+}

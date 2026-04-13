@@ -222,6 +222,39 @@ func (s *FederationServer) DiscoverEndpoints(
 	return &flowv1.DiscoverEndpointsResponse{Endpoints: endpoints}, nil
 }
 
+// GetPetitionTarget resolves the authority Flow that handles petitions for
+// a given scope/domain. It lists all FederationMember CRs and returns the
+// first member whose publisherRoles contain a matching scope.
+func (s *FederationServer) GetPetitionTarget(
+	ctx context.Context,
+	req *flowv1.GetPetitionTargetRequest,
+) (*flowv1.GetPetitionTargetResponse, error) {
+	if req.GetScope() == "" {
+		return nil, status.Error(codes.InvalidArgument, "scope is required")
+	}
+
+	// List all FederationMember CRs in the namespace.
+	var memberList federationv1.FederationMemberList
+	if err := s.k8sClient.List(ctx, &memberList, client.InNamespace(s.namespace)); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list FederationMembers: %v", err)
+	}
+
+	// Find the first member with a publisher role matching the requested scope.
+	for i := range memberList.Items {
+		m := &memberList.Items[i]
+		for _, role := range m.Spec.PublisherRoles {
+			if role.Scope == req.GetScope() {
+				return &flowv1.GetPetitionTargetResponse{
+					AuthorityFlowIdentity: m.Spec.FlowIdentity,
+					EmbassyEndpoint:       m.Spec.EmbassyEndpoint,
+				}, nil
+			}
+		}
+	}
+
+	return nil, status.Errorf(codes.NotFound, "no authority found for scope %q", req.GetScope())
+}
+
 // containsState reports whether refs contains the given state name.
 func containsState(refs []string, state string) bool {
 	return slices.Contains(refs, state)
