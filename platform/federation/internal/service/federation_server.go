@@ -162,6 +162,46 @@ func (s *FederationServer) GetMembership(
 	return &flowv1.GetMembershipResponse{Member: member}, nil
 }
 
+// DiscoverEndpoints returns Flow endpoints, optionally filtered by state.
+func (s *FederationServer) DiscoverEndpoints(
+	ctx context.Context, req *flowv1.DiscoverEndpointsRequest,
+) (*flowv1.DiscoverEndpointsResponse, error) {
+	members, err := s.store.ListMembers(req.GetStateFilter())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list members: %v", err)
+	}
+
+	endpoints := make([]*flowv1.FlowEndpoint, 0, len(members))
+	for _, m := range members {
+		endpoints = append(endpoints, &flowv1.FlowEndpoint{
+			FlowIdentity:   m.FlowIdentity,
+			EmbassyAddress: m.EmbassyEndpoint,
+			StateIds:       m.StateIDs,
+		})
+	}
+
+	return &flowv1.DiscoverEndpointsResponse{Endpoints: endpoints}, nil
+}
+
+// GetPetitionTarget returns the authority Flow identity and Embassy endpoint
+// for a given petition scope/domain.
+func (s *FederationServer) GetPetitionTarget(
+	ctx context.Context, req *flowv1.GetPetitionTargetRequest,
+) (*flowv1.GetPetitionTargetResponse, error) {
+	m, err := s.store.GetAuthorityForScope(req.GetScope())
+	if err != nil {
+		if strings.Contains(err.Error(), "no authority") {
+			return nil, status.Errorf(codes.NotFound, "no authority for scope %q", req.GetScope())
+		}
+		return nil, status.Errorf(codes.Internal, "get authority: %v", err)
+	}
+
+	return &flowv1.GetPetitionTargetResponse{
+		AuthorityFlowIdentity: m.FlowIdentity,
+		EmbassyEndpoint:       m.EmbassyEndpoint,
+	}, nil
+}
+
 // storeMemberToProto converts a store Member to a proto FederationMember.
 func (s *FederationServer) storeMemberToProto(m *sqlite.Member) *flowv1.FederationMember {
 	var states []*flowv1.State
