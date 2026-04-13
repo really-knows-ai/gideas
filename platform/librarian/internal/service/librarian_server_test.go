@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gideas/flow/librarian/internal/embed"
 	"github.com/gideas/flow/librarian/internal/store/sqlite"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -12,6 +13,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// testEmbeddingDims matches the store test dimension.
+const testEmbeddingDims = 4
 
 var idCounter int
 
@@ -23,12 +27,40 @@ func testIDGen() string {
 func newTestServer(t *testing.T) *LibrarianServer {
 	t.Helper()
 	idCounter = 0
-	store, err := sqlite.New(":memory:")
+	store, err := sqlite.New(":memory:", sqlite.WithEmbeddingDimension(testEmbeddingDims))
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return NewLibrarianServer(store, nil, testIDGen, 0.85)
+}
+
+// stubEmbedder returns a deterministic embedding for any input text.
+// The embedding is derived from the text length to make vectors reproducible.
+type stubEmbedder struct {
+	dims int
+}
+
+var _ embed.Embedder = (*stubEmbedder)(nil)
+
+func (s *stubEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	v := make([]float32, s.dims)
+	for i := range v {
+		v[i] = float32(len(text)+i) / 100.0
+	}
+	return v, nil
+}
+
+func newTestServerWithEmbedder(t *testing.T) *LibrarianServer {
+	t.Helper()
+	idCounter = 0
+	store, err := sqlite.New(":memory:", sqlite.WithEmbeddingDimension(testEmbeddingDims))
+	if err != nil {
+		t.Fatalf("open in-memory store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	emb := &stubEmbedder{dims: testEmbeddingDims}
+	return NewLibrarianServer(store, emb, testIDGen, 0.85)
 }
 
 // ---------------------------------------------------------------------------
@@ -450,19 +482,85 @@ func TestRetireLaw_EmptyID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ReplicateLaws (stubbed)
+// ReplicateLaws
 // ---------------------------------------------------------------------------
 
-func TestReplicateLaws_Unimplemented(t *testing.T) {
+func TestReplicateLaws_Basic(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	_, err := srv.ReplicateLaws(ctx, &flowv1.ReplicateLawsRequest{})
-	if err == nil {
-		t.Fatal("expected Unimplemented error")
+	resp, err := srv.ReplicateLaws(ctx, &flowv1.ReplicateLawsRequest{
+		Laws: []*flowv1.Law{
+			{
+				Id:   "rep-law-1",
+				Goal: "Replicated law",
+				Tier: flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION,
+				Representations: []*flowv1.Representation{
+					{Type: "text/plain", Content: "replicated content"},
+				},
+			},
+		},
+		SourceFlowNamespace: "authority-ns",
+	})
+	if err != nil {
+		t.Fatalf("ReplicateLaws: %v", err)
 	}
-	if s, ok := status.FromError(err); !ok || s.Code() != codes.Unimplemented {
-		t.Fatalf("expected Unimplemented, got %v", err)
+	if len(resp.GetIntegrationResults()) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.GetIntegrationResults()))
+	}
+	if !resp.GetIntegrationResults()[0].GetAccepted() {
+		t.Fatalf("expected accepted, got: %s", resp.GetIntegrationResults()[0].GetConflictReason())
+	}
+
+	// Verify the law was stored.
+	getLawResp, err := srv.GetLaw(ctx, &flowv1.GetLawRequest{LawId: "rep-law-1"})
+	if err != nil {
+		t.Fatalf("GetLaw: %v", err)
+	}
+	if getLawResp.GetLaw().GetGoal() != "Replicated law" {
+		t.Fatalf("expected goal %q, got %q", "Replicated law", getLawResp.GetLaw().GetGoal())
+	}
+	if getLawResp.GetLaw().GetTier() != flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION {
+		t.Fatalf("expected tier 4, got %v", getLawResp.GetLaw().GetTier())
+	}
+}
+
+func TestReplicateLaws_EmptyLaws(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	resp, err := srv.ReplicateLaws(ctx, &flowv1.ReplicateLawsRequest{})
+	if err != nil {
+		t.Fatalf("ReplicateLaws: %v", err)
+	}
+	if len(resp.GetIntegrationResults()) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(resp.GetIntegrationResults()))
+	}
+}
+
+func TestReplicateLaws_MissingID(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	resp, err := srv.ReplicateLaws(ctx, &flowv1.ReplicateLawsRequest{
+		Laws: []*flowv1.Law{
+			{
+				Goal: "No ID",
+				Tier: flowv1.LawTier_LAW_TIER_RULING,
+				Representations: []*flowv1.Representation{
+					{Type: "text/plain", Content: "x"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplicateLaws: %v", err)
+	}
+	if len(resp.GetIntegrationResults()) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.GetIntegrationResults()))
+	}
+	if resp.GetIntegrationResults()[0].GetAccepted() {
+		t.Fatal("expected rejected for missing ID")
 	}
 }
 
@@ -920,5 +1018,198 @@ func TestGetActiveDisputes_WithLawIDFilter(t *testing.T) {
 	}
 	if resp.GetRecords()[0].GetPetitionId() != "petition-x" {
 		t.Fatalf("expected petition-x, got %q", resp.GetRecords()[0].GetPetitionId())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Vec Embedding Hooks
+// ---------------------------------------------------------------------------
+
+func TestWriteLaw_StoresVecEmbedding(t *testing.T) {
+	srv := newTestServerWithEmbedder(t)
+	ctx := context.Background()
+
+	resp, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
+		Law: &flowv1.Law{
+			Goal: "New ruling with embedding",
+			Tier: flowv1.LawTier_LAW_TIER_RULING,
+			Representations: []*flowv1.Representation{
+				{Type: "text/plain", Content: "A ruling."},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteLaw: %v", err)
+	}
+
+	has, err := srv.store.HasVecEmbedding(ctx, resp.GetLawId())
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if !has {
+		t.Fatal("expected vec embedding to be stored after WriteLaw")
+	}
+}
+
+func TestWriteLaw_UpdateStoresVecEmbedding(t *testing.T) {
+	srv := newTestServerWithEmbedder(t)
+	ctx := context.Background()
+
+	// Create via RecordFinding.
+	findResp, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+		Goal:            "Original finding",
+		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "v1"}},
+	})
+	if err != nil {
+		t.Fatalf("RecordFinding: %v", err)
+	}
+
+	// Update via WriteLaw.
+	_, err = srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
+		Law: &flowv1.Law{
+			Id:   findResp.GetLawId(),
+			Goal: "Updated finding with new embedding",
+			Tier: flowv1.LawTier_LAW_TIER_FINDING,
+			Representations: []*flowv1.Representation{
+				{Type: "text/plain", Content: "v2"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteLaw update: %v", err)
+	}
+
+	has, err := srv.store.HasVecEmbedding(ctx, findResp.GetLawId())
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if !has {
+		t.Fatal("expected vec embedding to be updated after WriteLaw update")
+	}
+}
+
+func TestRecordFinding_StoresVecEmbedding(t *testing.T) {
+	srv := newTestServerWithEmbedder(t)
+	ctx := context.Background()
+
+	resp, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+		Goal:            "Finding with embedding",
+		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "finding"}},
+	})
+	if err != nil {
+		t.Fatalf("RecordFinding: %v", err)
+	}
+
+	has, err := srv.store.HasVecEmbedding(ctx, resp.GetLawId())
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if !has {
+		t.Fatal("expected vec embedding to be stored after RecordFinding")
+	}
+}
+
+func TestRetireLaw_DeletesVecEmbedding(t *testing.T) {
+	srv := newTestServerWithEmbedder(t)
+	ctx := context.Background()
+
+	// Create a law via RecordFinding (which stores embedding).
+	findResp, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
+		Goal:            "To retire",
+		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "retire me"}},
+	})
+	if err != nil {
+		t.Fatalf("RecordFinding: %v", err)
+	}
+
+	// Verify embedding exists.
+	has, err := srv.store.HasVecEmbedding(ctx, findResp.GetLawId())
+	if err != nil {
+		t.Fatalf("HasVecEmbedding before retire: %v", err)
+	}
+	if !has {
+		t.Fatal("expected vec embedding before retirement")
+	}
+
+	// Retire the law.
+	_, err = srv.RetireLaw(ctx, &flowv1.RetireLawRequest{LawId: findResp.GetLawId()})
+	if err != nil {
+		t.Fatalf("RetireLaw: %v", err)
+	}
+
+	// Verify embedding is deleted.
+	has, err = srv.store.HasVecEmbedding(ctx, findResp.GetLawId())
+	if err != nil {
+		t.Fatalf("HasVecEmbedding after retire: %v", err)
+	}
+	if has {
+		t.Fatal("expected vec embedding to be deleted after retirement")
+	}
+}
+
+func TestWriteLaw_NoEmbedder_NoVecEmbedding(t *testing.T) {
+	srv := newTestServer(t) // no embedder
+	ctx := context.Background()
+
+	resp, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
+		Law: &flowv1.Law{
+			Goal: "No embedder",
+			Tier: flowv1.LawTier_LAW_TIER_RULING,
+			Representations: []*flowv1.Representation{
+				{Type: "text/plain", Content: "x"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteLaw: %v", err)
+	}
+
+	// No embedder means no vec embedding.
+	has, err := srv.store.HasVecEmbedding(ctx, resp.GetLawId())
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if has {
+		t.Fatal("expected no vec embedding when embedder is nil")
+	}
+}
+
+func TestReplicateLaws_StoresVecEmbedding(t *testing.T) {
+	srv := newTestServerWithEmbedder(t)
+	ctx := context.Background()
+
+	resp, err := srv.ReplicateLaws(ctx, &flowv1.ReplicateLawsRequest{
+		Laws: []*flowv1.Law{
+			{
+				Id:   "replicated-law-1",
+				Goal: "Replicated law from authority",
+				Tier: flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION,
+				Representations: []*flowv1.Representation{
+					{Type: "text/plain", Content: "state law content"},
+				},
+				AppliesTo: []string{"source-code"},
+			},
+		},
+		SourceFlowNamespace: "authority-flow-ns",
+	})
+	if err != nil {
+		t.Fatalf("ReplicateLaws: %v", err)
+	}
+
+	// Check the result was successful.
+	if len(resp.GetIntegrationResults()) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.GetIntegrationResults()))
+	}
+	if !resp.GetIntegrationResults()[0].GetAccepted() {
+		t.Fatalf("expected accepted, got conflict: %s", resp.GetIntegrationResults()[0].GetConflictReason())
+	}
+
+	// Verify vec embedding was stored.
+	has, err := srv.store.HasVecEmbedding(ctx, "replicated-law-1")
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if !has {
+		t.Fatal("expected vec embedding to be stored after ReplicateLaws")
 	}
 }
