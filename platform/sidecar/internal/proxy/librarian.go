@@ -151,6 +151,13 @@ func (p *LibrarianProxy) GetActiveDisputes(
 	return p.client.GetActiveDisputes(propagateMetadata(ctx), req)
 }
 
+// SearchSimilarLaws forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) SearchSimilarLaws(
+	ctx context.Context, req *flowv1.SearchSimilarLawsRequest,
+) (*flowv1.SearchSimilarLawsResponse, error) {
+	return p.client.SearchSimilarLaws(propagateMetadata(ctx), req)
+}
+
 // ---------------------------------------------------------------------------
 // Identity extraction from metadata
 // ---------------------------------------------------------------------------

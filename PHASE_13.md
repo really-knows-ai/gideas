@@ -491,13 +491,13 @@ distributed conflict detection during publication admission.
 
 #### Slice 13.7B.4 -- Sidecar: SearchSimilarLaws proxy
 
-- [ ] Validate green: `go test ./platform/sidecar/...`
-- [ ] Add tests in `platform/sidecar/internal/proxy/librarian_test.go`:
+- [x] Validate green: `go test ./platform/sidecar/...`
+- [x] Add tests in `platform/sidecar/internal/proxy/librarian_test.go`:
   - `SearchSimilarLaws` is forwarded to the Librarian backend
   - Metadata is propagated
-- [ ] Validate red
-- [ ] Add `SearchSimilarLaws` forwarding to the existing Librarian proxy in `platform/sidecar/internal/proxy/librarian.go`
-- [ ] Validate green: `go test ./platform/sidecar/...`
+- [x] Validate red
+- [x] Add `SearchSimilarLaws` forwarding to the existing Librarian proxy in `platform/sidecar/internal/proxy/librarian.go`
+- [x] Validate green: `go test ./platform/sidecar/...`
 
 ---
 
