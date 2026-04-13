@@ -293,8 +293,8 @@ against the K8s API instead of SQLite.
 
 #### Slice 13.6.3 -- FederationMember CRD type
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Create `platform/federation/api/v1/federationmember_types.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Create `platform/federation/api/v1/federationmember_types.go`:
   - `FederationMemberSpec`:
     - `FlowIdentity string` (required)
     - `EmbassyEndpoint string` (required)
@@ -311,8 +311,8 @@ against the K8s API instead of SQLite.
     - Print columns: `FLOW_IDENTITY`, `EMBASSY_ENDPOINT`, `STATES`, `ROLES`
   - `FederationMemberList` type
   - `init()` registers with `SchemeBuilder`
-- [ ] Add tests: type registers in scheme, deep copy works
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Add tests: type registers in scheme, deep copy works
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.4 -- Federation controller manager + gRPC server
 
