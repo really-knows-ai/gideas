@@ -17,6 +17,7 @@ type captureLibrarianServer struct {
 	lastQueryReq             *flowv1.QueryLawsRequest
 	lastGetLawReq            *flowv1.GetLawRequest
 	lastGetActiveDisputesReq *flowv1.GetActiveDisputesRequest
+	lastSearchSimilarReq     *flowv1.SearchSimilarLawsRequest
 	capturedMD               metadata.MD
 }
 
@@ -58,6 +59,23 @@ func (s *captureLibrarianServer) GetActiveDisputes(
 	return &flowv1.GetActiveDisputesResponse{
 		Records: []*flowv1.DisputeRecord{
 			{PetitionId: "pet-1", CitedLawIds: []string{"law-a"}},
+		},
+	}, nil
+}
+
+func (s *captureLibrarianServer) SearchSimilarLaws(
+	ctx context.Context, req *flowv1.SearchSimilarLawsRequest,
+) (*flowv1.SearchSimilarLawsResponse, error) {
+	s.lastSearchSimilarReq = req
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		s.capturedMD = md
+	}
+	return &flowv1.SearchSimilarLawsResponse{
+		Results: []*flowv1.SimilarLaw{
+			{
+				Law:             &flowv1.Law{Id: "law-similar-1"},
+				SimilarityScore: 0.92,
+			},
 		},
 	}, nil
 }
@@ -237,6 +255,68 @@ func TestLibrarianProxy_GetActiveDisputes_Passthrough(t *testing.T) {
 	// Verify metadata propagation.
 	vals := env.librarianSpy.capturedMD.Get("x-flow-workitem-id")
 	if len(vals) != 1 || vals[0] != "wi-dispute-test" {
+		t.Fatalf("expected metadata propagation, got %v", vals)
+	}
+}
+
+func TestLibrarianProxy_SearchSimilarLaws_ForwardedToBackend(t *testing.T) {
+	env := setupLibrarianProxy(t)
+
+	resp, err := env.proxy.SearchSimilarLaws(context.Background(), &flowv1.SearchSimilarLawsRequest{
+		QueryText:   "no agent shall exceed its budget",
+		ScopeFilter: "division-a",
+		Limit:       5,
+	})
+	if err != nil {
+		t.Fatalf("SearchSimilarLaws: %v", err)
+	}
+
+	// Verify request was forwarded to Librarian backend.
+	if env.librarianSpy.lastSearchSimilarReq == nil {
+		t.Fatal("SearchSimilarLaws was not forwarded to Librarian")
+	}
+	if env.librarianSpy.lastSearchSimilarReq.GetQueryText() != "no agent shall exceed its budget" {
+		t.Fatalf("expected query_text forwarded, got %q",
+			env.librarianSpy.lastSearchSimilarReq.GetQueryText())
+	}
+	if env.librarianSpy.lastSearchSimilarReq.GetScopeFilter() != "division-a" {
+		t.Fatalf("expected scope_filter=division-a forwarded, got %q",
+			env.librarianSpy.lastSearchSimilarReq.GetScopeFilter())
+	}
+	if env.librarianSpy.lastSearchSimilarReq.GetLimit() != 5 {
+		t.Fatalf("expected limit=5 forwarded, got %d",
+			env.librarianSpy.lastSearchSimilarReq.GetLimit())
+	}
+
+	// Verify response is returned unmodified.
+	if len(resp.GetResults()) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.GetResults()))
+	}
+	if resp.GetResults()[0].GetLaw().GetId() != "law-similar-1" {
+		t.Fatalf("expected law_id=law-similar-1, got %q",
+			resp.GetResults()[0].GetLaw().GetId())
+	}
+	if resp.GetResults()[0].GetSimilarityScore() != 0.92 {
+		t.Fatalf("expected similarity_score=0.92, got %f",
+			resp.GetResults()[0].GetSimilarityScore())
+	}
+}
+
+func TestLibrarianProxy_SearchSimilarLaws_PropagatesMetadata(t *testing.T) {
+	env := setupLibrarianProxy(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", "wi-search-test")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := env.proxy.SearchSimilarLaws(ctx, &flowv1.SearchSimilarLawsRequest{
+		QueryText: "test query",
+	})
+	if err != nil {
+		t.Fatalf("SearchSimilarLaws: %v", err)
+	}
+
+	vals := env.librarianSpy.capturedMD.Get("x-flow-workitem-id")
+	if len(vals) != 1 || vals[0] != "wi-search-test" {
 		t.Fatalf("expected metadata propagation, got %v", vals)
 	}
 }
