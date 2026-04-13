@@ -2,14 +2,19 @@ package sqlite
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
 const testDivisionSecurity = "security"
 
+// testEmbeddingDims is a small dimension used for tests so we don't need
+// to create 2048-dimensional vectors.
+const testEmbeddingDims = 4
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := New(":memory:")
+	s, err := New(":memory:", WithEmbeddingDimension(testEmbeddingDims))
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
@@ -813,5 +818,105 @@ func TestRetireDisputeRecord_NonExistent(t *testing.T) {
 	err := s.RetireDisputeRecord(ctx, "petition-ghost")
 	if err == nil {
 		t.Fatal("expected error for non-existent petition_id, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Vec Embedding Tests (sqlite-vec)
+// ---------------------------------------------------------------------------
+
+func TestUpsertVecEmbedding_Basic(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	embedding := []float32{0.1, 0.2, 0.3, 0.4}
+	err := s.UpsertVecEmbedding(ctx, "law-vec-1", embedding)
+	if err != nil {
+		t.Fatalf("UpsertVecEmbedding: %v", err)
+	}
+
+	has, err := s.HasVecEmbedding(ctx, "law-vec-1")
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if !has {
+		t.Fatal("expected vec embedding to exist")
+	}
+}
+
+func TestUpsertVecEmbedding_Update(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert.
+	if err := s.UpsertVecEmbedding(ctx, "law-vec-u", []float32{1.0, 0.0, 0.0, 0.0}); err != nil {
+		t.Fatalf("first UpsertVecEmbedding: %v", err)
+	}
+
+	// Update with a new embedding.
+	if err := s.UpsertVecEmbedding(ctx, "law-vec-u", []float32{0.0, 1.0, 0.0, 0.0}); err != nil {
+		t.Fatalf("second UpsertVecEmbedding: %v", err)
+	}
+
+	// Should still have exactly one entry.
+	has, err := s.HasVecEmbedding(ctx, "law-vec-u")
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if !has {
+		t.Fatal("expected vec embedding to exist after update")
+	}
+}
+
+func TestUpsertVecEmbedding_DimensionMismatch(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Wrong dimension (3 instead of 4).
+	err := s.UpsertVecEmbedding(ctx, "law-vec-bad", []float32{0.1, 0.2, 0.3})
+	if err == nil {
+		t.Fatal("expected error for dimension mismatch")
+	}
+	if !strings.Contains(err.Error(), "dimension mismatch") {
+		t.Fatalf("expected dimension mismatch error, got: %v", err)
+	}
+}
+
+func TestDeleteVecEmbedding_Basic(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.UpsertVecEmbedding(ctx, "law-vec-del", []float32{0.1, 0.2, 0.3, 0.4}); err != nil {
+		t.Fatalf("UpsertVecEmbedding: %v", err)
+	}
+
+	if err := s.DeleteVecEmbedding(ctx, "law-vec-del"); err != nil {
+		t.Fatalf("DeleteVecEmbedding: %v", err)
+	}
+
+	has, err := s.HasVecEmbedding(ctx, "law-vec-del")
+	if err != nil {
+		t.Fatalf("HasVecEmbedding: %v", err)
+	}
+	if has {
+		t.Fatal("expected vec embedding to be deleted")
+	}
+}
+
+func TestDeleteVecEmbedding_NonExistent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Delete a non-existent embedding — should not error.
+	err := s.DeleteVecEmbedding(ctx, "law-vec-ghost")
+	if err != nil {
+		t.Fatalf("expected no error for non-existent embedding, got: %v", err)
+	}
+}
+
+func TestEmbeddingDimension(t *testing.T) {
+	s := newTestStore(t)
+	if s.EmbeddingDimension() != testEmbeddingDims {
+		t.Fatalf("expected dimension %d, got %d", testEmbeddingDims, s.EmbeddingDimension())
 	}
 }

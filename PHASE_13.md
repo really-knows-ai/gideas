@@ -453,23 +453,23 @@ distributed conflict detection during publication admission.
 
 #### Slice 13.7B.2 -- Librarian store: embedding storage and sqlite-vec
 
-- [ ] Validate green: `go test ./platform/librarian/...`
-- [ ] Add sqlite-vec dependency to `platform/librarian/go.mod`
-- [ ] Add `law_embeddings` table to Librarian schema:
+- [x] Validate green: `go test ./platform/librarian/...`
+- [x] Add sqlite-vec dependency to `platform/librarian/go.mod`
+- [x] Add `law_embeddings` table to Librarian schema:
   - `law_id TEXT PRIMARY KEY REFERENCES laws(id) ON DELETE CASCADE`
   - `embedding BLOB NOT NULL` (sqlite-vec vector)
-- [ ] Add Ollama embedding provider to Librarian:
+- [x] Add Ollama embedding provider to Librarian:
   - Uses the SDK `provider` abstraction (Ollama) to compute embeddings
   - `ComputeEmbedding(ctx, text string) ([]float32, error)`
   - Configured via env: `LIBRARIAN_EMBEDDING_MODEL`, `LIBRARIAN_OLLAMA_ADDRESS`
-- [ ] Add tests:
+- [x] Add tests:
   - Embedding is stored when a law is written via `WriteLaw`
   - Embedding is stored when a law is replicated via `ReplicateLaw`
   - Embedding is updated when a law is updated
   - Embedding is deleted when a law is retired
-- [ ] Validate red
-- [ ] Implement embedding storage hooks in `WriteLaw`, `ReplicateLaw`, `RetireLaw`
-- [ ] Validate green: `go test ./platform/librarian/...`
+- [x] Validate red
+- [x] Implement embedding storage hooks in `WriteLaw`, `ReplicateLaw`, `RetireLaw`
+- [x] Validate green: `go test ./platform/librarian/...`
 
 #### Slice 13.7B.3 -- Librarian: SearchSimilarLaws implementation
 

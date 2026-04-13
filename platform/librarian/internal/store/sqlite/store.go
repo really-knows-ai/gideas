@@ -1,11 +1,12 @@
 // Package sqlite implements the SQLite-backed storage layer for the Librarian
 // service.
 //
-// It manages four tables:
+// It manages four tables plus a vec0 virtual table:
 //   - laws: the active law registry
 //   - law_applies_to: scoping junction (artefact kinds a law governs)
 //   - law_versions: immutable version log with content hash and embeddings
 //   - dispute_records + dispute_record_laws: cross-flow petition dispute tracking
+//   - law_embeddings: sqlite-vec virtual table for vector similarity search
 //
 // All writes are transactional. The store can be initialised with ":memory:"
 // for testing or a file path for persistent operation.
@@ -23,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -84,15 +86,25 @@ type DisputeRecord struct {
 // SQLite. It matches the output of datetime('now') and strftime.
 const sqliteTimeFormat = "2006-01-02 15:04:05"
 
+// DefaultEmbeddingDimension is the default vector dimension for the
+// law_embeddings vec0 virtual table. This matches the output dimension of
+// the default Ollama embedding model (qwen3-embedding:4b).
+const DefaultEmbeddingDimension = 2048
+
 // Store is the SQLite-backed repository for the Librarian.
 type Store struct {
-	db *sql.DB
+	db            *sql.DB
+	embeddingDims int // vector dimension for the law_embeddings vec0 table
+}
+
+func init() {
+	sqlite_vec.Auto()
 }
 
 // New opens (or creates) a SQLite database at the given path and initialises
 // the schema. Use ":memory:" for an ephemeral in-memory store suitable for
 // testing.
-func New(dsn string) (*Store, error) {
+func New(dsn string, opts ...StoreOption) (*Store, error) {
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -110,12 +122,24 @@ func New(dsn string) (*Store, error) {
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, embeddingDims: DefaultEmbeddingDimension}
+	for _, o := range opts {
+		o(s)
+	}
 	if err := s.initSchema(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	return s, nil
+}
+
+// StoreOption configures a Store.
+type StoreOption func(*Store)
+
+// WithEmbeddingDimension sets the vector dimension for the law_embeddings
+// vec0 virtual table. Must be called before the store is opened.
+func WithEmbeddingDimension(dims int) StoreOption {
+	return func(s *Store) { s.embeddingDims = dims }
 }
 
 // Close closes the underlying database connection.
@@ -186,6 +210,27 @@ func (s *Store) initSchema() error {
 			return err
 		}
 	}
+
+	// Create the sqlite-vec virtual table for vector similarity search.
+	// The law_embeddings table stores one embedding per active law, keyed
+	// by a numeric rowid that maps 1:1 with the law_id via the
+	// law_embedding_map table.
+	vecDDL := []string{
+		fmt.Sprintf(
+			`CREATE VIRTUAL TABLE IF NOT EXISTS law_embeddings USING vec0(embedding float[%d])`,
+			s.embeddingDims,
+		),
+		`CREATE TABLE IF NOT EXISTS law_embedding_map (
+			law_id TEXT PRIMARY KEY,
+			rowid_ref INTEGER NOT NULL UNIQUE
+		)`,
+	}
+	for _, stmt := range vecDDL {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("init vec schema: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -810,6 +855,121 @@ func (s *Store) GetAllActiveEmbeddings(ctx context.Context) ([]LawEmbedding, err
 		results = append(results, le)
 	}
 	return results, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Vec Embedding Operations (sqlite-vec)
+// ---------------------------------------------------------------------------
+
+// UpsertVecEmbedding inserts or replaces the embedding for a law in the
+// law_embeddings vec0 virtual table. The mapping between law_id (text) and
+// the integer rowid required by vec0 is maintained in law_embedding_map.
+func (s *Store) UpsertVecEmbedding(ctx context.Context, lawID string, embedding []float32) error {
+	if len(embedding) != s.embeddingDims {
+		return fmt.Errorf("embedding dimension mismatch: got %d, want %d", len(embedding), s.embeddingDims)
+	}
+
+	blob, err := sqlite_vec.SerializeFloat32(embedding)
+	if err != nil {
+		return fmt.Errorf("serialize embedding: %w", err)
+	}
+
+	// Check if a mapping already exists.
+	var existingRowID int64
+	err = s.db.QueryRowContext(ctx,
+		`SELECT rowid_ref FROM law_embedding_map WHERE law_id = ?`, lawID,
+	).Scan(&existingRowID)
+
+	if err == nil {
+		// Update existing: delete old vec row and insert new one with the same rowid.
+		if _, err := s.db.ExecContext(ctx,
+			`DELETE FROM law_embeddings WHERE rowid = ?`, existingRowID,
+		); err != nil {
+			return fmt.Errorf("delete old vec embedding: %w", err)
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO law_embeddings(rowid, embedding) VALUES (?, ?)`,
+			existingRowID, blob,
+		); err != nil {
+			return fmt.Errorf("update vec embedding: %w", err)
+		}
+		return nil
+	}
+
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("check existing embedding map: %w", err)
+	}
+
+	// Insert new: let vec0 assign a rowid, then record the mapping.
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO law_embeddings(embedding) VALUES (?)`, blob,
+	)
+	if err != nil {
+		return fmt.Errorf("insert vec embedding: %w", err)
+	}
+	newRowID, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("get last insert id: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO law_embedding_map(law_id, rowid_ref) VALUES (?, ?)`,
+		lawID, newRowID,
+	); err != nil {
+		return fmt.Errorf("insert embedding map: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteVecEmbedding removes the embedding for a law from the vec0 virtual
+// table and the mapping table. No error is returned if no embedding exists
+// for the law.
+func (s *Store) DeleteVecEmbedding(ctx context.Context, lawID string) error {
+	var rowIDRef int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT rowid_ref FROM law_embedding_map WHERE law_id = ?`, lawID,
+	).Scan(&rowIDRef)
+	if err == sql.ErrNoRows {
+		return nil // No embedding to delete — not an error.
+	}
+	if err != nil {
+		return fmt.Errorf("lookup embedding map: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM law_embeddings WHERE rowid = ?`, rowIDRef,
+	); err != nil {
+		return fmt.Errorf("delete vec embedding: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM law_embedding_map WHERE law_id = ?`, lawID,
+	); err != nil {
+		return fmt.Errorf("delete embedding map: %w", err)
+	}
+
+	return nil
+}
+
+// HasVecEmbedding reports whether a vec embedding exists for the given law.
+func (s *Store) HasVecEmbedding(ctx context.Context, lawID string) (bool, error) {
+	var rowIDRef int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT rowid_ref FROM law_embedding_map WHERE law_id = ?`, lawID,
+	).Scan(&rowIDRef)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check embedding map: %w", err)
+	}
+	return true, nil
+}
+
+// EmbeddingDimension returns the configured vector dimension.
+func (s *Store) EmbeddingDimension() int {
+	return s.embeddingDims
 }
 
 // ---------------------------------------------------------------------------

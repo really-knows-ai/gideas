@@ -45,6 +45,7 @@ const (
 	envOllamaModel         = "OLLAMA_MODEL"
 	envSimilarityThreshold = "LIBRARIAN_SIMILARITY_THRESHOLD"
 	envEventBusAddress     = "EVENT_BUS_ADDRESS"
+	envEmbeddingDimension  = "LIBRARIAN_EMBEDDING_DIMENSION"
 )
 
 func main() {
@@ -83,8 +84,16 @@ func main() {
 		"similarity_threshold", threshold,
 	)
 
-	// Initialise the SQLite store.
-	store, err := sqlite.New(dbPath)
+	// Initialise the SQLite store with optional embedding dimension.
+	var storeOpts []sqlite.StoreOption
+	if dimStr := os.Getenv(envEmbeddingDimension); dimStr != "" {
+		if dim, err := strconv.Atoi(dimStr); err == nil && dim > 0 {
+			storeOpts = append(storeOpts, sqlite.WithEmbeddingDimension(dim))
+			slog.Info("Embedding dimension overridden", "dimension", dim)
+		}
+	}
+
+	store, err := sqlite.New(dbPath, storeOpts...)
 	if err != nil {
 		slog.Error("Failed to initialise SQLite store", "error", err)
 		os.Exit(1)

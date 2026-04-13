@@ -264,7 +264,8 @@ func (s *LibrarianServer) RecordFinding(
 
 	// Compute embedding inline and store it. Run conflict detection.
 	if s.embedder != nil {
-		go s.embedAndDetectConflicts(id, versionHash, law)
+		s.embedLawSync(ctx, id, versionHash, law)
+		go s.runConflictDetection(id, law)
 	}
 
 	return &flowv1.RecordFindingResponse{LawId: id}, nil
@@ -361,10 +362,8 @@ func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequ
 		"resource_id": lawID,
 	})
 
-	// Compute and store embedding.
-	if s.embedder != nil {
-		go s.embedLaw(lawID, versionHash, storeLaw)
-	}
+	// Compute and store embedding synchronously (both law_versions and vec0).
+	s.embedLawSync(ctx, lawID, versionHash, storeLaw)
 
 	return &flowv1.WriteLawResponse{
 		LawId:       lawID,
@@ -379,6 +378,9 @@ func (s *LibrarianServer) RetireLaw(
 	if req.GetLawId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "law_id is required")
 	}
+
+	// Delete vec embedding before retiring the law (need law to exist for map lookup).
+	s.deleteVecEmbedding(ctx, req.GetLawId())
 
 	if err := s.store.RetireLaw(ctx, req.GetLawId()); err != nil {
 		slog.Error("RetireLaw failed", "law_id", req.GetLawId(), "error", err)
@@ -395,11 +397,90 @@ func (s *LibrarianServer) RetireLaw(
 	return &flowv1.RetireLawResponse{Acknowledged: true}, nil
 }
 
-// ReplicateLaws is stubbed — cross-flow support is out of scope.
+// ReplicateLaws stores laws received from a remote Flow via Federation
+// distribution. Each law is created or updated in the local Library.
+// Embeddings are computed and stored for each replicated law.
 func (s *LibrarianServer) ReplicateLaws(
 	ctx context.Context, req *flowv1.ReplicateLawsRequest,
 ) (*flowv1.ReplicateLawsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ReplicateLaws is not implemented (cross-flow support deferred)")
+	results := make([]*flowv1.IntegrationResult, 0, len(req.GetLaws()))
+
+	for _, protoLaw := range req.GetLaws() {
+		result := &flowv1.IntegrationResult{LawId: protoLaw.GetId()}
+
+		if protoLaw.GetId() == "" {
+			result.ConflictReason = "law.id is required for replication"
+			results = append(results, result)
+			continue
+		}
+		if protoLaw.GetGoal() == "" {
+			result.ConflictReason = "law.goal is required"
+			results = append(results, result)
+			continue
+		}
+
+		tier := int(protoLaw.GetTier())
+		if tier < 1 || tier > 5 {
+			result.ConflictReason = "law.tier must be between 1 and 5"
+			results = append(results, result)
+			continue
+		}
+
+		storeReps := make([]sqlite.Representation, 0, len(protoLaw.GetRepresentations()))
+		for _, r := range protoLaw.GetRepresentations() {
+			storeReps = append(storeReps, sqlite.Representation{
+				Type:    r.GetType(),
+				Content: r.GetContent(),
+			})
+		}
+
+		storeLaw := sqlite.Law{
+			Goal:            protoLaw.GetGoal(),
+			Tier:            tier,
+			AppliesTo:       protoLaw.GetAppliesTo(),
+			Representations: storeReps,
+			Division:        protoLaw.GetDivision(),
+		}
+
+		// Try to get the existing law. If it exists, update; otherwise create.
+		_, err := s.store.GetLaw(ctx, protoLaw.GetId())
+		var versionHash string
+		if err != nil {
+			// Law does not exist — create it as active.
+			versionHash, err = s.store.CreateLaw(ctx, protoLaw.GetId(), storeLaw)
+			if err != nil {
+				slog.Error("ReplicateLaws create failed",
+					"law_id", protoLaw.GetId(), "error", err)
+				result.ConflictReason = fmt.Sprintf("create failed: %v", err)
+				results = append(results, result)
+				continue
+			}
+		} else {
+			// Law exists — update.
+			versionHash, err = s.store.UpdateLaw(ctx, protoLaw.GetId(), storeLaw)
+			if err != nil {
+				slog.Error("ReplicateLaws update failed",
+					"law_id", protoLaw.GetId(), "error", err)
+				result.ConflictReason = fmt.Sprintf("update failed: %v", err)
+				results = append(results, result)
+				continue
+			}
+		}
+
+		slog.Info("ReplicateLaws: law stored",
+			"law_id", protoLaw.GetId(),
+			"version_hash", versionHash,
+			"source_flow", req.GetSourceFlowNamespace(),
+		)
+
+		// Compute and store embedding synchronously.
+		s.embedLawSync(ctx, protoLaw.GetId(), versionHash, storeLaw)
+
+		result.Accepted = true
+		results = append(results, result)
+	}
+
+	return &flowv1.ReplicateLawsResponse{IntegrationResults: results}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -568,14 +649,16 @@ func (s *LibrarianServer) ApplyLifecycleAction(
 }
 
 // ---------------------------------------------------------------------------
-// Conflict Detection (Phase 4)
+// Embedding Pipeline
 // ---------------------------------------------------------------------------
 
-// embedAndDetectConflicts computes the embedding for a law, stores it, and
-// runs scope-aware conflict detection. Candidates are logged but no automatic
-// action is taken.
-func (s *LibrarianServer) embedAndDetectConflicts(lawID, versionHash string, law sqlite.Law) {
-	ctx := context.Background()
+// embedLawSync computes and stores the embedding synchronously in both
+// law_versions and the vec0 table. This is the primary embedding hook for
+// WriteLaw, RecordFinding, and ReplicateLaws.
+func (s *LibrarianServer) embedLawSync(ctx context.Context, lawID, versionHash string, law sqlite.Law) {
+	if s.embedder == nil {
+		return
+	}
 
 	embedding, err := s.embedder.Embed(ctx, law.Goal)
 	if err != nil {
@@ -585,6 +668,40 @@ func (s *LibrarianServer) embedAndDetectConflicts(lawID, versionHash string, law
 
 	if err := s.store.SetEmbedding(ctx, lawID, versionHash, embedding); err != nil {
 		slog.Warn("Failed to store embedding", "law_id", lawID, "error", err)
+	}
+
+	// Store in the vec0 table for similarity search.
+	if err := s.store.UpsertVecEmbedding(ctx, lawID, embedding); err != nil {
+		slog.Warn("Failed to store vec embedding", "law_id", lawID, "error", err)
+	}
+}
+
+// deleteVecEmbedding removes the vec embedding for a law. Called on retire.
+func (s *LibrarianServer) deleteVecEmbedding(ctx context.Context, lawID string) {
+	if err := s.store.DeleteVecEmbedding(ctx, lawID); err != nil {
+		slog.Warn("Failed to delete vec embedding", "law_id", lawID, "error", err)
+	}
+}
+
+// runConflictDetection runs scope-aware conflict detection for a law that
+// already has its embedding stored. This is designed to be called as a
+// goroutine after embedLawSync has completed.
+func (s *LibrarianServer) runConflictDetection(lawID string, law sqlite.Law) {
+	ctx := context.Background()
+
+	// Load the embedding that was just stored.
+	headLaw, err := s.store.GetLaw(ctx, lawID)
+	if err != nil {
+		slog.Warn("Failed to load law for conflict detection", "law_id", lawID, "error", err)
+		return
+	}
+
+	embedding, err := s.store.GetEmbedding(ctx, lawID, headLaw.VersionHash)
+	if err != nil {
+		slog.Warn("Failed to load embedding for conflict detection", "law_id", lawID, "error", err)
+		return
+	}
+	if embedding == nil {
 		return
 	}
 
@@ -594,22 +711,6 @@ func (s *LibrarianServer) embedAndDetectConflicts(lawID, versionHash string, law
 			"law_id", lawID,
 			"candidates", candidates,
 		)
-	}
-}
-
-// embedLaw computes and stores the embedding for a law (without conflict
-// detection).
-func (s *LibrarianServer) embedLaw(lawID, versionHash string, law sqlite.Law) {
-	ctx := context.Background()
-
-	embedding, err := s.embedder.Embed(ctx, law.Goal)
-	if err != nil {
-		slog.Warn("Failed to compute embedding", "law_id", lawID, "error", err)
-		return
-	}
-
-	if err := s.store.SetEmbedding(ctx, lawID, versionHash, embedding); err != nil {
-		slog.Warn("Failed to store embedding", "law_id", lawID, "error", err)
 	}
 }
 
