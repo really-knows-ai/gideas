@@ -404,18 +404,18 @@ authority publisher role enforcement using CRD queries.
 
 #### Slice 13.7.1 -- DiscoverEndpoints (CRD-backed)
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `DiscoverEndpoints` with no filter -> returns all member endpoints
   - `DiscoverEndpoints` with state filter -> returns only members with matching `stateRefs`
   - Each `FlowEndpoint` includes `flow_identity`, `embassy_address`, `state_ids`
   - Empty federation -> returns empty list
-- [ ] Validate red
-- [ ] Implement `DiscoverEndpoints`:
+- [x] Validate red
+- [x] Implement `DiscoverEndpoints`:
   - List all `FederationMember` CRs in namespace
   - If `state_filter` is set, filter in-memory by `spec.stateRefs` containing the state
   - Map to `FlowEndpoint` protos
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.7.2 -- GetPetitionTarget (CRD-backed)
 

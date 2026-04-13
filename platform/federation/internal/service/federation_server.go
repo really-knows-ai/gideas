@@ -11,6 +11,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -184,6 +185,46 @@ func (s *FederationServer) GetMembership(
 			PublisherRoles:  toProtoPublisherRoles(member.Spec.PublisherRoles),
 		},
 	}, nil
+}
+
+// DiscoverEndpoints returns the Embassy endpoints for all federation members,
+// optionally filtered by state membership. Each FlowEndpoint includes the
+// member's flow identity, embassy address, and state IDs.
+func (s *FederationServer) DiscoverEndpoints(
+	ctx context.Context,
+	req *flowv1.DiscoverEndpointsRequest,
+) (*flowv1.DiscoverEndpointsResponse, error) {
+	// List all FederationMember CRs in the namespace.
+	var memberList federationv1.FederationMemberList
+	if err := s.k8sClient.List(ctx, &memberList, client.InNamespace(s.namespace)); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list FederationMembers: %v", err)
+	}
+
+	stateFilter := req.GetStateFilter()
+	endpoints := make([]*flowv1.FlowEndpoint, 0, len(memberList.Items))
+
+	for i := range memberList.Items {
+		m := &memberList.Items[i]
+
+		// If a state filter is set, only include members whose stateRefs
+		// contain the requested state.
+		if stateFilter != "" && !containsState(m.Spec.StateRefs, stateFilter) {
+			continue
+		}
+
+		endpoints = append(endpoints, &flowv1.FlowEndpoint{
+			FlowIdentity:   m.Spec.FlowIdentity,
+			EmbassyAddress: m.Spec.EmbassyEndpoint,
+			StateIds:       m.Spec.StateRefs,
+		})
+	}
+
+	return &flowv1.DiscoverEndpointsResponse{Endpoints: endpoints}, nil
+}
+
+// containsState reports whether refs contains the given state name.
+func containsState(refs []string, state string) bool {
+	return slices.Contains(refs, state)
 }
 
 // resolveStates looks up FederationState CRs for the given state ref names
