@@ -40,30 +40,30 @@ Embassies. This slice wires the skeleton — no business logic yet.
 
 #### Slice 13.1.1 -- Embassy entry-node scaffold and gRPC server
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Create `nodes/embassy/main.go`:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Create `nodes/embassy/main.go`:
   - `main()` calls `flow.StartEntry(watchInbound, handleExport)` (Embassy is both an inbound listener and an export handler)
   - Import conventions: `flow "github.com/gideas/flow/sdk/go"`, `flowv1 "github.com/gideas/flow/gen/flow/v1"`
   - Entry function `watchInbound(ctx, entry)`: starts an Embassy gRPC server on env `EMBASSY_INBOUND_PORT` (default 50059) that serves `EmbassyService` RPCs for remote callers
   - Handler function `handleExport(ctx, wctx)`: handles locally-created outbound export Workitems
   - Implement `EmbassyServiceHandler` interface as a struct `embassyHandler` with stub methods returning `Unimplemented`
   - Wire `flow.NewEmbassyServer(handler)` registration on the gRPC listener
-- [ ] Create `nodes/embassy/testutil_test.go`:
+- [x] Create `nodes/embassy/testutil_test.go`:
   - Spy servers (operator, sidecar, archivist, librarian, event bus) following friction-watcher/ttl-watcher pattern
   - Test helpers for creating Embassy handler under test
-- [ ] Add tests in `nodes/embassy/main_test.go`:
+- [x] Add tests in `nodes/embassy/main_test.go`:
   - Embassy starts without error (entry function + handler registered)
   - Stub `PreflightManifest` returns `Unimplemented`
   - Stub `StreamPackage` returns `Unimplemented`
   - Stub `ExportPackage` returns `Unimplemented`
-- [ ] Validate red: tests fail (no implementation)
-- [ ] Implement the scaffold
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red: tests fail (no implementation)
+- [x] Implement the scaffold
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.1.2 -- Embassy config loading
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Embassy loads system import types from `EMBASSY_SYSTEM_IMPORT_TYPES` env var (JSON)
   - Embassy loads flow-authored import types from `EMBASSY_FLOW_IMPORT_TYPES` env var (JSON)
   - Embassy loads federation identity from `EMBASSY_FEDERATION_IDENTITY` env var
@@ -72,9 +72,9 @@ Embassies. This slice wires the skeleton — no business logic yet.
   - Embassy loads federation CA from `EMBASSY_FEDERATION_CA_PEM` env var
   - Embassy loads naturalisation config from `EMBASSY_NATURALISATION_CONFIG` env var (JSON)
   - Missing optional vars produce sensible defaults (non-federated mode)
-- [ ] Validate red
-- [ ] Implement config struct and loading in `nodes/embassy/config.go`
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement config struct and loading in `nodes/embassy/config.go`
+- [x] Validate green: `go test ./nodes/...`
 
 ---
 
@@ -86,39 +86,39 @@ requesting the full package.
 
 #### Slice 13.2.1 -- Import type resolution in preflight
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - `PreflightManifest` with `importType: "law-petition"` resolves against system import types → accepted
   - `PreflightManifest` with a flow-authored import type resolves against flow config → accepted
   - `PreflightManifest` with an unknown import type → rejected with reason
   - `PreflightManifest` generates a `transfer_id` in the response
-- [ ] Validate red
-- [ ] Implement import-type resolution in `PreflightManifest` handler using `flow.ResolveEmbassyImportType`
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement import-type resolution in `PreflightManifest` handler using `flow.ResolveEmbassyImportType`
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.2.2 -- Trust source validation in preflight
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Federation trust source: manifest from a federation member with valid identity → accepted
   - Treaty trust source: manifest with treaty name resolves against treaty policy → accepted
   - Treaty trust source: import type not in `AllowedImportTypes` → rejected
   - Treaty trust source: subject not in `AllowedSubjects` → rejected
   - Manifest with expired `expires_at` → rejected
-- [ ] Validate red
-- [ ] Implement trust validation using `flow.ValidateEmbassyTrustPolicy` in preflight
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement trust validation using `flow.ValidateEmbassyTrustPolicy` in preflight
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.2.3 -- Foreign stamp verification in preflight
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Manifest with all required foreign stamps for each artefact → accepted
   - Manifest missing a required foreign stamp → rejected with reason listing missing stamps
   - Manifest with extra unrequired stamps → accepted (extra stamps are provenance only)
-- [ ] Validate red
-- [ ] Implement foreign stamp requirement checking against the resolved import type's `requireForeignStamps`
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement foreign stamp requirement checking against the resolved import type's `requireForeignStamps`
+- [x] Validate green: `go test ./nodes/...`
 
 ---
 
@@ -129,39 +129,39 @@ digests, and stage it for materialisation.
 
 #### Slice 13.3.1 -- Package stager implementation
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Stager accepts manifest chunk and stores it
   - Stager accepts content chunks and accumulates them
   - Stager accepts trailer chunk with package digest
   - `Complete()` returns `EmbassyStagedPackage` with manifest and chunks
   - Empty chunk stream → error on `Complete()`
-- [ ] Validate red
-- [ ] Implement `embassyStager` struct satisfying `flow.EmbassyPackageStager` interface
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement `embassyStager` struct satisfying `flow.EmbassyPackageStager` interface
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.3.2 -- Package digest verification
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Staged package with matching trailer digest → verification passes
   - Staged package with mismatched trailer digest → error
   - Per-artefact digest from manifest matches staged content → passes
   - Per-artefact digest mismatch → error
-- [ ] Validate red
-- [ ] Implement digest verification on `Complete()` or a separate `Verify()` step
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement digest verification on `Complete()` or a separate `Verify()` step
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.3.3 -- StreamPackage handler wiring
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - `StreamPackage` with valid manifest + content + trailer → returns success with `workitem_id`
   - `StreamPackage` with failed digest verification → returns error
   - `StreamPackage` with unknown import type (no prior preflight) → returns error
-- [ ] Validate red
-- [ ] Wire `StreamPackage` handler: stage chunks → verify → materialise (using `flow.MaterializeStreamedPackage`)
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Wire `StreamPackage` handler: stage chunks → verify → materialise (using `flow.MaterializeStreamedPackage`)
+- [x] Validate green: `go test ./nodes/...`
 
 ---
 
@@ -172,37 +172,37 @@ artefacts, apply naturalisation stamps, and route to the intake node.
 
 #### Slice 13.4.1 -- Workitem creation and artefact unpacking
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Materializer creates a new Workitem via `operator.CreateWorkitem` with imported metadata
   - Materializer stores each manifest artefact via `archivist.StoreArtefact`
   - Created Workitem metadata includes `import_type`, `source_flow`, `transfer_id`
-- [ ] Validate red
-- [ ] Implement `embassyMaterializer` struct satisfying `flow.EmbassyMaterializer` interface
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement `embassyMaterializer` struct satisfying `flow.EmbassyMaterializer` interface
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.4.2 -- Naturalisation stamps
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - For each verified required foreign stamp, materializer applies `imported-<stamp>` local attestation
   - Foreign stamps remain attached as provenance (not removed)
   - If naturalisation config has `requireLocalStamps`, those are applied
   - If `autoNaturalise` is false, no `imported-*` stamps are applied (explicit mode)
-- [ ] Validate red
-- [ ] Implement naturalisation stamp logic in materializer
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement naturalisation stamp logic in materializer
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.4.3 -- Intake routing
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Built-in `law-petition` import type: Workitem is routed to the platform-owned petition intake path
   - Flow-authored import type: Workitem is routed to the configured `node` value from import type spec
   - Unknown import type (should not happen post-preflight): error
-- [ ] Validate red
-- [ ] Implement routing after materialisation (use topology or direct route based on import type)
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement routing after materialisation (use topology or direct route based on import type)
+- [x] Validate green: `go test ./nodes/...`
 
 ---
 
@@ -214,39 +214,39 @@ Embassy, send the manifest, wait for acceptance, and stream the package.
 
 #### Slice 13.5.1 -- Manifest builder
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Manifest builder reads Workitem artefacts via Archivist and builds `TransferManifest`
   - Manifest includes `import_type`, `source_flow`, `target_flow`, `transfer_id` (generated UUID), `expires_at`
   - Manifest includes `ArtefactManifest` entries with digest, size, representation metadata
   - Manifest includes local stamps as `ForeignStamp` entries
-- [ ] Validate red
-- [ ] Implement manifest builder in `nodes/embassy/manifest.go`
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement manifest builder in `nodes/embassy/manifest.go`
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.5.2 -- Target resolution via Federation
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - For `law-petition` export: calls `FederationClient.GetPetitionTarget(scope)` to resolve authority Flow
   - Returns target authority's Embassy endpoint and Flow identity
   - Error from Federation (no authority found) → export fails with descriptive error
-- [ ] Validate red
-- [ ] Implement target resolution in export handler using `flow.NewFederationClient()`
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement target resolution in export handler using `flow.NewFederationClient()`
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.5.3 -- Remote Embassy connection and transfer
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Export handler connects to remote Embassy via `flow.NewEmbassyClient()`
   - Sends manifest via `PreflightManifest` → if rejected, export fails with rejection reason
   - On preflight acceptance, streams package via `StreamPackage`
   - On successful transfer, calls `client.Complete(ctx)` on the local Workitem
   - On transfer failure, returns error (workitem fails)
-- [ ] Validate red
-- [ ] Implement export handler (the `handleExport` function in `main.go`)
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement export handler (the `handleExport` function in `main.go`)
+- [x] Validate green: `go test ./nodes/...`
 
 ---
 
