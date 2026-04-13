@@ -181,3 +181,102 @@ func TestCreateStateDuplicate(t *testing.T) {
 		t.Fatal("CreateState duplicate: expected error, got nil")
 	}
 }
+
+// --- Authority lookup tests ---
+
+func TestGetAuthorityForScope_StateLevel(t *testing.T) {
+	s := newTestStore(t)
+
+	// Add a member with a state-level publisher role for "security".
+	roles := []PublisherRole{{Scope: "security", Level: "state"}}
+	_ = s.AddMember("flow-authority", "flow-authority:50059", []string{"state-1"}, roles)
+	// Add another member without authority.
+	_ = s.AddMember("flow-regular", "flow-regular:50059", []string{"state-1"}, nil)
+
+	m, err := s.GetAuthorityForScope("security")
+	if err != nil {
+		t.Fatalf("GetAuthorityForScope: %v", err)
+	}
+	if m.FlowIdentity != "flow-authority" {
+		t.Errorf("FlowIdentity = %q, want %q", m.FlowIdentity, "flow-authority")
+	}
+	if m.EmbassyEndpoint != "flow-authority:50059" {
+		t.Errorf("EmbassyEndpoint = %q, want %q", m.EmbassyEndpoint, "flow-authority:50059")
+	}
+}
+
+func TestGetAuthorityForScope_FederationLevel(t *testing.T) {
+	s := newTestStore(t)
+
+	// Add a member with a federation-level publisher role.
+	roles := []PublisherRole{{Scope: "architecture", Level: "federation"}}
+	_ = s.AddMember("flow-fed-auth", "flow-fed-auth:50059", nil, roles)
+
+	m, err := s.GetAuthorityForScope("architecture")
+	if err != nil {
+		t.Fatalf("GetAuthorityForScope: %v", err)
+	}
+	if m.FlowIdentity != "flow-fed-auth" {
+		t.Errorf("FlowIdentity = %q, want %q", m.FlowIdentity, "flow-fed-auth")
+	}
+}
+
+func TestGetAuthorityForScope_NotFound(t *testing.T) {
+	s := newTestStore(t)
+
+	// No members have publisher roles for "unknown-scope".
+	_ = s.AddMember("flow-a", "flow-a:50059", nil, nil)
+
+	_, err := s.GetAuthorityForScope("unknown-scope")
+	if err == nil {
+		t.Fatal("GetAuthorityForScope unknown scope: expected error, got nil")
+	}
+}
+
+func TestGetAuthorityForScope_MemberPublisherRolesRecorded(t *testing.T) {
+	s := newTestStore(t)
+
+	// Add a member with multiple publisher roles.
+	roles := []PublisherRole{
+		{Scope: "security", Level: "state"},
+		{Scope: "architecture", Level: "federation"},
+	}
+	_ = s.AddMember("flow-multi", "flow-multi:50059", []string{"state-1"}, roles)
+
+	// Verify state-level authority for "security".
+	m, err := s.GetAuthorityForScope("security")
+	if err != nil {
+		t.Fatalf("GetAuthorityForScope security: %v", err)
+	}
+	if m.FlowIdentity != "flow-multi" {
+		t.Errorf("security authority FlowIdentity = %q, want %q", m.FlowIdentity, "flow-multi")
+	}
+
+	// Verify federation-level authority for "architecture".
+	m, err = s.GetAuthorityForScope("architecture")
+	if err != nil {
+		t.Fatalf("GetAuthorityForScope architecture: %v", err)
+	}
+	if m.FlowIdentity != "flow-multi" {
+		t.Errorf("architecture authority FlowIdentity = %q, want %q", m.FlowIdentity, "flow-multi")
+	}
+}
+
+func TestGetAuthorityForScope_ReturnsFullMember(t *testing.T) {
+	s := newTestStore(t)
+
+	// The returned Member should include state IDs and publisher roles.
+	roles := []PublisherRole{{Scope: "security", Level: "state"}}
+	_ = s.AddMember("flow-full", "flow-full:50059", []string{"state-1", "state-2"}, roles)
+
+	m, err := s.GetAuthorityForScope("security")
+	if err != nil {
+		t.Fatalf("GetAuthorityForScope: %v", err)
+	}
+	if len(m.StateIDs) != 2 {
+		t.Errorf("StateIDs len = %d, want 2", len(m.StateIDs))
+	}
+	if len(m.PublisherRoles) != 1 || m.PublisherRoles[0].Scope != "security" {
+		t.Errorf("PublisherRoles = %v, want [{security state}]", m.PublisherRoles)
+	}
+}

@@ -240,6 +240,29 @@ func (s *Store) ListMembers(stateFilter string) ([]*Member, error) {
 	return members, nil
 }
 
+// GetAuthorityForScope returns the federation member that holds a publisher
+// role for the given scope. Both state-level and federation-level roles are
+// considered. Returns an error if no member holds a publisher role for the
+// scope.
+func (s *Store) GetAuthorityForScope(scope string) (*Member, error) {
+	var flowIdentity string
+	err := s.db.QueryRow(
+		`SELECT m.flow_identity
+		 FROM members m
+		 JOIN member_publisher_roles r ON m.flow_identity = r.flow_identity
+		 WHERE r.scope = ?
+		 LIMIT 1`,
+		scope).Scan(&flowIdentity)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no authority for scope %q", scope)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get authority for scope: %w", err)
+	}
+
+	return s.GetMember(flowIdentity)
+}
+
 // memberStateIDs returns the state IDs for a member.
 func (s *Store) memberStateIDs(flowIdentity string) ([]string, error) {
 	rows, err := s.db.Query(

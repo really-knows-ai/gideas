@@ -350,41 +350,41 @@ authority publisher role enforcement.
 
 #### Slice 13.7.1 -- Federation store: publisher roles and authority lookup
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - Store records publisher roles per member (scope + level)
   - `GetAuthorityForScope(scope)` returns the member with matching publisher role
   - State-level authority: member with `level: "state"` and matching scope for a given state
   - Federation-level authority: member with `level: "federation"` and matching scope
   - No authority for scope → returns not found
-- [ ] Validate red
-- [ ] Implement authority lookup in store
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement authority lookup in store
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.7.2 -- Federation service: DiscoverEndpoints RPC
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `DiscoverEndpoints` with no filter → returns all member endpoints
   - `DiscoverEndpoints` with state filter → returns only members in that state
   - Each `FlowEndpoint` includes `flow_identity`, `embassy_address`, `state_ids`
   - Empty federation → returns empty list
-- [ ] Validate red
-- [ ] Implement `DiscoverEndpoints` RPC handler
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement `DiscoverEndpoints` RPC handler
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.7.3 -- Federation service: GetPetitionTarget RPC
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `GetPetitionTarget` with valid scope → returns authority flow identity + embassy endpoint
   - `GetPetitionTarget` with unknown scope → `NotFound`
   - `GetPetitionTarget` when authority has left federation → `NotFound`
   - State-level scope resolves to state-level authority
   - Federation-level scope resolves to federation-level authority
-- [ ] Validate red
-- [ ] Implement `GetPetitionTarget` RPC handler using store authority lookup
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement `GetPetitionTarget` RPC handler using store authority lookup
+- [x] Validate green: `go test ./platform/federation/...`
 
 ---
 
