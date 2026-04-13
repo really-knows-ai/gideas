@@ -574,6 +574,85 @@ func (s *LibrarianServer) GetActiveDisputes(
 	return &flowv1.GetActiveDisputesResponse{Records: protoRecords}, nil
 }
 
+// SearchSimilarLaws performs a vector similarity search against the law
+// embeddings in the Library. It embeds the query text, searches the vec0
+// virtual table for nearest neighbours, optionally filters by division
+// (scope_filter), and returns full Law objects with similarity scores.
+func (s *LibrarianServer) SearchSimilarLaws(
+	ctx context.Context, req *flowv1.SearchSimilarLawsRequest,
+) (*flowv1.SearchSimilarLawsResponse, error) {
+	if req.GetQueryText() == "" {
+		return nil, status.Error(codes.InvalidArgument, "query_text is required")
+	}
+	if s.embedder == nil {
+		return nil, status.Error(codes.FailedPrecondition, "embedding provider is not configured")
+	}
+
+	// Compute the query embedding.
+	queryEmbedding, err := s.embedder.Embed(ctx, req.GetQueryText())
+	if err != nil {
+		slog.Error("SearchSimilarLaws: embedding failed", "error", err)
+		return nil, status.Errorf(codes.Internal, "compute query embedding: %v", err)
+	}
+
+	// Determine the search limit. Fetch more than requested if we need to
+	// post-filter by scope, so we have enough candidates.
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = 10
+	}
+	fetchLimit := limit
+	if req.GetScopeFilter() != "" {
+		// Over-fetch to account for scope filtering.
+		fetchLimit = max(limit*3, 30)
+	}
+
+	// Query the vec0 table for nearest neighbours.
+	vecResults, err := s.store.SearchVecSimilar(ctx, queryEmbedding, fetchLimit)
+	if err != nil {
+		slog.Error("SearchSimilarLaws: vec search failed", "error", err)
+		return nil, status.Errorf(codes.Internal, "vector search: %v", err)
+	}
+
+	// Resolve each result to a full Law, apply scope filter, and convert
+	// distances to similarity scores.
+	var results []*flowv1.SimilarLaw
+	for _, vr := range vecResults {
+		if len(results) >= limit {
+			break
+		}
+
+		law, err := s.store.GetLaw(ctx, vr.LawID)
+		if err != nil {
+			// Law may have been retired between the vec search and the
+			// lookup — skip silently.
+			continue
+		}
+
+		// Scope filter: if set, only include laws matching the division.
+		if req.GetScopeFilter() != "" && law.Division != req.GetScopeFilter() {
+			continue
+		}
+
+		// Convert L2 distance to a similarity score in [0, 1].
+		// similarity = 1 / (1 + distance)
+		similarity := float32(1.0 / (1.0 + vr.Distance))
+
+		results = append(results, &flowv1.SimilarLaw{
+			Law:             storeLawToProto(law),
+			SimilarityScore: similarity,
+		})
+	}
+
+	slog.Info("SearchSimilarLaws",
+		"query_len", len(req.GetQueryText()),
+		"scope_filter", req.GetScopeFilter(),
+		"results", len(results),
+	)
+
+	return &flowv1.SearchSimilarLawsResponse{Results: results}, nil
+}
+
 // ApplyLifecycleAction applies the outcome of a review hearing.
 func (s *LibrarianServer) ApplyLifecycleAction(
 	ctx context.Context, req *flowv1.ApplyLifecycleActionRequest,
