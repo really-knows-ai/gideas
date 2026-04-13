@@ -19,8 +19,9 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.34 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
-	github.com/stoewer/go-strcase v1.2.0 // indirect
-	golang.org/x/exp v0.0.0-20230515195305-f3d0a9c9a5cc // indirect
+	github.com/stoewer/go-strcase v1.3.0 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
+	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
