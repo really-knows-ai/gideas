@@ -250,3 +250,178 @@ func TestJoinFederation_EmptyEmbassyEndpoint(t *testing.T) {
 		t.Errorf("expected InvalidArgument, got %v", err)
 	}
 }
+
+// --- LeaveFederation Tests ---
+
+func TestLeaveFederation_Success(t *testing.T) {
+	// Pre-load an existing FederationMember CR.
+	existing := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-alpha",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-alpha",
+			EmbassyEndpoint: "flow-alpha-embassy:50059",
+		},
+	}
+
+	srv := newTestServer(t, existing)
+
+	resp, err := srv.LeaveFederation(context.Background(), &flowv1.LeaveFederationRequest{
+		FlowIdentity: "flow-alpha",
+	})
+	if err != nil {
+		t.Fatalf("LeaveFederation returned error: %v", err)
+	}
+	if !resp.GetAcknowledged() {
+		t.Error("expected acknowledged = true")
+	}
+
+	// Verify the CR was deleted.
+	var member federationv1.FederationMember
+	key := types.NamespacedName{Namespace: testNamespace, Name: "flow-alpha"}
+	err = srv.k8sClient.Get(context.Background(), key, &member)
+	if err == nil {
+		t.Fatal("expected FederationMember CR to be deleted, but it still exists")
+	}
+}
+
+func TestLeaveFederation_NonMember(t *testing.T) {
+	// No pre-loaded members.
+	srv := newTestServer(t)
+
+	_, err := srv.LeaveFederation(context.Background(), &flowv1.LeaveFederationRequest{
+		FlowIdentity: "flow-unknown",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-member, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
+		t.Errorf("expected NotFound, got %v", err)
+	}
+}
+
+func TestLeaveFederation_EmptyFlowIdentity(t *testing.T) {
+	srv := newTestServer(t)
+
+	_, err := srv.LeaveFederation(context.Background(), &flowv1.LeaveFederationRequest{
+		FlowIdentity: "",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty flow_identity, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+// --- GetMembership Tests ---
+
+func TestGetMembership_Success(t *testing.T) {
+	// Pre-load a member with states and roles.
+	stateQLD := &federationv1.FederationState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "state-qld",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationStateSpec{Name: "Queensland"},
+	}
+	stateNSW := &federationv1.FederationState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "state-nsw",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationStateSpec{Name: "New South Wales"},
+	}
+	member := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-alpha",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-alpha",
+			EmbassyEndpoint: "flow-alpha-embassy:50059",
+			StateRefs:       []string{"state-qld", "state-nsw"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: "state"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, stateQLD, stateNSW, member)
+
+	resp, err := srv.GetMembership(context.Background(), &flowv1.GetMembershipRequest{
+		FlowIdentity: "flow-alpha",
+	})
+	if err != nil {
+		t.Fatalf("GetMembership returned error: %v", err)
+	}
+
+	m := resp.GetMember()
+	if m == nil {
+		t.Fatal("response member is nil")
+	}
+	if m.GetFlowIdentity() != "flow-alpha" {
+		t.Errorf("flow_identity = %q, want %q", m.GetFlowIdentity(), "flow-alpha")
+	}
+	if m.GetEmbassyEndpoint() != "flow-alpha-embassy:50059" {
+		t.Errorf("embassy_endpoint = %q, want %q", m.GetEmbassyEndpoint(), "flow-alpha-embassy:50059")
+	}
+
+	// States should be resolved from FederationState CRs via stateRefs.
+	if len(m.GetStates()) != 2 {
+		t.Fatalf("states count = %d, want 2", len(m.GetStates()))
+	}
+	// Check that state names are resolved (not just IDs).
+	statesByID := make(map[string]string)
+	for _, s := range m.GetStates() {
+		statesByID[s.GetStateId()] = s.GetName()
+	}
+	if statesByID["state-qld"] != "Queensland" {
+		t.Errorf("state-qld name = %q, want %q", statesByID["state-qld"], "Queensland")
+	}
+	if statesByID["state-nsw"] != "New South Wales" {
+		t.Errorf("state-nsw name = %q, want %q", statesByID["state-nsw"], "New South Wales")
+	}
+
+	// Publisher roles should be populated.
+	if len(m.GetPublisherRoles()) != 1 {
+		t.Fatalf("publisher_roles count = %d, want 1", len(m.GetPublisherRoles()))
+	}
+	role := m.GetPublisherRoles()[0]
+	if role.GetScope() != "education" {
+		t.Errorf("role scope = %q, want %q", role.GetScope(), "education")
+	}
+	if role.GetLevel() != "state" {
+		t.Errorf("role level = %q, want %q", role.GetLevel(), "state")
+	}
+}
+
+func TestGetMembership_NonMember(t *testing.T) {
+	srv := newTestServer(t)
+
+	_, err := srv.GetMembership(context.Background(), &flowv1.GetMembershipRequest{
+		FlowIdentity: "flow-unknown",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-member, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
+		t.Errorf("expected NotFound, got %v", err)
+	}
+}
+
+func TestGetMembership_EmptyFlowIdentity(t *testing.T) {
+	srv := newTestServer(t)
+
+	_, err := srv.GetMembership(context.Background(), &flowv1.GetMembershipRequest{
+		FlowIdentity: "",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty flow_identity, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
