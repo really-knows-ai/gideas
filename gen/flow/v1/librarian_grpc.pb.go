@@ -30,6 +30,7 @@ const (
 	LibrarianService_CreateDisputeRecord_FullMethodName  = "/flow.v1.LibrarianService/CreateDisputeRecord"
 	LibrarianService_RetireDisputeRecord_FullMethodName  = "/flow.v1.LibrarianService/RetireDisputeRecord"
 	LibrarianService_GetActiveDisputes_FullMethodName    = "/flow.v1.LibrarianService/GetActiveDisputes"
+	LibrarianService_SearchSimilarLaws_FullMethodName    = "/flow.v1.LibrarianService/SearchSimilarLaws"
 )
 
 // LibrarianServiceClient is the client API for LibrarianService service.
@@ -75,6 +76,10 @@ type LibrarianServiceClient interface {
 	// Returns active dispute records, optionally filtered by a cited law ID.
 	// Called by Sort to check for pending disputes before deadlock routing.
 	GetActiveDisputes(ctx context.Context, in *GetActiveDisputesRequest, opts ...grpc.CallOption) (*GetActiveDisputesResponse, error)
+	// Searches for laws semantically similar to the query text using vector
+	// similarity search (sqlite-vec). Used by the Federation service for
+	// distributed conflict detection during publication admission.
+	SearchSimilarLaws(ctx context.Context, in *SearchSimilarLawsRequest, opts ...grpc.CallOption) (*SearchSimilarLawsResponse, error)
 }
 
 type librarianServiceClient struct {
@@ -195,6 +200,16 @@ func (c *librarianServiceClient) GetActiveDisputes(ctx context.Context, in *GetA
 	return out, nil
 }
 
+func (c *librarianServiceClient) SearchSimilarLaws(ctx context.Context, in *SearchSimilarLawsRequest, opts ...grpc.CallOption) (*SearchSimilarLawsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchSimilarLawsResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_SearchSimilarLaws_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LibrarianServiceServer is the server API for LibrarianService service.
 // All implementations must embed UnimplementedLibrarianServiceServer
 // for forward compatibility.
@@ -238,6 +253,10 @@ type LibrarianServiceServer interface {
 	// Returns active dispute records, optionally filtered by a cited law ID.
 	// Called by Sort to check for pending disputes before deadlock routing.
 	GetActiveDisputes(context.Context, *GetActiveDisputesRequest) (*GetActiveDisputesResponse, error)
+	// Searches for laws semantically similar to the query text using vector
+	// similarity search (sqlite-vec). Used by the Federation service for
+	// distributed conflict detection during publication admission.
+	SearchSimilarLaws(context.Context, *SearchSimilarLawsRequest) (*SearchSimilarLawsResponse, error)
 	mustEmbedUnimplementedLibrarianServiceServer()
 }
 
@@ -280,6 +299,9 @@ func (UnimplementedLibrarianServiceServer) RetireDisputeRecord(context.Context, 
 }
 func (UnimplementedLibrarianServiceServer) GetActiveDisputes(context.Context, *GetActiveDisputesRequest) (*GetActiveDisputesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActiveDisputes not implemented")
+}
+func (UnimplementedLibrarianServiceServer) SearchSimilarLaws(context.Context, *SearchSimilarLawsRequest) (*SearchSimilarLawsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchSimilarLaws not implemented")
 }
 func (UnimplementedLibrarianServiceServer) mustEmbedUnimplementedLibrarianServiceServer() {}
 func (UnimplementedLibrarianServiceServer) testEmbeddedByValue()                          {}
@@ -500,6 +522,24 @@ func _LibrarianService_GetActiveDisputes_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LibrarianService_SearchSimilarLaws_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchSimilarLawsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).SearchSimilarLaws(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_SearchSimilarLaws_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).SearchSimilarLaws(ctx, req.(*SearchSimilarLawsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // LibrarianService_ServiceDesc is the grpc.ServiceDesc for LibrarianService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -550,6 +590,10 @@ var LibrarianService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetActiveDisputes",
 			Handler:    _LibrarianService_GetActiveDisputes_Handler,
+		},
+		{
+			MethodName: "SearchSimilarLaws",
+			Handler:    _LibrarianService_SearchSimilarLaws_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

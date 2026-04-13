@@ -442,14 +442,14 @@ distributed conflict detection during publication admission.
 
 #### Slice 13.7B.1 -- Librarian proto: SearchSimilarLaws RPC
 
-- [ ] Validate green: `go test ./...` (workspace)
-- [ ] Add to `proto/flow/v1/librarian.proto`:
+- [x] Validate green: `go test ./...` (workspace)
+- [x] Add to `proto/flow/v1/librarian.proto`:
   - `rpc SearchSimilarLaws(SearchSimilarLawsRequest) returns (SearchSimilarLawsResponse);`
   - `SearchSimilarLawsRequest`: `string query_text = 1;`, `string scope_filter = 2;`, `int32 limit = 3;`
   - `SearchSimilarLawsResponse`: `repeated SimilarLaw results = 1;`
   - `SimilarLaw`: `Law law = 1;`, `float similarity_score = 2;`
-- [ ] Run `make proto` to regenerate
-- [ ] Validate green: `go test ./...` (generated code compiles, existing tests pass)
+- [x] Run `make proto` to regenerate
+- [x] Validate green: `go test ./...` (generated code compiles, existing tests pass)
 
 #### Slice 13.7B.2 -- Librarian store: embedding storage and sqlite-vec
 
