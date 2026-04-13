@@ -62,6 +62,13 @@ service LibrarianService {
   // Returns active dispute records, optionally filtered by a cited law ID.
   // Called by Sort to check for pending disputes before deadlock routing.
   rpc GetActiveDisputes(GetActiveDisputesRequest) returns (GetActiveDisputesResponse);
+
+  // --- Semantic Search Methods ---
+
+  // Searches for laws semantically similar to the query text using vector
+  // similarity search (sqlite-vec). Used by the Federation service for
+  // distributed conflict detection during publication admission.
+  rpc SearchSimilarLaws(SearchSimilarLawsRequest) returns (SearchSimilarLawsResponse);
 }
 
 // --- Node-Facing ---
@@ -202,4 +209,25 @@ message GetActiveDisputesRequest {
 
 message GetActiveDisputesResponse {
   repeated DisputeRecord records = 1;
+}
+
+// --- Semantic Search Messages ---
+
+message SearchSimilarLawsRequest {
+  // The text to search for semantically similar laws.
+  string query_text = 1;
+  // Optional scope filter. When set, only laws in this division are returned.
+  string scope_filter = 2;
+  // Maximum number of results to return. Zero or negative means server default.
+  int32 limit = 3;
+}
+
+message SearchSimilarLawsResponse {
+  repeated SimilarLaw results = 1;
+}
+
+// A law with its similarity score from a semantic search.
+message SimilarLaw {
+  Law law = 1;
+  float similarity_score = 2;
 }
