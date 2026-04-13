@@ -333,20 +333,20 @@ against the K8s API instead of SQLite.
 
 #### Slice 13.6.5 -- FederationMember controller
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Create `platform/federation/internal/controller/federationmember_controller.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Create `platform/federation/internal/controller/federationmember_controller.go`:
   - `FederationMemberReconciler` struct with `client.Client` and `Scheme`
   - Reconcile: fetch FederationMember, validate spec (non-empty FlowIdentity/EmbassyEndpoint, valid Level values), set `Ready` condition, update status with `JoinedAt` timestamp
   - RBAC markers for `federationmembers` and `federationstates`
   - `SetupWithManager(mgr)` wiring
-- [ ] Add tests:
+- [x] Add tests:
   - Valid FederationMember -> `Ready` condition set to `True`
   - Missing FlowIdentity -> `Ready` condition set to `False` with reason
   - Invalid publisher role level -> `Ready` condition set to `False` with reason
   - Status `JoinedAt` is set on first reconcile and preserved on subsequent reconciles
-- [ ] Validate red
-- [ ] Implement
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.6 -- Federation service: JoinFederation (CRD-backed)
 

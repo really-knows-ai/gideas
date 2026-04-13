@@ -16,6 +16,7 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 
 	federationv1 "github.com/gideas/flow/federation/api/v1"
+	"github.com/gideas/flow/federation/internal/controller"
 	"github.com/gideas/flow/federation/internal/service"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -76,6 +77,14 @@ func run(ctx context.Context, cfg runConfig) error {
 			return fmt.Errorf("creating controller manager: %w", err)
 		}
 		k8sClient = mgr.GetClient()
+
+		// Register controllers with the manager.
+		if err := (&controller.FederationMemberReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("setting up FederationMember controller: %w", err)
+		}
 	}
 
 	// Build the Federation gRPC service.
