@@ -316,20 +316,20 @@ against the K8s API instead of SQLite.
 
 #### Slice 13.6.4 -- Federation controller manager + gRPC server
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Create `platform/federation/cmd/main.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Create `platform/federation/cmd/main.go`:
   - Kubebuilder manager setup (scheme registration for Federation CRDs)
   - gRPC server started concurrently using `mgr.GetClient()` for K8s API access
   - Read config from env: `FEDERATION_PORT` (default 50061), `FEDERATION_NAMESPACE`
   - Register `FederationServiceServer` on the gRPC listener
   - Graceful shutdown via manager context (following `platform/operator/cmd/main.go` pattern)
-- [ ] Add tests in `platform/federation/cmd/main_test.go`:
+- [x] Add tests in `platform/federation/cmd/main_test.go`:
   - Server starts on configured port
   - Server registers `FederationServiceServer`
   - Graceful shutdown completes cleanly
-- [ ] Validate red
-- [ ] Implement
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.5 -- FederationMember controller
 
