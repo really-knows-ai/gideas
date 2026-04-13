@@ -473,21 +473,21 @@ distributed conflict detection during publication admission.
 
 #### Slice 13.7B.3 -- Librarian: SearchSimilarLaws implementation
 
-- [ ] Validate green: `go test ./platform/librarian/...`
-- [ ] Add tests in `platform/librarian/internal/service/librarian_server_test.go`:
+- [x] Validate green: `go test ./platform/librarian/...`
+- [x] Add tests in `platform/librarian/internal/service/librarian_server_test.go`:
   - `SearchSimilarLaws` with query matching an existing law -> returns that law with high similarity score
   - `SearchSimilarLaws` with `scope_filter` -> returns only laws in that division
   - `SearchSimilarLaws` with `limit` -> returns at most `limit` results
   - `SearchSimilarLaws` with no matching laws -> returns empty results
   - Results are ordered by similarity score descending
-- [ ] Validate red
-- [ ] Implement `SearchSimilarLaws` in `platform/librarian/internal/service/librarian_server.go`:
+- [x] Validate red
+- [x] Implement `SearchSimilarLaws` in `platform/librarian/internal/service/librarian_server.go`:
   - Compute query embedding via Ollama provider
   - Query sqlite-vec for nearest neighbours
   - Join with laws table to return full `Law` objects
   - Apply scope filter (match against law `division`)
   - Apply limit
-- [ ] Validate green: `go test ./platform/librarian/...`
+- [x] Validate green: `go test ./platform/librarian/...`
 
 #### Slice 13.7B.4 -- Sidecar: SearchSimilarLaws proxy
 

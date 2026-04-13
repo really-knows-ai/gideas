@@ -972,6 +972,80 @@ func (s *Store) EmbeddingDimension() int {
 	return s.embeddingDims
 }
 
+// VecSearchResult represents a single result from a vector similarity search.
+type VecSearchResult struct {
+	LawID    string
+	Distance float64 // L2 distance from sqlite-vec (lower = more similar)
+}
+
+// SearchVecSimilar performs a k-nearest-neighbour search against the
+// law_embeddings vec0 virtual table using the provided query embedding.
+// Results are returned ordered by ascending distance (most similar first).
+// The limit parameter controls the maximum number of results.
+func (s *Store) SearchVecSimilar(ctx context.Context, queryEmbedding []float32, limit int) ([]VecSearchResult, error) {
+	if len(queryEmbedding) != s.embeddingDims {
+		return nil, fmt.Errorf("embedding dimension mismatch: got %d, want %d", len(queryEmbedding), s.embeddingDims)
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	blob, err := sqlite_vec.SerializeFloat32(queryEmbedding)
+	if err != nil {
+		return nil, fmt.Errorf("serialize query embedding: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT le.rowid, le.distance
+		 FROM law_embeddings le
+		 WHERE le.embedding MATCH ?
+		 ORDER BY le.distance
+		 LIMIT ?`,
+		blob, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("vec search: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Collect rowid+distance pairs first, then close the cursor before
+	// issuing follow-up queries (SQLite in-memory requires this).
+	type rowResult struct {
+		rowID    int64
+		distance float64
+	}
+	var rawResults []rowResult
+	for rows.Next() {
+		var r rowResult
+		if err := rows.Scan(&r.rowID, &r.distance); err != nil {
+			return nil, fmt.Errorf("scan vec result: %w", err)
+		}
+		rawResults = append(rawResults, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_ = rows.Close()
+
+	// Resolve rowid -> law_id via the mapping table.
+	var results []VecSearchResult
+	for _, r := range rawResults {
+		var lawID string
+		err := s.db.QueryRowContext(ctx,
+			`SELECT law_id FROM law_embedding_map WHERE rowid_ref = ?`, r.rowID,
+		).Scan(&lawID)
+		if err != nil {
+			continue // Orphaned row — skip.
+		}
+		results = append(results, VecSearchResult{
+			LawID:    lawID,
+			Distance: r.distance,
+		})
+	}
+
+	return results, nil
+}
+
 // ---------------------------------------------------------------------------
 // Dispute Record Operations
 // ---------------------------------------------------------------------------
