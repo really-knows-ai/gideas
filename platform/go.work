@@ -4,6 +4,7 @@ use (
 	./operator
 	./sidecar
 	./eventbus
+	./federation
 	./frictionledger
 	./monitor
 	./librarian

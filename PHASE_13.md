@@ -257,19 +257,19 @@ membership store, gRPC server, and basic join/leave/membership RPCs.
 
 #### Slice 13.6.1 -- Federation service module and directory scaffold
 
-- [ ] Validate green: `go test ./platform/...` (existing modules)
-- [ ] Create `platform/federation/` directory structure:
+- [x] Validate green: `go test ./platform/...` (existing modules)
+- [x] Create `platform/federation/` directory structure:
   - `platform/federation/cmd/main.go` — entry point
   - `platform/federation/internal/service/federation_server.go` — gRPC service implementation
   - `platform/federation/internal/store/sqlite/store.go` — SQLite persistence
   - `platform/federation/go.mod` — new module `github.com/gideas/flow/platform/federation`
-- [ ] Add `./platform/federation` to root `go.work`
-- [ ] Validate green: module compiles and is recognised by the workspace
+- [x] Add `./platform/federation` to root `go.work`
+- [x] Validate green: module compiles and is recognised by the workspace
 
 #### Slice 13.6.2 -- Federation store: membership CRUD
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests in `platform/federation/internal/store/sqlite/store_test.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests in `platform/federation/internal/store/sqlite/store_test.go`:
   - `AddMember` persists a federation member (flow identity, embassy endpoint, states, publisher roles)
   - `RemoveMember` removes by flow identity
   - `GetMember` returns member by flow identity
@@ -277,69 +277,69 @@ membership store, gRPC server, and basic join/leave/membership RPCs.
   - `ListMembers` with state filter returns members in that state
   - Duplicate flow identity → error
   - Remove non-existent member → error
-- [ ] Validate red
-- [ ] Implement store schema and CRUD in `platform/federation/internal/store/sqlite/store.go`:
+- [x] Validate red
+- [x] Implement store schema and CRUD in `platform/federation/internal/store/sqlite/store.go`:
   - Tables: `members`, `member_states`, `member_publisher_roles`
   - `FederationStore` struct with SQLite db
   - `New(dbPath)` constructor with schema init
   - CRUD methods
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.3 -- Federation store: state management
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `CreateState` persists a state (id, name)
   - `ListStates` returns all states
   - `GetState` returns by id
   - Duplicate state id → error
-- [ ] Validate red
-- [ ] Implement state CRUD in store
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement state CRUD in store
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.4 -- Federation service: JoinFederation RPC
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests in `platform/federation/internal/service/federation_server_test.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests in `platform/federation/internal/service/federation_server_test.go`:
   - `JoinFederation` with valid bootstrap token and flow identity → returns federation config, intermediate CA, states, publisher roles
   - `JoinFederation` with empty flow identity → `InvalidArgument`
   - `JoinFederation` with empty bootstrap token → `InvalidArgument`
   - `JoinFederation` with already-joined flow identity → `AlreadyExists`
   - Response includes assigned states and publisher roles
-- [ ] Validate red
-- [ ] Implement `JoinFederation` RPC handler:
+- [x] Validate red
+- [x] Implement `JoinFederation` RPC handler:
   - Validate inputs
   - Add member to store
   - Return `JoinFederationResponse` with federation config, CA pem, states, roles
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.5 -- Federation service: LeaveFederation and GetMembership RPCs
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `LeaveFederation` removes a joined member → ack
   - `LeaveFederation` for non-member → `NotFound`
   - `GetMembership` for joined member → returns snapshot (states, roles, endpoint)
   - `GetMembership` for non-member → `NotFound`
-- [ ] Validate red
-- [ ] Implement `LeaveFederation` and `GetMembership` RPC handlers
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement `LeaveFederation` and `GetMembership` RPC handlers
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.6 -- Federation service: cmd/main.go wiring
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - Server starts on configured port
   - Server registers `FederationServiceServer`
   - Graceful shutdown on SIGTERM
-- [ ] Validate red
-- [ ] Implement `platform/federation/cmd/main.go`:
+- [x] Validate red
+- [x] Implement `platform/federation/cmd/main.go`:
   - Read config from env (`FEDERATION_PORT`, `FEDERATION_DB_PATH`)
   - Create store
   - Create service server
   - Start gRPC server with reflection
   - Signal handler for graceful shutdown
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 ---
 
