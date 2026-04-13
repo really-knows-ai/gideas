@@ -255,6 +255,88 @@ func (s *FederationServer) GetPetitionTarget(
 	return nil, status.Errorf(codes.NotFound, "no authority found for scope %q", req.GetScope())
 }
 
+// SubmitPublication validates that the source Flow has authority to publish
+// the submitted law, then runs conflict detection (later slices) and either
+// accepts or rejects the publication.
+func (s *FederationServer) SubmitPublication(
+	ctx context.Context,
+	req *flowv1.SubmitPublicationRequest,
+) (*flowv1.SubmitPublicationResponse, error) {
+	// --- Input validation ---
+	if req.GetSourceFlowIdentity() == "" {
+		return nil, status.Error(codes.InvalidArgument, "source_flow_identity is required")
+	}
+	if req.GetLaw() == nil {
+		return nil, status.Error(codes.InvalidArgument, "law is required")
+	}
+
+	// --- Membership check ---
+	memberName := toK8sName(req.GetSourceFlowIdentity())
+	member := &federationv1.FederationMember{}
+	key := client.ObjectKey{Namespace: s.namespace, Name: memberName}
+	if err := s.k8sClient.Get(ctx, key, member); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, status.Errorf(codes.PermissionDenied,
+				"flow %q is not a federation member", req.GetSourceFlowIdentity())
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get FederationMember: %v", err)
+	}
+
+	// --- Authority validation ---
+	// The member must have at least one publisherRole whose scope matches
+	// the submitted law's division.
+	lawDivision := req.GetLaw().GetDivision()
+	if len(member.Spec.PublisherRoles) == 0 {
+		return &flowv1.SubmitPublicationResponse{
+			Accepted: false,
+			Rejection: &flowv1.PublicationRejection{
+				Reason:          flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_UNAUTHORISED,
+				RemediationText: fmt.Sprintf("flow %q has no publisher roles", req.GetSourceFlowIdentity()),
+			},
+		}, nil
+	}
+
+	var matchingRole *federationv1.PublisherRoleSpec
+	for i := range member.Spec.PublisherRoles {
+		if member.Spec.PublisherRoles[i].Scope == lawDivision {
+			matchingRole = &member.Spec.PublisherRoles[i]
+			break
+		}
+	}
+
+	if matchingRole == nil {
+		return &flowv1.SubmitPublicationResponse{
+			Accepted: false,
+			Rejection: &flowv1.PublicationRejection{
+				Reason: flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_OUT_OF_SCOPE,
+				RemediationText: fmt.Sprintf(
+					"flow %q has no publisher role for scope %q",
+					req.GetSourceFlowIdentity(), lawDivision),
+			},
+		}, nil
+	}
+
+	// State-level publishers must be assigned to at least one state.
+	if matchingRole.Level == "state" && len(member.Spec.StateRefs) == 0 {
+		return &flowv1.SubmitPublicationResponse{
+			Accepted: false,
+			Rejection: &flowv1.PublicationRejection{
+				Reason: flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_UNAUTHORISED,
+				RemediationText: fmt.Sprintf(
+					"flow %q has a state-level publisher role for scope %q but is not assigned to any state",
+					req.GetSourceFlowIdentity(), lawDivision),
+			},
+		}, nil
+	}
+
+	// --- Authority validation passed ---
+	// Conflict detection will be added in slices 13.8.2 and 13.8.3.
+	// For now, accept the publication.
+	return &flowv1.SubmitPublicationResponse{
+		Accepted: true,
+	}, nil
+}
+
 // containsState reports whether refs contains the given state name.
 func containsState(refs []string, state string) bool {
 	return slices.Contains(refs, state)
