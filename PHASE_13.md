@@ -419,18 +419,18 @@ authority publisher role enforcement using CRD queries.
 
 #### Slice 13.7.2 -- GetPetitionTarget (CRD-backed)
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `GetPetitionTarget` with valid scope -> returns authority flow identity + embassy endpoint
   - `GetPetitionTarget` with unknown scope -> `NotFound`
   - `GetPetitionTarget` when authority has left federation -> `NotFound`
   - State-level scope resolves to state-level authority
   - Federation-level scope resolves to federation-level authority
-- [ ] Validate red
-- [ ] Implement `GetPetitionTarget`:
+- [x] Validate red
+- [x] Implement `GetPetitionTarget`:
   - List `FederationMember` CRs, find one with a `publisherRole` matching the requested scope
   - Return authority flow identity + embassy endpoint
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 ---
 
