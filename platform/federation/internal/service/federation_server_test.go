@@ -15,7 +15,11 @@ import (
 	federationv1 "github.com/gideas/flow/federation/api/v1"
 )
 
-const testNamespace = "test-ns"
+const (
+	testNamespace        = "test-ns"
+	testFlowAlpha        = "flow-alpha"
+	testFlowAlphaEmbassy = "flow-alpha-embassy:50059"
+)
 
 // newTestServer creates a FederationServer backed by a fake K8s client
 // for unit testing. Optional K8s objects can be pre-loaded.
@@ -81,8 +85,8 @@ func TestJoinFederation_Success(t *testing.T) {
 
 	resp, err := srv.JoinFederation(context.Background(), &flowv1.JoinFederationRequest{
 		BootstrapToken:  "valid-token",
-		FlowIdentity:    "flow-alpha",
-		EmbassyEndpoint: "flow-alpha-embassy:50059",
+		FlowIdentity:    testFlowAlpha,
+		EmbassyEndpoint: testFlowAlphaEmbassy,
 	})
 	if err != nil {
 		t.Fatalf("JoinFederation returned error: %v", err)
@@ -108,15 +112,15 @@ func TestJoinFederation_Success(t *testing.T) {
 
 	// Verify that a FederationMember CR was created.
 	var member federationv1.FederationMember
-	key := types.NamespacedName{Namespace: testNamespace, Name: "flow-alpha"}
+	key := types.NamespacedName{Namespace: testNamespace, Name: testFlowAlpha}
 	if err := srv.k8sClient.Get(context.Background(), key, &member); err != nil {
 		t.Fatalf("failed to get FederationMember CR: %v", err)
 	}
-	if member.Spec.FlowIdentity != "flow-alpha" {
-		t.Errorf("member.Spec.FlowIdentity = %q, want %q", member.Spec.FlowIdentity, "flow-alpha")
+	if member.Spec.FlowIdentity != testFlowAlpha {
+		t.Errorf("member.Spec.FlowIdentity = %q, want %q", member.Spec.FlowIdentity, testFlowAlpha)
 	}
-	if member.Spec.EmbassyEndpoint != "flow-alpha-embassy:50059" {
-		t.Errorf("member.Spec.EmbassyEndpoint = %q, want %q", member.Spec.EmbassyEndpoint, "flow-alpha-embassy:50059")
+	if member.Spec.EmbassyEndpoint != testFlowAlphaEmbassy {
+		t.Errorf("member.Spec.EmbassyEndpoint = %q, want %q", member.Spec.EmbassyEndpoint, testFlowAlphaEmbassy)
 	}
 }
 
@@ -141,7 +145,7 @@ func TestJoinFederation_EmptyBootstrapToken(t *testing.T) {
 
 	_, err := srv.JoinFederation(context.Background(), &flowv1.JoinFederationRequest{
 		BootstrapToken:  "",
-		FlowIdentity:    "flow-alpha",
+		FlowIdentity:    testFlowAlpha,
 		EmbassyEndpoint: "flow-embassy:50059",
 	})
 	if err == nil {
@@ -157,7 +161,7 @@ func TestJoinFederation_InvalidBootstrapToken(t *testing.T) {
 
 	_, err := srv.JoinFederation(context.Background(), &flowv1.JoinFederationRequest{
 		BootstrapToken:  "wrong-token",
-		FlowIdentity:    "flow-alpha",
+		FlowIdentity:    testFlowAlpha,
 		EmbassyEndpoint: "flow-embassy:50059",
 	})
 	if err == nil {
@@ -172,12 +176,12 @@ func TestJoinFederation_AlreadyJoined(t *testing.T) {
 	// Pre-load an existing FederationMember CR for flow-alpha.
 	existing := &federationv1.FederationMember{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-alpha",
+			Name:      testFlowAlpha,
 			Namespace: testNamespace,
 		},
 		Spec: federationv1.FederationMemberSpec{
-			FlowIdentity:    "flow-alpha",
-			EmbassyEndpoint: "flow-alpha-embassy:50059",
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
 		},
 	}
 
@@ -185,8 +189,8 @@ func TestJoinFederation_AlreadyJoined(t *testing.T) {
 
 	_, err := srv.JoinFederation(context.Background(), &flowv1.JoinFederationRequest{
 		BootstrapToken:  "valid-token",
-		FlowIdentity:    "flow-alpha",
-		EmbassyEndpoint: "flow-alpha-embassy:50059",
+		FlowIdentity:    testFlowAlpha,
+		EmbassyEndpoint: testFlowAlphaEmbassy,
 	})
 	if err == nil {
 		t.Fatal("expected error for already-joined member, got nil")
@@ -240,7 +244,7 @@ func TestJoinFederation_EmptyEmbassyEndpoint(t *testing.T) {
 
 	_, err := srv.JoinFederation(context.Background(), &flowv1.JoinFederationRequest{
 		BootstrapToken:  "valid-token",
-		FlowIdentity:    "flow-alpha",
+		FlowIdentity:    testFlowAlpha,
 		EmbassyEndpoint: "",
 	})
 	if err == nil {
@@ -257,19 +261,19 @@ func TestLeaveFederation_Success(t *testing.T) {
 	// Pre-load an existing FederationMember CR.
 	existing := &federationv1.FederationMember{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-alpha",
+			Name:      testFlowAlpha,
 			Namespace: testNamespace,
 		},
 		Spec: federationv1.FederationMemberSpec{
-			FlowIdentity:    "flow-alpha",
-			EmbassyEndpoint: "flow-alpha-embassy:50059",
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
 		},
 	}
 
 	srv := newTestServer(t, existing)
 
 	resp, err := srv.LeaveFederation(context.Background(), &flowv1.LeaveFederationRequest{
-		FlowIdentity: "flow-alpha",
+		FlowIdentity: testFlowAlpha,
 	})
 	if err != nil {
 		t.Fatalf("LeaveFederation returned error: %v", err)
@@ -280,7 +284,7 @@ func TestLeaveFederation_Success(t *testing.T) {
 
 	// Verify the CR was deleted.
 	var member federationv1.FederationMember
-	key := types.NamespacedName{Namespace: testNamespace, Name: "flow-alpha"}
+	key := types.NamespacedName{Namespace: testNamespace, Name: testFlowAlpha}
 	err = srv.k8sClient.Get(context.Background(), key, &member)
 	if err == nil {
 		t.Fatal("expected FederationMember CR to be deleted, but it still exists")
@@ -336,12 +340,12 @@ func TestGetMembership_Success(t *testing.T) {
 	}
 	member := &federationv1.FederationMember{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-alpha",
+			Name:      testFlowAlpha,
 			Namespace: testNamespace,
 		},
 		Spec: federationv1.FederationMemberSpec{
-			FlowIdentity:    "flow-alpha",
-			EmbassyEndpoint: "flow-alpha-embassy:50059",
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
 			StateRefs:       []string{"state-qld", "state-nsw"},
 			PublisherRoles: []federationv1.PublisherRoleSpec{
 				{Scope: "education", Level: "state"},
@@ -352,7 +356,7 @@ func TestGetMembership_Success(t *testing.T) {
 	srv := newTestServer(t, stateQLD, stateNSW, member)
 
 	resp, err := srv.GetMembership(context.Background(), &flowv1.GetMembershipRequest{
-		FlowIdentity: "flow-alpha",
+		FlowIdentity: testFlowAlpha,
 	})
 	if err != nil {
 		t.Fatalf("GetMembership returned error: %v", err)
@@ -362,11 +366,11 @@ func TestGetMembership_Success(t *testing.T) {
 	if m == nil {
 		t.Fatal("response member is nil")
 	}
-	if m.GetFlowIdentity() != "flow-alpha" {
-		t.Errorf("flow_identity = %q, want %q", m.GetFlowIdentity(), "flow-alpha")
+	if m.GetFlowIdentity() != testFlowAlpha {
+		t.Errorf("flow_identity = %q, want %q", m.GetFlowIdentity(), testFlowAlpha)
 	}
-	if m.GetEmbassyEndpoint() != "flow-alpha-embassy:50059" {
-		t.Errorf("embassy_endpoint = %q, want %q", m.GetEmbassyEndpoint(), "flow-alpha-embassy:50059")
+	if m.GetEmbassyEndpoint() != testFlowAlphaEmbassy {
+		t.Errorf("embassy_endpoint = %q, want %q", m.GetEmbassyEndpoint(), testFlowAlphaEmbassy)
 	}
 
 	// States should be resolved from FederationState CRs via stateRefs.
@@ -423,5 +427,200 @@ func TestGetMembership_EmptyFlowIdentity(t *testing.T) {
 	}
 	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+// --- DiscoverEndpoints Tests ---
+
+func TestDiscoverEndpoints_NoFilter_ReturnsAllMembers(t *testing.T) {
+	// Pre-load two members with different states.
+	memberAlpha := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testFlowAlpha,
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	memberBeta := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-beta",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-beta",
+			EmbassyEndpoint: "flow-beta-embassy:50059",
+			StateRefs:       []string{"state-nsw"},
+		},
+	}
+
+	srv := newTestServer(t, memberAlpha, memberBeta)
+
+	resp, err := srv.DiscoverEndpoints(context.Background(), &flowv1.DiscoverEndpointsRequest{})
+	if err != nil {
+		t.Fatalf("DiscoverEndpoints returned error: %v", err)
+	}
+
+	if len(resp.GetEndpoints()) != 2 {
+		t.Fatalf("endpoints count = %d, want 2", len(resp.GetEndpoints()))
+	}
+
+	// Build a map for order-independent assertions.
+	byIdentity := make(map[string]*flowv1.FlowEndpoint)
+	for _, ep := range resp.GetEndpoints() {
+		byIdentity[ep.GetFlowIdentity()] = ep
+	}
+
+	alpha := byIdentity[testFlowAlpha]
+	if alpha == nil {
+		t.Fatal("missing endpoint for flow-alpha")
+	}
+	if alpha.GetEmbassyAddress() != testFlowAlphaEmbassy {
+		t.Errorf("flow-alpha embassy_address = %q, want %q", alpha.GetEmbassyAddress(), testFlowAlphaEmbassy)
+	}
+	if len(alpha.GetStateIds()) != 1 || alpha.GetStateIds()[0] != "state-qld" {
+		t.Errorf("flow-alpha state_ids = %v, want [state-qld]", alpha.GetStateIds())
+	}
+
+	beta := byIdentity["flow-beta"]
+	if beta == nil {
+		t.Fatal("missing endpoint for flow-beta")
+	}
+	if beta.GetEmbassyAddress() != "flow-beta-embassy:50059" {
+		t.Errorf("flow-beta embassy_address = %q, want %q", beta.GetEmbassyAddress(), "flow-beta-embassy:50059")
+	}
+	if len(beta.GetStateIds()) != 1 || beta.GetStateIds()[0] != "state-nsw" {
+		t.Errorf("flow-beta state_ids = %v, want [state-nsw]", beta.GetStateIds())
+	}
+}
+
+func TestDiscoverEndpoints_WithStateFilter_ReturnsMatchingMembers(t *testing.T) {
+	// Pre-load members: alpha in QLD, beta in NSW, gamma in both.
+	memberAlpha := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testFlowAlpha,
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	memberBeta := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-beta",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-beta",
+			EmbassyEndpoint: "flow-beta-embassy:50059",
+			StateRefs:       []string{"state-nsw"},
+		},
+	}
+	memberGamma := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-gamma",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-gamma",
+			EmbassyEndpoint: "flow-gamma-embassy:50059",
+			StateRefs:       []string{"state-qld", "state-nsw"},
+		},
+	}
+
+	srv := newTestServer(t, memberAlpha, memberBeta, memberGamma)
+
+	resp, err := srv.DiscoverEndpoints(context.Background(), &flowv1.DiscoverEndpointsRequest{
+		StateFilter: "state-qld",
+	})
+	if err != nil {
+		t.Fatalf("DiscoverEndpoints returned error: %v", err)
+	}
+
+	// Should return alpha (QLD) and gamma (QLD+NSW), not beta (NSW only).
+	if len(resp.GetEndpoints()) != 2 {
+		t.Fatalf("endpoints count = %d, want 2", len(resp.GetEndpoints()))
+	}
+
+	byIdentity := make(map[string]*flowv1.FlowEndpoint)
+	for _, ep := range resp.GetEndpoints() {
+		byIdentity[ep.GetFlowIdentity()] = ep
+	}
+
+	if byIdentity[testFlowAlpha] == nil {
+		t.Error("expected flow-alpha in results (member of state-qld)")
+	}
+	if byIdentity["flow-gamma"] == nil {
+		t.Error("expected flow-gamma in results (member of state-qld and state-nsw)")
+	}
+	if byIdentity["flow-beta"] != nil {
+		t.Error("flow-beta should not be in results (not a member of state-qld)")
+	}
+}
+
+func TestDiscoverEndpoints_FlowEndpointFields(t *testing.T) {
+	// Verify each FlowEndpoint includes flow_identity, embassy_address, state_ids.
+	member := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testFlowAlpha,
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
+			StateRefs:       []string{"state-qld", "state-nsw"},
+		},
+	}
+
+	srv := newTestServer(t, member)
+
+	resp, err := srv.DiscoverEndpoints(context.Background(), &flowv1.DiscoverEndpointsRequest{})
+	if err != nil {
+		t.Fatalf("DiscoverEndpoints returned error: %v", err)
+	}
+
+	if len(resp.GetEndpoints()) != 1 {
+		t.Fatalf("endpoints count = %d, want 1", len(resp.GetEndpoints()))
+	}
+
+	ep := resp.GetEndpoints()[0]
+	if ep.GetFlowIdentity() != testFlowAlpha {
+		t.Errorf("flow_identity = %q, want %q", ep.GetFlowIdentity(), testFlowAlpha)
+	}
+	if ep.GetEmbassyAddress() != testFlowAlphaEmbassy {
+		t.Errorf("embassy_address = %q, want %q", ep.GetEmbassyAddress(), testFlowAlphaEmbassy)
+	}
+	if len(ep.GetStateIds()) != 2 {
+		t.Fatalf("state_ids count = %d, want 2", len(ep.GetStateIds()))
+	}
+	// Check state IDs are present (order from spec.stateRefs).
+	stateSet := make(map[string]bool)
+	for _, sid := range ep.GetStateIds() {
+		stateSet[sid] = true
+	}
+	if !stateSet["state-qld"] {
+		t.Error("missing state-qld in state_ids")
+	}
+	if !stateSet["state-nsw"] {
+		t.Error("missing state-nsw in state_ids")
+	}
+}
+
+func TestDiscoverEndpoints_EmptyFederation_ReturnsEmptyList(t *testing.T) {
+	// No pre-loaded members.
+	srv := newTestServer(t)
+
+	resp, err := srv.DiscoverEndpoints(context.Background(), &flowv1.DiscoverEndpointsRequest{})
+	if err != nil {
+		t.Fatalf("DiscoverEndpoints returned error: %v", err)
+	}
+
+	if len(resp.GetEndpoints()) != 0 {
+		t.Errorf("endpoints count = %d, want 0", len(resp.GetEndpoints()))
 	}
 }
