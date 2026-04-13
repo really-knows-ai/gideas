@@ -10,7 +10,8 @@ sequencing lives in `PLAN.md` and `PHASE_10.md` onward.
 - The Embassy / Federation / cross-flow redesign is in progress.
 - Phase 11 Embassy foundations are complete under the corrected platform-owned node/import-type model.
 - Phase 12 Federation foundations are complete (proto, service schema, publication lifecycle, dispute records).
-- Active work moves next to `PHASE_13.md` Embassy node, Federation service, and Clerk/authority wiring.
+- Phase 13 Embassy node (13.1-13.5) is complete. Federation service (13.6-13.7) is being rewritten from SQLite to Kubernetes CRDs.
+- Active work moves next to `PHASE_13.md` Federation CRD migration, publication admission redesign, and Clerk/authority wiring.
 
 ## Motivation
 
@@ -107,7 +108,8 @@ tracking.
 | Naturalisation | **Per-stamp local attestation (`imported-*`)** | Embassy verifies each required foreign stamp and emits a local `imported-<stamp>` attestation. Local contracts rely on the attested local stamps; foreign stamps remain provenance only. |
 | Cross-flow transfer protocol | **Header-first Embassy manifest + streamed package** | Sender Embassy sends a signed manifest containing `importType`, artefact inventory, and foreign stamps. Receiver Embassy preflights before requesting the full package. Same protocol for federation-member and Treaty exchange. |
 | Published law distribution | **Federation service distributes published local Tier 3 laws** | Authority Flows publish ordinary local laws outward; subscribers materialise them as Tier 4 or Tier 5 based on publisher role. |
-| Publication conflicts | **Reject at federation publication admission** | Conflicting or unauthorised publications are rejected before distribution with structured feedback returned to the source Flow. |
+| Publication conflicts | **Distributed semantic search + LLM analysis** | No federation-level publication registry. The Federation service queries publisher Librarians via `SearchSimilarLaws` in parallel, consolidates results, and uses an LLM call to determine actual conflicts. Hard reject on conflict. |
+| Federation storage | **Kubernetes CRDs (no SQLite)** | `FederationMember` and `FederationState` CRDs backed by etcd. Inspectable via `kubectl`, subject to standard K8s RBAC. The Federation service is a Kubebuilder controller that owns these CRDs. |
 | Law application | **Dedicated law-applicator node** | Applies approved petitions via Librarian (`WriteLaw`/`RetireLaw`). Separated from routing decisions per Principle 5. |
 | Deadlock lifecycle | **Facilitator + Arbiter child** | Sort routes deadlocks to the Facilitator. The Facilitator assembles an evidence bundle, creates a child workitem for the Arbiter, and Suspends. The Arbiter deliberates and Completes. The Facilitator resumes and routes back to Sort. |
 | Dependent processes | **Suspend/Resume platform primitive** | When a node needs to wait for a long-running dependent process (e.g. Arbiter waiting for Clerk cycle to complete a law change), it creates a child workitem, calls `Suspend(condition)`, and gets re-dispatched when the condition is met. CEL-based conditions. Timeouts. |
@@ -290,26 +292,88 @@ service responsibility, not an Embassy `importType`.
 ### Federation Service
 
 The Federation service is the control-plane authority that sits above
-individual Flows. It is not a node in the Flow topology. Joining a federation
-establishes Flow identity, trust-root discovery, endpoint discovery, and
-membership. Federation policy then defines:
+individual Flows. It is architecturally independent of the Flow operator --
+a separate Kubebuilder controller + gRPC server deployed in its own namespace.
+Flows can run without a Federation service (standalone mode or Treaty-only);
+running a Federation service establishes the control plane that Flows join.
+
+**Implementation model.** The Federation service is a Kubebuilder controller
+that manages its own CRDs (`FederationMember`, `FederationState`) and exposes
+a gRPC server for SDK-facing RPCs. All persistent state lives in Kubernetes
+CRDs backed by etcd -- there is no separate database. This makes federation
+state inspectable via `kubectl`, subject to standard K8s RBAC, and consistent
+with the project's Kubernetes-native design.
+
+**CRDs owned by the Federation service:**
+
+| CRD | Created By | Purpose |
+|---|---|---|
+| `FederationMember` | Federation service (on `JoinFederation` RPC) | Tracks a Flow's membership, embassy endpoint, state assignments, and publisher roles. Deleted on `LeaveFederation`. |
+| `FederationState` | Federation admin (`kubectl apply`) | Declares a federation-defined organisational group. Applied once per state. |
+
+**Join/leave protocol.** A Flow joins the federation by calling
+`JoinFederation` on the Federation service's gRPC endpoint with a bootstrap
+token (issued out-of-band). The Federation service validates the token and
+creates a `FederationMember` CR. `LeaveFederation` deletes it. The Flow
+operator has no knowledge of Federation CRDs -- it only projects the
+federation endpoint address to the Embassy and petition-watcher nodes.
+
+Federation policy defines:
 
 - **States / organisational units** -- groups of Flows that share state-level
-  relationships; sibling relationships derive from shared membership.
+  relationships; sibling relationships derive from shared state membership.
+  Declared as `FederationState` CRs by the federation admin.
 - **Authority publisher roles** -- which Flows may publish local Tier 3 laws
   outward, whether publication lands as Tier 4 (state) or Tier 5 (federation),
-  and which domains / scopes they cover.
+  and which domains / scopes they cover. Stored on the `FederationMember` CR.
 - **Petition routing** -- which authority Flow receives built-in
   `law-petition` imports for a given relationship / scope.
 - **Publication admission** -- when a Flow marks a local Tier 3 law
   `published`, it submits the law to the Federation service. The service
-  validates role / scope / relationship constraints, runs conflict detection,
-  and either accepts the publication for distribution or rejects it with a
-  structured report returned to the source Flow.
+  validates authority, runs distributed conflict detection across publisher
+  Flows' Libraries (semantic search + LLM analysis), and either accepts the
+  publication for distribution or hard-rejects it with a structured report.
 - **Publication distribution** -- accepted state publications materialise as
   Tier 4 laws in subscriber Flows. Accepted federation-wide publications
-  materialise as Tier 5 laws. The law remains Tier 3 in its source Flow;
-  publication changes how other Flows receive it, not what it is locally.
+  materialise as Tier 5 laws automatically (no HITL ratification). The law
+  remains Tier 3 in its source Flow; publication changes how other Flows
+  receive it, not what it is locally.
+
+**Publication admission: distributed conflict detection.** There is no
+federation-level publication registry. Conflict detection is a live,
+distributed query:
+
+1. The source Flow calls `SubmitPublication(law)`.
+2. The Federation service validates that the source Flow has a publisher role
+   covering the law's scope/division.
+3. The Federation service identifies all publisher Flows from `FederationMember`
+   CRs and calls `Librarian.SearchSimilarLaws` on each publisher's Librarian
+   in parallel -- a distributed semantic search across all Libraries.
+4. The Federation service consolidates results and makes an LLM call (via the
+   SDK provider abstraction) to determine which semantic matches are actual
+   conflicts.
+5. If conflicts: hard reject with structured report (conflicting law IDs,
+   remediation text).
+6. If no conflicts: accept, push `PublishedLawEvent` on the
+   `SubscribeLawUpdates` stream to subscribers.
+
+For state-level publications, conflict detection queries only Librarians of
+publisher Flows in the same state(s). For federation-level publications, all
+publisher Librarians are queried.
+
+**Distribution mechanism.** Subscriber Flows maintain an open
+`SubscribeLawUpdates` gRPC stream to the Federation service. On accepted
+publication, the Federation service pushes a `PublishedLawEvent`. A local
+component in each subscriber Flow (the law-subscription watcher or
+petition-outcome-watcher) receives the event and calls its local
+`Librarian.ReplicateLaws` to write the law as T4 or T5 automatically --
+no HITL ratification for accepted publications.
+
+**Librarian semantic search.** The Librarian exposes a `SearchSimilarLaws`
+RPC that performs vector similarity search against stored law embeddings.
+Embeddings are computed using the Ollama provider when laws are written
+via `WriteLaw` or `ReplicateLaws`. The Librarian stores embeddings in
+sqlite-vec alongside the law data.
 
 ### Suspend/Resume Platform Primitive
 
@@ -644,9 +708,12 @@ administrative — no codification needed.
 
 Authority Flows are ordinary Flows. When an approved local Tier 3 law is marked
 `published`, the source Flow submits it to Federation service publication
-admission. If accepted, the Federation service distributes the law to
-subscriber Flows, where it materialises as Tier 4 or Tier 5 according to the
-publisher's authority role.
+admission. The Federation service runs distributed conflict detection (semantic
+search across publisher Librarians + LLM analysis). If accepted, it distributes
+the law to subscriber Flows via the `SubscribeLawUpdates` stream, where it
+materialises automatically as Tier 4 or Tier 5 according to the publisher's
+authority role -- no HITL ratification for accepted publications. If rejected,
+the Federation service returns a structured conflict report.
 
 If the law originated from a cross-flow `law-petition`, the approved published
 law carries the `petition_id` in provenance. The threading path is:
@@ -729,7 +796,7 @@ rather than each independently re-escalating through the Facilitator → Arbiter
 
 | Component | Role |
 |---|---|
-| Federation service | Federation control plane for membership, trust-root distribution, state / organisational-unit grouping, authority publisher roles, petition target discovery, publication admission, conflict rejection, and Tier 4 / Tier 5 distribution. |
+| Federation service | Federation control plane: Kubebuilder controller + gRPC server. Manages `FederationMember` and `FederationState` CRDs (no SQLite). Handles membership, endpoint discovery, authority publisher roles, petition target routing, publication admission (distributed semantic search + LLM conflict analysis), and Tier 4 / Tier 5 distribution via streaming. |
 
 ### New Node Images
 
@@ -757,7 +824,8 @@ rather than each independently re-escalating through the Facilitator → Arbiter
 | Flow CRD suspension config | `spec.suspension.maxSuspendTimeout`, `spec.suspension.defaultSuspendTimeout`. |
 | Cross-flow import type config | `spec.crossFlow.importTypes` publishes the flow-authored extension set `importType -> {node, requireForeignStamps}` and replaces the old `importNode` field. Built-in system import types (for example `law-petition`) live in the same effective namespace but are platform-owned rather than YAML-authored. |
 | Embassy transfer protocol | Signed manifest/header + streamed package transfer, shared by federation-member and Treaty-based exchange. Treaties may constrain `allowedImportTypes`. |
-| Published law admission / distribution | Source Flows submit local Tier 3 laws marked `published`; accepted laws materialise as Tier 4 or Tier 5 in subscribers, rejected publications return structured reports. |
+| Published law admission / distribution | Source Flows submit local Tier 3 laws marked `published`; Federation service validates authority, runs distributed semantic search across publisher Librarians, uses LLM for conflict analysis, and either accepts (automatic T4/T5 materialisation in subscribers) or hard-rejects with structured report. |
+| Librarian semantic search | `SearchSimilarLaws` RPC: vector similarity search via sqlite-vec against stored law embeddings (computed by Ollama provider on `WriteLaw`/`ReplicateLaws`). Used by the Federation service for distributed conflict detection. |
 
 ### CRD-Only Instances (no new image, just FoundryNode CRDs with config)
 
@@ -889,32 +957,35 @@ rather than each independently re-escalating through the Facilitator → Arbiter
    pending decisions)? Webhook? This is the `USE:queue/server` capability from
    the SDK HITL pattern. Needs to be made generic.
 
-8. **Federation service object model** -- what are the exact resources / APIs
-   for federation membership, state / organisational-unit grouping, authority
-   publisher roles, petition target discovery, and endpoint discovery?
+8. **Federation service object model** -- RESOLVED. `FederationMember` and
+   `FederationState` CRDs managed by the Federation service (Kubebuilder
+   controller). No SQLite. gRPC RPCs backed by K8s API reads/writes.
 
 9. **Authority scope model** -- how are domains such as security, risk, and
    finance declared, attached to publishers, attached to laws / petitions, and
    used for routing?
 
-10. **Overlap/conflict escalation policy** -- if two equal-tier external
-    authorities overlap or publish contradictory laws, how is that conflict
-    detected, who receives the resulting `law-petition`, and what prevents
-    ambiguous local precedence?
+10. **Overlap/conflict escalation policy** -- RESOLVED. Distributed semantic
+    search across publisher Librarians + LLM conflict analysis in the
+    Federation service. Hard reject on conflict -- source Flow receives a
+    structured report with conflicting law IDs and remediation text.
 
-11. **Publication lifecycle details** -- what is the exact `published` marker
-    semantics, rejection report shape, petition-ID correlation, dispute
-    record retirement behaviour, and subscriber materialisation path for
-    accepted Tier 4 / Tier 5 laws?
+11. **Publication lifecycle details** -- RESOLVED. No publication registry.
+    Conflict detection is live/distributed (semantic search + LLM). Accepted
+    laws are pushed via `SubscribeLawUpdates` stream and materialised
+    automatically as T4/T5 in subscriber Libraries via `ReplicateLaws`.
+    Rejections are hard with structured reports. Petition-ID correlation
+    flows through law provenance metadata.
 
 12. **Embassy staging/storage model** -- does Embassy require scratch storage
     for streamed packages in all cases, or only for large bundles / retryable
     transfers? How is partial-transfer recovery modeled?
 
-13. **Federation service deployment model** -- where does the Federation
-    service run? Per-cluster or shared across clusters? Its own namespace or
-    alongside an operator? Single instance or HA? How do Flows discover it?
-    This affects trust bootstrap, network topology, and operational model.
+13. **Federation service deployment model** -- RESOLVED. The Federation service
+    is a Kubebuilder controller + gRPC server, deployed independently of the
+    Flow operator. It runs in its own namespace, manages its own CRDs
+    (`FederationMember`, `FederationState`), and Flows discover it via a
+    configured endpoint address projected by the Flow operator.
 
 14. **Trust bootstrap** -- how does a Flow authenticate to the Federation
     service to join in the first place? The federation provides the trust
