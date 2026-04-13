@@ -350,28 +350,28 @@ against the K8s API instead of SQLite.
 
 #### Slice 13.6.6 -- Federation service: JoinFederation (CRD-backed)
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Rewrite `platform/federation/internal/service/federation_server.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Rewrite `platform/federation/internal/service/federation_server.go`:
   - `FederationServer` struct: replace `*sqlite.Store` with `client.Client` (K8s client) and `namespace string`
   - Replace `FederationOption` functions to configure K8s client, namespace, bootstrap token, config, CA
   - `NewFederationServer(k8sClient client.Client, namespace string, opts ...FederationOption)`
-- [ ] Rewrite `JoinFederation`:
+- [x] Rewrite `JoinFederation`:
   - Validate inputs (flow_identity, bootstrap_token)
   - Create a `FederationMember` CR via `k8sClient.Create()`
   - Spec populated from request + default states/roles
   - Read `FederationState` CRs for state details in response
   - Return `JoinFederationResponse` with config, CA, states, roles
   - If CR already exists -> `AlreadyExists`
-- [ ] Add tests in `platform/federation/internal/service/federation_server_test.go`:
+- [x] Add tests in `platform/federation/internal/service/federation_server_test.go`:
   - `JoinFederation` success -> `FederationMember` CR created, response has config/CA/states/roles
   - `JoinFederation` empty flow identity -> `InvalidArgument`
   - `JoinFederation` empty bootstrap token -> `InvalidArgument`
   - `JoinFederation` already joined -> `AlreadyExists`
   - Response includes assigned states and publisher roles
   - Tests use `fake.NewClientBuilder()` with the Federation scheme
-- [ ] Validate red
-- [ ] Implement
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.7 -- Federation service: LeaveFederation and GetMembership (CRD-backed)
 
