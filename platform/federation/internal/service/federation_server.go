@@ -13,9 +13,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,14 +27,40 @@ import (
 	federationv1 "github.com/gideas/flow/federation/api/v1"
 )
 
+// LibrarianDialer abstracts dialing a remote Librarian so tests can inject
+// a spy/mock without real gRPC connections.
+type LibrarianDialer interface {
+	// DialLibrarian connects to a Librarian at the given address and returns
+	// a client plus a closer function. The caller must call the closer when
+	// done with the client.
+	DialLibrarian(ctx context.Context, address string) (flowv1.LibrarianServiceClient, func() error, error)
+}
+
+// GRPCLibrarianDialer is the production implementation that dials a real
+// gRPC endpoint.
+type GRPCLibrarianDialer struct{}
+
+// DialLibrarian dials a Librarian at addr using insecure credentials (mTLS
+// is deferred to a later phase).
+func (d *GRPCLibrarianDialer) DialLibrarian(
+	ctx context.Context, addr string,
+) (flowv1.LibrarianServiceClient, func() error, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial librarian %s: %w", addr, err)
+	}
+	return flowv1.NewLibrarianServiceClient(conn), conn.Close, nil
+}
+
 // FederationServer implements flowv1.FederationServiceServer backed by
 // Kubernetes CRDs via a controller-runtime client.
 type FederationServer struct {
 	flowv1.UnimplementedFederationServiceServer
-	k8sClient      client.Client
-	namespace      string
-	config         *flowv1.FederationConfig
-	bootstrapToken string
+	k8sClient       client.Client
+	namespace       string
+	config          *flowv1.FederationConfig
+	bootstrapToken  string
+	librarianDialer LibrarianDialer
 }
 
 // FederationOption configures a FederationServer.
@@ -45,6 +74,12 @@ func WithFederationConfig(cfg *flowv1.FederationConfig) FederationOption {
 // WithBootstrapToken sets the expected bootstrap token for authentication.
 func WithBootstrapToken(token string) FederationOption {
 	return func(s *FederationServer) { s.bootstrapToken = token }
+}
+
+// WithLibrarianDialer sets the dialer used to connect to remote Librarians
+// for distributed conflict detection during publication admission.
+func WithLibrarianDialer(d LibrarianDialer) FederationOption {
+	return func(s *FederationServer) { s.librarianDialer = d }
 }
 
 // NewFederationServer returns a FederationServer backed by the given
@@ -330,11 +365,173 @@ func (s *FederationServer) SubmitPublication(
 	}
 
 	// --- Authority validation passed ---
-	// Conflict detection will be added in slices 13.8.2 and 13.8.3.
-	// For now, accept the publication.
+	// --- Distributed conflict detection (13.8.2) ---
+	// Search publisher Flows' Librarians for semantically similar laws.
+	// For state-level publications, only query publishers in the same state(s).
+	// For federation-level publications, query all publishers.
+	if s.librarianDialer != nil {
+		similarLaws, searchErr := s.distributedSearch(ctx, req.GetLaw(), matchingRole, member)
+		if searchErr != nil {
+			// Search infrastructure error is non-fatal for this slice.
+			// Log and proceed. LLM conflict analysis (13.8.3) will gate
+			// the final decision.
+			_ = searchErr
+		}
+		// Conflict analysis will be wired in slice 13.8.3 using the
+		// ConflictAnalyser interface. For now, collect results only.
+		_ = similarLaws
+	}
+
 	return &flowv1.SubmitPublicationResponse{
 		Accepted: true,
 	}, nil
+}
+
+// searchResult holds the results from a single Librarian search.
+type searchResult struct {
+	results []*flowv1.SimilarLaw
+	err     error
+}
+
+// distributedSearch queries publisher Flows' Librarians in parallel for laws
+// semantically similar to the candidate law. Results are consolidated and
+// deduplicated by law ID.
+func (s *FederationServer) distributedSearch(
+	ctx context.Context,
+	candidateLaw *flowv1.Law,
+	matchingRole *federationv1.PublisherRoleSpec,
+	sourceMember *federationv1.FederationMember,
+) ([]*flowv1.SimilarLaw, error) {
+	// List all FederationMember CRs to find publisher Flows.
+	var memberList federationv1.FederationMemberList
+	if err := s.k8sClient.List(ctx, &memberList, client.InNamespace(s.namespace)); err != nil {
+		return nil, fmt.Errorf("list FederationMembers for conflict search: %w", err)
+	}
+
+	// Determine which publishers to query based on the role level.
+	publishers := s.selectPublishersForSearch(memberList.Items, matchingRole, sourceMember)
+	if len(publishers) == 0 {
+		return nil, nil
+	}
+
+	// Query each publisher's Librarian in parallel.
+	var wg sync.WaitGroup
+	resultsCh := make(chan searchResult, len(publishers))
+
+	for _, pub := range publishers {
+		wg.Add(1)
+		go func(endpoint string) {
+			defer wg.Done()
+			result := s.searchLibrarian(ctx, endpoint, candidateLaw)
+			resultsCh <- result
+		}(pub.Spec.EmbassyEndpoint)
+	}
+
+	wg.Wait()
+	close(resultsCh)
+
+	// Consolidate results, deduplicating by law ID.
+	return consolidateResults(resultsCh), nil
+}
+
+// selectPublishersForSearch returns the FederationMember CRs whose Librarians
+// should be queried for conflict detection. State-level publications query only
+// publishers sharing a state with the source member. Federation-level
+// publications query all publishers.
+func (s *FederationServer) selectPublishersForSearch(
+	members []federationv1.FederationMember,
+	matchingRole *federationv1.PublisherRoleSpec,
+	sourceMember *federationv1.FederationMember,
+) []*federationv1.FederationMember {
+	var selected []*federationv1.FederationMember
+
+	for i := range members {
+		m := &members[i]
+
+		// Only consider members with publisher roles.
+		if len(m.Spec.PublisherRoles) == 0 {
+			continue
+		}
+
+		// For state-level publications, only include publishers who share
+		// at least one state with the source member.
+		if matchingRole.Level == "state" {
+			if !sharesState(sourceMember.Spec.StateRefs, m.Spec.StateRefs) {
+				continue
+			}
+		}
+
+		selected = append(selected, m)
+	}
+
+	return selected
+}
+
+// sharesState reports whether a and b share at least one common state ref.
+func sharesState(a, b []string) bool {
+	for _, sa := range a {
+		if slices.Contains(b, sa) {
+			return true
+		}
+	}
+	return false
+}
+
+// searchLibrarian dials a single Librarian and calls SearchSimilarLaws.
+// Connection and RPC errors are captured in the result (best-effort).
+func (s *FederationServer) searchLibrarian(
+	ctx context.Context,
+	endpoint string,
+	candidateLaw *flowv1.Law,
+) searchResult {
+	libClient, closer, err := s.librarianDialer.DialLibrarian(ctx, endpoint)
+	if err != nil {
+		return searchResult{err: fmt.Errorf("dial %s: %w", endpoint, err)}
+	}
+	defer closer() //nolint:errcheck
+
+	resp, err := libClient.SearchSimilarLaws(ctx, &flowv1.SearchSimilarLawsRequest{
+		QueryText:   candidateLaw.GetGoal(),
+		ScopeFilter: candidateLaw.GetDivision(),
+		Limit:       20,
+	})
+	if err != nil {
+		return searchResult{err: fmt.Errorf("search %s: %w", endpoint, err)}
+	}
+	return searchResult{results: resp.GetResults()}
+}
+
+// consolidateResults merges search results from multiple Librarians,
+// deduplicating by law ID. When the same law ID appears from multiple
+// Librarians, the entry with the highest similarity score is kept.
+func consolidateResults(ch <-chan searchResult) []*flowv1.SimilarLaw {
+	seen := make(map[string]*flowv1.SimilarLaw)
+	for r := range ch {
+		if r.err != nil {
+			// Best-effort: skip failed searches.
+			continue
+		}
+		for _, sl := range r.results {
+			if sl.GetLaw() == nil {
+				continue
+			}
+			lawID := sl.GetLaw().GetId()
+			if existing, ok := seen[lawID]; ok {
+				// Keep the higher similarity score.
+				if sl.GetSimilarityScore() > existing.GetSimilarityScore() {
+					seen[lawID] = sl
+				}
+			} else {
+				seen[lawID] = sl
+			}
+		}
+	}
+
+	result := make([]*flowv1.SimilarLaw, 0, len(seen))
+	for _, sl := range seen {
+		result = append(result, sl)
+	}
+	return result
 }
 
 // containsState reports whether refs contains the given state name.

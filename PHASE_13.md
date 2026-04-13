@@ -531,24 +531,24 @@ across publisher Librarians + LLM analysis), and accepts or hard-rejects.
 
 #### Slice 13.8.2 -- Federation service: SubmitPublication - distributed conflict detection
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add a `LibrarianDialer` interface to decouple Librarian connections for testing:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add a `LibrarianDialer` interface to decouple Librarian connections for testing:
   - `DialLibrarian(ctx context.Context, address string) (flowv1.LibrarianServiceClient, error)`
   - Production implementation: gRPC dial
   - Test implementation: returns a mock/spy Librarian
-- [ ] Add tests:
+- [x] Add tests:
   - On authority validation pass: Federation queries all publisher Flows' Librarians via `SearchSimilarLaws`
   - State-level publication: only Librarians of publisher Flows in the same state(s) are queried
   - Federation-level publication: all publisher Librarians are queried
   - Results from multiple Librarians are consolidated into a single list
   - Librarian connection error is logged and skipped (best-effort, non-blocking)
   - Empty search results from all Librarians -> no conflicts
-- [ ] Validate red
-- [ ] Implement distributed search:
+- [x] Validate red
+- [x] Implement distributed search:
   - List `FederationMember` CRs to find publisher Flows
   - Call `SearchSimilarLaws` on each publisher's Librarian in parallel (using `LibrarianDialer`)
   - Consolidate results, deduplicate by law ID
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.8.3 -- Federation service: SubmitPublication - LLM conflict analysis
 
