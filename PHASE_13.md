@@ -264,19 +264,19 @@ against the K8s API instead of SQLite.
 
 #### Slice 13.6.1 -- Federation Kubebuilder project scaffold
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Delete `platform/federation/internal/store/sqlite/` (SQLite store and tests)
-- [ ] Delete `platform/federation/cmd/main.go` and `cmd/main_test.go` (standalone gRPC bootstrap)
-- [ ] Create `platform/federation/api/v1/groupversion_info.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Delete `platform/federation/internal/store/sqlite/` (SQLite store and tests)
+- [x] Delete `platform/federation/cmd/main.go` and `cmd/main_test.go` (standalone gRPC bootstrap)
+- [x] Create `platform/federation/api/v1/groupversion_info.go`:
   - Group: `federation.gideas.io`, Version: `v1`
   - `SchemeBuilder` and `AddToScheme` following the operator pattern
-- [ ] Create `platform/federation/PROJECT` (Kubebuilder metadata):
+- [x] Create `platform/federation/PROJECT` (Kubebuilder metadata):
   - `domain: gideas.io`, `repo: github.com/gideas/flow/federation`
   - Resources: `FederationState`, `FederationMember`
-- [ ] Update `platform/federation/go.mod`:
+- [x] Update `platform/federation/go.mod`:
   - Add `sigs.k8s.io/controller-runtime`, `k8s.io/apimachinery`, `k8s.io/client-go`
   - Remove `github.com/mattn/go-sqlite3`
-- [ ] Validate green: module compiles and is recognised by the workspace
+- [x] Validate green: module compiles and is recognised by the workspace
 
 #### Slice 13.6.2 -- FederationState CRD type
 
