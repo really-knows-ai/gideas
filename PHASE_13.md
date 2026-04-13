@@ -280,16 +280,16 @@ against the K8s API instead of SQLite.
 
 #### Slice 13.6.2 -- FederationState CRD type
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Create `platform/federation/api/v1/federationstate_types.go`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Create `platform/federation/api/v1/federationstate_types.go`:
   - `FederationStateSpec`: `Name string` (human-readable state name)
   - `FederationStateStatus`: empty for now (states are simple declarations)
   - `FederationState` root type with markers: `+kubebuilder:object:root=true`, `+kubebuilder:resource:scope=Namespaced`
   - `FederationStateList` type
   - `init()` registers with `SchemeBuilder`
   - Print columns: `NAME` (metadata.name), `DISPLAY_NAME` (spec.name)
-- [ ] Add tests: type registers in scheme, deep copy works
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Add tests: type registers in scheme, deep copy works
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.6.3 -- FederationMember CRD type
 
