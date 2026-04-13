@@ -514,20 +514,20 @@ across publisher Librarians + LLM analysis), and accepts or hard-rejects.
 
 #### Slice 13.8.1 -- Federation service: SubmitPublication - authority validation
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `SubmitPublication` from a member with matching publisher role for the law's scope -> proceeds to conflict detection
   - `SubmitPublication` from a member without publisher role -> rejected with `UNAUTHORISED`
   - `SubmitPublication` from a member with wrong scope -> rejected with `OUT_OF_SCOPE`
   - `SubmitPublication` from a non-member -> `PermissionDenied`
   - State-level publisher: scope must match and member must be in a state
   - Federation-level publisher: scope must match
-- [ ] Validate red
-- [ ] Implement authority validation in `SubmitPublication` handler:
+- [x] Validate red
+- [x] Implement authority validation in `SubmitPublication` handler:
   - Look up `FederationMember` CR for source flow identity
   - Check that one of its `publisherRoles` matches the submitted law's division/scope
   - Return appropriate rejection reason on failure
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.8.2 -- Federation service: SubmitPublication - distributed conflict detection
 

@@ -752,6 +752,263 @@ func TestGetPetitionTarget_EmptyScope_InvalidArgument(t *testing.T) {
 	}
 }
 
+// --- SubmitPublication Tests ---
+
+func TestSubmitPublication_AuthorisedPublisher_Accepted(t *testing.T) {
+	// A member with a state-level publisher role for "education" submits a law
+	// with division "education" -> authority check passes, publication proceeds.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-publisher",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-publisher",
+			EmbassyEndpoint: "flow-publisher-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: "state"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-publisher",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	// With no conflict detection in this slice, authority-passing publications
+	// are accepted.
+	if !resp.GetAccepted() {
+		t.Errorf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+}
+
+func TestSubmitPublication_NoPublisherRole_Rejected(t *testing.T) {
+	// A member with no publisher roles submits a law -> rejected with UNAUTHORISED.
+	member := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testFlowAlpha,
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    testFlowAlpha,
+			EmbassyEndpoint: testFlowAlphaEmbassy,
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles:  nil, // No publisher roles.
+		},
+	}
+
+	srv := newTestServer(t, member)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: testFlowAlpha,
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false for member without publisher role")
+	}
+	if resp.GetRejection().GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_UNAUTHORISED {
+		t.Errorf("rejection reason = %v, want UNAUTHORISED", resp.GetRejection().GetReason())
+	}
+}
+
+func TestSubmitPublication_WrongScope_Rejected(t *testing.T) {
+	// A member with a publisher role for "education" submits a law with
+	// division "security" -> rejected with OUT_OF_SCOPE.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-publisher",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-publisher",
+			EmbassyEndpoint: "flow-publisher-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: "state"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-002",
+			Goal:     "Harden security posture",
+			Division: "security",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-publisher",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false for mismatched scope")
+	}
+	if resp.GetRejection().GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_OUT_OF_SCOPE {
+		t.Errorf("rejection reason = %v, want OUT_OF_SCOPE", resp.GetRejection().GetReason())
+	}
+}
+
+func TestSubmitPublication_NonMember_PermissionDenied(t *testing.T) {
+	// A non-member attempts to publish -> PermissionDenied gRPC error.
+	srv := newTestServer(t)
+
+	_, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Some law",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-unknown",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-member, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestSubmitPublication_StateLevelPublisher_MustBeInState(t *testing.T) {
+	// A member with a state-level publisher role for "education" who is NOT
+	// in any state -> rejected with UNAUTHORISED (state-level publishers must
+	// be assigned to at least one state).
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-stateless",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-stateless",
+			EmbassyEndpoint: "flow-stateless-embassy:50059",
+			StateRefs:       nil, // Not in any state.
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: "state"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-stateless",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false for state-level publisher not in any state")
+	}
+	if resp.GetRejection().GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_UNAUTHORISED {
+		t.Errorf("rejection reason = %v, want UNAUTHORISED", resp.GetRejection().GetReason())
+	}
+}
+
+func TestSubmitPublication_FederationLevelPublisher_Accepted(t *testing.T) {
+	// A member with a federation-level publisher role for "security" submits
+	// a law with division "security" -> accepted. No state membership required.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-fed-pub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-fed-pub",
+			EmbassyEndpoint: "flow-fed-pub-embassy:50059",
+			StateRefs:       nil, // No states -- OK for federation level.
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "security", Level: "federation"},
+			},
+		},
+	}
+
+	srv := newTestServer(t, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-003",
+			Goal:     "Harden security posture",
+			Division: "security",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-fed-pub",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	if !resp.GetAccepted() {
+		t.Errorf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+}
+
+func TestSubmitPublication_EmptySourceFlowIdentity_InvalidArgument(t *testing.T) {
+	srv := newTestServer(t)
+
+	_, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Some law",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty source_flow_identity, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestSubmitPublication_NilLaw_InvalidArgument(t *testing.T) {
+	srv := newTestServer(t)
+
+	_, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law:                nil,
+		SourceFlowIdentity: "flow-publisher",
+	})
+	if err == nil {
+		t.Fatal("expected error for nil law, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
 func TestGetPetitionTarget_MultipleMembers_ReturnsMatchingAuthority(t *testing.T) {
 	// Pre-load two members with different scopes: ensure the correct one
 	// is returned for each scope.
