@@ -5,6 +5,7 @@ use (
 	./nodes
 	./platform/archivist
 	./platform/eventbus
+	./platform/federation
 	./platform/frictionledger
 	./platform/librarian
 	./platform/monitor
