@@ -122,6 +122,101 @@ func (s *FederationServer) JoinFederation(
 	}, nil
 }
 
+// LeaveFederation deletes the FederationMember CR for the departing Flow.
+func (s *FederationServer) LeaveFederation(
+	ctx context.Context,
+	req *flowv1.LeaveFederationRequest,
+) (*flowv1.LeaveFederationResponse, error) {
+	if req.GetFlowIdentity() == "" {
+		return nil, status.Error(codes.InvalidArgument, "flow_identity is required")
+	}
+
+	memberName := toK8sName(req.GetFlowIdentity())
+	member := &federationv1.FederationMember{}
+	key := client.ObjectKey{Namespace: s.namespace, Name: memberName}
+
+	if err := s.k8sClient.Get(ctx, key, member); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, status.Errorf(codes.NotFound, "flow %q is not a federation member", req.GetFlowIdentity())
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get FederationMember: %v", err)
+	}
+
+	if err := s.k8sClient.Delete(ctx, member); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete FederationMember: %v", err)
+	}
+
+	return &flowv1.LeaveFederationResponse{Acknowledged: true}, nil
+}
+
+// GetMembership returns the current membership snapshot for a Flow,
+// resolving state names from FederationState CRs.
+func (s *FederationServer) GetMembership(
+	ctx context.Context,
+	req *flowv1.GetMembershipRequest,
+) (*flowv1.GetMembershipResponse, error) {
+	if req.GetFlowIdentity() == "" {
+		return nil, status.Error(codes.InvalidArgument, "flow_identity is required")
+	}
+
+	memberName := toK8sName(req.GetFlowIdentity())
+	member := &federationv1.FederationMember{}
+	key := client.ObjectKey{Namespace: s.namespace, Name: memberName}
+
+	if err := s.k8sClient.Get(ctx, key, member); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, status.Errorf(codes.NotFound, "flow %q is not a federation member", req.GetFlowIdentity())
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get FederationMember: %v", err)
+	}
+
+	// Resolve state names from FederationState CRs for the member's stateRefs.
+	states, err := s.resolveStates(ctx, member.Spec.StateRefs)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resolve states: %v", err)
+	}
+
+	return &flowv1.GetMembershipResponse{
+		Member: &flowv1.FederationMember{
+			FlowIdentity:    member.Spec.FlowIdentity,
+			EmbassyEndpoint: member.Spec.EmbassyEndpoint,
+			States:          states,
+			PublisherRoles:  toProtoPublisherRoles(member.Spec.PublisherRoles),
+		},
+	}, nil
+}
+
+// resolveStates looks up FederationState CRs for the given state ref names
+// and returns proto State messages with resolved display names.
+func (s *FederationServer) resolveStates(ctx context.Context, stateRefs []string) ([]*flowv1.State, error) {
+	if len(stateRefs) == 0 {
+		return nil, nil
+	}
+
+	result := make([]*flowv1.State, 0, len(stateRefs))
+	for _, ref := range stateRefs {
+		st := &federationv1.FederationState{}
+		key := client.ObjectKey{Namespace: s.namespace, Name: ref}
+		if err := s.k8sClient.Get(ctx, key, st); err != nil {
+			if errors.IsNotFound(err) {
+				// State ref points to a non-existent state -- include with
+				// empty display name rather than failing the entire request.
+				result = append(result, &flowv1.State{
+					StateId: ref,
+					Name:    "",
+				})
+				continue
+			}
+			return nil, fmt.Errorf("get FederationState %q: %w", ref, err)
+		}
+		result = append(result, &flowv1.State{
+			StateId: st.Name,
+			Name:    st.Spec.Name,
+		})
+	}
+	return result, nil
+}
+
 // listStates retrieves all FederationState CRs in the namespace and
 // converts them to proto State messages.
 func (s *FederationServer) listStates(ctx context.Context) ([]*flowv1.State, error) {

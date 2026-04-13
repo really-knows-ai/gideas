@@ -375,22 +375,22 @@ against the K8s API instead of SQLite.
 
 #### Slice 13.6.7 -- Federation service: LeaveFederation and GetMembership (CRD-backed)
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Rewrite `LeaveFederation`:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Rewrite `LeaveFederation`:
   - Delete the `FederationMember` CR by name (derived from flow identity)
   - Non-member -> `NotFound`
-- [ ] Rewrite `GetMembership`:
+- [x] Rewrite `GetMembership`:
   - Get the `FederationMember` CR
   - Convert to proto `FederationMember` (resolve state names from FederationState CRs)
   - Non-member -> `NotFound`
-- [ ] Add tests:
+- [x] Add tests:
   - `LeaveFederation` success -> CR deleted, ack
   - `LeaveFederation` non-member -> `NotFound`
   - `GetMembership` success -> returns full snapshot with states and roles
   - `GetMembership` non-member -> `NotFound`
-- [ ] Validate red
-- [ ] Implement
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement
+- [x] Validate green: `go test ./platform/federation/...`
 
 ---
 
