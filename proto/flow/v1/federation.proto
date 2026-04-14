@@ -178,6 +178,10 @@ message SubmitPublicationRequest {
   Law law = 1;
   // Identity of the Flow submitting the publication.
   string source_flow_identity = 2;
+  // Optional petition ID for provenance threading. Present when the law
+  // originated from a cross-flow petition (law-applicator copies the
+  // petition_id from the petition artefact into this field).
+  string petition_id = 3;
 }
 
 // SubmitPublicationResponse reports whether the publication was accepted.

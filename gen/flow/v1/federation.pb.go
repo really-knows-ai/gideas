@@ -970,8 +970,12 @@ type SubmitPublicationRequest struct {
 	Law *Law `protobuf:"bytes,1,opt,name=law,proto3" json:"law,omitempty"`
 	// Identity of the Flow submitting the publication.
 	SourceFlowIdentity string `protobuf:"bytes,2,opt,name=source_flow_identity,json=sourceFlowIdentity,proto3" json:"source_flow_identity,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Optional petition ID for provenance threading. Present when the law
+	// originated from a cross-flow petition (law-applicator copies the
+	// petition_id from the petition artefact into this field).
+	PetitionId    string `protobuf:"bytes,3,opt,name=petition_id,json=petitionId,proto3" json:"petition_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubmitPublicationRequest) Reset() {
@@ -1014,6 +1018,13 @@ func (x *SubmitPublicationRequest) GetLaw() *Law {
 func (x *SubmitPublicationRequest) GetSourceFlowIdentity() string {
 	if x != nil {
 		return x.SourceFlowIdentity
+	}
+	return ""
+}
+
+func (x *SubmitPublicationRequest) GetPetitionId() string {
+	if x != nil {
+		return x.PetitionId
 	}
 	return ""
 }
@@ -1443,10 +1454,12 @@ const file_flow_v1_federation_proto_rawDesc = "" +
 	"\x05scope\x18\x01 \x01(\tR\x05scope\"~\n" +
 	"\x19GetPetitionTargetResponse\x126\n" +
 	"\x17authority_flow_identity\x18\x01 \x01(\tR\x15authorityFlowIdentity\x12)\n" +
-	"\x10embassy_endpoint\x18\x02 \x01(\tR\x0fembassyEndpoint\"l\n" +
+	"\x10embassy_endpoint\x18\x02 \x01(\tR\x0fembassyEndpoint\"\x8d\x01\n" +
 	"\x18SubmitPublicationRequest\x12\x1e\n" +
 	"\x03law\x18\x01 \x01(\v2\f.flow.v1.LawR\x03law\x120\n" +
-	"\x14source_flow_identity\x18\x02 \x01(\tR\x12sourceFlowIdentity\"t\n" +
+	"\x14source_flow_identity\x18\x02 \x01(\tR\x12sourceFlowIdentity\x12\x1f\n" +
+	"\vpetition_id\x18\x03 \x01(\tR\n" +
+	"petitionId\"t\n" +
 	"\x19SubmitPublicationResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12;\n" +
 	"\trejection\x18\x02 \x01(\v2\x1d.flow.v1.PublicationRejectionR\trejection\"\xae\x01\n" +

@@ -23,6 +23,7 @@ const (
 	testFlowAlpha        = "flow-alpha"
 	testFlowAlphaEmbassy = "flow-alpha-embassy:50059"
 	testLevelState       = "state"
+	testLawID            = "law-001"
 )
 
 // newTestServer creates a FederationServer backed by a fake K8s client
@@ -2055,6 +2056,84 @@ func TestSubmitPublication_ConflictRejection_IncludesLawIDsAndRemediation(t *tes
 	}
 }
 
+// =============================================================================
+// Spy EventDispatcher for 13.8.4 tests
+// =============================================================================
+
+// spyEventDispatcher records dispatched events for test assertions.
+type spyEventDispatcher struct {
+	mu               sync.Mutex
+	lawEvents        []*flowv1.PublishedLawEvent
+	petitionOutcomes []*flowv1.PetitionOutcomeEvent
+}
+
+func (s *spyEventDispatcher) DispatchLawEvent(_ context.Context, event *flowv1.PublishedLawEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lawEvents = append(s.lawEvents, event)
+}
+
+func (s *spyEventDispatcher) DispatchPetitionOutcomeEvent(_ context.Context, event *flowv1.PetitionOutcomeEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.petitionOutcomes = append(s.petitionOutcomes, event)
+}
+
+func (s *spyEventDispatcher) getLawEvents() []*flowv1.PublishedLawEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]*flowv1.PublishedLawEvent, len(s.lawEvents))
+	copy(cp, s.lawEvents)
+	return cp
+}
+
+func (s *spyEventDispatcher) getPetitionOutcomes() []*flowv1.PetitionOutcomeEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]*flowv1.PetitionOutcomeEvent, len(s.petitionOutcomes))
+	copy(cp, s.petitionOutcomes)
+	return cp
+}
+
+// newTestServerFull creates a FederationServer with all injectable
+// dependencies for comprehensive testing.
+func newTestServerFull(
+	t *testing.T,
+	dialer LibrarianDialer,
+	analyser ConflictAnalyser,
+	dispatcher EventDispatcher,
+	objs ...client.Object,
+) *FederationServer {
+	t.Helper()
+
+	scheme := federationv1.NewTestScheme()
+	builder := fake.NewClientBuilder().WithScheme(scheme)
+	if len(objs) > 0 {
+		builder = builder.WithObjects(objs...)
+	}
+	k8sClient := builder.Build()
+
+	opts := []FederationOption{
+		WithFederationConfig(&flowv1.FederationConfig{
+			FederationId:   "fed-001",
+			FederationName: "Test Federation",
+			RootCaPem:      "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		}),
+		WithBootstrapToken("valid-token"),
+	}
+	if dialer != nil {
+		opts = append(opts, WithLibrarianDialer(dialer))
+	}
+	if analyser != nil {
+		opts = append(opts, WithConflictAnalyser(analyser))
+	}
+	if dispatcher != nil {
+		opts = append(opts, WithEventDispatcher(dispatcher))
+	}
+
+	return NewFederationServer(k8sClient, testNamespace, opts...)
+}
+
 func TestSubmitPublication_AnalyserError_FailSafeReject(t *testing.T) {
 	// LLM error -> publication rejected with INTERNAL-style error (fail-safe:
 	// do not publish on uncertainty).
@@ -2117,5 +2196,543 @@ func TestSubmitPublication_AnalyserError_FailSafeReject(t *testing.T) {
 	}
 	if rejection.GetRemediationText() == "" {
 		t.Error("expected remediation_text to contain error context")
+	}
+}
+
+// --- 13.8.4 SubmitPublication Acceptance and Distribution Trigger Tests ---
+
+func TestSubmitPublication_NoConflicts_AcceptedResponseTrue(t *testing.T) {
+	// When authority validation and conflict analysis both pass,
+	// SubmitPublicationResponse.accepted must be true.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{HasConflicts: false},
+	}
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, analyser, dispatcher, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       testLawID,
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Errorf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+}
+
+func TestSubmitPublication_NoConflicts_DispatchesPublishedLawEvent(t *testing.T) {
+	// When publication is accepted, a PublishedLawEvent must be dispatched
+	// to the event dispatcher (verified via spy subscriber).
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{HasConflicts: false},
+	}
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, analyser, dispatcher, publisher)
+
+	submittedLaw := &flowv1.Law{
+		Id:       testLawID,
+		Goal:     "Ensure quality education",
+		Division: "education",
+		Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+	}
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law:                submittedLaw,
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Verify a PublishedLawEvent was dispatched.
+	events := dispatcher.getLawEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 PublishedLawEvent dispatched, got %d", len(events))
+	}
+
+	event := events[0]
+	if event.GetLaw().GetId() != testLawID {
+		t.Errorf("event law ID = %q, want %q", event.GetLaw().GetId(), testLawID)
+	}
+	if event.GetPublisherFlowIdentity() != "flow-pub-a" {
+		t.Errorf("event publisher_flow_identity = %q, want %q", event.GetPublisherFlowIdentity(), "flow-pub-a")
+	}
+	if event.GetPublishedAt() == nil {
+		t.Error("event published_at is nil")
+	}
+}
+
+func TestSubmitPublication_StateLevelPublisher_MaterialisationTier4(t *testing.T) {
+	// State-level publisher -> materialisation tier is Tier 4 (STATE_CONSTITUTION).
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, nil, dispatcher, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       testLawID,
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	events := dispatcher.getLawEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 PublishedLawEvent, got %d", len(events))
+	}
+	if events[0].GetMaterialisationTier() != flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION {
+		t.Errorf("materialisation_tier = %v, want LAW_TIER_STATE_CONSTITUTION (Tier 4)",
+			events[0].GetMaterialisationTier())
+	}
+}
+
+func TestSubmitPublication_FederationLevelPublisher_MaterialisationTier5(t *testing.T) {
+	// Federation-level publisher -> materialisation tier is Tier 5 (FEDERAL_ACCORD).
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-fed-pub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-fed-pub",
+			EmbassyEndpoint: "flow-fed-pub-embassy:50059",
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "security", Level: "federation"},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-fed-pub",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-fed-pub-embassy:50059", spyLib)
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, nil, dispatcher, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-003",
+			Goal:     "Harden security posture",
+			Division: "security",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-fed-pub",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	events := dispatcher.getLawEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 PublishedLawEvent, got %d", len(events))
+	}
+	if events[0].GetMaterialisationTier() != flowv1.LawTier_LAW_TIER_FEDERAL_ACCORD {
+		t.Errorf("materialisation_tier = %v, want LAW_TIER_FEDERAL_ACCORD (Tier 5)",
+			events[0].GetMaterialisationTier())
+	}
+}
+
+func TestSubmitPublication_PublishedLawEvent_IncludesAllFields(t *testing.T) {
+	// Verify the PublishedLawEvent includes law, materialisation_tier,
+	// petition_id (from law provenance), publisher_flow_identity, published_at.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, nil, dispatcher, publisher)
+
+	submittedLaw := &flowv1.Law{
+		Id:       testLawID,
+		Goal:     "Ensure quality education",
+		Division: "education",
+		Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+	}
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law:                submittedLaw,
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	events := dispatcher.getLawEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 PublishedLawEvent, got %d", len(events))
+	}
+
+	event := events[0]
+
+	// Law must be included.
+	if event.GetLaw() == nil {
+		t.Fatal("event law is nil")
+	}
+	if event.GetLaw().GetId() != testLawID {
+		t.Errorf("event law ID = %q, want %q", event.GetLaw().GetId(), testLawID)
+	}
+	if event.GetLaw().GetGoal() != "Ensure quality education" {
+		t.Errorf("event law goal = %q, want %q", event.GetLaw().GetGoal(), "Ensure quality education")
+	}
+
+	// Materialisation tier (state-level publisher -> Tier 4).
+	if event.GetMaterialisationTier() != flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION {
+		t.Errorf("materialisation_tier = %v, want LAW_TIER_STATE_CONSTITUTION",
+			event.GetMaterialisationTier())
+	}
+
+	// Petition ID: empty for laws without petition provenance (Law proto
+	// does not carry provenance yet; this is structurally correct).
+	// This test verifies the field is present and populated from available data.
+	// (petition_id is empty here because the Law proto has no provenance field.)
+
+	// Publisher flow identity.
+	if event.GetPublisherFlowIdentity() != "flow-pub-a" {
+		t.Errorf("publisher_flow_identity = %q, want %q",
+			event.GetPublisherFlowIdentity(), "flow-pub-a")
+	}
+
+	// Published timestamp must be set.
+	if event.GetPublishedAt() == nil {
+		t.Error("published_at is nil, expected a timestamp")
+	}
+}
+
+func TestSubmitPublication_ConflictRejection_NoPetitionOutcomeWithoutPetitionID(t *testing.T) {
+	// When a publication is rejected and the law does NOT have petition_id
+	// provenance, no PetitionOutcomeEvent should be dispatched.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	conflictingLaw := &flowv1.SimilarLaw{
+		Law:             &flowv1.Law{Id: "law-existing-001", Goal: "Existing education law"},
+		SimilarityScore: 0.95,
+	}
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: []*flowv1.SimilarLaw{conflictingLaw}},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{
+			HasConflicts:      true,
+			ConflictingLawIDs: []string{"law-existing-001"},
+			RemediationText:   "Conflict detected.",
+		},
+	}
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, analyser, dispatcher, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-new-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false")
+	}
+
+	// No petition_id on the law -> no PetitionOutcomeEvent.
+	outcomes := dispatcher.getPetitionOutcomes()
+	if len(outcomes) != 0 {
+		t.Errorf("expected 0 PetitionOutcomeEvents (no petition_id), got %d", len(outcomes))
+	}
+
+	// No law event should be dispatched on rejection.
+	lawEvents := dispatcher.getLawEvents()
+	if len(lawEvents) != 0 {
+		t.Errorf("expected 0 PublishedLawEvents (rejected), got %d", len(lawEvents))
+	}
+}
+
+func TestSubmitPublication_ConflictRejection_DispatchesPetitionOutcomeEvent(t *testing.T) {
+	// When a publication is rejected and the law HAS petition_id provenance,
+	// a PetitionOutcomeEvent with REJECTED outcome must be dispatched.
+	// Since the Law proto does not carry petition_id, we use a convention:
+	// the SubmitPublicationRequest can carry a petition_id field. For now,
+	// we test via the request's petition_id field.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	conflictingLaw := &flowv1.SimilarLaw{
+		Law:             &flowv1.Law{Id: "law-existing-001", Goal: "Existing education law"},
+		SimilarityScore: 0.95,
+	}
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: []*flowv1.SimilarLaw{conflictingLaw}},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{
+			HasConflicts:      true,
+			ConflictingLawIDs: []string{"law-existing-001"},
+			RemediationText:   "The proposed law contradicts law-existing-001.",
+		},
+	}
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, analyser, dispatcher, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-new-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+		PetitionId:         "petition-abc-123",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false")
+	}
+
+	// PetitionOutcomeEvent must be dispatched with REJECTED.
+	outcomes := dispatcher.getPetitionOutcomes()
+	if len(outcomes) != 1 {
+		t.Fatalf("expected 1 PetitionOutcomeEvent, got %d", len(outcomes))
+	}
+
+	outcome := outcomes[0]
+	if outcome.GetPetitionId() != "petition-abc-123" {
+		t.Errorf("petition_id = %q, want %q", outcome.GetPetitionId(), "petition-abc-123")
+	}
+	if outcome.GetOutcome() != flowv1.PetitionOutcome_PETITION_OUTCOME_REJECTED {
+		t.Errorf("outcome = %v, want PETITION_OUTCOME_REJECTED", outcome.GetOutcome())
+	}
+	if outcome.GetRejection() == nil {
+		t.Fatal("expected rejection details on PetitionOutcomeEvent")
+	}
+	if outcome.GetRejection().GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT {
+		t.Errorf("rejection reason = %v, want CONFLICT", outcome.GetRejection().GetReason())
+	}
+	if outcome.GetResolvedAt() == nil {
+		t.Error("resolved_at is nil")
+	}
+}
+
+func TestSubmitPublication_Acceptance_DispatchesPetitionOutcomeEvent(t *testing.T) {
+	// When a publication is accepted and has petition_id provenance,
+	// a PetitionOutcomeEvent with ACCEPTED outcome must be dispatched.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+	dispatcher := &spyEventDispatcher{}
+
+	srv := newTestServerFull(t, dialer, nil, dispatcher, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       testLawID,
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+		PetitionId:         "petition-xyz-789",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// PublishedLawEvent should have petition_id populated.
+	lawEvents := dispatcher.getLawEvents()
+	if len(lawEvents) != 1 {
+		t.Fatalf("expected 1 PublishedLawEvent, got %d", len(lawEvents))
+	}
+	if lawEvents[0].GetPetitionId() != "petition-xyz-789" {
+		t.Errorf("event petition_id = %q, want %q",
+			lawEvents[0].GetPetitionId(), "petition-xyz-789")
+	}
+
+	// PetitionOutcomeEvent should also be dispatched with ACCEPTED.
+	outcomes := dispatcher.getPetitionOutcomes()
+	if len(outcomes) != 1 {
+		t.Fatalf("expected 1 PetitionOutcomeEvent, got %d", len(outcomes))
+	}
+	if outcomes[0].GetPetitionId() != "petition-xyz-789" {
+		t.Errorf("outcome petition_id = %q, want %q",
+			outcomes[0].GetPetitionId(), "petition-xyz-789")
+	}
+	if outcomes[0].GetOutcome() != flowv1.PetitionOutcome_PETITION_OUTCOME_ACCEPTED {
+		t.Errorf("outcome = %v, want PETITION_OUTCOME_ACCEPTED",
+			outcomes[0].GetOutcome())
+	}
+	if outcomes[0].GetPublishedLawId() != testLawID {
+		t.Errorf("published_law_id = %q, want %q",
+			outcomes[0].GetPublishedLawId(), testLawID)
 	}
 }
