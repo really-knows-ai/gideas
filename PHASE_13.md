@@ -575,23 +575,23 @@ across publisher Librarians + LLM analysis), and accepts or hard-rejects.
 
 #### Slice 13.8.4 -- Federation service: SubmitPublication - acceptance and distribution trigger
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - No conflicts: `SubmitPublicationResponse` with `accepted: true`
   - No conflicts: `PublishedLawEvent` is dispatched to subscribers (verified via spy subscriber)
   - Materialisation tier is Tier 4 for state-level publisher, Tier 5 for federation-level publisher
   - `PublishedLawEvent` includes law, materialisation_tier, petition_id (from law provenance), publisher_flow_identity, published_at
   - Conflicts: `SubmitPublicationResponse` with `accepted: false` and populated `PublicationRejection`
   - Conflicts: `PetitionOutcomeEvent` with `REJECTED` is dispatched if law has petition_id provenance
-- [ ] Validate red
-- [ ] Implement acceptance path:
+- [x] Validate red
+- [x] Implement acceptance path:
   - Build `PublishedLawEvent` with correct materialisation tier
   - Dispatch to subscriber registry (wired in 13.9.1)
   - If law has petition_id in provenance, dispatch `PetitionOutcomeEvent` (wired in 13.9.2)
-- [ ] Implement rejection path:
+- [x] Implement rejection path:
   - Build `SubmitPublicationResponse` with `PublicationRejection`
   - If law has petition_id in provenance, dispatch `PetitionOutcomeEvent` with `REJECTED` + rejection details
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 ---
 

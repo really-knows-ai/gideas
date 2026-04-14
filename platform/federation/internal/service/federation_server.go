@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,6 +35,17 @@ type LibrarianDialer interface {
 	// a client plus a closer function. The caller must call the closer when
 	// done with the client.
 	DialLibrarian(ctx context.Context, address string) (flowv1.LibrarianServiceClient, func() error, error)
+}
+
+// EventDispatcher abstracts the mechanism for broadcasting events to
+// subscribers. The subscriber registry (13.9.1) provides the production
+// implementation; tests inject a spy.
+type EventDispatcher interface {
+	// DispatchLawEvent sends a PublishedLawEvent to all relevant subscribers.
+	DispatchLawEvent(ctx context.Context, event *flowv1.PublishedLawEvent)
+	// DispatchPetitionOutcomeEvent sends a PetitionOutcomeEvent to the
+	// originating subscriber Flow.
+	DispatchPetitionOutcomeEvent(ctx context.Context, event *flowv1.PetitionOutcomeEvent)
 }
 
 // ConflictAnalyser abstracts the LLM-based conflict analysis so tests can
@@ -89,6 +101,7 @@ type FederationServer struct {
 	bootstrapToken   string
 	librarianDialer  LibrarianDialer
 	conflictAnalyser ConflictAnalyser
+	eventDispatcher  EventDispatcher
 }
 
 // FederationOption configures a FederationServer.
@@ -114,6 +127,12 @@ func WithLibrarianDialer(d LibrarianDialer) FederationOption {
 // detection during publication admission.
 func WithConflictAnalyser(a ConflictAnalyser) FederationOption {
 	return func(s *FederationServer) { s.conflictAnalyser = a }
+}
+
+// WithEventDispatcher sets the dispatcher used to broadcast events to
+// subscribers (law publication and petition outcome events).
+func WithEventDispatcher(d EventDispatcher) FederationOption {
+	return func(s *FederationServer) { s.eventDispatcher = d }
 }
 
 // NewFederationServer returns a FederationServer backed by the given
@@ -422,29 +441,89 @@ func (s *FederationServer) SubmitPublication(
 		report, analyseErr := s.conflictAnalyser.AnalyseConflicts(ctx, req.GetLaw(), similarLaws)
 		if analyseErr != nil {
 			// Fail-safe: do not publish on uncertainty.
+			rejection := &flowv1.PublicationRejection{
+				Reason:          flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT,
+				RemediationText: fmt.Sprintf("conflict analysis failed: %v", analyseErr),
+			}
+			s.dispatchRejectionOutcome(ctx, req.GetPetitionId(), rejection)
 			return &flowv1.SubmitPublicationResponse{
-				Accepted: false,
-				Rejection: &flowv1.PublicationRejection{
-					Reason:          flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT,
-					RemediationText: fmt.Sprintf("conflict analysis failed: %v", analyseErr),
-				},
+				Accepted:  false,
+				Rejection: rejection,
 			}, nil
 		}
 		if report.HasConflicts {
+			rejection := &flowv1.PublicationRejection{
+				Reason:            flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT,
+				ConflictingLawIds: report.ConflictingLawIDs,
+				RemediationText:   report.RemediationText,
+			}
+			s.dispatchRejectionOutcome(ctx, req.GetPetitionId(), rejection)
 			return &flowv1.SubmitPublicationResponse{
-				Accepted: false,
-				Rejection: &flowv1.PublicationRejection{
-					Reason:            flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT,
-					ConflictingLawIds: report.ConflictingLawIDs,
-					RemediationText:   report.RemediationText,
-				},
+				Accepted:  false,
+				Rejection: rejection,
 			}, nil
 		}
+	}
+
+	// --- Acceptance (13.8.4) ---
+	// Determine materialisation tier from the publisher's role level.
+	matTier := s.materialisationTier(matchingRole)
+
+	// Build and dispatch the PublishedLawEvent.
+	now := timestamppb.Now()
+	lawEvent := &flowv1.PublishedLawEvent{
+		Law:                   req.GetLaw(),
+		MaterialisationTier:   matTier,
+		PetitionId:            req.GetPetitionId(),
+		PublisherFlowIdentity: req.GetSourceFlowIdentity(),
+		PublishedAt:           now,
+	}
+	if s.eventDispatcher != nil {
+		s.eventDispatcher.DispatchLawEvent(ctx, lawEvent)
+	}
+
+	// If the law carries a petition_id, dispatch an ACCEPTED PetitionOutcomeEvent.
+	if req.GetPetitionId() != "" && s.eventDispatcher != nil {
+		s.eventDispatcher.DispatchPetitionOutcomeEvent(ctx, &flowv1.PetitionOutcomeEvent{
+			PetitionId:     req.GetPetitionId(),
+			Outcome:        flowv1.PetitionOutcome_PETITION_OUTCOME_ACCEPTED,
+			PublishedLawId: req.GetLaw().GetId(),
+			ResolvedAt:     now,
+		})
 	}
 
 	return &flowv1.SubmitPublicationResponse{
 		Accepted: true,
 	}, nil
+}
+
+// materialisationTier returns the appropriate law tier for subscriber
+// materialisation based on the publisher's role level.
+func (s *FederationServer) materialisationTier(role *federationv1.PublisherRoleSpec) flowv1.LawTier {
+	switch role.Level {
+	case "federation":
+		return flowv1.LawTier_LAW_TIER_FEDERAL_ACCORD // Tier 5
+	default: // "state" or unrecognised
+		return flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION // Tier 4
+	}
+}
+
+// dispatchRejectionOutcome dispatches a PetitionOutcomeEvent with REJECTED
+// status if a petition_id is present and an event dispatcher is configured.
+func (s *FederationServer) dispatchRejectionOutcome(
+	ctx context.Context,
+	petitionID string,
+	rejection *flowv1.PublicationRejection,
+) {
+	if petitionID == "" || s.eventDispatcher == nil {
+		return
+	}
+	s.eventDispatcher.DispatchPetitionOutcomeEvent(ctx, &flowv1.PetitionOutcomeEvent{
+		PetitionId: petitionID,
+		Outcome:    flowv1.PetitionOutcome_PETITION_OUTCOME_REJECTED,
+		Rejection:  rejection,
+		ResolvedAt: timestamppb.Now(),
+	})
 }
 
 // searchResult holds the results from a single Librarian search.
