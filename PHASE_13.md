@@ -603,8 +603,8 @@ Librarian for materialisation.
 
 #### Slice 13.9.1 -- Federation service: subscriber registry and event dispatch
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `SubscribeLawUpdates` registers a subscriber and receives events on the stream
   - When a publication is accepted, all subscribers in the target states receive a `PublishedLawEvent`
   - State-level publication: only subscribers in the same state(s) receive the event
@@ -612,9 +612,9 @@ Librarian for materialisation.
   - `PublishedLawEvent` includes `law`, `materialisation_tier`, `petition_id`, `publisher_flow_identity`, `published_at`
   - Subscriber that disconnects is removed from registry
   - Multiple subscribers receive the same event
-- [ ] Validate red
-- [ ] Implement subscriber registry (in-memory subscriber map) and event dispatch in `SubscribeLawUpdates` handler
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red
+- [x] Implement subscriber registry (in-memory subscriber map) and event dispatch in `SubscribeLawUpdates` handler
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.9.2 -- Federation service: SubscribePetitionOutcomes RPC
 

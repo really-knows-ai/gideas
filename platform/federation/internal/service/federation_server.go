@@ -42,7 +42,11 @@ type LibrarianDialer interface {
 // implementation; tests inject a spy.
 type EventDispatcher interface {
 	// DispatchLawEvent sends a PublishedLawEvent to all relevant subscribers.
-	DispatchLawEvent(ctx context.Context, event *flowv1.PublishedLawEvent)
+	// publisherStateRefs identifies the states the publishing Flow belongs to,
+	// used for state-level filtering (only subscribers sharing a state receive
+	// the event). For federation-level publications all subscribers receive
+	// the event regardless of publisherStateRefs.
+	DispatchLawEvent(ctx context.Context, event *flowv1.PublishedLawEvent, publisherStateRefs []string)
 	// DispatchPetitionOutcomeEvent sends a PetitionOutcomeEvent to the
 	// originating subscriber Flow.
 	DispatchPetitionOutcomeEvent(ctx context.Context, event *flowv1.PetitionOutcomeEvent)
@@ -95,13 +99,14 @@ func (d *GRPCLibrarianDialer) DialLibrarian(
 // Kubernetes CRDs via a controller-runtime client.
 type FederationServer struct {
 	flowv1.UnimplementedFederationServiceServer
-	k8sClient        client.Client
-	namespace        string
-	config           *flowv1.FederationConfig
-	bootstrapToken   string
-	librarianDialer  LibrarianDialer
-	conflictAnalyser ConflictAnalyser
-	eventDispatcher  EventDispatcher
+	k8sClient          client.Client
+	namespace          string
+	config             *flowv1.FederationConfig
+	bootstrapToken     string
+	librarianDialer    LibrarianDialer
+	conflictAnalyser   ConflictAnalyser
+	eventDispatcher    EventDispatcher
+	subscriberRegistry *SubscriberRegistry
 }
 
 // FederationOption configures a FederationServer.
@@ -136,14 +141,24 @@ func WithEventDispatcher(d EventDispatcher) FederationOption {
 }
 
 // NewFederationServer returns a FederationServer backed by the given
-// Kubernetes client.
+// Kubernetes client. A SubscriberRegistry is always created and used as
+// the fallback EventDispatcher when no explicit dispatcher is injected
+// (e.g. via WithEventDispatcher for testing). The registry is also used
+// by SubscribeLawUpdates and SubscribePetitionOutcomes to manage active
+// gRPC server streams.
 func NewFederationServer(k8sClient client.Client, namespace string, opts ...FederationOption) *FederationServer {
+	registry := NewSubscriberRegistry()
 	srv := &FederationServer{
-		k8sClient: k8sClient,
-		namespace: namespace,
+		k8sClient:          k8sClient,
+		namespace:          namespace,
+		subscriberRegistry: registry,
 	}
 	for _, o := range opts {
 		o(srv)
+	}
+	// If no explicit dispatcher was injected, use the subscriber registry.
+	if srv.eventDispatcher == nil {
+		srv.eventDispatcher = registry
 	}
 	return srv
 }
@@ -479,7 +494,7 @@ func (s *FederationServer) SubmitPublication(
 		PublishedAt:           now,
 	}
 	if s.eventDispatcher != nil {
-		s.eventDispatcher.DispatchLawEvent(ctx, lawEvent)
+		s.eventDispatcher.DispatchLawEvent(ctx, lawEvent, member.Spec.StateRefs)
 	}
 
 	// If the law carries a petition_id, dispatch an ACCEPTED PetitionOutcomeEvent.
@@ -758,4 +773,80 @@ func toK8sName(identity string) string {
 		}
 	}
 	return b.String()
+}
+
+// SubscribeLawUpdates registers a law-update subscriber and streams
+// PublishedLawEvents until the client disconnects. The subscriber's
+// FederationMember CR is looked up to determine state membership for
+// state-level event filtering.
+func (s *FederationServer) SubscribeLawUpdates(
+	req *flowv1.SubscribeLawUpdatesRequest,
+	stream flowv1.FederationService_SubscribeLawUpdatesServer,
+) error {
+	flowIdentity := req.GetSubscriberFlowIdentity()
+	if flowIdentity == "" {
+		return status.Error(codes.InvalidArgument, "subscriber_flow_identity is required")
+	}
+
+	// Look up the subscriber's FederationMember CR to get state membership.
+	memberName := toK8sName(flowIdentity)
+	member := &federationv1.FederationMember{}
+	key := client.ObjectKey{Namespace: s.namespace, Name: memberName}
+	if err := s.k8sClient.Get(stream.Context(), key, member); err != nil {
+		if errors.IsNotFound(err) {
+			return status.Errorf(codes.NotFound, "flow %q is not a federation member", flowIdentity)
+		}
+		return status.Errorf(codes.Internal, "failed to get FederationMember: %v", err)
+	}
+
+	// Register the subscriber in the registry.
+	s.subscriberRegistry.RegisterLawSubscriber(flowIdentity, member.Spec.StateRefs, stream)
+	defer s.subscriberRegistry.RemoveLawSubscriber(flowIdentity)
+
+	// Block until the client disconnects.
+	<-stream.Context().Done()
+	return nil
+}
+
+// SubscribePetitionOutcomes registers a petition-outcome subscriber and
+// streams PetitionOutcomeEvents until the client disconnects.
+func (s *FederationServer) SubscribePetitionOutcomes(
+	req *flowv1.SubscribePetitionOutcomesRequest,
+	stream flowv1.FederationService_SubscribePetitionOutcomesServer,
+) error {
+	flowIdentity := req.GetSubscriberFlowIdentity()
+	if flowIdentity == "" {
+		return status.Error(codes.InvalidArgument, "subscriber_flow_identity is required")
+	}
+
+	// Verify the subscriber is a member.
+	memberName := toK8sName(flowIdentity)
+	member := &federationv1.FederationMember{}
+	key := client.ObjectKey{Namespace: s.namespace, Name: memberName}
+	if err := s.k8sClient.Get(stream.Context(), key, member); err != nil {
+		if errors.IsNotFound(err) {
+			return status.Errorf(codes.NotFound, "flow %q is not a federation member", flowIdentity)
+		}
+		return status.Errorf(codes.Internal, "failed to get FederationMember: %v", err)
+	}
+
+	// Register the subscriber in the registry.
+	s.subscriberRegistry.RegisterPetitionSubscriber(flowIdentity, stream)
+	defer s.subscriberRegistry.RemovePetitionSubscriber(flowIdentity)
+
+	// Block until the client disconnects.
+	<-stream.Context().Done()
+	return nil
+}
+
+// HasLawSubscriber reports whether a law-update subscriber is registered for
+// the given flow identity. Exposed for test synchronisation.
+func (s *FederationServer) HasLawSubscriber(flowIdentity string) bool {
+	return s.subscriberRegistry.HasLawSubscriber(flowIdentity)
+}
+
+// HasPetitionSubscriber reports whether a petition-outcome subscriber is
+// registered for the given flow identity. Exposed for test synchronisation.
+func (s *FederationServer) HasPetitionSubscriber(flowIdentity string) bool {
+	return s.subscriberRegistry.HasPetitionSubscriber(flowIdentity)
 }
