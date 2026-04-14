@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -24,6 +25,8 @@ const (
 	testFlowAlphaEmbassy = "flow-alpha-embassy:50059"
 	testLevelState       = "state"
 	testLawID            = "law-001"
+	testFlowPubA         = "flow-pub-a"
+	testFlowPubAEmbassy  = "flow-pub-a-embassy:50059"
 )
 
 // newTestServer creates a FederationServer backed by a fake K8s client
@@ -2067,7 +2070,7 @@ type spyEventDispatcher struct {
 	petitionOutcomes []*flowv1.PetitionOutcomeEvent
 }
 
-func (s *spyEventDispatcher) DispatchLawEvent(_ context.Context, event *flowv1.PublishedLawEvent) {
+func (s *spyEventDispatcher) DispatchLawEvent(_ context.Context, event *flowv1.PublishedLawEvent, _ []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lawEvents = append(s.lawEvents, event)
@@ -2310,8 +2313,8 @@ func TestSubmitPublication_NoConflicts_DispatchesPublishedLawEvent(t *testing.T)
 	if event.GetLaw().GetId() != testLawID {
 		t.Errorf("event law ID = %q, want %q", event.GetLaw().GetId(), testLawID)
 	}
-	if event.GetPublisherFlowIdentity() != "flow-pub-a" {
-		t.Errorf("event publisher_flow_identity = %q, want %q", event.GetPublisherFlowIdentity(), "flow-pub-a")
+	if event.GetPublisherFlowIdentity() != testFlowPubA {
+		t.Errorf("event publisher_flow_identity = %q, want %q", event.GetPublisherFlowIdentity(), testFlowPubA)
 	}
 	if event.GetPublishedAt() == nil {
 		t.Error("event published_at is nil")
@@ -2499,9 +2502,9 @@ func TestSubmitPublication_PublishedLawEvent_IncludesAllFields(t *testing.T) {
 	// (petition_id is empty here because the Law proto has no provenance field.)
 
 	// Publisher flow identity.
-	if event.GetPublisherFlowIdentity() != "flow-pub-a" {
+	if event.GetPublisherFlowIdentity() != testFlowPubA {
 		t.Errorf("publisher_flow_identity = %q, want %q",
-			event.GetPublisherFlowIdentity(), "flow-pub-a")
+			event.GetPublisherFlowIdentity(), testFlowPubA)
 	}
 
 	// Published timestamp must be set.
@@ -2661,6 +2664,650 @@ func TestSubmitPublication_ConflictRejection_DispatchesPetitionOutcomeEvent(t *t
 	if outcome.GetResolvedAt() == nil {
 		t.Error("resolved_at is nil")
 	}
+}
+
+// =============================================================================
+// Mock gRPC server streams for 13.9.1 subscriber registry tests
+// =============================================================================
+
+// mockLawUpdateStream implements grpc.ServerStreamingServer[PublishedLawEvent]
+// for testing SubscribeLawUpdates.
+type mockLawUpdateStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	events []*flowv1.PublishedLawEvent
+}
+
+func newMockLawUpdateStream(ctx context.Context) *mockLawUpdateStream {
+	ctx, cancel := context.WithCancel(ctx)
+	return &mockLawUpdateStream{ctx: ctx, cancel: cancel}
+}
+
+func (m *mockLawUpdateStream) Send(event *flowv1.PublishedLawEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Check if context has been cancelled (simulates client disconnect).
+	select {
+	case <-m.ctx.Done():
+		return m.ctx.Err()
+	default:
+	}
+	m.events = append(m.events, event)
+	return nil
+}
+
+func (m *mockLawUpdateStream) Context() context.Context {
+	return m.ctx
+}
+
+func (m *mockLawUpdateStream) getEvents() []*flowv1.PublishedLawEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]*flowv1.PublishedLawEvent, len(m.events))
+	copy(cp, m.events)
+	return cp
+}
+
+// --- 13.9.1 SubscribeLawUpdates and Subscriber Registry Tests ---
+
+func TestSubscribeLawUpdates_RegistersSubscriberAndReceivesEvents(t *testing.T) {
+	// A subscriber calls SubscribeLawUpdates and receives a PublishedLawEvent
+	// dispatched via SubmitPublication acceptance.
+	subscriberMember := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub",
+			EmbassyEndpoint: "flow-sub-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, subscriberMember, publisher)
+
+	// Start subscriber in a goroutine (SubscribeLawUpdates blocks).
+	stream := newMockLawUpdateStream(context.Background())
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub"},
+			stream,
+		)
+	}()
+
+	// Give the subscriber time to register.
+	waitForLawSubscriber(t, srv, "flow-sub")
+
+	// Publish a law (accepted).
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Disconnect the subscriber.
+	stream.cancel()
+	<-subErrCh
+
+	// The subscriber should have received the event.
+	events := stream.getEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event on subscriber stream, got %d", len(events))
+	}
+	if events[0].GetLaw().GetId() != testLawID {
+		t.Errorf("event law ID = %q, want %q", events[0].GetLaw().GetId(), testLawID)
+	}
+	if events[0].GetPublisherFlowIdentity() != testFlowPubA {
+		t.Errorf("event publisher_flow_identity = %q, want %q", events[0].GetPublisherFlowIdentity(), testFlowPubA)
+	}
+	if events[0].GetPublishedAt() == nil {
+		t.Error("event published_at is nil")
+	}
+}
+
+func TestSubscribeLawUpdates_StateLevelPublication_OnlySameStateSubscribersReceive(t *testing.T) {
+	// State-level publication: only subscribers in the same state(s) as the
+	// publisher receive the event. Subscriber in a different state does not.
+	subQLD := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub-qld",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub-qld",
+			EmbassyEndpoint: "flow-sub-qld-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	subNSW := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub-nsw",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub-nsw",
+			EmbassyEndpoint: "flow-sub-nsw-embassy:50059",
+			StateRefs:       []string{"state-nsw"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, subQLD, subNSW, publisher)
+
+	// Start two subscribers.
+	streamQLD := newMockLawUpdateStream(context.Background())
+	streamNSW := newMockLawUpdateStream(context.Background())
+	qldErrCh := make(chan error, 1)
+	nswErrCh := make(chan error, 1)
+	go func() {
+		qldErrCh <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub-qld"},
+			streamQLD,
+		)
+	}()
+	go func() {
+		nswErrCh <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub-nsw"},
+			streamNSW,
+		)
+	}()
+
+	waitForLawSubscriber(t, srv, "flow-sub-qld")
+	waitForLawSubscriber(t, srv, "flow-sub-nsw")
+
+	// Publish a state-level law (QLD scope).
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Disconnect both subscribers.
+	streamQLD.cancel()
+	streamNSW.cancel()
+	<-qldErrCh
+	<-nswErrCh
+
+	// QLD subscriber should receive the event.
+	qldEvents := streamQLD.getEvents()
+	if len(qldEvents) != 1 {
+		t.Errorf("QLD subscriber: expected 1 event, got %d", len(qldEvents))
+	}
+
+	// NSW subscriber should NOT receive the event (different state).
+	nswEvents := streamNSW.getEvents()
+	if len(nswEvents) != 0 {
+		t.Errorf("NSW subscriber: expected 0 events (different state), got %d", len(nswEvents))
+	}
+}
+
+func TestSubscribeLawUpdates_FederationLevelPublication_AllSubscribersReceive(t *testing.T) {
+	// Federation-level publication: all subscribers receive the event
+	// regardless of state membership.
+	subQLD := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub-qld",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub-qld",
+			EmbassyEndpoint: "flow-sub-qld-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	subNSW := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub-nsw",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub-nsw",
+			EmbassyEndpoint: "flow-sub-nsw-embassy:50059",
+			StateRefs:       []string{"state-nsw"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-fed-pub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-fed-pub",
+			EmbassyEndpoint: "flow-fed-pub-embassy:50059",
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "security", Level: "federation"},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-fed-pub",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-fed-pub-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, subQLD, subNSW, publisher)
+
+	// Start two subscribers.
+	streamQLD := newMockLawUpdateStream(context.Background())
+	streamNSW := newMockLawUpdateStream(context.Background())
+	qldErrCh := make(chan error, 1)
+	nswErrCh := make(chan error, 1)
+	go func() {
+		qldErrCh <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub-qld"},
+			streamQLD,
+		)
+	}()
+	go func() {
+		nswErrCh <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub-nsw"},
+			streamNSW,
+		)
+	}()
+
+	waitForLawSubscriber(t, srv, "flow-sub-qld")
+	waitForLawSubscriber(t, srv, "flow-sub-nsw")
+
+	// Publish a federation-level law.
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-sec-001",
+			Goal:     "Harden security posture",
+			Division: "security",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-fed-pub",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Disconnect both subscribers.
+	streamQLD.cancel()
+	streamNSW.cancel()
+	<-qldErrCh
+	<-nswErrCh
+
+	// Both subscribers should receive the event (federation-level).
+	qldEvents := streamQLD.getEvents()
+	if len(qldEvents) != 1 {
+		t.Errorf("QLD subscriber: expected 1 event, got %d", len(qldEvents))
+	}
+	nswEvents := streamNSW.getEvents()
+	if len(nswEvents) != 1 {
+		t.Errorf("NSW subscriber: expected 1 event, got %d", len(nswEvents))
+	}
+}
+
+func TestSubscribeLawUpdates_PublishedLawEvent_IncludesAllFields(t *testing.T) {
+	// Verify the event received by the subscriber includes all required fields:
+	// law, materialisation_tier, petition_id, publisher_flow_identity, published_at.
+	subscriber := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub",
+			EmbassyEndpoint: "flow-sub-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, subscriber, publisher)
+
+	stream := newMockLawUpdateStream(context.Background())
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub"},
+			stream,
+		)
+	}()
+
+	waitForLawSubscriber(t, srv, "flow-sub")
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       testLawID,
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+		PetitionId:         "petition-001",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	stream.cancel()
+	<-subErrCh
+
+	events := stream.getEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	event := events[0]
+
+	// Law.
+	if event.GetLaw() == nil {
+		t.Fatal("event law is nil")
+	}
+	if event.GetLaw().GetId() != testLawID {
+		t.Errorf("law ID = %q, want %q", event.GetLaw().GetId(), testLawID)
+	}
+	// Materialisation tier (state-level -> Tier 4).
+	if event.GetMaterialisationTier() != flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION {
+		t.Errorf("materialisation_tier = %v, want LAW_TIER_STATE_CONSTITUTION",
+			event.GetMaterialisationTier())
+	}
+	// Petition ID.
+	if event.GetPetitionId() != "petition-001" {
+		t.Errorf("petition_id = %q, want %q", event.GetPetitionId(), "petition-001")
+	}
+	// Publisher flow identity.
+	if event.GetPublisherFlowIdentity() != testFlowPubA {
+		t.Errorf("publisher_flow_identity = %q, want %q",
+			event.GetPublisherFlowIdentity(), testFlowPubA)
+	}
+	// Published timestamp.
+	if event.GetPublishedAt() == nil {
+		t.Error("published_at is nil")
+	}
+}
+
+func TestSubscribeLawUpdates_DisconnectedSubscriberIsRemoved(t *testing.T) {
+	// When a subscriber disconnects (context cancelled), it is removed from
+	// the registry. Subsequent events are not sent to it and do not error.
+	subscriber := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub",
+			EmbassyEndpoint: "flow-sub-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, subscriber, publisher)
+
+	// Subscribe and then disconnect.
+	stream := newMockLawUpdateStream(context.Background())
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub"},
+			stream,
+		)
+	}()
+
+	waitForLawSubscriber(t, srv, "flow-sub")
+
+	// Disconnect the subscriber.
+	stream.cancel()
+	<-subErrCh
+
+	// Now publish a law. This should not panic or error -- the subscriber
+	// has been removed from the registry.
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Subscriber should not have received the event (disconnected before publish).
+	events := stream.getEvents()
+	if len(events) != 0 {
+		t.Errorf("expected 0 events (disconnected subscriber), got %d", len(events))
+	}
+}
+
+func TestSubscribeLawUpdates_MultipleSubscribersReceiveSameEvent(t *testing.T) {
+	// Multiple subscribers in the same state both receive the same event.
+	sub1 := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub-1",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub-1",
+			EmbassyEndpoint: "flow-sub-1-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	sub2 := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub-2",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub-2",
+			EmbassyEndpoint: "flow-sub-2-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, sub1, sub2, publisher)
+
+	stream1 := newMockLawUpdateStream(context.Background())
+	stream2 := newMockLawUpdateStream(context.Background())
+	errCh1 := make(chan error, 1)
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh1 <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub-1"},
+			stream1,
+		)
+	}()
+	go func() {
+		errCh2 <- srv.SubscribeLawUpdates(
+			&flowv1.SubscribeLawUpdatesRequest{SubscriberFlowIdentity: "flow-sub-2"},
+			stream2,
+		)
+	}()
+
+	waitForLawSubscriber(t, srv, "flow-sub-1")
+	waitForLawSubscriber(t, srv, "flow-sub-2")
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	stream1.cancel()
+	stream2.cancel()
+	<-errCh1
+	<-errCh2
+
+	events1 := stream1.getEvents()
+	events2 := stream2.getEvents()
+	if len(events1) != 1 {
+		t.Errorf("subscriber 1: expected 1 event, got %d", len(events1))
+	}
+	if len(events2) != 1 {
+		t.Errorf("subscriber 2: expected 1 event, got %d", len(events2))
+	}
+	// Both should receive the same law ID.
+	if len(events1) > 0 && events1[0].GetLaw().GetId() != testLawID {
+		t.Errorf("subscriber 1 event law ID = %q, want %q", events1[0].GetLaw().GetId(), testLawID)
+	}
+	if len(events2) > 0 && events2[0].GetLaw().GetId() != testLawID {
+		t.Errorf("subscriber 2 event law ID = %q, want %q", events2[0].GetLaw().GetId(), testLawID)
+	}
+}
+
+// waitForLawSubscriber polls the server's subscriber registry until the
+// subscriber is registered, or fails the test after a timeout.
+func waitForLawSubscriber(t *testing.T, srv *FederationServer, flowIdentity string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.HasLawSubscriber(flowIdentity) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for law subscriber %q to register", flowIdentity)
 }
 
 func TestSubmitPublication_Acceptance_DispatchesPetitionOutcomeEvent(t *testing.T) {
