@@ -3383,3 +3383,403 @@ func TestSubmitPublication_Acceptance_DispatchesPetitionOutcomeEvent(t *testing.
 			outcomes[0].GetPublishedLawId(), testLawID)
 	}
 }
+
+// =============================================================================
+// Mock gRPC server streams for 13.9.2 SubscribePetitionOutcomes tests
+// =============================================================================
+
+// mockPetitionOutcomeStream implements grpc.ServerStreamingServer[PetitionOutcomeEvent]
+// for testing SubscribePetitionOutcomes.
+type mockPetitionOutcomeStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	events []*flowv1.PetitionOutcomeEvent
+}
+
+func newMockPetitionOutcomeStream(ctx context.Context) *mockPetitionOutcomeStream {
+	ctx, cancel := context.WithCancel(ctx)
+	return &mockPetitionOutcomeStream{ctx: ctx, cancel: cancel}
+}
+
+func (m *mockPetitionOutcomeStream) Send(event *flowv1.PetitionOutcomeEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	select {
+	case <-m.ctx.Done():
+		return m.ctx.Err()
+	default:
+	}
+	m.events = append(m.events, event)
+	return nil
+}
+
+func (m *mockPetitionOutcomeStream) Context() context.Context {
+	return m.ctx
+}
+
+func (m *mockPetitionOutcomeStream) getEvents() []*flowv1.PetitionOutcomeEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]*flowv1.PetitionOutcomeEvent, len(m.events))
+	copy(cp, m.events)
+	return cp
+}
+
+// waitForPetitionSubscriber polls the server's subscriber registry until the
+// petition-outcome subscriber is registered, or fails the test after a timeout.
+func waitForPetitionSubscriber(t *testing.T, srv *FederationServer, flowIdentity string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.HasPetitionSubscriber(flowIdentity) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for petition subscriber %q to register", flowIdentity)
+}
+
+// --- 13.9.2 SubscribePetitionOutcomes Tests ---
+
+func TestSubscribePetitionOutcomes_RegistersAndReceivesAcceptedEvent(t *testing.T) {
+	// A subscriber calls SubscribePetitionOutcomes and receives an ACCEPTED
+	// PetitionOutcomeEvent when a publication with petition_id is accepted.
+	subscriber := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub",
+			EmbassyEndpoint: "flow-sub-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, subscriber, publisher)
+
+	// Start petition-outcome subscriber in a goroutine.
+	stream := newMockPetitionOutcomeStream(context.Background())
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- srv.SubscribePetitionOutcomes(
+			&flowv1.SubscribePetitionOutcomesRequest{SubscriberFlowIdentity: "flow-sub"},
+			stream,
+		)
+	}()
+
+	waitForPetitionSubscriber(t, srv, "flow-sub")
+
+	// Publish a law with petition_id (accepted, no conflicts).
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       testLawID,
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+		PetitionId:         "petition-abc-001",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Disconnect the subscriber.
+	stream.cancel()
+	<-subErrCh
+
+	// Verify the subscriber received the ACCEPTED petition outcome event.
+	events := stream.getEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 petition outcome event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.GetPetitionId() != "petition-abc-001" {
+		t.Errorf("petition_id = %q, want %q", ev.GetPetitionId(), "petition-abc-001")
+	}
+	if ev.GetOutcome() != flowv1.PetitionOutcome_PETITION_OUTCOME_ACCEPTED {
+		t.Errorf("outcome = %v, want PETITION_OUTCOME_ACCEPTED", ev.GetOutcome())
+	}
+	if ev.GetPublishedLawId() != testLawID {
+		t.Errorf("published_law_id = %q, want %q", ev.GetPublishedLawId(), testLawID)
+	}
+	if ev.GetRejection() != nil {
+		t.Error("expected no rejection on ACCEPTED event")
+	}
+	if ev.GetResolvedAt() == nil {
+		t.Error("resolved_at is nil")
+	}
+}
+
+func TestSubscribePetitionOutcomes_ReceivesRejectedEventWithReport(t *testing.T) {
+	// When a publication with petition_id is rejected (conflict), the
+	// petition subscriber receives a REJECTED event with rejection details.
+	subscriber := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub",
+			EmbassyEndpoint: "flow-sub-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	// Return similar laws so conflict analysis triggers.
+	spyLib := &spyLibrarianClient{
+		flowID: "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{
+			Results: []*flowv1.SimilarLaw{
+				{
+					Law:             &flowv1.Law{Id: "existing-law-99", Goal: "Old education standard", Division: "education"},
+					SimilarityScore: 0.95,
+				},
+			},
+		},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	// Conflict analyser that reports a real conflict.
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{
+			HasConflicts:      true,
+			ConflictingLawIDs: []string{"existing-law-99"},
+			RemediationText:   "Revise to avoid overlap with existing-law-99",
+		},
+	}
+
+	// Build server WITHOUT an explicit spy dispatcher so the real
+	// SubscriberRegistry is used (petition subscriber receives events).
+	scheme := federationv1.NewTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(subscriber, publisher).Build()
+	srv := NewFederationServer(k8sClient, testNamespace,
+		WithFederationConfig(&flowv1.FederationConfig{
+			FederationId:   "fed-001",
+			FederationName: "Test Federation",
+			RootCaPem:      "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		}),
+		WithBootstrapToken("valid-token"),
+		WithLibrarianDialer(dialer),
+		WithConflictAnalyser(analyser),
+	)
+
+	// Start petition-outcome subscriber.
+	stream := newMockPetitionOutcomeStream(context.Background())
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- srv.SubscribePetitionOutcomes(
+			&flowv1.SubscribePetitionOutcomesRequest{SubscriberFlowIdentity: "flow-sub"},
+			stream,
+		)
+	}()
+
+	waitForPetitionSubscriber(t, srv, "flow-sub")
+
+	// Publish a law with petition_id (will be rejected due to conflict).
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       testLawID,
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+		PetitionId:         "petition-rej-001",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if resp.GetAccepted() {
+		t.Fatal("expected rejected publication, got accepted")
+	}
+
+	// Disconnect the subscriber.
+	stream.cancel()
+	<-subErrCh
+
+	// Verify the subscriber received the REJECTED petition outcome event.
+	events := stream.getEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 petition outcome event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.GetPetitionId() != "petition-rej-001" {
+		t.Errorf("petition_id = %q, want %q", ev.GetPetitionId(), "petition-rej-001")
+	}
+	if ev.GetOutcome() != flowv1.PetitionOutcome_PETITION_OUTCOME_REJECTED {
+		t.Errorf("outcome = %v, want PETITION_OUTCOME_REJECTED", ev.GetOutcome())
+	}
+	if ev.GetRejection() == nil {
+		t.Fatal("expected rejection details on REJECTED event")
+	}
+	if ev.GetRejection().GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT {
+		t.Errorf("rejection reason = %v, want CONFLICT", ev.GetRejection().GetReason())
+	}
+	if len(ev.GetRejection().GetConflictingLawIds()) == 0 {
+		t.Error("expected conflicting_law_ids in rejection")
+	}
+	if ev.GetRejection().GetRemediationText() == "" {
+		t.Error("expected remediation_text in rejection")
+	}
+	if ev.GetPublishedLawId() != "" {
+		t.Errorf("published_law_id should be empty on rejection, got %q", ev.GetPublishedLawId())
+	}
+	if ev.GetResolvedAt() == nil {
+		t.Error("resolved_at is nil")
+	}
+}
+
+func TestSubscribePetitionOutcomes_NoPetitionID_NoEventDispatched(t *testing.T) {
+	// When a publication is accepted but has no petition_id, no
+	// PetitionOutcomeEvent should be dispatched to the subscriber.
+	subscriber := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-sub",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-sub",
+			EmbassyEndpoint: "flow-sub-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+		},
+	}
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	srv := newTestServerWithDialer(t, dialer, subscriber, publisher)
+
+	// Subscribe to petition outcomes.
+	stream := newMockPetitionOutcomeStream(context.Background())
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- srv.SubscribePetitionOutcomes(
+			&flowv1.SubscribePetitionOutcomesRequest{SubscriberFlowIdentity: "flow-sub"},
+			stream,
+		)
+	}()
+
+	waitForPetitionSubscriber(t, srv, "flow-sub")
+
+	// Publish a law WITHOUT petition_id.
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       testLawID,
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted = true, got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Disconnect.
+	stream.cancel()
+	<-subErrCh
+
+	// No petition outcome event should have been dispatched.
+	events := stream.getEvents()
+	if len(events) != 0 {
+		t.Errorf("expected 0 petition outcome events (no petition_id), got %d", len(events))
+	}
+}
+
+func TestSubscribePetitionOutcomes_EmptyFlowIdentity_InvalidArgument(t *testing.T) {
+	srv := newTestServer(t)
+
+	stream := newMockPetitionOutcomeStream(context.Background())
+	err := srv.SubscribePetitionOutcomes(
+		&flowv1.SubscribePetitionOutcomesRequest{SubscriberFlowIdentity: ""},
+		stream,
+	)
+	if err == nil {
+		t.Fatal("expected error for empty subscriber_flow_identity")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+	stream.cancel()
+}
+
+func TestSubscribePetitionOutcomes_NonMember_NotFound(t *testing.T) {
+	srv := newTestServer(t)
+
+	stream := newMockPetitionOutcomeStream(context.Background())
+	err := srv.SubscribePetitionOutcomes(
+		&flowv1.SubscribePetitionOutcomesRequest{SubscriberFlowIdentity: "unknown-flow"},
+		stream,
+	)
+	if err == nil {
+		t.Fatal("expected error for non-member subscriber")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
+		t.Errorf("expected NotFound, got %v", err)
+	}
+	stream.cancel()
+}
