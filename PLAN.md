@@ -13,7 +13,7 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 - Phase 11 implementation is complete and reviewed against the corrected built-in import type model.
 - Phase 12 Federation foundations are complete (proto, service schema, publication lifecycle, dispute records, SDK client, petition-outcome helpers, architectural guard tests).
 - Phase 13 Embassy node (13.1-13.5) is complete. Federation service slices 13.6-13.7 are being rewritten (SQLite -> Kubernetes CRDs).
-- Next active work: `PHASE_13.md` slice 13.8.3 (Federation service: SubmitPublication - LLM conflict analysis).
+- Next active work: `PHASE_13.md` slice 13.8.4 (Federation service: SubmitPublication - acceptance and distribution trigger).
 
 ### Phase 13 Federation Redesign
 
