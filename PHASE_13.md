@@ -552,26 +552,26 @@ across publisher Librarians + LLM analysis), and accepts or hard-rejects.
 
 #### Slice 13.8.3 -- Federation service: SubmitPublication - LLM conflict analysis
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add a `ConflictAnalyser` interface to decouple LLM calls for testing:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add a `ConflictAnalyser` interface to decouple LLM calls for testing:
   - `AnalyseConflicts(ctx context.Context, candidateLaw *flowv1.Law, similarLaws []*flowv1.Law) (*ConflictReport, error)`
   - `ConflictReport`: `HasConflicts bool`, `ConflictingLawIDs []string`, `RemediationText string`
   - Production implementation: uses SDK `Agent` with Ollama provider
   - Test implementation: deterministic stub
-- [ ] Add tests:
+- [x] Add tests:
   - No similar laws from search -> `AnalyseConflicts` is not called, publication accepted
   - Similar laws found but LLM determines no real conflicts -> publication accepted
   - Similar laws found and LLM determines real conflicts -> publication rejected with `CONFLICT` reason
   - Rejection includes `conflicting_law_ids` and `remediation_text` from LLM analysis
   - LLM error -> publication rejected with `INTERNAL` error (fail-safe: do not publish on uncertainty)
-- [ ] Validate red
-- [ ] Implement conflict analysis:
+- [x] Validate red
+- [x] Implement conflict analysis:
   - `OllamaConflictAnalyser` struct using SDK `Agent`:
     - System prompt: conflict analysis task description
     - Query template: candidate law + list of similar laws
     - Output schema: JSON with `has_conflicts`, `conflicting_law_ids[]`, `remediation_text`
   - Wire into `SubmitPublication` path after distributed search
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.8.4 -- Federation service: SubmitPublication - acceptance and distribution trigger
 

@@ -1241,6 +1241,35 @@ func newTestServerWithDialer(t *testing.T, dialer LibrarianDialer, objs ...clien
 	)
 }
 
+// newTestServerWithDialerAndAnalyser creates a FederationServer with both
+// a spy LibrarianDialer and a ConflictAnalyser.
+func newTestServerWithDialerAndAnalyser(
+	t *testing.T,
+	dialer LibrarianDialer,
+	analyser ConflictAnalyser,
+	objs ...client.Object,
+) *FederationServer {
+	t.Helper()
+
+	scheme := federationv1.NewTestScheme()
+	builder := fake.NewClientBuilder().WithScheme(scheme)
+	if len(objs) > 0 {
+		builder = builder.WithObjects(objs...)
+	}
+	k8sClient := builder.Build()
+
+	return NewFederationServer(k8sClient, testNamespace,
+		WithFederationConfig(&flowv1.FederationConfig{
+			FederationId:   "fed-001",
+			FederationName: "Test Federation",
+			RootCaPem:      "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		}),
+		WithBootstrapToken("valid-token"),
+		WithLibrarianDialer(dialer),
+		WithConflictAnalyser(analyser),
+	)
+}
+
 // --- 13.8.2 SubmitPublication Distributed Conflict Detection Tests ---
 
 func TestSubmitPublication_AuthorityPass_QueriesPublisherLibrarians(t *testing.T) {
@@ -1722,5 +1751,371 @@ func TestSubmitPublication_EmptySearchResults_NoConflicts(t *testing.T) {
 	}
 	if !resp.GetAccepted() {
 		t.Errorf("expected accepted = true (empty results = no conflicts), got false; rejection = %v", resp.GetRejection())
+	}
+}
+
+// =============================================================================
+// Stub ConflictAnalyser for 13.8.3 tests
+// =============================================================================
+
+// stubConflictAnalyser is a deterministic test double for the ConflictAnalyser
+// interface. It returns a pre-configured report and records its calls.
+type stubConflictAnalyser struct {
+	mu     sync.Mutex
+	calls  []stubAnalyserCall
+	report *ConflictReport
+	err    error
+}
+
+type stubAnalyserCall struct {
+	candidateLaw *flowv1.Law
+	similarLaws  []*flowv1.SimilarLaw
+}
+
+func (s *stubConflictAnalyser) AnalyseConflicts(
+	_ context.Context,
+	candidateLaw *flowv1.Law,
+	similarLaws []*flowv1.SimilarLaw,
+) (*ConflictReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, stubAnalyserCall{
+		candidateLaw: candidateLaw,
+		similarLaws:  similarLaws,
+	})
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.report, nil
+}
+
+func (s *stubConflictAnalyser) getCalls() []stubAnalyserCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]stubAnalyserCall, len(s.calls))
+	copy(cp, s.calls)
+	return cp
+}
+
+// --- 13.8.3 SubmitPublication LLM Conflict Analysis Tests ---
+
+func TestSubmitPublication_NoSimilarLaws_AnalyserNotCalled_Accepted(t *testing.T) {
+	// No similar laws from search -> AnalyseConflicts is not called,
+	// publication is accepted.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: nil}, // Empty results.
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{HasConflicts: true}, // Would reject if called.
+	}
+
+	srv := newTestServerWithDialerAndAnalyser(t, dialer, analyser, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Errorf("expected accepted = true (no similar laws -> no analysis), got false; rejection = %v", resp.GetRejection())
+	}
+
+	// The analyser must NOT have been called.
+	if len(analyser.getCalls()) != 0 {
+		t.Errorf("expected 0 analyser calls (no similar laws), got %d", len(analyser.getCalls()))
+	}
+}
+
+func TestSubmitPublication_SimilarLaws_NoRealConflicts_Accepted(t *testing.T) {
+	// Similar laws found but LLM determines no real conflicts -> accepted.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	similarLaw := &flowv1.SimilarLaw{
+		Law:             &flowv1.Law{Id: "law-existing-001", Goal: "Existing education law"},
+		SimilarityScore: 0.85,
+	}
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: []*flowv1.SimilarLaw{similarLaw}},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{HasConflicts: false}, // No real conflicts.
+	}
+
+	srv := newTestServerWithDialerAndAnalyser(t, dialer, analyser, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-new-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Errorf("expected accepted = true (no real conflicts), got false; rejection = %v", resp.GetRejection())
+	}
+
+	// Analyser should have been called once.
+	calls := analyser.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 analyser call, got %d", len(calls))
+	}
+	if calls[0].candidateLaw.GetId() != "law-new-001" {
+		t.Errorf("analyser candidate law ID = %q, want %q", calls[0].candidateLaw.GetId(), "law-new-001")
+	}
+	if len(calls[0].similarLaws) != 1 {
+		t.Errorf("analyser similar laws count = %d, want 1", len(calls[0].similarLaws))
+	}
+}
+
+func TestSubmitPublication_SimilarLaws_RealConflicts_Rejected(t *testing.T) {
+	// Similar laws found and LLM determines real conflicts -> rejected
+	// with CONFLICT reason, conflicting_law_ids, and remediation_text.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	conflictingLaw := &flowv1.SimilarLaw{
+		Law:             &flowv1.Law{Id: "law-existing-001", Goal: "Existing education law"},
+		SimilarityScore: 0.95,
+	}
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: []*flowv1.SimilarLaw{conflictingLaw}},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{
+			HasConflicts:      true,
+			ConflictingLawIDs: []string{"law-existing-001"},
+			RemediationText:   "The proposed law directly contradicts law-existing-001. Consider revising the scope.",
+		},
+	}
+
+	srv := newTestServerWithDialerAndAnalyser(t, dialer, analyser, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-new-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false (real conflicts detected)")
+	}
+	rejection := resp.GetRejection()
+	if rejection == nil {
+		t.Fatal("expected rejection to be non-nil")
+	}
+	if rejection.GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT {
+		t.Errorf("rejection reason = %v, want CONFLICT", rejection.GetReason())
+	}
+	if len(rejection.GetConflictingLawIds()) != 1 || rejection.GetConflictingLawIds()[0] != "law-existing-001" {
+		t.Errorf("conflicting_law_ids = %v, want [law-existing-001]", rejection.GetConflictingLawIds())
+	}
+	if rejection.GetRemediationText() == "" {
+		t.Error("expected remediation_text to be non-empty")
+	}
+}
+
+func TestSubmitPublication_ConflictRejection_IncludesLawIDsAndRemediation(t *testing.T) {
+	// Verify that rejection includes conflicting_law_ids and remediation_text
+	// from the LLM analysis report.
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	laws := []*flowv1.SimilarLaw{
+		{Law: &flowv1.Law{Id: "law-001", Goal: "Law A"}, SimilarityScore: 0.92},
+		{Law: &flowv1.Law{Id: "law-002", Goal: "Law B"}, SimilarityScore: 0.88},
+	}
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: laws},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		report: &ConflictReport{
+			HasConflicts:      true,
+			ConflictingLawIDs: []string{"law-001", "law-002"},
+			RemediationText:   "Both law-001 and law-002 conflict. Narrow scope or retire them first.",
+		},
+	}
+
+	srv := newTestServerWithDialerAndAnalyser(t, dialer, analyser, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-new-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false")
+	}
+	rejection := resp.GetRejection()
+	if len(rejection.GetConflictingLawIds()) != 2 {
+		t.Fatalf("conflicting_law_ids count = %d, want 2", len(rejection.GetConflictingLawIds()))
+	}
+	wantIDs := map[string]bool{"law-001": true, "law-002": true}
+	for _, id := range rejection.GetConflictingLawIds() {
+		if !wantIDs[id] {
+			t.Errorf("unexpected conflicting_law_id: %q", id)
+		}
+	}
+	if rejection.GetRemediationText() != "Both law-001 and law-002 conflict. Narrow scope or retire them first." {
+		t.Errorf("remediation_text = %q, want specific text", rejection.GetRemediationText())
+	}
+}
+
+func TestSubmitPublication_AnalyserError_FailSafeReject(t *testing.T) {
+	// LLM error -> publication rejected with INTERNAL-style error (fail-safe:
+	// do not publish on uncertainty).
+	publisher := &federationv1.FederationMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-pub-a",
+			Namespace: testNamespace,
+		},
+		Spec: federationv1.FederationMemberSpec{
+			FlowIdentity:    "flow-pub-a",
+			EmbassyEndpoint: "flow-pub-a-embassy:50059",
+			StateRefs:       []string{"state-qld"},
+			PublisherRoles: []federationv1.PublisherRoleSpec{
+				{Scope: "education", Level: testLevelState},
+			},
+		},
+	}
+
+	similarLaw := &flowv1.SimilarLaw{
+		Law:             &flowv1.Law{Id: "law-existing-001", Goal: "Existing education law"},
+		SimilarityScore: 0.85,
+	}
+	spyLib := &spyLibrarianClient{
+		flowID:   "flow-pub-a",
+		response: &flowv1.SearchSimilarLawsResponse{Results: []*flowv1.SimilarLaw{similarLaw}},
+	}
+	dialer := newSpyDialer()
+	dialer.addClient("flow-pub-a-embassy:50059", spyLib)
+
+	analyser := &stubConflictAnalyser{
+		err: fmt.Errorf("ollama connection refused"),
+	}
+
+	srv := newTestServerWithDialerAndAnalyser(t, dialer, analyser, publisher)
+
+	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
+		Law: &flowv1.Law{
+			Id:       "law-new-001",
+			Goal:     "Ensure quality education",
+			Division: "education",
+			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		},
+		SourceFlowIdentity: "flow-pub-a",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPublication returned error: %v", err)
+	}
+
+	// Fail-safe: rejected on analyser error.
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted = false (fail-safe on analyser error)")
+	}
+	rejection := resp.GetRejection()
+	if rejection == nil {
+		t.Fatal("expected rejection to be non-nil")
+	}
+	// The rejection reason should indicate an internal/conflict analysis failure.
+	if rejection.GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT {
+		t.Errorf("rejection reason = %v, want CONFLICT (fail-safe)", rejection.GetReason())
+	}
+	if rejection.GetRemediationText() == "" {
+		t.Error("expected remediation_text to contain error context")
 	}
 }

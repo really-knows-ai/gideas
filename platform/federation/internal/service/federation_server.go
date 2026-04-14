@@ -36,6 +36,33 @@ type LibrarianDialer interface {
 	DialLibrarian(ctx context.Context, address string) (flowv1.LibrarianServiceClient, func() error, error)
 }
 
+// ConflictAnalyser abstracts the LLM-based conflict analysis so tests can
+// inject a deterministic stub. The production implementation uses an SDK
+// Agent with Ollama to evaluate semantic matches against the candidate law.
+type ConflictAnalyser interface {
+	// AnalyseConflicts evaluates whether any of the semantically similar
+	// laws actually conflict with the candidate law. It returns a report
+	// indicating whether conflicts were found and, if so, which laws
+	// conflict and what remediation is suggested.
+	AnalyseConflicts(
+		ctx context.Context,
+		candidateLaw *flowv1.Law,
+		similarLaws []*flowv1.SimilarLaw,
+	) (*ConflictReport, error)
+}
+
+// ConflictReport holds the result of LLM-based conflict analysis.
+type ConflictReport struct {
+	// HasConflicts is true when the analyser determines that at least one
+	// similar law actually conflicts with the candidate.
+	HasConflicts bool
+	// ConflictingLawIDs lists the IDs of laws that conflict.
+	ConflictingLawIDs []string
+	// RemediationText is a human-readable description of the conflicts
+	// and suggested remediation actions.
+	RemediationText string
+}
+
 // GRPCLibrarianDialer is the production implementation that dials a real
 // gRPC endpoint.
 type GRPCLibrarianDialer struct{}
@@ -56,11 +83,12 @@ func (d *GRPCLibrarianDialer) DialLibrarian(
 // Kubernetes CRDs via a controller-runtime client.
 type FederationServer struct {
 	flowv1.UnimplementedFederationServiceServer
-	k8sClient       client.Client
-	namespace       string
-	config          *flowv1.FederationConfig
-	bootstrapToken  string
-	librarianDialer LibrarianDialer
+	k8sClient        client.Client
+	namespace        string
+	config           *flowv1.FederationConfig
+	bootstrapToken   string
+	librarianDialer  LibrarianDialer
+	conflictAnalyser ConflictAnalyser
 }
 
 // FederationOption configures a FederationServer.
@@ -80,6 +108,12 @@ func WithBootstrapToken(token string) FederationOption {
 // for distributed conflict detection during publication admission.
 func WithLibrarianDialer(d LibrarianDialer) FederationOption {
 	return func(s *FederationServer) { s.librarianDialer = d }
+}
+
+// WithConflictAnalyser sets the analyser used for LLM-based conflict
+// detection during publication admission.
+func WithConflictAnalyser(a ConflictAnalyser) FederationOption {
+	return func(s *FederationServer) { s.conflictAnalyser = a }
 }
 
 // NewFederationServer returns a FederationServer backed by the given
@@ -369,17 +403,43 @@ func (s *FederationServer) SubmitPublication(
 	// Search publisher Flows' Librarians for semantically similar laws.
 	// For state-level publications, only query publishers in the same state(s).
 	// For federation-level publications, query all publishers.
+	var similarLaws []*flowv1.SimilarLaw
 	if s.librarianDialer != nil {
-		similarLaws, searchErr := s.distributedSearch(ctx, req.GetLaw(), matchingRole, member)
+		results, searchErr := s.distributedSearch(ctx, req.GetLaw(), matchingRole, member)
 		if searchErr != nil {
-			// Search infrastructure error is non-fatal for this slice.
-			// Log and proceed. LLM conflict analysis (13.8.3) will gate
-			// the final decision.
+			// Search infrastructure error is non-fatal. Log and proceed
+			// with empty results -- the analyser will not be called.
 			_ = searchErr
 		}
-		// Conflict analysis will be wired in slice 13.8.3 using the
-		// ConflictAnalyser interface. For now, collect results only.
-		_ = similarLaws
+		similarLaws = results
+	}
+
+	// --- LLM conflict analysis (13.8.3) ---
+	// If similar laws were found and a conflict analyser is configured,
+	// ask the LLM to determine whether the semantic matches are actual
+	// conflicts. Fail-safe: reject on analyser error.
+	if len(similarLaws) > 0 && s.conflictAnalyser != nil {
+		report, analyseErr := s.conflictAnalyser.AnalyseConflicts(ctx, req.GetLaw(), similarLaws)
+		if analyseErr != nil {
+			// Fail-safe: do not publish on uncertainty.
+			return &flowv1.SubmitPublicationResponse{
+				Accepted: false,
+				Rejection: &flowv1.PublicationRejection{
+					Reason:          flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT,
+					RemediationText: fmt.Sprintf("conflict analysis failed: %v", analyseErr),
+				},
+			}, nil
+		}
+		if report.HasConflicts {
+			return &flowv1.SubmitPublicationResponse{
+				Accepted: false,
+				Rejection: &flowv1.PublicationRejection{
+					Reason:            flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT,
+					ConflictingLawIds: report.ConflictingLawIDs,
+					RemediationText:   report.RemediationText,
+				},
+			}, nil
+		}
 	}
 
 	return &flowv1.SubmitPublicationResponse{
