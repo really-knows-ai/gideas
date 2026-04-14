@@ -618,15 +618,15 @@ Librarian for materialisation.
 
 #### Slice 13.9.2 -- Federation service: SubscribePetitionOutcomes RPC
 
-- [ ] Validate green: `go test ./platform/federation/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./platform/federation/...`
+- [x] Add tests:
   - `SubscribePetitionOutcomes` registers a subscriber and receives petition outcome events
   - When a publication is accepted and has petition_id provenance, `ACCEPTED` event is dispatched to the petitioning Flow
   - When a publication is rejected and has petition_id provenance, `REJECTED` event is dispatched with rejection report
   - `PetitionOutcomeEvent` includes `petition_id`, `outcome`, optional `rejection`, optional `published_law_id`
-- [ ] Validate red
-- [ ] Implement petition-outcome event dispatch (events are generated as side effects of `SubmitPublication`)
-- [ ] Validate green: `go test ./platform/federation/...`
+- [x] Validate red (implementation already complete from 13.9.1 -- tests pass immediately)
+- [x] Implement petition-outcome event dispatch (events are generated as side effects of `SubmitPublication`)
+- [x] Validate green: `go test ./platform/federation/...`
 
 #### Slice 13.9.3 -- Librarian: ReplicateLaws implementation
 
