@@ -695,8 +695,11 @@ type ReplicateLawsRequest struct {
 	// Source namespace for cross-flow law replication.
 	// Identifies the Kubernetes namespace of the originating FoundryFlow.
 	SourceFlowNamespace string `protobuf:"bytes,2,opt,name=source_flow_namespace,json=sourceFlowNamespace,proto3" json:"source_flow_namespace,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Optional petition ID for provenance threading. Present when the
+	// replicated laws originated from a cross-flow law-petition.
+	PetitionId    string `protobuf:"bytes,3,opt,name=petition_id,json=petitionId,proto3" json:"petition_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReplicateLawsRequest) Reset() {
@@ -739,6 +742,13 @@ func (x *ReplicateLawsRequest) GetLaws() []*Law {
 func (x *ReplicateLawsRequest) GetSourceFlowNamespace() string {
 	if x != nil {
 		return x.SourceFlowNamespace
+	}
+	return ""
+}
+
+func (x *ReplicateLawsRequest) GetPetitionId() string {
+	if x != nil {
+		return x.PetitionId
 	}
 	return ""
 }
@@ -1432,10 +1442,12 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\x10RetireLawRequest\x12\x15\n" +
 	"\x06law_id\x18\x01 \x01(\tR\x05lawId\"7\n" +
 	"\x11RetireLawResponse\x12\"\n" +
-	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"l\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"\x8d\x01\n" +
 	"\x14ReplicateLawsRequest\x12 \n" +
 	"\x04laws\x18\x01 \x03(\v2\f.flow.v1.LawR\x04laws\x122\n" +
-	"\x15source_flow_namespace\x18\x02 \x01(\tR\x13sourceFlowNamespace\"d\n" +
+	"\x15source_flow_namespace\x18\x02 \x01(\tR\x13sourceFlowNamespace\x12\x1f\n" +
+	"\vpetition_id\x18\x03 \x01(\tR\n" +
+	"petitionId\"d\n" +
 	"\x15ReplicateLawsResponse\x12K\n" +
 	"\x13integration_results\x18\x01 \x03(\v2\x1a.flow.v1.IntegrationResultR\x12integrationResults\"`\n" +
 	"\x1bApplyLifecycleActionRequest\x12\x15\n" +

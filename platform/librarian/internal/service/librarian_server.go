@@ -440,6 +440,8 @@ func (s *LibrarianServer) ReplicateLaws(
 			AppliesTo:       protoLaw.GetAppliesTo(),
 			Representations: storeReps,
 			Division:        protoLaw.GetDivision(),
+			SourceFlow:      req.GetSourceFlowNamespace(),
+			PetitionID:      req.GetPetitionId(),
 		}
 
 		// Try to get the existing law. If it exists, update; otherwise create.

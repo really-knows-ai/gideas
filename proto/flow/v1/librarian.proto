@@ -142,6 +142,9 @@ message ReplicateLawsRequest {
   // Source namespace for cross-flow law replication.
   // Identifies the Kubernetes namespace of the originating FoundryFlow.
   string source_flow_namespace = 2;
+  // Optional petition ID for provenance threading. Present when the
+  // replicated laws originated from a cross-flow law-petition.
+  string petition_id = 3;
 }
 
 message ReplicateLawsResponse {

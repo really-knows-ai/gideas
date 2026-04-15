@@ -40,6 +40,10 @@ type Law struct {
 	VersionHash     string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+
+	// Provenance fields for replicated (cross-flow) laws.
+	SourceFlow string // Originating Flow namespace. Empty for locally-created laws.
+	PetitionID string // Petition ID when law originated from a cross-flow petition.
 }
 
 // Representation is a typed representation of a law's goal.
@@ -155,6 +159,8 @@ func (s *Store) initSchema() error {
 		tier        INTEGER NOT NULL CHECK(tier BETWEEN 1 AND 5),
 		active      INTEGER NOT NULL DEFAULT 1,
 		division    TEXT NOT NULL DEFAULT '',
+		source_flow TEXT NOT NULL DEFAULT '',
+		petition_id TEXT NOT NULL DEFAULT '',
 		created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
 		updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
@@ -399,8 +405,11 @@ func (s *Store) createLaw(ctx context.Context, id string, law Law, active bool) 
 
 	// Insert into laws.
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO laws (id, goal, tier, division, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, law.Goal, law.Tier, law.Division, activeInt, now, now,
+		`INSERT INTO laws
+		 (id, goal, tier, division, source_flow, petition_id, active, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, law.Goal, law.Tier, law.Division, law.SourceFlow, law.PetitionID,
+		activeInt, now, now,
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert law: %w", err)
@@ -445,16 +454,18 @@ func (s *Store) createLaw(ctx context.Context, id string, law Law, active bool) 
 func (s *Store) GetLaw(ctx context.Context, id string) (Law, error) {
 	// Read from the laws table first.
 	var (
-		goal      string
-		tier      int
-		activeInt int
-		division  string
-		createdAt string
-		updatedAt string
+		goal       string
+		tier       int
+		activeInt  int
+		division   string
+		sourceFlow string
+		petitionID string
+		createdAt  string
+		updatedAt  string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT goal, tier, active, division, created_at, updated_at FROM laws WHERE id = ?`, id,
-	).Scan(&goal, &tier, &activeInt, &division, &createdAt, &updatedAt)
+		`SELECT goal, tier, active, division, source_flow, petition_id, created_at, updated_at FROM laws WHERE id = ?`, id,
+	).Scan(&goal, &tier, &activeInt, &division, &sourceFlow, &petitionID, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return Law{}, fmt.Errorf("law %q not found", id)
 	}
@@ -505,6 +516,8 @@ func (s *Store) GetLaw(ctx context.Context, id string) (Law, error) {
 		VersionHash:     versionHash,
 		CreatedAt:       ct,
 		UpdatedAt:       ut,
+		SourceFlow:      sourceFlow,
+		PetitionID:      petitionID,
 	}, nil
 }
 
@@ -532,8 +545,8 @@ func (s *Store) UpdateLaw(ctx context.Context, id string, law Law) (string, erro
 
 	// Update the laws table.
 	_, err = tx.ExecContext(ctx,
-		`UPDATE laws SET goal = ?, tier = ?, division = ?, updated_at = ? WHERE id = ?`,
-		law.Goal, law.Tier, law.Division, now, id,
+		`UPDATE laws SET goal = ?, tier = ?, division = ?, source_flow = ?, petition_id = ?, updated_at = ? WHERE id = ?`,
+		law.Goal, law.Tier, law.Division, law.SourceFlow, law.PetitionID, now, id,
 	)
 	if err != nil {
 		return "", fmt.Errorf("update law: %w", err)
