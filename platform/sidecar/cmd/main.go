@@ -43,6 +43,7 @@ const (
 	envLibrarianAddress    = "LIBRARIAN_ADDRESS"
 	envEventBusAddress     = "EVENT_BUS_ADDRESS"
 	envFrictionLedgerAddr  = "FRICTION_LEDGER_ADDRESS"
+	envFederationAddress   = "FEDERATION_ADDRESS"
 	envCapabilities        = "FLOW_CAPABILITIES"
 )
 
@@ -71,6 +72,7 @@ func main() {
 	librarianAddr := os.Getenv(envLibrarianAddress)
 	eventBusAddr := os.Getenv(envEventBusAddress)
 	frictionLedgerAddr := os.Getenv(envFrictionLedgerAddr)
+	federationAddr := os.Getenv(envFederationAddress)
 	capabilities := os.Getenv(envCapabilities)
 
 	slog.Info("Sidecar starting",
@@ -83,6 +85,7 @@ func main() {
 		"librarian_address", librarianAddr,
 		"event_bus_address", eventBusAddr,
 		"friction_ledger_address", frictionLedgerAddr,
+		"federation_address", federationAddr,
 		"capabilities", capabilities,
 		"phase", "brain-stem",
 	)
@@ -193,6 +196,22 @@ func main() {
 		slog.Info("Friction Ledger proxy disabled (no FRICTION_LEDGER_ADDRESS set)")
 	}
 
+	// FederationService: proxy to real Federation service if address is set.
+	var federationCloser func() error
+	if federationAddr != "" {
+		federationProxy, err := proxy.NewFederationProxy(federationAddr)
+		if err != nil {
+			slog.Error("Failed to connect to Federation", "address", federationAddr, "error", err)
+			os.Exit(1)
+		}
+		flowv1.RegisterFederationServiceServer(srv, federationProxy)
+		federationCloser = federationProxy.Close
+		slog.Info("Federation proxy enabled", "address", federationAddr)
+	} else {
+		federationCloser = func() error { return nil }
+		slog.Info("Federation proxy disabled (no FEDERATION_ADDRESS set)")
+	}
+
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
@@ -210,6 +229,7 @@ func main() {
 		_ = archivistCloser()
 		_ = librarianCloser()
 		_ = frictionLedgerCloser()
+		_ = federationCloser()
 		_ = eventBusCloser()
 		_ = sidecarSrv.Close()
 	}()
