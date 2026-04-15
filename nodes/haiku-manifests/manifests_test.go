@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"testing"
 
@@ -90,6 +91,119 @@ func findFoundryFlow(t *testing.T) foundryFlow {
 	}
 	t.Fatal("no FoundryFlow document found in flow.yaml")
 	return foundryFlow{} // unreachable
+}
+
+// ---------------------------------------------------------------------------
+// FoundryNode types
+// ---------------------------------------------------------------------------
+
+type foundryNodeOutput struct {
+	Name   string `yaml:"name"`
+	Target string `yaml:"target"`
+}
+
+type foundryNodeSpec struct {
+	Image        string              `yaml:"image"`
+	Entry        string              `yaml:"entry,omitempty"`
+	Exit         string              `yaml:"exit,omitempty"`
+	Outputs      []foundryNodeOutput `yaml:"outputs"`
+	Capabilities []string            `yaml:"capabilities"`
+}
+
+type foundryNode struct {
+	k8sObject `yaml:",inline"`
+	Spec      foundryNodeSpec `yaml:"spec"`
+}
+
+// ---------------------------------------------------------------------------
+// Deployment types
+// ---------------------------------------------------------------------------
+
+type envVar struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
+type deploymentContainer struct {
+	Name  string   `yaml:"name"`
+	Image string   `yaml:"image"`
+	Env   []envVar `yaml:"env"`
+}
+
+type deploymentSpec struct {
+	Template struct {
+		Metadata struct {
+			Labels map[string]string `yaml:"labels"`
+		} `yaml:"metadata"`
+		Spec struct {
+			Containers []deploymentContainer `yaml:"containers"`
+		} `yaml:"spec"`
+	} `yaml:"template"`
+}
+
+type deployment struct {
+	k8sObject `yaml:",inline"`
+	Spec      deploymentSpec `yaml:"spec"`
+}
+
+// ---------------------------------------------------------------------------
+// Helpers: FoundryNode and Deployment finders
+// ---------------------------------------------------------------------------
+
+// findFoundryNodes parses flow.yaml and returns a map of name → foundryNode
+// for every document with Kind == "FoundryNode".
+func findFoundryNodes(t *testing.T) map[string]foundryNode {
+	t.Helper()
+
+	docs := parseMultiDocYAML(t, "flow.yaml")
+	nodes := make(map[string]foundryNode)
+	for _, doc := range docs {
+		var obj k8sObject
+		if err := yaml.Unmarshal(doc, &obj); err != nil {
+			t.Fatalf("unmarshalling k8sObject: %v", err)
+		}
+		if obj.Kind == "FoundryNode" {
+			var fn foundryNode
+			if err := yaml.Unmarshal(doc, &fn); err != nil {
+				t.Fatalf("unmarshalling FoundryNode %q: %v", obj.Metadata.Name, err)
+			}
+			nodes[fn.Metadata.Name] = fn
+		}
+	}
+	return nodes
+}
+
+// findDeployments parses deployments.yaml and returns a map keyed by the
+// FLOW_NODE_ID env var value from the sidecar container.
+func findDeployments(t *testing.T) map[string]deployment {
+	t.Helper()
+
+	docs := parseMultiDocYAML(t, "deployments.yaml")
+	deps := make(map[string]deployment)
+	for _, doc := range docs {
+		var obj k8sObject
+		if err := yaml.Unmarshal(doc, &obj); err != nil {
+			t.Fatalf("unmarshalling k8sObject: %v", err)
+		}
+		if obj.Kind == "Deployment" {
+			var d deployment
+			if err := yaml.Unmarshal(doc, &d); err != nil {
+				t.Fatalf("unmarshalling Deployment %q: %v", obj.Metadata.Name, err)
+			}
+			// Key by FLOW_NODE_ID from the sidecar container.
+			for _, c := range d.Spec.Template.Spec.Containers {
+				if c.Name == "sidecar" {
+					for _, e := range c.Env {
+						if e.Name == "FLOW_NODE_ID" {
+							deps[e.Value] = d
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	return deps
 }
 
 // ---------------------------------------------------------------------------
@@ -267,4 +381,64 @@ func TestFoundryFlow_NodeGroups_NoDuplicatesAcrossGroups(t *testing.T) {
 	}
 	sort.Strings(allNodes)
 	t.Logf("all %d unique nodes across groups: %v", len(allNodes), allNodes)
+}
+
+// ---------------------------------------------------------------------------
+// Sort FoundryNode – judiciary outputs & suspend capability
+// ---------------------------------------------------------------------------
+
+func TestSort_HasArbiterOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	sn, ok := nodes["sort"]
+	if !ok {
+		t.Fatal("FoundryNode 'sort' not found in flow.yaml")
+	}
+
+	for _, o := range sn.Spec.Outputs {
+		if o.Name == "arbiter" {
+			if o.Target != "facilitator" {
+				t.Errorf("sort output 'arbiter': want target %q, got %q", "facilitator", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("sort FoundryNode missing output 'arbiter'")
+}
+
+func TestSort_HasSuspendCapability(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	sn, ok := nodes["sort"]
+	if !ok {
+		t.Fatal("FoundryNode 'sort' not found in flow.yaml")
+	}
+
+	if slices.Contains(sn.Spec.Capabilities, "SUSPEND:workitem") {
+		return
+	}
+	t.Error("sort FoundryNode missing capability 'SUSPEND:workitem'")
+}
+
+func TestSort_SidecarHasLibrarianAddress(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["sort"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='sort' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == "sidecar" {
+			for _, e := range c.Env {
+				if e.Name == "LIBRARIAN_ADDRESS" {
+					if e.Value != "flow-librarian:50058" {
+						t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q",
+							"flow-librarian:50058", e.Value)
+					}
+					return
+				}
+			}
+			t.Error("sort sidecar container missing LIBRARIAN_ADDRESS env var")
+			return
+		}
+	}
+	t.Error("sort Deployment missing sidecar container")
 }
