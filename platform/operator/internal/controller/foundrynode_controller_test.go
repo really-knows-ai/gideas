@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -109,6 +110,10 @@ var _ = Describe("FoundryNode Controller", func() {
 			Expect(sidecarEnv).To(ContainElement(corev1.EnvVar{Name: "FLOW_NAMESPACE", Value: "default"}))
 			Expect(sidecarEnv).To(ContainElement(corev1.EnvVar{Name: "EVENT_BUS_ADDRESS", Value: "flow-eventbus:50056"}))
 
+			By("Verifying FEDERATION_ADDRESS is NOT projected when no federation")
+			sidecarEnvMap := envVarMap(sidecarEnv)
+			Expect(sidecarEnvMap).NotTo(HaveKey("FEDERATION_ADDRESS"))
+
 			By("Verifying the Ready condition is set")
 			var node flowv1.FoundryNode
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &node)).To(Succeed())
@@ -178,6 +183,121 @@ var _ = Describe("FoundryNode Controller", func() {
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCond.Reason).To(Equal("InvalidCapability"))
+		})
+	})
+
+	Context("When federation is configured on the parent FoundryFlow", func() {
+		const resourceName = "test-node-fed"
+		const testNamespace = "node-fed-test"
+
+		ctx := context.Background()
+
+		nodeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: testNamespace,
+		}
+
+		BeforeEach(func() {
+			By("creating the test namespace")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: testNamespace},
+			}
+			var existing corev1.Namespace
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: testNamespace}, &existing); errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			}
+
+			By("creating a FoundryFlow with federation config")
+			var existingFlow flowv1.FoundryFlow
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-flow-fed", Namespace: testNamespace}, &existingFlow); errors.IsNotFound(err) {
+				flowResource := &flowv1.FoundryFlow{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-flow-fed",
+						Namespace: testNamespace,
+					},
+					Spec: flowv1.FoundryFlowSpec{
+						EntryContracts: map[string]flowv1.Contract{
+							"default": {},
+						},
+						ExitContracts: map[string]flowv1.Contract{
+							"default": {},
+						},
+						GovernancePolicy: flowv1.GovernancePolicy{
+							MaxVisits:      10,
+							DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+							MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+						},
+						CrossFlow: &flowv1.CrossFlowConfig{
+							Federation: &flowv1.FederationConfig{
+								Identity:           "flow-alpha",
+								States:             []string{"california"},
+								FederationEndpoint: "federation.example.com:50061",
+								PublisherRoles: []flowv1.FederationPublisherRole{
+									{Scope: "security", Level: "state"},
+								},
+							},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			}
+
+			By("creating the FoundryNode")
+			var existingNode flowv1.FoundryNode
+			if err := k8sClient.Get(ctx, nodeNamespacedName, &existingNode); errors.IsNotFound(err) {
+				nodeResource := &flowv1.FoundryNode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      resourceName,
+						Namespace: testNamespace,
+					},
+					Spec: flowv1.FoundryNodeSpec{
+						Image: "test-image:latest",
+					},
+				}
+				Expect(k8sClient.Create(ctx, nodeResource)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			By("Cleanup the FoundryNode")
+			nodeResource := &flowv1.FoundryNode{}
+			if err := k8sClient.Get(ctx, nodeNamespacedName, nodeResource); err == nil {
+				_ = k8sClient.Delete(ctx, nodeResource)
+			}
+
+			By("Cleanup the Deployment")
+			deploy := &appsv1.Deployment{}
+			if err := k8sClient.Get(ctx, nodeNamespacedName, deploy); err == nil {
+				_ = k8sClient.Delete(ctx, deploy)
+			}
+
+			By("Cleanup the FoundryFlow")
+			flowResource := &flowv1.FoundryFlow{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-flow-fed", Namespace: testNamespace}, flowResource); err == nil {
+				_ = k8sClient.Delete(ctx, flowResource)
+			}
+		})
+
+		It("should project FEDERATION_ADDRESS to the sidecar container", func() {
+			By("Reconciling the FoundryNode")
+			controllerReconciler := &FoundryNodeReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: nodeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the Deployment was created")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, nodeNamespacedName, &deploy)).To(Succeed())
+			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(2))
+
+			By("Verifying sidecar container has FEDERATION_ADDRESS")
+			sidecarEnvMap := envVarMap(deploy.Spec.Template.Spec.Containers[1].Env)
+			Expect(sidecarEnvMap).To(HaveKeyWithValue("FEDERATION_ADDRESS", "flow-federation:50061"))
 		})
 	})
 })

@@ -142,16 +142,19 @@ func (r *FoundryNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.setCondition(ctx, &node, metav1.ConditionFalse, "InvalidChildContract", err.Error())
 	}
 
+	// Check if the parent FoundryFlow has federation configured.
+	fedEnabled := r.flowHasFederation(ctx, &node)
+
 	// Determine deployment strategy.
 	useStatefulSet := r.requiresStatefulSet(&node)
 
 	// Reconcile the workload (Deployment or StatefulSet).
 	if useStatefulSet {
-		if err := r.reconcileStatefulSet(ctx, &node); err != nil {
+		if err := r.reconcileStatefulSet(ctx, &node, fedEnabled); err != nil {
 			return r.setCondition(ctx, &node, metav1.ConditionFalse, "ReconcileFailed", err.Error())
 		}
 	} else {
-		if err := r.reconcileDeployment(ctx, &node); err != nil {
+		if err := r.reconcileDeployment(ctx, &node, fedEnabled); err != nil {
 			return r.setCondition(ctx, &node, metav1.ConditionFalse, "ReconcileFailed", err.Error())
 		}
 	}
@@ -214,6 +217,19 @@ func (r *FoundryNodeReconciler) validateAgainstFlow(ctx context.Context, node *f
 	}
 
 	return nil
+}
+
+// flowHasFederation checks if the parent FoundryFlow has federation configured.
+func (r *FoundryNodeReconciler) flowHasFederation(ctx context.Context, node *flowv1.FoundryNode) bool {
+	var flows flowv1.FoundryFlowList
+	if err := r.List(ctx, &flows, client.InNamespace(node.Namespace)); err != nil {
+		return false
+	}
+	if len(flows.Items) == 0 {
+		return false
+	}
+	flow := &flows.Items[0]
+	return flow.Spec.CrossFlow != nil && flow.Spec.CrossFlow.Federation != nil
 }
 
 // validateOutputTargets checks that routing output targets reference existing FoundryNodes.
@@ -301,7 +317,7 @@ func (r *FoundryNodeReconciler) hasQueueServerCapability(node *flowv1.FoundryNod
 }
 
 // buildPodTemplate constructs the pod template spec with node + sidecar containers.
-func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode) corev1.PodTemplateSpec {
+func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFederation bool) corev1.PodTemplateSpec {
 	labels := r.labelsForNode(node)
 
 	// Node container.
@@ -345,6 +361,15 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode) corev
 		})
 	}
 
+	// Inject federation address when the parent FoundryFlow has federation configured.
+	if hasFederation {
+		fedAddr := corev1.EnvVar{
+			Name:  "FEDERATION_ADDRESS",
+			Value: fmt.Sprintf("%s:%d", federationSvcName, federationPort),
+		}
+		sidecarContainer.Env = append(sidecarContainer.Env, fedAddr)
+	}
+
 	// Inject volume mounts if storage is configured.
 	if node.Spec.Storage != nil {
 		for _, vol := range node.Spec.Storage.Volumes {
@@ -368,7 +393,7 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode) corev
 }
 
 // reconcileDeployment creates or updates a Deployment for the FoundryNode.
-func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *flowv1.FoundryNode) error {
+func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *flowv1.FoundryNode, hasFederation bool) error {
 	replicas := int32(1)
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -383,7 +408,7 @@ func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *f
 		deploy.Spec.Selector = &metav1.LabelSelector{
 			MatchLabels: r.labelsForNode(node),
 		}
-		deploy.Spec.Template = r.buildPodTemplate(node)
+		deploy.Spec.Template = r.buildPodTemplate(node, hasFederation)
 		return controllerutil.SetControllerReference(node, deploy, r.Scheme)
 	})
 	if err != nil {
@@ -398,7 +423,7 @@ func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *f
 }
 
 // reconcileStatefulSet creates or updates a StatefulSet for the FoundryNode.
-func (r *FoundryNodeReconciler) reconcileStatefulSet(ctx context.Context, node *flowv1.FoundryNode) error {
+func (r *FoundryNodeReconciler) reconcileStatefulSet(ctx context.Context, node *flowv1.FoundryNode, hasFederation bool) error {
 	replicas := int32(1)
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -414,7 +439,7 @@ func (r *FoundryNodeReconciler) reconcileStatefulSet(ctx context.Context, node *
 		sts.Spec.Selector = &metav1.LabelSelector{
 			MatchLabels: r.labelsForNode(node),
 		}
-		sts.Spec.Template = r.buildPodTemplate(node)
+		sts.Spec.Template = r.buildPodTemplate(node, hasFederation)
 
 		// Build VolumeClaimTemplates from storage config.
 		if node.Spec.Storage != nil {

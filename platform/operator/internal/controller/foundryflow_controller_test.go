@@ -700,6 +700,9 @@ var _ = Describe("FoundryFlow Controller", func() {
 				"EMBASSY_FEDERATION_CA_PEM",
 				"-----BEGIN CERTIFICATE-----\nZmFrZS1mZWRlcmF0aW9uLWNh\n-----END CERTIFICATE-----",
 			))
+
+			By("Verifying FEDERATION_ADDRESS is projected")
+			Expect(envMap).To(HaveKeyWithValue("FEDERATION_ADDRESS", "flow-federation:50061"))
 		})
 	})
 
