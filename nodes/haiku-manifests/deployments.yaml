@@ -159,6 +159,8 @@ spec:
               value: "flow-operator:50052"
             - name: ARCHIVIST_ADDRESS
               value: "flow-archivist:50054"
+            - name: LIBRARIAN_ADDRESS
+              value: "flow-librarian:50058"
       volumes:
         - name: node-config
           configMap:

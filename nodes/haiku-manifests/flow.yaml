@@ -267,10 +267,13 @@ spec:
       target: "appraise"
     - name: "refine"
       target: "refine"
+    - name: "arbiter"
+      target: "facilitator"
   capabilities:
     - "READ:artefact/haiku"
     - "READ:feedback"
     - "STAMP:artefact/haiku/approval"
+    - "SUSPEND:workitem"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
