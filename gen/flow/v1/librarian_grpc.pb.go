@@ -55,14 +55,14 @@ type LibrarianServiceClient interface {
 	// Returns the full law object by identifier.
 	// Used by the Judiciary (Tribunal, Arbiter) for hearing evidence retrieval.
 	GetLaw(ctx context.Context, in *GetLawRequest, opts ...grpc.CallOption) (*GetLawResponse, error)
-	// Persists a law (Tier 2 Ruling applied by the Judiciary Gate after petition
-	// approval, Tier 3+ applied by administrator or Governance Flow).
+	// Persists a law (Tier 1-2 applied by law-applicator after petition
+	// approval, Tier 3 applied by law-applicator or administrator).
 	WriteLaw(ctx context.Context, in *WriteLawRequest, opts ...grpc.CallOption) (*WriteLawResponse, error)
 	// Removes a law from the active Library.
 	// History is preserved in the audit log.
 	RetireLaw(ctx context.Context, in *RetireLawRequest, opts ...grpc.CallOption) (*RetireLawResponse, error)
-	// Receives higher-tier laws from a remote Librarian for integration.
-	// Triggers the two-stage conflict protocol.
+	// Stores laws received from the Federation service for local materialisation.
+	// Subscriber Flows receive published laws as Tier 4 or Tier 5.
 	ReplicateLaws(ctx context.Context, in *ReplicateLawsRequest, opts ...grpc.CallOption) (*ReplicateLawsResponse, error)
 	// Applies the outcome of a review hearing (promote, retire, demote)
 	// to the specified law. Called by the Operator after Tribunal hearing completion.
@@ -232,14 +232,14 @@ type LibrarianServiceServer interface {
 	// Returns the full law object by identifier.
 	// Used by the Judiciary (Tribunal, Arbiter) for hearing evidence retrieval.
 	GetLaw(context.Context, *GetLawRequest) (*GetLawResponse, error)
-	// Persists a law (Tier 2 Ruling applied by the Judiciary Gate after petition
-	// approval, Tier 3+ applied by administrator or Governance Flow).
+	// Persists a law (Tier 1-2 applied by law-applicator after petition
+	// approval, Tier 3 applied by law-applicator or administrator).
 	WriteLaw(context.Context, *WriteLawRequest) (*WriteLawResponse, error)
 	// Removes a law from the active Library.
 	// History is preserved in the audit log.
 	RetireLaw(context.Context, *RetireLawRequest) (*RetireLawResponse, error)
-	// Receives higher-tier laws from a remote Librarian for integration.
-	// Triggers the two-stage conflict protocol.
+	// Stores laws received from the Federation service for local materialisation.
+	// Subscriber Flows receive published laws as Tier 4 or Tier 5.
 	ReplicateLaws(context.Context, *ReplicateLawsRequest) (*ReplicateLawsResponse, error)
 	// Applies the outcome of a review hearing (promote, retire, demote)
 	// to the specified law. Called by the Operator after Tribunal hearing completion.

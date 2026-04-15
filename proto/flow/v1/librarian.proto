@@ -33,16 +33,16 @@ service LibrarianService {
   // Used by the Judiciary (Tribunal, Arbiter) for hearing evidence retrieval.
   rpc GetLaw(GetLawRequest) returns (GetLawResponse);
 
-  // Persists a law (Tier 2 Ruling applied by the Judiciary Gate after petition
-  // approval, Tier 3+ applied by administrator or Governance Flow).
+  // Persists a law (Tier 1-2 applied by law-applicator after petition
+  // approval, Tier 3 applied by law-applicator or administrator).
   rpc WriteLaw(WriteLawRequest) returns (WriteLawResponse);
 
   // Removes a law from the active Library.
   // History is preserved in the audit log.
   rpc RetireLaw(RetireLawRequest) returns (RetireLawResponse);
 
-  // Receives higher-tier laws from a remote Librarian for integration.
-  // Triggers the two-stage conflict protocol.
+  // Stores laws received from the Federation service for local materialisation.
+  // Subscriber Flows receive published laws as Tier 4 or Tier 5.
   rpc ReplicateLaws(ReplicateLawsRequest) returns (ReplicateLawsResponse);
 
   // Applies the outcome of a review hearing (promote, retire, demote)
