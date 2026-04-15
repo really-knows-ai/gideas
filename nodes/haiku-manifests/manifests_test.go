@@ -11,6 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const containerNameSidecar = "sidecar"
+
 // ---------------------------------------------------------------------------
 // Generic YAML types for parsing Kubernetes manifests
 // ---------------------------------------------------------------------------
@@ -124,10 +126,26 @@ type envVar struct {
 	Value string `yaml:"value"`
 }
 
+type volumeMount struct {
+	Name      string `yaml:"name"`
+	MountPath string `yaml:"mountPath"`
+	ReadOnly  bool   `yaml:"readOnly"`
+}
+
 type deploymentContainer struct {
-	Name  string   `yaml:"name"`
-	Image string   `yaml:"image"`
-	Env   []envVar `yaml:"env"`
+	Name         string        `yaml:"name"`
+	Image        string        `yaml:"image"`
+	Env          []envVar      `yaml:"env"`
+	VolumeMounts []volumeMount `yaml:"volumeMounts"`
+}
+
+type configMapVolumeSource struct {
+	Name string `yaml:"name"`
+}
+
+type volume struct {
+	Name      string                 `yaml:"name"`
+	ConfigMap *configMapVolumeSource `yaml:"configMap,omitempty"`
 }
 
 type deploymentSpec struct {
@@ -137,6 +155,7 @@ type deploymentSpec struct {
 		} `yaml:"metadata"`
 		Spec struct {
 			Containers []deploymentContainer `yaml:"containers"`
+			Volumes    []volume              `yaml:"volumes"`
 		} `yaml:"spec"`
 	} `yaml:"template"`
 }
@@ -192,7 +211,7 @@ func findDeployments(t *testing.T) map[string]deployment {
 			}
 			// Key by FLOW_NODE_ID from the sidecar container.
 			for _, c := range d.Spec.Template.Spec.Containers {
-				if c.Name == "sidecar" {
+				if c.Name == containerNameSidecar {
 					for _, e := range c.Env {
 						if e.Name == "FLOW_NODE_ID" {
 							deps[e.Value] = d
@@ -204,6 +223,38 @@ func findDeployments(t *testing.T) map[string]deployment {
 		}
 	}
 	return deps
+}
+
+// ---------------------------------------------------------------------------
+// ConfigMap types
+// ---------------------------------------------------------------------------
+
+type configMap struct {
+	k8sObject `yaml:",inline"`
+	Data      map[string]string `yaml:"data"`
+}
+
+// findConfigMaps parses configmaps.yaml and returns a map of name → configMap
+// for every document with Kind == "ConfigMap".
+func findConfigMaps(t *testing.T) map[string]configMap {
+	t.Helper()
+
+	docs := parseMultiDocYAML(t, "configmaps.yaml")
+	cms := make(map[string]configMap)
+	for _, doc := range docs {
+		var obj k8sObject
+		if err := yaml.Unmarshal(doc, &obj); err != nil {
+			t.Fatalf("unmarshalling k8sObject: %v", err)
+		}
+		if obj.Kind == "ConfigMap" {
+			var cm configMap
+			if err := yaml.Unmarshal(doc, &cm); err != nil {
+				t.Fatalf("unmarshalling ConfigMap %q: %v", obj.Metadata.Name, err)
+			}
+			cms[cm.Metadata.Name] = cm
+		}
+	}
+	return cms
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +477,7 @@ func TestSort_SidecarHasLibrarianAddress(t *testing.T) {
 	}
 
 	for _, c := range d.Spec.Template.Spec.Containers {
-		if c.Name == "sidecar" {
+		if c.Name == containerNameSidecar {
 			for _, e := range c.Env {
 				if e.Name == "LIBRARIAN_ADDRESS" {
 					if e.Value != "flow-librarian:50058" {
@@ -441,4 +492,271 @@ func TestSort_SidecarHasLibrarianAddress(t *testing.T) {
 		}
 	}
 	t.Error("sort Deployment missing sidecar container")
+}
+
+// ---------------------------------------------------------------------------
+// Facilitator tests (Slice 14.1.2)
+// ---------------------------------------------------------------------------
+
+func TestFacilitator_FoundryNode_ResolvedOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["facilitator"]
+	if !ok {
+		t.Fatal("FoundryNode 'facilitator' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "resolved" {
+			if o.Target != "sort" {
+				t.Errorf("facilitator output 'resolved': want target %q, got %q", "sort", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("facilitator FoundryNode missing output 'resolved'")
+}
+
+func TestFacilitator_FoundryNode_Capabilities(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["facilitator"]
+	if !ok {
+		t.Fatal("FoundryNode 'facilitator' not found in flow.yaml")
+	}
+
+	required := []string{
+		"SUSPEND:workitem",
+		"CREATE:workitem/child",
+		"READ:artefact/petition",
+		"READ:artefact/haiku",
+		"READ:feedback",
+		"READ:law",
+	}
+	for _, cap := range required {
+		if !slices.Contains(fn.Spec.Capabilities, cap) {
+			t.Errorf("facilitator FoundryNode missing capability %q", cap)
+		}
+	}
+}
+
+func TestFacilitator_Sidecar_LibrarianAndFrictionLedger(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["facilitator"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='facilitator' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			envMap := make(map[string]string)
+			for _, e := range c.Env {
+				envMap[e.Name] = e.Value
+			}
+			if v, ok := envMap["LIBRARIAN_ADDRESS"]; !ok {
+				t.Error("facilitator sidecar missing LIBRARIAN_ADDRESS")
+			} else if v != "flow-librarian:50058" {
+				t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q", "flow-librarian:50058", v)
+			}
+			if v, ok := envMap["FRICTION_LEDGER_ADDRESS"]; !ok {
+				t.Error("facilitator sidecar missing FRICTION_LEDGER_ADDRESS")
+			} else if v != "flow-frictionledger:50057" {
+				t.Errorf("FRICTION_LEDGER_ADDRESS: want %q, got %q", "flow-frictionledger:50057", v)
+			}
+			return
+		}
+	}
+	t.Error("facilitator Deployment missing sidecar container")
+}
+
+func TestFacilitator_ConfigMap_ArbiterNode(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["facilitator-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'facilitator-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("facilitator-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling facilitator config data: %v", err)
+	}
+
+	if v, ok := cfg["arbiterNode"]; !ok {
+		t.Error("facilitator config missing 'arbiterNode' field")
+	} else if v != "arbiter" {
+		t.Errorf("facilitator config arbiterNode: want %q, got %v", "arbiter", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Arbiter tests (Slice 14.1.3)
+// ---------------------------------------------------------------------------
+
+func TestArbiter_FoundryNode_HungOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["arbiter"]
+	if !ok {
+		t.Fatal("FoundryNode 'arbiter' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "hung" {
+			if o.Target != "arbiter-hitl-resolve" {
+				t.Errorf("arbiter output 'hung': want target %q, got %q",
+					"arbiter-hitl-resolve", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("arbiter FoundryNode missing output 'hung'")
+}
+
+func TestArbiter_FoundryNode_Capabilities(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["arbiter"]
+	if !ok {
+		t.Fatal("FoundryNode 'arbiter' not found in flow.yaml")
+	}
+
+	required := []string{
+		"SUSPEND:workitem",
+		"CREATE:workitem/child",
+	}
+	for _, cap := range required {
+		if !slices.Contains(fn.Spec.Capabilities, cap) {
+			t.Errorf("arbiter FoundryNode missing capability %q", cap)
+		}
+	}
+}
+
+func TestArbiter_ConfigMap_AllFields(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["arbiter-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'arbiter-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("arbiter-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling arbiter config data: %v", err)
+	}
+
+	requiredFields := []string{
+		"jurySize", "jurorNode", "consensusStrategy",
+		"maxRounds", "clerkNode", "hungOutput",
+	}
+	for _, field := range requiredFields {
+		if _, ok := cfg[field]; !ok {
+			t.Errorf("arbiter config missing field %q", field)
+		}
+	}
+}
+
+func TestArbiter_Deployment_ConfigMapMount(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["arbiter"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='arbiter' not found in deployments.yaml")
+	}
+
+	for _, vol := range d.Spec.Template.Spec.Volumes {
+		if vol.Name == "node-config" && vol.ConfigMap != nil {
+			if vol.ConfigMap.Name != "arbiter-config" {
+				t.Errorf("arbiter volume configMap name: want %q, got %q",
+					"arbiter-config", vol.ConfigMap.Name)
+			}
+			return
+		}
+	}
+	t.Error("arbiter Deployment missing node-config volume with arbiter-config ConfigMap")
+}
+
+// ---------------------------------------------------------------------------
+// Juror tests (Slice 14.1.4)
+// ---------------------------------------------------------------------------
+
+func TestJuror_FoundryNode_EmptyOutputs(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["juror"]
+	if !ok {
+		t.Fatal("FoundryNode 'juror' not found in flow.yaml")
+	}
+
+	if len(fn.Spec.Outputs) != 0 {
+		t.Errorf("juror FoundryNode should have empty outputs, got %d", len(fn.Spec.Outputs))
+	}
+}
+
+func TestJuror_FoundryNode_Capabilities(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["juror"]
+	if !ok {
+		t.Fatal("FoundryNode 'juror' not found in flow.yaml")
+	}
+
+	required := []string{
+		"READ:artefact/question",
+		"READ:artefact/evidence",
+		"READ:artefact/allowed-outcomes",
+		"READ:artefact/prior-round-reasoning",
+		"WRITE:artefact/verdict",
+	}
+	for _, cap := range required {
+		if !slices.Contains(fn.Spec.Capabilities, cap) {
+			t.Errorf("juror FoundryNode missing capability %q", cap)
+		}
+	}
+}
+
+func TestJuror_Deployment_NodeHasOllamaBaseURL(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["juror"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='juror' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == "node" {
+			for _, e := range c.Env {
+				if e.Name == "OLLAMA_BASE_URL" {
+					return
+				}
+			}
+			t.Error("juror node container missing OLLAMA_BASE_URL env var")
+			return
+		}
+	}
+	t.Error("juror Deployment missing node container")
+}
+
+func TestJuror_ConfigMap_Personality(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["juror-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'juror-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("juror-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling juror config data: %v", err)
+	}
+
+	if v, ok := cfg["personality"]; !ok {
+		t.Error("juror config missing 'personality' field")
+	} else if v != "textualist" {
+		t.Errorf("juror config personality: want %q, got %v", "textualist", v)
+	}
 }

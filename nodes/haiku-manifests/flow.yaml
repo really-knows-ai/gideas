@@ -344,3 +344,68 @@ spec:
     - "READ:feedback"
     - "WRITE:feedback/actioned"
     - "READ:law"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: facilitator
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: facilitator:latest
+  outputs:
+    - name: "resolved"
+      target: "sort"
+  capabilities:
+    - "READ:artefact/petition"
+    - "READ:artefact/haiku"
+    - "READ:feedback"
+    - "READ:law"
+    - "CREATE:workitem/child"
+    - "SUSPEND:workitem"
+    - "WRITE:artefact/dispute-workitem"
+    - "WRITE:artefact/dispute-details"
+    - "WRITE:artefact/dispute-artefact"
+    - "WRITE:artefact/dispute-inputs"
+    - "WRITE:artefact/appendix"
+    - "WRITE:artefact/disputed-artefact"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: arbiter
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: arbiter:latest
+  outputs:
+    - name: "hung"
+      target: "arbiter-hitl-resolve"
+  capabilities:
+    - "READ:artefact/evidence-bundle"
+    - "WRITE:artefact/verdict-context"
+    - "WRITE:artefact/question"
+    - "WRITE:artefact/evidence"
+    - "WRITE:artefact/allowed-outcomes"
+    - "WRITE:artefact/prior-round-reasoning"
+    - "CREATE:workitem/child"
+    - "SUSPEND:workitem"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: juror
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: juror:latest
+  outputs: []
+  capabilities:
+    - "READ:artefact/question"
+    - "READ:artefact/evidence"
+    - "READ:artefact/allowed-outcomes"
+    - "READ:artefact/prior-round-reasoning"
+    - "WRITE:artefact/verdict"

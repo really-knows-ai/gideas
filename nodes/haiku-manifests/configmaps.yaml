@@ -80,3 +80,42 @@ data:
     outputArtefact: "haiku"
     governedArtefact: "haiku"
     outputField: "haiku"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: facilitator-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: facilitator
+data:
+  node-config.yaml: |
+    arbiterNode: "arbiter"
+    inputArtefacts: ["petition"]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arbiter-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: arbiter
+data:
+  node-config.yaml: |
+    jurySize: 5
+    jurorNode: "juror"
+    consensusStrategy: "SIMPLE_MAJORITY"
+    maxRounds: 3
+    clerkNode: "clerk-forge"
+    hungOutput: "hung"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: juror-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: juror
+data:
+  node-config.yaml: |
+    personality: "textualist"
