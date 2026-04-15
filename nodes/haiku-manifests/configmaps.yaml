@@ -184,3 +184,108 @@ data:
   node-config.yaml: |
     choiceLabels:
       resolution: "Provide Resolution"
+---
+# --- Clerk Forge ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clerk-forge-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: clerk-forge
+data:
+  node-config.yaml: |
+    inputArtefacts: ["verdict-context"]
+    outputArtefact: "petition"
+    governedArtefact: "petition"
+    outputField: "petition"
+    systemPrompt: |
+      You are a legal clerk drafting governance petitions. Given a court's verdict
+      decision, produce a structured YAML petition with concrete law changes
+      (create, retire, demote) that faithfully implement the court's reasoning.
+      Each change must include a justification grounded in the verdict.
+    queryTemplate: |
+      The court has issued the following verdict decision:
+
+      {{.Input}}
+
+      Draft a governance petition that implements this decision. The petition must
+      include concrete law changes with justifications. Output valid YAML matching
+      the petition schema.
+---
+# --- Clerk Sort ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clerk-sort-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: clerk-sort
+data:
+  node-config.yaml: |
+    nodeOrder: "appraise"
+    deadlockThreshold: 3
+---
+# --- Clerk Appraise ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clerk-appraise-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: clerk-appraise
+data:
+  node-config.yaml: |
+    inputArtefacts: ["verdict-context"]
+    reviewArtefact: "petition"
+    governedArtefact: "petition"
+    stampName: "review"
+    reviewerNode: "reviewer"
+    divisionPrompts:
+      alignment: "Verify the petition faithfully implements the court's verdict decision. Check that each change is justified by the verdict reasoning."
+      completeness: "Check that all aspects of the verdict are addressed. Verify no law changes are missing or extraneous."
+      feasibility: "Assess whether the proposed law changes are well-formed and internally consistent."
+---
+# --- Clerk Refine ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clerk-refine-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: clerk-refine
+data:
+  node-config.yaml: |
+    inputArtefacts: ["verdict-context"]
+    outputArtefact: "petition"
+    governedArtefact: "petition"
+    outputField: "petition"
+    systemPrompt: |
+      You are a legal clerk revising a governance petition based on review feedback.
+      The petition must faithfully implement the court's verdict decision. Address
+      each piece of feedback while maintaining alignment with the verdict.
+    queryTemplate: |
+      Original verdict decision:
+      {{.VerdictContext}}
+
+      Current petition:
+      {{.Input}}
+
+      Review feedback to address:
+      {{.Feedback}}
+
+      Revise the petition to address the feedback while maintaining alignment with
+      the verdict. Output valid YAML matching the petition schema.
+---
+# --- Clerk Facilitator ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clerk-facilitator-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: clerk-facilitator
+data:
+  node-config.yaml: |
+    arbiterNode: "arbiter"
+    inputArtefacts: ["verdict-context"]

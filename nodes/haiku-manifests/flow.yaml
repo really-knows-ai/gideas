@@ -518,3 +518,112 @@ spec:
   capabilities:
     - "READ:artefact/evidence-bundle"
     - "READ:artefact/deliberation-result"
+---
+# --- Clerk Cycle Node Definitions ---
+
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: clerk-forge
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: forge:latest
+  outputs:
+    - name: "default"
+      target: "codification"
+  capabilities:
+    - "READ:artefact/verdict-context"
+    - "WRITE:artefact/petition"
+    - "READ:law"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: clerk-sort
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: sort:latest
+  outputs:
+    - name: "appraise"
+      target: "clerk-appraise"
+    - name: "refine"
+      target: "clerk-refine"
+    - name: "arbiter"
+      target: "clerk-facilitator"
+    - name: "done"
+      target: "clerk-done-router"
+  capabilities:
+    - "READ:artefact/petition"
+    - "READ:feedback"
+    - "STAMP:artefact/petition/approval"
+    - "SUSPEND:workitem"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: clerk-appraise
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: appraise:latest
+  outputs:
+    - name: "default"
+      target: "clerk-sort"
+  capabilities:
+    - "READ:artefact/verdict-context"
+    - "READ:artefact/petition"
+    - "READ:law"
+    - "WRITE:feedback/new"
+    - "STAMP:artefact/petition/review"
+    - "CREATE:workitem/child"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: clerk-refine
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: refine:latest
+  outputs:
+    - name: "default"
+      target: "codification"
+  capabilities:
+    - "READ:artefact/verdict-context"
+    - "READ:artefact/petition"
+    - "WRITE:artefact/petition"
+    - "READ:feedback"
+    - "WRITE:feedback/actioned"
+    - "READ:law"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: clerk-facilitator
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: facilitator:latest
+  outputs:
+    - name: "resolved"
+      target: "clerk-sort"
+  capabilities:
+    - "READ:artefact/verdict-context"
+    - "READ:artefact/petition"
+    - "READ:feedback"
+    - "READ:law"
+    - "CREATE:workitem/child"
+    - "SUSPEND:workitem"
+    - "WRITE:artefact/dispute-workitem"
+    - "WRITE:artefact/dispute-details"
+    - "WRITE:artefact/dispute-artefact"
+    - "WRITE:artefact/dispute-inputs"
+    - "WRITE:artefact/appendix"
+    - "WRITE:artefact/disputed-artefact"
