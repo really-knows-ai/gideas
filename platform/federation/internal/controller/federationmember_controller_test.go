@@ -255,7 +255,7 @@ func TestDeletedMember_NoError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile returned error for deleted member: %v", err)
 	}
-	if result.Requeue {
+	if result.RequeueAfter != 0 {
 		t.Error("expected no requeue for deleted member")
 	}
 }

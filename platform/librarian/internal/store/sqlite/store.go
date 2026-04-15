@@ -591,6 +591,22 @@ func (s *Store) UpdateLaw(ctx context.Context, id string, law Law) (string, erro
 	return versionHash, nil
 }
 
+// ReplicateLaw stores a law received from a remote Flow via Federation
+// distribution. It is an upsert: if the law does not exist it is created
+// as active; if it already exists its content and provenance are updated.
+// Provenance fields (SourceFlow, PetitionID) are preserved through the
+// write. Returns the version hash.
+func (s *Store) ReplicateLaw(ctx context.Context, id string, law Law) (string, error) {
+	// Check whether the law already exists.
+	_, err := s.GetLaw(ctx, id)
+	if err != nil {
+		// Law does not exist — create as active.
+		return s.CreateLaw(ctx, id, law)
+	}
+	// Law exists — update content and provenance.
+	return s.UpdateLaw(ctx, id, law)
+}
+
 // RetireLaw deletes the law from the active registry and scope table.
 // Versions remain in law_versions for audit trail.
 func (s *Store) RetireLaw(ctx context.Context, id string) error {

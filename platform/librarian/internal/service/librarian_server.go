@@ -444,29 +444,14 @@ func (s *LibrarianServer) ReplicateLaws(
 			PetitionID:      req.GetPetitionId(),
 		}
 
-		// Try to get the existing law. If it exists, update; otherwise create.
-		_, err := s.store.GetLaw(ctx, protoLaw.GetId())
-		var versionHash string
+		// Upsert: create if new, update if exists. Provenance is preserved.
+		versionHash, err := s.store.ReplicateLaw(ctx, protoLaw.GetId(), storeLaw)
 		if err != nil {
-			// Law does not exist — create it as active.
-			versionHash, err = s.store.CreateLaw(ctx, protoLaw.GetId(), storeLaw)
-			if err != nil {
-				slog.Error("ReplicateLaws create failed",
-					"law_id", protoLaw.GetId(), "error", err)
-				result.ConflictReason = fmt.Sprintf("create failed: %v", err)
-				results = append(results, result)
-				continue
-			}
-		} else {
-			// Law exists — update.
-			versionHash, err = s.store.UpdateLaw(ctx, protoLaw.GetId(), storeLaw)
-			if err != nil {
-				slog.Error("ReplicateLaws update failed",
-					"law_id", protoLaw.GetId(), "error", err)
-				result.ConflictReason = fmt.Sprintf("update failed: %v", err)
-				results = append(results, result)
-				continue
-			}
+			slog.Error("ReplicateLaws store failed",
+				"law_id", protoLaw.GetId(), "error", err)
+			result.ConflictReason = fmt.Sprintf("store failed: %v", err)
+			results = append(results, result)
+			continue
 		}
 
 		slog.Info("ReplicateLaws: law stored",

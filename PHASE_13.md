@@ -643,15 +643,15 @@ Librarian for materialisation.
 
 #### Slice 13.9.4 -- Librarian store: replicated law storage
 
-- [ ] Validate green: `go test ./platform/librarian/...`
-- [ ] Add tests in `platform/librarian/internal/store/sqlite/store_test.go`:
+- [x] Validate green: `go test ./platform/librarian/...`
+- [x] Add tests in `platform/librarian/internal/store/sqlite/store_test.go`:
   - `ReplicateLaw` stores a law with external provenance (source flow, materialisation tier)
   - Replicated law is queryable via existing `QueryLaws`
   - Replicated law retains `petition_id` in provenance
   - Updating an existing replicated law (same id) updates content and provenance
-- [ ] Validate red
-- [ ] Implement `ReplicateLaw(ctx, law, sourceFlowNamespace)` in Librarian store
-- [ ] Validate green: `go test ./platform/librarian/...`
+- [x] Validate red
+- [x] Implement `ReplicateLaw(ctx, law, sourceFlowNamespace)` in Librarian store
+- [x] Validate green: `go test ./platform/librarian/...`
 
 ---
 
