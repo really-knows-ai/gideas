@@ -519,6 +519,7 @@ func (r *FoundryFlowReconciler) embassyEnvVars(flow *flowv1.FoundryFlow) []corev
 	if fed := flow.Spec.CrossFlow.Federation; fed != nil {
 		envs = append(envs, corev1.EnvVar{Name: "EMBASSY_FEDERATION_IDENTITY", Value: fed.Identity})
 		envs = append(envs, corev1.EnvVar{Name: "EMBASSY_FEDERATION_ENDPOINT", Value: fed.FederationEndpoint})
+		envs = append(envs, corev1.EnvVar{Name: "FEDERATION_ADDRESS", Value: fmt.Sprintf("%s:%d", federationSvcName, federationPort)})
 
 		if data, err := json.Marshal(fed.States); err == nil {
 			envs = append(envs, corev1.EnvVar{Name: "EMBASSY_FEDERATION_STATES", Value: string(data)})
