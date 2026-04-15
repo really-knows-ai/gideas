@@ -275,7 +275,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 
 			// Clean up infrastructure resources (envtest does not run garbage collection).
 			By("Cleanup infrastructure Deployments and Services")
-			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian", "flow-embassy"}
+			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian", "flow-embassy", "flow-federation"}
 			for _, name := range infraNames {
 				deploy := &appsv1.Deployment{}
 				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, deploy); err == nil {
@@ -649,7 +649,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 
 			By("Cleanup infrastructure Deployments and Services")
-			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian", "flow-embassy"}
+			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian", "flow-embassy", "flow-federation"}
 			for _, name := range infraNames {
 				deploy := &appsv1.Deployment{}
 				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, deploy); err == nil {
@@ -700,6 +700,261 @@ var _ = Describe("FoundryFlow Controller", func() {
 				"EMBASSY_FEDERATION_CA_PEM",
 				"-----BEGIN CERTIFICATE-----\nZmFrZS1mZWRlcmF0aW9uLWNh\n-----END CERTIFICATE-----",
 			))
+		})
+	})
+
+	Context("When reconciling Federation infrastructure", func() {
+		const resourceName = "test-flow-federation"
+		const testNamespace = "federation-infra-test"
+
+		ctx := context.Background()
+
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: testNamespace,
+		}
+
+		BeforeEach(func() {
+			By("creating the test namespace")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: testNamespace},
+			}
+			var existing corev1.Namespace
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: testNamespace}, &existing); errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			By("Cleanup infrastructure Deployments and Services")
+			infraNames := []string{"flow-eventbus", "flow-frictionledger", "flow-monitor", "flow-librarian", "flow-embassy", "flow-federation"}
+			for _, name := range infraNames {
+				deploy := &appsv1.Deployment{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, deploy); err == nil {
+					_ = k8sClient.Delete(ctx, deploy)
+				}
+				svc := &corev1.Service{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, svc); err == nil {
+					_ = k8sClient.Delete(ctx, svc)
+				}
+			}
+		})
+
+		It("should create Federation Deployment and Service when federation is set", func() {
+			By("creating a FoundryFlow with federation config")
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: testNamespace,
+				},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					CrossFlow: &flowv1.CrossFlowConfig{
+						Federation: &flowv1.FederationConfig{
+							Identity:           "flow-alpha",
+							States:             []string{"california"},
+							FederationEndpoint: "federation.example.com:50061",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the Federation Deployment exists with correct image and port")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-federation",
+				Namespace: testNamespace,
+			}, &deploy)).To(Succeed())
+			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/gideas/flow/federation:latest"))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Ports).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(50061)))
+
+			By("Verifying Federation labels")
+			Expect(deploy.Labels).To(HaveKeyWithValue("app.kubernetes.io/name", "flow-federation"))
+			Expect(deploy.Labels).To(HaveKeyWithValue("app.kubernetes.io/component", "control-plane"))
+
+			By("Verifying the Federation Service exists")
+			var svc corev1.Service
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-federation",
+				Namespace: testNamespace,
+			}, &svc)).To(Succeed())
+			Expect(svc.Spec.Ports).To(HaveLen(1))
+			Expect(svc.Spec.Ports[0].Port).To(Equal(int32(50061)))
+			Expect(svc.Spec.Ports[0].Name).To(Equal("grpc"))
+		})
+
+		It("should set Federation env vars including FEDERATION_PORT and FEDERATION_NAMESPACE", func() {
+			By("creating a FoundryFlow with federation config")
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: testNamespace,
+				},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					CrossFlow: &flowv1.CrossFlowConfig{
+						Federation: &flowv1.FederationConfig{
+							Identity:           "flow-beta",
+							States:             []string{"nevada"},
+							FederationEndpoint: "federation.example.com:50061",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying Federation env vars")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-federation",
+				Namespace: testNamespace,
+			}, &deploy)).To(Succeed())
+
+			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
+			Expect(envMap).To(HaveKeyWithValue("FEDERATION_PORT", "50061"))
+			Expect(envMap).To(HaveKeyWithValue("FEDERATION_NAMESPACE", testNamespace))
+		})
+
+		It("should not have /data volume or FEDERATION_DB_PATH", func() {
+			By("creating a FoundryFlow with federation config")
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: testNamespace,
+				},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+					CrossFlow: &flowv1.CrossFlowConfig{
+						Federation: &flowv1.FederationConfig{
+							Identity:           "flow-gamma",
+							States:             []string{"oregon"},
+							FederationEndpoint: "federation.example.com:50061",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying no /data volume or FEDERATION_DB_PATH")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-federation",
+				Namespace: testNamespace,
+			}, &deploy)).To(Succeed())
+
+			Expect(deploy.Spec.Template.Spec.Volumes).To(BeEmpty())
+			Expect(deploy.Spec.Template.Spec.Containers[0].VolumeMounts).To(BeEmpty())
+
+			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
+			Expect(envMap).NotTo(HaveKey("FEDERATION_DB_PATH"))
+		})
+
+		It("should not create Federation Deployment or Service when federation is nil", func() {
+			By("creating a FoundryFlow without federation config")
+			noFedName := "test-flow-no-fed"
+			noFedNamespacedName := types.NamespacedName{Name: noFedName, Namespace: testNamespace}
+
+			flowResource := &flowv1.FoundryFlow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      noFedName,
+					Namespace: testNamespace,
+				},
+				Spec: flowv1.FoundryFlowSpec{
+					EntryContracts: map[string]flowv1.Contract{"default": {}},
+					ExitContracts:  map[string]flowv1.Contract{"default": {}},
+					GovernancePolicy: flowv1.GovernancePolicy{
+						MaxVisits:      10,
+						DefaultTimeout: metav1.Duration{Duration: 5 * time.Minute},
+						MaxTimeout:     metav1.Duration{Duration: 30 * time.Minute},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, flowResource)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, flowResource) }()
+
+			By("Reconciling the resource")
+			controllerReconciler := &FoundryFlowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: noFedNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying no Federation Deployment exists")
+			var deploy appsv1.Deployment
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-federation",
+				Namespace: testNamespace,
+			}, &deploy)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+
+			By("Verifying no Federation Service exists")
+			var svc corev1.Service
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "flow-federation",
+				Namespace: testNamespace,
+			}, &svc)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 	})
 
