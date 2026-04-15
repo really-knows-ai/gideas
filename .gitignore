@@ -16,3 +16,6 @@ bin/
 # Go test binaries and coverage
 *.test
 *.out
+
+# OpenCode local state
+.opencode/package-lock.json
