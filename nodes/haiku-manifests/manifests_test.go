@@ -23,6 +23,7 @@ const (
 	envOllamaBaseURL     = "OLLAMA_BASE_URL"
 	outputNameDefault    = "default"
 	targetClerkSort      = "clerk-sort"
+	targetEmbassy        = "embassy"
 )
 
 // ---------------------------------------------------------------------------
@@ -1740,10 +1741,10 @@ func TestLawApplicator_FoundryNode_EmbassyOutputAndWriteLaw(t *testing.T) {
 	}
 
 	for _, o := range fn.Spec.Outputs {
-		if o.Name == "embassy" {
-			if o.Target != "embassy" {
-				t.Errorf("law-applicator output 'embassy': want target %q, got %q",
-					"embassy", o.Target)
+		if o.Name == targetEmbassy {
+			if o.Target != targetEmbassy {
+				t.Errorf("law-applicator output %q: want target %q, got %q",
+					targetEmbassy, targetEmbassy, o.Target)
 			}
 			// Also verify WRITE:law capability
 			if !slices.Contains(fn.Spec.Capabilities, "WRITE:law") {
@@ -1752,7 +1753,7 @@ func TestLawApplicator_FoundryNode_EmbassyOutputAndWriteLaw(t *testing.T) {
 			return
 		}
 	}
-	t.Error("law-applicator FoundryNode missing output 'embassy'")
+	t.Errorf("law-applicator FoundryNode missing output %q", targetEmbassy)
 }
 
 func TestLawApplicator_Deployment_SidecarHasLibrarianAddress(t *testing.T) {
@@ -1791,4 +1792,118 @@ func TestLawApplicator_Deployment_NoConfigMapMount(t *testing.T) {
 		t.Errorf("law-applicator Deployment should have no volumes, got %d",
 			len(d.Spec.Template.Spec.Volumes))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-cutting manifest consistency (Slice 14.3.1)
+// ---------------------------------------------------------------------------
+
+func TestManifest_CrossCuttingConsistency(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	deps := findDeployments(t)
+	cms := findConfigMaps(t)
+	ff := findFoundryFlow(t)
+
+	t.Run("output_targets_exist", func(t *testing.T) {
+		for name, fn := range nodes {
+			for _, o := range fn.Spec.Outputs {
+				if o.Target == targetEmbassy {
+					continue // operator-provisioned, not in hand-authored manifests
+				}
+				if _, ok := nodes[o.Target]; !ok {
+					t.Errorf("FoundryNode %q output %q references target %q which does not exist as a FoundryNode",
+						name, o.Name, o.Target)
+				}
+			}
+		}
+	})
+
+	t.Run("nodegroup_members_exist", func(t *testing.T) {
+		for group, members := range ff.Spec.NodeGroups {
+			for _, member := range members {
+				if _, ok := nodes[member]; !ok {
+					t.Errorf("nodeGroup %q lists %q but no FoundryNode with that name exists",
+						group, member)
+				}
+			}
+		}
+	})
+
+	t.Run("configmap_consistency", func(t *testing.T) {
+		for nodeID, d := range deps {
+			for _, vol := range d.Spec.Template.Spec.Volumes {
+				if vol.ConfigMap == nil {
+					continue
+				}
+				if _, ok := cms[vol.ConfigMap.Name]; !ok {
+					t.Errorf("Deployment %q (FLOW_NODE_ID=%q) mounts ConfigMap %q but it does not exist in configmaps.yaml",
+						d.Metadata.Name, nodeID, vol.ConfigMap.Name)
+				}
+			}
+		}
+	})
+
+	t.Run("deployment_crd_alignment", func(t *testing.T) {
+		for nodeID := range deps {
+			if _, ok := nodes[nodeID]; !ok {
+				t.Errorf("Deployment FLOW_NODE_ID=%q has no matching FoundryNode in flow.yaml", nodeID)
+			}
+		}
+	})
+
+	t.Run("no_duplicate_foundrynode_names", func(t *testing.T) {
+		// findFoundryNodes returns a map so duplicates would be silently
+		// overwritten. Parse raw documents to detect true duplicates.
+		docs := parseMultiDocYAML(t, "flow.yaml")
+		seen := make(map[string]int)
+		for _, doc := range docs {
+			var obj k8sObject
+			if err := yaml.Unmarshal(doc, &obj); err != nil {
+				t.Fatalf("unmarshalling k8sObject: %v", err)
+			}
+			if obj.Kind == "FoundryNode" {
+				seen[obj.Metadata.Name]++
+			}
+		}
+		for name, count := range seen {
+			if count > 1 {
+				t.Errorf("FoundryNode %q appears %d times in flow.yaml (must be unique)", name, count)
+			}
+		}
+	})
+
+	t.Run("embassy_exclusion", func(t *testing.T) {
+		if _, ok := nodes[targetEmbassy]; ok {
+			t.Errorf("%q must NOT appear as a FoundryNode in flow.yaml (it is operator-provisioned)", targetEmbassy)
+		}
+	})
+
+	t.Run("foundrynode_count", func(t *testing.T) {
+		// 6 main-cycle + 10 judiciary + 9 clerk-cycle = 25 hand-authored FoundryNodes.
+		if len(nodes) != 25 {
+			names := make([]string, 0, len(nodes))
+			for n := range nodes {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			t.Errorf("expected 25 FoundryNode documents, got %d: %v", len(nodes), names)
+		}
+	})
+
+	t.Run("deployment_count", func(t *testing.T) {
+		// Every FoundryNode must have a matching Deployment.
+		for name := range nodes {
+			if _, ok := deps[name]; !ok {
+				t.Errorf("FoundryNode %q has no matching Deployment (by FLOW_NODE_ID)", name)
+			}
+		}
+		if len(deps) != 25 {
+			ids := make([]string, 0, len(deps))
+			for id := range deps {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			t.Errorf("expected 25 Deployments, got %d: %v", len(deps), ids)
+		}
+	})
 }
