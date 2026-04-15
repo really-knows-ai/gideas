@@ -627,3 +627,90 @@ spec:
     - "WRITE:artefact/dispute-inputs"
     - "WRITE:artefact/appendix"
     - "WRITE:artefact/disputed-artefact"
+---
+# --- Codification ---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: codification
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: codification:latest
+  outputs:
+    - name: "default"
+      target: "clerk-sort"
+  capabilities:
+    - "READ:artefact/petition"
+    - "WRITE:artefact/petition"
+    - "WRITE:artefact/codification-goal"
+    - "CREATE:workitem/child"
+---
+# --- Codify SMT (child node) ---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: codify-smt
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: codify-smt:latest
+  outputs: []
+  capabilities:
+    - "READ:artefact/codification-goal"
+    - "WRITE:artefact/codification-result"
+---
+# --- Clerk Done Router ---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: clerk-done-router
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: rule-router:latest
+  outputs:
+    - name: "law-applicator"
+      target: "law-applicator"
+    - name: "hitl-appraise"
+      target: "hitl-appraise"
+  capabilities:
+    - "READ:artefact/petition"
+---
+# --- HITL Gate ---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: hitl-gate
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: rule-router:latest
+  outputs:
+    - name: "law-applicator"
+      target: "law-applicator"
+  capabilities:
+    - "READ:artefact/petition"
+---
+# --- Law Applicator ---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: law-applicator
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: law-applicator:latest
+  outputs:
+    - name: "embassy"
+      target: "embassy"
+  capabilities:
+    - "READ:artefact/petition"
+    - "WRITE:artefact/approval-stamp"
+    - "READ:law"
+    - "WRITE:law"

@@ -20,7 +20,9 @@ const (
 	addrLibrarian        = "flow-librarian:50058"
 	addrFrictionLedger   = "flow-frictionledger:50057"
 	envLibrarianAddress  = "LIBRARIAN_ADDRESS"
+	envOllamaBaseURL     = "OLLAMA_BASE_URL"
 	outputNameDefault    = "default"
+	targetClerkSort      = "clerk-sort"
 )
 
 // ---------------------------------------------------------------------------
@@ -736,7 +738,7 @@ func TestJuror_Deployment_NodeHasOllamaBaseURL(t *testing.T) {
 	for _, c := range d.Spec.Template.Spec.Containers {
 		if c.Name == containerNameNode {
 			for _, e := range c.Env {
-				if e.Name == "OLLAMA_BASE_URL" {
+				if e.Name == envOllamaBaseURL {
 					return
 				}
 			}
@@ -1252,9 +1254,9 @@ func TestClerkAppraise_FoundryNode_DefaultOutputToClerkSort(t *testing.T) {
 
 	for _, o := range fn.Spec.Outputs {
 		if o.Name == outputNameDefault {
-			if o.Target != "clerk-sort" {
+			if o.Target != targetClerkSort {
 				t.Errorf("clerk-appraise output 'default': want target %q, got %q",
-					"clerk-sort", o.Target)
+					targetClerkSort, o.Target)
 			}
 			// Verify has CREATE:workitem/child
 			if !slices.Contains(fn.Spec.Capabilities, "CREATE:workitem/child") {
@@ -1294,9 +1296,9 @@ func TestClerkFacilitator_FoundryNode_ResolvedOutputToClerkSort(t *testing.T) {
 
 	for _, o := range fn.Spec.Outputs {
 		if o.Name == "resolved" {
-			if o.Target != "clerk-sort" {
+			if o.Target != targetClerkSort {
 				t.Errorf("clerk-facilitator output 'resolved': want target %q, got %q",
-					"clerk-sort", o.Target)
+					targetClerkSort, o.Target)
 			}
 			return
 		}
@@ -1321,7 +1323,7 @@ func TestClerkForge_Deployment_ImageAndOllamaEnv(t *testing.T) {
 				t.Errorf("clerk-forge node image: want %q, got %q", "forge:latest", c.Image)
 			}
 			for _, e := range c.Env {
-				if e.Name == "OLLAMA_BASE_URL" {
+				if e.Name == envOllamaBaseURL {
 					return
 				}
 			}
@@ -1491,4 +1493,302 @@ func TestClerkFacilitator_Deployment_SidecarHasLibrarianAndFrictionLedger(t *tes
 		}
 	}
 	t.Error("clerk-facilitator Deployment missing sidecar container")
+}
+
+// ---------------------------------------------------------------------------
+// Codification + codify-smt tests (Slice 14.1.10)
+// ---------------------------------------------------------------------------
+
+func TestCodification_FoundryNode_DefaultOutputToClerkSort(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["codification"]
+	if !ok {
+		t.Fatal("FoundryNode 'codification' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == outputNameDefault {
+			if o.Target != targetClerkSort {
+				t.Errorf("codification output 'default': want target %q, got %q",
+					targetClerkSort, o.Target)
+			}
+			return
+		}
+	}
+	t.Error("codification FoundryNode missing output 'default'")
+}
+
+func TestCodification_FoundryNode_HasCreateChildCapability(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["codification"]
+	if !ok {
+		t.Fatal("FoundryNode 'codification' not found in flow.yaml")
+	}
+
+	if !slices.Contains(fn.Spec.Capabilities, "CREATE:workitem/child") {
+		t.Error("codification FoundryNode missing capability 'CREATE:workitem/child'")
+	}
+}
+
+func TestCodifySmt_FoundryNode_EmptyOutputs(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["codify-smt"]
+	if !ok {
+		t.Fatal("FoundryNode 'codify-smt' not found in flow.yaml")
+	}
+
+	if len(fn.Spec.Outputs) != 0 {
+		t.Errorf("codify-smt FoundryNode should have empty outputs (child node), got %d",
+			len(fn.Spec.Outputs))
+	}
+}
+
+func TestCodification_Deployment_HasConfigMapMount(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["codification"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='codification' not found in deployments.yaml")
+	}
+
+	for _, vol := range d.Spec.Template.Spec.Volumes {
+		if vol.Name == "node-config" && vol.ConfigMap != nil {
+			if vol.ConfigMap.Name != "codification-config" {
+				t.Errorf("codification volume configMap name: want %q, got %q",
+					"codification-config", vol.ConfigMap.Name)
+			}
+			return
+		}
+	}
+	t.Error("codification Deployment missing node-config volume with codification-config ConfigMap")
+}
+
+func TestCodifySmt_Deployment_NodeHasOllamaBaseURL(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["codify-smt"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='codify-smt' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameNode {
+			for _, e := range c.Env {
+				if e.Name == envOllamaBaseURL {
+					return
+				}
+			}
+			t.Error("codify-smt node container missing OLLAMA_BASE_URL env var")
+			return
+		}
+	}
+	t.Error("codify-smt Deployment missing node container")
+}
+
+func TestCodification_ConfigMap_CodificationNodesField(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["codification-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'codification-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("codification-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling codification config data: %v", err)
+	}
+
+	if _, ok := cfg["codificationNodes"]; !ok {
+		t.Error("codification config missing 'codificationNodes' field")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Rule Router tests (Slice 14.1.11)
+// ---------------------------------------------------------------------------
+
+func TestClerkDoneRouter_FoundryNode_TwoOutputs(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["clerk-done-router"]
+	if !ok {
+		t.Fatal("FoundryNode 'clerk-done-router' not found in flow.yaml")
+	}
+
+	wantOutputs := map[string]string{
+		"law-applicator": "law-applicator",
+		"hitl-appraise":  "hitl-appraise",
+	}
+
+	foundOutputs := make(map[string]string)
+	for _, o := range fn.Spec.Outputs {
+		foundOutputs[o.Name] = o.Target
+	}
+
+	for name, target := range wantOutputs {
+		got, ok := foundOutputs[name]
+		if !ok {
+			t.Errorf("clerk-done-router missing output %q", name)
+			continue
+		}
+		if got != target {
+			t.Errorf("clerk-done-router output %q: want target %q, got %q", name, target, got)
+		}
+	}
+}
+
+func TestHITLGate_FoundryNode_LawApplicatorOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["hitl-gate"]
+	if !ok {
+		t.Fatal("FoundryNode 'hitl-gate' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "law-applicator" {
+			if o.Target != "law-applicator" {
+				t.Errorf("hitl-gate output 'law-applicator': want target %q, got %q",
+					"law-applicator", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("hitl-gate FoundryNode missing output 'law-applicator'")
+}
+
+func TestClerkDoneRouter_ConfigMap_HasRulesWithTierMetadata(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["clerk-done-router-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'clerk-done-router-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("clerk-done-router-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling clerk-done-router config data: %v", err)
+	}
+
+	if _, ok := cfg["rules"]; !ok {
+		t.Error("clerk-done-router config missing 'rules' field")
+	}
+
+	// Verify the raw config mentions petition_max_tier
+	if !strings.Contains(raw, "petition_max_tier") {
+		t.Error("clerk-done-router config rules should reference petition_max_tier metadata")
+	}
+}
+
+func TestHITLGate_ConfigMap_HasRules(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["hitl-gate-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'hitl-gate-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("hitl-gate-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling hitl-gate config data: %v", err)
+	}
+
+	if _, ok := cfg["rules"]; !ok {
+		t.Error("hitl-gate config missing 'rules' field")
+	}
+}
+
+func TestRuleRouter_Deployments_UseRuleRouterImage(t *testing.T) {
+	deps := findDeployments(t)
+
+	routerNodes := []string{"clerk-done-router", "hitl-gate"}
+	for _, name := range routerNodes {
+		d, ok := deps[name]
+		if !ok {
+			t.Errorf("Deployment with FLOW_NODE_ID=%q not found in deployments.yaml", name)
+			continue
+		}
+		for _, c := range d.Spec.Template.Spec.Containers {
+			if c.Name == containerNameNode {
+				if c.Image != "rule-router:latest" {
+					t.Errorf("%s node container image: want %q, got %q",
+						name, "rule-router:latest", c.Image)
+				}
+				break
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Law-applicator tests (Slice 14.1.12)
+// ---------------------------------------------------------------------------
+
+func TestLawApplicator_FoundryNode_EmbassyOutputAndWriteLaw(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["law-applicator"]
+	if !ok {
+		t.Fatal("FoundryNode 'law-applicator' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "embassy" {
+			if o.Target != "embassy" {
+				t.Errorf("law-applicator output 'embassy': want target %q, got %q",
+					"embassy", o.Target)
+			}
+			// Also verify WRITE:law capability
+			if !slices.Contains(fn.Spec.Capabilities, "WRITE:law") {
+				t.Error("law-applicator FoundryNode missing capability 'WRITE:law'")
+			}
+			return
+		}
+	}
+	t.Error("law-applicator FoundryNode missing output 'embassy'")
+}
+
+func TestLawApplicator_Deployment_SidecarHasLibrarianAddress(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["law-applicator"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='law-applicator' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			for _, e := range c.Env {
+				if e.Name == envLibrarianAddress {
+					if e.Value != addrLibrarian {
+						t.Errorf("%s: want %q, got %q",
+							envLibrarianAddress, addrLibrarian, e.Value)
+					}
+					return
+				}
+			}
+			t.Error("law-applicator sidecar missing LIBRARIAN_ADDRESS env var")
+			return
+		}
+	}
+	t.Error("law-applicator Deployment missing sidecar container")
+}
+
+func TestLawApplicator_Deployment_NoConfigMapMount(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["law-applicator"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='law-applicator' not found in deployments.yaml")
+	}
+
+	if len(d.Spec.Template.Spec.Volumes) != 0 {
+		t.Errorf("law-applicator Deployment should have no volumes, got %d",
+			len(d.Spec.Template.Spec.Volumes))
+	}
 }
