@@ -359,7 +359,7 @@ Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md#the-judiciary--standa
 
 ## Embassy API
 
-The Embassy is the cross-flow gateway node responsible for Workitem import/export. It replaces the former Operator-centric `ExportWorkitem`/`ImportWorkitem` methods with a manifest-preflight and package-streaming protocol. The Embassy is Operator-provisioned and holds cross-flow transfer capabilities.
+The Embassy is the cross-flow gateway node responsible for Workitem import/export, using a manifest-preflight and package-streaming protocol. The Embassy is Operator-provisioned and holds cross-flow transfer capabilities.
 
 ### Transfer Methods
 
