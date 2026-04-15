@@ -289,3 +289,64 @@ data:
   node-config.yaml: |
     arbiterNode: "arbiter"
     inputArtefacts: ["verdict-context"]
+---
+# --- Codification ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: codification-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: codification
+data:
+  node-config.yaml: |
+    petitionArtefact: "petition"
+    codificationNodes: ["codify-smt"]
+    defaultOutput: "default"
+---
+# --- Codify SMT ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: codify-smt-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: codify-smt
+data:
+  node-config.yaml: |
+    outputFormat: "application/smt-lib"
+---
+# --- Clerk Done Router ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clerk-done-router-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: clerk-done-router
+data:
+  node-config.yaml: |
+    rules:
+      - name: "tier-1-2"
+        when: 'metadata["petition_max_tier"] in ["FINDING", "RULING"]'
+        output: "law-applicator"
+      - name: "tier-3-5"
+        when: 'true'
+        output: "hitl-appraise"
+    default: "hitl-appraise"
+---
+# --- HITL Gate ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hitl-gate-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: hitl-gate
+data:
+  node-config.yaml: |
+    rules:
+      - name: "all-approved"
+        when: 'true'
+        output: "law-applicator"
+    default: "law-applicator"
