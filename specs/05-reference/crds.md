@@ -499,5 +499,5 @@ The Operator rejects invalid configuration at admission time. Partial applicatio
 9. Stamp vocabulary on GovernedArtefact defines which stamp names are meaningful; contracts select from that vocabulary.
 10. Child Workitem `parentWorkitemID` is immutable after creation. The `flow.gideas.io/parent` label is set by the Operator at creation time.
 11. NodeGroups are inline on FoundryFlow. A node belongs to at most one group.
-12. `crossFlow.importTypes` replaces the former `importNode` field for flow-authored import types. Built-in system import types (currently `law-petition`) share the same effective namespace but are platform-owned rather than YAML-authored.
+12. `crossFlow.importTypes` defines the flow-authored import type extension set. Built-in system import types (currently `law-petition`) share the same effective namespace but are platform-owned rather than YAML-authored.
 13. A dispute record prevents retirement or demotion of the referenced law until the dispute is resolved.
