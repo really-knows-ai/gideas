@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -13,9 +14,13 @@ import (
 
 const (
 	containerNameSidecar = "sidecar"
+	containerNameNode    = "node"
 	nodeNameArbiter      = "arbiter"
 	nodeNameTribunal     = "tribunal"
 	addrLibrarian        = "flow-librarian:50058"
+	addrFrictionLedger   = "flow-frictionledger:50057"
+	envLibrarianAddress  = "LIBRARIAN_ADDRESS"
+	outputNameDefault    = "default"
 )
 
 // ---------------------------------------------------------------------------
@@ -484,10 +489,10 @@ func TestSort_SidecarHasLibrarianAddress(t *testing.T) {
 	for _, c := range d.Spec.Template.Spec.Containers {
 		if c.Name == containerNameSidecar {
 			for _, e := range c.Env {
-				if e.Name == "LIBRARIAN_ADDRESS" {
+				if e.Name == envLibrarianAddress {
 					if e.Value != addrLibrarian {
-						t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q",
-							addrLibrarian, e.Value)
+						t.Errorf("%s: want %q, got %q",
+							envLibrarianAddress, addrLibrarian, e.Value)
 					}
 					return
 				}
@@ -556,15 +561,15 @@ func TestFacilitator_Sidecar_LibrarianAndFrictionLedger(t *testing.T) {
 			for _, e := range c.Env {
 				envMap[e.Name] = e.Value
 			}
-			if v, ok := envMap["LIBRARIAN_ADDRESS"]; !ok {
+			if v, ok := envMap[envLibrarianAddress]; !ok {
 				t.Error("facilitator sidecar missing LIBRARIAN_ADDRESS")
 			} else if v != addrLibrarian {
-				t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q", addrLibrarian, v)
+				t.Errorf("%s: want %q, got %q", envLibrarianAddress, addrLibrarian, v)
 			}
 			if v, ok := envMap["FRICTION_LEDGER_ADDRESS"]; !ok {
 				t.Error("facilitator sidecar missing FRICTION_LEDGER_ADDRESS")
-			} else if v != "flow-frictionledger:50057" {
-				t.Errorf("FRICTION_LEDGER_ADDRESS: want %q, got %q", "flow-frictionledger:50057", v)
+			} else if v != addrFrictionLedger {
+				t.Errorf("FRICTION_LEDGER_ADDRESS: want %q, got %q", addrFrictionLedger, v)
 			}
 			return
 		}
@@ -729,7 +734,7 @@ func TestJuror_Deployment_NodeHasOllamaBaseURL(t *testing.T) {
 	}
 
 	for _, c := range d.Spec.Template.Spec.Containers {
-		if c.Name == "node" {
+		if c.Name == containerNameNode {
 			for _, e := range c.Env {
 				if e.Name == "OLLAMA_BASE_URL" {
 					return
@@ -825,15 +830,15 @@ func TestTribunal_Deployment_SidecarHasLibrarianAndFrictionLedger(t *testing.T) 
 			for _, e := range c.Env {
 				envMap[e.Name] = e.Value
 			}
-			if v, ok := envMap["LIBRARIAN_ADDRESS"]; !ok {
+			if v, ok := envMap[envLibrarianAddress]; !ok {
 				t.Error("tribunal sidecar missing LIBRARIAN_ADDRESS")
 			} else if v != addrLibrarian {
-				t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q", addrLibrarian, v)
+				t.Errorf("%s: want %q, got %q", envLibrarianAddress, addrLibrarian, v)
 			}
 			if v, ok := envMap["FRICTION_LEDGER_ADDRESS"]; !ok {
 				t.Error("tribunal sidecar missing FRICTION_LEDGER_ADDRESS")
-			} else if v != "flow-frictionledger:50057" {
-				t.Errorf("FRICTION_LEDGER_ADDRESS: want %q, got %q", "flow-frictionledger:50057", v)
+			} else if v != addrFrictionLedger {
+				t.Errorf("FRICTION_LEDGER_ADDRESS: want %q, got %q", addrFrictionLedger, v)
 			}
 			return
 		}
@@ -885,7 +890,7 @@ func TestFrictionWatcher_FoundryNode_EntryAndOutput(t *testing.T) {
 	}
 
 	for _, o := range fn.Spec.Outputs {
-		if o.Name == "default" {
+		if o.Name == outputNameDefault {
 			if o.Target != nodeNameTribunal {
 				t.Errorf("friction-watcher output 'default': want target %q, got %q",
 					nodeNameTribunal, o.Target)
@@ -908,7 +913,7 @@ func TestTTLWatcher_FoundryNode_EntryAndOutput(t *testing.T) {
 	}
 
 	for _, o := range fn.Spec.Outputs {
-		if o.Name == "default" {
+		if o.Name == outputNameDefault {
 			if o.Target != nodeNameTribunal {
 				t.Errorf("ttl-watcher output 'default': want target %q, got %q",
 					nodeNameTribunal, o.Target)
@@ -967,10 +972,10 @@ func TestTTLWatcher_Deployment_SidecarHasLibrarianAddress(t *testing.T) {
 	for _, c := range d.Spec.Template.Spec.Containers {
 		if c.Name == containerNameSidecar {
 			for _, e := range c.Env {
-				if e.Name == "LIBRARIAN_ADDRESS" {
+				if e.Name == envLibrarianAddress {
 					if e.Value != addrLibrarian {
-						t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q",
-							addrLibrarian, e.Value)
+						t.Errorf("%s: want %q, got %q",
+							envLibrarianAddress, addrLibrarian, e.Value)
 					}
 					return
 				}
@@ -1095,7 +1100,7 @@ func TestHITL_Deployments_UseHITLImage(t *testing.T) {
 			continue
 		}
 		for _, c := range d.Spec.Template.Spec.Containers {
-			if c.Name == "node" {
+			if c.Name == containerNameNode {
 				if c.Image != "hitl:latest" {
 					t.Errorf("%s node container image: want %q, got %q",
 						name, "hitl:latest", c.Image)
@@ -1170,4 +1175,320 @@ func TestTribunalHITLResolve_ConfigMap_ChoiceLabels(t *testing.T) {
 	if _, ok := cfg["choiceLabels"]; !ok {
 		t.Error("tribunal-hitl-resolve config missing 'choiceLabels' field")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Clerk Cycle FoundryNode CRD tests (Slice 14.1.8)
+// ---------------------------------------------------------------------------
+
+func TestClerkForge_FoundryNode_DefaultOutputToCodification(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["clerk-forge"]
+	if !ok {
+		t.Fatal("FoundryNode 'clerk-forge' not found in flow.yaml")
+	}
+
+	if fn.Spec.Image != "forge:latest" {
+		t.Errorf("clerk-forge image: want %q, got %q", "forge:latest", fn.Spec.Image)
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == outputNameDefault {
+			if o.Target != "codification" {
+				t.Errorf("clerk-forge output 'default': want target %q, got %q",
+					"codification", o.Target)
+			}
+			// Verify reads verdict-context
+			if !slices.Contains(fn.Spec.Capabilities, "READ:artefact/verdict-context") {
+				t.Error("clerk-forge missing capability 'READ:artefact/verdict-context'")
+			}
+			return
+		}
+	}
+	t.Error("clerk-forge FoundryNode missing output 'default'")
+}
+
+func TestClerkSort_FoundryNode_FourOutputs(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["clerk-sort"]
+	if !ok {
+		t.Fatal("FoundryNode 'clerk-sort' not found in flow.yaml")
+	}
+
+	wantOutputs := map[string]string{
+		"appraise": "clerk-appraise",
+		"refine":   "clerk-refine",
+		"arbiter":  "clerk-facilitator",
+		"done":     "clerk-done-router",
+	}
+
+	foundOutputs := make(map[string]string)
+	for _, o := range fn.Spec.Outputs {
+		foundOutputs[o.Name] = o.Target
+	}
+
+	for name, target := range wantOutputs {
+		got, ok := foundOutputs[name]
+		if !ok {
+			t.Errorf("clerk-sort missing output %q", name)
+			continue
+		}
+		if got != target {
+			t.Errorf("clerk-sort output %q: want target %q, got %q", name, target, got)
+		}
+	}
+
+	if len(fn.Spec.Outputs) != len(wantOutputs) {
+		t.Errorf("clerk-sort output count: want %d, got %d", len(wantOutputs), len(fn.Spec.Outputs))
+	}
+}
+
+func TestClerkAppraise_FoundryNode_DefaultOutputToClerkSort(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["clerk-appraise"]
+	if !ok {
+		t.Fatal("FoundryNode 'clerk-appraise' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == outputNameDefault {
+			if o.Target != "clerk-sort" {
+				t.Errorf("clerk-appraise output 'default': want target %q, got %q",
+					"clerk-sort", o.Target)
+			}
+			// Verify has CREATE:workitem/child
+			if !slices.Contains(fn.Spec.Capabilities, "CREATE:workitem/child") {
+				t.Error("clerk-appraise missing capability 'CREATE:workitem/child'")
+			}
+			return
+		}
+	}
+	t.Error("clerk-appraise FoundryNode missing output 'default'")
+}
+
+func TestClerkRefine_FoundryNode_DefaultOutputToCodification(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["clerk-refine"]
+	if !ok {
+		t.Fatal("FoundryNode 'clerk-refine' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == outputNameDefault {
+			if o.Target != "codification" {
+				t.Errorf("clerk-refine output 'default': want target %q, got %q (NOT clerk-sort)",
+					"codification", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("clerk-refine FoundryNode missing output 'default'")
+}
+
+func TestClerkFacilitator_FoundryNode_ResolvedOutputToClerkSort(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["clerk-facilitator"]
+	if !ok {
+		t.Fatal("FoundryNode 'clerk-facilitator' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "resolved" {
+			if o.Target != "clerk-sort" {
+				t.Errorf("clerk-facilitator output 'resolved': want target %q, got %q",
+					"clerk-sort", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("clerk-facilitator FoundryNode missing output 'resolved'")
+}
+
+// ---------------------------------------------------------------------------
+// Clerk Cycle Deployment + ConfigMap tests (Slice 14.1.9)
+// ---------------------------------------------------------------------------
+
+func TestClerkForge_Deployment_ImageAndOllamaEnv(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["clerk-forge"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='clerk-forge' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameNode {
+			if c.Image != "forge:latest" {
+				t.Errorf("clerk-forge node image: want %q, got %q", "forge:latest", c.Image)
+			}
+			for _, e := range c.Env {
+				if e.Name == "OLLAMA_BASE_URL" {
+					return
+				}
+			}
+			t.Error("clerk-forge node container missing OLLAMA_BASE_URL env var")
+			return
+		}
+	}
+	t.Error("clerk-forge Deployment missing node container")
+}
+
+func TestClerkForge_ConfigMap_SystemPromptAndQueryTemplate(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["clerk-forge-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'clerk-forge-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("clerk-forge-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling clerk-forge config data: %v", err)
+	}
+
+	if _, ok := cfg["systemPrompt"]; !ok {
+		t.Error("clerk-forge config missing 'systemPrompt' field")
+	}
+	if _, ok := cfg["queryTemplate"]; !ok {
+		t.Error("clerk-forge config missing 'queryTemplate' field")
+	}
+}
+
+func TestClerkSort_Deployment_SidecarHasLibrarian(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["clerk-sort"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='clerk-sort' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			for _, e := range c.Env {
+				if e.Name == envLibrarianAddress {
+					if e.Value != addrLibrarian {
+						t.Errorf("%s: want %q, got %q",
+							envLibrarianAddress, addrLibrarian, e.Value)
+					}
+					return
+				}
+			}
+			t.Error("clerk-sort sidecar missing LIBRARIAN_ADDRESS env var")
+			return
+		}
+	}
+	t.Error("clerk-sort Deployment missing sidecar container")
+}
+
+func TestClerkSort_ConfigMap_NodeOrderNoQuench(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["clerk-sort-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'clerk-sort-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("clerk-sort-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling clerk-sort config data: %v", err)
+	}
+
+	if v, ok := cfg["nodeOrder"]; !ok {
+		t.Error("clerk-sort config missing 'nodeOrder' field")
+	} else if v != "appraise" {
+		t.Errorf("clerk-sort config nodeOrder: want %q, got %v", "appraise", v)
+	}
+}
+
+func TestClerkAppraise_Deployment_SidecarEnvVars(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["clerk-appraise"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='clerk-appraise' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			envMap := make(map[string]string)
+			for _, e := range c.Env {
+				envMap[e.Name] = e.Value
+			}
+			required := []string{envLibrarianAddress, "EVENT_BUS_ADDRESS", "FRICTION_LEDGER_ADDRESS"}
+			for _, name := range required {
+				if _, ok := envMap[name]; !ok {
+					t.Errorf("clerk-appraise sidecar missing %s env var", name)
+				}
+			}
+			return
+		}
+	}
+	t.Error("clerk-appraise Deployment missing sidecar container")
+}
+
+func TestClerkRefine_ConfigMap_SystemPromptMentionsRevising(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["clerk-refine-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'clerk-refine-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("clerk-refine-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling clerk-refine config data: %v", err)
+	}
+
+	sp, ok := cfg["systemPrompt"]
+	if !ok {
+		t.Fatal("clerk-refine config missing 'systemPrompt' field")
+	}
+
+	spStr, ok := sp.(string)
+	if !ok {
+		t.Fatalf("clerk-refine config systemPrompt is not a string: %T", sp)
+	}
+
+	if !strings.Contains(spStr, "revising") {
+		t.Error("clerk-refine config systemPrompt does not mention 'revising'")
+	}
+}
+
+func TestClerkFacilitator_Deployment_SidecarHasLibrarianAndFrictionLedger(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["clerk-facilitator"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='clerk-facilitator' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			envMap := make(map[string]string)
+			for _, e := range c.Env {
+				envMap[e.Name] = e.Value
+			}
+			if v, ok := envMap[envLibrarianAddress]; !ok {
+				t.Error("clerk-facilitator sidecar missing LIBRARIAN_ADDRESS")
+			} else if v != addrLibrarian {
+				t.Errorf("%s: want %q, got %q", envLibrarianAddress, addrLibrarian, v)
+			}
+			if v, ok := envMap["FRICTION_LEDGER_ADDRESS"]; !ok {
+				t.Error("clerk-facilitator sidecar missing FRICTION_LEDGER_ADDRESS")
+			} else if v != addrFrictionLedger {
+				t.Errorf("FRICTION_LEDGER_ADDRESS: want %q, got %q",
+					addrFrictionLedger, v)
+			}
+			return
+		}
+	}
+	t.Error("clerk-facilitator Deployment missing sidecar container")
 }
