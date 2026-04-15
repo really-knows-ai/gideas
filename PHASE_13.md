@@ -630,16 +630,16 @@ Librarian for materialisation.
 
 #### Slice 13.9.3 -- Librarian: ReplicateLaws implementation
 
-- [ ] Validate green: `go test ./platform/librarian/...`
-- [ ] Add tests in `platform/librarian/internal/service/librarian_server_test.go`:
+- [x] Validate green: `go test ./platform/librarian/...`
+- [x] Add tests in `platform/librarian/internal/service/librarian_server_test.go`:
   - `ReplicateLaws` with valid laws and source flow namespace -> stores laws as Tier 4 or Tier 5
   - `ReplicateLaws` returns `IntegrationResult` per law with success/failure status
   - `ReplicateLaws` with empty laws list -> returns empty results (no error)
   - Laws stored via `ReplicateLaws` retain provenance metadata (source flow, petition_id)
   - Duplicate law id -> conflict/update result
-- [ ] Validate red
-- [ ] Implement `ReplicateLaws` in `platform/librarian/internal/service/librarian_server.go` (replace the existing stub)
-- [ ] Validate green: `go test ./platform/librarian/...`
+- [x] Validate red
+- [x] Implement `ReplicateLaws` in `platform/librarian/internal/service/librarian_server.go` (replace the existing stub)
+- [x] Validate green: `go test ./platform/librarian/...`
 
 #### Slice 13.9.4 -- Librarian store: replicated law storage
 
