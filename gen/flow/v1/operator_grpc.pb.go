@@ -19,14 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OperatorService_SubmitResult_FullMethodName        = "/flow.v1.OperatorService/SubmitResult"
-	OperatorService_GetFlowTopology_FullMethodName     = "/flow.v1.OperatorService/GetFlowTopology"
-	OperatorService_CreateWorkitem_FullMethodName      = "/flow.v1.OperatorService/CreateWorkitem"
-	OperatorService_CreateChildWorkitem_FullMethodName = "/flow.v1.OperatorService/CreateChildWorkitem"
-	OperatorService_RouteChild_FullMethodName          = "/flow.v1.OperatorService/RouteChild"
-	OperatorService_GetChildren_FullMethodName         = "/flow.v1.OperatorService/GetChildren"
-	OperatorService_ResumeWorkitem_FullMethodName      = "/flow.v1.OperatorService/ResumeWorkitem"
-	OperatorService_ValidateChildAccess_FullMethodName = "/flow.v1.OperatorService/ValidateChildAccess"
+	OperatorService_SubmitResult_FullMethodName           = "/flow.v1.OperatorService/SubmitResult"
+	OperatorService_GetFlowTopology_FullMethodName        = "/flow.v1.OperatorService/GetFlowTopology"
+	OperatorService_CreateWorkitem_FullMethodName         = "/flow.v1.OperatorService/CreateWorkitem"
+	OperatorService_CreateChildWorkitem_FullMethodName    = "/flow.v1.OperatorService/CreateChildWorkitem"
+	OperatorService_RouteChild_FullMethodName             = "/flow.v1.OperatorService/RouteChild"
+	OperatorService_GetChildren_FullMethodName            = "/flow.v1.OperatorService/GetChildren"
+	OperatorService_ResumeWorkitem_FullMethodName         = "/flow.v1.OperatorService/ResumeWorkitem"
+	OperatorService_ListSuspendedWorkitems_FullMethodName = "/flow.v1.OperatorService/ListSuspendedWorkitems"
+	OperatorService_ValidateChildAccess_FullMethodName    = "/flow.v1.OperatorService/ValidateChildAccess"
 )
 
 // OperatorServiceClient is the client API for OperatorService service.
@@ -69,6 +70,10 @@ type OperatorServiceClient interface {
 	// Workitem is in Suspended phase and re-dispatches it to the same node
 	// type that suspended it.
 	ResumeWorkitem(ctx context.Context, in *ResumeWorkitemRequest, opts ...grpc.CallOption) (*ResumeWorkitemResponse, error)
+	// Returns workitems in Suspended phase whose resume condition contains
+	// the given filter string. Used by watcher nodes to discover workitems
+	// held on a specific condition (e.g. dispute_retired("petition-id")).
+	ListSuspendedWorkitems(ctx context.Context, in *ListSuspendedWorkitemsRequest, opts ...grpc.CallOption) (*ListSuspendedWorkitemsResponse, error)
 	// Validates that a parent-child Workitem relationship exists and that the
 	// child is in Completed state. Called by the Archivist to authorise
 	// cross-Workitem artefact reads. Returns valid=true only when the child
@@ -155,6 +160,16 @@ func (c *operatorServiceClient) ResumeWorkitem(ctx context.Context, in *ResumeWo
 	return out, nil
 }
 
+func (c *operatorServiceClient) ListSuspendedWorkitems(ctx context.Context, in *ListSuspendedWorkitemsRequest, opts ...grpc.CallOption) (*ListSuspendedWorkitemsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSuspendedWorkitemsResponse)
+	err := c.cc.Invoke(ctx, OperatorService_ListSuspendedWorkitems_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *operatorServiceClient) ValidateChildAccess(ctx context.Context, in *ValidateChildAccessRequest, opts ...grpc.CallOption) (*ValidateChildAccessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateChildAccessResponse)
@@ -205,6 +220,10 @@ type OperatorServiceServer interface {
 	// Workitem is in Suspended phase and re-dispatches it to the same node
 	// type that suspended it.
 	ResumeWorkitem(context.Context, *ResumeWorkitemRequest) (*ResumeWorkitemResponse, error)
+	// Returns workitems in Suspended phase whose resume condition contains
+	// the given filter string. Used by watcher nodes to discover workitems
+	// held on a specific condition (e.g. dispute_retired("petition-id")).
+	ListSuspendedWorkitems(context.Context, *ListSuspendedWorkitemsRequest) (*ListSuspendedWorkitemsResponse, error)
 	// Validates that a parent-child Workitem relationship exists and that the
 	// child is in Completed state. Called by the Archivist to authorise
 	// cross-Workitem artefact reads. Returns valid=true only when the child
@@ -241,6 +260,9 @@ func (UnimplementedOperatorServiceServer) GetChildren(context.Context, *GetChild
 }
 func (UnimplementedOperatorServiceServer) ResumeWorkitem(context.Context, *ResumeWorkitemRequest) (*ResumeWorkitemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResumeWorkitem not implemented")
+}
+func (UnimplementedOperatorServiceServer) ListSuspendedWorkitems(context.Context, *ListSuspendedWorkitemsRequest) (*ListSuspendedWorkitemsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSuspendedWorkitems not implemented")
 }
 func (UnimplementedOperatorServiceServer) ValidateChildAccess(context.Context, *ValidateChildAccessRequest) (*ValidateChildAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateChildAccess not implemented")
@@ -392,6 +414,24 @@ func _OperatorService_ResumeWorkitem_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OperatorService_ListSuspendedWorkitems_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSuspendedWorkitemsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperatorServiceServer).ListSuspendedWorkitems(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperatorService_ListSuspendedWorkitems_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperatorServiceServer).ListSuspendedWorkitems(ctx, req.(*ListSuspendedWorkitemsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _OperatorService_ValidateChildAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ValidateChildAccessRequest)
 	if err := dec(in); err != nil {
@@ -444,6 +484,10 @@ var OperatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResumeWorkitem",
 			Handler:    _OperatorService_ResumeWorkitem_Handler,
+		},
+		{
+			MethodName: "ListSuspendedWorkitems",
+			Handler:    _OperatorService_ListSuspendedWorkitems_Handler,
 		},
 		{
 			MethodName: "ValidateChildAccess",

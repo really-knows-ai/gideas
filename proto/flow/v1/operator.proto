@@ -52,6 +52,11 @@ service OperatorService {
   // type that suspended it.
   rpc ResumeWorkitem(ResumeWorkitemRequest) returns (ResumeWorkitemResponse);
 
+  // Returns workitems in Suspended phase whose resume condition contains
+  // the given filter string. Used by watcher nodes to discover workitems
+  // held on a specific condition (e.g. dispute_retired("petition-id")).
+  rpc ListSuspendedWorkitems(ListSuspendedWorkitemsRequest) returns (ListSuspendedWorkitemsResponse);
+
   // --- Service-Facing Methods ---
 
   // Validates that a parent-child Workitem relationship exists and that the
@@ -221,4 +226,22 @@ message ValidateChildAccessResponse {
   // Current lifecycle phase of the child (for diagnostics). Empty if child
   // was not found.
   string phase = 2;
+}
+
+// --- ListSuspendedWorkitems ---
+
+message ListSuspendedWorkitemsRequest {
+  // Filter by condition substring. Returns only suspended workitems
+  // whose resume_condition contains this string.
+  string condition_contains = 1;
+}
+
+message ListSuspendedWorkitemsResponse {
+  repeated SuspendedWorkitemInfo workitems = 1;
+}
+
+// Summary of a suspended workitem returned by ListSuspendedWorkitems.
+message SuspendedWorkitemInfo {
+  string workitem_id = 1;
+  string resume_condition = 2;
 }

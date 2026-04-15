@@ -106,6 +106,14 @@ func (h *OperatorHandler) ResumeWorkitem(
 	return &flowv1.ResumeWorkitemResponse{Accepted: true}, nil
 }
 
+func (h *OperatorHandler) ListSuspendedWorkitems(
+	ctx context.Context, req *flowv1.ListSuspendedWorkitemsRequest,
+) (*flowv1.ListSuspendedWorkitemsResponse, error) {
+	slog.Info("Sidecar intercepted ListSuspendedWorkitems (mock)",
+		"condition_contains", req.GetConditionContains())
+	return &flowv1.ListSuspendedWorkitemsResponse{}, nil
+}
+
 // ---------------------------------------------------------------------------
 // ArchivistService — Mock
 // ---------------------------------------------------------------------------

@@ -141,6 +141,54 @@ func (e *EntryClient) QueryLaws(
 	return resp.GetLaws(), nil
 }
 
+// RetireDisputeRecord retires a dispute record by petition ID.
+func (e *EntryClient) RetireDisputeRecord(ctx context.Context, petitionID string) error {
+	if e.librarian == nil {
+		return fmt.Errorf("flow sdk: entry client: no sidecar connection for librarian (set SIDECAR_ADDRESS)")
+	}
+	_, err := e.librarian.RetireDisputeRecord(ctx, &flowv1.RetireDisputeRecordRequest{
+		PetitionId: petitionID,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: entry client: retire dispute record failed: %w", err)
+	}
+	return nil
+}
+
+// ResumeWorkitem resumes a suspended workitem by ID.
+func (e *EntryClient) ResumeWorkitem(ctx context.Context, workitemID string) error {
+	if e.operator == nil {
+		return fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
+	}
+	_, err := e.operator.ResumeWorkitem(ctx, &flowv1.ResumeWorkitemRequest{
+		WorkitemId: workitemID,
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: entry client: resume workitem failed: %w", err)
+	}
+	return nil
+}
+
+// ListSuspendedWorkitems returns suspended workitem IDs whose resume condition
+// contains the given filter string. Used by watcher nodes to discover workitems
+// held on a specific condition (e.g. dispute_retired("petition-id")).
+func (e *EntryClient) ListSuspendedWorkitems(ctx context.Context, conditionContains string) ([]string, error) {
+	if e.operator == nil {
+		return nil, fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
+	}
+	resp, err := e.operator.ListSuspendedWorkitems(ctx, &flowv1.ListSuspendedWorkitemsRequest{
+		ConditionContains: conditionContains,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: entry client: list suspended workitems failed: %w", err)
+	}
+	ids := make([]string, 0, len(resp.GetWorkitems()))
+	for _, wi := range resp.GetWorkitems() {
+		ids = append(ids, wi.GetWorkitemId())
+	}
+	return ids, nil
+}
+
 // Close releases underlying gRPC connections.
 func (e *EntryClient) Close() error {
 	var firstErr error

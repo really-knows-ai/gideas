@@ -17,13 +17,21 @@ import (
 // Spy servers for EntryClient tests
 // ---------------------------------------------------------------------------
 
-// entrySpyOperator captures CreateWorkitem calls.
+// entrySpyOperator captures CreateWorkitem, ResumeWorkitem, and
+// ListSuspendedWorkitems calls.
 type entrySpyOperator struct {
 	flowv1.UnimplementedOperatorServiceServer
 
-	lastMetadata map[string]string
-	returnID     string
-	returnErr    error
+	lastMetadata    map[string]string
+	returnID        string
+	returnErr       error
+	resumeWorkitems []string // captured workitem IDs from ResumeWorkitem
+	resumeErr       error
+
+	// ListSuspendedWorkitems tracking.
+	listSuspendedResp []*flowv1.SuspendedWorkitemInfo
+	listSuspendedErr  error
+	lastCondFilter    string
 }
 
 func (s *entrySpyOperator) CreateWorkitem(
@@ -34,6 +42,28 @@ func (s *entrySpyOperator) CreateWorkitem(
 		return nil, s.returnErr
 	}
 	return &flowv1.CreateWorkitemResponse{WorkitemId: s.returnID}, nil
+}
+
+func (s *entrySpyOperator) ResumeWorkitem(
+	_ context.Context, req *flowv1.ResumeWorkitemRequest,
+) (*flowv1.ResumeWorkitemResponse, error) {
+	s.resumeWorkitems = append(s.resumeWorkitems, req.GetWorkitemId())
+	if s.resumeErr != nil {
+		return nil, s.resumeErr
+	}
+	return &flowv1.ResumeWorkitemResponse{Accepted: true}, nil
+}
+
+func (s *entrySpyOperator) ListSuspendedWorkitems(
+	_ context.Context, req *flowv1.ListSuspendedWorkitemsRequest,
+) (*flowv1.ListSuspendedWorkitemsResponse, error) {
+	s.lastCondFilter = req.GetConditionContains()
+	if s.listSuspendedErr != nil {
+		return nil, s.listSuspendedErr
+	}
+	return &flowv1.ListSuspendedWorkitemsResponse{
+		Workitems: s.listSuspendedResp,
+	}, nil
 }
 
 // entrySpyEventBus captures Subscribe calls and sends events.
@@ -60,13 +90,15 @@ func (s *entrySpyEventBus) Subscribe(
 	return nil
 }
 
-// entrySpyLibrarian captures QueryLaws calls.
+// entrySpyLibrarian captures QueryLaws and RetireDisputeRecord calls.
 type entrySpyLibrarian struct {
 	flowv1.UnimplementedLibrarianServiceServer
 
-	lastFilter *flowv1.LawFilter
-	returnLaws []*flowv1.Law
-	returnErr  error
+	lastFilter         *flowv1.LawFilter
+	returnLaws         []*flowv1.Law
+	returnErr          error
+	retiredPetitionIDs []string // captured petition IDs from RetireDisputeRecord
+	retireErr          error
 }
 
 func (s *entrySpyLibrarian) QueryLaws(
@@ -77,6 +109,16 @@ func (s *entrySpyLibrarian) QueryLaws(
 		return nil, s.returnErr
 	}
 	return &flowv1.QueryLawsResponse{Laws: s.returnLaws}, nil
+}
+
+func (s *entrySpyLibrarian) RetireDisputeRecord(
+	_ context.Context, req *flowv1.RetireDisputeRecordRequest,
+) (*flowv1.RetireDisputeRecordResponse, error) {
+	s.retiredPetitionIDs = append(s.retiredPetitionIDs, req.GetPetitionId())
+	if s.retireErr != nil {
+		return nil, s.retireErr
+	}
+	return &flowv1.RetireDisputeRecordResponse{Acknowledged: true}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +415,125 @@ func TestEntryClient_QueryLaws_Error(t *testing.T) {
 func TestEntryClient_QueryLaws_NoConnection(t *testing.T) {
 	ec := &EntryClient{}
 	_, err := ec.QueryLaws(context.Background(), "", "")
+	if err == nil {
+		t.Fatal("expected error when no sidecar connection, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — EntryClient.RetireDisputeRecord
+// ---------------------------------------------------------------------------
+
+func TestEntryClient_RetireDisputeRecord_Success(t *testing.T) {
+	libSpy := &entrySpyLibrarian{}
+	opSpy := &entrySpyOperator{returnID: "unused"}
+	ec := setupEntryTestEnv(t, opSpy, nil, libSpy)
+
+	err := ec.RetireDisputeRecord(context.Background(), "pet-42")
+	if err != nil {
+		t.Fatalf("RetireDisputeRecord() returned error: %v", err)
+	}
+	if len(libSpy.retiredPetitionIDs) != 1 || libSpy.retiredPetitionIDs[0] != "pet-42" {
+		t.Fatalf("expected retired petition_id=pet-42, got %v", libSpy.retiredPetitionIDs)
+	}
+}
+
+func TestEntryClient_RetireDisputeRecord_Error(t *testing.T) {
+	libSpy := &entrySpyLibrarian{retireErr: fmt.Errorf("not found")}
+	opSpy := &entrySpyOperator{returnID: "unused"}
+	ec := setupEntryTestEnv(t, opSpy, nil, libSpy)
+
+	err := ec.RetireDisputeRecord(context.Background(), "pet-99")
+	if err == nil {
+		t.Fatal("expected error from RetireDisputeRecord, got nil")
+	}
+}
+
+func TestEntryClient_RetireDisputeRecord_NoConnection(t *testing.T) {
+	ec := &EntryClient{}
+	err := ec.RetireDisputeRecord(context.Background(), "pet-1")
+	if err == nil {
+		t.Fatal("expected error when no sidecar connection, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — EntryClient.ResumeWorkitem
+// ---------------------------------------------------------------------------
+
+func TestEntryClient_ResumeWorkitem_Success(t *testing.T) {
+	opSpy := &entrySpyOperator{returnID: "unused"}
+	ec := setupEntryTestEnv(t, opSpy, nil)
+
+	err := ec.ResumeWorkitem(context.Background(), "wi-held-001")
+	if err != nil {
+		t.Fatalf("ResumeWorkitem() returned error: %v", err)
+	}
+	if len(opSpy.resumeWorkitems) != 1 || opSpy.resumeWorkitems[0] != "wi-held-001" {
+		t.Fatalf("expected resumed workitem_id=wi-held-001, got %v", opSpy.resumeWorkitems)
+	}
+}
+
+func TestEntryClient_ResumeWorkitem_Error(t *testing.T) {
+	opSpy := &entrySpyOperator{returnID: "unused", resumeErr: fmt.Errorf("workitem not found")}
+	ec := setupEntryTestEnv(t, opSpy, nil)
+
+	err := ec.ResumeWorkitem(context.Background(), "wi-missing")
+	if err == nil {
+		t.Fatal("expected error from ResumeWorkitem, got nil")
+	}
+}
+
+func TestEntryClient_ResumeWorkitem_NoConnection(t *testing.T) {
+	ec := &EntryClient{}
+	err := ec.ResumeWorkitem(context.Background(), "wi-1")
+	if err == nil {
+		t.Fatal("expected error when no sidecar connection, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — EntryClient.ListSuspendedWorkitems
+// ---------------------------------------------------------------------------
+
+func TestEntryClient_ListSuspendedWorkitems_Success(t *testing.T) {
+	opSpy := &entrySpyOperator{
+		returnID: "unused",
+		listSuspendedResp: []*flowv1.SuspendedWorkitemInfo{
+			{WorkitemId: "wi-held-1", ResumeCondition: `dispute_retired("pet-42")`},
+			{WorkitemId: "wi-held-2", ResumeCondition: `dispute_retired("pet-42")`},
+		},
+	}
+	ec := setupEntryTestEnv(t, opSpy, nil)
+
+	ids, err := ec.ListSuspendedWorkitems(context.Background(), "pet-42")
+	if err != nil {
+		t.Fatalf("ListSuspendedWorkitems() returned error: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != "wi-held-1" || ids[1] != "wi-held-2" {
+		t.Fatalf("expected [wi-held-1, wi-held-2], got %v", ids)
+	}
+	if opSpy.lastCondFilter != "pet-42" {
+		t.Fatalf("expected condition_contains=pet-42, got %q", opSpy.lastCondFilter)
+	}
+}
+
+func TestEntryClient_ListSuspendedWorkitems_Error(t *testing.T) {
+	opSpy := &entrySpyOperator{
+		returnID:         "unused",
+		listSuspendedErr: fmt.Errorf("operator unavailable"),
+	}
+	ec := setupEntryTestEnv(t, opSpy, nil)
+
+	_, err := ec.ListSuspendedWorkitems(context.Background(), "pet-42")
+	if err == nil {
+		t.Fatal("expected error from ListSuspendedWorkitems, got nil")
+	}
+}
+
+func TestEntryClient_ListSuspendedWorkitems_NoConnection(t *testing.T) {
+	ec := &EntryClient{}
+	_, err := ec.ListSuspendedWorkitems(context.Background(), "pet-1")
 	if err == nil {
 		t.Fatal("expected error when no sidecar connection, got nil")
 	}

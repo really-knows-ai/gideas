@@ -37,6 +37,12 @@ func newSpyGRPCServer(spy *applicatorSpy) *grpc.Server {
 // applicatorSpy — configurable inputs, recorded outputs
 // ---------------------------------------------------------------------------
 
+// disputeRecordCall records arguments to a CreateDisputeRecord invocation.
+type disputeRecordCall struct {
+	PetitionID  string
+	CitedLawIDs []string
+}
+
 // applicatorSpy captures calls to service operations for test assertions.
 // The law-applicator is a simple action node: read petition artefact, apply
 // each change via Librarian (WriteLaw/RetireLaw/GetLaw+WriteLaw for demote),
@@ -72,6 +78,10 @@ type applicatorSpy struct {
 	RetireLawErr     error
 	CompleteErr      error
 
+	// ── Configurable error returns (dispute) ───────────────────────
+
+	CreateDisputeRecordErr error
+
 	// ── Recorded operations for assertions ──────────────────────────
 
 	// StoredArtefacts records artefact store calls: artefactID -> content.
@@ -79,6 +89,9 @@ type applicatorSpy struct {
 
 	// Completed is true if a CompleteAction was received.
 	Completed bool
+
+	// RoutedTo records the output name from RouteToOutput calls.
+	RoutedTo string
 
 	// WrittenLaws records laws passed to WriteLaw.
 	WrittenLaws []*flowv1.Law
@@ -91,6 +104,9 @@ type applicatorSpy struct {
 
 	// HeartbeatCount records the number of Heartbeat calls.
 	HeartbeatCount int
+
+	// DisputeRecordCalls records CreateDisputeRecord invocations.
+	DisputeRecordCalls []disputeRecordCall
 }
 
 func newApplicatorSpy() *applicatorSpy {
@@ -166,9 +182,10 @@ func (s *applicatorSpy) SubmitResult(
 			return nil, s.CompleteErr
 		}
 		s.Completed = true
+	case *flowv1.SubmitResultRequest_Route:
+		s.RoutedTo = a.Route.GetTarget()
 	default:
-		// Route/Suspend — law-applicator should never call these,
-		// but no-op to avoid test crashes on unexpected paths.
+		// Suspend — law-applicator should never call this.
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
@@ -270,6 +287,24 @@ func (s *applicatorSpy) RetireLaw(
 	return &flowv1.RetireLawResponse{Acknowledged: true}, nil
 }
 
+func (s *applicatorSpy) CreateDisputeRecord(
+	_ context.Context, req *flowv1.CreateDisputeRecordRequest,
+) (*flowv1.CreateDisputeRecordResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.DisputeRecordCalls = append(s.DisputeRecordCalls, disputeRecordCall{
+		PetitionID:  req.GetPetitionId(),
+		CitedLawIDs: req.GetCitedLawIds(),
+	})
+
+	if s.CreateDisputeRecordErr != nil {
+		return nil, s.CreateDisputeRecordErr
+	}
+
+	return &flowv1.CreateDisputeRecordResponse{}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test assertion helpers
 // ---------------------------------------------------------------------------
@@ -306,5 +341,23 @@ func assertNoStampStored(t *testing.T, spy *applicatorSpy) {
 	t.Helper()
 	if _, ok := spy.StoredArtefacts["approval-stamp"]; ok {
 		t.Fatal("expected no approval-stamp artefact to be stored")
+	}
+}
+
+// assertRoutedTo verifies the spy recorded a Route to the given output.
+//
+//nolint:unparam // target is currently always "embassy" but the helper is general-purpose.
+func assertRoutedTo(t *testing.T, spy *applicatorSpy, target string) {
+	t.Helper()
+	if spy.RoutedTo != target {
+		t.Fatalf("expected RouteToOutput(%q), got %q", target, spy.RoutedTo)
+	}
+}
+
+// assertNotRouted verifies the spy did NOT record any Route call.
+func assertNotRouted(t *testing.T, spy *applicatorSpy) {
+	t.Helper()
+	if spy.RoutedTo != "" {
+		t.Fatalf("expected no RouteToOutput call, got %q", spy.RoutedTo)
 	}
 }

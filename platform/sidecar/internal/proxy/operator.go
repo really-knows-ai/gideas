@@ -174,6 +174,18 @@ func (p *OperatorProxy) ResumeWorkitem(
 	return p.client.ResumeWorkitem(outCtx, req)
 }
 
+// ListSuspendedWorkitems forwards to the Operator. Returns suspended workitems
+// whose resume condition contains the given filter string.
+func (p *OperatorProxy) ListSuspendedWorkitems(
+	ctx context.Context, req *flowv1.ListSuspendedWorkitemsRequest,
+) (*flowv1.ListSuspendedWorkitemsResponse, error) {
+	outCtx := propagateMetadata(ctx)
+	slog.Info("Forwarding ListSuspendedWorkitems to Operator",
+		"condition_contains", req.GetConditionContains(),
+	)
+	return p.client.ListSuspendedWorkitems(outCtx, req)
+}
+
 // extractWorkitemIDFromMD reads the workitem ID from incoming gRPC metadata.
 // Returns empty string if not present.
 func extractWorkitemIDFromMD(ctx context.Context) string {
