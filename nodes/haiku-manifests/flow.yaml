@@ -181,6 +181,9 @@ spec:
     # The petition must exist when the workitem enters the flow.
     standard-entry:
       "petition": []
+    # A law-reference artefact must exist for judiciary watcher entry.
+    hearing-entry:
+      "law-reference": []
   exitContracts:
     # The haiku must carry linter, review, and approval stamps to exit.
     standard-exit:
@@ -188,6 +191,40 @@ spec:
         - linter
         - review
         - approval
+    # The petition must carry review + approval stamps to exit the Clerk cycle.
+    clerk-exit:
+      "petition":
+        - review
+        - approval
+  nodeGroups:
+    main-cycle:
+      - forge
+      - sort
+      - quench
+      - appraise
+      - reviewer
+      - refine
+    judiciary:
+      - facilitator
+      - arbiter
+      - juror
+      - tribunal
+      - friction-watcher
+      - ttl-watcher
+      - hitl-appraise
+      - arbiter-hitl-resolve
+      - tribunal-hitl-resolve
+      - law-applicator
+    clerk-cycle:
+      - clerk-forge
+      - clerk-sort
+      - clerk-appraise
+      - clerk-refine
+      - clerk-facilitator
+      - codification
+      - codify-smt
+      - clerk-done-router
+      - hitl-gate
   governancePolicy:
     maxVisits: 20
     defaultTimeout: "10m"
