@@ -65,7 +65,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: build-sidecar build-null-node build-forge build-sort build-appraise build-reviewer build-refine build-advocate build-arbiter build-juror build-codify-smt build-codification build-rule-router build-facilitator build-hitl build-law-applicator build-tribunal build-friction-watcher build-ttl-watcher build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
+build: build-sidecar build-null-node build-forge build-sort build-appraise build-reviewer build-refine build-arbiter build-juror build-codify-smt build-codification build-rule-router build-facilitator build-hitl build-law-applicator build-tribunal build-friction-watcher build-ttl-watcher build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -94,10 +94,6 @@ build-reviewer: ## Build the Reviewer node binary.
 .PHONY: build-refine
 build-refine: ## Build the Refine node binary.
 	CGO_ENABLED=1 go build -o bin/refine ./nodes/refine
-
-.PHONY: build-advocate
-build-advocate: ## Build the Advocate node binary.
-	CGO_ENABLED=1 go build -o bin/advocate ./nodes/advocate
 
 .PHONY: build-arbiter
 build-arbiter: ## Build the Arbiter node binary.
