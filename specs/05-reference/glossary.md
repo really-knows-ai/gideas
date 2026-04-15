@@ -24,7 +24,7 @@ The petition drafting and approval cycle in the Judiciary's legislative inner cy
 
 ### crossFlow.importTypes
 
-A map on the FoundryFlow CRD's `spec.crossFlow` that defines the flow-authored/custom import type extension set for cross-flow Workitem reception. Each key is an import type name; each value specifies a target node (must be entry-bound) and optional per-artefact foreign-stamp requirements. Replaces the former `importNode` field. Built-in system import types such as `law-petition` live in the same effective namespace but are not authored in this map. Detail: [CRDs](./crds.md#cross-flow-configuration).
+A map on the FoundryFlow CRD's `spec.crossFlow` that defines the flow-authored/custom import type extension set for cross-flow Workitem reception. Each key is an import type name; each value specifies a target node (must be entry-bound) and optional per-artefact foreign-stamp requirements. Built-in system import types such as `law-petition` live in the same effective namespace but are not authored in this map. Detail: [CRDs](./crds.md#cross-flow-configuration).
 
 ### Embassy
 
@@ -36,7 +36,7 @@ A Judiciary lifecycle node for deadlock resolution. It assembles an evidence bun
 
 ### Federation
 
-The control-plane authority that manages inter-Flow membership, trust-root discovery, state groupings, authority publisher roles, petition-routing policy, and published-law distribution. A Federation replaces the former Governance Flow runtime concept: member Flows remain ordinary Flows, while the Federation service governs how T4-T5 authority relationships and publication work across them. Detail: [Governance](../01-concepts/04-governance.md#federation-membership), [Federation](../02-flow/08-federation.md), [gRPC API](./grpc-api.md#federation-api).
+The control-plane authority that manages inter-Flow membership, trust-root discovery, state groupings, authority publisher roles, petition-routing policy, and published-law distribution. Member Flows remain ordinary Flows, while the Federation service governs how T4-T5 authority relationships and publication work across them. Detail: [Governance](../01-concepts/04-governance.md#federation-membership), [Federation](../02-flow/08-federation.md), [gRPC API](./grpc-api.md#federation-api).
 
 ### Flow
 
@@ -184,7 +184,7 @@ Any point where the system pauses for a human decision. The SDK provides the [HI
 
 ### HITL node
 
-A generic config-driven Human-in-the-Loop node. Single image, multiple CRD instances. It is used for hung-jury resolution and for human approval in the Clerk cycle's Tier 3-5 petition path. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. Replaces the old Advocate-specific human boundary with a reusable node pattern. Detail: [SDK HITL](../04-sdk/08-sdk-hitl.md).
+A generic config-driven Human-in-the-Loop node. Single image, multiple CRD instances. It is used for hung-jury resolution and for human approval in the Clerk cycle's Tier 3-5 petition path. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. Provides a reusable node pattern for human-in-the-loop decisions. Detail: [SDK HITL](../04-sdk/08-sdk-hitl.md).
 
 ### Judiciary
 
@@ -368,7 +368,7 @@ The process by which imported artefacts and foreign stamps gain local governance
 
 ### Sibling Flow
 
-A Flow that shares membership in at least one federation-defined state with another Flow. Sibling relationships derive from shared state membership and federation policy, not from a dedicated Governance Flow runtime. Federation-member exchange between sibling Flows uses the federation trust root; Treaties are only needed for non-federation exchange.
+A Flow that shares membership in at least one federation-defined state with another Flow. Sibling relationships derive from shared state membership and federation policy, not from a dedicated runtime. Federation-member exchange between sibling Flows uses the federation trust root; Treaties are only needed for non-federation exchange.
 
 ### State Root
 
