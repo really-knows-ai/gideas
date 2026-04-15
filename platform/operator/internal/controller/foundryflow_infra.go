@@ -39,10 +39,12 @@ const (
 	flowMonitorImage     = "ghcr.io/gideas/flow/monitor:latest"
 	librarianImage       = "ghcr.io/gideas/flow/librarian:latest"
 	embassyImage         = "ghcr.io/gideas/flow/embassy:latest"
+	federationImage      = "ghcr.io/gideas/flow/federation:latest"
 	eventBusPort         = 50056
 	frictionLedgerPort   = 50057
 	librarianPort        = 50058
 	embassyPort          = 50059
+	federationPort       = 50061
 	flowMonitorHTTPPort  = 2112
 	infraStorageSize     = "1Gi"
 	monitorStorageSize   = "100Mi"
@@ -51,6 +53,7 @@ const (
 	flowMonitorSvcName   = "flow-monitor"
 	librarianSvcName     = "flow-librarian"
 	embassySvcName       = "flow-embassy"
+	federationSvcName    = "flow-federation"
 	eventBusDBPath       = "/data/eventbus.db"
 	frictionLedgerDBPath = "/data/frictionledger.db"
 	librarianDBPath      = "/data/librarian.db"
@@ -87,6 +90,12 @@ func (r *FoundryFlowReconciler) reconcileInfrastructure(ctx context.Context, flo
 
 	if err := r.reconcileEmbassy(ctx, flow); err != nil {
 		return fmt.Errorf("could not reconcile Embassy: %w", err)
+	}
+
+	if flow.Spec.CrossFlow != nil && flow.Spec.CrossFlow.Federation != nil {
+		if err := r.reconcileFederation(ctx, flow); err != nil {
+			return fmt.Errorf("could not reconcile Federation: %w", err)
+		}
 	}
 
 	return nil
@@ -549,6 +558,67 @@ func flowImportTypesEnvVar(importTypes map[string]flowv1.ImportTypeSpec) corev1.
 	}
 
 	return corev1.EnvVar{Name: "EMBASSY_FLOW_IMPORT_TYPES", Value: string(data)}
+}
+
+// -----------------------------------------------------------------------
+// Federation
+// -----------------------------------------------------------------------
+
+func (r *FoundryFlowReconciler) reconcileFederation(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	if err := r.reconcileFederationDeployment(ctx, flow); err != nil {
+		return err
+	}
+	return r.reconcileService(ctx, flow, federationSvcName, federationPort, "grpc")
+}
+
+func (r *FoundryFlowReconciler) reconcileFederationDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	replicas := int32(1)
+	labels := infraLabels(federationSvcName)
+
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      federationSvcName,
+			Namespace: flow.Namespace,
+		},
+	}
+
+	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+		deploy.Labels = labels
+		deploy.Spec.Replicas = &replicas
+		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		deploy.Spec.Template = corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name:            "federation",
+					Image:           federationImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Ports: []corev1.ContainerPort{{
+						Name:          "grpc",
+						ContainerPort: int32(federationPort),
+						Protocol:      corev1.ProtocolTCP,
+					}},
+					Env: r.federationEnvVars(flow),
+				}},
+			},
+		}
+		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("could not reconcile Federation Deployment: %w", err)
+	}
+
+	logf.FromContext(ctx).Info("Reconciled Federation Deployment",
+		"name", deploy.Name, "result", result,
+	)
+	return nil
+}
+
+func (r *FoundryFlowReconciler) federationEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "FEDERATION_PORT", Value: fmt.Sprintf("%d", federationPort)},
+		{Name: "FEDERATION_NAMESPACE", Value: flow.Namespace},
+	}
 }
 
 // -----------------------------------------------------------------------
