@@ -48,7 +48,6 @@ The "Walking Skeleton" and reference components.
 │   ├── law-applicator/   # Petition application action node
 │   ├── codification/     # Petition codification fan-out orchestrator
 │   ├── codify-smt/       # Reference formal codifier node
-│   ├── advocate/         # Governance escalation gateway (deferred redesign)
 │   ├── friction-watcher/ # Judiciary Entry Node (friction threshold events)
 │   ├── ttl-watcher/      # Judiciary Entry Node (law TTL expiry)
 │   └── null-node/        # Verification Node (Phase 1)
