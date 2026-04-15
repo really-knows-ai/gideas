@@ -150,14 +150,6 @@ spec:
 apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
 metadata:
-  name: advocate-context
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
   name: human-decision
   namespace: default
 spec:
