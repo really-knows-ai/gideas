@@ -119,3 +119,68 @@ metadata:
 data:
   node-config.yaml: |
     personality: "textualist"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tribunal-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: tribunal
+data:
+  node-config.yaml: |
+    jurySize: 5
+    jurorNode: "juror"
+    consensusStrategy: "SIMPLE_MAJORITY"
+    maxRounds: 3
+    clerkNode: "clerk-forge"
+    hungOutput: "hung"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ttl-watcher-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: ttl-watcher
+data:
+  node-config.yaml: |
+    scanPeriod: "5m"
+    tier1: "168h"
+    tier2: "720h"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hitl-appraise-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: hitl-appraise
+data:
+  node-config.yaml: |
+    choiceLabels:
+      approved: "Approve Petition"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arbiter-hitl-resolve-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: arbiter-hitl-resolve
+data:
+  node-config.yaml: |
+    choiceLabels:
+      resolution: "Provide Resolution"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tribunal-hitl-resolve-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: tribunal-hitl-resolve
+data:
+  node-config.yaml: |
+    choiceLabels:
+      resolution: "Provide Resolution"
