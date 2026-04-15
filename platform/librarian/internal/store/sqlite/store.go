@@ -114,6 +114,13 @@ func New(dsn string, opts ...StoreOption) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
+	// In-memory databases are per-connection in SQLite: every new connection
+	// opened by the pool gets its own blank database.  Limit the pool to a
+	// single connection so all queries hit the same in-memory instance.
+	if dsn == ":memory:" {
+		db.SetMaxOpenConns(1)
+	}
+
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
