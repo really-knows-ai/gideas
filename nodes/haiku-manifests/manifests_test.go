@@ -11,7 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const containerNameSidecar = "sidecar"
+const (
+	containerNameSidecar = "sidecar"
+	nodeNameArbiter      = "arbiter"
+	nodeNameTribunal     = "tribunal"
+	addrLibrarian        = "flow-librarian:50058"
+)
 
 // ---------------------------------------------------------------------------
 // Generic YAML types for parsing Kubernetes manifests
@@ -446,7 +451,7 @@ func TestSort_HasArbiterOutput(t *testing.T) {
 	}
 
 	for _, o := range sn.Spec.Outputs {
-		if o.Name == "arbiter" {
+		if o.Name == nodeNameArbiter {
 			if o.Target != "facilitator" {
 				t.Errorf("sort output 'arbiter': want target %q, got %q", "facilitator", o.Target)
 			}
@@ -480,9 +485,9 @@ func TestSort_SidecarHasLibrarianAddress(t *testing.T) {
 		if c.Name == containerNameSidecar {
 			for _, e := range c.Env {
 				if e.Name == "LIBRARIAN_ADDRESS" {
-					if e.Value != "flow-librarian:50058" {
+					if e.Value != addrLibrarian {
 						t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q",
-							"flow-librarian:50058", e.Value)
+							addrLibrarian, e.Value)
 					}
 					return
 				}
@@ -553,8 +558,8 @@ func TestFacilitator_Sidecar_LibrarianAndFrictionLedger(t *testing.T) {
 			}
 			if v, ok := envMap["LIBRARIAN_ADDRESS"]; !ok {
 				t.Error("facilitator sidecar missing LIBRARIAN_ADDRESS")
-			} else if v != "flow-librarian:50058" {
-				t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q", "flow-librarian:50058", v)
+			} else if v != addrLibrarian {
+				t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q", addrLibrarian, v)
 			}
 			if v, ok := envMap["FRICTION_LEDGER_ADDRESS"]; !ok {
 				t.Error("facilitator sidecar missing FRICTION_LEDGER_ADDRESS")
@@ -586,8 +591,8 @@ func TestFacilitator_ConfigMap_ArbiterNode(t *testing.T) {
 
 	if v, ok := cfg["arbiterNode"]; !ok {
 		t.Error("facilitator config missing 'arbiterNode' field")
-	} else if v != "arbiter" {
-		t.Errorf("facilitator config arbiterNode: want %q, got %v", "arbiter", v)
+	} else if v != nodeNameArbiter {
+		t.Errorf("facilitator config arbiterNode: want %q, got %v", nodeNameArbiter, v)
 	}
 }
 
@@ -758,5 +763,411 @@ func TestJuror_ConfigMap_Personality(t *testing.T) {
 		t.Error("juror config missing 'personality' field")
 	} else if v != "textualist" {
 		t.Errorf("juror config personality: want %q, got %v", "textualist", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tribunal tests (Slice 14.1.5)
+// ---------------------------------------------------------------------------
+
+func TestTribunal_FoundryNode_HungOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["tribunal"]
+	if !ok {
+		t.Fatal("FoundryNode 'tribunal' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "hung" {
+			if o.Target != "tribunal-hitl-resolve" {
+				t.Errorf("tribunal output 'hung': want target %q, got %q",
+					"tribunal-hitl-resolve", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("tribunal FoundryNode missing output 'hung'")
+}
+
+func TestTribunal_FoundryNode_Capabilities(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["tribunal"]
+	if !ok {
+		t.Fatal("FoundryNode 'tribunal' not found in flow.yaml")
+	}
+
+	required := []string{
+		"READ:law",
+		"CREATE:workitem/child",
+	}
+	for _, cap := range required {
+		if !slices.Contains(fn.Spec.Capabilities, cap) {
+			t.Errorf("tribunal FoundryNode missing capability %q", cap)
+		}
+	}
+
+	// Tribunal does NOT have SUSPEND:workitem — it fire-and-forgets.
+	if slices.Contains(fn.Spec.Capabilities, "SUSPEND:workitem") {
+		t.Error("tribunal FoundryNode should NOT have SUSPEND:workitem capability")
+	}
+}
+
+func TestTribunal_Deployment_SidecarHasLibrarianAndFrictionLedger(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["tribunal"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='tribunal' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			envMap := make(map[string]string)
+			for _, e := range c.Env {
+				envMap[e.Name] = e.Value
+			}
+			if v, ok := envMap["LIBRARIAN_ADDRESS"]; !ok {
+				t.Error("tribunal sidecar missing LIBRARIAN_ADDRESS")
+			} else if v != addrLibrarian {
+				t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q", addrLibrarian, v)
+			}
+			if v, ok := envMap["FRICTION_LEDGER_ADDRESS"]; !ok {
+				t.Error("tribunal sidecar missing FRICTION_LEDGER_ADDRESS")
+			} else if v != "flow-frictionledger:50057" {
+				t.Errorf("FRICTION_LEDGER_ADDRESS: want %q, got %q", "flow-frictionledger:50057", v)
+			}
+			return
+		}
+	}
+	t.Error("tribunal Deployment missing sidecar container")
+}
+
+func TestTribunal_ConfigMap_AllFields(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["tribunal-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'tribunal-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("tribunal-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling tribunal config data: %v", err)
+	}
+
+	requiredFields := []string{
+		"jurySize", "jurorNode", "consensusStrategy",
+		"maxRounds", "clerkNode", "hungOutput",
+	}
+	for _, field := range requiredFields {
+		if _, ok := cfg[field]; !ok {
+			t.Errorf("tribunal config missing field %q", field)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Watcher tests (Slice 14.1.6)
+// ---------------------------------------------------------------------------
+
+func TestFrictionWatcher_FoundryNode_EntryAndOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["friction-watcher"]
+	if !ok {
+		t.Fatal("FoundryNode 'friction-watcher' not found in flow.yaml")
+	}
+
+	if fn.Spec.Entry != "hearing-entry" {
+		t.Errorf("friction-watcher entry: want %q, got %q", "hearing-entry", fn.Spec.Entry)
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "default" {
+			if o.Target != nodeNameTribunal {
+				t.Errorf("friction-watcher output 'default': want target %q, got %q",
+					nodeNameTribunal, o.Target)
+			}
+			return
+		}
+	}
+	t.Error("friction-watcher FoundryNode missing output 'default'")
+}
+
+func TestTTLWatcher_FoundryNode_EntryAndOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["ttl-watcher"]
+	if !ok {
+		t.Fatal("FoundryNode 'ttl-watcher' not found in flow.yaml")
+	}
+
+	if fn.Spec.Entry != "hearing-entry" {
+		t.Errorf("ttl-watcher entry: want %q, got %q", "hearing-entry", fn.Spec.Entry)
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "default" {
+			if o.Target != nodeNameTribunal {
+				t.Errorf("ttl-watcher output 'default': want target %q, got %q",
+					nodeNameTribunal, o.Target)
+			}
+			return
+		}
+	}
+	t.Error("ttl-watcher FoundryNode missing output 'default'")
+}
+
+func TestFrictionWatcher_Deployment_SidecarHasEventBusAddress(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["friction-watcher"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='friction-watcher' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			for _, e := range c.Env {
+				if e.Name == "EVENT_BUS_ADDRESS" {
+					if e.Value != "flow-eventbus:50056" {
+						t.Errorf("EVENT_BUS_ADDRESS: want %q, got %q",
+							"flow-eventbus:50056", e.Value)
+					}
+					return
+				}
+			}
+			t.Error("friction-watcher sidecar missing EVENT_BUS_ADDRESS env var")
+			return
+		}
+	}
+	t.Error("friction-watcher Deployment missing sidecar container")
+}
+
+func TestFrictionWatcher_Deployment_NoConfigMapMount(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["friction-watcher"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='friction-watcher' not found in deployments.yaml")
+	}
+
+	if len(d.Spec.Template.Spec.Volumes) != 0 {
+		t.Errorf("friction-watcher Deployment should have no volumes, got %d",
+			len(d.Spec.Template.Spec.Volumes))
+	}
+}
+
+func TestTTLWatcher_Deployment_SidecarHasLibrarianAddress(t *testing.T) {
+	deps := findDeployments(t)
+	d, ok := deps["ttl-watcher"]
+	if !ok {
+		t.Fatal("Deployment with FLOW_NODE_ID='ttl-watcher' not found in deployments.yaml")
+	}
+
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == containerNameSidecar {
+			for _, e := range c.Env {
+				if e.Name == "LIBRARIAN_ADDRESS" {
+					if e.Value != addrLibrarian {
+						t.Errorf("LIBRARIAN_ADDRESS: want %q, got %q",
+							addrLibrarian, e.Value)
+					}
+					return
+				}
+			}
+			t.Error("ttl-watcher sidecar missing LIBRARIAN_ADDRESS env var")
+			return
+		}
+	}
+	t.Error("ttl-watcher Deployment missing sidecar container")
+}
+
+func TestTTLWatcher_ConfigMap_Fields(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["ttl-watcher-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'ttl-watcher-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("ttl-watcher-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling ttl-watcher config data: %v", err)
+	}
+
+	requiredFields := []string{"scanPeriod", "tier1", "tier2"}
+	for _, field := range requiredFields {
+		if _, ok := cfg[field]; !ok {
+			t.Errorf("ttl-watcher config missing field %q", field)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HITL tests (Slice 14.1.7)
+// ---------------------------------------------------------------------------
+
+func TestHITLAppraise_FoundryNode_OutputAndExit(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["hitl-appraise"]
+	if !ok {
+		t.Fatal("FoundryNode 'hitl-appraise' not found in flow.yaml")
+	}
+
+	if fn.Spec.Exit != "clerk-exit" {
+		t.Errorf("hitl-appraise exit: want %q, got %q", "clerk-exit", fn.Spec.Exit)
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "approved" {
+			if o.Target != "hitl-gate" {
+				t.Errorf("hitl-appraise output 'approved': want target %q, got %q",
+					"hitl-gate", o.Target)
+			}
+			return
+		}
+	}
+	t.Error("hitl-appraise FoundryNode missing output 'approved'")
+}
+
+func TestHITLAppraise_FoundryNode_WriteFeedbackCapability(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["hitl-appraise"]
+	if !ok {
+		t.Fatal("FoundryNode 'hitl-appraise' not found in flow.yaml")
+	}
+
+	if !slices.Contains(fn.Spec.Capabilities, "WRITE:feedback") {
+		t.Error("hitl-appraise FoundryNode missing capability 'WRITE:feedback'")
+	}
+}
+
+func TestArbiterHITLResolve_FoundryNode_ResolutionOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["arbiter-hitl-resolve"]
+	if !ok {
+		t.Fatal("FoundryNode 'arbiter-hitl-resolve' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "resolution" {
+			if o.Target != nodeNameArbiter {
+				t.Errorf("arbiter-hitl-resolve output 'resolution': want target %q, got %q",
+					nodeNameArbiter, o.Target)
+			}
+			return
+		}
+	}
+	t.Error("arbiter-hitl-resolve FoundryNode missing output 'resolution'")
+}
+
+func TestTribunalHITLResolve_FoundryNode_ResolutionOutput(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["tribunal-hitl-resolve"]
+	if !ok {
+		t.Fatal("FoundryNode 'tribunal-hitl-resolve' not found in flow.yaml")
+	}
+
+	for _, o := range fn.Spec.Outputs {
+		if o.Name == "resolution" {
+			if o.Target != nodeNameTribunal {
+				t.Errorf("tribunal-hitl-resolve output 'resolution': want target %q, got %q",
+					nodeNameTribunal, o.Target)
+			}
+			return
+		}
+	}
+	t.Error("tribunal-hitl-resolve FoundryNode missing output 'resolution'")
+}
+
+func TestHITL_Deployments_UseHITLImage(t *testing.T) {
+	deps := findDeployments(t)
+
+	hitlNodes := []string{"hitl-appraise", "arbiter-hitl-resolve", "tribunal-hitl-resolve"}
+	for _, name := range hitlNodes {
+		d, ok := deps[name]
+		if !ok {
+			t.Errorf("Deployment with FLOW_NODE_ID=%q not found in deployments.yaml", name)
+			continue
+		}
+		for _, c := range d.Spec.Template.Spec.Containers {
+			if c.Name == "node" {
+				if c.Image != "hitl:latest" {
+					t.Errorf("%s node container image: want %q, got %q",
+						name, "hitl:latest", c.Image)
+				}
+				break
+			}
+		}
+	}
+}
+
+func TestHITLAppraise_ConfigMap_ChoiceLabels(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["hitl-appraise-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'hitl-appraise-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("hitl-appraise-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling hitl-appraise config data: %v", err)
+	}
+
+	if _, ok := cfg["choiceLabels"]; !ok {
+		t.Error("hitl-appraise config missing 'choiceLabels' field")
+	}
+}
+
+func TestArbiterHITLResolve_ConfigMap_ChoiceLabels(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["arbiter-hitl-resolve-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'arbiter-hitl-resolve-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("arbiter-hitl-resolve-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling arbiter-hitl-resolve config data: %v", err)
+	}
+
+	if _, ok := cfg["choiceLabels"]; !ok {
+		t.Error("arbiter-hitl-resolve config missing 'choiceLabels' field")
+	}
+}
+
+func TestTribunalHITLResolve_ConfigMap_ChoiceLabels(t *testing.T) {
+	cms := findConfigMaps(t)
+	cm, ok := cms["tribunal-hitl-resolve-config"]
+	if !ok {
+		t.Fatal("ConfigMap 'tribunal-hitl-resolve-config' not found in configmaps.yaml")
+	}
+
+	raw, ok := cm.Data["node-config.yaml"]
+	if !ok {
+		t.Fatal("tribunal-hitl-resolve-config missing 'node-config.yaml' key")
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshalling tribunal-hitl-resolve config data: %v", err)
+	}
+
+	if _, ok := cfg["choiceLabels"]; !ok {
+		t.Error("tribunal-hitl-resolve config missing 'choiceLabels' field")
 	}
 }

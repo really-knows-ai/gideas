@@ -409,3 +409,112 @@ spec:
     - "READ:artefact/allowed-outcomes"
     - "READ:artefact/prior-round-reasoning"
     - "WRITE:artefact/verdict"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: tribunal
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: tribunal:latest
+  outputs:
+    - name: "hung"
+      target: "tribunal-hitl-resolve"
+  capabilities:
+    - "READ:artefact/law-reference"
+    - "WRITE:artefact/verdict-context"
+    - "WRITE:artefact/question"
+    - "WRITE:artefact/evidence"
+    - "WRITE:artefact/allowed-outcomes"
+    - "WRITE:artefact/prior-round-reasoning"
+    - "READ:law"
+    - "CREATE:workitem/child"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: friction-watcher
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: friction-watcher:latest
+  entry: "hearing-entry"
+  outputs:
+    - name: "default"
+      target: "tribunal"
+  capabilities:
+    - "WRITE:artefact/law-reference"
+    - "CREATE:workitem"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: ttl-watcher
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: ttl-watcher:latest
+  entry: "hearing-entry"
+  outputs:
+    - name: "default"
+      target: "tribunal"
+  capabilities:
+    - "WRITE:artefact/law-reference"
+    - "CREATE:workitem"
+    - "READ:law"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: hitl-appraise
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: hitl:latest
+  exit: "clerk-exit"
+  outputs:
+    - name: "approved"
+      target: "hitl-gate"
+  capabilities:
+    - "READ:artefact/petition"
+    - "WRITE:feedback"
+    - "STAMP:artefact/petition/approval"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: arbiter-hitl-resolve
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: hitl:latest
+  exit: "clerk-exit"
+  outputs:
+    - name: "resolution"
+      target: "arbiter"
+  capabilities:
+    - "READ:artefact/evidence-bundle"
+    - "READ:artefact/deliberation-result"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: tribunal-hitl-resolve
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: hitl:latest
+  exit: "clerk-exit"
+  outputs:
+    - name: "resolution"
+      target: "tribunal"
+  capabilities:
+    - "READ:artefact/evidence-bundle"
+    - "READ:artefact/deliberation-result"
