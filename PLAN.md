@@ -14,7 +14,7 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 - Phase 12 Federation foundations are complete (proto, service schema, publication lifecycle, dispute records, SDK client, petition-outcome helpers, architectural guard tests).
 - Phase 13 is complete. Embassy node (13.1-13.5), Federation service CRD rewrite (13.6-13.7), Librarian semantic search (13.7B), publication admission (13.8), law distribution (13.9), petition-outcome-watcher (13.10), law-applicator T4-5 wiring (13.11), operator Federation provisioning (13.12), sidecar Federation proxy (13.13), and cross-cutting validation (13.14) are all done.
 - Phase 14 is complete. Judiciary manifests: 25 FoundryNode CRDs, 25 Deployments, 20 ConfigMaps, FoundryFlow entry/exit contracts and nodeGroups, and cross-cutting manifest consistency validation.
-- Next active work: `PHASE_XX.md` (cleanup, deletion, validation, and final regression gates).
+- Phase XX is complete. All phases of the Embassy + Federation redesign are done.
 
 ### Phase 13 Federation Redesign
 
@@ -66,7 +66,7 @@ Librarian.
 3. `PHASE_12.md` - complete: Federation proto / service schema / publication lifecycle / dispute record foundations landed.
 4. `PHASE_13.md` - complete: `nodes/embassy/` (13.1-13.5), Federation service CRD rewrite (13.6-13.7), Librarian semantic search (13.7B), distributed publication admission (13.8), law distribution (13.9), petition-outcome-watcher (13.10), law-applicator T4-5 wiring (13.11), operator/sidecar integration (13.12-13.13), cross-cutting validation (13.14).
 5. `PHASE_14.md` - complete: judiciary FoundryNode CRDs, Deployments, ConfigMaps, FoundryFlow contracts/nodeGroups, cross-cutting manifest validation.
-6. `PHASE_XX.md` - next active phase: delete Advocate, remove stale `importNode` / Governance Flow paths, and run final quality gates.
+6. `PHASE_XX.md` - complete: Advocate deleted, stale importNode / Governance Flow references removed, all quality gates passed.
 
 ## Architecture Summary
 

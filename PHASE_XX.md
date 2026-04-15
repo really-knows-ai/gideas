@@ -35,13 +35,13 @@
 - Delete: `nodes/advocate/main_test.go`
 - Delete: `nodes/advocate/testutil_test.go`
 
-- [ ] **Step 1: Delete the advocate directory**
+- [x] **Step 1: Delete the advocate directory**
 
 ```bash
 rm -rf nodes/advocate/
 ```
 
-- [ ] **Step 2: Verify deletion**
+- [x] **Step 2: Verify deletion**
 
 ```bash
 ls nodes/advocate/ 2>&1
@@ -49,7 +49,7 @@ ls nodes/advocate/ 2>&1
 
 Expected: `No such file or directory`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add -A nodes/advocate/ && git commit -m "remove: delete nodes/advocate/ (superseded by Embassy + HITL nodes)"
@@ -65,7 +65,7 @@ git add -A nodes/advocate/ && git commit -m "remove: delete nodes/advocate/ (sup
 
 - Modify: `Makefile`
 
-- [ ] **Step 1: Remove `build-advocate` from the `build:` dependency list on line 68**
+- [x] **Step 1: Remove `build-advocate` from the `build:` dependency list on line 68**
 
 The current line 68 reads:
 
@@ -79,7 +79,7 @@ Change to (remove `build-advocate` from the list):
 build: build-sidecar build-null-node build-forge build-sort build-appraise build-reviewer build-refine build-arbiter build-juror build-codify-smt build-codification build-rule-router build-facilitator build-hitl build-law-applicator build-tribunal build-friction-watcher build-ttl-watcher build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
 ```
 
-- [ ] **Step 2: Delete the `build-advocate` target (lines 98-100)**
+- [x] **Step 2: Delete the `build-advocate` target (lines 98-100)**
 
 Delete these exact three lines:
 
@@ -91,7 +91,7 @@ build-advocate: ## Build the Advocate node binary.
 
 Note: line 100 has a tab indent before `CGO_ENABLED=1`. The blank line after line 100 (before the `build-arbiter` target) should remain.
 
-- [ ] **Step 3: Verify no advocate references remain in Makefile**
+- [x] **Step 3: Verify no advocate references remain in Makefile**
 
 ```bash
 grep -i "advocate" Makefile
@@ -99,7 +99,7 @@ grep -i "advocate" Makefile
 
 Expected: No output.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Makefile && git commit -m "remove: drop build-advocate target from Makefile"
@@ -115,7 +115,7 @@ git add Makefile && git commit -m "remove: drop build-advocate target from Makef
 
 - Modify: `nodes/haiku-manifests/flow.yaml`
 
-- [ ] **Step 1: Delete the advocate-context GovernedArtefact document**
+- [x] **Step 1: Delete the advocate-context GovernedArtefact document**
 
 Remove these exact lines (including the leading `---` separator):
 
@@ -132,7 +132,7 @@ spec:
 
 The line immediately before this block is `  stamps: []` (end of the `codification-result` document). The line immediately after is `---` (start of the `human-decision` document). After deletion, the `codification-result` document's final `  stamps: []` should be followed by `---` for the `human-decision` document.
 
-- [ ] **Step 2: Verify no advocate references remain in haiku-manifests**
+- [x] **Step 2: Verify no advocate references remain in haiku-manifests**
 
 ```bash
 grep -ri "advocate" nodes/haiku-manifests/
@@ -140,7 +140,7 @@ grep -ri "advocate" nodes/haiku-manifests/
 
 Expected: No output.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add nodes/haiku-manifests/flow.yaml && git commit -m "remove: delete advocate-context GovernedArtefact from haiku manifests"
@@ -156,7 +156,7 @@ git add nodes/haiku-manifests/flow.yaml && git commit -m "remove: delete advocat
 
 - Modify: `AGENTS.md`
 
-- [ ] **Step 1: Delete the advocate line from the repo structure tree**
+- [x] **Step 1: Delete the advocate line from the repo structure tree**
 
 Remove this exact line (line 51):
 
@@ -166,7 +166,7 @@ Remove this exact line (line 51):
 
 The line before is `│   ├── refine/           # Revision node` and the line after is `│   ├── arbiter/          # Deadlock deliberation orchestrator`.
 
-- [ ] **Step 2: Verify no advocate references remain in AGENTS.md**
+- [x] **Step 2: Verify no advocate references remain in AGENTS.md**
 
 ```bash
 grep -i "advocate" AGENTS.md
@@ -174,7 +174,7 @@ grep -i "advocate" AGENTS.md
 
 Expected: No output.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add AGENTS.md && git commit -m "docs: remove advocate from AGENTS.md repo structure"
@@ -191,7 +191,7 @@ git add AGENTS.md && git commit -m "docs: remove advocate from AGENTS.md repo st
 - Modify: `proto/flow/v1/librarian.proto`
 - Regenerate: `gen/flow/v1/librarian_grpc.pb.go` (via `buf generate`)
 
-- [ ] **Step 1: Fix WriteLaw comment (lines 36-37)**
+- [x] **Step 1: Fix WriteLaw comment (lines 36-37)**
 
 Change these exact lines:
 
@@ -207,7 +207,7 @@ To:
   // approval, Tier 3 applied by law-applicator or administrator).
 ```
 
-- [ ] **Step 2: Fix ReplicateLaws comment (lines 44-45)**
+- [x] **Step 2: Fix ReplicateLaws comment (lines 44-45)**
 
 Change these exact lines:
 
@@ -223,7 +223,7 @@ To:
   // Subscriber Flows receive published laws as Tier 4 or Tier 5.
 ```
 
-- [ ] **Step 3: Regenerate proto code**
+- [x] **Step 3: Regenerate proto code**
 
 ```bash
 buf generate
@@ -231,7 +231,7 @@ buf generate
 
 Expected: `gen/flow/v1/librarian_grpc.pb.go` (and potentially other gen files) are regenerated. The Makefile target is `make proto` which runs `buf generate`.
 
-- [ ] **Step 4: Verify generated comments are updated**
+- [x] **Step 4: Verify generated comments are updated**
 
 ```bash
 grep -n "Governance Flow" gen/flow/v1/librarian_grpc.pb.go
@@ -241,7 +241,7 @@ grep -n "Judiciary Gate" gen/flow/v1/librarian_grpc.pb.go
 
 Expected: No output for any grep.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proto/flow/v1/librarian.proto gen/ && git commit -m "fix: update stale WriteLaw/ReplicateLaws proto comments (remove Governance Flow, Judiciary Gate references)"
@@ -257,7 +257,7 @@ git add proto/flow/v1/librarian.proto gen/ && git commit -m "fix: update stale W
 
 - Modify: `specs/05-reference/glossary.md`
 
-- [ ] **Step 1: Simplify HITL node entry (line 187)**
+- [x] **Step 1: Simplify HITL node entry (line 187)**
 
 The full current line 187 reads:
 
@@ -273,7 +273,7 @@ So the full line becomes:
 A generic config-driven Human-in-the-Loop node. Single image, multiple CRD instances. It is used for hung-jury resolution and for human approval in the Clerk cycle's Tier 3-5 petition path. Uses the SDK [HITL pattern](../04-sdk/08-sdk-hitl.md) with `USE:queue/server` capability. Provides a reusable node pattern for human-in-the-loop decisions. Detail: [SDK HITL](../04-sdk/08-sdk-hitl.md).
 ```
 
-- [ ] **Step 2: Simplify crossFlow.importTypes entry (line 27)**
+- [x] **Step 2: Simplify crossFlow.importTypes entry (line 27)**
 
 The full current line 27 reads:
 
@@ -287,7 +287,7 @@ Remove the sentence `Replaces the former `importNode` field.` so the line become
 A map on the FoundryFlow CRD's `spec.crossFlow` that defines the flow-authored/custom import type extension set for cross-flow Workitem reception. Each key is an import type name; each value specifies a target node (must be entry-bound) and optional per-artefact foreign-stamp requirements. Built-in system import types such as `law-petition` live in the same effective namespace but are not authored in this map. Detail: [CRDs](./crds.md#cross-flow-configuration).
 ```
 
-- [ ] **Step 3: Simplify Federation entry (line 39)**
+- [x] **Step 3: Simplify Federation entry (line 39)**
 
 The full current line 39 reads:
 
@@ -301,7 +301,7 @@ Change `A Federation replaces the former Governance Flow runtime concept: member
 The control-plane authority that manages inter-Flow membership, trust-root discovery, state groupings, authority publisher roles, petition-routing policy, and published-law distribution. Member Flows remain ordinary Flows, while the Federation service governs how T4-T5 authority relationships and publication work across them. Detail: [Governance](../01-concepts/04-governance.md#federation-membership), [Federation](../02-flow/08-federation.md), [gRPC API](./grpc-api.md#federation-api).
 ```
 
-- [ ] **Step 4: Simplify Sibling Flow entry (line 371)**
+- [x] **Step 4: Simplify Sibling Flow entry (line 371)**
 
 The full current line 371 reads:
 
@@ -315,7 +315,7 @@ Change `not from a dedicated Governance Flow runtime` to `not from a dedicated r
 A Flow that shares membership in at least one federation-defined state with another Flow. Sibling relationships derive from shared state membership and federation policy, not from a dedicated runtime. Federation-member exchange between sibling Flows uses the federation trust root; Treaties are only needed for non-federation exchange.
 ```
 
-- [ ] **Step 5: Verify no stale references remain in glossary**
+- [x] **Step 5: Verify no stale references remain in glossary**
 
 ```bash
 grep -in "advocate\|importNode\|Governance Flow" specs/05-reference/glossary.md
@@ -323,7 +323,7 @@ grep -in "advocate\|importNode\|Governance Flow" specs/05-reference/glossary.md
 
 Expected: No output.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add specs/05-reference/glossary.md && git commit -m "docs: remove Advocate/importNode/Governance Flow comparison language from glossary"
@@ -339,7 +339,7 @@ git add specs/05-reference/glossary.md && git commit -m "docs: remove Advocate/i
 
 - Modify: `specs/05-reference/crds.md`
 
-- [ ] **Step 1: Simplify the crossFlow.importTypes design note (line 502)**
+- [x] **Step 1: Simplify the crossFlow.importTypes design note (line 502)**
 
 Change this exact line:
 
@@ -353,7 +353,7 @@ To:
 12. `crossFlow.importTypes` defines the flow-authored import type extension set. Built-in system import types (currently `law-petition`) share the same effective namespace but are platform-owned rather than YAML-authored.
 ```
 
-- [ ] **Step 2: Verify no importNode references remain in crds.md**
+- [x] **Step 2: Verify no importNode references remain in crds.md**
 
 ```bash
 grep -in "importNode" specs/05-reference/crds.md
@@ -361,7 +361,7 @@ grep -in "importNode" specs/05-reference/crds.md
 
 Expected: No output.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add specs/05-reference/crds.md && git commit -m "docs: remove importNode comparison from crds.md design notes"
@@ -377,7 +377,7 @@ git add specs/05-reference/crds.md && git commit -m "docs: remove importNode com
 
 - Modify: `specs/05-reference/grpc-api.md`
 
-- [ ] **Step 1: Simplify the Embassy API description (line 362)**
+- [x] **Step 1: Simplify the Embassy API description (line 362)**
 
 Change this exact line:
 
@@ -391,7 +391,7 @@ To:
 The Embassy is the cross-flow gateway node responsible for Workitem import/export, using a manifest-preflight and package-streaming protocol. The Embassy is Operator-provisioned and holds cross-flow transfer capabilities.
 ```
 
-- [ ] **Step 2: Verify no ExportWorkitem/ImportWorkitem references remain in grpc-api.md**
+- [x] **Step 2: Verify no ExportWorkitem/ImportWorkitem references remain in grpc-api.md**
 
 ```bash
 grep -in "ExportWorkitem\|ImportWorkitem" specs/05-reference/grpc-api.md
@@ -399,7 +399,7 @@ grep -in "ExportWorkitem\|ImportWorkitem" specs/05-reference/grpc-api.md
 
 Expected: No output.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add specs/05-reference/grpc-api.md && git commit -m "docs: simplify Embassy API description (remove ExportWorkitem/ImportWorkitem comparison)"
@@ -413,7 +413,7 @@ git add specs/05-reference/grpc-api.md && git commit -m "docs: simplify Embassy 
 
 **Dependencies:** Tasks 1-8 must all be complete.
 
-- [ ] **Step 1: Run all tests**
+- [x] **Step 1: Run all tests**
 
 ```bash
 make test-all
@@ -421,7 +421,7 @@ make test-all
 
 Expected: All tests pass. Zero failures. The `test-nodes` target (`./nodes/...`) will auto-exclude the deleted `nodes/advocate/` directory.
 
-- [ ] **Step 2: Run lint and tidy**
+- [x] **Step 2: Run lint and tidy**
 
 ```bash
 make check-fix-all
@@ -429,7 +429,7 @@ make check-fix-all
 
 Expected: Clean exit. No lint failures. If `check-fix-all` auto-fixes anything (goimports, tidy), those changes need to be committed.
 
-- [ ] **Step 3: Run spec lint**
+- [x] **Step 3: Run spec lint**
 
 ```bash
 cd tools/spec-lint && node lint.mjs
@@ -437,7 +437,7 @@ cd tools/spec-lint && node lint.mjs
 
 Expected: All specs clean. Zero violations. The spec-lint tool excludes `legacy/`, `node_modules/`, `tools/spec-lint/`, and plan files by default.
 
-- [ ] **Step 4: Commit any auto-fix changes**
+- [x] **Step 4: Commit any auto-fix changes**
 
 If `check-fix-all` or spec-lint identified/fixed issues:
 
@@ -457,7 +457,7 @@ If no changes, skip this step.
 
 **Dependencies:** Tasks 1-9 must all be complete.
 
-- [ ] **Step 1: Sweep for Advocate**
+- [x] **Step 1: Sweep for Advocate**
 
 ```bash
 grep -ri "advocate" --include='*.go' --include='*.proto' --include='*.yaml' --include='*.md' . \
@@ -467,7 +467,7 @@ grep -ri "advocate" --include='*.go' --include='*.proto' --include='*.yaml' --in
 
 Expected: No output.
 
-- [ ] **Step 2: Sweep for importNode**
+- [x] **Step 2: Sweep for importNode**
 
 ```bash
 grep -ri "importNode\|import_node\|ImportNode" --include='*.go' --include='*.proto' --include='*.yaml' --include='*.md' . \
@@ -480,7 +480,7 @@ Expected: Only retirement guard tests in these files (these are intentional -- t
 
 Zero stale usage.
 
-- [ ] **Step 3: Sweep for Governance Flow as runtime**
+- [x] **Step 3: Sweep for Governance Flow as runtime**
 
 ```bash
 grep -ri "Governance Flow\|GovernanceFlow\|governance-flow\|governance_flow" --include='*.go' --include='*.proto' --include='*.yaml' --include='*.md' . \
@@ -489,7 +489,7 @@ grep -ri "Governance Flow\|GovernanceFlow\|governance-flow\|governance_flow" --i
 
 Expected: Only the retirement guard test `gen/flow/v1/federation_proto_retirement_test.go` (asserts `GovernanceFlow` does NOT exist in federation.proto) and `specs/01-concepts/04-governance.md` line 129 which says "There is no special Governance Flow runtime" (correct architectural statement). Zero stale usage.
 
-- [ ] **Step 4: Sweep for ExportWorkitem/ImportWorkitem**
+- [x] **Step 4: Sweep for ExportWorkitem/ImportWorkitem**
 
 ```bash
 grep -ri "ExportWorkitem\|ImportWorkitem" --include='*.go' --include='*.proto' --include='*.yaml' --include='*.md' . \
@@ -503,7 +503,7 @@ Expected: Only retirement guard tests in these files (intentional):
 
 Zero stale usage.
 
-- [ ] **Step 5: Sweep for pending-decision Tier 1**
+- [x] **Step 5: Sweep for pending-decision Tier 1**
 
 ```bash
 grep -ri "pending-decision\|pending_decision" --include='*.go' --include='*.proto' --include='*.yaml' --include='*.md' . \
@@ -512,7 +512,7 @@ grep -ri "pending-decision\|pending_decision" --include='*.go' --include='*.prot
 
 Expected: No output.
 
-- [ ] **Step 6: If any sweep finds unexpected results, investigate and fix before proceeding**
+- [x] **Step 6: If any sweep finds unexpected results, investigate and fix before proceeding**
 
 If any stale reference is found that is NOT a retirement guard test or an explicit "there is no X" architectural statement, fix it and re-run the quality gates (Task 9).
 
@@ -528,7 +528,7 @@ If any stale reference is found that is NOT a retirement guard test or an explic
 
 - Modify: `PLAN.md`
 
-- [ ] **Step 1: Update status line**
+- [x] **Step 1: Update status line**
 
 Change line 17 from:
 
@@ -542,7 +542,7 @@ To:
 - Phase XX is complete. All phases of the Embassy + Federation redesign are done.
 ```
 
-- [ ] **Step 2: Update active execution order entry**
+- [x] **Step 2: Update active execution order entry**
 
 Change line 69 from:
 
@@ -556,7 +556,7 @@ To:
 6. `PHASE_XX.md` - complete: Advocate deleted, stale importNode / Governance Flow references removed, all quality gates passed.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add PLAN.md && git commit -m "docs: mark Phase XX complete in PLAN.md"
