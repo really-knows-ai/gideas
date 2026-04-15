@@ -3,11 +3,12 @@
 // It receives an approved petition from an upstream Rule Router and applies
 // each change via the Librarian (WriteLaw / RetireLaw / demote). After all
 // changes are applied, it stores an "approval-stamp" artefact recording the
-// results and calls Complete().
+// results.
 //
-// The law-applicator has no routing decisions, no outputs, and no
-// configuration. It is the simplest judiciary node type: read → apply →
-// stamp → done.
+// For petitions whose highest-tier change is Tier 1-3 the node calls
+// Complete(). For petitions with any Tier 4 or Tier 5 change the node
+// instead creates a dispute record via the Librarian and routes the
+// workitem to the "embassy" output for cross-flow export.
 //
 // Input artefacts:
 //
@@ -27,6 +28,8 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	flow "github.com/gideas/flow/sdk/go"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ---------------------------------------------------------------------------
@@ -48,6 +51,7 @@ type petition struct {
 }
 
 type petitionBody struct {
+	PetitionID         string           `json:"petition_id"`
 	Context            petitionContext  `json:"context"`
 	Changes            []petitionChange `json:"changes"`
 	ProseJustification string           `json:"prose_justification"`
@@ -156,14 +160,35 @@ func handleLawApplicator(ctx context.Context, client *flow.Client) error {
 		return fmt.Errorf("law-applicator: store approval stamp: %w", err)
 	}
 
-	// -- Step 4: Complete -------------------------------------------------
-	if _, err := client.Complete(ctx); err != nil {
-		return fmt.Errorf("law-applicator: complete: %w", err)
+	// -- Step 4: Tier-dependent completion --------------------------------
+	maxTier := maxPetitionTier(pet.Petition.Changes)
+
+	if maxTier >= 4 { //nolint:mnd // Tier 4 is the Embassy threshold.
+		// T4-5 path: create dispute record, then route to Embassy.
+		citedIDs := collectCitedLawIDs(pet.Petition.Changes, stamp)
+		if err := createDisputeRecord(ctx, client, pet.Petition.PetitionID, citedIDs); err != nil {
+			return err
+		}
+
+		if _, err := client.RouteToOutput(ctx, "embassy"); err != nil {
+			return fmt.Errorf("law-applicator: route to embassy: %w", err)
+		}
+
+		slog.Info("law-applicator: T4-5 petition routed to embassy",
+			"petition_id", pet.Petition.PetitionID,
+			"cited_law_ids", len(citedIDs),
+		)
+	} else {
+		// T1-3 path: complete as before.
+		if _, err := client.Complete(ctx); err != nil {
+			return fmt.Errorf("law-applicator: complete: %w", err)
+		}
+
+		slog.Info("law-applicator: petition applied, workitem completed",
+			"law_results", len(stamp.LawResults),
+		)
 	}
 
-	slog.Info("law-applicator: petition applied, workitem completed",
-		"law_results", len(stamp.LawResults),
-	)
 	return nil
 }
 
@@ -262,4 +287,69 @@ func applyDemote(ctx context.Context, client *flow.Client, change *petitionChang
 		LawID:       resp.GetLawId(),
 		VersionHash: resp.GetVersionHash(),
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Tier Detection & Embassy Routing (T4-5)
+// ---------------------------------------------------------------------------
+
+// maxPetitionTier returns the highest tier across all petition changes.
+func maxPetitionTier(changes []petitionChange) int32 {
+	var max int32
+	for _, c := range changes {
+		if c.Tier > max {
+			max = c.Tier
+		}
+	}
+	return max
+}
+
+// collectCitedLawIDs gathers law IDs referenced by a T4-5 petition.
+// It includes explicit LawID fields from changes (e.g. retire/demote targets)
+// as well as newly created law IDs recorded in the approval stamp.
+func collectCitedLawIDs(changes []petitionChange, stamp *approvalStamp) []string {
+	seen := make(map[string]struct{})
+	var ids []string
+
+	// Explicit law IDs in the petition changes.
+	for _, c := range changes {
+		if c.LawID != "" {
+			if _, ok := seen[c.LawID]; !ok {
+				seen[c.LawID] = struct{}{}
+				ids = append(ids, c.LawID)
+			}
+		}
+	}
+
+	// Newly created/demoted law IDs from the stamp results.
+	for _, r := range stamp.LawResults {
+		if r.LawID != "" {
+			if _, ok := seen[r.LawID]; !ok {
+				seen[r.LawID] = struct{}{}
+				ids = append(ids, r.LawID)
+			}
+		}
+	}
+
+	return ids
+}
+
+// createDisputeRecord calls Librarian.CreateDisputeRecord. An AlreadyExists
+// error is treated as idempotent (logged and ignored); all other errors are
+// returned to the caller.
+func createDisputeRecord(ctx context.Context, client *flow.Client, petitionID string, citedLawIDs []string) error {
+	_, err := client.Librarian.CreateDisputeRecord(ctx, &flowv1.CreateDisputeRecordRequest{
+		PetitionId:  petitionID,
+		CitedLawIds: citedLawIDs,
+	})
+	if err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			slog.Warn("law-applicator: dispute record already exists (idempotent)",
+				"petition_id", petitionID,
+			)
+			return nil
+		}
+		return fmt.Errorf("law-applicator: create dispute record: %w", err)
+	}
+	return nil
 }

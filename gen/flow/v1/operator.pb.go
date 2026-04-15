@@ -1276,6 +1276,149 @@ func (x *ValidateChildAccessResponse) GetPhase() string {
 	return ""
 }
 
+type ListSuspendedWorkitemsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Filter by condition substring. Returns only suspended workitems
+	// whose resume_condition contains this string.
+	ConditionContains string `protobuf:"bytes,1,opt,name=condition_contains,json=conditionContains,proto3" json:"condition_contains,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ListSuspendedWorkitemsRequest) Reset() {
+	*x = ListSuspendedWorkitemsRequest{}
+	mi := &file_flow_v1_operator_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSuspendedWorkitemsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSuspendedWorkitemsRequest) ProtoMessage() {}
+
+func (x *ListSuspendedWorkitemsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_operator_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSuspendedWorkitemsRequest.ProtoReflect.Descriptor instead.
+func (*ListSuspendedWorkitemsRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_operator_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ListSuspendedWorkitemsRequest) GetConditionContains() string {
+	if x != nil {
+		return x.ConditionContains
+	}
+	return ""
+}
+
+type ListSuspendedWorkitemsResponse struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Workitems     []*SuspendedWorkitemInfo `protobuf:"bytes,1,rep,name=workitems,proto3" json:"workitems,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSuspendedWorkitemsResponse) Reset() {
+	*x = ListSuspendedWorkitemsResponse{}
+	mi := &file_flow_v1_operator_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSuspendedWorkitemsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSuspendedWorkitemsResponse) ProtoMessage() {}
+
+func (x *ListSuspendedWorkitemsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_operator_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSuspendedWorkitemsResponse.ProtoReflect.Descriptor instead.
+func (*ListSuspendedWorkitemsResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_operator_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ListSuspendedWorkitemsResponse) GetWorkitems() []*SuspendedWorkitemInfo {
+	if x != nil {
+		return x.Workitems
+	}
+	return nil
+}
+
+// Summary of a suspended workitem returned by ListSuspendedWorkitems.
+type SuspendedWorkitemInfo struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	WorkitemId      string                 `protobuf:"bytes,1,opt,name=workitem_id,json=workitemId,proto3" json:"workitem_id,omitempty"`
+	ResumeCondition string                 `protobuf:"bytes,2,opt,name=resume_condition,json=resumeCondition,proto3" json:"resume_condition,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SuspendedWorkitemInfo) Reset() {
+	*x = SuspendedWorkitemInfo{}
+	mi := &file_flow_v1_operator_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SuspendedWorkitemInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SuspendedWorkitemInfo) ProtoMessage() {}
+
+func (x *SuspendedWorkitemInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_operator_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SuspendedWorkitemInfo.ProtoReflect.Descriptor instead.
+func (*SuspendedWorkitemInfo) Descriptor() ([]byte, []int) {
+	return file_flow_v1_operator_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SuspendedWorkitemInfo) GetWorkitemId() string {
+	if x != nil {
+		return x.WorkitemId
+	}
+	return ""
+}
+
+func (x *SuspendedWorkitemInfo) GetResumeCondition() string {
+	if x != nil {
+		return x.ResumeCondition
+	}
+	return ""
+}
+
 var File_flow_v1_operator_proto protoreflect.FileDescriptor
 
 const file_flow_v1_operator_proto_rawDesc = "" +
@@ -1356,10 +1499,18 @@ const file_flow_v1_operator_proto_rawDesc = "" +
 	"\x11child_workitem_id\x18\x02 \x01(\tR\x0fchildWorkitemId\"I\n" +
 	"\x1bValidateChildAccessResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x14\n" +
-	"\x05phase\x18\x02 \x01(\tR\x05phase*V\n" +
+	"\x05phase\x18\x02 \x01(\tR\x05phase\"N\n" +
+	"\x1dListSuspendedWorkitemsRequest\x12-\n" +
+	"\x12condition_contains\x18\x01 \x01(\tR\x11conditionContains\"^\n" +
+	"\x1eListSuspendedWorkitemsResponse\x12<\n" +
+	"\tworkitems\x18\x01 \x03(\v2\x1e.flow.v1.SuspendedWorkitemInfoR\tworkitems\"c\n" +
+	"\x15SuspendedWorkitemInfo\x12\x1f\n" +
+	"\vworkitem_id\x18\x01 \x01(\tR\n" +
+	"workitemId\x12)\n" +
+	"\x10resume_condition\x18\x02 \x01(\tR\x0fresumeCondition*V\n" +
 	"\x10CompletionReason\x12!\n" +
 	"\x1dCOMPLETION_REASON_UNSPECIFIED\x10\x00\x12\x1f\n" +
-	"\x1bCOMPLETION_REASON_CANCELLED\x10\x012\xaf\x05\n" +
+	"\x1bCOMPLETION_REASON_CANCELLED\x10\x012\x9a\x06\n" +
 	"\x0fOperatorService\x12K\n" +
 	"\fSubmitResult\x12\x1c.flow.v1.SubmitResultRequest\x1a\x1d.flow.v1.SubmitResultResponse\x12T\n" +
 	"\x0fGetFlowTopology\x12\x1f.flow.v1.GetFlowTopologyRequest\x1a .flow.v1.GetFlowTopologyResponse\x12Q\n" +
@@ -1368,7 +1519,8 @@ const file_flow_v1_operator_proto_rawDesc = "" +
 	"\n" +
 	"RouteChild\x12\x1a.flow.v1.RouteChildRequest\x1a\x1b.flow.v1.RouteChildResponse\x12H\n" +
 	"\vGetChildren\x12\x1b.flow.v1.GetChildrenRequest\x1a\x1c.flow.v1.GetChildrenResponse\x12Q\n" +
-	"\x0eResumeWorkitem\x12\x1e.flow.v1.ResumeWorkitemRequest\x1a\x1f.flow.v1.ResumeWorkitemResponse\x12`\n" +
+	"\x0eResumeWorkitem\x12\x1e.flow.v1.ResumeWorkitemRequest\x1a\x1f.flow.v1.ResumeWorkitemResponse\x12i\n" +
+	"\x16ListSuspendedWorkitems\x12&.flow.v1.ListSuspendedWorkitemsRequest\x1a'.flow.v1.ListSuspendedWorkitemsResponse\x12`\n" +
 	"\x13ValidateChildAccess\x12#.flow.v1.ValidateChildAccessRequest\x1a$.flow.v1.ValidateChildAccessResponseB\x84\x01\n" +
 	"\vcom.flow.v1B\rOperatorProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
@@ -1385,77 +1537,83 @@ func file_flow_v1_operator_proto_rawDescGZIP() []byte {
 }
 
 var file_flow_v1_operator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_flow_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_flow_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_flow_v1_operator_proto_goTypes = []any{
-	(CompletionReason)(0),               // 0: flow.v1.CompletionReason
-	(*CreateWorkitemRequest)(nil),       // 1: flow.v1.CreateWorkitemRequest
-	(*SubmitResultRequest)(nil),         // 2: flow.v1.SubmitResultRequest
-	(*CompleteAction)(nil),              // 3: flow.v1.CompleteAction
-	(*RouteAction)(nil),                 // 4: flow.v1.RouteAction
-	(*SuspendAction)(nil),               // 5: flow.v1.SuspendAction
-	(*SubmitResultResponse)(nil),        // 6: flow.v1.SubmitResultResponse
-	(*CreateWorkitemResponse)(nil),      // 7: flow.v1.CreateWorkitemResponse
-	(*CreateChildWorkitemRequest)(nil),  // 8: flow.v1.CreateChildWorkitemRequest
-	(*CreateChildWorkitemResponse)(nil), // 9: flow.v1.CreateChildWorkitemResponse
-	(*RouteChildRequest)(nil),           // 10: flow.v1.RouteChildRequest
-	(*RouteChildResponse)(nil),          // 11: flow.v1.RouteChildResponse
-	(*GetChildrenRequest)(nil),          // 12: flow.v1.GetChildrenRequest
-	(*GetChildrenResponse)(nil),         // 13: flow.v1.GetChildrenResponse
-	(*ChildWorkitemStatus)(nil),         // 14: flow.v1.ChildWorkitemStatus
-	(*ResumeWorkitemRequest)(nil),       // 15: flow.v1.ResumeWorkitemRequest
-	(*ResumeWorkitemResponse)(nil),      // 16: flow.v1.ResumeWorkitemResponse
-	(*GetFlowTopologyRequest)(nil),      // 17: flow.v1.GetFlowTopologyRequest
-	(*GetFlowTopologyResponse)(nil),     // 18: flow.v1.GetFlowTopologyResponse
-	(*FlowNode)(nil),                    // 19: flow.v1.FlowNode
-	(*FlowOutput)(nil),                  // 20: flow.v1.FlowOutput
-	(*StampRequirements)(nil),           // 21: flow.v1.StampRequirements
-	(*ValidateChildAccessRequest)(nil),  // 22: flow.v1.ValidateChildAccessRequest
-	(*ValidateChildAccessResponse)(nil), // 23: flow.v1.ValidateChildAccessResponse
-	nil,                                 // 24: flow.v1.CreateWorkitemRequest.MetadataEntry
-	nil,                                 // 25: flow.v1.GetFlowTopologyResponse.NodesEntry
-	nil,                                 // 26: flow.v1.GetFlowTopologyResponse.ExitContractEntry
-	(*durationpb.Duration)(nil),         // 27: google.protobuf.Duration
-	(*RoutingInstruction)(nil),          // 28: flow.v1.RoutingInstruction
-	(*ArtefactRef)(nil),                 // 29: flow.v1.ArtefactRef
+	(CompletionReason)(0),                  // 0: flow.v1.CompletionReason
+	(*CreateWorkitemRequest)(nil),          // 1: flow.v1.CreateWorkitemRequest
+	(*SubmitResultRequest)(nil),            // 2: flow.v1.SubmitResultRequest
+	(*CompleteAction)(nil),                 // 3: flow.v1.CompleteAction
+	(*RouteAction)(nil),                    // 4: flow.v1.RouteAction
+	(*SuspendAction)(nil),                  // 5: flow.v1.SuspendAction
+	(*SubmitResultResponse)(nil),           // 6: flow.v1.SubmitResultResponse
+	(*CreateWorkitemResponse)(nil),         // 7: flow.v1.CreateWorkitemResponse
+	(*CreateChildWorkitemRequest)(nil),     // 8: flow.v1.CreateChildWorkitemRequest
+	(*CreateChildWorkitemResponse)(nil),    // 9: flow.v1.CreateChildWorkitemResponse
+	(*RouteChildRequest)(nil),              // 10: flow.v1.RouteChildRequest
+	(*RouteChildResponse)(nil),             // 11: flow.v1.RouteChildResponse
+	(*GetChildrenRequest)(nil),             // 12: flow.v1.GetChildrenRequest
+	(*GetChildrenResponse)(nil),            // 13: flow.v1.GetChildrenResponse
+	(*ChildWorkitemStatus)(nil),            // 14: flow.v1.ChildWorkitemStatus
+	(*ResumeWorkitemRequest)(nil),          // 15: flow.v1.ResumeWorkitemRequest
+	(*ResumeWorkitemResponse)(nil),         // 16: flow.v1.ResumeWorkitemResponse
+	(*GetFlowTopologyRequest)(nil),         // 17: flow.v1.GetFlowTopologyRequest
+	(*GetFlowTopologyResponse)(nil),        // 18: flow.v1.GetFlowTopologyResponse
+	(*FlowNode)(nil),                       // 19: flow.v1.FlowNode
+	(*FlowOutput)(nil),                     // 20: flow.v1.FlowOutput
+	(*StampRequirements)(nil),              // 21: flow.v1.StampRequirements
+	(*ValidateChildAccessRequest)(nil),     // 22: flow.v1.ValidateChildAccessRequest
+	(*ValidateChildAccessResponse)(nil),    // 23: flow.v1.ValidateChildAccessResponse
+	(*ListSuspendedWorkitemsRequest)(nil),  // 24: flow.v1.ListSuspendedWorkitemsRequest
+	(*ListSuspendedWorkitemsResponse)(nil), // 25: flow.v1.ListSuspendedWorkitemsResponse
+	(*SuspendedWorkitemInfo)(nil),          // 26: flow.v1.SuspendedWorkitemInfo
+	nil,                                    // 27: flow.v1.CreateWorkitemRequest.MetadataEntry
+	nil,                                    // 28: flow.v1.GetFlowTopologyResponse.NodesEntry
+	nil,                                    // 29: flow.v1.GetFlowTopologyResponse.ExitContractEntry
+	(*durationpb.Duration)(nil),            // 30: google.protobuf.Duration
+	(*RoutingInstruction)(nil),             // 31: flow.v1.RoutingInstruction
+	(*ArtefactRef)(nil),                    // 32: flow.v1.ArtefactRef
 }
 var file_flow_v1_operator_proto_depIdxs = []int32{
-	24, // 0: flow.v1.CreateWorkitemRequest.metadata:type_name -> flow.v1.CreateWorkitemRequest.MetadataEntry
+	27, // 0: flow.v1.CreateWorkitemRequest.metadata:type_name -> flow.v1.CreateWorkitemRequest.MetadataEntry
 	3,  // 1: flow.v1.SubmitResultRequest.complete:type_name -> flow.v1.CompleteAction
 	4,  // 2: flow.v1.SubmitResultRequest.route:type_name -> flow.v1.RouteAction
 	5,  // 3: flow.v1.SubmitResultRequest.suspend:type_name -> flow.v1.SuspendAction
 	0,  // 4: flow.v1.CompleteAction.reason:type_name -> flow.v1.CompletionReason
-	27, // 5: flow.v1.SuspendAction.timeout:type_name -> google.protobuf.Duration
-	28, // 6: flow.v1.RouteChildRequest.routing_instruction:type_name -> flow.v1.RoutingInstruction
+	30, // 5: flow.v1.SuspendAction.timeout:type_name -> google.protobuf.Duration
+	31, // 6: flow.v1.RouteChildRequest.routing_instruction:type_name -> flow.v1.RoutingInstruction
 	14, // 7: flow.v1.GetChildrenResponse.children:type_name -> flow.v1.ChildWorkitemStatus
-	29, // 8: flow.v1.ChildWorkitemStatus.artefacts:type_name -> flow.v1.ArtefactRef
+	32, // 8: flow.v1.ChildWorkitemStatus.artefacts:type_name -> flow.v1.ArtefactRef
 	0,  // 9: flow.v1.ChildWorkitemStatus.completion_reason:type_name -> flow.v1.CompletionReason
 	19, // 10: flow.v1.GetFlowTopologyResponse.self:type_name -> flow.v1.FlowNode
-	25, // 11: flow.v1.GetFlowTopologyResponse.nodes:type_name -> flow.v1.GetFlowTopologyResponse.NodesEntry
-	26, // 12: flow.v1.GetFlowTopologyResponse.exit_contract:type_name -> flow.v1.GetFlowTopologyResponse.ExitContractEntry
+	28, // 11: flow.v1.GetFlowTopologyResponse.nodes:type_name -> flow.v1.GetFlowTopologyResponse.NodesEntry
+	29, // 12: flow.v1.GetFlowTopologyResponse.exit_contract:type_name -> flow.v1.GetFlowTopologyResponse.ExitContractEntry
 	20, // 13: flow.v1.FlowNode.outputs:type_name -> flow.v1.FlowOutput
-	19, // 14: flow.v1.GetFlowTopologyResponse.NodesEntry.value:type_name -> flow.v1.FlowNode
-	21, // 15: flow.v1.GetFlowTopologyResponse.ExitContractEntry.value:type_name -> flow.v1.StampRequirements
-	2,  // 16: flow.v1.OperatorService.SubmitResult:input_type -> flow.v1.SubmitResultRequest
-	17, // 17: flow.v1.OperatorService.GetFlowTopology:input_type -> flow.v1.GetFlowTopologyRequest
-	1,  // 18: flow.v1.OperatorService.CreateWorkitem:input_type -> flow.v1.CreateWorkitemRequest
-	8,  // 19: flow.v1.OperatorService.CreateChildWorkitem:input_type -> flow.v1.CreateChildWorkitemRequest
-	10, // 20: flow.v1.OperatorService.RouteChild:input_type -> flow.v1.RouteChildRequest
-	12, // 21: flow.v1.OperatorService.GetChildren:input_type -> flow.v1.GetChildrenRequest
-	15, // 22: flow.v1.OperatorService.ResumeWorkitem:input_type -> flow.v1.ResumeWorkitemRequest
-	22, // 23: flow.v1.OperatorService.ValidateChildAccess:input_type -> flow.v1.ValidateChildAccessRequest
-	6,  // 24: flow.v1.OperatorService.SubmitResult:output_type -> flow.v1.SubmitResultResponse
-	18, // 25: flow.v1.OperatorService.GetFlowTopology:output_type -> flow.v1.GetFlowTopologyResponse
-	7,  // 26: flow.v1.OperatorService.CreateWorkitem:output_type -> flow.v1.CreateWorkitemResponse
-	9,  // 27: flow.v1.OperatorService.CreateChildWorkitem:output_type -> flow.v1.CreateChildWorkitemResponse
-	11, // 28: flow.v1.OperatorService.RouteChild:output_type -> flow.v1.RouteChildResponse
-	13, // 29: flow.v1.OperatorService.GetChildren:output_type -> flow.v1.GetChildrenResponse
-	16, // 30: flow.v1.OperatorService.ResumeWorkitem:output_type -> flow.v1.ResumeWorkitemResponse
-	23, // 31: flow.v1.OperatorService.ValidateChildAccess:output_type -> flow.v1.ValidateChildAccessResponse
-	24, // [24:32] is the sub-list for method output_type
-	16, // [16:24] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	26, // 14: flow.v1.ListSuspendedWorkitemsResponse.workitems:type_name -> flow.v1.SuspendedWorkitemInfo
+	19, // 15: flow.v1.GetFlowTopologyResponse.NodesEntry.value:type_name -> flow.v1.FlowNode
+	21, // 16: flow.v1.GetFlowTopologyResponse.ExitContractEntry.value:type_name -> flow.v1.StampRequirements
+	2,  // 17: flow.v1.OperatorService.SubmitResult:input_type -> flow.v1.SubmitResultRequest
+	17, // 18: flow.v1.OperatorService.GetFlowTopology:input_type -> flow.v1.GetFlowTopologyRequest
+	1,  // 19: flow.v1.OperatorService.CreateWorkitem:input_type -> flow.v1.CreateWorkitemRequest
+	8,  // 20: flow.v1.OperatorService.CreateChildWorkitem:input_type -> flow.v1.CreateChildWorkitemRequest
+	10, // 21: flow.v1.OperatorService.RouteChild:input_type -> flow.v1.RouteChildRequest
+	12, // 22: flow.v1.OperatorService.GetChildren:input_type -> flow.v1.GetChildrenRequest
+	15, // 23: flow.v1.OperatorService.ResumeWorkitem:input_type -> flow.v1.ResumeWorkitemRequest
+	24, // 24: flow.v1.OperatorService.ListSuspendedWorkitems:input_type -> flow.v1.ListSuspendedWorkitemsRequest
+	22, // 25: flow.v1.OperatorService.ValidateChildAccess:input_type -> flow.v1.ValidateChildAccessRequest
+	6,  // 26: flow.v1.OperatorService.SubmitResult:output_type -> flow.v1.SubmitResultResponse
+	18, // 27: flow.v1.OperatorService.GetFlowTopology:output_type -> flow.v1.GetFlowTopologyResponse
+	7,  // 28: flow.v1.OperatorService.CreateWorkitem:output_type -> flow.v1.CreateWorkitemResponse
+	9,  // 29: flow.v1.OperatorService.CreateChildWorkitem:output_type -> flow.v1.CreateChildWorkitemResponse
+	11, // 30: flow.v1.OperatorService.RouteChild:output_type -> flow.v1.RouteChildResponse
+	13, // 31: flow.v1.OperatorService.GetChildren:output_type -> flow.v1.GetChildrenResponse
+	16, // 32: flow.v1.OperatorService.ResumeWorkitem:output_type -> flow.v1.ResumeWorkitemResponse
+	25, // 33: flow.v1.OperatorService.ListSuspendedWorkitems:output_type -> flow.v1.ListSuspendedWorkitemsResponse
+	23, // 34: flow.v1.OperatorService.ValidateChildAccess:output_type -> flow.v1.ValidateChildAccessResponse
+	26, // [26:35] is the sub-list for method output_type
+	17, // [17:26] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_operator_proto_init() }
@@ -1475,7 +1633,7 @@ func file_flow_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_operator_proto_rawDesc), len(file_flow_v1_operator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   26,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

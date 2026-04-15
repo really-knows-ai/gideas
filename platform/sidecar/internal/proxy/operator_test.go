@@ -31,6 +31,11 @@ type captureOperatorServer struct {
 	resumeResp    *flowv1.ResumeWorkitemResponse
 	resumeErr     error
 	lastResumeReq *flowv1.ResumeWorkitemRequest
+
+	// ListSuspendedWorkitems RPC fields.
+	listSuspendedResp    *flowv1.ListSuspendedWorkitemsResponse
+	listSuspendedErr     error
+	lastListSuspendedReq *flowv1.ListSuspendedWorkitemsRequest
 }
 
 func (s *captureOperatorServer) GetFlowTopology(
@@ -88,6 +93,19 @@ func (s *captureOperatorServer) ResumeWorkitem(
 		return nil, s.resumeErr
 	}
 	return s.resumeResp, nil
+}
+
+func (s *captureOperatorServer) ListSuspendedWorkitems(
+	ctx context.Context, req *flowv1.ListSuspendedWorkitemsRequest,
+) (*flowv1.ListSuspendedWorkitemsResponse, error) {
+	s.lastListSuspendedReq = req
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		s.capturedMD = md
+	}
+	if s.listSuspendedErr != nil {
+		return nil, s.listSuspendedErr
+	}
+	return s.listSuspendedResp, nil
 }
 
 // fakeChildTracker records TrackChild calls for assertions.
@@ -308,6 +326,9 @@ func setupOperatorProxyWithTracker(t *testing.T) (*OperatorProxy, *captureOperat
 			},
 		},
 		resumeResp: &flowv1.ResumeWorkitemResponse{Accepted: true},
+		listSuspendedResp: &flowv1.ListSuspendedWorkitemsResponse{
+			Workitems: []*flowv1.SuspendedWorkitemInfo{},
+		},
 	}
 
 	conn := dialBufconn(t, func(srv *grpc.Server) {
@@ -579,4 +600,72 @@ func TestOperatorProxy_ResumeWorkitem_PropagatesMetadata(t *testing.T) {
 	assertCapturedMD("x-flow-namespace", "ns-A")
 	assertCapturedMD("x-flow-workitem-id", "wi-suspended")
 	assertCapturedMD("x-flow-node-id", "node-X")
+}
+
+// ---------------------------------------------------------------------------
+// ListSuspendedWorkitems proxy tests
+// ---------------------------------------------------------------------------
+
+func TestOperatorProxy_ListSuspendedWorkitems_ForwardsAndReturns(t *testing.T) {
+	proxy, capture, _ := setupOperatorProxyWithTracker(t)
+
+	// Pre-configure the backend to return some suspended workitems.
+	capture.listSuspendedResp = &flowv1.ListSuspendedWorkitemsResponse{
+		Workitems: []*flowv1.SuspendedWorkitemInfo{
+			{WorkitemId: "wi-held-1", ResumeCondition: `dispute_retired("pet-42")`},
+		},
+	}
+
+	md := metadata.Pairs("x-flow-namespace", "ns-test")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := proxy.ListSuspendedWorkitems(ctx, &flowv1.ListSuspendedWorkitemsRequest{
+		ConditionContains: "pet-42",
+	})
+	if err != nil {
+		t.Fatalf("ListSuspendedWorkitems: %v", err)
+	}
+	if len(resp.GetWorkitems()) != 1 {
+		t.Fatalf("expected 1 workitem, got %d", len(resp.GetWorkitems()))
+	}
+	if resp.GetWorkitems()[0].GetWorkitemId() != "wi-held-1" {
+		t.Fatalf("expected workitem_id=wi-held-1, got %q",
+			resp.GetWorkitems()[0].GetWorkitemId())
+	}
+
+	// Verify the request was forwarded to the backend.
+	if capture.lastListSuspendedReq == nil {
+		t.Fatal("ListSuspendedWorkitems was not forwarded to Operator backend")
+	}
+	if capture.lastListSuspendedReq.GetConditionContains() != "pet-42" {
+		t.Fatalf("expected condition_contains=pet-42, got %q",
+			capture.lastListSuspendedReq.GetConditionContains())
+	}
+}
+
+func TestOperatorProxy_ListSuspendedWorkitems_PropagatesMetadata(t *testing.T) {
+	proxy, capture, _ := setupOperatorProxyWithTracker(t)
+
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns-B",
+		"x-flow-node-id", "watcher-node",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.ListSuspendedWorkitems(ctx, &flowv1.ListSuspendedWorkitemsRequest{
+		ConditionContains: "pet-1",
+	})
+	if err != nil {
+		t.Fatalf("ListSuspendedWorkitems: %v", err)
+	}
+
+	assertCapturedMD := func(key, expected string) {
+		t.Helper()
+		vals := capture.capturedMD.Get(key)
+		if len(vals) != 1 || vals[0] != expected {
+			t.Fatalf("expected %s=%s, got %v", key, expected, vals)
+		}
+	}
+	assertCapturedMD("x-flow-namespace", "ns-B")
+	assertCapturedMD("x-flow-node-id", "watcher-node")
 }

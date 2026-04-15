@@ -929,6 +929,57 @@ func (s *OperatorServer) ResumeWorkitem(ctx context.Context, req *flowv1.ResumeW
 	return &flowv1.ResumeWorkitemResponse{Accepted: true}, nil
 }
 
+// ListSuspendedWorkitems returns workitems in the Suspended phase whose
+// ResumeCondition contains the given filter string. Used by watcher nodes
+// to discover workitems held on a specific condition.
+func (s *OperatorServer) ListSuspendedWorkitems(ctx context.Context, req *flowv1.ListSuspendedWorkitemsRequest) (*flowv1.ListSuspendedWorkitemsResponse, error) {
+	conditionFilter := req.GetConditionContains()
+	if conditionFilter == "" {
+		return nil, status.Error(codes.InvalidArgument, "condition_contains is required")
+	}
+
+	namespace := extractMetadataValue(ctx, metadataKeyNamespace)
+
+	slog.Info("ListSuspendedWorkitems received",
+		"condition_contains", conditionFilter,
+		"namespace", namespace,
+	)
+
+	// List all Workitems in the namespace.
+	var workitemList apiv1.WorkitemList
+	listOpts := []client.ListOption{
+		client.InNamespace(namespace),
+	}
+	if err := s.K8sClient.List(ctx, &workitemList, listOpts...); err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to list workitems: %v", err))
+	}
+
+	// Filter to Suspended phase with matching condition.
+	var results []*flowv1.SuspendedWorkitemInfo
+	for i := range workitemList.Items {
+		wi := &workitemList.Items[i]
+		if wi.Status.Phase != "Suspended" {
+			continue
+		}
+		if !strings.Contains(wi.Status.ResumeCondition, conditionFilter) {
+			continue
+		}
+		results = append(results, &flowv1.SuspendedWorkitemInfo{
+			WorkitemId:      wi.Name,
+			ResumeCondition: wi.Status.ResumeCondition,
+		})
+	}
+
+	slog.Info("ListSuspendedWorkitems completed",
+		"condition_contains", conditionFilter,
+		"count", len(results),
+	)
+
+	return &flowv1.ListSuspendedWorkitemsResponse{
+		Workitems: results,
+	}, nil
+}
+
 // generateSuffix returns a short unique suffix for Workitem names.
 // Uses the current nanosecond timestamp for uniqueness in the walking skeleton.
 // A production implementation would use crypto/rand or a UUID library.

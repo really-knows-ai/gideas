@@ -630,3 +630,421 @@ func TestApplicator_Create_AppliesToAndTierPassedToLibrarian(t *testing.T) {
 		t.Errorf("AppliesTo = %v, want [*.go *.ts]", law.GetAppliesTo())
 	}
 }
+
+// ===========================================================================
+// Slice 13.11.1 — Tier detection
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// T1-2 petition -> Complete (regression guard)
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T1Petition_Completes(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "pet-t1",
+			Context:    petitionContext{Trigger: "deadlock-resolution"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 1, Goal: "tier-1 law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertCompleted(t, spy)
+	assertNotRouted(t, spy)
+}
+
+func TestApplicator_T2Petition_Completes(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "pet-t2",
+			Context:    petitionContext{Trigger: "deadlock-resolution"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 2, Goal: "tier-2 law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertCompleted(t, spy)
+	assertNotRouted(t, spy)
+}
+
+// ---------------------------------------------------------------------------
+// T3 petition -> Complete (regression guard)
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T3Petition_Completes(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "pet-t3",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 3, Goal: "tier-3 local statute", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertCompleted(t, spy)
+	assertNotRouted(t, spy)
+}
+
+// ---------------------------------------------------------------------------
+// T4 petition -> does NOT Complete, routes to Embassy
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T4Petition_DoesNotComplete(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "pet-t4",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 4, Goal: "state statute", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertNotCompleted(t, spy)
+	assertRoutedTo(t, spy, "embassy")
+}
+
+// ---------------------------------------------------------------------------
+// T5 petition -> does NOT Complete, routes to Embassy
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T5Petition_DoesNotComplete(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "pet-t5",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 5, Goal: "federal statute", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertNotCompleted(t, spy)
+	assertRoutedTo(t, spy, "embassy")
+}
+
+// ---------------------------------------------------------------------------
+// Mixed tiers: T2 create + T4 retire -> T4-5 path wins (max tier)
+// ---------------------------------------------------------------------------
+
+func TestApplicator_MixedTiers_MaxTierWins(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "pet-mixed",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 2, Goal: "tier-2 law", AppliesTo: []string{"*.go"}},
+				{Action: "retire", Tier: 4, LawID: "old-state-law"},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertNotCompleted(t, spy)
+	assertRoutedTo(t, spy, "embassy")
+}
+
+// ===========================================================================
+// Slice 13.11.2 — Create dispute record on T4-5 path
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// T4-5 petition: creates dispute record with petition_id and cited_law_ids
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T4_CreatesDisputeRecord(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "dispute-pet-1",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "retire", Tier: 4, LawID: "law-to-retire"},
+				{Action: "create", Tier: 5, Goal: "new federal law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+	spy.WriteLawResponses = []*flowv1.WriteLawResponse{
+		{LawId: "new-federal-law-id", VersionHash: "v1"},
+	}
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	// Verify CreateDisputeRecord was called.
+	if len(spy.DisputeRecordCalls) != 1 {
+		t.Fatalf("expected 1 CreateDisputeRecord call, got %d", len(spy.DisputeRecordCalls))
+	}
+	call := spy.DisputeRecordCalls[0]
+	if call.PetitionID != "dispute-pet-1" {
+		t.Errorf("dispute record petition_id = %q, want %q", call.PetitionID, "dispute-pet-1")
+	}
+	// cited_law_ids should include the retire target and the newly created law.
+	wantIDs := map[string]bool{"law-to-retire": true, "new-federal-law-id": true}
+	gotIDs := make(map[string]bool, len(call.CitedLawIDs))
+	for _, id := range call.CitedLawIDs {
+		gotIDs[id] = true
+	}
+	for want := range wantIDs {
+		if !gotIDs[want] {
+			t.Errorf("cited_law_ids missing %q, got %v", want, call.CitedLawIDs)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// petition_id is read from petition.petition_id
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T4_PetitionIDFromPetition(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "my-unique-petition-id",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 4, Goal: "state law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	if len(spy.DisputeRecordCalls) != 1 {
+		t.Fatalf("expected 1 CreateDisputeRecord call, got %d", len(spy.DisputeRecordCalls))
+	}
+	if spy.DisputeRecordCalls[0].PetitionID != "my-unique-petition-id" {
+		t.Errorf("petition_id = %q, want %q", spy.DisputeRecordCalls[0].PetitionID, "my-unique-petition-id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cited_law_ids: extracted from changes (existing law_id fields + new create IDs)
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T4_CitedLawIDsExtracted(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "cite-test",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "retire", Tier: 5, LawID: "retired-law-a"},
+				{Action: "retire", Tier: 5, LawID: "retired-law-b"},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	if len(spy.DisputeRecordCalls) != 1 {
+		t.Fatalf("expected 1 CreateDisputeRecord call, got %d", len(spy.DisputeRecordCalls))
+	}
+	ids := spy.DisputeRecordCalls[0].CitedLawIDs
+	wantIDs := map[string]bool{"retired-law-a": true, "retired-law-b": true}
+	gotIDs := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		gotIDs[id] = true
+	}
+	for want := range wantIDs {
+		if !gotIDs[want] {
+			t.Errorf("cited_law_ids missing %q, got %v", want, ids)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CreateDisputeRecord fails with AlreadyExists -> log warning, continue
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T4_CreateDisputeAlreadyExists_Continues(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "already-exists-pet",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 4, Goal: "state law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+	spy.CreateDisputeRecordErr = status.Errorf(codes.AlreadyExists, "dispute already exists")
+
+	client := setupApplicatorTest(t, spy)
+
+	// Should NOT return error.
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator should not fail on AlreadyExists: %v", err)
+	}
+
+	assertNotCompleted(t, spy)
+	assertRoutedTo(t, spy, "embassy")
+}
+
+// ---------------------------------------------------------------------------
+// CreateDisputeRecord fails with other error -> return error
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T4_CreateDisputeOtherError_ReturnsError(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "error-pet",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 4, Goal: "state law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+	spy.CreateDisputeRecordErr = status.Errorf(codes.Internal, "librarian crashed")
+
+	client := setupApplicatorTest(t, spy)
+
+	err := handleLawApplicator(context.Background(), client)
+	if err == nil {
+		t.Fatal("expected error when CreateDisputeRecord fails with Internal")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T1-2 petition: no dispute record created (regression)
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T2_NoDisputeRecord(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "low-tier-pet",
+			Context:    petitionContext{Trigger: "deadlock-resolution"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 2, Goal: "tier-2 law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertCompleted(t, spy)
+	if len(spy.DisputeRecordCalls) != 0 {
+		t.Errorf("expected no CreateDisputeRecord calls for T2, got %d", len(spy.DisputeRecordCalls))
+	}
+}
+
+// ===========================================================================
+// Slice 13.11.3 — Route to Embassy on T4-5 path
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// T4-5 petition: after dispute record, routes to "embassy"
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T4_RoutesToEmbassy(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "route-test-pet",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 4, Goal: "state law", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertNotCompleted(t, spy)
+	assertRoutedTo(t, spy, "embassy")
+	assertStampStored(t, spy) // stamp is still stored before routing
+}
+
+// ---------------------------------------------------------------------------
+// T3 petition: still calls Complete, not Route (regression)
+// ---------------------------------------------------------------------------
+
+func TestApplicator_T3_CompletesNotRoutes(t *testing.T) {
+	spy := newApplicatorSpy()
+	seedPetition(t, spy, petition{
+		Petition: petitionBody{
+			PetitionID: "t3-complete-pet",
+			Context:    petitionContext{Trigger: "friction-hearing"},
+			Changes: []petitionChange{
+				{Action: "create", Tier: 3, Goal: "local statute", AppliesTo: []string{"*.go"}},
+			},
+		},
+	})
+
+	client := setupApplicatorTest(t, spy)
+
+	if err := handleLawApplicator(context.Background(), client); err != nil {
+		t.Fatalf("handleLawApplicator: %v", err)
+	}
+
+	assertCompleted(t, spy)
+	assertNotRouted(t, spy)
+	if len(spy.DisputeRecordCalls) != 0 {
+		t.Errorf("expected no CreateDisputeRecord calls for T3, got %d", len(spy.DisputeRecordCalls))
+	}
+}
