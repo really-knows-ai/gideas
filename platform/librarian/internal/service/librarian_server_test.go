@@ -31,8 +31,12 @@ func newTestServer(t *testing.T) *LibrarianServer {
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	return NewLibrarianServer(store, nil, testIDGen, 0.85)
+	srv := NewLibrarianServer(store, nil, testIDGen, 0.85)
+	t.Cleanup(func() {
+		srv.Wait()
+		_ = store.Close()
+	})
+	return srv
 }
 
 // stubEmbedder returns a deterministic embedding for any input text.
@@ -58,9 +62,13 @@ func newTestServerWithEmbedder(t *testing.T) *LibrarianServer {
 	if err != nil {
 		t.Fatalf("open in-memory store: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
 	emb := &stubEmbedder{dims: testEmbeddingDims}
-	return NewLibrarianServer(store, emb, testIDGen, 0.85)
+	srv := NewLibrarianServer(store, emb, testIDGen, 0.85)
+	t.Cleanup(func() {
+		srv.Wait()
+		_ = store.Close()
+	})
+	return srv
 }
 
 // ---------------------------------------------------------------------------

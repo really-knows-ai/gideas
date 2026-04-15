@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/gideas/flow/librarian/internal/embed"
 	"github.com/gideas/flow/librarian/internal/store/sqlite"
@@ -48,6 +49,7 @@ type LibrarianServer struct {
 	newID               IDGenerator
 	similarityThreshold float64
 	auditor             AuditPublisher // nil-safe: audit publishing degrades gracefully
+	bgWg                sync.WaitGroup // tracks in-flight background goroutines
 }
 
 // NewLibrarianServer returns a LibrarianServer backed by the given store.
@@ -72,6 +74,11 @@ func NewLibrarianServer(
 	}
 	return srv
 }
+
+// Wait blocks until all in-flight background goroutines (e.g. conflict
+// detection) have completed. Callers should invoke Wait before closing the
+// underlying store to avoid accessing a closed database.
+func (s *LibrarianServer) Wait() { s.bgWg.Wait() }
 
 // LibrarianOption configures a LibrarianServer.
 type LibrarianOption func(*LibrarianServer)
@@ -265,7 +272,9 @@ func (s *LibrarianServer) RecordFinding(
 	// Compute embedding inline and store it. Run conflict detection.
 	if s.embedder != nil {
 		s.embedLawSync(ctx, id, versionHash, law)
-		go s.runConflictDetection(id, law)
+		s.bgWg.Go(func() {
+			s.runConflictDetection(id, law)
+		})
 	}
 
 	return &flowv1.RecordFindingResponse{LawId: id}, nil
