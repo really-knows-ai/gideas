@@ -12,8 +12,8 @@ the linked phase files plus `ARCHITECTURE.md` as the detailed source of truth.
 - Phase 10 specification rewrite is complete and reviewed.
 - Phase 11 implementation is complete and reviewed against the corrected built-in import type model.
 - Phase 12 Federation foundations are complete (proto, service schema, publication lifecycle, dispute records, SDK client, petition-outcome helpers, architectural guard tests).
-- Phase 13 Embassy node (13.1-13.5) is complete. Federation service slices 13.6-13.7 are being rewritten (SQLite -> Kubernetes CRDs).
-- Next active work: `PHASE_13.md` slice 13.10.1 (Petition-outcome-watcher scaffold).
+- Phase 13 is complete. Embassy node (13.1-13.5), Federation service CRD rewrite (13.6-13.7), Librarian semantic search (13.7B), publication admission (13.8), law distribution (13.9), petition-outcome-watcher (13.10), law-applicator T4-5 wiring (13.11), operator Federation provisioning (13.12), sidecar Federation proxy (13.13), and cross-cutting validation (13.14) are all done.
+- Next active work: `PHASE_14.md` (Judiciary manifests: FoundryNode CRDs, Deployments, ConfigMaps).
 
 ### Phase 13 Federation Redesign
 

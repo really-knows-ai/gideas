@@ -662,55 +662,55 @@ to Federation petition-outcome events and handles acceptance/rejection.
 
 #### Slice 13.10.1 -- Petition-outcome-watcher scaffold
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Create `nodes/petition-watcher/main.go`:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Create `nodes/petition-watcher/main.go`:
   - `main()` calls `flow.StartEntry(watchOutcomes, handleOutcome)`
   - Entry function `watchOutcomes(ctx, entry)`: connects to Federation via `flow.NewFederationClient()`, calls `SubscribePetitionOutcomes`, processes events in a reconnect loop (following friction-watcher pattern)
   - Handler function `handleOutcome(ctx, wctx)`: handles Workitems created by the entry function (e.g. new Clerk cycle on rejection)
-- [ ] Create `nodes/petition-watcher/testutil_test.go`:
+- [x] Create `nodes/petition-watcher/testutil_test.go`:
   - Spy servers for operator, sidecar, librarian, federation
-- [ ] Add tests in `nodes/petition-watcher/main_test.go`:
+- [x] Add tests in `nodes/petition-watcher/main_test.go`:
   - Watcher starts and connects to Federation
   - Watcher reconnects on stream error (reconnect loop)
-- [ ] Validate red
-- [ ] Implement scaffold
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement scaffold
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.10.2 -- Petition-outcome-watcher: acceptance path
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - On `ACCEPTED` outcome event: watcher calls `Librarian.RetireDisputeRecord(petition_id)`
   - On `ACCEPTED` outcome event: watcher calls `Operator.ResumeWorkitem` for each workitem held on that `petition_id`
   - If `RetireDisputeRecord` returns `NotFound` (already retired): log warning, continue
   - If `ResumeWorkitem` fails: log warning, continue (best-effort)
-- [ ] Validate red
-- [ ] Implement acceptance handling in entry function
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement acceptance handling in entry function
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.10.3 -- Petition-outcome-watcher: rejection path
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - On `REJECTED` outcome event: watcher calls `Librarian.RetireDisputeRecord(petition_id)`
   - On `REJECTED` outcome event: watcher creates a new Clerk cycle Workitem via `entry.CreateWorkitem` with rejection context metadata (`petition_id`, rejection reason, conflicting law ids)
   - On `REJECTED` outcome event: watcher calls `Operator.ResumeWorkitem` for held workitems
   - Created Workitem metadata includes `rejection_report` as serialised JSON for clerk-forge to interpret
-- [ ] Validate red
-- [ ] Implement rejection handling in entry function
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement rejection handling in entry function
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.10.4 -- Petition-outcome-watcher: held workitem discovery
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - Watcher discovers suspended workitems keyed on `petition_id` (the pending-hold condition from Sort)
   - Discovery uses an operator query or convention-based lookup
   - Multiple held workitems for the same `petition_id` are all resumed
   - Zero held workitems -> no error, just log
-- [ ] Validate red
-- [ ] Implement held workitem discovery and resume
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement held workitem discovery and resume
+- [x] Validate green: `go test ./nodes/...`
 
 ---
 
@@ -721,40 +721,40 @@ on the T4-5 petition path, instead of just calling `Complete()`.
 
 #### Slice 13.11.1 -- Law-applicator: detect T4-5 petition
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests in `nodes/law-applicator/main_test.go`:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests in `nodes/law-applicator/main_test.go`:
   - Petition with all changes at Tier 1-2 -> `Complete()` as before (regression guard)
   - Petition with any change at Tier 3 -> `Complete()` as before
   - Petition with any change at Tier 4 or Tier 5 -> does NOT call `Complete()` (new behaviour)
   - Tier detection reads from `petition.changes[].tier` or metadata
-- [ ] Validate red
-- [ ] Implement tier detection logic in law-applicator
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement tier detection logic in law-applicator
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.11.2 -- Law-applicator: create dispute record on T4-5 path
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - T4-5 petition: law-applicator calls `Librarian.CreateDisputeRecord` with `petition_id` and `cited_law_ids`
   - `cited_law_ids` are extracted from the petition changes (law IDs being created/retired/demoted)
   - `petition_id` is read from `petition.petition_id`
   - If `CreateDisputeRecord` fails with `AlreadyExists` -> log warning, continue (idempotent)
   - If `CreateDisputeRecord` fails with other error -> return error
-- [ ] Validate red
-- [ ] Implement dispute record creation in law-applicator's T4-5 path
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement dispute record creation in law-applicator's T4-5 path
+- [x] Validate green: `go test ./nodes/...`
 
 #### Slice 13.11.3 -- Law-applicator: route to Embassy on T4-5 path
 
-- [ ] Validate green: `go test ./nodes/...`
-- [ ] Add tests:
+- [x] Validate green: `go test ./nodes/...`
+- [x] Add tests:
   - T4-5 petition: after dispute record creation, law-applicator calls `client.RouteToOutput(ctx, "embassy")`
   - Workitem metadata includes `import_type: "law-petition"`, `petition_id`, target scope
   - T1-2 petition: still calls `Complete()` (regression guard)
   - T3 petition: calls `Complete()` (T3 laws are local, no cross-flow export)
-- [ ] Validate red
-- [ ] Implement Embassy routing in law-applicator (add "embassy" output, route on T4-5)
-- [ ] Validate green: `go test ./nodes/...`
+- [x] Validate red
+- [x] Implement Embassy routing in law-applicator (add "embassy" output, route on T4-5)
+- [x] Validate green: `go test ./nodes/...`
 
 ---
 
@@ -767,29 +767,29 @@ service.
 
 #### Slice 13.12.1 -- Operator: reconcileFederation Deployment and Service
 
-- [ ] Validate green: `make -C platform/operator test`
-- [ ] Add tests in `platform/operator/internal/controller/foundryflow_infra_test.go`:
+- [x] Validate green: `make -C platform/operator test`
+- [x] Add tests in `platform/operator/internal/controller/foundryflow_infra_test.go`:
   - When `spec.crossFlow.federation` is set: Federation Deployment is created with correct image, port (50061), labels
   - When `spec.crossFlow.federation` is set: Federation Service is created (`flow-federation`, port 50061)
   - When `spec.crossFlow.federation` is nil: no Federation Deployment or Service created
   - Federation env vars include: `FEDERATION_PORT`, `FEDERATION_NAMESPACE`
   - No `/data` volume or `FEDERATION_DB_PATH` (no SQLite)
-- [ ] Validate red
-- [ ] Implement `reconcileFederation`, `reconcileFederationDeployment`, `federationEnvVars` in `foundryflow_infra.go`:
+- [x] Validate red
+- [x] Implement `reconcileFederation`, `reconcileFederationDeployment`, `federationEnvVars` in `foundryflow_infra.go`:
   - Constants: `federationImage = "ghcr.io/gideas/flow/federation:latest"`, `federationPort = 50061`, `federationSvcName = "flow-federation"`
   - Add `r.reconcileFederation(ctx, flow)` to `reconcileInfrastructure` (conditional on `spec.crossFlow.federation != nil`)
-- [ ] Validate green: `make -C platform/operator test`
+- [x] Validate green: `make -C platform/operator test`
 
 #### Slice 13.12.2 -- Operator: project Federation address to Embassy and nodes
 
-- [ ] Validate green: `make -C platform/operator test`
-- [ ] Add tests:
+- [x] Validate green: `make -C platform/operator test`
+- [x] Add tests:
   - Embassy Deployment receives `FEDERATION_ADDRESS` env var pointing to `flow-federation:50061` when federation is configured
   - petition-outcome-watcher node Deployment receives `FEDERATION_ADDRESS` env var
   - When federation is not configured, `FEDERATION_ADDRESS` is not projected
-- [ ] Validate red
-- [ ] Update Embassy env var projection to include `FEDERATION_ADDRESS`
-- [ ] Validate green: `make -C platform/operator test`
+- [x] Validate red
+- [x] Update Embassy env var projection to include `FEDERATION_ADDRESS`
+- [x] Validate green: `make -C platform/operator test`
 
 ---
 
@@ -801,21 +801,21 @@ for nodes like petition-outcome-watcher that use `FederationClient`.
 
 #### Slice 13.13.1 -- Sidecar: Federation proxy
 
-- [ ] Validate green: `go test ./platform/sidecar/...`
-- [ ] Add tests in `platform/sidecar/internal/proxy/federation_test.go`:
+- [x] Validate green: `go test ./platform/sidecar/...`
+- [x] Add tests in `platform/sidecar/internal/proxy/federation_test.go`:
   - `NewFederationProxy` connects to the configured address
   - All 8 RPCs are forwarded to the Federation backend
   - Metadata is propagated via `propagateMetadata`
-- [ ] Validate red
-- [ ] Create `platform/sidecar/internal/proxy/federation.go`:
+- [x] Validate red
+- [x] Create `platform/sidecar/internal/proxy/federation.go`:
   - `FederationProxy` struct embedding `flowv1.UnimplementedFederationServiceServer`
   - `NewFederationProxy(addr string)` constructor
   - Forward all RPCs (including streaming RPCs for `SubscribeLawUpdates` and `SubscribePetitionOutcomes`)
   - `Close()` method
-- [ ] Wire into `platform/sidecar/cmd/main.go`:
+- [x] Wire into `platform/sidecar/cmd/main.go`:
   - Add `envFederationAddress = "FEDERATION_ADDRESS"`
   - Conditional registration: if env var set, create proxy and register; else skip
-- [ ] Validate green: `go test ./platform/sidecar/...`
+- [x] Validate green: `go test ./platform/sidecar/...`
 
 ---
 
@@ -826,32 +826,32 @@ whole.
 
 #### Slice 13.14.1 -- Full test suite
 
-- [ ] Run `go test ./...` from repo root (all modules via go.work, including `platform/federation`)
-- [ ] Run `make -C platform/operator test`
-- [ ] All tests pass
+- [x] Run `go test ./...` from repo root (all modules via go.work, including `platform/federation`)
+- [x] Run `make -C platform/operator test`
+- [x] All tests pass
 
 #### Slice 13.14.2 -- Lint and tidy
 
-- [ ] Run `make check-fix`
-- [ ] All lint issues resolved
-- [ ] Run `make -C platform/operator lint-fix`
-- [ ] All operator lint issues resolved
+- [x] Run `make check-fix`
+- [x] All lint issues resolved
+- [x] Run `make -C platform/operator lint-fix`
+- [x] All operator lint issues resolved
 
 #### Slice 13.14.3 -- Proto generation idempotency
 
-- [ ] Run `make proto`
-- [ ] `git diff` shows no changes (generation is idempotent)
+- [x] Run `make proto`
+- [x] `git diff` shows no changes (generation is idempotent)
 
 #### Slice 13.14.4 -- Architectural guard tests
 
-- [ ] Add `gen/flow/v1/embassy_implementation_test.go` (or extend existing test):
+- [x] Add `gen/flow/v1/embassy_implementation_test.go` (or extend existing test):
   - Assert `embassy.proto` RPC surface has not regressed (PreflightManifest, StreamPackage, ExportPackage still present)
-- [ ] Add `gen/flow/v1/librarian_search_test.go` (or extend existing test):
+- [x] Add `gen/flow/v1/librarian_search_test.go` (or extend existing test):
   - Assert `librarian.proto` includes `SearchSimilarLaws` RPC
-- [ ] Add integration-style test verifying:
+- [x] Add integration-style test verifying:
   - Embassy node implements all 3 `EmbassyServiceHandler` methods (not stubs)
   - Federation service implements all 8 `FederationServiceServer` methods (not stubs)
-- [ ] Validate green
+- [x] Validate green
 
 ---
 
