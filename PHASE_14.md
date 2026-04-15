@@ -1,5 +1,7 @@
 # Phase 14 - Judiciary Manifests (CRDs, Deployments, ConfigMaps)
 
+**STATUS: COMPLETE** — All slices implemented, tests pass (71 tests including 8 cross-cutting sub-tests), `make check-fix` clean.
+
 Write the FoundryNode CRDs, Deployment manifests, and ConfigMaps for all
 judiciary nodes. Embassy is operator-provisioned and excluded from hand-authored
 manifests. The Federation service is a platform service, also outside this
@@ -93,14 +95,14 @@ No config change needed; the output name is hardcoded as `"arbiter"`.
 
 Steps:
 
-- [ ] Write test: validate Sort FoundryNode has `arbiter` output targeting `facilitator`
-- [ ] Write test: validate Sort sidecar has `LIBRARIAN_ADDRESS` env var
-- [ ] Write test: validate Sort capabilities include `SUSPEND:workitem`
-- [ ] Update Sort FoundryNode in `flow.yaml`
-- [ ] Update Sort Deployment in `deployments.yaml` (add `LIBRARIAN_ADDRESS` to sidecar)
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add judiciary outputs and suspend capability to Sort`
+- [x] Write test: validate Sort FoundryNode has `arbiter` output targeting `facilitator`
+- [x] Write test: validate Sort sidecar has `LIBRARIAN_ADDRESS` env var
+- [x] Write test: validate Sort capabilities include `SUSPEND:workitem`
+- [x] Update Sort FoundryNode in `flow.yaml`
+- [x] Update Sort Deployment in `deployments.yaml` (add `LIBRARIAN_ADDRESS` to sidecar)
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add judiciary outputs and suspend capability to Sort`
 
 ### Slice 14.1.2 — Facilitator CRD + Deployment + ConfigMap
 
@@ -149,15 +151,15 @@ inputArtefacts: ["petition"]
 
 Steps:
 
-- [ ] Write test: validate Facilitator FoundryNode exists with correct outputs and capabilities
-- [ ] Write test: validate Facilitator Deployment has LIBRARIAN_ADDRESS and FRICTION_LEDGER_ADDRESS
-- [ ] Write test: validate facilitator-config ConfigMap has arbiterNode field
-- [ ] Add Facilitator FoundryNode to `flow.yaml`
-- [ ] Add facilitator-config ConfigMap to `configmaps.yaml`
-- [ ] Add Facilitator Deployment to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Facilitator node CRD, deployment, and config`
+- [x] Write test: validate Facilitator FoundryNode exists with correct outputs and capabilities
+- [x] Write test: validate Facilitator Deployment has LIBRARIAN_ADDRESS and FRICTION_LEDGER_ADDRESS
+- [x] Write test: validate facilitator-config ConfigMap has arbiterNode field
+- [x] Add Facilitator FoundryNode to `flow.yaml`
+- [x] Add facilitator-config ConfigMap to `configmaps.yaml`
+- [x] Add Facilitator Deployment to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Facilitator node CRD, deployment, and config`
 
 ### Slice 14.1.3 — Arbiter CRD + Deployment + ConfigMap
 
@@ -207,16 +209,16 @@ hungOutput: "hung"
 
 Steps:
 
-- [ ] Write test: validate Arbiter FoundryNode exists with `hung` output targeting `arbiter-hitl-resolve`
-- [ ] Write test: validate Arbiter capabilities include SUSPEND and child creation
-- [ ] Write test: validate arbiter-config ConfigMap has all required fields
-- [ ] Write test: validate Arbiter Deployment has ConfigMap mount
-- [ ] Add Arbiter FoundryNode to `flow.yaml`
-- [ ] Add arbiter-config ConfigMap to `configmaps.yaml`
-- [ ] Add Arbiter Deployment to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Arbiter node CRD, deployment, and config`
+- [x] Write test: validate Arbiter FoundryNode exists with `hung` output targeting `arbiter-hitl-resolve`
+- [x] Write test: validate Arbiter capabilities include SUSPEND and child creation
+- [x] Write test: validate arbiter-config ConfigMap has all required fields
+- [x] Write test: validate Arbiter Deployment has ConfigMap mount
+- [x] Add Arbiter FoundryNode to `flow.yaml`
+- [x] Add arbiter-config ConfigMap to `configmaps.yaml`
+- [x] Add Arbiter Deployment to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Arbiter node CRD, deployment, and config`
 
 ### Slice 14.1.4 — Juror CRD + Deployment + ConfigMap
 
@@ -255,15 +257,15 @@ personality: "textualist"
 
 Steps:
 
-- [ ] Write test: validate Juror FoundryNode has empty outputs and correct capabilities
-- [ ] Write test: validate Juror Deployment has OLLAMA_BASE_URL in node container
-- [ ] Write test: validate juror-config ConfigMap has personality field
-- [ ] Add Juror FoundryNode to `flow.yaml`
-- [ ] Add juror-config ConfigMap to `configmaps.yaml`
-- [ ] Add Juror Deployment to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Juror node CRD, deployment, and config`
+- [x] Write test: validate Juror FoundryNode has empty outputs and correct capabilities
+- [x] Write test: validate Juror Deployment has OLLAMA_BASE_URL in node container
+- [x] Write test: validate juror-config ConfigMap has personality field
+- [x] Add Juror FoundryNode to `flow.yaml`
+- [x] Add juror-config ConfigMap to `configmaps.yaml`
+- [x] Add Juror Deployment to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Juror node CRD, deployment, and config`
 
 ### Slice 14.1.5 — Tribunal CRD + Deployment + ConfigMap
 
@@ -312,16 +314,16 @@ hungOutput: "hung"
 
 Steps:
 
-- [ ] Write test: validate Tribunal FoundryNode has `hung` output targeting `tribunal-hitl-resolve`
-- [ ] Write test: validate Tribunal capabilities include READ:law and CREATE:workitem/child but NOT SUSPEND
-- [ ] Write test: validate Tribunal Deployment sidecar has LIBRARIAN_ADDRESS and FRICTION_LEDGER_ADDRESS
-- [ ] Write test: validate tribunal-config ConfigMap
-- [ ] Add Tribunal FoundryNode to `flow.yaml`
-- [ ] Add tribunal-config ConfigMap to `configmaps.yaml`
-- [ ] Add Tribunal Deployment to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Tribunal node CRD, deployment, and config`
+- [x] Write test: validate Tribunal FoundryNode has `hung` output targeting `tribunal-hitl-resolve`
+- [x] Write test: validate Tribunal capabilities include READ:law and CREATE:workitem/child but NOT SUSPEND
+- [x] Write test: validate Tribunal Deployment sidecar has LIBRARIAN_ADDRESS and FRICTION_LEDGER_ADDRESS
+- [x] Write test: validate tribunal-config ConfigMap
+- [x] Add Tribunal FoundryNode to `flow.yaml`
+- [x] Add tribunal-config ConfigMap to `configmaps.yaml`
+- [x] Add Tribunal Deployment to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Tribunal node CRD, deployment, and config`
 
 ### Slice 14.1.6 — Watcher Nodes (friction-watcher + ttl-watcher) CRDs + Deployments + ConfigMaps
 
@@ -389,17 +391,17 @@ tier2: "720h"
 
 Steps:
 
-- [ ] Write test: validate friction-watcher FoundryNode has entry binding and default output to tribunal
-- [ ] Write test: validate ttl-watcher FoundryNode has entry binding and default output to tribunal
-- [ ] Write test: validate friction-watcher Deployment sidecar has EVENT_BUS_ADDRESS
-- [ ] Write test: validate ttl-watcher Deployment sidecar has LIBRARIAN_ADDRESS
-- [ ] Write test: validate ttl-watcher-config ConfigMap has scanPeriod and tier fields
-- [ ] Add friction-watcher and ttl-watcher FoundryNodes to `flow.yaml`
-- [ ] Add ttl-watcher-config ConfigMap to `configmaps.yaml`
-- [ ] Add friction-watcher and ttl-watcher Deployments to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add friction-watcher and ttl-watcher entry nodes`
+- [x] Write test: validate friction-watcher FoundryNode has entry binding and default output to tribunal
+- [x] Write test: validate ttl-watcher FoundryNode has entry binding and default output to tribunal
+- [x] Write test: validate friction-watcher Deployment sidecar has EVENT_BUS_ADDRESS
+- [x] Write test: validate ttl-watcher Deployment sidecar has LIBRARIAN_ADDRESS
+- [x] Write test: validate ttl-watcher-config ConfigMap has scanPeriod and tier fields
+- [x] Add friction-watcher and ttl-watcher FoundryNodes to `flow.yaml`
+- [x] Add ttl-watcher-config ConfigMap to `configmaps.yaml`
+- [x] Add friction-watcher and ttl-watcher Deployments to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add friction-watcher and ttl-watcher entry nodes`
 
 ### Slice 14.1.7 — HITL Node CRDs (hitl-appraise, arbiter-hitl-resolve, tribunal-hitl-resolve) + Deployments
 
@@ -495,16 +497,16 @@ choiceLabels:
 
 Steps:
 
-- [ ] Write test: validate hitl-appraise FoundryNode has `approved` output, exit binding, WRITE:feedback
-- [ ] Write test: validate arbiter-hitl-resolve has `resolution` output targeting `arbiter`
-- [ ] Write test: validate tribunal-hitl-resolve has `resolution` output targeting `tribunal`
-- [ ] Write test: validate all three HITL Deployments use hitl:latest image
-- [ ] Add three HITL FoundryNodes to `flow.yaml`
-- [ ] Add HITL ConfigMaps to `configmaps.yaml` (choice labels)
-- [ ] Add three HITL Deployments to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add HITL node CRDs and deployments`
+- [x] Write test: validate hitl-appraise FoundryNode has `approved` output, exit binding, WRITE:feedback
+- [x] Write test: validate arbiter-hitl-resolve has `resolution` output targeting `arbiter`
+- [x] Write test: validate tribunal-hitl-resolve has `resolution` output targeting `tribunal`
+- [x] Write test: validate all three HITL Deployments use hitl:latest image
+- [x] Add three HITL FoundryNodes to `flow.yaml`
+- [x] Add HITL ConfigMaps to `configmaps.yaml` (choice labels)
+- [x] Add three HITL Deployments to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add HITL node CRDs and deployments`
 
 ### Slice 14.1.8 — Clerk Cycle FoundryNode CRDs (clerk-forge, clerk-sort, clerk-appraise, clerk-refine, clerk-facilitator)
 
@@ -646,15 +648,15 @@ spec:
 
 Steps:
 
-- [ ] Write test: validate clerk-forge routes to codification and reads verdict-context
-- [ ] Write test: validate clerk-sort has appraise/refine/arbiter/done outputs with correct targets
-- [ ] Write test: validate clerk-appraise routes to clerk-sort and has CREATE:workitem/child
-- [ ] Write test: validate clerk-refine routes to codification (not clerk-sort)
-- [ ] Write test: validate clerk-facilitator routes resolved to clerk-sort
-- [ ] Add all five Clerk cycle FoundryNodes to `flow.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Clerk cycle FoundryNode CRDs`
+- [x] Write test: validate clerk-forge routes to codification and reads verdict-context
+- [x] Write test: validate clerk-sort has appraise/refine/arbiter/done outputs with correct targets
+- [x] Write test: validate clerk-appraise routes to clerk-sort and has CREATE:workitem/child
+- [x] Write test: validate clerk-refine routes to codification (not clerk-sort)
+- [x] Write test: validate clerk-facilitator routes resolved to clerk-sort
+- [x] Add all five Clerk cycle FoundryNodes to `flow.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Clerk cycle FoundryNode CRDs`
 
 ### Slice 14.1.9 — Clerk Cycle Deployments + ConfigMaps
 
@@ -755,18 +757,18 @@ inputArtefacts: ["verdict-context"]
 
 Steps:
 
-- [ ] Write test: validate clerk-forge Deployment uses forge:latest and has OLLAMA_BASE_URL
-- [ ] Write test: validate clerk-forge-config has systemPrompt and queryTemplate overrides
-- [ ] Write test: validate clerk-sort Deployment has LIBRARIAN_ADDRESS
-- [ ] Write test: validate clerk-sort-config nodeOrder has no quench
-- [ ] Write test: validate clerk-appraise Deployment has all required sidecar env vars
-- [ ] Write test: validate clerk-refine routes to codification via Deployment config
-- [ ] Write test: validate clerk-facilitator has LIBRARIAN_ADDRESS and FRICTION_LEDGER_ADDRESS
-- [ ] Add all five Clerk Deployment manifests to `deployments.yaml`
-- [ ] Add all five Clerk ConfigMaps to `configmaps.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Clerk cycle deployments and ConfigMaps`
+- [x] Write test: validate clerk-forge Deployment uses forge:latest and has OLLAMA_BASE_URL
+- [x] Write test: validate clerk-forge-config has systemPrompt and queryTemplate overrides
+- [x] Write test: validate clerk-sort Deployment has LIBRARIAN_ADDRESS
+- [x] Write test: validate clerk-sort-config nodeOrder has no quench
+- [x] Write test: validate clerk-appraise Deployment has all required sidecar env vars
+- [x] Write test: validate clerk-refine routes to codification via Deployment config
+- [x] Write test: validate clerk-facilitator has LIBRARIAN_ADDRESS and FRICTION_LEDGER_ADDRESS
+- [x] Add all five Clerk Deployment manifests to `deployments.yaml`
+- [x] Add all five Clerk ConfigMaps to `configmaps.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Clerk cycle deployments and ConfigMaps`
 
 ### Slice 14.1.10 — Codification + codify-smt CRDs + Deployments + ConfigMaps
 
@@ -834,17 +836,17 @@ outputFormat: "application/smt-lib"
 
 Steps:
 
-- [ ] Write test: validate codification FoundryNode routes to clerk-sort and has CREATE:workitem/child
-- [ ] Write test: validate codify-smt is a child node (empty outputs)
-- [ ] Write test: validate codification Deployment has ConfigMap mount
-- [ ] Write test: validate codify-smt Deployment has OLLAMA_BASE_URL
-- [ ] Write test: validate codification-config has codificationNodes field
-- [ ] Add codification and codify-smt FoundryNodes to `flow.yaml`
-- [ ] Add codification-config and codify-smt-config to `configmaps.yaml`
-- [ ] Add codification and codify-smt Deployments to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Codification and codify-smt nodes`
+- [x] Write test: validate codification FoundryNode routes to clerk-sort and has CREATE:workitem/child
+- [x] Write test: validate codify-smt is a child node (empty outputs)
+- [x] Write test: validate codification Deployment has ConfigMap mount
+- [x] Write test: validate codify-smt Deployment has OLLAMA_BASE_URL
+- [x] Write test: validate codification-config has codificationNodes field
+- [x] Add codification and codify-smt FoundryNodes to `flow.yaml`
+- [x] Add codification-config and codify-smt-config to `configmaps.yaml`
+- [x] Add codification and codify-smt Deployments to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Codification and codify-smt nodes`
 
 ### Slice 14.1.11 — Rule Router CRDs (clerk-done-router + hitl-gate) + Deployments + ConfigMaps
 
@@ -958,17 +960,17 @@ default: "law-applicator"
 
 Steps:
 
-- [ ] Write test: validate clerk-done-router has two outputs (law-applicator, hitl-appraise)
-- [ ] Write test: validate hitl-gate has law-applicator output
-- [ ] Write test: validate clerk-done-router-config CEL rules reference correct tier metadata
-- [ ] Write test: validate hitl-gate-config has rules
-- [ ] Write test: validate both Deployments use rule-router:latest
-- [ ] Add clerk-done-router and hitl-gate FoundryNodes to `flow.yaml`
-- [ ] Add clerk-done-router-config and hitl-gate-config to `configmaps.yaml`
-- [ ] Add clerk-done-router and hitl-gate Deployments to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add Rule Router CRDs for Clerk exit routing`
+- [x] Write test: validate clerk-done-router has two outputs (law-applicator, hitl-appraise)
+- [x] Write test: validate hitl-gate has law-applicator output
+- [x] Write test: validate clerk-done-router-config CEL rules reference correct tier metadata
+- [x] Write test: validate hitl-gate-config has rules
+- [x] Write test: validate both Deployments use rule-router:latest
+- [x] Add clerk-done-router and hitl-gate FoundryNodes to `flow.yaml`
+- [x] Add clerk-done-router-config and hitl-gate-config to `configmaps.yaml`
+- [x] Add clerk-done-router and hitl-gate Deployments to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add Rule Router CRDs for Clerk exit routing`
 
 ### Slice 14.1.12 — Law-applicator CRD + Deployment
 
@@ -1003,14 +1005,14 @@ CreateDisputeRecord). No ConfigMap needed.
 
 Steps:
 
-- [ ] Write test: validate law-applicator FoundryNode has embassy output and WRITE:law capability
-- [ ] Write test: validate law-applicator Deployment sidecar has LIBRARIAN_ADDRESS
-- [ ] Write test: validate law-applicator Deployment has no ConfigMap mount
-- [ ] Add law-applicator FoundryNode to `flow.yaml`
-- [ ] Add law-applicator Deployment to `deployments.yaml`
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add law-applicator node CRD and deployment`
+- [x] Write test: validate law-applicator FoundryNode has embassy output and WRITE:law capability
+- [x] Write test: validate law-applicator Deployment sidecar has LIBRARIAN_ADDRESS
+- [x] Write test: validate law-applicator Deployment has no ConfigMap mount
+- [x] Add law-applicator FoundryNode to `flow.yaml`
+- [x] Add law-applicator Deployment to `deployments.yaml`
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add law-applicator node CRD and deployment`
 
 ### Slice 14.2.1 — FoundryFlow update: judiciary NodeGroup + entry/exit contracts
 
@@ -1072,14 +1074,14 @@ spec:
 
 Steps:
 
-- [ ] Write test: validate FoundryFlow has hearing-entry contract with law-reference artefact
-- [ ] Write test: validate FoundryFlow has clerk-exit contract with petition stamps
-- [ ] Write test: validate FoundryFlow has judiciary and clerk-cycle nodeGroups
-- [ ] Write test: validate all 24 hand-authored nodes appear in exactly one nodeGroup
-- [ ] Update FoundryFlow in `flow.yaml` with new contracts and nodeGroups
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `feat(manifests): add judiciary entry/exit contracts and nodeGroups`
+- [x] Write test: validate FoundryFlow has hearing-entry contract with law-reference artefact
+- [x] Write test: validate FoundryFlow has clerk-exit contract with petition stamps
+- [x] Write test: validate FoundryFlow has judiciary and clerk-cycle nodeGroups
+- [x] Write test: validate all 24 hand-authored nodes appear in exactly one nodeGroup
+- [x] Update FoundryFlow in `flow.yaml` with new contracts and nodeGroups
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `feat(manifests): add judiciary entry/exit contracts and nodeGroups`
 
 ### Slice 14.3.1 — Cross-cutting manifest validation test
 
@@ -1096,15 +1098,15 @@ consistency:
 
 Steps:
 
-- [ ] Write comprehensive manifest consistency test
-- [ ] Run tests, verify pass
-- [ ] Run `make check-fix`, resolve issues
-- [ ] Commit: `test(manifests): add cross-cutting manifest consistency validation`
+- [x] Write comprehensive manifest consistency test
+- [x] Run tests, verify pass
+- [x] Run `make check-fix`, resolve issues
+- [x] Commit: `test(manifests): add cross-cutting manifest consistency validation`
 
 ### Slice 14.4.1 — Update PLAN.md
 
-- [ ] Update PLAN.md to mark Phase 14 complete
-- [ ] Commit: `docs: mark Phase 14 complete`
+- [x] Update PLAN.md to mark Phase 14 complete
+- [x] Commit: `docs: mark Phase 14 complete`
 
 ---
 
