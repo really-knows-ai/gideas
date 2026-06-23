@@ -8,13 +8,18 @@ A governed workflow runtime on Kubernetes. Work progresses through adversarial c
 |-----------|-------------|
 | `specs/` | [Technical specification](specs/README.md) — the authoritative source of truth |
 | `proto/` | Protocol Buffer definitions (the wire contract) |
-| `operator/` | Control plane — Kubebuilder controller managing Flows, Workitems, and CRDs |
-| `sidecar/` | Data plane — in-pod proxy handling identity, capability enforcement, and service routing |
+| `gen/` | Generated Go code from proto definitions |
+| `platform/operator/` | Control plane — Kubebuilder controller managing Flows, Workitems, and CRDs |
+| `platform/sidecar/` | Data plane — in-pod proxy handling identity, capability enforcement, and service routing |
+| `platform/archivist/` | System service — content-addressable artefact storage (SQLite) |
+| `platform/librarian/` | System service — law and governance store (SQLite) |
+| `platform/eventbus/` | System service — Event Bus |
+| `platform/frictionledger/` | System service — Friction Ledger |
+| `platform/federation/` | System service — Cross-Flow Federation controller |
+| `platform/monitor/` | System service — Flow Monitor for friction and telemetry |
 | `sdk/go/` | Go SDK for node developers |
-| `nodes/` | Standard node implementations and the Haiku demo cycle |
-| `archivist/` | System service — content-addressable artefact storage (SQLite) |
-| `librarian/` | System service — law and governance store (SQLite) |
-| `monitor/` | System service — Flow Monitor for friction and telemetry (SQLite) |
+| `nodes/` | Standard node implementations |
+| `charts/` | Helm charts for deployment |
 | `tools/` | Spec linter, demo scripts, and the `haiku-watch` CLI |
 
 ## Prerequisites
@@ -31,7 +36,7 @@ A governed workflow runtime on Kubernetes. Work progresses through adversarial c
 ### 1. Install CRDs
 
 ```bash
-make -C operator install
+make -C platform/operator install
 ```
 
 ### 2. Build container images
@@ -40,18 +45,20 @@ From the repo root:
 
 ```bash
 # Operator
-docker build -t flow-operator:latest -f operator/Dockerfile .
+docker build -t flow-operator:latest -f platform/operator/Dockerfile .
 
 # Sidecar
-docker build -t flow-sidecar:latest -f sidecar/Dockerfile .
+docker build -t flow-sidecar:latest -f platform/sidecar/Dockerfile .
 
 # System services
-docker build -t flow-archivist:latest -f archivist/Dockerfile .
-docker build -t flow-librarian:latest -f librarian/Dockerfile .
-docker build -t flow-monitor:latest   -f monitor/Dockerfile .
+docker build -t flow-archivist:latest      -f platform/archivist/Dockerfile .
+docker build -t flow-librarian:latest      -f platform/librarian/Dockerfile .
+docker build -t flow-eventbus:latest       -f platform/eventbus/Dockerfile .
+docker build -t flow-frictionledger:latest -f platform/frictionledger/Dockerfile .
+docker build -t flow-monitor:latest        -f platform/monitor/Dockerfile .
 
 # Haiku demo nodes (one image per node)
-for node in forge haiku-quench sort haiku-appraise haiku-refine; do
+for node in forge haiku-quench sort appraise refine; do
   docker build -t "$node:latest" --build-arg NODE="$node" -f nodes/Dockerfile .
 done
 ```
@@ -59,8 +66,9 @@ done
 If using Kind, load the images into the cluster:
 
 ```bash
-for img in flow-operator flow-sidecar flow-archivist flow-librarian flow-monitor \
-           forge haiku-quench sort haiku-appraise haiku-refine; do
+for img in flow-operator flow-sidecar flow-archivist flow-librarian \
+           flow-eventbus flow-frictionledger flow-monitor \
+           forge haiku-quench sort appraise refine; do
   kind load docker-image "$img:latest" --name <cluster-name>
 done
 ```
@@ -68,15 +76,17 @@ done
 ### 3. Deploy the Operator
 
 ```bash
-make -C operator deploy
+make -C platform/operator deploy
 ```
 
 ### 4. Deploy system services
 
 ```bash
-kubectl apply -f archivist/deployment.yaml
-kubectl apply -f librarian/deployment.yaml
-kubectl apply -f monitor/deployment.yaml
+kubectl apply -f platform/archivist/deployment.yaml
+kubectl apply -f platform/librarian/deployment.yaml
+kubectl apply -f platform/eventbus/deployment.yaml
+kubectl apply -f platform/frictionledger/deployment.yaml
+kubectl apply -f platform/monitor/deployment.yaml
 ```
 
 ### 5. Deploy the Haiku demo
