@@ -81,4 +81,79 @@ These two steps are non-negotiable. A change without tests or with lint violatio
 
 ## Compatibility Policy
 
-This is a greenfield project. There are no backward compatibility obligations. Breaking API changes are acceptable and preferred over accumulating backward-compat debt. Do not deprecate -- remove.
+This is a greenfield project. There are no backward compatibility obligations. Breaking API changes are acceptable and preferred over accumulating backward-compat debt. Do not deprecate — remove.
+
+---
+
+## Workflow: Spec → Plan → Execute → Review
+
+New features and changes follow a structured pipeline designed for iterative, reviewed, and auditable development.
+
+### Directory Convention
+
+All feature-level planning lives under `plans/<project-name>/`:
+
+```
+plans/<project-name>/
+├── SPEC.md          # What to build (requirements, design, acceptance criteria)
+├── PLAN.md          # How to build it (phased breakdown, execution order)
+├── PHASE_01.md      # Individual phase files (one per phase)
+├── PHASE_02.md
+└── REVIEW.md        # Spec-compliance audit checklist (produced by implementation-review)
+```
+
+The `specs/` directory remains the authoritative system-level source of truth. The `plans/` directory contains per-feature execution plans and reviews. Both live on `main` regardless of where implementation happens.
+
+### Pipeline Steps
+
+#### 1. Spec (`make-project-spec`)
+
+Turn an idea or feature request into `plans/<project-name>/SPEC.md`. The skill explores context, proposes approaches, writes a concrete spec with acceptance criteria, and self-reviews. Output: a reviewed `SPEC.md` ready for planning.
+
+Run: `make-project-spec` skill.
+
+#### 2. Plan (`make-phased-plan`)
+
+Read `SPEC.md` and produce `PLAN.md` + `PHASE_XX.md` files. Proposes multiple phase breakdown strategies (by layer, by service, by risk, etc.) for the user to choose from. Drafts phases in parallel, then reviews each phase individually and holistically. Output: approved `PLAN.md` and `PHASE_XX.md` files.
+
+Run: `make-phased-plan` skill.
+
+#### 3. Execute (`execute-phased-plan`)
+
+Execute the phased plan in a fresh git worktree and `dev/<project-slug>` branch. Each phase is implemented, verified, reviewed, and committed before the next phase begins. After all phases, runs the full quality gate (`go test ./... && make check-fix`) and a final spec-fulfilment review. Output: completed implementation in a worktree ready for merge.
+
+Run: `execute-phased-plan` skill.
+
+#### 4. Review (`implementation-review`)
+
+Audit the current repository state against `SPEC.md`. Dispatches parallel reviewer subagents (one per spec section) to find deviations. Consolidates findings into `REVIEW.md` as a checklist, cross-referencing against previously resolved and wont-fix items. Output: `REVIEW.md` checklist.
+
+Run: `implementation-review` skill.
+
+#### 5. Fix (`systematic-fix-and-review` / `fix-review-item`)
+
+Fix items from `REVIEW.md`.
+
+- **`fix-review-item`**: Fixes exactly one `- [ ]` item, commits the fix (with quality gate), and stops. Run repeatedly for incremental progress.
+- **`systematic-fix-and-review`**: Fixes every `- [ ]` item through strict fix → reviewer → commit cycles. Adds a reviewer gate between fix and commit. Runs until every item is `- [x]` or `- [~]` (wont-fix).
+
+### Subagents
+
+This repository defines three subagents under `.opencode/agents/`:
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `reviewer` | deepseek-v4-flash (high variant) | General-purpose review: correctness, clarity, consistency |
+| `implementer` | deepseek-v4-flash (low variant) | Implementation: smallest correct change, verify, report |
+| `analyst` | claude-haiku-4.5 | Read-only analysis: exploration, categorisation, structured reports |
+
+### Existing Skills
+
+Additional project-specific skills:
+
+| Skill | Purpose |
+|-------|---------|
+| `spec-lint-fix` | Run markdown linting from `tools/spec-lint/`, fix issues, rerun until clean |
+| `spec-review` | Deep-review all spec documents against AGENTS.md, produce or continue REVIEW.md |
+| `publish-release` | Quality gate, build, changelog, README review, tag, push, and `gh release create` |
+| `commit-push` | Commit and push all changes (update gitignore where needed) |
