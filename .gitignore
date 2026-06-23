@@ -17,5 +17,8 @@ bin/
 *.test
 *.out
 
+# Transient planning artifacts
+plans/
+
 # OpenCode local state
 .opencode/package-lock.json
