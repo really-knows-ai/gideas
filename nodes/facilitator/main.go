@@ -13,7 +13,7 @@
 //
 //  1. First invocation (no children):
 //     - Discover topology and exit contract to enumerate artefact kinds.
-//     - Scan feedback for DEADLOCKED items; select the highest-severity one.
+//     - Scan feedback for DEADLOCKED items; select the first one.
 //     - Assemble evidence as five separate artefacts on the child:
 //     dispute-workitem, dispute-details, dispute-artefact,
 //     dispute-inputs, appendix.
@@ -227,7 +227,7 @@ func handleFirstInvocation(
 
 	exitContract := topology.GetExitContract()
 
-	// ── Step 2: Find highest-severity deadlocked feedback ────────────
+	// ── Step 2: Find deadlocked feedback ─────────────────────────────
 	artefactKind, disputed, err := selectDisputedFeedback(ctx, client, exitContract)
 	if err != nil {
 		return err
@@ -248,7 +248,6 @@ func handleFirstInvocation(
 	slog.Info("facilitator: disputed feedback selected",
 		"artefact_kind", artefactKind,
 		"feedback_id", disputed.GetId(),
-		"severity", disputed.GetSeverity().String(),
 	)
 
 	// ── Step 3: Assemble evidence artefacts ──────────────────────────
@@ -278,7 +277,6 @@ func handleFirstInvocation(
 	emitTelemetry(ctx, client, "foundry.facilitator.evidence_assembled", map[string]any{
 		"artefact_kind": artefactKind,
 		"feedback_id":   disputed.GetId(),
-		"severity":      disputed.GetSeverity().String(),
 	})
 
 	// ── Step 4: Build disputed-artefact reference ────────────────────
@@ -374,8 +372,7 @@ type disputedArtefactRef struct {
 }
 
 // selectDisputedFeedback scans all artefact kinds in the exit contract for
-// deadlocked feedback and returns the single highest-severity item. If
-// severity ties, the first encountered wins.
+// deadlocked feedback and returns the first one found.
 //
 // Returns ("", nil, nil) when no deadlocked feedback exists.
 func selectDisputedFeedback(
@@ -398,7 +395,7 @@ func selectDisputedFeedback(
 			if item.GetState() != flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
 				continue
 			}
-			if bestItem == nil || item.GetSeverity() > bestItem.GetSeverity() {
+			if bestItem == nil {
 				bestKind = kind
 				bestItem = item
 			}
@@ -476,7 +473,6 @@ func buildDisputeDetails(
 	b.WriteString("## Disputed Feedback\n\n")
 	fmt.Fprintf(&b, "- **ID**: %s\n", item.GetId())
 	fmt.Fprintf(&b, "- **Source**: %s\n", item.GetSource())
-	fmt.Fprintf(&b, "- **Severity**: %s\n", item.GetSeverity().String())
 	fmt.Fprintf(&b, "- **State**: %s\n", item.GetState().String())
 	fmt.Fprintf(&b, "- **Message**: %s\n", item.GetMessage())
 
