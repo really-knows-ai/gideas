@@ -79,6 +79,38 @@ These two steps are non-negotiable. A change without tests or with lint violatio
 3. **Make the Cost Visible** — Friction is a first-class, quantifiable signal.
 4. **Quality is Fixed, Cost is Variable** — The standard is non-negotiable; the system measures the cost of achieving it.
 
+## Coding Ethos
+
+Before writing any code, stop at the first rung that holds:
+
+1. Does this need to be built at all? (YAGNI)
+2. Does it already exist in this codebase? Reuse the helper, util, or pattern already here — don't re-write it.
+3. Does the standard library already do this? Use it.
+4. Does a native platform feature cover it? Use it.
+5. Does an already-installed dependency solve it? Use it.
+6. Can this be one line? Make it one line.
+7. Only then: write the minimum code that works.
+
+The ladder runs *after* you understand the problem, not instead of it: read the task and the code it touches, trace the real flow end to end, then climb.
+
+### Bug Fix Rule
+
+Fix root cause, not symptom. A report names a symptom. Grep every caller of the function you touch and fix the shared function once — one guard there is a smaller diff than one per caller, and patching only the path the ticket names leaves a sibling caller still broken.
+
+### Rules
+
+- No abstractions that weren't explicitly requested.
+- No new dependency if it can be avoided.
+- No boilerplate nobody asked for.
+- Deletion over addition. Boring over clever. Fewest files possible.
+- Shortest working diff wins, but only once you understand the problem. The smallest change in the wrong place isn't lazy — it's a second bug.
+- Mark intentional simplifications with a `ponytail:` comment. If the short-cut has a known ceiling (global lock, O(n²) scan, naive heuristic), the comment names the ceiling and the upgrade path.
+- Non-trivial logic leaves ONE runnable check behind — the smallest thing that fails if the logic breaks (an assert-based self-check or one small test file; no frameworks, no fixtures). Trivial one-liners need no test.
+
+### Never Negotiable
+
+Trust-boundary validation, data-loss handling, security, and accessibility are never on the chopping block. Lazy code without its safety net is just reckless.
+
 ## Compatibility Policy
 
 This is a greenfield project. There are no backward compatibility obligations. Breaking API changes are acceptable and preferred over accumulating backward-compat debt. Do not deprecate — remove.
@@ -103,6 +135,22 @@ plans/<project-name>/
 ```
 
 The `specs/` directory remains the authoritative system-level source of truth. The `plans/` directory contains per-feature execution plans and reviews. Both live on `main` regardless of where implementation happens.
+
+### Worktree Convention
+
+Phased plan execution uses isolated git worktrees under `.worktrees/`:
+
+```
+.worktrees/<project-slug>/   # git worktree for dev/<project-slug> branch
+```
+
+Worktrees are created with:
+
+```bash
+git worktree add -b dev/<project-slug> .worktrees/<project-slug> HEAD
+```
+
+All implementation, verification, review, and commits happen inside the worktree. The `.worktrees/` directory is gitignored — never commit worktree contents to `main`.
 
 ### Pipeline Steps
 
@@ -157,3 +205,5 @@ Additional project-specific skills:
 | `spec-review` | Deep-review all spec documents against AGENTS.md, produce or continue REVIEW.md |
 | `publish-release` | Quality gate, build, changelog, README review, tag, push, and `gh release create` |
 | `commit-push` | Commit and push all changes (update gitignore where needed) |
+| `ponytail-review` | Review diffs for over-engineering: what to delete, simplify, or replace with stdlib/native equivalents |
+| `ponytail-audit` | Whole-repo audit for over-engineering: ranked list of bloat, unused code, reinvented wheels |
