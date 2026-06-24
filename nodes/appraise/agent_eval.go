@@ -59,8 +59,7 @@ The current {{.ReviewArtefact}}:
 
 ## ORIGINAL FEEDBACK
 
-Message: {{.FeedbackMessage}}
-Severity: {{.FeedbackSeverity}}
+{{.FeedbackMessage}}
 
 ## INVESTIGATION HISTORY
 
@@ -87,15 +86,14 @@ type evalSystemData struct {
 
 // evalTemplateQueryData extends evalQueryData with config fields for template rendering.
 type evalTemplateQueryData struct {
-	ReviewArtefact   string
-	InputArtefact    string
-	InputContent     string
-	ReviewContent    string
-	FeedbackMessage  string
-	FeedbackSeverity string
-	History          string
-	Justification    string
-	KindInstruction  string
+	ReviewArtefact  string
+	InputArtefact   string
+	InputContent    string
+	ReviewContent   string
+	FeedbackMessage string
+	History         string
+	Justification   string
+	KindInstruction string
 }
 
 // NewEvalAgent creates an EvalAgent with the given client and config.
@@ -179,15 +177,14 @@ Your job: decide if the refusal is justified.
 	}
 
 	data := evalTemplateQueryData{
-		ReviewArtefact:   e.cfg.ReviewArtefact,
-		InputArtefact:    artefacts.InputLabel(e.cfg.InputArtefacts),
-		InputContent:     inputContent,
-		ReviewContent:    reviewContent,
-		FeedbackMessage:  fb.GetMessage(),
-		FeedbackSeverity: fb.GetSeverity().String(),
-		History:          historyBlock.String(),
-		Justification:    justificationBlock,
-		KindInstruction:  kindInstruction,
+		ReviewArtefact:  e.cfg.ReviewArtefact,
+		InputArtefact:   artefacts.InputLabel(e.cfg.InputArtefacts),
+		InputContent:    inputContent,
+		ReviewContent:   reviewContent,
+		FeedbackMessage: fb.GetMessage(),
+		History:         historyBlock.String(),
+		Justification:   justificationBlock,
+		KindInstruction: kindInstruction,
 	}
 
 	raw, err := e.agent.Run(ctx, data)

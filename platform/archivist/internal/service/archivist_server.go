@@ -308,6 +308,21 @@ func (s *ArchivistServer) StoreArtefact(
 		"version_hash", contentHash,
 	)
 
+	// Auto-resolve stale feedback tied to older versions.
+	if n, err := s.store.ResolveStaleFeedback(ctx, workitemID, artefactID, contentHash); err != nil {
+		slog.Error("StoreArtefact: failed to resolve stale feedback",
+			"workitem_id", workitemID,
+			"artefact_id", artefactID,
+			"error", err,
+		)
+	} else if n > 0 {
+		slog.Info("StoreArtefact: resolved stale feedback",
+			"workitem_id", workitemID,
+			"artefact_id", artefactID,
+			"resolved_stale_count", n,
+		)
+	}
+
 	s.publishAudit(ctx, "audit.artefact.version_created", map[string]string{
 		"action":      "version_created",
 		"resource_id": artefactID,
@@ -712,7 +727,7 @@ func (s *ArchivistServer) AddFeedback(
 	slog.Info("AddFeedback",
 		"workitem_id", workitemID,
 		"artefact_id", artefactID,
-		"severity", req.GetSeverity().String(),
+		"can_wont_fix", req.GetCanWontFix(),
 		"source", source,
 	)
 
@@ -730,7 +745,7 @@ func (s *ArchivistServer) AddFeedback(
 
 	feedbackID, err := s.store.AddFeedback(
 		ctx, workitemID, artefactID, source,
-		int32(req.GetSeverity()), req.GetMessage(), versionHash,
+		req.GetCanWontFix(), req.GetMessage(), versionHash,
 	)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "add feedback: %v", err)
@@ -783,7 +798,7 @@ func (s *ArchivistServer) GetFeedback(
 		items = append(items, &flowv1.FeedbackItem{
 			Id:           r.ID,
 			Source:       r.Source,
-			Severity:     flowv1.Severity(r.Severity),
+			CanWontFix:   r.CanWontFix,
 			State:        flowv1.FeedbackState(r.State),
 			Message:      r.Message,
 			LinkedRuling: r.LinkedRuling,
@@ -1127,7 +1142,7 @@ func feedbackRecordToProto(r *sqlite.FeedbackRecord) *flowv1.FeedbackItem {
 	return &flowv1.FeedbackItem{
 		Id:           r.ID,
 		Source:       r.Source,
-		Severity:     flowv1.Severity(r.Severity),
+		CanWontFix:   r.CanWontFix,
 		State:        flowv1.FeedbackState(r.State),
 		Message:      r.Message,
 		LinkedRuling: r.LinkedRuling,

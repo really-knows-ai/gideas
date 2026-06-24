@@ -199,11 +199,10 @@ func defaultFacilitatorTopology() *flowv1.GetFlowTopologyResponse {
 func defaultDeadlockedFeedback() []*flowv1.FeedbackItem {
 	return []*flowv1.FeedbackItem{
 		{
-			Id:       "fb-1",
-			Source:   "reviewer-A",
-			Severity: flowv1.Severity_SEVERITY_HIGH,
-			State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-			Message:  "The haiku does not follow traditional kigo conventions.",
+			Id:      "fb-1",
+			Source:  "reviewer-A",
+			State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			Message: "The haiku does not follow traditional kigo conventions.",
 			Justification: &flowv1.Justification{
 				Kind: &flowv1.Justification_Citation{
 					Citation: &flowv1.Citation{
@@ -217,11 +216,10 @@ func defaultDeadlockedFeedback() []*flowv1.FeedbackItem {
 			},
 		},
 		{
-			Id:       "fb-2",
-			Source:   "reviewer-B",
-			Severity: flowv1.Severity_SEVERITY_LOW,
-			State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-			Message:  "Line count is ambiguous.",
+			Id:      "fb-2",
+			Source:  "reviewer-B",
+			State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+			Message: "Line count is ambiguous.",
 			Justification: &flowv1.Justification{
 				Kind: &flowv1.Justification_NovelArgument{
 					NovelArgument: &flowv1.NovelArgument{

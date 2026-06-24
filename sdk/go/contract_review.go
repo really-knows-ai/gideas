@@ -34,12 +34,9 @@ type ReviewResult struct {
 
 // ReviewFeedback is a single feedback observation from a review agent.
 type ReviewFeedback struct {
-	// Message is a specific, actionable observation (1-2 sentences).
+	// Message is a specific, actionable observation stating the deviation
+	// (1-2 sentences).
 	Message string
-
-	// Severity is the importance level: "low", "medium", "high", or
-	// "critical".
-	Severity string
 
 	// CitedLaws lists governance law IDs that this feedback references.
 	// Empty if the observation is novel (not tied to a specific law).

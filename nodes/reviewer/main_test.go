@@ -19,7 +19,7 @@ func TestReviewAgent_ValidOutput(t *testing.T) {
 	spy := newReviewerSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [{"message": "issue found", "severity": "medium", "cited_laws": []}]}`),
+			Output: []byte(`{"feedback": [{"message": "issue found", "cited_laws": []}]}`),
 			Cost:   defaultCost(),
 		},
 	}
@@ -59,33 +59,12 @@ func TestReviewAgent_EmptyFeedback(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_RejectsInvalidSeverity(t *testing.T) {
-	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [{"message": "issue", "severity": "extreme", "cited_laws": []}]}`),
-			Cost:   defaultCost(),
-		},
-	}
-
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
-
-	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
-	if err == nil {
-		t.Fatal("expected invalid severity to fail schema validation")
-	}
-	if !strings.Contains(err.Error(), "output validation failed") {
-		t.Fatalf("expected 'output validation failed' in error, got: %v", err)
-	}
-}
-
 func TestReviewAgent_RejectsEmptyMessage(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newReviewerSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [{"message": "", "severity": "low", "cited_laws": []}]}`),
+			Output: []byte(`{"feedback": [{"message": "", "cited_laws": []}]}`),
 			Cost:   defaultCost(),
 		},
 	}
@@ -230,7 +209,7 @@ func TestReviewAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	// With no suffix, the system prompt should end cleanly after the severity list.
+	// With no suffix, the system prompt should end cleanly after the deviation list.
 	if strings.Contains(mp.capturedSystem, "Pay special attention") {
 		t.Errorf("system prompt should not contain division suffix when empty, got:\n%s",
 			mp.capturedSystem)
@@ -270,7 +249,7 @@ func TestReviewAgent_HappyPath(t *testing.T) {
 
 	mp := &mockModel{
 		output: &flow.InferOutput{
-			Output: []byte(`{"feedback": [{"message": "weak imagery", "severity": "medium", "cited_laws": ["law-1"]}]}`),
+			Output: []byte(`{"feedback": [{"message": "weak imagery", "cited_laws": ["law-1"]}]}`),
 			Cost:   defaultCost(),
 		},
 	}
@@ -343,8 +322,8 @@ func TestReviewAgent_ReviewOutputFormat(t *testing.T) {
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": [
-				{"message": "issue one", "severity": "low", "cited_laws": []},
-				{"message": "issue two", "severity": "critical", "cited_laws": ["law-1", "law-2"]}
+				{"message": "issue one", "cited_laws": []},
+				{"message": "issue two", "cited_laws": ["law-1", "law-2"]}
 			]}`),
 			Cost: defaultCost(),
 		},
@@ -368,9 +347,6 @@ func TestReviewAgent_ReviewOutputFormat(t *testing.T) {
 	if out.Feedback[0].Message != "issue one" {
 		t.Fatalf("expected 'issue one', got %q", out.Feedback[0].Message)
 	}
-	if out.Feedback[0].Severity != "low" {
-		t.Fatalf("expected severity 'low', got %q", out.Feedback[0].Severity)
-	}
 	if len(out.Feedback[0].CitedLaws) != 0 {
 		t.Fatalf("expected 0 cited laws, got %d", len(out.Feedback[0].CitedLaws))
 	}
@@ -378,9 +354,6 @@ func TestReviewAgent_ReviewOutputFormat(t *testing.T) {
 	// Verify second item.
 	if out.Feedback[1].Message != "issue two" {
 		t.Fatalf("expected 'issue two', got %q", out.Feedback[1].Message)
-	}
-	if out.Feedback[1].Severity != "critical" {
-		t.Fatalf("expected severity 'critical', got %q", out.Feedback[1].Severity)
 	}
 	if len(out.Feedback[1].CitedLaws) != 2 {
 		t.Fatalf("expected 2 cited laws, got %d", len(out.Feedback[1].CitedLaws))

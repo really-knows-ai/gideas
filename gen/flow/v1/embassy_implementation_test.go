@@ -43,5 +43,5 @@ func TestEmbassyServiceCompileTimeAssertions(t *testing.T) {
 	var _ flowv1.EmbassyServiceServer = flowv1.UnimplementedEmbassyServiceServer{}
 
 	// Verify the client interface symbol exists (nil zero-value).
-	var _ flowv1.EmbassyServiceClient = (flowv1.EmbassyServiceClient)(nil)
+	var _ = (flowv1.EmbassyServiceClient)(nil)
 }

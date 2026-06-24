@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sync"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/artefacts"
@@ -37,7 +36,7 @@ const (
 // TriageContract + RevisionContract pair.
 //
 // Steps: fetch inputs → get output artefact → query laws → get feedback →
-// Phase 1 triage (parallel) → Phase 2 revision (if any actioned) → store →
+// Phase 1 triage (sequential) → Phase 2 revision (if any actioned) → store →
 // route to "default" output.
 func HandleRefine(
 	ctx context.Context,
@@ -74,7 +73,7 @@ func HandleRefine(
 	}
 
 	// ---------------------------------------------------------------
-	// Phase 1: Per-item triage (parallel)
+	// Phase 1: Per-item triage (sequential)
 	// ---------------------------------------------------------------
 
 	actionedItems, err := triageFeedback(ctx, triage, client,
@@ -123,8 +122,9 @@ func HandleRefine(
 	return nil
 }
 
-// triageFeedback runs parallel LLM triage for NEW and REJECTED feedback items.
-// Each item gets a focused inference call that decides action or refuse.
+// triageFeedback runs sequential LLM triage for NEW and REJECTED feedback items.
+// Each item is processed one at a time. For each, the canWontFix flag determines
+// whether the LLM may refuse (canWontFix=true) or must action (canWontFix=false).
 // Returns the list of items that were actioned (for Phase 2 context).
 func triageFeedback(
 	ctx context.Context,
@@ -168,78 +168,70 @@ func triageFeedback(
 
 	slog.Info("refine: triaging feedback items", "count", len(tasks))
 
-	type triageResultItem struct {
-		task triageTask
-		out  flow.TriageResult
-		err  error
-	}
-
-	results := make([]triageResultItem, len(tasks))
-	var wg sync.WaitGroup
-	for i, task := range tasks {
-		if task.forceActioned {
-			results[i] = triageResultItem{
-				task: task,
-				out: flow.TriageResult{
-					Decision: decisionAction,
-					Message:  contemptMessage,
-				},
-			}
-			continue
-		}
-
-		wg.Add(1)
-		go func(idx int, t triageTask) {
-			defer wg.Done()
-			out, err := triage.Run(ctx, t.item, inputContent, reviewContent, laws)
-			if err != nil {
-				results[idx] = triageResultItem{task: t, err: err}
-				return
-			}
-			results[idx] = triageResultItem{task: t, out: *out}
-		}(i, task)
-	}
-	wg.Wait()
-
-	// Apply decisions sequentially (gRPC calls to Archivist).
+	// Process items sequentially (one at a time, no goroutines).
 	var actioned []flow.ActionedFeedback
-	for _, r := range results {
-		if r.err != nil {
-			return nil, fmt.Errorf("refine: triage feedback %s: %w",
-				r.task.item.GetId(), r.err)
-		}
-
-		fbID := r.task.item.GetId()
-
-		switch r.out.Decision {
-		case decisionAction:
-			slog.Info("refine: actioning feedback",
-				"feedback_id", fbID, "message", r.out.Message)
-			if err := client.ResolveFeedback(ctx, fbID, r.out.Message); err != nil {
+	for _, task := range tasks {
+		// Contempt guard: force action without LLM.
+		if task.forceActioned {
+			fbID := task.item.GetId()
+			slog.Info("refine: contempt guard — forcing action",
+				"feedback_id", fbID)
+			if err := client.ResolveFeedback(ctx, fbID, contemptMessage); err != nil {
 				return nil, fmt.Errorf("refine: resolve feedback %s: %w", fbID, err)
 			}
 			actioned = append(actioned, flow.ActionedFeedback{
 				FeedbackID:     fbID,
-				Message:        r.task.item.GetMessage(),
-				FixDescription: r.out.Message,
+				Message:        task.item.GetMessage(),
+				FixDescription: contemptMessage,
+			})
+			continue
+		}
+
+		// Run LLM triage for this item.
+		out, err := triage.Run(ctx, task.item, inputContent, reviewContent, laws)
+		if err != nil {
+			return nil, fmt.Errorf("refine: triage feedback %s: %w",
+				task.item.GetId(), err)
+		}
+
+		fbID := task.item.GetId()
+		canWontFix := task.item.GetCanWontFix()
+
+		// Belt-and-suspenders: refuse is not allowed for canWontFix=false.
+		if !canWontFix && out.Decision == decisionRefuse {
+			return nil, fmt.Errorf(
+				"refine: cannot refuse canWontFix=false feedback %s", fbID)
+		}
+
+		switch out.Decision {
+		case decisionAction:
+			slog.Info("refine: actioning feedback",
+				"feedback_id", fbID, "message", out.Message)
+			if err := client.ResolveFeedback(ctx, fbID, out.Message); err != nil {
+				return nil, fmt.Errorf("refine: resolve feedback %s: %w", fbID, err)
+			}
+			actioned = append(actioned, flow.ActionedFeedback{
+				FeedbackID:     fbID,
+				Message:        task.item.GetMessage(),
+				FixDescription: out.Message,
 			})
 
 		case decisionRefuse:
-			justification, err := buildJustification(r.out)
+			justification, err := buildJustification(*out)
 			if err != nil {
 				return nil, fmt.Errorf("refine: build justification for %s: %w", fbID, err)
 			}
 			slog.Info("refine: refusing feedback",
 				"feedback_id", fbID,
-				"justification_type", r.out.JustificationType,
-				"message", r.out.Message)
+				"justification_type", out.JustificationType,
+				"message", out.Message)
 			if err := client.RefuseFeedback(ctx, fbID, justification); err != nil {
 				return nil, fmt.Errorf("refine: refuse feedback %s: %w", fbID, err)
 			}
 
 		default:
 			return nil, fmt.Errorf("refine: unexpected decision %q for feedback %s",
-				r.out.Decision, fbID)
+				out.Decision, fbID)
 		}
 	}
 

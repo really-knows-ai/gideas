@@ -139,8 +139,8 @@ message FeedbackItem {
   // Sidecar-injected x-flow-node-id metadata. Gate nodes use this to
   // attribute unresolved feedback to the stamp phase that generated it.
   string source = 2;
-  Severity severity = 3;
   FeedbackState state = 4;
+  bool can_wont_fix = 11;
   string message = 5;
   string linked_ruling = 6;
   repeated FeedbackEvent history = 7;

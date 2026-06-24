@@ -172,10 +172,9 @@ func TestEvalAgent_PromptContainsContext(t *testing.T) {
 
 	agent := newTestEvalAgent(t, mp, spy, cfg)
 	fb := &flowv1.FeedbackItem{
-		Id:       testFeedbackID,
-		Message:  "syllable count is wrong",
-		Severity: flowv1.Severity_SEVERITY_HIGH,
-		State:    flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED,
+		Id:      testFeedbackID,
+		Message: "syllable count is wrong",
+		State:   flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED,
 		History: []*flowv1.FeedbackEvent{
 			{Action: "fix", Actor: "refine", Message: "adjusted syllables"},
 		},
@@ -431,10 +430,9 @@ func TestFindingAgent_PromptContainsDiscussions(t *testing.T) {
 	agent := newTestFindingAgent(t, mp, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{
-			Id:       testFeedbackID,
-			Message:  "the moon reference is weak",
-			Severity: flowv1.Severity_SEVERITY_MEDIUM,
-			State:    flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
+			Id:      testFeedbackID,
+			Message: "the moon reference is weak",
+			State:   flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 			Justification: &flowv1.Justification{
 				Kind: &flowv1.Justification_NovelArgument{
 					NovelArgument: &flowv1.NovelArgument{
