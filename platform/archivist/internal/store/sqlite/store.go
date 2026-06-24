@@ -70,7 +70,7 @@ type FeedbackRecord struct {
 	WorkitemID   string
 	ArtefactID   string
 	Source       string
-	Severity     int32 // maps to flowv1.Severity enum
+	CanWontFix   bool  // if true, refiner may refuse this feedback
 	State        int32 // maps to flowv1.FeedbackState enum
 	Message      string
 	VersionHash  string // artefact version this feedback was raised against
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS feedback_items (
     workitem_id    TEXT NOT NULL,
     artefact_id    TEXT NOT NULL,
     source         TEXT NOT NULL DEFAULT '',
-    severity       INTEGER NOT NULL DEFAULT 0,
+    can_wont_fix   INTEGER NOT NULL DEFAULT 0,
     state          INTEGER NOT NULL DEFAULT 1,
     message        TEXT NOT NULL DEFAULT '',
     version_hash   TEXT NOT NULL DEFAULT '',
@@ -456,7 +456,7 @@ func (s *Store) GetStampNamesForVersion(
 func (s *Store) AddFeedback(
 	ctx context.Context,
 	workitemID, artefactID, source string,
-	severity int32, message, versionHash string,
+	canWontFix bool, message, versionHash string,
 ) (string, error) {
 	feedbackID := uuid.New().String()
 	const stateNew int32 = 1 // flowv1.FeedbackState_FEEDBACK_STATE_NEW
@@ -467,10 +467,14 @@ func (s *Store) AddFeedback(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	canWontFixInt := 0
+	if canWontFix {
+		canWontFixInt = 1
+	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO feedback_items (id, workitem_id, artefact_id, source, severity, state, message, version_hash)
+		`INSERT INTO feedback_items (id, workitem_id, artefact_id, source, can_wont_fix, state, message, version_hash)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		feedbackID, workitemID, artefactID, source, severity, stateNew, message, versionHash,
+		feedbackID, workitemID, artefactID, source, canWontFixInt, stateNew, message, versionHash,
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert feedback: %w", err)
@@ -494,7 +498,7 @@ func (s *Store) AddFeedback(
 // GetFeedback returns all feedback items for a (workitemID, artefactID) pair.
 func (s *Store) GetFeedback(ctx context.Context, workitemID, artefactID string) ([]FeedbackRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, severity, state, message, version_hash, linked_ruling, created_at
+		`SELECT id, workitem_id, artefact_id, source, can_wont_fix, state, message, version_hash, linked_ruling, created_at
 		 FROM feedback_items
 		 WHERE workitem_id = ? AND artefact_id = ?
 		 ORDER BY created_at ASC`,
@@ -509,13 +513,15 @@ func (s *Store) GetFeedback(ctx context.Context, workitemID, artefactID string) 
 	for rows.Next() {
 		var f FeedbackRecord
 		var createdStr string
+		var canWontFixInt int
 		if err := rows.Scan(
 			&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
-			&f.Severity, &f.State, &f.Message, &f.VersionHash,
+			&canWontFixInt, &f.State, &f.Message, &f.VersionHash,
 			&f.LinkedRuling, &createdStr,
 		); err != nil {
 			return nil, fmt.Errorf("scan feedback: %w", err)
 		}
+		f.CanWontFix = canWontFixInt != 0
 		f.CreatedAt = parseTime(createdStr)
 		items = append(items, f)
 	}
@@ -583,13 +589,14 @@ func (s *Store) TransitionFeedback(
 	// Read current state.
 	var f FeedbackRecord
 	var createdStr string
+	var canWontFixInt int
 	err = tx.QueryRowContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, severity, state,
+		`SELECT id, workitem_id, artefact_id, source, can_wont_fix, state,
 		        message, version_hash, linked_ruling, created_at
 		 FROM feedback_items WHERE id = ?`, feedbackID,
 	).Scan(
 		&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
-		&f.Severity, &f.State, &f.Message, &f.VersionHash,
+		&canWontFixInt, &f.State, &f.Message, &f.VersionHash,
 		&f.LinkedRuling, &createdStr,
 	)
 	if err == sql.ErrNoRows {
@@ -598,6 +605,7 @@ func (s *Store) TransitionFeedback(
 	if err != nil {
 		return nil, fmt.Errorf("read feedback: %w", err)
 	}
+	f.CanWontFix = canWontFixInt != 0
 	f.CreatedAt = parseTime(createdStr)
 
 	// Validate current state is in allowed from-states.
@@ -637,15 +645,17 @@ func (s *Store) TransitionFeedback(
 func (s *Store) GetFeedbackByID(ctx context.Context, feedbackID string) (*FeedbackRecord, error) {
 	var f FeedbackRecord
 	var createdStr string
+	var canWontFixInt int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, severity, state,
+		`SELECT id, workitem_id, artefact_id, source, can_wont_fix, state,
 		        message, version_hash, linked_ruling, created_at
 		 FROM feedback_items WHERE id = ?`, feedbackID,
 	).Scan(
 		&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
-		&f.Severity, &f.State, &f.Message, &f.VersionHash,
+		&canWontFixInt, &f.State, &f.Message, &f.VersionHash,
 		&f.LinkedRuling, &createdStr,
 	)
+	f.CanWontFix = canWontFixInt != 0
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -694,15 +704,17 @@ func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string, target
 	// Read current feedback.
 	var f FeedbackRecord
 	var createdStr string
+	var canWontFixInt int
 	err = tx.QueryRowContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, severity, state,
+		`SELECT id, workitem_id, artefact_id, source, can_wont_fix, state,
 		        message, version_hash, linked_ruling, created_at
 		 FROM feedback_items WHERE id = ?`, feedbackID,
 	).Scan(
 		&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
-		&f.Severity, &f.State, &f.Message, &f.VersionHash,
+		&canWontFixInt, &f.State, &f.Message, &f.VersionHash,
 		&f.LinkedRuling, &createdStr,
 	)
+	f.CanWontFix = canWontFixInt != 0
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("feedback %q: %w", feedbackID, ErrFeedbackNotFound)
 	}
@@ -752,6 +764,81 @@ func (s *Store) LinkRuling(ctx context.Context, feedbackID, lawID string, target
 	f.LinkedRuling = lawID
 	f.State = targetState
 	return &f, nil
+}
+
+// ResolveStaleFeedback atomically resolves all feedback items for a given
+// (workitemID, artefactID) that are tied to an older version (version_hash !=
+// newVersionHash) and have can_wont_fix = 0 (only auto-resolvable feedback).
+// Items already in RESOLVED or DEADLOCKED state, or with a linked ruling, are
+// skipped. Returns the number of items resolved.
+func (s *Store) ResolveStaleFeedback(
+	ctx context.Context, workitemID, artefactID, newVersionHash string,
+) (int64, error) {
+	const stateResolved int32 = 6   // FEEDBACK_STATE_RESOLVED
+	const stateDeadlocked int32 = 5 // FEEDBACK_STATE_DEADLOCKED
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Select eligible feedback items: old version, can_wont_fix=0,
+	// not in terminal states, no linked ruling.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE feedback_items
+		 SET state = ?
+		 WHERE workitem_id = ?
+		   AND artefact_id = ?
+		   AND version_hash != ?
+		   AND can_wont_fix = 0
+		   AND state NOT IN (?, ?)
+		   AND linked_ruling = ''`,
+		stateResolved,
+		workitemID, artefactID, newVersionHash,
+		stateResolved, stateDeadlocked,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("resolve stale feedback: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return 0, tx.Commit() // nothing to do, commit empty tx
+	}
+
+	// Append a "resolved" event for each affected item.
+	//
+	// ponytail: We use a subquery-based INSERT to avoid a separate
+	// SELECT-then-loop. SQLite does not support INSERT ... SELECT with
+	// RETURNING in older versions, so we rely on RowsAffected for the
+	// count and insert events in bulk.
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO feedback_events (feedback_id, actor, action, message)
+		 SELECT id, 'archivist', 'resolved', ?
+		 FROM feedback_items
+		 WHERE workitem_id = ?
+		   AND artefact_id = ?
+		   AND version_hash != ?
+		   AND can_wont_fix = 0
+		   AND state = ?
+		   AND linked_ruling = ''`,
+		fmt.Sprintf("superseded by version %s", newVersionHash),
+		workitemID, artefactID, newVersionHash,
+		stateResolved,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert resolve events: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+
+	return n, nil
 }
 
 // parseTime parses a SQLite datetime string. Falls back to RFC3339 if the

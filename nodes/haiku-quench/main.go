@@ -93,7 +93,7 @@ func handleQuench(ctx context.Context, client *flow.Client) error {
 			"got", fmt.Sprintf("%d-%d-%d", counts[0], counts[1], counts[2]),
 		)
 		if _, err := client.AddFeedback(
-			ctx, "haiku", flowv1.Severity_SEVERITY_HIGH, fbMsg,
+			ctx, "haiku", false, fbMsg,
 		); err != nil {
 			return fmt.Errorf("quench: add feedback: %w", err)
 		}

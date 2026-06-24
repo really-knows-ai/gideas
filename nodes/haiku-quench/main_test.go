@@ -200,8 +200,8 @@ func TestHandleQuench_InvalidHaiku_NoFeedback(t *testing.T) {
 		t.Errorf("expected artefact 'haiku', got %q",
 			fb.ArtefactID)
 	}
-	if fb.Severity != flowv1.Severity_SEVERITY_HIGH {
-		t.Errorf("expected SEVERITY_HIGH, got %v", fb.Severity)
+	if fb.CanWontFix {
+		t.Errorf("expected CanWontFix=false for quench feedback, got true")
 	}
 	if !strings.Contains(fb.Message, "must be exactly 5-7-5") {
 		t.Errorf("feedback message missing structure info: %q",
@@ -594,10 +594,8 @@ func TestHandleQuench_EmptyHaiku_RaisesFeedback(t *testing.T) {
 		t.Fatalf("expected 1 feedback for empty haiku, got %d",
 			len(spy.AddedFeedback))
 	}
-	if spy.AddedFeedback[0].Severity !=
-		flowv1.Severity_SEVERITY_HIGH {
-		t.Errorf("expected HIGH severity, got %v",
-			spy.AddedFeedback[0].Severity)
+	if spy.AddedFeedback[0].CanWontFix {
+		t.Errorf("expected CanWontFix=false for quench feedback, got true")
 	}
 }
 

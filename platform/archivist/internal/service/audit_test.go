@@ -188,7 +188,7 @@ func TestAudit_FeedbackLifecycle(t *testing.T) {
 	// AddFeedback.
 	addResp, err := s.AddFeedback(ctx, &flowv1.AddFeedbackRequest{
 		WorkitemId: "wi-1", ArtefactId: "doc",
-		Severity: flowv1.Severity_SEVERITY_MEDIUM, Message: "needs work",
+		CanWontFix: false, Message: "needs work",
 	})
 	if err != nil {
 		t.Fatalf("add feedback: %v", err)
@@ -230,7 +230,7 @@ func TestAudit_RefuseRejectDeadlockCycle(t *testing.T) {
 	// Add feedback.
 	addResp, err := s.AddFeedback(ctx, &flowv1.AddFeedbackRequest{
 		WorkitemId: "wi-1", ArtefactId: "doc",
-		Severity: flowv1.Severity_SEVERITY_HIGH, Message: "bad",
+		CanWontFix: false, Message: "bad",
 	})
 	if err != nil {
 		t.Fatalf("add: %v", err)

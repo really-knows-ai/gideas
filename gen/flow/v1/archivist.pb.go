@@ -1005,7 +1005,7 @@ type AddFeedbackRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	WorkitemId string                 `protobuf:"bytes,1,opt,name=workitem_id,json=workitemId,proto3" json:"workitem_id,omitempty"`
 	ArtefactId string                 `protobuf:"bytes,2,opt,name=artefact_id,json=artefactId,proto3" json:"artefact_id,omitempty"`
-	Severity   Severity               `protobuf:"varint,3,opt,name=severity,proto3,enum=flow.v1.Severity" json:"severity,omitempty"`
+	CanWontFix bool                   `protobuf:"varint,6,opt,name=can_wont_fix,json=canWontFix,proto3" json:"can_wont_fix,omitempty"`
 	Message    string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	// Sidecar-resolved from the latest version at call time.
 	VersionHash   string `protobuf:"bytes,5,opt,name=version_hash,json=versionHash,proto3" json:"version_hash,omitempty"`
@@ -1057,11 +1057,11 @@ func (x *AddFeedbackRequest) GetArtefactId() string {
 	return ""
 }
 
-func (x *AddFeedbackRequest) GetSeverity() Severity {
+func (x *AddFeedbackRequest) GetCanWontFix() bool {
 	if x != nil {
-		return x.Severity
+		return x.CanWontFix
 	}
-	return Severity_SEVERITY_UNSPECIFIED
+	return false
 }
 
 func (x *AddFeedbackRequest) GetMessage() string {
@@ -2310,13 +2310,14 @@ const file_flow_v1_archivist_proto_rawDesc = "" +
 	"\n" +
 	"cert_chain\x18\x05 \x01(\fR\tcertChain\"=\n" +
 	"\x15StampArtefactResponse\x12$\n" +
-	"\x05stamp\x18\x01 \x01(\v2\x0e.flow.v1.StampR\x05stamp\"\xc2\x01\n" +
+	"\x05stamp\x18\x01 \x01(\v2\x0e.flow.v1.StampR\x05stamp\"\xb5\x01\n" +
 	"\x12AddFeedbackRequest\x12\x1f\n" +
 	"\vworkitem_id\x18\x01 \x01(\tR\n" +
 	"workitemId\x12\x1f\n" +
 	"\vartefact_id\x18\x02 \x01(\tR\n" +
-	"artefactId\x12-\n" +
-	"\bseverity\x18\x03 \x01(\x0e2\x11.flow.v1.SeverityR\bseverity\x12\x18\n" +
+	"artefactId\x12 \n" +
+	"\fcan_wont_fix\x18\x06 \x01(\bR\n" +
+	"canWontFix\x12\x18\n" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x12!\n" +
 	"\fversion_hash\x18\x05 \x01(\tR\vversionHash\"6\n" +
 	"\x13AddFeedbackResponse\x12\x1f\n" +
@@ -2490,10 +2491,9 @@ var file_flow_v1_archivist_proto_goTypes = []any{
 	(*VersionEntry)(nil),                  // 43: flow.v1.VersionEntry
 	(*Stamp)(nil),                         // 44: flow.v1.Stamp
 	(*ArtefactRef)(nil),                   // 45: flow.v1.ArtefactRef
-	(Severity)(0),                         // 46: flow.v1.Severity
-	(*FeedbackItem)(nil),                  // 47: flow.v1.FeedbackItem
-	(*Justification)(nil),                 // 48: flow.v1.Justification
-	(FeedbackState)(0),                    // 49: flow.v1.FeedbackState
+	(*FeedbackItem)(nil),                  // 46: flow.v1.FeedbackItem
+	(*Justification)(nil),                 // 47: flow.v1.Justification
+	(FeedbackState)(0),                    // 48: flow.v1.FeedbackState
 }
 var file_flow_v1_archivist_proto_depIdxs = []int32{
 	42, // 0: flow.v1.QueryArtefactStateResponse.artefact_states:type_name -> flow.v1.ArtefactState
@@ -2502,65 +2502,64 @@ var file_flow_v1_archivist_proto_depIdxs = []int32{
 	45, // 3: flow.v1.ListArtefactsResponse.artefact_refs:type_name -> flow.v1.ArtefactRef
 	44, // 4: flow.v1.GetStampsResponse.stamps:type_name -> flow.v1.Stamp
 	44, // 5: flow.v1.StampArtefactResponse.stamp:type_name -> flow.v1.Stamp
-	46, // 6: flow.v1.AddFeedbackRequest.severity:type_name -> flow.v1.Severity
-	47, // 7: flow.v1.GetFeedbackResponse.feedback_items:type_name -> flow.v1.FeedbackItem
-	47, // 8: flow.v1.ResolveFeedbackResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	48, // 9: flow.v1.RefuseFeedbackRequest.justification:type_name -> flow.v1.Justification
-	47, // 10: flow.v1.RefuseFeedbackResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	47, // 11: flow.v1.AcceptFixResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	47, // 12: flow.v1.RejectFixResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	47, // 13: flow.v1.AcceptRefusalResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	47, // 14: flow.v1.RejectRefusalResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	47, // 15: flow.v1.DeadlockFeedbackResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	49, // 16: flow.v1.LinkRulingRequest.target_state:type_name -> flow.v1.FeedbackState
-	47, // 17: flow.v1.LinkRulingResponse.updated_item:type_name -> flow.v1.FeedbackItem
-	0,  // 18: flow.v1.ArchivistService.QueryArtefactState:input_type -> flow.v1.QueryArtefactStateRequest
-	2,  // 19: flow.v1.ArchivistService.GetArtefact:input_type -> flow.v1.GetArtefactRequest
-	4,  // 20: flow.v1.ArchivistService.GetArtefactVersion:input_type -> flow.v1.GetArtefactVersionRequest
-	6,  // 21: flow.v1.ArchivistService.GetArtefactMetadata:input_type -> flow.v1.GetArtefactMetadataRequest
-	8,  // 22: flow.v1.ArchivistService.ListArtefacts:input_type -> flow.v1.ListArtefactsRequest
-	10, // 23: flow.v1.ArchivistService.StoreArtefact:input_type -> flow.v1.StoreArtefactRequest
-	12, // 24: flow.v1.ArchivistService.GetStamps:input_type -> flow.v1.GetStampsRequest
-	14, // 25: flow.v1.ArchivistService.HasStamp:input_type -> flow.v1.HasStampRequest
-	16, // 26: flow.v1.ArchivistService.StampArtefact:input_type -> flow.v1.StampArtefactRequest
-	18, // 27: flow.v1.ArchivistService.AddFeedback:input_type -> flow.v1.AddFeedbackRequest
-	20, // 28: flow.v1.ArchivistService.GetFeedback:input_type -> flow.v1.GetFeedbackRequest
-	22, // 29: flow.v1.ArchivistService.HasUnresolvedFeedback:input_type -> flow.v1.HasUnresolvedFeedbackRequest
-	24, // 30: flow.v1.ArchivistService.ResolveFeedback:input_type -> flow.v1.ResolveFeedbackRequest
-	26, // 31: flow.v1.ArchivistService.RefuseFeedback:input_type -> flow.v1.RefuseFeedbackRequest
-	28, // 32: flow.v1.ArchivistService.AcceptFix:input_type -> flow.v1.AcceptFixRequest
-	30, // 33: flow.v1.ArchivistService.RejectFix:input_type -> flow.v1.RejectFixRequest
-	32, // 34: flow.v1.ArchivistService.AcceptRefusal:input_type -> flow.v1.AcceptRefusalRequest
-	34, // 35: flow.v1.ArchivistService.RejectRefusal:input_type -> flow.v1.RejectRefusalRequest
-	36, // 36: flow.v1.ArchivistService.GetFeedbackDepth:input_type -> flow.v1.GetFeedbackDepthRequest
-	38, // 37: flow.v1.ArchivistService.DeadlockFeedback:input_type -> flow.v1.DeadlockFeedbackRequest
-	40, // 38: flow.v1.ArchivistService.LinkRuling:input_type -> flow.v1.LinkRulingRequest
-	1,  // 39: flow.v1.ArchivistService.QueryArtefactState:output_type -> flow.v1.QueryArtefactStateResponse
-	3,  // 40: flow.v1.ArchivistService.GetArtefact:output_type -> flow.v1.GetArtefactResponse
-	5,  // 41: flow.v1.ArchivistService.GetArtefactVersion:output_type -> flow.v1.GetArtefactVersionResponse
-	7,  // 42: flow.v1.ArchivistService.GetArtefactMetadata:output_type -> flow.v1.GetArtefactMetadataResponse
-	9,  // 43: flow.v1.ArchivistService.ListArtefacts:output_type -> flow.v1.ListArtefactsResponse
-	11, // 44: flow.v1.ArchivistService.StoreArtefact:output_type -> flow.v1.StoreArtefactResponse
-	13, // 45: flow.v1.ArchivistService.GetStamps:output_type -> flow.v1.GetStampsResponse
-	15, // 46: flow.v1.ArchivistService.HasStamp:output_type -> flow.v1.HasStampResponse
-	17, // 47: flow.v1.ArchivistService.StampArtefact:output_type -> flow.v1.StampArtefactResponse
-	19, // 48: flow.v1.ArchivistService.AddFeedback:output_type -> flow.v1.AddFeedbackResponse
-	21, // 49: flow.v1.ArchivistService.GetFeedback:output_type -> flow.v1.GetFeedbackResponse
-	23, // 50: flow.v1.ArchivistService.HasUnresolvedFeedback:output_type -> flow.v1.HasUnresolvedFeedbackResponse
-	25, // 51: flow.v1.ArchivistService.ResolveFeedback:output_type -> flow.v1.ResolveFeedbackResponse
-	27, // 52: flow.v1.ArchivistService.RefuseFeedback:output_type -> flow.v1.RefuseFeedbackResponse
-	29, // 53: flow.v1.ArchivistService.AcceptFix:output_type -> flow.v1.AcceptFixResponse
-	31, // 54: flow.v1.ArchivistService.RejectFix:output_type -> flow.v1.RejectFixResponse
-	33, // 55: flow.v1.ArchivistService.AcceptRefusal:output_type -> flow.v1.AcceptRefusalResponse
-	35, // 56: flow.v1.ArchivistService.RejectRefusal:output_type -> flow.v1.RejectRefusalResponse
-	37, // 57: flow.v1.ArchivistService.GetFeedbackDepth:output_type -> flow.v1.GetFeedbackDepthResponse
-	39, // 58: flow.v1.ArchivistService.DeadlockFeedback:output_type -> flow.v1.DeadlockFeedbackResponse
-	41, // 59: flow.v1.ArchivistService.LinkRuling:output_type -> flow.v1.LinkRulingResponse
-	39, // [39:60] is the sub-list for method output_type
-	18, // [18:39] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	46, // 6: flow.v1.GetFeedbackResponse.feedback_items:type_name -> flow.v1.FeedbackItem
+	46, // 7: flow.v1.ResolveFeedbackResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	47, // 8: flow.v1.RefuseFeedbackRequest.justification:type_name -> flow.v1.Justification
+	46, // 9: flow.v1.RefuseFeedbackResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	46, // 10: flow.v1.AcceptFixResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	46, // 11: flow.v1.RejectFixResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	46, // 12: flow.v1.AcceptRefusalResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	46, // 13: flow.v1.RejectRefusalResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	46, // 14: flow.v1.DeadlockFeedbackResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	48, // 15: flow.v1.LinkRulingRequest.target_state:type_name -> flow.v1.FeedbackState
+	46, // 16: flow.v1.LinkRulingResponse.updated_item:type_name -> flow.v1.FeedbackItem
+	0,  // 17: flow.v1.ArchivistService.QueryArtefactState:input_type -> flow.v1.QueryArtefactStateRequest
+	2,  // 18: flow.v1.ArchivistService.GetArtefact:input_type -> flow.v1.GetArtefactRequest
+	4,  // 19: flow.v1.ArchivistService.GetArtefactVersion:input_type -> flow.v1.GetArtefactVersionRequest
+	6,  // 20: flow.v1.ArchivistService.GetArtefactMetadata:input_type -> flow.v1.GetArtefactMetadataRequest
+	8,  // 21: flow.v1.ArchivistService.ListArtefacts:input_type -> flow.v1.ListArtefactsRequest
+	10, // 22: flow.v1.ArchivistService.StoreArtefact:input_type -> flow.v1.StoreArtefactRequest
+	12, // 23: flow.v1.ArchivistService.GetStamps:input_type -> flow.v1.GetStampsRequest
+	14, // 24: flow.v1.ArchivistService.HasStamp:input_type -> flow.v1.HasStampRequest
+	16, // 25: flow.v1.ArchivistService.StampArtefact:input_type -> flow.v1.StampArtefactRequest
+	18, // 26: flow.v1.ArchivistService.AddFeedback:input_type -> flow.v1.AddFeedbackRequest
+	20, // 27: flow.v1.ArchivistService.GetFeedback:input_type -> flow.v1.GetFeedbackRequest
+	22, // 28: flow.v1.ArchivistService.HasUnresolvedFeedback:input_type -> flow.v1.HasUnresolvedFeedbackRequest
+	24, // 29: flow.v1.ArchivistService.ResolveFeedback:input_type -> flow.v1.ResolveFeedbackRequest
+	26, // 30: flow.v1.ArchivistService.RefuseFeedback:input_type -> flow.v1.RefuseFeedbackRequest
+	28, // 31: flow.v1.ArchivistService.AcceptFix:input_type -> flow.v1.AcceptFixRequest
+	30, // 32: flow.v1.ArchivistService.RejectFix:input_type -> flow.v1.RejectFixRequest
+	32, // 33: flow.v1.ArchivistService.AcceptRefusal:input_type -> flow.v1.AcceptRefusalRequest
+	34, // 34: flow.v1.ArchivistService.RejectRefusal:input_type -> flow.v1.RejectRefusalRequest
+	36, // 35: flow.v1.ArchivistService.GetFeedbackDepth:input_type -> flow.v1.GetFeedbackDepthRequest
+	38, // 36: flow.v1.ArchivistService.DeadlockFeedback:input_type -> flow.v1.DeadlockFeedbackRequest
+	40, // 37: flow.v1.ArchivistService.LinkRuling:input_type -> flow.v1.LinkRulingRequest
+	1,  // 38: flow.v1.ArchivistService.QueryArtefactState:output_type -> flow.v1.QueryArtefactStateResponse
+	3,  // 39: flow.v1.ArchivistService.GetArtefact:output_type -> flow.v1.GetArtefactResponse
+	5,  // 40: flow.v1.ArchivistService.GetArtefactVersion:output_type -> flow.v1.GetArtefactVersionResponse
+	7,  // 41: flow.v1.ArchivistService.GetArtefactMetadata:output_type -> flow.v1.GetArtefactMetadataResponse
+	9,  // 42: flow.v1.ArchivistService.ListArtefacts:output_type -> flow.v1.ListArtefactsResponse
+	11, // 43: flow.v1.ArchivistService.StoreArtefact:output_type -> flow.v1.StoreArtefactResponse
+	13, // 44: flow.v1.ArchivistService.GetStamps:output_type -> flow.v1.GetStampsResponse
+	15, // 45: flow.v1.ArchivistService.HasStamp:output_type -> flow.v1.HasStampResponse
+	17, // 46: flow.v1.ArchivistService.StampArtefact:output_type -> flow.v1.StampArtefactResponse
+	19, // 47: flow.v1.ArchivistService.AddFeedback:output_type -> flow.v1.AddFeedbackResponse
+	21, // 48: flow.v1.ArchivistService.GetFeedback:output_type -> flow.v1.GetFeedbackResponse
+	23, // 49: flow.v1.ArchivistService.HasUnresolvedFeedback:output_type -> flow.v1.HasUnresolvedFeedbackResponse
+	25, // 50: flow.v1.ArchivistService.ResolveFeedback:output_type -> flow.v1.ResolveFeedbackResponse
+	27, // 51: flow.v1.ArchivistService.RefuseFeedback:output_type -> flow.v1.RefuseFeedbackResponse
+	29, // 52: flow.v1.ArchivistService.AcceptFix:output_type -> flow.v1.AcceptFixResponse
+	31, // 53: flow.v1.ArchivistService.RejectFix:output_type -> flow.v1.RejectFixResponse
+	33, // 54: flow.v1.ArchivistService.AcceptRefusal:output_type -> flow.v1.AcceptRefusalResponse
+	35, // 55: flow.v1.ArchivistService.RejectRefusal:output_type -> flow.v1.RejectRefusalResponse
+	37, // 56: flow.v1.ArchivistService.GetFeedbackDepth:output_type -> flow.v1.GetFeedbackDepthResponse
+	39, // 57: flow.v1.ArchivistService.DeadlockFeedback:output_type -> flow.v1.DeadlockFeedbackResponse
+	41, // 58: flow.v1.ArchivistService.LinkRuling:output_type -> flow.v1.LinkRulingResponse
+	38, // [38:59] is the sub-list for method output_type
+	17, // [17:38] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_archivist_proto_init() }
