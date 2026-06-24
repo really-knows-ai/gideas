@@ -73,7 +73,7 @@ func HandleRefine(
 	}
 
 	// ---------------------------------------------------------------
-	// Phase 1: Per-item triage (parallel)
+	// Phase 1: Per-item triage (sequential)
 	// ---------------------------------------------------------------
 
 	actionedItems, err := triageFeedback(ctx, triage, client,
