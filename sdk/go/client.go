@@ -390,7 +390,9 @@ func (c *Client) HasStamp(ctx context.Context, artefactID, stampName string) (bo
 // ---------------------------------------------------------------------------
 
 // AddFeedback creates a new feedback item on the specified artefact.
-// The feedback starts in NEW state. Returns the generated feedback ID.
+// The feedback starts in NEW state. The canWontFix parameter gates whether
+// the refiner may refuse this feedback with a justification (true = refusal
+// permitted, false = must action). Returns the generated feedback ID.
 func (c *Client) AddFeedback(
 	ctx context.Context, artefactID string, canWontFix bool, message string,
 ) (string, error) {
