@@ -392,12 +392,12 @@ func (c *Client) HasStamp(ctx context.Context, artefactID, stampName string) (bo
 // AddFeedback creates a new feedback item on the specified artefact.
 // The feedback starts in NEW state. Returns the generated feedback ID.
 func (c *Client) AddFeedback(
-	ctx context.Context, artefactID string, severity flowv1.Severity, message string,
+	ctx context.Context, artefactID string, canWontFix bool, message string,
 ) (string, error) {
 	resp, err := c.Archivist.AddFeedback(ctx, &flowv1.AddFeedbackRequest{
 		WorkitemId: c.workitemID,
 		ArtefactId: artefactID,
-		Severity:   severity,
+		CanWontFix: canWontFix,
 		Message:    message,
 	})
 	if err != nil {
