@@ -43,11 +43,13 @@ const (
 	eventBusPort         = 50056
 	frictionLedgerPort   = 50057
 	librarianPort        = 50058
+	archivistPort        = 50054
 	embassyPort          = 50059
 	federationPort       = 50061
 	flowMonitorHTTPPort  = 2112
 	infraStorageSize     = "1Gi"
 	monitorStorageSize   = "100Mi"
+	archivistSvcName     = "flow-archivist"
 	eventBusServiceName  = "flow-eventbus"
 	frictionLedgerSvcNm  = "flow-frictionledger"
 	flowMonitorSvcName   = "flow-monitor"
@@ -59,7 +61,7 @@ const (
 	librarianDBPath      = "/data/librarian.db"
 	embassyDataPath      = "/data"
 	monitorCheckpointPth = "/data/monitor-checkpoint.json"
-	operatorSvcName      = "flow-operator"
+	operatorSvcName      = "flow-operator.operator-system.svc.cluster.local"
 	operatorPort         = 50052
 )
 

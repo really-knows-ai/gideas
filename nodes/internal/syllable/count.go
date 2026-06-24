@@ -1,74 +1,48 @@
-// Package syllable provides a heuristic English syllable counter.
+// Package syllable provides English syllable counting via a Go port of
+// github.com/wooorm/syllable (the npm "syllable" package).
 //
-// The algorithm uses vowel-group counting with common English adjustments
-// (silent-e, diphthongs, suffixes). It is not perfect for all words but
-// works well enough for haiku validation.
+// The upstream library handles vowel-consonant patterns plus an extensive
+// set of corner-case regex rules covering thousands of English words,
+// replacing the previous 65-line vowel-group heuristic.
+//
+// syllables.In() overcounts on multi-word strings (counts word
+// boundaries), so we split into individual words and sum.
+//
+// Known overrides fix words where the upstream library consistently
+// miscounts (usually misidentifying vowel pairs as diphthongs).
 package syllable
 
 import (
 	"strings"
-	"unicode"
+
+	"github.com/wonglyxng/syllables"
 )
 
-// Count returns the estimated number of syllables in a single English word.
-// It uses a vowel-group heuristic with adjustments for common patterns.
-func Count(word string) int {
-	word = strings.ToLower(strings.TrimSpace(word))
-	if word == "" {
-		return 0
-	}
-
-	// Remove non-letter characters.
-	cleaned := strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) {
-			return r
-		}
-		return -1
-	}, word)
-	if cleaned == "" {
-		return 0
-	}
-
-	vowels := "aeiouy"
-	count := 0
-	prevVowel := false
-
-	for _, ch := range cleaned {
-		isVowel := strings.ContainsRune(vowels, ch)
-		if isVowel && !prevVowel {
-			count++
-		}
-		prevVowel = isVowel
-	}
-
-	// Adjustments for common English patterns.
-
-	// Silent -e at end (but not -le which adds a syllable).
-	if strings.HasSuffix(cleaned, "e") && !strings.HasSuffix(cleaned, "le") {
-		count--
-	}
-
-	// -ed at end is usually silent unless preceded by t or d.
-	if strings.HasSuffix(cleaned, "ed") && len(cleaned) > 3 {
-		beforeEd := cleaned[len(cleaned)-3]
-		if beforeEd != 't' && beforeEd != 'd' {
-			count--
-		}
-	}
-
-	// Ensure at least one syllable per word.
-	if count < 1 {
-		count = 1
-	}
-
-	return count
+// overrides corrects known miscounts in the upstream library.
+// Each word is lowercased before lookup.
+var overrides = map[string]int{
+	"chaos":     2, // ao is not a diphthong in "chaos"
+	"poem":      2, // oe is not a diphthong in "poem"
+	"poems":     2,
+	"farewell":  2, // "fare" + "well", not a triphthong
+	"goodbye":   2, // "good" + "bye"
+	"goodbyes":  2,
 }
 
-// CountLine returns the total syllable count for a line of text.
+// Count returns the estimated number of syllables in a single English word.
+func Count(word string) int {
+	key := strings.ToLower(word)
+	if n, ok := overrides[key]; ok {
+		return n
+	}
+	return syllables.In(word)
+}
+
+// CountLine returns the total syllable count for a line of text by
+// splitting into words and summing per-word counts.
 func CountLine(line string) int {
-	words := strings.Fields(line)
 	total := 0
-	for _, w := range words {
+	for _, w := range strings.Fields(line) {
 		total += Count(w)
 	}
 	return total

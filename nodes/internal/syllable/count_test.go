@@ -23,6 +23,17 @@ func TestCount(t *testing.T) {
 		{"sound", 1},
 		{"of", 1},
 		{"silence", 2},
+		// Edge cases that broke the old vowel-group heuristic.
+		{"leaves", 1},
+		{"gives", 1},
+		{"lives", 1},
+		{"waves", 1},
+		{"fire", 1},
+		{"poem", 2}, // overridden from 1 (wooorm/syllable bug: oe→diphthong)
+		{"rhythm", 2},
+		{"crimson", 2},
+		{"descend", 2},
+		{"descends", 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.word, func(t *testing.T) {
@@ -73,5 +84,22 @@ func TestValidateHaiku(t *testing.T) {
 	_, ok = ValidateHaiku(twoLines)
 	if ok {
 		t.Error("expected invalid for two lines")
+	}
+
+	// Real haiku from the demo that the old counter mishandled (6-7-5 → actually 5-7-5).
+	realHaiku := "Crimson leaves descend\nCool whispers drift in twilight\nGolden silence falls"
+	counts, ok = ValidateHaiku(realHaiku)
+	if !ok {
+		t.Errorf("expected valid haiku, got counts %v", counts)
+	}
+	if counts != [3]int{5, 7, 5} {
+		t.Errorf("expected [5, 7, 5], got %v", counts)
+	}
+
+	// Invalid haiku (6-7-5).
+	invalid2 := "Crimson leaves descending\nCool whispers drift in twilight\nGolden silence falls"
+	_, ok = ValidateHaiku(invalid2)
+	if ok {
+		t.Error("expected invalid haiku")
 	}
 }

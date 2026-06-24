@@ -73,7 +73,7 @@ func IdentityInterceptor(resolver SessionResolver, namespace, nodeID, capabiliti
 		if len(vals) > 0 {
 			identity := resolver.LookupSession(vals[0])
 			if identity != nil {
-				slog.Debug("Identity interceptor: injecting session identity",
+				slog.Info("Identity interceptor: injecting session identity",
 					"namespace", namespace,
 					"workitem_id", identity.WorkitemID,
 					"node_id", identity.NodeID,
@@ -90,12 +90,16 @@ func IdentityInterceptor(resolver SessionResolver, namespace, nodeID, capabiliti
 				ctx = metadata.NewIncomingContext(ctx, enriched)
 				return handler(ctx, req)
 			}
+			slog.Info("Identity interceptor: no session found for workitem",
+				"requested_workitem_id", vals[0],
+				"method", info.FullMethod,
+			)
 		}
 
 		// Entry-bound fallback: no active workitem session, but the
 		// Sidecar knows its namespace and node identity.
 		if namespace != "" && nodeID != "" {
-			slog.Debug("Identity interceptor: entry-bound fallback",
+			slog.Info("Identity interceptor: entry-bound fallback",
 				"namespace", namespace,
 				"node_id", nodeID,
 				"capabilities", capabilities,

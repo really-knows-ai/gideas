@@ -105,7 +105,22 @@ func (s *Scheduler) CalculateNextStep(
 	workitem *flowv1.Workitem,
 	flow *flowv1.FoundryFlow,
 ) (*Result, error) {
-	// 1. Fetch the FoundryNode CRD for the current assignee.
+	// 1. For instructions that don't require the current node, handle directly.
+	switch instruction.Type {
+	case "route_to":
+		// route_to only validates the target — no current node needed.
+		// This supports child workitems which have no current assignee yet.
+		result, err := s.handleRouteTo(ctx, instruction.Target)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.checkThrashGuard(workitem, flow); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	// 2. Instructions that require the current node.
 	var node flowv1.FoundryNode
 	key := types.NamespacedName{
 		Namespace: s.Namespace,
@@ -115,7 +130,6 @@ func (s *Scheduler) CalculateNextStep(
 		return nil, fmt.Errorf("failed to fetch FoundryNode %q: %w", currentAssignee, err)
 	}
 
-	// 2. Dispatch on instruction type (guards 1 + 2: shape + target validity).
 	switch instruction.Type {
 	case "complete":
 		return s.handleComplete(ctx, &node, workitem, flow)
@@ -125,18 +139,6 @@ func (s *Scheduler) CalculateNextStep(
 		if err != nil {
 			return nil, err
 		}
-		// Guard 3: Thrash check before applying transition.
-		if err := s.checkThrashGuard(workitem, flow); err != nil {
-			return nil, err
-		}
-		return result, nil
-
-	case "route_to":
-		result, err := s.handleRouteTo(ctx, instruction.Target)
-		if err != nil {
-			return nil, err
-		}
-		// Guard 3: Thrash check before applying transition.
 		if err := s.checkThrashGuard(workitem, flow); err != nil {
 			return nil, err
 		}
@@ -158,6 +160,17 @@ func (s *Scheduler) CalculateNextStep(
 // If a FoundryFlow is provided, the bound exit contract is validated
 // against artefact state via the Archivist.
 func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode, workitem *flowv1.Workitem, flow *flowv1.FoundryFlow) (*Result, error) {
+	// Children don't need exit contracts — they report back to the parent.
+	if workitem != nil && workitem.Status.ParentWorkitemID != "" {
+		if err := s.checkThrashGuard(workitem, flow); err != nil {
+			return nil, err
+		}
+		return &Result{
+			NextAssignee: "",
+			Phase:        "Completed",
+		}, nil
+	}
+
 	if node.Spec.Exit == "" {
 		return nil, &GuardError{
 			Code:    "EXIT_NOT_BOUND",

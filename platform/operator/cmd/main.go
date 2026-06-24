@@ -190,6 +190,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Connect to the Event Bus for audit and lifecycle event publishing.
+	// Must be initialized before controllers so they can receive the publisher.
+	var auditor *eventbus.AsyncPublisher
+	ebAddr := eventBusAddr
+	if ebAddr == "" {
+		ebAddr = os.Getenv("EVENT_BUS_ADDRESS")
+	}
+	if ebAddr != "" {
+		ebConn, ebErr := grpc.NewClient(
+			ebAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if ebErr != nil {
+			setupLog.Error(ebErr, "Failed to connect to Event Bus", "address", ebAddr)
+			os.Exit(1)
+		}
+		ebClient := flowv1gen.NewFlowEventBusServiceClient(ebConn)
+		auditor = eventbus.NewAsyncPublisher(ebClient)
+		setupLog.Info("Event Bus connected for audit publishing", "address", ebAddr)
+	} else {
+		setupLog.Info("Event Bus not configured, audit publishing disabled")
+	}
+
 	if err := (&controller.FoundryFlowReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -205,8 +228,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.WorkitemReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		Auditor: auditor,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Workitem")
 		os.Exit(1)
@@ -274,28 +298,7 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	operatorSrv := rpc.NewOperatorServer(mgr.GetClient())
-
-	// Connect to the Event Bus for audit event publishing.
-	// Prefer the flag; fall back to the environment variable.
-	ebAddr := eventBusAddr
-	if ebAddr == "" {
-		ebAddr = os.Getenv("EVENT_BUS_ADDRESS")
-	}
-	if ebAddr != "" {
-		ebConn, ebErr := grpc.NewClient(
-			ebAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if ebErr != nil {
-			setupLog.Error(ebErr, "Failed to connect to Event Bus", "address", ebAddr)
-			os.Exit(1)
-		}
-		ebClient := flowv1gen.NewFlowEventBusServiceClient(ebConn)
-		operatorSrv.Auditor = eventbus.NewAsyncPublisher(ebClient)
-		setupLog.Info("Event Bus connected for audit publishing", "address", ebAddr)
-	} else {
-		setupLog.Info("Event Bus not configured, audit publishing disabled")
-	}
+	operatorSrv.Auditor = auditor
 
 	flowv1gen.RegisterOperatorServiceServer(grpcServer, operatorSrv)
 	reflection.Register(grpcServer)

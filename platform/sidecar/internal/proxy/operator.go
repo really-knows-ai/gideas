@@ -7,6 +7,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -65,8 +66,21 @@ func (p *OperatorProxy) SubmitResult(
 ) (*flowv1.SubmitResultResponse, error) {
 	outCtx := propagateMetadata(ctx)
 
+	// Log propagated metadata keys for debugging namespace propagation.
+	md, _ := metadata.FromOutgoingContext(outCtx)
+	nsKeys := md.Get("x-flow-namespace")
+	wKeys := md.Get("x-flow-workitem-id")
+	nKeys := md.Get("x-flow-node-id")
+	actionStr := "nil"
+	if req.GetAction() != nil {
+		actionStr = fmt.Sprintf("%T", req.GetAction())
+	}
 	slog.Info("Forwarding SubmitResult to Operator",
 		"workitem_id", req.GetWorkitemId(),
+		"action_type", actionStr,
+		"x_flow_namespace", nsKeys,
+		"x_flow_workitem_id", wKeys,
+		"x_flow_node_id", nKeys,
 	)
 
 	resp, err := p.client.SubmitResult(outCtx, req)

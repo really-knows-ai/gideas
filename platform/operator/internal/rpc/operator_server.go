@@ -187,6 +187,7 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 		"workitem_id", workitemID,
 		"namespace", namespace,
 		"action", submitActionString(req),
+		"node_id", extractMetadataValue(ctx, metadataKeyNodeID),
 	)
 
 	// 2. Fetch the Workitem CRD.
@@ -200,8 +201,18 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 		return nil, status.Error(codes.NotFound, fmt.Sprintf("workitem %q not found: %v", workitemID, err))
 	}
 
-	// 3. Convert action to CRD routing instruction.
-	workitem.Status.RoutingInstruction = convertSubmitAction(req)
+	// 3. Convert action to CRD routing instruction. Skip if action is nil to
+	// avoid overwriting a valid routing instruction from a concurrent call.
+	ri := convertSubmitAction(req)
+	if ri != nil {
+		workitem.Status.RoutingInstruction = ri
+	} else {
+		slog.Warn("SubmitResult with nil action, routing instruction not updated",
+			"workitem_id", workitemID,
+			"node_id", extractMetadataValue(ctx, metadataKeyNodeID),
+		)
+		return &flowv1.SubmitResultResponse{Accepted: true}, nil
+	}
 
 	// 3a. Completion guard: reject complete if children are non-terminal.
 	if workitem.Status.RoutingInstruction != nil && workitem.Status.RoutingInstruction.Type == completeType {

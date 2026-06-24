@@ -29,6 +29,7 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	flowv1gen "github.com/gideas/flow/gen/flow/v1"
@@ -879,5 +880,6 @@ func (r *WorkitemReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&flowv1.Workitem{}).
 		Named("workitem").
+		WithOptions(controller.Options{MaxConcurrentReconciles: 10}).
 		Complete(r)
 }
