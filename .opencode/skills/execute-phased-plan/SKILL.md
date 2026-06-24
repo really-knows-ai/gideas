@@ -33,6 +33,12 @@ dev/<project-slug>
 
 If the branch name already exists, append a numeric suffix (`-02`, `-03`, etc.).
 
+Worktrees live in `.worktrees/` inside the repo root:
+
+```bash
+git worktree add -b dev/<project-slug> .worktrees/<project-slug> HEAD
+```
+
 All implementation, verification, review, and commits happen inside the new worktree.
 
 ### 3. Execute phases in order

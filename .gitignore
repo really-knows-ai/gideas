@@ -22,3 +22,6 @@ plans/
 
 # OpenCode local state
 .opencode/package-lock.json
+
+# Git worktrees for phased plan execution
+.worktrees/
