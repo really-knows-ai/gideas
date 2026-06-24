@@ -310,22 +310,19 @@ func printLiveState(
 			}
 			seenFeedback[id] = true
 
-			// Color-code by severity.
 			msg := fb.GetMessage()
 			// For multi-line feedback (e.g. quench syllable breakdown),
 			// show only the first line in the timeline.
 			if idx := strings.Index(msg, "\n"); idx > 0 {
 				msg = msg[:idx]
 			}
-			color := "\033[33m" // yellow default
-			if fb.GetSeverity() == flowv1.Severity_SEVERITY_HIGH {
-				color = "\033[31m" // red
-			} else if fb.GetSeverity() == flowv1.Severity_SEVERITY_MEDIUM {
-				color = "\033[33m" // yellow
+			canWontFix := fb.GetCanWontFix()
+			canWontFixLabel := "refusable"
+			if !canWontFix {
+				canWontFixLabel = "fixed"
 			}
 			stateLabel := strings.TrimPrefix(fb.GetState().String(), "FEEDBACK_STATE_")
-			sevLabel := strings.TrimPrefix(fb.GetSeverity().String(), "SEVERITY_")
-			fmt.Printf("%-12s       %s[%s/%s] %s\033[0m\n", "", color, stateLabel, sevLabel, msg)
+			fmt.Printf("%-12s       [%s/%s] %s\033[0m\n", "", stateLabel, canWontFixLabel, msg)
 		}
 	}
 }
@@ -394,7 +391,7 @@ func fetchAndPrintHaiku(ctx context.Context, addr, workitemID string) {
 	if err == nil && len(feedbackResp.GetFeedbackItems()) > 0 {
 		fmt.Println("\n--- FEEDBACK HISTORY ---")
 		for _, fb := range feedbackResp.GetFeedbackItems() {
-			fmt.Printf("  [%s] %s — %s\n", fb.GetState().String(), fb.GetSeverity().String(), fb.GetMessage())
+			fmt.Printf("  [%s] %s\n", fb.GetState().String(), fb.GetMessage())
 		}
 	}
 

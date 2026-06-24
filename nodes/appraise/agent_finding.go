@@ -159,7 +159,6 @@ func (f *FindingAgent) Run(
 	for i, fb := range items {
 		fmt.Fprintf(&discussions, "### Discussion %d\n\n", i+1)
 		fmt.Fprintf(&discussions, "**Original feedback**: %s\n", fb.GetMessage())
-		fmt.Fprintf(&discussions, "**Severity**: %s\n", fb.GetSeverity().String())
 
 		// Resolution path.
 		switch fb.GetState() {

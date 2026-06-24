@@ -38,13 +38,12 @@ type reviewRawOutput struct {
 // wire-format (snake_case).
 type reviewRawItem struct {
 	Message   string   `json:"message"`
-	Severity  string   `json:"severity"`
 	CitedLaws []string `json:"cited_laws"`
 }
 
 // reviewSchema validates the output of fresh review inferences.
-// The LLM produces zero or more feedback items, each with severity and
-// optional law citations.
+// The LLM produces zero or more feedback items, each with a message
+// and optional law citations.
 var reviewSchema = []byte(`{
 	"type": "object",
 	"properties": {
@@ -54,10 +53,9 @@ var reviewSchema = []byte(`{
 				"type": "object",
 				"properties": {
 					"message":    { "type": "string", "minLength": 1 },
-					"severity":   { "type": "string", "enum": ["low", "medium", "high", "critical"] },
 					"cited_laws": { "type": "array", "items": { "type": "string" } }
 				},
-				"required": ["message", "severity", "cited_laws"],
+				"required": ["message", "cited_laws"],
 				"additionalProperties": false
 			}
 		}
@@ -78,15 +76,10 @@ const reviewSystemPromptTemplate = `You are a {{.ReviewArtefact}} reviewer for a
 
 Your job is to review the {{.ReviewArtefact}} and produce NEW feedback observations. You are NOT approving or rejecting — you are producing observations. If you have no new issues, return an empty feedback array.
 
-Every piece of feedback must either:
-1. CITE one or more governance laws by ID — the {{.ReviewArtefact}} violates or insufficiently addresses the law.
-2. Offer a NOVEL observation — something not covered by any law but worth improving. Use an empty cited_laws array for these.
-
-Each feedback item must include a severity level:
-- "low": Minor style or preference issue
-- "medium": Quality issue that should be addressed
-- "high": Functional or structural concern
-- "critical": Blocking issue
+Feedback states a deviation from a required standard. Every observation must identify what is being deviated from:
+- Law violation: the artefact breaches a governance law. Cite the law by ID.
+- Prompt deviation: the artefact strays from the creative brief (theme, subject, mood, or explicit instructions).
+- Both: the deviation violates both a law and the creative brief.
 {{- if .DivisionSuffix}}
 
 {{.DivisionSuffix}}
@@ -133,9 +126,8 @@ Only raise NEW observations not covered by existing feedback.
 
 Respond with ONLY a JSON object containing a "feedback" array.
 Each item has:
-- "message": a specific, actionable observation (1-2 sentences)
-- "severity": one of "low", "medium", "high", "critical"
-- "cited_laws": array of law IDs this feedback references (empty array if novel)
+- "message": a specific, actionable observation stating the deviation (1-2 sentences)
+- "cited_laws": array of law IDs this feedback references (empty array if prompt-only deviation)
 
 If the {{.ReviewArtefact}} is excellent and you have no NEW feedback, return:
 {"feedback": []}
@@ -148,13 +140,13 @@ No issues:
 Law violation:
 {"feedback": [
   {"message": "Violates a specific governance law.",
-   "severity": "medium", "cited_laws": ["{{.ExampleLawID}}"]}
+   "cited_laws": ["{{.ExampleLawID}}"]}
 ]}
 
-Novel observation:
+Prompt deviation:
 {"feedback": [
-  {"message": "The final section feels rushed.",
-   "severity": "low", "cited_laws": []}
+  {"message": "The final section is about penguins but the prompt requested cats.",
+   "cited_laws": []}
 ]}
 
 Output ONLY the JSON object. No markdown fences, no explanation, no other text.`
@@ -300,7 +292,6 @@ func (r *ReviewAgent) Run(
 	for i, item := range rawOut.Feedback {
 		result.Feedback[i] = flow.ReviewFeedback{
 			Message:   item.Message,
-			Severity:  item.Severity,
 			CitedLaws: item.CitedLaws,
 		}
 	}

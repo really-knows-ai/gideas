@@ -671,8 +671,8 @@ type FeedbackItem struct {
 	// Sidecar-injected x-flow-node-id metadata. Gate nodes use this to
 	// attribute unresolved feedback to the stamp phase that generated it.
 	Source        string                 `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
-	Severity      Severity               `protobuf:"varint,3,opt,name=severity,proto3,enum=flow.v1.Severity" json:"severity,omitempty"`
 	State         FeedbackState          `protobuf:"varint,4,opt,name=state,proto3,enum=flow.v1.FeedbackState" json:"state,omitempty"`
+	CanWontFix    bool                   `protobuf:"varint,11,opt,name=can_wont_fix,json=canWontFix,proto3" json:"can_wont_fix,omitempty"`
 	Message       string                 `protobuf:"bytes,5,opt,name=message,proto3" json:"message,omitempty"`
 	LinkedRuling  string                 `protobuf:"bytes,6,opt,name=linked_ruling,json=linkedRuling,proto3" json:"linked_ruling,omitempty"`
 	History       []*FeedbackEvent       `protobuf:"bytes,7,rep,name=history,proto3" json:"history,omitempty"`
@@ -727,18 +727,18 @@ func (x *FeedbackItem) GetSource() string {
 	return ""
 }
 
-func (x *FeedbackItem) GetSeverity() Severity {
-	if x != nil {
-		return x.Severity
-	}
-	return Severity_SEVERITY_UNSPECIFIED
-}
-
 func (x *FeedbackItem) GetState() FeedbackState {
 	if x != nil {
 		return x.State
 	}
 	return FeedbackState_FEEDBACK_STATE_UNSPECIFIED
+}
+
+func (x *FeedbackItem) GetCanWontFix() bool {
+	if x != nil {
+		return x.CanWontFix
+	}
+	return false
 }
 
 func (x *FeedbackItem) GetMessage() string {
@@ -1575,12 +1575,13 @@ const file_flow_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"cert_chain\x18\x05 \x01(\fR\tcertChain\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa0\x03\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x93\x03\n" +
 	"\fFeedbackItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
-	"\x06source\x18\x02 \x01(\tR\x06source\x12-\n" +
-	"\bseverity\x18\x03 \x01(\x0e2\x11.flow.v1.SeverityR\bseverity\x12,\n" +
-	"\x05state\x18\x04 \x01(\x0e2\x16.flow.v1.FeedbackStateR\x05state\x12\x18\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\x12,\n" +
+	"\x05state\x18\x04 \x01(\x0e2\x16.flow.v1.FeedbackStateR\x05state\x12 \n" +
+	"\fcan_wont_fix\x18\v \x01(\bR\n" +
+	"canWontFix\x12\x18\n" +
 	"\amessage\x18\x05 \x01(\tR\amessage\x12#\n" +
 	"\rlinked_ruling\x18\x06 \x01(\tR\flinkedRuling\x120\n" +
 	"\ahistory\x18\a \x03(\v2\x16.flow.v1.FeedbackEventR\ahistory\x12<\n" +
@@ -1726,29 +1727,28 @@ var file_flow_v1_common_proto_depIdxs = []int32{
 	2,  // 0: flow.v1.RoutingInstruction.type:type_name -> flow.v1.RoutingType
 	22, // 1: flow.v1.WorkitemContext.metadata:type_name -> flow.v1.WorkitemContext.MetadataEntry
 	23, // 2: flow.v1.Stamp.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 3: flow.v1.FeedbackItem.severity:type_name -> flow.v1.Severity
-	1,  // 4: flow.v1.FeedbackItem.state:type_name -> flow.v1.FeedbackState
-	11, // 5: flow.v1.FeedbackItem.history:type_name -> flow.v1.FeedbackEvent
-	12, // 6: flow.v1.FeedbackItem.justification:type_name -> flow.v1.Justification
-	23, // 7: flow.v1.FeedbackItem.created_at:type_name -> google.protobuf.Timestamp
-	23, // 8: flow.v1.FeedbackEvent.timestamp:type_name -> google.protobuf.Timestamp
-	13, // 9: flow.v1.Justification.citation:type_name -> flow.v1.Citation
-	14, // 10: flow.v1.Justification.novel_argument:type_name -> flow.v1.NovelArgument
-	16, // 11: flow.v1.Law.representations:type_name -> flow.v1.Representation
-	3,  // 12: flow.v1.Law.tier:type_name -> flow.v1.LawTier
-	23, // 13: flow.v1.Law.created_at:type_name -> google.protobuf.Timestamp
-	23, // 14: flow.v1.Law.updated_at:type_name -> google.protobuf.Timestamp
-	23, // 15: flow.v1.VersionEntry.created_at:type_name -> google.protobuf.Timestamp
-	3,  // 16: flow.v1.FrictionAggregate.tier:type_name -> flow.v1.LawTier
-	23, // 17: flow.v1.FrictionAggregate.earliest:type_name -> google.protobuf.Timestamp
-	23, // 18: flow.v1.FrictionAggregate.latest:type_name -> google.protobuf.Timestamp
-	23, // 19: flow.v1.TimeRange.start:type_name -> google.protobuf.Timestamp
-	23, // 20: flow.v1.TimeRange.end:type_name -> google.protobuf.Timestamp
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	1,  // 3: flow.v1.FeedbackItem.state:type_name -> flow.v1.FeedbackState
+	11, // 4: flow.v1.FeedbackItem.history:type_name -> flow.v1.FeedbackEvent
+	12, // 5: flow.v1.FeedbackItem.justification:type_name -> flow.v1.Justification
+	23, // 6: flow.v1.FeedbackItem.created_at:type_name -> google.protobuf.Timestamp
+	23, // 7: flow.v1.FeedbackEvent.timestamp:type_name -> google.protobuf.Timestamp
+	13, // 8: flow.v1.Justification.citation:type_name -> flow.v1.Citation
+	14, // 9: flow.v1.Justification.novel_argument:type_name -> flow.v1.NovelArgument
+	16, // 10: flow.v1.Law.representations:type_name -> flow.v1.Representation
+	3,  // 11: flow.v1.Law.tier:type_name -> flow.v1.LawTier
+	23, // 12: flow.v1.Law.created_at:type_name -> google.protobuf.Timestamp
+	23, // 13: flow.v1.Law.updated_at:type_name -> google.protobuf.Timestamp
+	23, // 14: flow.v1.VersionEntry.created_at:type_name -> google.protobuf.Timestamp
+	3,  // 15: flow.v1.FrictionAggregate.tier:type_name -> flow.v1.LawTier
+	23, // 16: flow.v1.FrictionAggregate.earliest:type_name -> google.protobuf.Timestamp
+	23, // 17: flow.v1.FrictionAggregate.latest:type_name -> google.protobuf.Timestamp
+	23, // 18: flow.v1.TimeRange.start:type_name -> google.protobuf.Timestamp
+	23, // 19: flow.v1.TimeRange.end:type_name -> google.protobuf.Timestamp
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_common_proto_init() }

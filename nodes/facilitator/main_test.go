@@ -173,37 +173,34 @@ func TestFacilitator_FirstInvocation_DisputedRef(t *testing.T) {
 	if ref.WorkitemID != testWorkitemID {
 		t.Errorf("disputed ref workitem_id = %q, want test-workitem", ref.WorkitemID)
 	}
-	// Should be the highest-severity item (fb-1 = HIGH, fb-2 = LOW).
+	// Should be the first DEADLOCKED item (fb-1).
 	if ref.FeedbackID != testFeedbackID {
-		t.Errorf("disputed ref feedback_id = %q, want fb-1 (highest severity)", ref.FeedbackID)
+		t.Errorf("disputed ref feedback_id = %q, want fb-1 (first deadlocked)", ref.FeedbackID)
 	}
 }
 
-func TestFacilitator_FirstInvocation_SelectsHighestSeverity(t *testing.T) {
+func TestFacilitator_FirstInvocation_SelectsFirstDeadlocked(t *testing.T) {
 	spy := newFacilitatorSpy()
-	// fb-2 is LOW, fb-critical is CRITICAL — should pick fb-critical.
+	// fb-low, fb-critical, fb-medium — should pick the first DEADLOCKED item (fb-low).
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
 			{
-				Id:       "fb-low",
-				Source:   "reviewer-A",
-				Severity: flowv1.Severity_SEVERITY_LOW,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-				Message:  "Minor issue",
+				Id:      "fb-low",
+				Source:  "reviewer-A",
+				State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Message: "Minor issue",
 			},
 			{
-				Id:       "fb-critical",
-				Source:   "reviewer-B",
-				Severity: flowv1.Severity_SEVERITY_CRITICAL,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-				Message:  "Critical issue",
+				Id:      "fb-critical",
+				Source:  "reviewer-B",
+				State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Message: "Critical issue",
 			},
 			{
-				Id:       "fb-medium",
-				Source:   "reviewer-C",
-				Severity: flowv1.Severity_SEVERITY_MEDIUM,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-				Message:  "Medium issue",
+				Id:      "fb-medium",
+				Source:  "reviewer-C",
+				State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Message: "Medium issue",
 			},
 		},
 	}
@@ -225,8 +222,8 @@ func TestFacilitator_FirstInvocation_SelectsHighestSeverity(t *testing.T) {
 	if ref == nil {
 		t.Fatal("disputed-artefact ref not stored on child")
 	}
-	if ref.FeedbackID != "fb-critical" {
-		t.Errorf("expected highest severity feedback fb-critical, got %q", ref.FeedbackID)
+	if ref.FeedbackID != "fb-low" {
+		t.Errorf("expected first DEADLOCKED feedback fb-low, got %q", ref.FeedbackID)
 	}
 }
 
@@ -239,9 +236,8 @@ func TestFacilitator_DisputeWorkitem_Content(t *testing.T) {
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
 			{
-				Id:       testFeedbackID,
-				Severity: flowv1.Severity_SEVERITY_HIGH,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Id:    testFeedbackID,
+				State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
 			},
 		},
 	}
@@ -327,11 +323,10 @@ func TestFacilitator_DisputeDetails_Content(t *testing.T) {
 	childID := spy.CreatedChildren[0]
 	content := spy.getChildArtefact(childID, artefactDisputeDetails)
 
-	// Should contain the highest-severity feedback (fb-1).
+	// Should contain the first DEADLOCKED feedback (fb-1).
 	for _, want := range []string{
 		testFeedbackID,
 		"reviewer-A",
-		"SEVERITY_HIGH",
 		"The haiku does not follow traditional kigo conventions.",
 		"Missing seasonal reference.",
 		"The seasonal reference is implicit.",
@@ -355,9 +350,9 @@ func TestFacilitator_DisputeDetails_Content(t *testing.T) {
 		t.Error("dispute-details missing per-law friction data")
 	}
 
-	// Should NOT contain fb-2 (lower severity).
+	// Should NOT contain fb-2 (only the first DEADLOCKED item is selected).
 	if strings.Contains(content, "fb-2") {
-		t.Error("dispute-details should only contain the highest-severity item, found fb-2")
+		t.Error("dispute-details should only contain the first DEADLOCKED item, found fb-2")
 	}
 }
 
@@ -400,11 +395,10 @@ func TestFacilitator_DisputeDetails_NovelArgument(t *testing.T) {
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
 			{
-				Id:       "fb-novel",
-				Source:   "reviewer-X",
-				Severity: flowv1.Severity_SEVERITY_CRITICAL,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-				Message:  "Novel argument test",
+				Id:      "fb-novel",
+				Source:  "reviewer-X",
+				State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Message: "Novel argument test",
 				Justification: &flowv1.Justification{
 					Kind: &flowv1.Justification_NovelArgument{
 						NovelArgument: &flowv1.NovelArgument{
@@ -445,7 +439,7 @@ func TestFacilitator_DisputeArtefact_Content(t *testing.T) {
 	spy.ArtefactContent = []byte("An old silent pond / A frog jumps into the pond / Splash! Silence again")
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: testFeedbackID, Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: testFeedbackID, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 
@@ -475,7 +469,7 @@ func TestFacilitator_DisputeArtefact_LargeContent(t *testing.T) {
 	spy.ArtefactContent = []byte(largeContent)
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-trunc", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-trunc", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 
@@ -503,7 +497,7 @@ func TestFacilitator_DisputeInputs_Content(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: testFeedbackID, Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: testFeedbackID, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.ArtefactContentByID = map[string][]byte{
@@ -544,7 +538,7 @@ func TestFacilitator_DisputeInputs_NoConfig(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: testFeedbackID, Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: testFeedbackID, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 
@@ -572,7 +566,7 @@ func TestFacilitator_Appendix_Content(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: testFeedbackID, Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: testFeedbackID, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.Laws = []*flowv1.Law{
@@ -618,7 +612,7 @@ func TestFacilitator_Appendix_NoLaws(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: testFeedbackID, Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: testFeedbackID, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	// No laws configured.
@@ -647,7 +641,7 @@ func TestFacilitator_DisputeWorkitem_NoFriction(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-nf", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-nf", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	// No friction data.
@@ -680,7 +674,7 @@ func TestFacilitator_SuspendConditionCorrect(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-sc", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-sc", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 
@@ -889,7 +883,7 @@ func TestFacilitator_CustomArbiterNode(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-cfg", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-cfg", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 
@@ -1095,7 +1089,7 @@ func TestFacilitator_Error_GetArtefactFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.GetArtefactErr = fmt.Errorf("artefact unavailable")
@@ -1115,7 +1109,7 @@ func TestFacilitator_Error_QueryLawsFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.QueryLawsErr = fmt.Errorf("librarian unavailable")
@@ -1135,7 +1129,7 @@ func TestFacilitator_Error_QueryFrictionFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.QueryFrictionErr = fmt.Errorf("friction ledger unavailable")
@@ -1155,7 +1149,7 @@ func TestFacilitator_Error_CreateChildFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.CreateChildErr = fmt.Errorf("cannot create child")
@@ -1175,7 +1169,7 @@ func TestFacilitator_Error_StoreArtefactFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.StoreArtefactErr = fmt.Errorf("archivist store failed")
@@ -1196,7 +1190,7 @@ func TestFacilitator_Error_RouteChildFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.RouteChildErr = fmt.Errorf("routing child failed")
@@ -1216,7 +1210,7 @@ func TestFacilitator_Error_SuspendFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	spy.SuspendErr = fmt.Errorf("suspend rejected")
@@ -1289,7 +1283,7 @@ func TestFacilitator_Error_GetInputArtefactFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
-			{Id: "fb-err", Severity: flowv1.Severity_SEVERITY_HIGH, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-err", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 	// GetArtefact will fail for input artefact "petition" since GetArtefactErr
@@ -1511,7 +1505,7 @@ func TestFacilitator_MixedFeedbackStates_OnlyDeadlockedPicked(t *testing.T) {
 		"haiku": {
 			{Id: "fb-resolved", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
 			{Id: "fb-new", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
-			{Id: "fb-dl", Severity: flowv1.Severity_SEVERITY_MEDIUM, State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
+			{Id: "fb-dl", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 		},
 	}
 
@@ -1569,11 +1563,10 @@ func TestFacilitator_GetLaw_CalledForCitedLaws(t *testing.T) {
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
 			{
-				Id:       "fb-cited",
-				Source:   "reviewer-A",
-				Severity: flowv1.Severity_SEVERITY_CRITICAL,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-				Message:  "Cited feedback",
+				Id:      "fb-cited",
+				Source:  "reviewer-A",
+				State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Message: "Cited feedback",
 				Justification: &flowv1.Justification{
 					Kind: &flowv1.Justification_Citation{
 						Citation: &flowv1.Citation{
@@ -1618,11 +1611,10 @@ func TestFacilitator_GetLaw_FailureIsNonFatal(t *testing.T) {
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
 			{
-				Id:       "fb-cited",
-				Source:   "reviewer-A",
-				Severity: flowv1.Severity_SEVERITY_HIGH,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-				Message:  "Cited feedback",
+				Id:      "fb-cited",
+				Source:  "reviewer-A",
+				State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Message: "Cited feedback",
 				Justification: &flowv1.Justification{
 					Kind: &flowv1.Justification_Citation{
 						Citation: &flowv1.Citation{
@@ -1666,11 +1658,10 @@ func TestFacilitator_QueryFriction_FilteredByWorkitemAndLaw(t *testing.T) {
 	spy.FeedbackItemsByArtefact = map[string][]*flowv1.FeedbackItem{
 		"haiku": {
 			{
-				Id:       "fb-friction",
-				Source:   "reviewer-A",
-				Severity: flowv1.Severity_SEVERITY_HIGH,
-				State:    flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
-				Message:  "Friction test",
+				Id:      "fb-friction",
+				Source:  "reviewer-A",
+				State:   flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
+				Message: "Friction test",
 				Justification: &flowv1.Justification{
 					Kind: &flowv1.Justification_Citation{
 						Citation: &flowv1.Citation{

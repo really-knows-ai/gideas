@@ -48,5 +48,5 @@ func TestFederationServiceCompileTimeAssertions(t *testing.T) {
 	var _ flowv1.FederationServiceServer = flowv1.UnimplementedFederationServiceServer{}
 
 	// Verify the client interface symbol exists (nil zero-value).
-	var _ flowv1.FederationServiceClient = (flowv1.FederationServiceClient)(nil)
+	var _ = (flowv1.FederationServiceClient)(nil)
 }

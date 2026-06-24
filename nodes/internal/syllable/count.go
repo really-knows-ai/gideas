@@ -21,12 +21,12 @@ import (
 // overrides corrects known miscounts in the upstream library.
 // Each word is lowercased before lookup.
 var overrides = map[string]int{
-	"chaos":     2, // ao is not a diphthong in "chaos"
-	"poem":      2, // oe is not a diphthong in "poem"
-	"poems":     2,
-	"farewell":  2, // "fare" + "well", not a triphthong
-	"goodbye":   2, // "good" + "bye"
-	"goodbyes":  2,
+	"chaos":    2, // ao is not a diphthong in "chaos"
+	"poem":     2, // oe is not a diphthong in "poem"
+	"poems":    2,
+	"farewell": 2, // "fare" + "well", not a triphthong
+	"goodbye":  2, // "good" + "bye"
+	"goodbyes": 2,
 }
 
 // Count returns the estimated number of syllables in a single English word.
@@ -42,7 +42,7 @@ func Count(word string) int {
 // splitting into words and summing per-word counts.
 func CountLine(line string) int {
 	total := 0
-	for _, w := range strings.Fields(line) {
+	for w := range strings.FieldsSeq(line) {
 		total += Count(w)
 	}
 	return total

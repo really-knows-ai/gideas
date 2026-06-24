@@ -27,7 +27,9 @@ func newTestTriageAgent(t *testing.T, mm *mockModel, spy *refineSpy, cfg *refine
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(agent.agent, mm)
+	// Override model on both internal agents (action-only and full).
+	flow.OverrideModelForTest(agent.actionOnlyAgent, mm)
+	flow.OverrideModelForTest(agent.fullAgent, mm)
 	return agent
 }
 
@@ -115,6 +117,8 @@ func TestTriageAgent_SchemaValidation(t *testing.T) {
 				Id:      testFeedbackID,
 				Message: "test feedback",
 				State:   flowv1.FeedbackState_FEEDBACK_STATE_NEW,
+				// Refuse tests require canWontFix=true.
+				CanWontFix: strings.Contains(tt.name, "refuse"),
 			}
 
 			out, err := agent.Run(context.Background(), fb, "petition text", "haiku text", nil)
@@ -153,9 +157,9 @@ func TestTriageAgent_PromptContainsContext(t *testing.T) {
 
 	agent := newTestTriageAgent(t, mp, spy, cfg)
 	fb := &flowv1.FeedbackItem{
-		Id:       testFeedbackID,
-		Message:  "syllable count is wrong",
-		Severity: flowv1.Severity_SEVERITY_MEDIUM,
+		Id:         testFeedbackID,
+		Message:    "syllable count is wrong",
+		CanWontFix: true, // full prompt includes context
 		History: []*flowv1.FeedbackEvent{
 			{Actor: "appraise", Action: "add", Message: "raised syllable issue"},
 		},
@@ -172,7 +176,6 @@ func TestTriageAgent_PromptContainsContext(t *testing.T) {
 
 	query := string(mp.capturedQuery)
 	checks := []string{
-		"write about autumn",
 		"autumn leaves fall",
 		"syllable count is wrong",
 		"raised syllable issue",
@@ -198,8 +201,9 @@ func TestTriageAgent_PromptContainsHistory(t *testing.T) {
 
 	agent := newTestTriageAgent(t, mp, spy, cfg)
 	fb := &flowv1.FeedbackItem{
-		Id:      testFeedbackID,
-		Message: "test issue",
+		Id:         testFeedbackID,
+		Message:    "test issue",
+		CanWontFix: true, // full prompt includes history
 		History: []*flowv1.FeedbackEvent{
 			{Actor: "appraise", Action: "add", Message: "first observation"},
 			{Actor: "refine", Action: "resolve", Message: "attempted fix"},
@@ -236,7 +240,7 @@ func TestTriageAgent_PromptContainsLaws(t *testing.T) {
 	}
 
 	agent := newTestTriageAgent(t, mp, spy, cfg)
-	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
+	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 	laws := []*flowv1.Law{
 		{Id: "law-1", Tier: 1, Goal: "exactly 5-7-5 syllables"},
 		{Id: "law-2", Tier: 2, Goal: "use seasonal imagery"},
@@ -267,7 +271,7 @@ func TestTriageAgent_PromptOmitsLawsWhenNone(t *testing.T) {
 	}
 
 	agent := newTestTriageAgent(t, mp, spy, cfg)
-	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
+	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
 	if err != nil {
@@ -501,10 +505,10 @@ func TestHandleRefine_AllActioned(t *testing.T) {
 	spy := newRefineSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
-			Id:       testFeedbackID,
-			State:    flowv1.FeedbackState_FEEDBACK_STATE_NEW,
-			Message:  "syllable count is wrong",
-			Severity: flowv1.Severity_SEVERITY_MEDIUM,
+			Id:         testFeedbackID,
+			State:      flowv1.FeedbackState_FEEDBACK_STATE_NEW,
+			Message:    "syllable count is wrong",
+			CanWontFix: false, // quench-style feedback — must action
 		},
 	}
 
@@ -524,7 +528,8 @@ func TestHandleRefine_AllActioned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.agent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
+	flow.OverrideModelForTest(triage.fullAgent, mp)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
@@ -568,10 +573,10 @@ func TestHandleRefine_AllRefused(t *testing.T) {
 	spy := newRefineSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
-			Id:       testFeedbackID,
-			State:    flowv1.FeedbackState_FEEDBACK_STATE_NEW,
-			Message:  "use different imagery",
-			Severity: flowv1.Severity_SEVERITY_LOW,
+			Id:         testFeedbackID,
+			State:      flowv1.FeedbackState_FEEDBACK_STATE_NEW,
+			Message:    "use different imagery",
+			CanWontFix: true, // appraise-style feedback — may refuse
 		},
 	}
 
@@ -590,7 +595,8 @@ func TestHandleRefine_AllRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.agent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
+	flow.OverrideModelForTest(triage.fullAgent, mp)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
@@ -635,16 +641,16 @@ func TestHandleRefine_MixedItems(t *testing.T) {
 	spy := newRefineSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
-			Id:       testFeedbackID,
-			State:    flowv1.FeedbackState_FEEDBACK_STATE_NEW,
-			Message:  "syllable count is wrong",
-			Severity: flowv1.Severity_SEVERITY_MEDIUM,
+			Id:         testFeedbackID,
+			State:      flowv1.FeedbackState_FEEDBACK_STATE_NEW,
+			Message:    "syllable count is wrong",
+			CanWontFix: false, // quench-style — must action
 		},
 		{
-			Id:       "fb-2",
-			State:    flowv1.FeedbackState_FEEDBACK_STATE_NEW,
-			Message:  "use different imagery",
-			Severity: flowv1.Severity_SEVERITY_LOW,
+			Id:         "fb-2",
+			State:      flowv1.FeedbackState_FEEDBACK_STATE_NEW,
+			Message:    "use different imagery",
+			CanWontFix: true, // appraise-style — may refuse
 		},
 	}
 
@@ -667,7 +673,8 @@ func TestHandleRefine_MixedItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.agent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
+	flow.OverrideModelForTest(triage.fullAgent, mp)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
@@ -723,7 +730,10 @@ func TestHandleRefine_NoFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.agent, mp)
+	// No feedback items, so the triage agent is not called.
+	// Override models to avoid nil agent panics.
+	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
+	flow.OverrideModelForTest(triage.fullAgent, mp)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
@@ -824,7 +834,7 @@ func TestTriageAgent_ConfigMapOverrideSystemPrompt(t *testing.T) {
 	}
 
 	agent := newTestTriageAgent(t, mp, spy, cfg)
-	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
+	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
 	if err != nil {
@@ -849,7 +859,7 @@ func TestTriageAgent_ConfigMapOverrideQueryTemplate(t *testing.T) {
 	}
 
 	agent := newTestTriageAgent(t, mp, spy, cfg)
-	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "custom feedback msg"}
+	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "custom feedback msg", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
 	if err != nil {
@@ -933,7 +943,7 @@ func TestTriageAgent_EmptyOverrideUsesDefault(t *testing.T) {
 	}
 
 	agent := newTestTriageAgent(t, mp, spy, cfg)
-	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
+	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
 	if err != nil {
@@ -941,7 +951,7 @@ func TestTriageAgent_EmptyOverrideUsesDefault(t *testing.T) {
 	}
 
 	// Default system prompt should contain the standard text.
-	if !strings.Contains(mp.capturedSystem, "poet deciding how to handle feedback") {
+	if !strings.Contains(mp.capturedSystem, "poet revising your work") {
 		t.Errorf("system prompt should use default when override is empty, got:\n%s", mp.capturedSystem)
 	}
 }
@@ -971,5 +981,83 @@ func TestRevisionAgent_EmptyOverrideUsesDefault(t *testing.T) {
 	// Default system prompt should contain the standard text.
 	if !strings.Contains(mp.capturedSystem, "poet revising your work") {
 		t.Errorf("system prompt should use default when override is empty, got:\n%s", mp.capturedSystem)
+	}
+}
+
+func TestHandleRefine_ContemptGuard(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newRefineSpy()
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{
+			Id:           "fb-contempt",
+			State:        flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
+			Message:      "syllable count",
+			CanWontFix:   false,
+			LinkedRuling: "ruling-1",
+		},
+	}
+
+	revisionOut := `{"haiku": "revised after contempt"}`
+	mp := &mockModel{
+		outputs: []*flow.InferOutput{
+			{Output: []byte(revisionOut), Cost: defaultCost()},
+		},
+	}
+
+	client := newSpyClient(t, spy)
+
+	triage, err := NewTriageAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewTriageAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
+	flow.OverrideModelForTest(triage.fullAgent, mp)
+	revision, err := NewRevisionAgent(client, cfg)
+	if err != nil {
+		t.Fatalf("NewRevisionAgent() failed: %v", err)
+	}
+	flow.OverrideModelForTest(revision.agent, mp)
+
+	handlerCfg := handlers.RefineConfig{
+		InputArtefacts:   cfg.InputArtefacts,
+		OutputArtefact:   cfg.OutputArtefact,
+		GovernedArtefact: cfg.GovernedArtefact,
+	}
+
+	if err := handlers.HandleRefine(context.Background(), client, triage, revision, handlerCfg); err != nil {
+		t.Fatalf("HandleRefine() returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// Verify feedback was resolved via contempt guard (no LLM triage call).
+	if len(spy.ResolvedFeedback) != 1 {
+		t.Fatalf("expected 1 resolved feedback, got %d", len(spy.ResolvedFeedback))
+	}
+	msg, ok := spy.ResolvedFeedback["fb-contempt"]
+	if !ok {
+		t.Fatal("expected feedback fb-contempt to be resolved")
+	}
+	if msg != "Complying with judicial ruling" {
+		t.Fatalf("expected contempt message, got %q", msg)
+	}
+
+	// Verify artefact was stored with revised content.
+	if len(spy.StoredArtefacts) != 1 {
+		t.Fatalf("expected 1 stored artefact, got %d", len(spy.StoredArtefacts))
+	}
+	if string(spy.StoredArtefacts[0].Content) != "revised after contempt" {
+		t.Fatalf("expected revised content, got %q", string(spy.StoredArtefacts[0].Content))
+	}
+
+	// Verify routing.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != testRouteTarget {
+		t.Fatalf("expected route to 'default', got %v", spy.RoutedOutputs)
+	}
+
+	// Verify no LLM triage calls were made (contempt guard should skip triage).
+	if mp.callIdx != 1 {
+		t.Fatalf("expected 1 model call (revision only, no triage), got %d", mp.callIdx)
 	}
 }

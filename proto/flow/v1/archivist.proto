@@ -209,7 +209,7 @@ message StampArtefactResponse {
 message AddFeedbackRequest {
   string workitem_id = 1;
   string artefact_id = 2;
-  Severity severity = 3;
+  bool can_wont_fix = 6;
   string message = 4;
   // Sidecar-resolved from the latest version at call time.
   string version_hash = 5;

@@ -33,6 +33,8 @@ type spyServer struct {
 	lastSubmitReq *flowv1.SubmitResultRequest
 	// lastResumeReq is the request captured from the most recent ResumeWorkitem call.
 	lastResumeReq *flowv1.ResumeWorkitemRequest
+	// lastAddFeedbackReq is the request captured from the most recent AddFeedback call.
+	lastAddFeedbackReq *flowv1.AddFeedbackRequest
 }
 
 func (s *spyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatRequest) (*flowv1.HeartbeatResponse, error) {
@@ -247,6 +249,14 @@ func (s *spyServer) StoreArtefact(
 		VersionHash:  "hash-001",
 		IsNewVersion: true,
 	}, nil
+}
+
+func (s *spyServer) AddFeedback(
+	ctx context.Context, req *flowv1.AddFeedbackRequest,
+) (*flowv1.AddFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastAddFeedbackReq = req
+	return &flowv1.AddFeedbackResponse{FeedbackId: "fb-auto-001"}, nil
 }
 
 func (s *spyServer) StampArtefact(
@@ -927,5 +937,65 @@ func TestComplete_WithoutReason(t *testing.T) {
 	}
 	if complete.Complete.GetReason() != flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED {
 		t.Fatalf("reason = %v, want COMPLETION_REASON_UNSPECIFIED", complete.Complete.GetReason())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — AddFeedback Convenience Method
+// ---------------------------------------------------------------------------
+
+func TestAddFeedback_CanWontFixTrue(t *testing.T) {
+	const wantID = "workitem-addfb-true-001"
+	env := setupTestEnv(t, wantID)
+
+	fbID, err := env.client.AddFeedback(context.Background(), "artefact-001", true, "test message")
+	if err != nil {
+		t.Fatalf("AddFeedback() returned error: %v", err)
+	}
+	if fbID == "" {
+		t.Fatal("AddFeedback() returned empty feedback ID")
+	}
+	if env.spy.lastAddFeedbackReq == nil {
+		t.Fatal("AddFeedback was not called on the server")
+	}
+	if !env.spy.lastAddFeedbackReq.GetCanWontFix() {
+		t.Fatal("expected CanWontFix=true, got false")
+	}
+}
+
+func TestAddFeedback_CanWontFixFalse(t *testing.T) {
+	const wantID = "workitem-addfb-false-001"
+	env := setupTestEnv(t, wantID)
+
+	fbID, err := env.client.AddFeedback(context.Background(), "artefact-002", false, "another message")
+	if err != nil {
+		t.Fatalf("AddFeedback() returned error: %v", err)
+	}
+	if fbID == "" {
+		t.Fatal("AddFeedback() returned empty feedback ID")
+	}
+	if env.spy.lastAddFeedbackReq == nil {
+		t.Fatal("AddFeedback was not called on the server")
+	}
+	if env.spy.lastAddFeedbackReq.GetCanWontFix() {
+		t.Fatal("expected CanWontFix=false, got true")
+	}
+}
+
+func TestAddFeedback_InjectsWorkitemMetadata(t *testing.T) {
+	const wantID = "workitem-addfb-meta-001"
+	env := setupTestEnv(t, wantID)
+
+	_, err := env.client.AddFeedback(context.Background(), "artefact-003", true, "meta test")
+	if err != nil {
+		t.Fatalf("AddFeedback() returned error: %v", err)
+	}
+
+	got := env.spy.lastMD.Get("x-flow-workitem-id")
+	if len(got) == 0 {
+		t.Fatal("metadata x-flow-workitem-id was NOT present on AddFeedback call")
+	}
+	if got[0] != wantID {
+		t.Fatalf("metadata x-flow-workitem-id = %q, want %q", got[0], wantID)
 	}
 }
