@@ -62,7 +62,7 @@ type appraiseSpy struct {
 
 type addedFeedbackItem struct {
 	ArtefactID string
-	Severity   flowv1.Severity
+	CanWontFix bool
 	Message    string
 }
 
@@ -176,7 +176,7 @@ func (s *appraiseSpy) AddFeedback(
 	defer s.mu.Unlock()
 	s.AddedFeedback = append(s.AddedFeedback, addedFeedbackItem{
 		ArtefactID: req.GetArtefactId(),
-		Severity:   req.GetSeverity(),
+		CanWontFix: req.GetCanWontFix(),
 		Message:    req.GetMessage(),
 	})
 	return &flowv1.AddFeedbackResponse{

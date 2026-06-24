@@ -17,28 +17,34 @@ var _ flow.TriageContract = (*TriageAgent)(nil)
 // TriageAgent — concrete agent for per-item triage (Phase 1)
 // ---------------------------------------------------------------------------
 
-// TriageAgent wraps a flow.Agent with triage-specific schema, prompts, and
-// a typed Run() interface. It evaluates each feedback item to decide whether
-// to action (fix) or refuse (won't fix) the issue.
+// TriageAgent wraps two flow.Agent instances — one for canWontFix=false
+// (action-only, no refuse option) and one for canWontFix=true (action or
+// refuse with structured justification). The Run() method delegates to the
+// appropriate agent based on the feedback item's canWontFix flag.
 type TriageAgent struct {
-	agent *flow.Agent
-	cfg   *refineConfig
+	actionOnlyAgent *flow.Agent // for canWontFix=false items
+	fullAgent       *flow.Agent // for canWontFix=true items
+	cfg             *refineConfig
 }
 
-// triageOutput is the Go representation of the triageSchema-validated JSON.
-type triageOutput struct {
-	Decision          string   `json:"decision"`
-	Message           string   `json:"message"`
-	JustificationType string   `json:"justification_type"`
-	CitationIDs       []string `json:"citation_ids"`
-	Argument          string   `json:"argument"`
-}
+// triageSchemaActionOnly allows only "action" decisions — used when
+// canWontFix=false. The refiner must fix the issue and cannot refuse.
+var triageSchemaActionOnly = []byte(`{
+	"type": "object",
+	"properties": {
+		"decision":           { "type": "string", "enum": ["action"] },
+		"message":            { "type": "string", "minLength": 1 },
+		"justification_type": { "type": "string" },
+		"citation_ids":       { "type": "array", "items": { "type": "string" } },
+		"argument":           { "type": "string" }
+	},
+	"required": ["decision", "message"],
+	"additionalProperties": false
+}`)
 
-// triageSchema validates the output of per-item triage inferences.
-// The LLM decides whether to action or refuse each feedback item.
-// Justification fields are only relevant when decision is "refuse" — the
-// Go code validates this business rule after unmarshalling.
-var triageSchema = []byte(`{
+// triageSchemaFull allows both "action" and "refuse" decisions — used when
+// canWontFix=true. The refiner may refuse with a structured justification.
+var triageSchemaFull = []byte(`{
 	"type": "object",
 	"properties": {
 		"decision":           { "type": "string", "enum": ["action", "refuse"] },
@@ -51,63 +57,63 @@ var triageSchema = []byte(`{
 	"additionalProperties": false
 }`)
 
+// triageOutput is the Go representation of the triage schema-validated JSON.
+type triageOutput struct {
+	Decision          string   `json:"decision"`
+	Message           string   `json:"message"`
+	JustificationType string   `json:"justification_type"`
+	CitationIDs       []string `json:"citation_ids"`
+	Argument          string   `json:"argument"`
+}
+
 // triageSystemData holds config-time data for rendering the system prompt.
 type triageSystemData struct {
 	OutputArtefact string
 }
 
 //nolint:lll // Prompt template — readability favors keeping the template intact.
-const triageSystemPromptTemplate = `You are a {{.OutputArtefact}} poet deciding how to handle feedback on your work.
+const triageSystemPromptTemplate = `You are a {{.OutputArtefact}} poet revising your work. You will fix the issue described in the feedback.`
 
-You will be given context about the original request and the current {{.OutputArtefact}}, along with a feedback item and its investigation history. Your job is to decide whether to action (fix) or refuse (won't fix) the feedback.
+// triageQueryActionOnly is the query prompt for canWontFix=false items.
+// The refiner must fix the issue — no refuse option.
+//
+//nolint:lll
+const triageQueryActionOnly = `You made this. You will fix this issue.
 
-If you refuse, you must provide a structured justification:
-- Set "justification_type" to "citation" and provide "citation_ids" (array of law IDs) if existing governance supports your position.
-- Set "justification_type" to "novel_argument" and provide "argument" (free-text reasoning) if your position is based on new reasoning.`
-
-// triageQueryPromptTemplate is the query prompt template, rendered per Run()
-// call with runtime data (input content, review content, feedback, laws).
-const triageQueryPromptTemplate = `## CONTEXT
-
-Your {{.OutputArtefact}} was written to fulfil this petition:
-> {{.InputContent}}
-
-Your current {{.OutputArtefact}}:
+## CURRENT {{.OutputArtefactUpper}}
 {{.ReviewContent}}
 
-## FEEDBACK ITEM
+## FEEDBACK
+{{.FeedbackMessage}}
 
-Message: {{.FeedbackMessage}}
-Severity: {{.FeedbackSeverity}}
+## RESPONSE FORMAT
+{"decision": "action", "message": "description of the fix I will apply"}
+
+Output ONLY the JSON object, nothing else.`
+
+// triageQueryFull is the query prompt for canWontFix=true items.
+// The refiner may action or refuse with a structured justification.
+//
+//nolint:lll
+const triageQueryFull = `You made this. You will fix this issue.
+
+## CURRENT {{.OutputArtefactUpper}}
+{{.ReviewContent}}
+
+## FEEDBACK
+{{.FeedbackMessage}}
+{{- if .History}}
 
 ## INVESTIGATION HISTORY
-
 {{.History}}
+{{- end}}
 {{- if .Laws}}
 
 ## APPLICABLE LAWS
-
 {{.Laws}}
-You may cite law IDs if refusing based on existing governance.
 {{- end}}
 
-## YOUR TASK
-
-Decide how to handle this feedback:
-
-1. "action" — You agree the feedback has merit and will fix the issue in
-   your revision. Provide a message describing the fix you will apply.
-
-2. "refuse" — You believe the feedback is wrong, subjective, or contradicts
-   governance. You must provide a structured justification:
-   - Set "justification_type" to "citation" and provide "citation_ids"
-     (array of law IDs) if existing governance supports your position.
-   - Set "justification_type" to "novel_argument" and provide "argument"
-     (free-text reasoning) if your position is based on new reasoning.
-
 ## RESPONSE FORMAT
-
-Respond with ONLY a JSON object.
 
 If actioning:
 {"decision": "action", "message": "description of the fix I will apply"}
@@ -124,51 +130,101 @@ Output ONLY the JSON object, nothing else.`
 
 // triageTemplateQueryData holds all fields for the query prompt template.
 type triageTemplateQueryData struct {
-	OutputArtefact   string
-	InputContent     string
-	ReviewContent    string
-	FeedbackMessage  string
-	FeedbackSeverity string
-	History          string
-	Laws             string
+	OutputArtefact      string
+	OutputArtefactUpper string
+	InputContent        string
+	ReviewContent       string
+	FeedbackMessage     string
+	History             string
+	Laws                string
 }
 
 // NewTriageAgent creates a TriageAgent with the given client and config.
+// It creates two flow.Agent instances:
+//   - actionOnlyAgent for canWontFix=false items (action-only schema, simplified prompt)
+//   - fullAgent for canWontFix=true items (action-or-refuse schema, full prompt)
+//
 // The model (GptOss120bOllama) is created internally by buildAgent.
-// If cfg provides non-empty TriageSystemPrompt or TriageQueryTemplate
-// overrides, those replace the baked-in defaults.
+// If cfg.TriageSystemPrompt is non-empty, it overrides the system prompt for
+// the full agent only. If cfg.TriageQueryTemplate is non-empty, it overrides
+// the query template for the full agent only.
 func NewTriageAgent(client *flow.Client, cfg *refineConfig) (*TriageAgent, error) {
 	sysData := triageSystemData{
 		OutputArtefact: cfg.OutputArtefact,
 	}
 
-	sysTmpl := triageSystemPromptTemplate
+	// Resolve system prompt for full agent (respects ConfigMap override).
+	fullSysTmpl := triageSystemPromptTemplate
 	if cfg.TriageSystemPrompt != "" {
-		sysTmpl = cfg.TriageSystemPrompt
+		fullSysTmpl = cfg.TriageSystemPrompt
 	}
 
-	queryTmpl := triageQueryPromptTemplate
+	// Resolve query template for full agent (respects ConfigMap override).
+	fullQueryTmpl := triageQueryFull
 	if cfg.TriageQueryTemplate != "" {
-		queryTmpl = cfg.TriageQueryTemplate
+		fullQueryTmpl = cfg.TriageQueryTemplate
 	}
 
-	agent, err := buildAgent(client, "triage agent",
-		sysTmpl, sysData,
-		queryTmpl, triageSchema)
+	// Create action-only agent (always uses baked-in defaults — cannot refuse).
+	actionOnlyAgent, err := buildAgent(client, "triage agent (action-only)",
+		triageSystemPromptTemplate, sysData,
+		triageQueryActionOnly, triageSchemaActionOnly)
 	if err != nil {
 		return nil, err
 	}
 
-	return &TriageAgent{agent: agent, cfg: cfg}, nil
+	// Create full agent (may refuse with justification).
+	fullAgent, err := buildAgent(client, "triage agent (full)",
+		fullSysTmpl, sysData,
+		fullQueryTmpl, triageSchemaFull)
+	if err != nil {
+		// Clean up action-only agent.
+		return nil, err
+	}
+
+	return &TriageAgent{
+		actionOnlyAgent: actionOnlyAgent,
+		fullAgent:       fullAgent,
+		cfg:             cfg,
+	}, nil
 }
 
 // Run evaluates a single feedback item and returns the triage decision.
+// It delegates to the action-only agent (if canWontFix=false) or the full
+// agent (if canWontFix=true), selecting the appropriate prompt and schema.
 func (t *TriageAgent) Run(
 	ctx context.Context,
 	fb *flowv1.FeedbackItem,
 	inputContent, reviewContent string,
 	laws []*flowv1.Law,
 ) (*flow.TriageResult, error) {
+	canWontFix := fb.GetCanWontFix()
+
+	if !canWontFix {
+		// Action-only: simplified query, no refuse option.
+		data := triageTemplateQueryData{
+			OutputArtefact:      t.cfg.OutputArtefact,
+			OutputArtefactUpper: strings.ToUpper(t.cfg.OutputArtefact),
+			ReviewContent:       reviewContent,
+			FeedbackMessage:     fb.GetMessage(),
+		}
+
+		raw, err := t.actionOnlyAgent.Run(ctx, data)
+		if err != nil {
+			return nil, err
+		}
+
+		var out triageOutput
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, fmt.Errorf("triage agent: unmarshal output: %w", err)
+		}
+
+		return &flow.TriageResult{
+			Decision: out.Decision,
+			Message:  out.Message,
+		}, nil
+	}
+
 	// Build history block.
 	var historyBlock strings.Builder
 	for _, ev := range fb.GetHistory() {
@@ -186,16 +242,16 @@ func (t *TriageAgent) Run(
 	}
 
 	data := triageTemplateQueryData{
-		OutputArtefact:   t.cfg.OutputArtefact,
-		InputContent:     inputContent,
-		ReviewContent:    reviewContent,
-		FeedbackMessage:  fb.GetMessage(),
-		FeedbackSeverity: fb.GetSeverity().String(),
-		History:          historyBlock.String(),
-		Laws:             lawBlock.String(),
+		OutputArtefact:      t.cfg.OutputArtefact,
+		OutputArtefactUpper: strings.ToUpper(t.cfg.OutputArtefact),
+		InputContent:        inputContent,
+		ReviewContent:       reviewContent,
+		FeedbackMessage:     fb.GetMessage(),
+		History:             historyBlock.String(),
+		Laws:                lawBlock.String(),
 	}
 
-	raw, err := t.agent.Run(ctx, data)
+	raw, err := t.fullAgent.Run(ctx, data)
 	if err != nil {
 		return nil, err
 	}
