@@ -989,10 +989,10 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	spy := newRefineSpy()
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
-			Id:          "fb-contempt",
-			State:       flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
-			Message:     "syllable count",
-			CanWontFix:  false,
+			Id:           "fb-contempt",
+			State:        flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
+			Message:      "syllable count",
+			CanWontFix:   false,
 			LinkedRuling: "ruling-1",
 		},
 	}
