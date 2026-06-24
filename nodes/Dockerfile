@@ -7,9 +7,14 @@
 #   docker build -t sort:latest --build-arg NODE=sort -f nodes/Dockerfile .
 FROM golang:1.25 AS builder
 ARG NODE
+ARG CGO_ENABLED=0
 
 WORKDIR /workspace
 ENV GOWORK=off
+
+RUN if [ "$CGO_ENABLED" = "1" ]; then \
+      apt-get update && apt-get install -y gcc libc6-dev && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Copy dependency modules
 COPY gen/go.mod gen/go.sum gen/
@@ -23,9 +28,9 @@ RUN cd nodes && go mod download
 # Copy nodes source
 COPY nodes/ nodes/
 
-RUN cd nodes && CGO_ENABLED=0 go build -o /node ./${NODE}
+RUN cd nodes && CGO_ENABLED=${CGO_ENABLED} go build -o /node ./${NODE}
 
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/base:nonroot
 COPY --from=builder /node /node
 USER 65532:65532
 ENTRYPOINT ["/node"]

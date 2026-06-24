@@ -190,33 +190,36 @@ spec:
         - approval
   nodeGroups:
     main-cycle:
-      - forge
-      - sort
-      - quench
-      - appraise
-      - reviewer
-      - refine
+      nodes:
+        - forge
+        - sort
+        - quench
+        - appraise
+        - reviewer
+        - refine
     judiciary:
-      - facilitator
-      - arbiter
-      - juror
-      - tribunal
-      - friction-watcher
-      - ttl-watcher
-      - hitl-appraise
-      - arbiter-hitl-resolve
-      - tribunal-hitl-resolve
-      - law-applicator
+      nodes:
+        - facilitator
+        - arbiter
+        - juror
+        - tribunal
+        - friction-watcher
+        - ttl-watcher
+        - hitl-appraise
+        - arbiter-hitl-resolve
+        - tribunal-hitl-resolve
+        - law-applicator
     clerk-cycle:
-      - clerk-forge
-      - clerk-sort
-      - clerk-appraise
-      - clerk-refine
-      - clerk-facilitator
-      - codification
-      - codify-smt
-      - clerk-done-router
-      - hitl-gate
+      nodes:
+        - clerk-forge
+        - clerk-sort
+        - clerk-appraise
+        - clerk-refine
+        - clerk-facilitator
+        - codification
+        - codify-smt
+        - clerk-done-router
+        - hitl-gate
   governancePolicy:
     maxVisits: 20
     defaultTimeout: "10m"
@@ -238,7 +241,7 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
-    - "READ:artefact/petition"
+    - "READ:artefact"
     - "WRITE:artefact/haiku"
     - "READ:law"
 ---

@@ -4,7 +4,7 @@ FROM golang:1.25 AS builder
 WORKDIR /workspace
 ENV GOWORK=off
 
-RUN apt-get update && apt-get install -y gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y gcc libc6-dev libsqlite3-dev && rm -rf /var/lib/apt/lists/*
 
 COPY gen/go.mod gen/go.sum gen/
 COPY gen/flow/ gen/flow/

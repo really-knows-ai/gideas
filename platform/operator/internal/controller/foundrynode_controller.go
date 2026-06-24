@@ -42,7 +42,7 @@ import (
 
 const (
 	// sidecarImage is the container image for the Sidecar injected into every node pod.
-	sidecarImage = "ghcr.io/gideas/flow/sidecar:latest"
+	sidecarImage = "flow-sidecar:dbg2"
 
 	// sidecarGRPCPort is the port the Sidecar listens on for gRPC.
 	sidecarGRPCPort = 50051
@@ -331,6 +331,7 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFe
 			{Name: "SIDECAR_ADDRESS", Value: fmt.Sprintf("localhost:%d", sidecarGRPCPort)},
 			// Direct access: Event Bus uses gRPC streaming which bypasses the Sidecar proxy.
 			{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
+			{Name: "OLLAMA_BASE_URL", Value: "http://host.docker.internal:11434"},
 		},
 	}
 
@@ -346,6 +347,7 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFe
 			{Name: "FLOW_NODE_NAME", Value: node.Name},
 			{Name: "FLOW_NAMESPACE", Value: node.Namespace},
 			// Wire control-plane infrastructure service addresses.
+			{Name: "ARCHIVIST_ADDRESS", Value: fmt.Sprintf("%s:%d", archivistSvcName, archivistPort)},
 			{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
 			{Name: "FRICTION_LEDGER_ADDRESS", Value: fmt.Sprintf("%s:%d", frictionLedgerSvcNm, frictionLedgerPort)},
 			{Name: "OPERATOR_ADDRESS", Value: fmt.Sprintf("%s:%d", operatorSvcName, operatorPort)},
@@ -382,12 +384,33 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFe
 		}
 	}
 
+	// Mount node config from a ConfigMap named <nodeName>-config if it exists.
+	configName := node.Name + "-config"
+	nodeContainer.VolumeMounts = append(nodeContainer.VolumeMounts, corev1.VolumeMount{
+		Name:      "node-config",
+		ReadOnly:  true,
+		MountPath: "/etc/foundry",
+	})
+
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: labels,
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{nodeContainer, sidecarContainer},
+			Volumes: []corev1.Volume{
+				{
+					Name: "node-config",
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: configName,
+							},
+							DefaultMode: func() *int32 { v := int32(420); return &v }(),
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -402,6 +425,13 @@ func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *f
 		},
 	}
 
+	// Preserve the pod-template-hash label set by the Deployment controller
+	// to avoid an infinite reconcile loop.
+	prevHash := ""
+	if deploy.Spec.Template.Labels != nil {
+		prevHash = deploy.Spec.Template.Labels["pod-template-hash"]
+	}
+
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
 		deploy.Labels = r.labelsForNode(node)
 		deploy.Spec.Replicas = &replicas
@@ -409,6 +439,12 @@ func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *f
 			MatchLabels: r.labelsForNode(node),
 		}
 		deploy.Spec.Template = r.buildPodTemplate(node, hasFederation)
+		if prevHash != "" {
+			if deploy.Spec.Template.Labels == nil {
+				deploy.Spec.Template.Labels = make(map[string]string)
+			}
+			deploy.Spec.Template.Labels["pod-template-hash"] = prevHash
+		}
 		return controllerutil.SetControllerReference(node, deploy, r.Scheme)
 	})
 	if err != nil {
@@ -560,6 +596,7 @@ func (r *FoundryNodeReconciler) labelsForNode(node *flowv1.FoundryNode) map[stri
 		"app.kubernetes.io/instance":   node.Name,
 		"app.kubernetes.io/managed-by": "foundry-operator",
 		"flow.gideas.io/node":          node.Name,
+		"flow.gideas.io/node-name":     node.Name,
 	}
 }
 
