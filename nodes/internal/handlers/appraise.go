@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -35,26 +34,6 @@ const (
 	// division field.
 	defaultDivision = "general"
 )
-
-// ---------------------------------------------------------------------------
-// Severity Mapping
-// ---------------------------------------------------------------------------
-
-// severityMap maps lowercase string severity values from the LLM to the
-// proto enum. Returns SEVERITY_MEDIUM for unknown values as a safe default.
-var severityMap = map[string]flowv1.Severity{
-	"low":      flowv1.Severity_SEVERITY_LOW,
-	"medium":   flowv1.Severity_SEVERITY_MEDIUM,
-	"high":     flowv1.Severity_SEVERITY_HIGH,
-	"critical": flowv1.Severity_SEVERITY_CRITICAL,
-}
-
-func parseSeverity(s string) flowv1.Severity {
-	if sev, ok := severityMap[strings.ToLower(s)]; ok {
-		return sev
-	}
-	return flowv1.Severity_SEVERITY_MEDIUM
-}
 
 // hasNovelArgument returns true if the feedback item carries a
 // NovelArgument justification.
@@ -148,16 +127,14 @@ func HandleAppraise(
 			continue
 		}
 
-		severity := parseSeverity(item.Severity)
 		feedbackID, err := client.AddFeedback(
-			ctx, cfg.GovernedArtefact, severity, item.Message)
+			ctx, cfg.GovernedArtefact, true, item.Message)
 		if err != nil {
 			return fmt.Errorf("appraise: add feedback[%d]: %w", i, err)
 		}
 		slog.Info("appraise: feedback raised",
 			"index", i,
 			"feedback_id", feedbackID,
-			"severity", item.Severity,
 			"message", item.Message,
 			"cited_laws", item.CitedLaws,
 		)
@@ -210,7 +187,6 @@ func HandleAppraise(
 // reviewItem is a single feedback observation from a child Reviewer's output.
 type reviewItem struct {
 	Message   string   `json:"message"`
-	Severity  string   `json:"severity"`
 	CitedLaws []string `json:"cited_laws"`
 }
 

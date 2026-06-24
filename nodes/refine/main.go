@@ -7,12 +7,13 @@
 //
 // Refine operates in two phases:
 //
-//  1. Per-Item Triage — For each NEW or REJECTED feedback item, a separate
+//  1. Per-Item Triage — For each NEW or REJECTED feedback item, a single
 //     FoundryAgent inference call decides whether to action (fix) or refuse
-//     (won't fix) the item. These run in parallel, each with managed heartbeat
-//     and cost telemetry. Refusals require a structured justification (law
-//     citation or novel argument). If a REJECTED item has a linked ruling
-//     (contempt guard), it is force-actioned without LLM inference.
+//     (won't fix) the item. Items are processed sequentially — each decision
+//     completes before the next begins. Refusals require a structured
+//     justification (law citation or novel argument). If a REJECTED item has a
+//     linked ruling (contempt guard), it is force-actioned without LLM
+//     inference.
 //
 //  2. Revision — A single FoundryAgent inference call takes the petition,
 //     current haiku, applicable laws, and the actioned items from Phase 1

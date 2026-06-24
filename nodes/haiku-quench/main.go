@@ -11,7 +11,7 @@
 //  2. Get existing feedback for the artefact.
 //  3. If VALID — accept fixes on any ACTIONED feedback (the fix worked).
 //  4. If INVALID — reject fixes on any ACTIONED feedback (the fix didn't
-//     resolve the structural issue) and raise new HIGH-severity feedback.
+//     resolve the structural issue) and raise new feedback (canWontFix=false).
 //  5. Always stamp "linter" and route to Sort.
 //
 // This ordering preserves the feedback history chain: a failed fix is
