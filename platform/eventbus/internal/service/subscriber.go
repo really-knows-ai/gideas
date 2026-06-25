@@ -2,6 +2,7 @@
 package service
 
 import (
+	"slices"
 	"sync"
 
 	"github.com/gideas/flow/eventbus/internal/store/sqlite"
@@ -81,7 +82,7 @@ func (r *registry) remove(channel string, sub *subscriber) {
 	subs := r.subs[channel]
 	for i, s := range subs {
 		if s == sub {
-			r.subs[channel] = append(subs[:i], subs[i+1:]...)
+			r.subs[channel] = slices.Delete(subs, i, i+1)
 			close(sub.ch)
 			return
 		}
