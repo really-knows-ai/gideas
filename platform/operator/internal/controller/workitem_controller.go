@@ -88,7 +88,7 @@ type WorkitemReconciler struct {
 // publishAudit submits an audit event for a workitem lifecycle transition via
 // the async publisher. If the publisher is nil, audit publishing is silently
 // disabled.
-func (r *WorkitemReconciler) publishAudit(_ context.Context, eventType string, workitemName string, attrs map[string]string) {
+func (r *WorkitemReconciler) publishAudit(eventType string, workitemName string, attrs map[string]string) {
 	if r.Auditor == nil {
 		return
 	}
@@ -281,7 +281,7 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 			"aggregate", aggregate,
 			"maxVisits", flow.Spec.GovernancePolicy.MaxVisits,
 		)
-		r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+		r.publishAudit("audit.workitem.failed", workitem.Name, map[string]string{
 			"action": "failed",
 			"reason": "THRASH_BUDGET_EXCEEDED",
 		})
@@ -342,7 +342,7 @@ func (r *WorkitemReconciler) reconcilePending(ctx context.Context, workitem *flo
 		"assignee", assignee,
 	)
 
-	r.publishAudit(ctx, "audit.workitem.running", workitem.Name, map[string]string{
+	r.publishAudit("audit.workitem.running", workitem.Name, map[string]string{
 		"action":   "running",
 		"assignee": assignee,
 	})
@@ -415,7 +415,7 @@ func (r *WorkitemReconciler) reconcileRunning(ctx context.Context, req ctrl.Requ
 				"elapsed", elapsed,
 				"timeout", timeout,
 			)
-			r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+			r.publishAudit("audit.workitem.failed", workitem.Name, map[string]string{
 				"action": "failed",
 				"reason": "TIMEOUT_EXCEEDED",
 			})
@@ -488,7 +488,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 					"code", guardErr.Code,
 					"message", guardErr.Message,
 				)
-				r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+				r.publishAudit("audit.workitem.failed", workitem.Name, map[string]string{
 					"action": "failed",
 					"reason": guardErr.Code,
 				})
@@ -554,7 +554,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 			"condition", result.SuspendCondition,
 			"timeout", result.SuspendTimeout,
 		)
-		r.publishAudit(ctx, "audit.workitem.suspended", workitem.Name, map[string]string{
+		r.publishAudit("audit.workitem.suspended", workitem.Name, map[string]string{
 			"action":    "suspended",
 			"assignee":  previousAssignee,
 			"condition": result.SuspendCondition,
@@ -589,7 +589,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 			"name", workitem.Name,
 			"lastNode", previousAssignee,
 		)
-		r.publishAudit(ctx, "audit.workitem.completed", workitem.Name, map[string]string{
+		r.publishAudit("audit.workitem.completed", workitem.Name, map[string]string{
 			"action":    "completed",
 			"last_node": previousAssignee,
 		})
@@ -600,7 +600,7 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 			"from", previousAssignee,
 			"to", result.NextAssignee,
 		)
-		r.publishAudit(ctx, "audit.workitem.routed", workitem.Name, map[string]string{
+		r.publishAudit("audit.workitem.routed", workitem.Name, map[string]string{
 			"action": "routed",
 			"from":   previousAssignee,
 			"to":     result.NextAssignee,
@@ -629,7 +629,7 @@ func (r *WorkitemReconciler) reconcileSuspended(ctx context.Context, workitem *f
 				"name", workitem.Name,
 				"resumeTimeout", workitem.Status.ResumeTimeout,
 			)
-			r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+			r.publishAudit("audit.workitem.failed", workitem.Name, map[string]string{
 				"action": "failed",
 				"reason": "SUSPEND_TIMEOUT_EXCEEDED",
 			})
@@ -644,7 +644,7 @@ func (r *WorkitemReconciler) reconcileSuspended(ctx context.Context, workitem *f
 				"elapsed", elapsed,
 				"timeout", timeout,
 			)
-			r.publishAudit(ctx, "audit.workitem.failed", workitem.Name, map[string]string{
+			r.publishAudit("audit.workitem.failed", workitem.Name, map[string]string{
 				"action": "failed",
 				"reason": "SUSPEND_TIMEOUT_EXCEEDED",
 			})
@@ -723,7 +723,7 @@ func (r *WorkitemReconciler) resumeWorkitem(ctx context.Context, workitem *flowv
 		"name", workitem.Name,
 		"assignee", assignee,
 	)
-	r.publishAudit(ctx, "audit.workitem.resumed", workitem.Name, map[string]string{
+	r.publishAudit("audit.workitem.resumed", workitem.Name, map[string]string{
 		"action":   "resumed",
 		"assignee": assignee,
 	})
