@@ -8,7 +8,6 @@ package rpc
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	apiv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/pkg/eventbus"
+	"github.com/gideas/flow/pkg/randid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -89,7 +89,7 @@ func (s *OperatorServer) publishAudit(ctx context.Context, eventType string, att
 	s.Auditor.Submit(&flowv1.PublishRequest{
 		Channel: "audit",
 		Event: &flowv1.FlowEvent{
-			EventId:       newAuditEventID(),
+			EventId:       randid.NewRandomID(),
 			EventType:     eventType,
 			FlowNamespace: extractMetadataValue(ctx, metadataKeyNamespace),
 			NodeId:        extractMetadataValue(ctx, metadataKeyNodeID),
@@ -115,15 +115,6 @@ func (s *OperatorServer) resolveFlow(ctx context.Context, namespace string) (*ap
 			fmt.Sprintf("expected exactly 1 FoundryFlow in namespace %q, found %d (singleton violation)", namespace, len(flows.Items)))
 	}
 	return &flows.Items[0], nil
-}
-
-// newAuditEventID returns a random hex-encoded identifier for audit events.
-func newAuditEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }
 
 // ---------------------------------------------------------------------------

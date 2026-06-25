@@ -11,7 +11,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"net"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/gideas/flow/frictionledger/internal/service"
 	"github.com/gideas/flow/frictionledger/internal/store/sqlite"
+	"github.com/gideas/flow/pkg/randid"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -58,7 +58,7 @@ func main() {
 
 	thresholds := loadThresholds()
 
-	ledgerSrv := service.NewFrictionLedgerServer(store, newEventID, thresholds)
+	ledgerSrv := service.NewFrictionLedgerServer(store, randid.NewRandomID, thresholds)
 
 	// Connect to Event Bus and start subscription.
 	busConn, busClient, err := service.ConnectEventBus(busAddr)
@@ -100,15 +100,6 @@ func main() {
 	}
 
 	slog.Info("Friction Ledger stopped")
-}
-
-// newEventID returns a random hex-encoded identifier for event records.
-func newEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }
 
 // loadThresholds reads per-tier friction threshold configuration from

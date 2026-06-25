@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"time"
@@ -37,6 +36,7 @@ import (
 	"github.com/gideas/flow/operator/internal/controller/dispatcher"
 	"github.com/gideas/flow/operator/internal/controller/scheduler"
 	"github.com/gideas/flow/pkg/eventbus"
+	"github.com/gideas/flow/pkg/randid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -95,7 +95,7 @@ func (r *WorkitemReconciler) publishAudit(_ context.Context, eventType string, w
 	r.Auditor.Submit(&flowv1gen.PublishRequest{
 		Channel: "audit",
 		Event: &flowv1gen.FlowEvent{
-			EventId:    newWIAuditID(),
+			EventId:    randid.NewRandomID(),
 			EventType:  eventType,
 			WorkitemId: workitemName,
 			Timestamp:  timestamppb.Now(),
@@ -133,7 +133,7 @@ func (r *WorkitemReconciler) publishLifecycle(workitem *flowv1.Workitem, phase s
 	r.Auditor.Submit(&flowv1gen.PublishRequest{
 		Channel: "workitem",
 		Event: &flowv1gen.FlowEvent{
-			EventId:    newWIAuditID(),
+			EventId:    randid.NewRandomID(),
 			EventType:  "workitem.phase_changed",
 			WorkitemId: workitem.Name,
 			Timestamp:  timestamppb.Now(),
@@ -141,15 +141,6 @@ func (r *WorkitemReconciler) publishLifecycle(workitem *flowv1.Workitem, phase s
 			Attributes: attrs,
 		},
 	})
-}
-
-// newWIAuditID returns a random hex-encoded identifier for audit events.
-func newWIAuditID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }
 
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems,verbs=get;list;watch;create;update;patch;delete

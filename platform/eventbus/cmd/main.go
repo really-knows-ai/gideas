@@ -10,7 +10,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/gideas/flow/eventbus/internal/service"
 	"github.com/gideas/flow/eventbus/internal/store/sqlite"
+	"github.com/gideas/flow/pkg/randid"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -70,7 +70,7 @@ func main() {
 
 	srv := grpc.NewServer()
 
-	busSrv := service.NewEventBusServer(store, newEventID, retention)
+	busSrv := service.NewEventBusServer(store, randid.NewRandomID, retention)
 	flowv1.RegisterFlowEventBusServiceServer(srv, busSrv)
 
 	// Enable gRPC reflection for debugging with grpcurl.
@@ -94,15 +94,6 @@ func main() {
 	}
 
 	slog.Info("Flow Event Bus stopped")
-}
-
-// newEventID returns a random hex-encoded identifier for event records.
-func newEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }
 
 // retentionEntry mirrors the JSON structure for a single channel's
