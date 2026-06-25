@@ -24,10 +24,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"sync"
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -62,34 +62,6 @@ func main() {
 // Entry function — subscribes to Federation, logs petition outcome events
 // ---------------------------------------------------------------------------
 
-// pendingTracker provides best-effort per-replica deduplication of petition IDs.
-// With multiple replicas, duplicates may still occur (acceptable — downstream
-// nodes handle duplicate workitems gracefully).
-type pendingTracker struct {
-	mu      sync.Mutex
-	pending map[string]struct{}
-}
-
-func newPendingTracker() *pendingTracker {
-	return &pendingTracker{pending: make(map[string]struct{})}
-}
-
-func (p *pendingTracker) markPending(petitionID string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, ok := p.pending[petitionID]; ok {
-		return false // already pending
-	}
-	p.pending[petitionID] = struct{}{}
-	return true
-}
-
-func (p *pendingTracker) clearPending(petitionID string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.pending, petitionID)
-}
-
 // watchOutcomes is the entry function. It creates a FederationClient and
 // runs a reconnect loop subscribing to petition outcome events.
 func watchOutcomes(ctx context.Context, entry *flow.EntryClient) error {
@@ -116,7 +88,7 @@ func watchOutcomesWithClient(
 	flowIdentity string,
 	entry *flow.EntryClient,
 ) error {
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 	delay := reconnectBaseDelay
 
 	for {
@@ -156,7 +128,7 @@ func watchOutcomesWithClient(
 func consumeOutcomes(
 	ctx context.Context,
 	stream *flow.PetitionOutcomeStream,
-	tracker *pendingTracker,
+	tracker *internal.PendingTracker,
 	entry *flow.EntryClient,
 ) error {
 	for {
@@ -179,7 +151,7 @@ func consumeOutcomes(
 		}
 
 		// Best-effort dedup: skip if already pending on this replica.
-		if !tracker.markPending(petitionID) {
+		if !tracker.MarkPending(petitionID) {
 			slog.Debug("petition-watcher: petition_id already pending, skipping",
 				"petition_id", petitionID)
 			continue

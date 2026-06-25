@@ -10,6 +10,7 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -215,29 +216,6 @@ func TestLawTimestamp_NilBoth(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — pendingTracker
-// ---------------------------------------------------------------------------
-
-func TestPendingTracker_MarkAndClear(t *testing.T) {
-	tracker := newPendingTracker()
-
-	if !tracker.markPending(testLawID1) {
-		t.Fatal("expected first markPending to return true")
-	}
-	if tracker.markPending(testLawID1) {
-		t.Fatal("expected second markPending for same ID to return false")
-	}
-	if !tracker.markPending(testLawID2) {
-		t.Fatal("expected markPending for different ID to return true")
-	}
-
-	tracker.clearPending(testLawID1)
-	if !tracker.markPending(testLawID1) {
-		t.Fatal("expected markPending after clearPending to return true")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Tests — scanAndCreate (integration with spy servers)
 // ---------------------------------------------------------------------------
 
@@ -258,7 +236,7 @@ func TestScanAndCreate_CreatesWorkitems(t *testing.T) {
 	}}
 
 	ec := setupEntryTestClient(t, opSpy, libSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
@@ -291,7 +269,7 @@ func TestScanAndCreate_DeduplicatesPending(t *testing.T) {
 	}}
 
 	ec := setupEntryTestClient(t, opSpy, libSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	// First scan — should create workitem.
 	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
@@ -324,7 +302,7 @@ func TestScanAndCreate_CreateWorkitemError_ClearsPending(t *testing.T) {
 	}}
 
 	ec := setupEntryTestClient(t, opSpy, libSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
@@ -332,7 +310,7 @@ func TestScanAndCreate_CreateWorkitemError_ClearsPending(t *testing.T) {
 	}
 
 	// After error, pending should be cleared — re-mark should succeed.
-	if !tracker.markPending(testLawID1) {
+	if !tracker.MarkPending(testLawID1) {
 		t.Fatal("expected law to be cleared from pending after CreateWorkitem error")
 	}
 }
@@ -346,7 +324,7 @@ func TestScanAndCreate_QueryLawsError(t *testing.T) {
 	libSpy := &spyLibrarian{returnErr: fmt.Errorf("librarian unavailable")}
 
 	ec := setupEntryTestClient(t, opSpy, libSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, time.Now)
 	if err == nil {
@@ -370,7 +348,7 @@ func TestScanAndCreate_NoExpiredLaws(t *testing.T) {
 	}}
 
 	ec := setupEntryTestClient(t, opSpy, libSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
@@ -401,7 +379,7 @@ func TestScanAndCreate_MultipleTiers(t *testing.T) {
 	}}
 
 	ec := setupEntryTestClient(t, opSpy, libSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {

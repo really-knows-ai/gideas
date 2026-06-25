@@ -21,10 +21,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"sync"
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -59,38 +59,10 @@ func main() {
 // Entry function — subscribes to Event Bus, creates workitems
 // ---------------------------------------------------------------------------
 
-// pendingTracker provides best-effort per-replica deduplication of law IDs.
-// With multiple replicas, duplicates may still occur (acceptable — the
-// Tribunal handles duplicate hearings gracefully).
-type pendingTracker struct {
-	mu      sync.Mutex
-	pending map[string]struct{}
-}
-
-func newPendingTracker() *pendingTracker {
-	return &pendingTracker{pending: make(map[string]struct{})}
-}
-
-func (p *pendingTracker) markPending(lawID string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, ok := p.pending[lawID]; ok {
-		return false // already pending
-	}
-	p.pending[lawID] = struct{}{}
-	return true
-}
-
-func (p *pendingTracker) clearPending(lawID string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.pending, lawID)
-}
-
 // watchFriction is the entry function. It reconnects to the Event Bus with
 // exponential backoff and creates hearing workitems for threshold events.
 func watchFriction(ctx context.Context, entry *flow.EntryClient) error {
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 	delay := reconnectBaseDelay
 
 	for {
@@ -129,7 +101,7 @@ func consumeEvents(
 	ctx context.Context,
 	entry *flow.EntryClient,
 	events *flow.EventStream,
-	tracker *pendingTracker,
+	tracker *internal.PendingTracker,
 ) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -152,7 +124,7 @@ func consumeEvents(
 		}
 
 		// Best-effort dedup: skip if already pending on this replica.
-		if !tracker.markPending(lawID) {
+		if !tracker.MarkPending(lawID) {
 			slog.Debug("friction-watcher: law_id already pending, skipping",
 				"law_id", lawID, "event_id", evt.GetEventId())
 			continue
@@ -164,7 +136,7 @@ func consumeEvents(
 		if _, err := entry.CreateWorkitem(ctx, map[string]string{
 			"law_id": lawID,
 		}); err != nil {
-			tracker.clearPending(lawID)
+			tracker.ClearPending(lawID)
 			slog.Warn("friction-watcher: create workitem failed",
 				"law_id", lawID, "error", err)
 		}
