@@ -87,6 +87,12 @@ func (s *ArchivistServer) validateChildAccess(ctx context.Context, parentWorkite
 			"cross-Workitem reads not available: Operator client not configured")
 	}
 
+	// Propagate namespace metadata to outgoing Operator call.
+	ns := extractMetadataValue(ctx, "x-flow-namespace")
+	if ns != "" {
+		ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("x-flow-namespace", ns))
+	}
+
 	resp, err := s.operatorClient.ValidateChildAccess(ctx, &flowv1.ValidateChildAccessRequest{
 		ParentWorkitemId: parentWorkitemID,
 		ChildWorkitemId:  childWorkitemID,

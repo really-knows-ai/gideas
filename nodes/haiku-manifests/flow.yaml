@@ -303,6 +303,8 @@ spec:
     - "READ:artefact/haiku"
     - "READ:law"
     - "WRITE:feedback/new"
+    - "WRITE:feedback/resolved"
+    - "WRITE:feedback/rejected"
     - "STAMP:artefact/haiku/review"
     - "CREATE:workitem/child"
 ---
@@ -338,6 +340,7 @@ spec:
     - "WRITE:artefact/haiku"
     - "READ:feedback"
     - "WRITE:feedback/actioned"
+    - "WRITE:feedback/wont_fix"
     - "READ:law"
 ---
 apiVersion: flow.gideas.io/v1

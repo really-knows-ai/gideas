@@ -43,13 +43,10 @@ func HandleForge(ctx context.Context, client *flow.Client, agent flow.ForgeContr
 	}
 	slog.Info("forge: read inputs", "artefacts", cfg.InputArtefacts)
 
-	// Query laws for governance (broken: deliberately ignore laws).
-	_ = client.QueryLaws
-	_ = cfg.GovernedArtefact
-	slog.Info("forge: laws deliberately omitted — forge will not know governance constraints")
+	laws, _ := client.QueryLaws(ctx, cfg.GovernedArtefact, "")
+	slog.Info("forge: laws retrieved", "count", len(laws))
 
-	// Generate content via the ForgeContract agent (laws intentionally omitted).
-	result, err := agent.Run(ctx, input, nil)
+	result, err := agent.Run(ctx, input, laws)
 	if err != nil {
 		return fmt.Errorf("forge: agent run: %w", err)
 	}
