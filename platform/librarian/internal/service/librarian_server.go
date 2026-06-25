@@ -91,7 +91,7 @@ func WithAuditPublisher(pub AuditPublisher) LibrarianOption {
 // publishAudit submits an audit event to the async publisher for non-blocking
 // delivery to the Event Bus. If the publisher is nil, audit publishing is
 // silently disabled.
-func (s *LibrarianServer) publishAudit(_ context.Context, eventType string, attrs map[string]string) {
+func (s *LibrarianServer) publishAudit(eventType string, attrs map[string]string) {
 	if s.auditor == nil {
 		return
 	}
@@ -254,7 +254,7 @@ func (s *LibrarianServer) RecordFinding(
 		"version_hash", versionHash,
 	)
 
-	s.publishAudit(ctx, "audit.law.created", map[string]string{
+	s.publishAudit("audit.law.created", map[string]string{
 		"action":      "created",
 		"resource_id": id,
 		"tier":        "1",
@@ -357,7 +357,7 @@ func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequ
 	if protoLaw.GetId() != "" {
 		action = "updated"
 	}
-	s.publishAudit(ctx, "audit.law."+action, map[string]string{
+	s.publishAudit("audit.law."+action, map[string]string{
 		"action":      action,
 		"resource_id": lawID,
 	})
@@ -389,7 +389,7 @@ func (s *LibrarianServer) RetireLaw(
 
 	slog.Info("RetireLaw completed", "law_id", req.GetLawId())
 
-	s.publishAudit(ctx, "audit.law.retired", map[string]string{
+	s.publishAudit("audit.law.retired", map[string]string{
 		"action":      "retired",
 		"resource_id": req.GetLawId(),
 	})
@@ -502,7 +502,7 @@ func (s *LibrarianServer) CreateDisputeRecord(
 		"cited_law_ids", rec.CitedLawIDs,
 	)
 
-	s.publishAudit(ctx, "audit.dispute.created", map[string]string{
+	s.publishAudit("audit.dispute.created", map[string]string{
 		"action":        "created",
 		"petition_id":   rec.PetitionID,
 		"cited_law_ids": strings.Join(rec.CitedLawIDs, ","),
@@ -534,7 +534,7 @@ func (s *LibrarianServer) RetireDisputeRecord(
 
 	slog.Info("RetireDisputeRecord", "petition_id", req.GetPetitionId())
 
-	s.publishAudit(ctx, "audit.dispute.retired", map[string]string{
+	s.publishAudit("audit.dispute.retired", map[string]string{
 		"action":      "retired",
 		"petition_id": req.GetPetitionId(),
 	})
@@ -675,7 +675,7 @@ func (s *LibrarianServer) ApplyLifecycleAction(
 			}
 		}
 		slog.Info("ApplyLifecycleAction: promote", "law_id", lawID, "new_tier", law.Tier+1)
-		s.publishAudit(ctx, "audit.law.promoted", map[string]string{
+		s.publishAudit("audit.law.promoted", map[string]string{
 			"action":      "promoted",
 			"resource_id": lawID,
 		})
@@ -685,7 +685,7 @@ func (s *LibrarianServer) ApplyLifecycleAction(
 			return nil, status.Errorf(codes.Internal, "retire law: %v", err)
 		}
 		slog.Info("ApplyLifecycleAction: retire", "law_id", lawID)
-		s.publishAudit(ctx, "audit.law.retired", map[string]string{
+		s.publishAudit("audit.law.retired", map[string]string{
 			"action":      "retired",
 			"resource_id": lawID,
 		})
@@ -702,7 +702,7 @@ func (s *LibrarianServer) ApplyLifecycleAction(
 			return nil, status.Errorf(codes.Internal, "set tier: %v", err)
 		}
 		slog.Info("ApplyLifecycleAction: demote", "law_id", lawID, "new_tier", law.Tier-1)
-		s.publishAudit(ctx, "audit.law.demoted", map[string]string{
+		s.publishAudit("audit.law.demoted", map[string]string{
 			"action":      "demoted",
 			"resource_id": lawID,
 		})
