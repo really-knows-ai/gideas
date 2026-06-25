@@ -40,11 +40,15 @@ type k8sObject struct {
 	} `yaml:"metadata"`
 }
 
+type nodeGroupSpec struct {
+	Nodes []string `yaml:"nodes"`
+}
+
 type foundryFlowSpec struct {
 	EntryContracts   map[string]map[string][]string `yaml:"entryContracts"`
 	ExitContracts    map[string]map[string][]string `yaml:"exitContracts"`
 	GovernancePolicy map[string]any                 `yaml:"governancePolicy"`
-	NodeGroups       map[string][]string            `yaml:"nodeGroups"`
+	NodeGroups       map[string]nodeGroupSpec       `yaml:"nodeGroups"`
 }
 
 type foundryFlow struct {
@@ -354,8 +358,8 @@ func TestFoundryFlow_NodeGroups_TotalCount(t *testing.T) {
 	ff := findFoundryFlow(t)
 
 	total := 0
-	for _, members := range ff.Spec.NodeGroups {
-		total += len(members)
+	for _, group := range ff.Spec.NodeGroups {
+		total += len(group.Nodes)
 	}
 
 	// 6 main-cycle + 10 judiciary + 9 clerk-cycle = 25
@@ -390,14 +394,15 @@ func TestFoundryFlow_PreservesExistingFields(t *testing.T) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-func assertGroupEqual(t *testing.T, groups map[string][]string, name string, want []string) {
+func assertGroupEqual(t *testing.T, groups map[string]nodeGroupSpec, name string, want []string) {
 	t.Helper()
 
-	got, ok := groups[name]
+	group, ok := groups[name]
 	if !ok {
 		t.Errorf("nodeGroups missing %q", name)
 		return
 	}
+	got := group.Nodes
 
 	// Compare sorted to be order-independent for membership, but also check
 	// exact order since the spec defines a deliberate ordering.
@@ -429,12 +434,12 @@ func TestFoundryFlow_NodeGroups_NoDuplicatesAcrossGroups(t *testing.T) {
 	ff := findFoundryFlow(t)
 
 	seen := make(map[string]string) // node → group
-	for group, members := range ff.Spec.NodeGroups {
-		for _, node := range members {
+	for groupName, group := range ff.Spec.NodeGroups {
+		for _, node := range group.Nodes {
 			if prev, ok := seen[node]; ok {
-				t.Errorf("node %q appears in both %q and %q", node, prev, group)
+				t.Errorf("node %q appears in both %q and %q", node, prev, groupName)
 			}
-			seen[node] = group
+			seen[node] = groupName
 		}
 	}
 
@@ -1819,11 +1824,11 @@ func TestManifest_CrossCuttingConsistency(t *testing.T) {
 	})
 
 	t.Run("nodegroup_members_exist", func(t *testing.T) {
-		for group, members := range ff.Spec.NodeGroups {
-			for _, member := range members {
+		for groupName, group := range ff.Spec.NodeGroups {
+			for _, member := range group.Nodes {
 				if _, ok := nodes[member]; !ok {
 					t.Errorf("nodeGroup %q lists %q but no FoundryNode with that name exists",
-						group, member)
+						groupName, member)
 				}
 			}
 		}

@@ -47,6 +47,9 @@ const (
 	// outputRefine is the well-known output name for routing to refinement.
 	outputRefine = "refine"
 
+	// outputAppraise is the well-known output name for routing to appraise adjudication.
+	outputAppraise = "appraise"
+
 	// pendingHoldTimeout is the suspension timeout for workitems held
 	// pending a dispute resolution. Defaults to 2 weeks (the platform's
 	// default max suspend timeout).
@@ -168,13 +171,13 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 					return fmt.Errorf("sort: check stamp %s: %w", stamp, err)
 				}
 				if hasStamp {
-					// Stamp present — check for unresolved feedback from this provider.
-					unresolvedFromProvider, err := hasUnresolvedFeedbackFrom(ctx, client, kind, nodeName)
+					// Stamp present — check for unaddressed feedback (NEW/REJECTED) from this provider.
+					unaddressedFromProvider, err := hasUnaddressedFeedbackFrom(ctx, client, kind, nodeName)
 					if err != nil {
 						return err
 					}
-					if unresolvedFromProvider {
-						slog.Info("sort: routing to refine (unresolved feedback from provider)",
+					if unaddressedFromProvider {
+						slog.Info("sort: routing to refine (unaddressed feedback from provider)",
 							"artefact_kind", kind,
 							"provider", nodeName,
 							"stamp", stamp)
@@ -205,6 +208,21 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 		}
 
 		// ── Step 3: All stamps from nodeOrder present ─────────────────
+		// Check for addressed feedback (ACTIONED/WONT_FIX) needing adjudication.
+		hasAddressed, err := hasAddressedFeedback(ctx, client, kind)
+		if err != nil {
+			return err
+		}
+		if hasAddressed {
+			slog.Info("sort: routing to appraise (addressed feedback needs adjudication)",
+				"artefact_kind", kind)
+			_, err = client.RouteToOutput(ctx, outputAppraise)
+			if err != nil {
+				return fmt.Errorf("sort: route to appraise: %w", err)
+			}
+			return nil
+		}
+
 		// Apply any stamps Sort itself can provide.
 		myStamps := stampsProvidedBy(selfNode.GetName(), kind, stampProviders)
 		for _, stamp := range myStamps {
@@ -288,9 +306,9 @@ func stampsProvidedBy(nodeName, kind string, providers map[string]map[string]str
 	return stamps
 }
 
-// hasUnresolvedFeedbackFrom checks whether there is unresolved feedback
+// hasUnaddressedFeedbackFrom checks whether there is NEW or REJECTED feedback
 // from the specified source node on the given artefact kind.
-func hasUnresolvedFeedbackFrom(
+func hasUnaddressedFeedbackFrom(
 	ctx context.Context, client *flow.Client, artefactID, sourceNode string,
 ) (bool, error) {
 	items, err := client.GetFeedback(ctx, artefactID)
@@ -302,8 +320,27 @@ func hasUnresolvedFeedbackFrom(
 			continue
 		}
 		state := item.GetState()
-		if state != flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED &&
-			state != flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
+		if state == flowv1.FeedbackState_FEEDBACK_STATE_NEW ||
+			state == flowv1.FeedbackState_FEEDBACK_STATE_REJECTED {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// hasAddressedFeedback checks whether any ACTIONED or WONT_FIX feedback
+// exists on the given artefact kind (any source).
+func hasAddressedFeedback(
+	ctx context.Context, client *flow.Client, artefactID string,
+) (bool, error) {
+	items, err := client.GetFeedback(ctx, artefactID)
+	if err != nil {
+		return false, fmt.Errorf("sort: get feedback for %s: %w", artefactID, err)
+	}
+	for _, item := range items {
+		state := item.GetState()
+		if state == flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED ||
+			state == flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX {
 			return true, nil
 		}
 	}

@@ -103,7 +103,7 @@ func TestSort_RoutesToAppraise_MissingReviewStamp(t *testing.T) {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "appraise" {
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraise {
 		t.Fatalf("expected route to appraise, got %v", spy.RoutedOutputs)
 	}
 }
@@ -267,7 +267,7 @@ func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
-	// Quench left unresolved feedback below deadlock threshold.
+	// Quench left addressed (WONT_FIX) feedback below deadlock threshold.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-6", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
 	}
@@ -281,9 +281,9 @@ func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking, got %v", spy.DeadlockedIDs)
 	}
-	// Linter stamp present + unresolved feedback from quench → refine.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputRefine {
-		t.Fatalf("expected route to refine, got %v", spy.RoutedOutputs)
+	// Linter stamp present + WONT_FIX from quench → appraise (adjudication).
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraise {
+		t.Fatalf("expected route to appraise, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -358,9 +358,9 @@ func TestSort_CustomThreshold(t *testing.T) {
 		t.Fatalf("expected no deadlocking with threshold=5, got %v",
 			spy.DeadlockedIDs)
 	}
-	// Linter stamp present + unresolved feedback from quench → refine.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputRefine {
-		t.Fatalf("expected route to refine, got %v", spy.RoutedOutputs)
+	// Linter stamp present + WONT_FIX from quench → appraise (adjudication).
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraise {
+		t.Fatalf("expected route to appraise, got %v", spy.RoutedOutputs)
 	}
 }
 
