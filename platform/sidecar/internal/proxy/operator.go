@@ -209,7 +209,10 @@ func extractWorkitemIDFromMD(ctx context.Context) string {
 // metadataUnaryInterceptor copies incoming gRPC metadata to the outgoing
 // context before invoking the upstream call, replacing per-method
 // propagateMetadata() calls.
-func metadataUnaryInterceptor(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+func metadataUnaryInterceptor(
+	ctx context.Context, method string, req, reply any,
+	cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption,
+) error {
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
@@ -217,7 +220,10 @@ func metadataUnaryInterceptor(ctx context.Context, method string, req, reply any
 }
 
 // metadataStreamInterceptor is the streaming variant.
-func metadataStreamInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+func metadataStreamInterceptor(
+	ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn,
+	method string, streamer grpc.Streamer, opts ...grpc.CallOption,
+) (grpc.ClientStream, error) {
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
