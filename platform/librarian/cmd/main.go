@@ -12,7 +12,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"net"
@@ -25,6 +24,7 @@ import (
 	"github.com/gideas/flow/librarian/internal/service"
 	"github.com/gideas/flow/librarian/internal/store/sqlite"
 	"github.com/gideas/flow/pkg/eventbus"
+	"github.com/gideas/flow/pkg/randid"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -144,7 +144,7 @@ func main() {
 
 	srv := grpc.NewServer()
 
-	librarianSrv := service.NewLibrarianServer(store, embedder, newLawID, threshold, serverOpt...)
+	librarianSrv := service.NewLibrarianServer(store, embedder, randid.NewRandomID, threshold, serverOpt...)
 	flowv1.RegisterLibrarianServiceServer(srv, librarianSrv)
 
 	// Enable gRPC reflection for debugging with grpcurl.
@@ -170,13 +170,4 @@ func main() {
 	}
 
 	slog.Info("Librarian stopped")
-}
-
-// newLawID returns a random hex-encoded identifier for law records.
-func newLawID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }

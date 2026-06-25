@@ -9,15 +9,14 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
 
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/pkg/randid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -47,7 +46,7 @@ type ArchivistServer struct {
 func NewArchivistServer(s *sqlite.Store, opts ...ArchivistOption) *ArchivistServer {
 	srv := &ArchivistServer{
 		store:   s,
-		newIDFn: newAuditEventID,
+		newIDFn: randid.NewRandomID,
 		namespaceFn: func(ctx context.Context) string {
 			return extractMetadataValue(ctx, "x-flow-namespace")
 		},
@@ -148,15 +147,6 @@ func (s *ArchivistServer) publishAudit(ctx context.Context, eventType string, at
 			Attributes:    attrs,
 		},
 	})
-}
-
-// newAuditEventID returns a random hex-encoded identifier for audit events.
-func newAuditEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }
 
 // extractMetadataValue reads a single value from incoming gRPC metadata.

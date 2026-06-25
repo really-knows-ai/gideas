@@ -7,7 +7,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/gideas/flow/librarian/internal/store/sqlite"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/pkg/randid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -98,21 +98,12 @@ func (s *LibrarianServer) publishAudit(_ context.Context, eventType string, attr
 	s.auditor.Submit(&flowv1.PublishRequest{
 		Channel: "audit",
 		Event: &flowv1.FlowEvent{
-			EventId:    newLibAuditID(),
+			EventId:    randid.NewRandomID(),
 			EventType:  eventType,
 			Timestamp:  timestamppb.Now(),
 			Attributes: attrs,
 		},
 	})
-}
-
-// newLibAuditID returns a random hex-encoded identifier for audit events.
-func newLibAuditID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }
 
 // ---------------------------------------------------------------------------

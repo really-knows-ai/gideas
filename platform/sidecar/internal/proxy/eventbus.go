@@ -1,13 +1,12 @@
 package proxy
 
 import (
-	"crypto/rand"
-	"fmt"
 	"log/slog"
 	"strconv"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/pkg/eventbus"
+	"github.com/gideas/flow/pkg/randid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -89,7 +88,7 @@ func (p *EventBusProxy) PublishFriction(
 	p.publisher.Submit(&flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:       newEventID(),
+			EventId:       randid.NewRandomID(),
 			EventType:     "friction",
 			FlowNamespace: namespace,
 			NodeId:        nodeID,
@@ -118,7 +117,7 @@ func (p *EventBusProxy) PublishTelemetry(
 	p.publisher.Submit(&flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:       newEventID(),
+			EventId:       randid.NewRandomID(),
 			EventType:     eventType,
 			FlowNamespace: namespace,
 			NodeId:        nodeID,
@@ -133,13 +132,4 @@ func (p *EventBusProxy) PublishTelemetry(
 		"node_id", nodeID,
 		"event_type", eventType,
 	)
-}
-
-// newEventID returns a random hex-encoded identifier for events.
-func newEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }

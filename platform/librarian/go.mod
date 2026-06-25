@@ -6,6 +6,7 @@ require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/gideas/flow/gen v0.0.0
 	github.com/gideas/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
+	github.com/gideas/flow/pkg/randid v0.0.0-00010101000000-000000000000
 	github.com/mattn/go-sqlite3 v1.14.34
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
@@ -21,3 +22,5 @@ require (
 replace github.com/gideas/flow/gen => ../../gen
 
 replace github.com/gideas/flow/pkg/eventbus => ../pkg/eventbus
+
+replace github.com/gideas/flow/pkg/randid => ../pkg/randid

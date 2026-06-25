@@ -14,12 +14,11 @@
 package buffer
 
 import (
-	"crypto/rand"
-	"fmt"
 	"strconv"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/pkg/eventbus"
+	"github.com/gideas/flow/pkg/randid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -139,7 +138,7 @@ func frictionRequest(evt Event) *flowv1.PublishRequest {
 	return &flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:       newEventID(),
+			EventId:       randid.NewRandomID(),
 			EventType:     "friction",
 			FlowNamespace: evt.Namespace,
 			NodeId:        evt.NodeID,
@@ -155,7 +154,7 @@ func telemetryRequest(evt Event) *flowv1.PublishRequest {
 	return &flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:       newEventID(),
+			EventId:       randid.NewRandomID(),
 			EventType:     evt.EventType,
 			FlowNamespace: evt.Namespace,
 			NodeId:        evt.NodeID,
@@ -164,13 +163,4 @@ func telemetryRequest(evt Event) *flowv1.PublishRequest {
 			Payload:       evt.Payload,
 		},
 	}
-}
-
-// newEventID returns a random hex-encoded identifier for events.
-func newEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return fmt.Sprintf("%x", b)
 }
