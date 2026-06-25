@@ -206,4 +206,5 @@ Additional project-specific skills:
 | `publish-release` | Quality gate, build, changelog, README review, tag, push, and `gh release create` |
 | `commit-push` | Commit and push all changes (update gitignore where needed) |
 | `ponytail-review` | Review diffs for over-engineering: what to delete, simplify, or replace with stdlib/native equivalents |
-| `ponytail-audit` | Whole-repo audit for over-engineering: ranked list of bloat, unused code, reinvented wheels |
+| `ponytail-audit` | Whole-repo audit for over-engineering: writes ranked checklist to plans/AUDIT.md |
+| `ponytail-fix` | Fix ponytail audit items one at a time: implement → ponytail-review → normal review → quality gate → commit |

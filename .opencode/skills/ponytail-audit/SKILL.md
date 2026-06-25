@@ -2,14 +2,16 @@
 name: ponytail-audit
 description: >
   Whole-repo audit for over-engineering. Like ponytail-review, but scans the
-  entire codebase instead of a diff: a ranked list of what to delete, simplify,
-  or replace with stdlib/native equivalents. Use when the user says "audit this
-  codebase", "audit for over-engineering", "what can I delete from this repo",
-  "find bloat", or calls ponytail-audit. One-shot report, does not apply fixes.
+  entire codebase instead of a diff: writes a ranked checklist to
+  plans/AUDIT.md of what to delete, simplify, or replace with stdlib/native
+  equivalents. Use when the user says "audit this codebase", "audit for
+  over-engineering", "what can I delete from this repo", "find bloat", or calls
+  ponytail-audit. One-shot report, does not apply fixes.
 ---
 
 ponytail-review, repo-wide. Scan the whole tree instead of a diff. Rank
-findings biggest cut first.
+findings biggest cut first. Write output to `plans/AUDIT.md` as a structured
+checklist consumable by `ponytail-fix`.
 
 ## Tags
 
@@ -29,11 +31,35 @@ thing, dead flags and config, hand-rolled stdlib.
 
 ## Output
 
-One line per finding, ranked: `<tag> <what to cut>. <replacement>. [path]`.
-End with `net: -<N> lines, -<M> deps possible.` Nothing to cut: `Lean already. Ship.`
+Write findings to `plans/AUDIT.md` as a ranked checklist. Format each finding
+as a markdown checklist item with the tag as a heading:
 
-## Boundaries
+```markdown
+### `<tag>:` `<one-line summary>`
 
-Scope: over-engineering and complexity only. Correctness bugs, security holes,
-and performance are explicitly out of scope. Route them to the `@reviewer`
-subagent instead. Lists findings, applies nothing. One-shot.
+Description of the finding, including file paths and estimated savings.
+
+- [ ] `path/to/file.go:L<N>` — what to change and why
+- [ ] `path/to/other.go:L<N>` — what to change and why
+```
+
+End with:
+
+```markdown
+---
+
+**Net estimate: ~-<N> lines, ~-<M> deps.** All replacements use existing stdlib
+or in-repo consolidation. No new dependencies introduced.
+```
+
+If nothing to cut: `Lean already. Ship.`
+
+## Notes
+
+- `plans/` is gitignored. AUDIT.md is never committed.
+- After writing AUDIT.md, invoke `ponytail-fix` to work through items.
+- Merge into an existing AUDIT.md if one exists: preserve completed (✅)
+  items and append new findings.
+- Scope: over-engineering and complexity only. Correctness bugs, security
+  holes, and performance are explicitly out of scope. Route them to the
+  `@reviewer` subagent instead. Lists findings, applies nothing. One-shot.
