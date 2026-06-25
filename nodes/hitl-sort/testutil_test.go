@@ -207,7 +207,6 @@ func newTestQueueManager(t *testing.T) flow.QueueManager {
 	t.Helper()
 	qm, err := flow.NewQueueManager(
 		flow.WithShardID("test-shard"),
-		flow.WithPeerResolver(&staticResolver{}),
 	)
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
@@ -230,11 +229,4 @@ func waitForEnqueue(t *testing.T, qm flow.QueueManager, workitemID string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s to appear in queue", workitemID)
-}
-
-// staticResolver returns no peers (standalone mode for testing).
-type staticResolver struct{}
-
-func (r *staticResolver) Resolve(_ context.Context) ([]string, error) {
-	return nil, nil
 }
