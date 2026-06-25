@@ -48,6 +48,8 @@ func NewArchivistProxy(archivistAddr string, childAuth service.ChildAuthorizer) 
 	conn, err := grpc.NewClient(
 		archivistAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
+		grpc.WithStreamInterceptor(metadataStreamInterceptor),
 	)
 	if err != nil {
 		return nil, err
@@ -174,8 +176,6 @@ func (p *ArchivistProxy) StoreArtefact(
 		return nil, err
 	}
 
-	outCtx := propagateMetadata(ctx)
-
 	// Security: compute the content hash server-side.
 	hash := sha256.Sum256(req.GetContent())
 	contentHash := fmt.Sprintf("%x", hash[:])
@@ -188,7 +188,7 @@ func (p *ArchivistProxy) StoreArtefact(
 	)
 
 	// Forward with the Sidecar-computed hash, overriding any node-supplied value.
-	resp, err := p.client.StoreArtefact(outCtx, &flowv1.StoreArtefactRequest{
+	resp, err := p.client.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:       req.GetWorkitemId(),
 		ArtefactId:       req.GetArtefactId(),
 		GovernedArtefact: req.GetGovernedArtefact(),
@@ -219,8 +219,6 @@ func (p *ArchivistProxy) GetArtefact(
 		return nil, err
 	}
 
-	outCtx := propagateMetadata(ctx)
-
 	if targetID := req.GetTargetWorkitemId(); targetID != "" {
 		slog.Info("Sidecar: forwarding GetArtefact (cross-Workitem)",
 			"workitem_id", req.GetWorkitemId(),
@@ -233,23 +231,21 @@ func (p *ArchivistProxy) GetArtefact(
 			"artefact_id", req.GetArtefactId(),
 		)
 	}
-	return p.client.GetArtefact(outCtx, req)
+	return p.client.GetArtefact(ctx, req)
 }
 
 // GetArtefactVersion forwards to the Archivist (passthrough).
 func (p *ArchivistProxy) GetArtefactVersion(
 	ctx context.Context, req *flowv1.GetArtefactVersionRequest,
 ) (*flowv1.GetArtefactVersionResponse, error) {
-	outCtx := propagateMetadata(ctx)
-	return p.client.GetArtefactVersion(outCtx, req)
+	return p.client.GetArtefactVersion(ctx, req)
 }
 
 // GetArtefactMetadata forwards to the Archivist (passthrough).
 func (p *ArchivistProxy) GetArtefactMetadata(
 	ctx context.Context, req *flowv1.GetArtefactMetadataRequest,
 ) (*flowv1.GetArtefactMetadataResponse, error) {
-	outCtx := propagateMetadata(ctx)
-	return p.client.GetArtefactMetadata(outCtx, req)
+	return p.client.GetArtefactMetadata(ctx, req)
 }
 
 // ListArtefacts forwards to the Archivist. If target_workitem_id is set,
@@ -262,22 +258,20 @@ func (p *ArchivistProxy) ListArtefacts(
 		return nil, err
 	}
 
-	outCtx := propagateMetadata(ctx)
 	if targetID := req.GetTargetWorkitemId(); targetID != "" {
 		slog.Info("Sidecar: forwarding ListArtefacts (cross-Workitem)",
 			"workitem_id", req.GetWorkitemId(),
 			"target_workitem_id", targetID,
 		)
 	}
-	return p.client.ListArtefacts(outCtx, req)
+	return p.client.ListArtefacts(ctx, req)
 }
 
 // QueryArtefactState forwards to the Archivist (passthrough).
 func (p *ArchivistProxy) QueryArtefactState(
 	ctx context.Context, req *flowv1.QueryArtefactStateRequest,
 ) (*flowv1.QueryArtefactStateResponse, error) {
-	outCtx := propagateMetadata(ctx)
-	return p.client.QueryArtefactState(outCtx, req)
+	return p.client.QueryArtefactState(ctx, req)
 }
 
 // --- Stamp passthroughs ---
@@ -285,17 +279,17 @@ func (p *ArchivistProxy) QueryArtefactState(
 func (p *ArchivistProxy) GetStamps(
 	ctx context.Context, req *flowv1.GetStampsRequest,
 ) (*flowv1.GetStampsResponse, error) {
-	return p.client.GetStamps(propagateMetadata(ctx), req)
+	return p.client.GetStamps(ctx, req)
 }
 
 func (p *ArchivistProxy) HasStamp(ctx context.Context, req *flowv1.HasStampRequest) (*flowv1.HasStampResponse, error) {
-	return p.client.HasStamp(propagateMetadata(ctx), req)
+	return p.client.HasStamp(ctx, req)
 }
 
 func (p *ArchivistProxy) StampArtefact(
 	ctx context.Context, req *flowv1.StampArtefactRequest,
 ) (*flowv1.StampArtefactResponse, error) {
-	return p.client.StampArtefact(propagateMetadata(ctx), req)
+	return p.client.StampArtefact(ctx, req)
 }
 
 // --- Feedback passthroughs ---
@@ -303,72 +297,72 @@ func (p *ArchivistProxy) StampArtefact(
 func (p *ArchivistProxy) AddFeedback(
 	ctx context.Context, req *flowv1.AddFeedbackRequest,
 ) (*flowv1.AddFeedbackResponse, error) {
-	return p.client.AddFeedback(propagateMetadata(ctx), req)
+	return p.client.AddFeedback(ctx, req)
 }
 
 func (p *ArchivistProxy) GetFeedback(
 	ctx context.Context, req *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
-	return p.client.GetFeedback(propagateMetadata(ctx), req)
+	return p.client.GetFeedback(ctx, req)
 }
 
 func (p *ArchivistProxy) HasUnresolvedFeedback(
 	ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest,
 ) (*flowv1.HasUnresolvedFeedbackResponse, error) {
-	return p.client.HasUnresolvedFeedback(propagateMetadata(ctx), req)
+	return p.client.HasUnresolvedFeedback(ctx, req)
 }
 
 func (p *ArchivistProxy) ResolveFeedback(
 	ctx context.Context, req *flowv1.ResolveFeedbackRequest,
 ) (*flowv1.ResolveFeedbackResponse, error) {
-	return p.client.ResolveFeedback(propagateMetadata(ctx), req)
+	return p.client.ResolveFeedback(ctx, req)
 }
 
 func (p *ArchivistProxy) RefuseFeedback(
 	ctx context.Context, req *flowv1.RefuseFeedbackRequest,
 ) (*flowv1.RefuseFeedbackResponse, error) {
-	return p.client.RefuseFeedback(propagateMetadata(ctx), req)
+	return p.client.RefuseFeedback(ctx, req)
 }
 
 func (p *ArchivistProxy) AcceptFix(
 	ctx context.Context, req *flowv1.AcceptFixRequest,
 ) (*flowv1.AcceptFixResponse, error) {
-	return p.client.AcceptFix(propagateMetadata(ctx), req)
+	return p.client.AcceptFix(ctx, req)
 }
 
 func (p *ArchivistProxy) RejectFix(
 	ctx context.Context, req *flowv1.RejectFixRequest,
 ) (*flowv1.RejectFixResponse, error) {
-	return p.client.RejectFix(propagateMetadata(ctx), req)
+	return p.client.RejectFix(ctx, req)
 }
 
 func (p *ArchivistProxy) AcceptRefusal(
 	ctx context.Context, req *flowv1.AcceptRefusalRequest,
 ) (*flowv1.AcceptRefusalResponse, error) {
-	return p.client.AcceptRefusal(propagateMetadata(ctx), req)
+	return p.client.AcceptRefusal(ctx, req)
 }
 
 func (p *ArchivistProxy) RejectRefusal(
 	ctx context.Context, req *flowv1.RejectRefusalRequest,
 ) (*flowv1.RejectRefusalResponse, error) {
-	return p.client.RejectRefusal(propagateMetadata(ctx), req)
+	return p.client.RejectRefusal(ctx, req)
 }
 
 func (p *ArchivistProxy) GetFeedbackDepth(
 	ctx context.Context, req *flowv1.GetFeedbackDepthRequest,
 ) (*flowv1.GetFeedbackDepthResponse, error) {
-	return p.client.GetFeedbackDepth(propagateMetadata(ctx), req)
+	return p.client.GetFeedbackDepth(ctx, req)
 }
 
 func (p *ArchivistProxy) DeadlockFeedback(
 	ctx context.Context, req *flowv1.DeadlockFeedbackRequest,
 ) (*flowv1.DeadlockFeedbackResponse, error) {
-	return p.client.DeadlockFeedback(propagateMetadata(ctx), req)
+	return p.client.DeadlockFeedback(ctx, req)
 }
 
 // LinkRuling forwards to the Archivist (passthrough).
 func (p *ArchivistProxy) LinkRuling(
 	ctx context.Context, req *flowv1.LinkRulingRequest,
 ) (*flowv1.LinkRulingResponse, error) {
-	return p.client.LinkRuling(propagateMetadata(ctx), req)
+	return p.client.LinkRuling(ctx, req)
 }

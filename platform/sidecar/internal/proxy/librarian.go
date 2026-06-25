@@ -36,6 +36,8 @@ func NewLibrarianProxy(librarianAddr string, eventBusProxy *EventBusProxy) (*Lib
 	conn, err := grpc.NewClient(
 		librarianAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
+		grpc.WithStreamInterceptor(metadataStreamInterceptor),
 	)
 	if err != nil {
 		return nil, err
@@ -74,16 +76,14 @@ func citationMagnitude() float64 {
 func (p *LibrarianProxy) QueryLaws(
 	ctx context.Context, req *flowv1.QueryLawsRequest,
 ) (*flowv1.QueryLawsResponse, error) {
-	return p.client.QueryLaws(propagateMetadata(ctx), req)
+	return p.client.QueryLaws(ctx, req)
 }
 
 // Cite forwards to the Librarian and then emits a friction event to the
 // Event Bus via the EventBusProxy with fixed citation magnitude.
 func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.CiteResponse, error) {
-	outCtx := propagateMetadata(ctx)
-
 	// Forward to Librarian.
-	resp, err := p.client.Cite(outCtx, req)
+	resp, err := p.client.Cite(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -110,52 +110,52 @@ func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*fl
 func (p *LibrarianProxy) RecordFinding(
 	ctx context.Context, req *flowv1.RecordFindingRequest,
 ) (*flowv1.RecordFindingResponse, error) {
-	return p.client.RecordFinding(propagateMetadata(ctx), req)
+	return p.client.RecordFinding(ctx, req)
 }
 
 // GetLaw forwards to the Librarian (passthrough).
 func (p *LibrarianProxy) GetLaw(ctx context.Context, req *flowv1.GetLawRequest) (*flowv1.GetLawResponse, error) {
-	return p.client.GetLaw(propagateMetadata(ctx), req)
+	return p.client.GetLaw(ctx, req)
 }
 
 // WriteLaw forwards to the Librarian (passthrough).
 func (p *LibrarianProxy) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequest) (*flowv1.WriteLawResponse, error) {
-	return p.client.WriteLaw(propagateMetadata(ctx), req)
+	return p.client.WriteLaw(ctx, req)
 }
 
 // RetireLaw forwards to the Librarian (passthrough).
 func (p *LibrarianProxy) RetireLaw(
 	ctx context.Context, req *flowv1.RetireLawRequest,
 ) (*flowv1.RetireLawResponse, error) {
-	return p.client.RetireLaw(propagateMetadata(ctx), req)
+	return p.client.RetireLaw(ctx, req)
 }
 
 // ReplicateLaws forwards to the Librarian (passthrough).
 func (p *LibrarianProxy) ReplicateLaws(
 	ctx context.Context, req *flowv1.ReplicateLawsRequest,
 ) (*flowv1.ReplicateLawsResponse, error) {
-	return p.client.ReplicateLaws(propagateMetadata(ctx), req)
+	return p.client.ReplicateLaws(ctx, req)
 }
 
 // ApplyLifecycleAction forwards to the Librarian (passthrough).
 func (p *LibrarianProxy) ApplyLifecycleAction(
 	ctx context.Context, req *flowv1.ApplyLifecycleActionRequest,
 ) (*flowv1.ApplyLifecycleActionResponse, error) {
-	return p.client.ApplyLifecycleAction(propagateMetadata(ctx), req)
+	return p.client.ApplyLifecycleAction(ctx, req)
 }
 
 // GetActiveDisputes forwards to the Librarian (passthrough).
 func (p *LibrarianProxy) GetActiveDisputes(
 	ctx context.Context, req *flowv1.GetActiveDisputesRequest,
 ) (*flowv1.GetActiveDisputesResponse, error) {
-	return p.client.GetActiveDisputes(propagateMetadata(ctx), req)
+	return p.client.GetActiveDisputes(ctx, req)
 }
 
 // SearchSimilarLaws forwards to the Librarian (passthrough).
 func (p *LibrarianProxy) SearchSimilarLaws(
 	ctx context.Context, req *flowv1.SearchSimilarLawsRequest,
 ) (*flowv1.SearchSimilarLawsResponse, error) {
-	return p.client.SearchSimilarLaws(propagateMetadata(ctx), req)
+	return p.client.SearchSimilarLaws(ctx, req)
 }
 
 // ---------------------------------------------------------------------------

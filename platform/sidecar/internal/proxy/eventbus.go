@@ -29,6 +29,8 @@ func NewEventBusProxy(eventBusAddr string) (*EventBusProxy, error) {
 	conn, err := grpc.NewClient(
 		eventBusAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
+		grpc.WithStreamInterceptor(metadataStreamInterceptor),
 	)
 	if err != nil {
 		return nil, err

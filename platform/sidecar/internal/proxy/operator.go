@@ -38,6 +38,8 @@ func NewOperatorProxy(operatorAddr string, childTracker service.ChildTracker) (*
 	conn, err := grpc.NewClient(
 		operatorAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
+		grpc.WithStreamInterceptor(metadataStreamInterceptor),
 	)
 	if err != nil {
 		return nil, err
@@ -64,10 +66,8 @@ func (p *OperatorProxy) Close() error {
 func (p *OperatorProxy) SubmitResult(
 	ctx context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
-	outCtx := propagateMetadata(ctx)
-
 	// Log propagated metadata keys for debugging namespace propagation.
-	md, _ := metadata.FromOutgoingContext(outCtx)
+	md, _ := metadata.FromIncomingContext(ctx)
 	nsKeys := md.Get("x-flow-namespace")
 	wKeys := md.Get("x-flow-workitem-id")
 	nKeys := md.Get("x-flow-node-id")
@@ -83,7 +83,7 @@ func (p *OperatorProxy) SubmitResult(
 		"x_flow_node_id", nKeys,
 	)
 
-	resp, err := p.client.SubmitResult(outCtx, req)
+	resp, err := p.client.SubmitResult(ctx, req)
 	if err != nil {
 		slog.Error("SubmitResult forwarding failed", "error", err)
 		return nil, err
@@ -100,9 +100,8 @@ func (p *OperatorProxy) SubmitResult(
 func (p *OperatorProxy) CreateWorkitem(
 	ctx context.Context, req *flowv1.CreateWorkitemRequest,
 ) (*flowv1.CreateWorkitemResponse, error) {
-	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding CreateWorkitem to Operator")
-	return p.client.CreateWorkitem(outCtx, req)
+	return p.client.CreateWorkitem(ctx, req)
 }
 
 // GetFlowTopology forwards the topology discovery request to the Operator.
@@ -112,9 +111,8 @@ func (p *OperatorProxy) CreateWorkitem(
 func (p *OperatorProxy) GetFlowTopology(
 	ctx context.Context, req *flowv1.GetFlowTopologyRequest,
 ) (*flowv1.GetFlowTopologyResponse, error) {
-	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding GetFlowTopology to Operator")
-	return p.client.GetFlowTopology(outCtx, req)
+	return p.client.GetFlowTopology(ctx, req)
 }
 
 // ---------------------------------------------------------------------------
@@ -128,11 +126,9 @@ func (p *OperatorProxy) GetFlowTopology(
 func (p *OperatorProxy) CreateChildWorkitem(
 	ctx context.Context, req *flowv1.CreateChildWorkitemRequest,
 ) (*flowv1.CreateChildWorkitemResponse, error) {
-	outCtx := propagateMetadata(ctx)
-
 	slog.Info("Forwarding CreateChildWorkitem to Operator")
 
-	resp, err := p.client.CreateChildWorkitem(outCtx, req)
+	resp, err := p.client.CreateChildWorkitem(ctx, req)
 	if err != nil {
 		slog.Error("CreateChildWorkitem forwarding failed", "error", err)
 		return nil, err
@@ -159,11 +155,10 @@ func (p *OperatorProxy) CreateChildWorkitem(
 func (p *OperatorProxy) RouteChild(
 	ctx context.Context, req *flowv1.RouteChildRequest,
 ) (*flowv1.RouteChildResponse, error) {
-	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding RouteChild to Operator",
 		"child_workitem_id", req.GetChildWorkitemId(),
 	)
-	return p.client.RouteChild(outCtx, req)
+	return p.client.RouteChild(ctx, req)
 }
 
 // GetChildren forwards to the Operator. The Operator queries children by
@@ -171,9 +166,8 @@ func (p *OperatorProxy) RouteChild(
 func (p *OperatorProxy) GetChildren(
 	ctx context.Context, req *flowv1.GetChildrenRequest,
 ) (*flowv1.GetChildrenResponse, error) {
-	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding GetChildren to Operator")
-	return p.client.GetChildren(outCtx, req)
+	return p.client.GetChildren(ctx, req)
 }
 
 // ResumeWorkitem forwards to the Operator. The Operator validates that the
@@ -181,11 +175,10 @@ func (p *OperatorProxy) GetChildren(
 func (p *OperatorProxy) ResumeWorkitem(
 	ctx context.Context, req *flowv1.ResumeWorkitemRequest,
 ) (*flowv1.ResumeWorkitemResponse, error) {
-	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding ResumeWorkitem to Operator",
 		"workitem_id", req.GetWorkitemId(),
 	)
-	return p.client.ResumeWorkitem(outCtx, req)
+	return p.client.ResumeWorkitem(ctx, req)
 }
 
 // ListSuspendedWorkitems forwards to the Operator. Returns suspended workitems
@@ -193,11 +186,10 @@ func (p *OperatorProxy) ResumeWorkitem(
 func (p *OperatorProxy) ListSuspendedWorkitems(
 	ctx context.Context, req *flowv1.ListSuspendedWorkitemsRequest,
 ) (*flowv1.ListSuspendedWorkitemsResponse, error) {
-	outCtx := propagateMetadata(ctx)
 	slog.Info("Forwarding ListSuspendedWorkitems to Operator",
 		"condition_contains", req.GetConditionContains(),
 	)
-	return p.client.ListSuspendedWorkitems(outCtx, req)
+	return p.client.ListSuspendedWorkitems(ctx, req)
 }
 
 // extractWorkitemIDFromMD reads the workitem ID from incoming gRPC metadata.
@@ -214,16 +206,20 @@ func extractWorkitemIDFromMD(ctx context.Context) string {
 	return vals[0]
 }
 
-// propagateMetadata copies incoming gRPC metadata from the server context
-// to outgoing metadata on a new client context. The identity injection
-// interceptor (service.IdentityInterceptor) enriches the incoming metadata
-// with authoritative x-flow-namespace, x-flow-workitem-id, and x-flow-node-id
-// before this function is called, so all proxied requests carry the complete
-// Sidecar-injected identity context.
-func propagateMetadata(ctx context.Context) context.Context {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ctx
+// metadataUnaryInterceptor copies incoming gRPC metadata to the outgoing
+// context before invoking the upstream call, replacing per-method
+// propagateMetadata() calls.
+func metadataUnaryInterceptor(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
-	return metadata.NewOutgoingContext(ctx, md)
+	return invoker(ctx, method, req, reply, cc, opts...)
+}
+
+// metadataStreamInterceptor is the streaming variant.
+func metadataStreamInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+	return streamer(ctx, desc, cc, method, opts...)
 }
