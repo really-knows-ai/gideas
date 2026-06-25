@@ -72,13 +72,6 @@ type WorkitemStatus struct {
 	// TIMEOUT_EXCEEDED, CONTRACT_VIOLATION, INVALID_ROUTE).
 	// +optional
 	FailureReason string `json:"failureReason,omitempty"`
-
-	// completionReason distinguishes success from cancellation on Completed workitems.
-	// Empty or "success" means normal completion. "cancelled" means HITL cancelled.
-	// Stored for audit and filterable in CEL suspend conditions.
-	// +optional
-	CompletionReason string `json:"completionReason,omitempty"`
-
 	// resumeCondition is the CEL expression that must evaluate to true for the
 	// Operator to auto-resume a Suspended workitem. Empty means manual Resume() required.
 	// +optional

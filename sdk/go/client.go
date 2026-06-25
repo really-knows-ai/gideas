@@ -216,7 +216,7 @@ func WithReason(r flowv1.CompletionReason) CompleteOption {
 type SuspendOption func(*flowv1.SuspendAction)
 
 // WithCondition sets a CEL expression for automatic resume evaluation.
-// Available variables: children (list with phase, completion_reason).
+// Available variables: children (list with phase).
 // Example: children.all(c, c.phase == "Completed")
 func WithCondition(cel string) SuspendOption {
 	return func(a *flowv1.SuspendAction) {

@@ -644,7 +644,6 @@ func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenR
 			WorkitemId:       c.Name,
 			Phase:            c.Status.Phase,
 			CurrentAssignee:  c.Status.CurrentAssignee,
-			CompletionReason: completionReasonFromString(c.Status.CompletionReason),
 			// Artefact references are populated via Archivist cross-Workitem
 			// reads (Phase 7). For now, return an empty list.
 		}
@@ -867,14 +866,6 @@ func routingTargetString(ri *flowv1.RoutingInstruction) string {
 		return nilString
 	}
 	return ri.GetTarget()
-}
-
-// completionReasonFromString converts a CRD string to the proto CompletionReason enum.
-func completionReasonFromString(s string) flowv1.CompletionReason {
-	if v, ok := flowv1.CompletionReason_value[s]; ok {
-		return flowv1.CompletionReason(v)
-	}
-	return flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED
 }
 
 // ResumeWorkitem explicitly resumes a suspended Workitem. The Operator validates
