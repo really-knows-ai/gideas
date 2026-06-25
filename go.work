@@ -11,6 +11,7 @@ use (
 	./platform/monitor
 	./platform/operator
 	./platform/pkg/eventbus
+	./platform/pkg/randid
 	./platform/sidecar
 	./sdk/go
 	./tools/haiku-watch
