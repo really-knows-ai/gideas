@@ -37,7 +37,7 @@ func NewOllamaEmbedder(baseURL, model string) *OllamaEmbedder {
 	return &OllamaEmbedder{
 		baseURL: baseURL,
 		model:   model,
-		client:  &http.Client{},
+		client:  http.DefaultClient,
 	}
 }
 
