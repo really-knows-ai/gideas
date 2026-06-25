@@ -27,10 +27,6 @@ import (
 )
 
 const (
-	// metadataKeyWorkitemID is the gRPC metadata key carrying the Sidecar-injected
-	// workitem identity.
-	metadataKeyWorkitemID = "x-flow-workitem-id"
-
 	// metadataKeyNamespace is the gRPC metadata key carrying the Sidecar-injected
 	// Kubernetes namespace (flow identity boundary).
 	metadataKeyNamespace = "x-flow-namespace"
@@ -93,7 +89,7 @@ func (s *OperatorServer) publishAudit(ctx context.Context, eventType string, att
 			EventType:     eventType,
 			FlowNamespace: extractMetadataValue(ctx, metadataKeyNamespace),
 			NodeId:        extractMetadataValue(ctx, metadataKeyNodeID),
-			WorkitemId:    extractMetadataValue(ctx, metadataKeyWorkitemID),
+			WorkitemId:    extractMetadataValue(ctx, "x-flow-workitem-id"),
 			Timestamp:     timestamppb.Now(),
 			Attributes:    attrs,
 		},
@@ -740,7 +736,7 @@ func (s *OperatorServer) ValidateChildAccess(ctx context.Context, req *flowv1.Va
 
 // extractWorkitemID reads the x-flow-workitem-id from incoming gRPC metadata.
 func extractWorkitemID(ctx context.Context) string {
-	return extractMetadataValue(ctx, metadataKeyWorkitemID)
+	return extractMetadataValue(ctx, "x-flow-workitem-id")
 }
 
 // extractMetadataValue reads a single value from incoming gRPC metadata.
