@@ -738,7 +738,7 @@ func (r *WorkitemReconciler) resumeWorkitem(ctx context.Context, workitem *flowv
 //
 // The CEL environment exposes a single variable:
 //
-//	children: list of objects with { phase: string, completion_reason: string }
+//	children: list of objects with { phase: string }
 //
 // Example condition: children.all(c, c.phase == "Completed")
 func (r *WorkitemReconciler) evaluateResumeCondition(ctx context.Context, workitem *flowv1.Workitem) (bool, error) {
@@ -755,8 +755,7 @@ func (r *WorkitemReconciler) evaluateResumeCondition(ctx context.Context, workit
 	children := make([]map[string]any, len(childList.Items))
 	for i := range childList.Items {
 		children[i] = map[string]any{
-			"phase":             childList.Items[i].Status.Phase,
-			"completion_reason": childList.Items[i].Status.CompletionReason,
+			"phase": childList.Items[i].Status.Phase,
 		}
 	}
 
