@@ -226,7 +226,7 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 		// Apply any stamps Sort itself can provide.
 		myStamps := stampsProvidedBy(selfNode.GetName(), kind, stampProviders)
 		for _, stamp := range myStamps {
-			if containsString(requiredStamps, stamp) {
+			if slices.Contains(requiredStamps, stamp) {
 				slog.Info("sort: stamping artefact",
 					"artefact_kind", kind,
 					"stamp", stamp)
@@ -450,9 +450,4 @@ func parseNodeOrder(raw string) []string {
 		}
 	}
 	return result
-}
-
-// containsString returns true if the slice contains the target string.
-func containsString(slice []string, target string) bool {
-	return slices.Contains(slice, target)
 }
