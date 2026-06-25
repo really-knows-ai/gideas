@@ -8,6 +8,7 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 )
@@ -52,35 +53,6 @@ func TestExtractLawID_MultipleLabels(t *testing.T) {
 	got := extractLawID(evt)
 	if got != "law-99" {
 		t.Fatalf("expected law-99, got %q", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — pendingTracker
-// ---------------------------------------------------------------------------
-
-func TestPendingTracker_MarkAndClear(t *testing.T) {
-	tracker := newPendingTracker()
-
-	// First mark should succeed.
-	if !tracker.markPending("law-1") {
-		t.Fatal("expected first markPending to return true")
-	}
-
-	// Second mark of same ID should fail (already pending).
-	if tracker.markPending("law-1") {
-		t.Fatal("expected second markPending for same ID to return false")
-	}
-
-	// Different ID should succeed.
-	if !tracker.markPending("law-2") {
-		t.Fatal("expected markPending for different ID to return true")
-	}
-
-	// Clear and re-mark should succeed.
-	tracker.clearPending("law-1")
-	if !tracker.markPending("law-1") {
-		t.Fatal("expected markPending after clearPending to return true")
 	}
 }
 
@@ -172,7 +144,7 @@ func TestConsumeEvents_CreatesWorkitems(t *testing.T) {
 	}
 
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := ec.Subscribe(context.Background(), channel, eventType)
 	if err != nil {
@@ -210,7 +182,7 @@ func TestConsumeEvents_DeduplicatesSameLawID(t *testing.T) {
 	}
 
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := ec.Subscribe(context.Background(), channel, eventType)
 	if err != nil {
@@ -245,7 +217,7 @@ func TestConsumeEvents_SkipsMissingLawID(t *testing.T) {
 	}
 
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := ec.Subscribe(context.Background(), channel, eventType)
 	if err != nil {
@@ -276,7 +248,7 @@ func TestConsumeEvents_CreateWorkitemError_ClearsPending(t *testing.T) {
 	}
 
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := ec.Subscribe(context.Background(), channel, eventType)
 	if err != nil {
@@ -289,7 +261,7 @@ func TestConsumeEvents_CreateWorkitemError_ClearsPending(t *testing.T) {
 	}
 
 	// After error, pending should be cleared — re-mark should succeed.
-	if !tracker.markPending(testLawID10) {
+	if !tracker.MarkPending(testLawID10) {
 		t.Fatal("expected law-10 to be cleared from pending after CreateWorkitem error")
 	}
 }
@@ -303,7 +275,7 @@ func TestConsumeEvents_ContextCancelled(t *testing.T) {
 	}
 
 	ec := setupEntryTestClient(t, &spyOperator{returnID: "wi-1"}, ebSpy)
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately

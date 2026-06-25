@@ -23,6 +23,7 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -95,27 +96,6 @@ func main() {
 // Entry function — polls Librarian for expired laws, creates workitems
 // ---------------------------------------------------------------------------
 
-// pendingTracker provides best-effort per-replica deduplication of law IDs.
-type pendingTracker struct {
-	pending map[string]struct{}
-}
-
-func newPendingTracker() *pendingTracker {
-	return &pendingTracker{pending: make(map[string]struct{})}
-}
-
-func (p *pendingTracker) markPending(lawID string) bool {
-	if _, ok := p.pending[lawID]; ok {
-		return false
-	}
-	p.pending[lawID] = struct{}{}
-	return true
-}
-
-func (p *pendingTracker) clearPending(lawID string) {
-	delete(p.pending, lawID)
-}
-
 // watchTTL is the entry function. It loads config, then polls the Librarian
 // on a timer to find laws exceeding their tier's review TTL.
 func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
@@ -133,7 +113,7 @@ func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
 	slog.Info("ttl-watcher: configured",
 		"scan_period", interval, "tier_count", len(tierTTLs))
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	// Run the first scan immediately, then on a timer.
 	if err := scanAndCreate(ctx, entry, tierTTLs, tracker, time.Now); err != nil {
@@ -162,7 +142,7 @@ func scanAndCreate(
 	ctx context.Context,
 	entry *flow.EntryClient,
 	tierTTLs map[flowv1.LawTier]time.Duration,
-	tracker *pendingTracker,
+	tracker *internal.PendingTracker,
 	nowFunc func() time.Time,
 ) error {
 	laws, err := entry.QueryLaws(ctx, "", "")
@@ -178,7 +158,7 @@ func scanAndCreate(
 		}
 
 		lawID := law.GetId()
-		if !tracker.markPending(lawID) {
+		if !tracker.MarkPending(lawID) {
 			slog.Debug("ttl-watcher: law already pending, skipping",
 				"law_id", lawID)
 			continue
@@ -190,7 +170,7 @@ func scanAndCreate(
 		if _, err := entry.CreateWorkitem(ctx, map[string]string{
 			"law_id": lawID,
 		}); err != nil {
-			tracker.clearPending(lawID)
+			tracker.ClearPending(lawID)
 			slog.Warn("ttl-watcher: create workitem failed",
 				"law_id", lawID, "error", err)
 		}

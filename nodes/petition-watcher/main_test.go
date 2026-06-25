@@ -8,6 +8,7 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -16,35 +17,6 @@ const (
 	testPetitionID1 = "pet-1"
 	testPetitionID2 = "pet-2"
 )
-
-// ---------------------------------------------------------------------------
-// Tests — pendingTracker
-// ---------------------------------------------------------------------------
-
-func TestPendingTracker_MarkAndClear(t *testing.T) {
-	tracker := newPendingTracker()
-
-	// First mark should succeed.
-	if !tracker.markPending("pet-1") {
-		t.Fatal("expected first markPending to return true")
-	}
-
-	// Second mark of same ID should fail (already pending).
-	if tracker.markPending("pet-1") {
-		t.Fatal("expected second markPending for same ID to return false")
-	}
-
-	// Different ID should succeed.
-	if !tracker.markPending("pet-2") {
-		t.Fatal("expected markPending for different ID to return true")
-	}
-
-	// Clear and re-mark should succeed.
-	tracker.clearPending("pet-1")
-	if !tracker.markPending("pet-1") {
-		t.Fatal("expected markPending after clearPending to return true")
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Tests — nextBackoff / sleepCtx
@@ -101,7 +73,7 @@ func TestConsumeOutcomes_ProcessesEvents(t *testing.T) {
 	}
 	defer func() { _ = fedClient.Close() }()
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -116,11 +88,11 @@ func TestConsumeOutcomes_ProcessesEvents(t *testing.T) {
 	}
 
 	// Verify both petition IDs were marked as pending.
-	if tracker.markPending(testPetitionID1) {
-		t.Error("expected pet-1 to be pending (markPending returned true)")
+	if tracker.MarkPending(testPetitionID1) {
+		t.Error("expected pet-1 to be pending (MarkPending returned true)")
 	}
-	if tracker.markPending(testPetitionID2) {
-		t.Error("expected pet-2 to be pending (markPending returned true)")
+	if tracker.MarkPending(testPetitionID2) {
+		t.Error("expected pet-2 to be pending (MarkPending returned true)")
 	}
 }
 
@@ -140,7 +112,7 @@ func TestConsumeOutcomes_DeduplicatesSamePetitionID(t *testing.T) {
 	}
 	defer func() { _ = fedClient.Close() }()
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -153,10 +125,10 @@ func TestConsumeOutcomes_DeduplicatesSamePetitionID(t *testing.T) {
 	}
 
 	// Both IDs should be pending (but pet-1 was only logged once).
-	if tracker.markPending(testPetitionID1) {
+	if tracker.MarkPending(testPetitionID1) {
 		t.Error("expected pet-1 to be pending")
 	}
-	if tracker.markPending(testPetitionID2) {
+	if tracker.MarkPending(testPetitionID2) {
 		t.Error("expected pet-2 to be pending")
 	}
 }
@@ -184,7 +156,7 @@ func TestConsumeOutcomes_ContextCancelled(t *testing.T) {
 		return
 	}
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 	err = consumeOutcomes(ctx, stream, tracker, nil)
 	if err == nil {
 		t.Fatal("expected error from consumeOutcomes on cancelled context")
@@ -318,7 +290,7 @@ func TestConsumeOutcomes_Accepted_CallsRetireDisputeRecord(t *testing.T) {
 	entrySpy := &entryClientSpy{}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -356,7 +328,7 @@ func TestConsumeOutcomes_Accepted_RetireNotFound_LogsAndContinues(t *testing.T) 
 	entrySpy := &entryClientSpy{retireErr: notFoundErr()}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -395,7 +367,7 @@ func TestConsumeOutcomes_Accepted_RetireOtherError_LogsAndContinues(t *testing.T
 	entrySpy := &entryClientSpy{retireErr: fmt.Errorf("librarian unavailable")}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -436,7 +408,7 @@ func TestConsumeOutcomes_Rejected_CallsRetireDisputeRecord(t *testing.T) {
 	entrySpy := &entryClientSpy{}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -472,7 +444,7 @@ func TestConsumeOutcomes_Rejected_CreatesClerkCycleWorkitem(t *testing.T) {
 	entrySpy := &entryClientSpy{}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -555,7 +527,7 @@ func TestConsumeOutcomes_Rejected_RetireNotFound_StillCreatesWorkitem(t *testing
 	entrySpy := &entryClientSpy{retireErr: notFoundErr()}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -603,7 +575,7 @@ func TestConsumeOutcomes_Rejected_CreateWorkitemError_LogsAndContinues(t *testin
 	entrySpy := &entryClientSpy{createWIErr: fmt.Errorf("operator unavailable")}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -657,7 +629,7 @@ func TestConsumeOutcomes_Accepted_ResumesHeldWorkitems(t *testing.T) {
 	}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -699,7 +671,7 @@ func TestConsumeOutcomes_Accepted_ZeroHeldWorkitems_NoError(t *testing.T) {
 	}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -740,7 +712,7 @@ func TestConsumeOutcomes_Accepted_ListSuspendedError_LogsAndContinues(t *testing
 	}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -784,7 +756,7 @@ func TestConsumeOutcomes_Accepted_ResumeFailure_DoesNotBlockOthers(t *testing.T)
 	}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
@@ -826,7 +798,7 @@ func TestConsumeOutcomes_Rejected_ResumesHeldWorkitems(t *testing.T) {
 	}
 	entryClient := newEntryTestClient(t, entrySpy)
 
-	tracker := newPendingTracker()
+	tracker := internal.NewPendingTracker()
 
 	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
 	if err != nil {
