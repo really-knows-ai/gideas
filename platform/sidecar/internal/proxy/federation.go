@@ -26,6 +26,8 @@ func NewFederationProxy(addr string) (*FederationProxy, error) {
 	conn, err := grpc.NewClient(
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
+		grpc.WithStreamInterceptor(metadataStreamInterceptor),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dial federation: %w", err)
@@ -53,42 +55,42 @@ func (p *FederationProxy) Close() error {
 func (p *FederationProxy) JoinFederation(
 	ctx context.Context, req *flowv1.JoinFederationRequest,
 ) (*flowv1.JoinFederationResponse, error) {
-	return p.client.JoinFederation(propagateMetadata(ctx), req)
+	return p.client.JoinFederation(ctx, req)
 }
 
 // LeaveFederation forwards to the Federation service (passthrough).
 func (p *FederationProxy) LeaveFederation(
 	ctx context.Context, req *flowv1.LeaveFederationRequest,
 ) (*flowv1.LeaveFederationResponse, error) {
-	return p.client.LeaveFederation(propagateMetadata(ctx), req)
+	return p.client.LeaveFederation(ctx, req)
 }
 
 // GetMembership forwards to the Federation service (passthrough).
 func (p *FederationProxy) GetMembership(
 	ctx context.Context, req *flowv1.GetMembershipRequest,
 ) (*flowv1.GetMembershipResponse, error) {
-	return p.client.GetMembership(propagateMetadata(ctx), req)
+	return p.client.GetMembership(ctx, req)
 }
 
 // DiscoverEndpoints forwards to the Federation service (passthrough).
 func (p *FederationProxy) DiscoverEndpoints(
 	ctx context.Context, req *flowv1.DiscoverEndpointsRequest,
 ) (*flowv1.DiscoverEndpointsResponse, error) {
-	return p.client.DiscoverEndpoints(propagateMetadata(ctx), req)
+	return p.client.DiscoverEndpoints(ctx, req)
 }
 
 // GetPetitionTarget forwards to the Federation service (passthrough).
 func (p *FederationProxy) GetPetitionTarget(
 	ctx context.Context, req *flowv1.GetPetitionTargetRequest,
 ) (*flowv1.GetPetitionTargetResponse, error) {
-	return p.client.GetPetitionTarget(propagateMetadata(ctx), req)
+	return p.client.GetPetitionTarget(ctx, req)
 }
 
 // SubmitPublication forwards to the Federation service (passthrough).
 func (p *FederationProxy) SubmitPublication(
 	ctx context.Context, req *flowv1.SubmitPublicationRequest,
 ) (*flowv1.SubmitPublicationResponse, error) {
-	return p.client.SubmitPublication(propagateMetadata(ctx), req)
+	return p.client.SubmitPublication(ctx, req)
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +103,7 @@ func (p *FederationProxy) SubscribeLawUpdates(
 	req *flowv1.SubscribeLawUpdatesRequest,
 	stream grpc.ServerStreamingServer[flowv1.PublishedLawEvent],
 ) error {
-	outCtx := propagateMetadata(stream.Context())
-	clientStream, err := p.client.SubscribeLawUpdates(outCtx, req)
+	clientStream, err := p.client.SubscribeLawUpdates(stream.Context(), req)
 	if err != nil {
 		return err
 	}
@@ -126,8 +127,7 @@ func (p *FederationProxy) SubscribePetitionOutcomes(
 	req *flowv1.SubscribePetitionOutcomesRequest,
 	stream grpc.ServerStreamingServer[flowv1.PetitionOutcomeEvent],
 ) error {
-	outCtx := propagateMetadata(stream.Context())
-	clientStream, err := p.client.SubscribePetitionOutcomes(outCtx, req)
+	clientStream, err := p.client.SubscribePetitionOutcomes(stream.Context(), req)
 	if err != nil {
 		return err
 	}

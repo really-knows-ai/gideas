@@ -25,6 +25,8 @@ func NewFrictionLedgerProxy(frictionLedgerAddr string) (*FrictionLedgerProxy, er
 	conn, err := grpc.NewClient(
 		frictionLedgerAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
+		grpc.WithStreamInterceptor(metadataStreamInterceptor),
 	)
 	if err != nil {
 		return nil, err
@@ -50,5 +52,5 @@ func (p *FrictionLedgerProxy) QueryFriction(
 	ctx context.Context, req *flowv1.QueryFrictionRequest,
 ) (*flowv1.QueryFrictionResponse, error) {
 	slog.Info("Forwarding QueryFriction to Friction Ledger")
-	return p.client.QueryFriction(propagateMetadata(ctx), req)
+	return p.client.QueryFriction(ctx, req)
 }

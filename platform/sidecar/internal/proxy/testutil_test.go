@@ -36,6 +36,8 @@ func dialBufconn(t *testing.T, registerFunc func(*grpc.Server)) *grpc.ClientConn
 			return lis.DialContext(ctx)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
+		grpc.WithStreamInterceptor(metadataStreamInterceptor),
 	)
 	if err != nil {
 		t.Fatalf("failed to dial bufconn: %v", err)
