@@ -18,20 +18,6 @@ const (
 	EnvFederationAddress = "FEDERATION_ADDRESS"
 )
 
-// FederationOption configures the FederationClient.
-type FederationOption func(*federationConfig)
-
-type federationConfig struct {
-	address string
-}
-
-// WithFederationAddress overrides the default Federation gRPC address.
-func WithFederationAddress(addr string) FederationOption {
-	return func(c *federationConfig) {
-		c.address = addr
-	}
-}
-
 // PetitionTarget holds the authority Flow identity and Embassy endpoint
 // returned by GetPetitionTarget.
 type PetitionTarget struct {
@@ -46,15 +32,12 @@ type FederationClient struct {
 }
 
 // NewFederationClient connects to the Federation service.
-func NewFederationClient(opts ...FederationOption) (*FederationClient, error) {
-	cfg := &federationConfig{address: DefaultFederationAddress}
-	for _, opt := range opts {
-		opt(cfg)
-	}
+func NewFederationClient() (*FederationClient, error) {
+	address := DefaultFederationAddress
 	if envAddr := os.Getenv(EnvFederationAddress); envAddr != "" {
-		cfg.address = envAddr
+		address = envAddr
 	}
-	return newFederationClient(cfg.address)
+	return newFederationClient(address)
 }
 
 // NewFederationClientForTest creates a FederationClient connected to the given address.
