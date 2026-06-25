@@ -777,9 +777,6 @@ func convertSubmitAction(req *flowv1.SubmitResultRequest) *apiv1.RoutingInstruct
 	switch a := req.GetAction().(type) {
 	case *flowv1.SubmitResultRequest_Complete:
 		ri := &apiv1.RoutingInstruction{Type: completeType}
-		if a.Complete != nil && a.Complete.GetReason() != flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED {
-			ri.CompletionReason = a.Complete.GetReason().String()
-		}
 		return ri
 	case *flowv1.SubmitResultRequest_Route:
 		if a.Route != nil && a.Route.GetOutput() {

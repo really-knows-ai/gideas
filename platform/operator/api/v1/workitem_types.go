@@ -101,11 +101,6 @@ type RoutingInstruction struct {
 	// +optional
 	Target string `json:"target,omitempty"`
 
-	// completionReason is set when type is "complete". Distinguishes success from
-	// cancellation. Empty means success (default, backward compatible).
-	// +optional
-	CompletionReason string `json:"completionReason,omitempty"`
-
 	// suspendCondition is set when type is "suspend". CEL expression for auto-resume.
 	// Empty means manual Resume() required.
 	// +optional
