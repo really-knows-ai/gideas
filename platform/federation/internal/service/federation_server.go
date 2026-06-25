@@ -311,7 +311,7 @@ func (s *FederationServer) DiscoverEndpoints(
 
 		// If a state filter is set, only include members whose stateRefs
 		// contain the requested state.
-		if stateFilter != "" && !containsState(m.Spec.StateRefs, stateFilter) {
+		if stateFilter != "" && !slices.Contains(m.Spec.StateRefs, stateFilter) {
 			continue
 		}
 
@@ -686,11 +686,6 @@ func consolidateResults(ch <-chan searchResult) []*flowv1.SimilarLaw {
 		result = append(result, sl)
 	}
 	return result
-}
-
-// containsState reports whether refs contains the given state name.
-func containsState(refs []string, state string) bool {
-	return slices.Contains(refs, state)
 }
 
 // resolveStates looks up FederationState CRs for the given state ref names

@@ -53,11 +53,11 @@ func ValidateEmbassyTrustPolicy(
 		return nil
 	}
 
-	if len(policy.AllowedImportTypes) > 0 && !containsString(policy.AllowedImportTypes, req.ImportType) {
+	if len(policy.AllowedImportTypes) > 0 && !slices.Contains(policy.AllowedImportTypes, req.ImportType) {
 		return fmt.Errorf("import type %q is not allowed by treaty policy", req.ImportType)
 	}
 
-	if len(policy.AllowedSubjects) > 0 && !containsString(policy.AllowedSubjects, req.Subject) {
+	if len(policy.AllowedSubjects) > 0 && !slices.Contains(policy.AllowedSubjects, req.Subject) {
 		return fmt.Errorf("subject %q is not allowed by treaty policy", req.Subject)
 	}
 
@@ -66,8 +66,4 @@ func ValidateEmbassyTrustPolicy(
 	}
 
 	return nil
-}
-
-func containsString(values []string, want string) bool {
-	return slices.Contains(values, want)
 }
