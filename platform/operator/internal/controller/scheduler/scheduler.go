@@ -17,6 +17,8 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	flowv1 "github.com/gideas/flow/operator/api/v1"
@@ -335,11 +337,7 @@ func (s *Scheduler) validateContract(ctx context.Context, workitemID string, con
 		return nil // Empty contract means no requirements.
 	}
 
-	// Collect governed artefact names from the contract.
-	governedNames := make([]string, 0, len(contract))
-	for name := range contract {
-		governedNames = append(governedNames, name)
-	}
+	governedNames := slices.Collect(maps.Keys(contract))
 
 	// Query the Archivist for artefact state.
 	states, err := s.Querier.QueryArtefactState(ctx, workitemID, governedNames)
