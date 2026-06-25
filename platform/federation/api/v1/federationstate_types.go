@@ -30,9 +30,6 @@ type FederationStateSpec struct {
 	Name string `json:"name"`
 }
 
-// FederationStateStatus defines the observed state of FederationState.
-type FederationStateStatus struct{}
-
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:printcolumn:name="DISPLAY_NAME",type=string,JSONPath=".spec.name"
@@ -49,10 +46,6 @@ type FederationState struct {
 	// spec defines the desired state of FederationState
 	// +required
 	Spec FederationStateSpec `json:"spec"`
-
-	// status defines the observed state of FederationState
-	// +optional
-	Status FederationStateStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
