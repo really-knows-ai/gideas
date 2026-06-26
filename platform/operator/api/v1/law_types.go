@@ -52,6 +52,11 @@ type LawSpec struct {
 	// Empty means unset; consumers treat empty as "general".
 	// +optional
 	Division string `json:"division,omitempty"`
+
+	// group is the law group name. Must match metadata.name of a LawGroup CRD.
+	// Empty means the "default" group.
+	// +optional
+	Group string `json:"group,omitempty"`
 }
 
 // Representation is a typed expression of a law's goal.
@@ -86,6 +91,7 @@ type LawStatus struct {
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:printcolumn:name="Tier",type=integer,JSONPath=".spec.tier"
 // +kubebuilder:printcolumn:name="Division",type=string,JSONPath=".spec.division"
+// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=".spec.group"
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".status.version"
 
 // Law is the Schema for the laws API.
