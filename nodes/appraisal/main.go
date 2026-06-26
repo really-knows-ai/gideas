@@ -28,7 +28,7 @@
 //	  - "petition"
 //	reviewArtefact:   "haiku"
 //	governedArtefact: "haiku"
-//	reviewerNode:     "reviewer"
+//	reviewerNode:     "appraiser"
 //	appraisers:
 //	  - id: "skeptic"
 //	    personality: "You are strict but fair."

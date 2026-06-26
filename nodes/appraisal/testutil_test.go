@@ -395,7 +395,7 @@ func defaultTestConfig() *appraisalConfig {
 		InputArtefacts:   []string{"petition"},
 		ReviewArtefact:   "haiku",
 		GovernedArtefact: "haiku",
-		ReviewerNode:     "reviewer",
+		ReviewerNode:     "appraiser",
 	}
 }
 

@@ -47,8 +47,8 @@ const (
 	// outputRefine is the well-known output name for routing to refinement.
 	outputRefine = "refine"
 
-	// outputAppraise is the well-known output name for routing to appraise adjudication.
-	outputAppraise = "appraise"
+	// outputAppraisal is the well-known output name for routing to appraisal adjudication.
+	outputAppraisal = "appraisal"
 
 	// pendingHoldTimeout is the suspension timeout for workitems held
 	// pending a dispute resolution. Defaults to 2 weeks (the platform's
@@ -214,11 +214,11 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 			return err
 		}
 		if hasAddressed {
-			slog.Info("sort: routing to appraise (addressed feedback needs adjudication)",
+			slog.Info("sort: routing to appraisal (addressed feedback needs adjudication)",
 				"artefact_kind", kind)
-			_, err = client.RouteToOutput(ctx, outputAppraise)
+			_, err = client.RouteToOutput(ctx, outputAppraisal)
 			if err != nil {
-				return fmt.Errorf("sort: route to appraise: %w", err)
+				return fmt.Errorf("sort: route to appraisal: %w", err)
 			}
 			return nil
 		}

@@ -41,7 +41,7 @@ type AppraiserPersonalityData struct {
 }
 
 // LawData is the minimal law representation passed via the "laws" artefact.
-// Only the fields the ReviewAgent needs are included.
+// Only the fields the AppraiserAgent needs are included.
 type LawData struct {
 	ID   string `json:"id"`
 	Tier int32  `json:"tier"`
@@ -74,49 +74,49 @@ func HandleReview(
 
 	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
 	if err != nil {
-		return fmt.Errorf("reviewer: read inputs: %w", err)
+		return fmt.Errorf("appraiser: read inputs: %w", err)
 	}
 
 	reviewResp, err := client.GetArtefact(ctx, cfg.ReviewArtefact)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", cfg.ReviewArtefact, err)
+		return fmt.Errorf("appraiser: read %s: %w", cfg.ReviewArtefact, err)
 	}
 	reviewContent := string(reviewResp.GetContent())
 
 	// Read and deserialize laws.
 	lawsResp, err := client.GetArtefact(ctx, ArtefactLaws)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", ArtefactLaws, err)
+		return fmt.Errorf("appraiser: read %s: %w", ArtefactLaws, err)
 	}
 
 	var lawItems []LawData
 	if err := json.Unmarshal(lawsResp.GetContent(), &lawItems); err != nil {
-		return fmt.Errorf("reviewer: unmarshal laws: %w", err)
+		return fmt.Errorf("appraiser: unmarshal laws: %w", err)
 	}
 
 	// Read and deserialize history.
 	historyResp, err := client.GetArtefact(ctx, ArtefactHistory)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", ArtefactHistory, err)
+		return fmt.Errorf("appraiser: read %s: %w", ArtefactHistory, err)
 	}
 
 	var historyItems []HistoryData
 	if err := json.Unmarshal(historyResp.GetContent(), &historyItems); err != nil {
-		return fmt.Errorf("reviewer: unmarshal history: %w", err)
+		return fmt.Errorf("appraiser: unmarshal history: %w", err)
 	}
 
 	// Read and deserialize group data.
 	groupResp, err := client.GetArtefact(ctx, ArtefactGroup)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", ArtefactGroup, err)
+		return fmt.Errorf("appraiser: read %s: %w", ArtefactGroup, err)
 	}
 
 	var groupData GroupData
 	if err := json.Unmarshal(groupResp.GetContent(), &groupData); err != nil {
-		return fmt.Errorf("reviewer: unmarshal group data: %w", err)
+		return fmt.Errorf("appraiser: unmarshal group data: %w", err)
 	}
 
-	slog.Info("reviewer: reviewing",
+	slog.Info("appraiser: reviewing",
 		"group", groupData.Name,
 		"law_count", len(lawItems),
 		"history_count", len(historyItems),
@@ -145,10 +145,10 @@ func HandleReview(
 
 	out, err := agent.Run(ctx, inputContent, reviewContent, laws, history)
 	if err != nil {
-		return fmt.Errorf("reviewer: review run: %w", err)
+		return fmt.Errorf("appraiser: review run: %w", err)
 	}
 
-	slog.Info("reviewer: review complete",
+	slog.Info("appraiser: review complete",
 		"group", groupData.Name,
 		"feedback_count", len(out.Feedback),
 	)
@@ -159,13 +159,13 @@ func HandleReview(
 
 	outJSON, err := json.Marshal(out)
 	if err != nil {
-		return fmt.Errorf("reviewer: marshal review output: %w", err)
+		return fmt.Errorf("appraiser: marshal review output: %w", err)
 	}
 
 	// The governed artefact for child data transfer is "review-data" —
 	// internal plumbing, not a governed work product.
 	if _, err := client.StoreArtefact(ctx, ArtefactReviewOutput, "review-data", outJSON); err != nil {
-		return fmt.Errorf("reviewer: store %s: %w", ArtefactReviewOutput, err)
+		return fmt.Errorf("appraiser: store %s: %w", ArtefactReviewOutput, err)
 	}
 
 	// ---------------------------------------------------------------
@@ -173,10 +173,10 @@ func HandleReview(
 	// ---------------------------------------------------------------
 
 	if _, err := client.Complete(ctx); err != nil {
-		return fmt.Errorf("reviewer: complete: %w", err)
+		return fmt.Errorf("appraiser: complete: %w", err)
 	}
 
-	slog.Info("reviewer: completed",
+	slog.Info("appraiser: completed",
 		"group", groupData.Name,
 		"workitem_id", os.Getenv(flow.EnvWorkitemID),
 	)
