@@ -1182,6 +1182,30 @@ func (s *spyLibrarianClient) GetActiveDisputes(
 	panic("unexpected call to GetActiveDisputes")
 }
 
+func (s *spyLibrarianClient) GetLawGroup(
+	_ context.Context, _ *flowv1.GetLawGroupRequest, _ ...grpc.CallOption,
+) (*flowv1.GetLawGroupResponse, error) {
+	panic("unexpected call to GetLawGroup")
+}
+
+func (s *spyLibrarianClient) ListLawGroups(
+	_ context.Context, _ *flowv1.ListLawGroupsRequest, _ ...grpc.CallOption,
+) (*flowv1.ListLawGroupsResponse, error) {
+	panic("unexpected call to ListLawGroups")
+}
+
+func (s *spyLibrarianClient) SyncLawGroup(
+	_ context.Context, _ *flowv1.SyncLawGroupRequest, _ ...grpc.CallOption,
+) (*flowv1.SyncLawGroupResponse, error) {
+	panic("unexpected call to SyncLawGroup")
+}
+
+func (s *spyLibrarianClient) DeleteLawGroup(
+	_ context.Context, _ *flowv1.DeleteLawGroupRequest, _ ...grpc.CallOption,
+) (*flowv1.DeleteLawGroupResponse, error) {
+	panic("unexpected call to DeleteLawGroup")
+}
+
 // spyLibrarianDialer maps embassy endpoint addresses to spy clients.
 type spyLibrarianDialer struct {
 	mu      sync.Mutex

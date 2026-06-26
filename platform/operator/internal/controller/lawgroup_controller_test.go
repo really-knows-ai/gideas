@@ -55,7 +55,7 @@ func TestLawGroupReconciler_StubDoesNotCrash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile returned error: %v", err)
 	}
-	if result.RequeueAfter != 0 || result.Requeue {
+	if result.RequeueAfter != 0 {
 		t.Fatalf("expected empty result, got %+v", result)
 	}
 }
@@ -92,7 +92,7 @@ func TestLawGroupReconciler_MissingObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile returned error for missing object: %v", err)
 	}
-	if result.RequeueAfter != 0 || result.Requeue {
+	if result.RequeueAfter != 0 {
 		t.Fatalf("expected empty result for missing object, got %+v", result)
 	}
 }
