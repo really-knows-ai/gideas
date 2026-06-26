@@ -878,7 +878,7 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 	err := env.client.PublishAuditEvent(context.Background(), "appraisal.coverage", map[string]string{
 		"stage": "appraisal",
 		"cycle": "test-cycle",
-	})
+	}, "workitem-publishaudit-001", "test-ns")
 	if err != nil {
 		t.Fatalf("PublishAuditEvent() returned error: %v", err)
 	}
@@ -912,7 +912,7 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 
 func TestPublishAuditEvent_NoEventBus_ReturnsError(t *testing.T) {
 	client := &Client{EventBus: nil}
-	err := client.PublishAuditEvent(context.Background(), "test.event", map[string]string{})
+	err := client.PublishAuditEvent(context.Background(), "test.event", map[string]string{}, "", "")
 	if err == nil {
 		t.Fatal("expected error when EventBus is nil, got nil")
 	}
