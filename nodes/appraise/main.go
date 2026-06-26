@@ -54,12 +54,11 @@ import (
 // appraiseConfig holds the node's configuration, loaded from a
 // ConfigMap-mounted YAML file via nodeconfig.Load.
 type appraiseConfig struct {
-	InputArtefacts   []string          `yaml:"inputArtefacts"`   // artefact IDs to read as input (e.g. ["petition"])
-	ReviewArtefact   string            `yaml:"reviewArtefact"`   // artefact ID to review (e.g. "haiku")
-	GovernedArtefact string            `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
-	StampName        string            `yaml:"stampName"`        // stamp to apply (e.g. "review")
-	ReviewerNode     string            `yaml:"reviewerNode"`     // target node for fan-out review (e.g. "reviewer")
-	DivisionPrompts  map[string]string `yaml:"divisionPrompts"`  // division name → system prompt suffix
+	InputArtefacts   []string `yaml:"inputArtefacts"`   // artefact IDs to read as input (e.g. ["petition"])
+	ReviewArtefact   string   `yaml:"reviewArtefact"`   // artefact ID to review (e.g. "haiku")
+	GovernedArtefact string   `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
+	StampName        string   `yaml:"stampName"`        // stamp to apply (e.g. "review")
+	ReviewerNode     string   `yaml:"reviewerNode"`     // target node for fan-out review (e.g. "reviewer")
 
 	// Optional ConfigMap prompt overrides. Empty strings use baked-in defaults.
 	EvalSystemPrompt     string `yaml:"evalSystemPrompt"`     // override eval agent system prompt template
@@ -170,7 +169,6 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		GovernedArtefact: cfg.GovernedArtefact,
 		StampName:        cfg.StampName,
 		ReviewerNode:     cfg.ReviewerNode,
-		DivisionPrompts:  cfg.DivisionPrompts,
 	}
 
 	return handlers.HandleAppraise(ctx, client, evalAgent, findingAgent, handlerCfg)

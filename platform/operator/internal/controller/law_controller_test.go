@@ -30,6 +30,8 @@ import (
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 )
 
+const testGroupName = "security"
+
 var _ = Describe("Law Controller", func() {
 	Context("When reconciling a valid resource", func() {
 		const resourceName = "test-law"
@@ -142,12 +144,12 @@ var _ = Describe("Law Controller", func() {
 
 			var reconciled flowv1.Law
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &reconciled)).To(Succeed())
-			versionWithoutDivision := reconciled.Status.Version
-			Expect(versionWithoutDivision).NotTo(BeEmpty())
+			versionWithoutGroup := reconciled.Status.Version
+			Expect(versionWithoutGroup).NotTo(BeEmpty())
 
-			By("Updating the law with a division")
+			By("Updating the law with a group")
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &reconciled)).To(Succeed())
-			reconciled.Spec.Division = "security"
+			reconciled.Spec.Group = testGroupName
 			Expect(k8sClient.Update(ctx, &reconciled)).To(Succeed())
 
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -157,11 +159,11 @@ var _ = Describe("Law Controller", func() {
 
 			var updated flowv1.Law
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &updated)).To(Succeed())
-			versionWithDivision := updated.Status.Version
-			Expect(versionWithDivision).NotTo(BeEmpty())
+			versionWithGroup := updated.Status.Version
+			Expect(versionWithGroup).NotTo(BeEmpty())
 
 			By("Verifying the hashes differ")
-			Expect(versionWithDivision).NotTo(Equal(versionWithoutDivision))
+			Expect(versionWithGroup).NotTo(Equal(versionWithoutGroup))
 		})
 	})
 })

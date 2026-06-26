@@ -17,22 +17,17 @@ import (
 // Agent-level config (prompts, model, schema) is encapsulated in the
 // concrete eval and finding agents.
 type AppraiseConfig struct {
-	InputArtefacts   []string          // artefact IDs to read as input (e.g. ["petition"])
-	ReviewArtefact   string            // artefact ID to review (e.g. "haiku")
-	GovernedArtefact string            // GovernedArtefact CR name (e.g. "haiku")
-	StampName        string            // stamp to apply (e.g. "review")
-	ReviewerNode     string            // target node for fan-out review (e.g. "reviewer")
-	DivisionPrompts  map[string]string // division name → system prompt suffix
+	InputArtefacts   []string // artefact IDs to read as input (e.g. ["petition"])
+	ReviewArtefact   string   // artefact ID to review (e.g. "haiku")
+	GovernedArtefact string   // GovernedArtefact CR name (e.g. "haiku")
+	StampName        string   // stamp to apply (e.g. "review")
+	ReviewerNode     string   // target node for fan-out review (e.g. "reviewer")
 }
 
 // Appraise-specific constants.
 const (
 	verdictAccept = "accept"
 	verdictReject = "reject"
-
-	// defaultDivision is the division name assigned to laws with an empty
-	// division field.
-	defaultDivision = "general"
 )
 
 // hasNovelArgument returns true if the feedback item carries a
@@ -196,21 +191,7 @@ type reviewOutput struct {
 	Feedback []reviewItem `json:"feedback"`
 }
 
-// groupLawsByDivision groups laws by their Division field. Laws with an
-// empty division are placed under defaultDivision ("general").
-func groupLawsByDivision(laws []*flowv1.Law) map[string][]*flowv1.Law {
-	groups := make(map[string][]*flowv1.Law)
-	for _, law := range laws {
-		div := law.GetDivision()
-		if div == "" {
-			div = defaultDivision
-		}
-		groups[div] = append(groups[div], law)
-	}
-	return groups
-}
-
-// fanOutReview groups laws by division, creates FanOutTasks for each group,
+// fanOutReview groups laws by group, creates FanOutTasks for each group,
 // dispatches them to child Reviewer nodes, waits for completion, and merges
 // the review outputs into a single slice of review items.
 //
@@ -223,11 +204,11 @@ func fanOutReview(
 	existingFeedback []*flowv1.FeedbackItem,
 	inputContent, reviewContent string,
 ) ([]reviewItem, error) {
-	// Group laws by division.
-	groups := groupLawsByDivision(laws)
+	// Group laws by group.
+	groups := flow.PartitionLawsByGroup(laws)
 
 	slog.Info("appraise: fan-out review",
-		"division_count", len(groups),
+		"group_count", len(groups),
 		"total_laws", len(laws),
 	)
 
@@ -236,7 +217,7 @@ func fanOutReview(
 		return nil, nil
 	}
 
-	// Serialize history (shared across all divisions).
+	// Serialize history (shared across all groups).
 	historyItems := make([]HistoryData, 0, len(existingFeedback))
 	for _, fb := range existingFeedback {
 		historyItems = append(historyItems, HistoryData{
@@ -250,12 +231,12 @@ func fanOutReview(
 		return nil, fmt.Errorf("marshal history: %w", err)
 	}
 
-	// Build FanOutTasks — one per division.
+	// Build FanOutTasks — one per group.
 	tasks := make([]flow.FanOutTask, 0, len(groups))
-	for divName, divLaws := range groups {
-		// Serialize laws for this division.
-		lawItems := make([]LawData, 0, len(divLaws))
-		for _, law := range divLaws {
+	for groupName, groupLaws := range groups {
+		// Serialize laws for this group.
+		lawItems := make([]LawData, 0, len(groupLaws))
+		for _, law := range groupLaws {
 			lawItems = append(lawItems, LawData{
 				ID:   law.GetId(),
 				Tier: int32(law.GetTier()),
@@ -265,18 +246,18 @@ func fanOutReview(
 
 		lawsJSON, jsonErr := json.Marshal(lawItems)
 		if jsonErr != nil {
-			return nil, fmt.Errorf("marshal laws for division %s: %w", divName, jsonErr)
+			return nil, fmt.Errorf("marshal laws for group %s: %w", groupName, jsonErr)
 		}
 
-		// Build division data with optional prompt suffix.
-		divData := DivisionData{
-			Name:         divName,
-			PromptSuffix: cfg.DivisionPrompts[divName],
+		// Build group data.
+		groupData := GroupData{
+			Name:         groupName,
+			PromptSuffix: "", // TODO(PHASE_06): replace fanOutReview body
 		}
 
-		divJSON, jsonErr := json.Marshal(divData)
+		groupJSON, jsonErr := json.Marshal(groupData)
 		if jsonErr != nil {
-			return nil, fmt.Errorf("marshal division data for %s: %w", divName, jsonErr)
+			return nil, fmt.Errorf("marshal group data for %s: %w", groupName, jsonErr)
 		}
 
 		task := flow.FanOutTask{
@@ -286,14 +267,14 @@ func fanOutReview(
 				{ID: cfg.ReviewArtefact, GovernedArtefact: "review-data", Content: []byte(reviewContent)},
 				{ID: ArtefactLaws, GovernedArtefact: "review-data", Content: lawsJSON},
 				{ID: ArtefactHistory, GovernedArtefact: "review-data", Content: historyJSON},
-				{ID: ArtefactDivision, GovernedArtefact: "review-data", Content: divJSON},
+				{ID: ArtefactDivision, GovernedArtefact: "review-data", Content: groupJSON},
 			},
 		}
 		tasks = append(tasks, task)
 
 		slog.Info("appraise: fan-out task",
-			"division", divName,
-			"law_count", len(divLaws),
+			"group", groupName,
+			"law_count", len(groupLaws),
 		)
 	}
 

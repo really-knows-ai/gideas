@@ -163,7 +163,6 @@ func (s *LibrarianServer) QueryLaws(
 	if f := req.GetFilter(); f != nil {
 		filter.GovernedArtefact = f.GetGovernedArtefact()
 		filter.RepresentationType = f.GetRepresentationType()
-		filter.Division = f.GetDivision()
 		filter.Group = f.GetGroup()
 
 		// Validate: if representation_type is set, governed_artefact must also be set.
@@ -175,7 +174,7 @@ func (s *LibrarianServer) QueryLaws(
 	slog.Info("QueryLaws",
 		"governed_artefact", filter.GovernedArtefact,
 		"representation_type", filter.RepresentationType,
-		"division", filter.Division,
+		"group", filter.Group,
 	)
 
 	laws, err := s.store.QueryLaws(ctx, filter)
@@ -427,7 +426,7 @@ func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequ
 		Tier:            tier,
 		AppliesTo:       protoLaw.GetAppliesTo(),
 		Representations: storeReps,
-		Division:        protoLaw.GetDivision(),
+		Group:           protoLaw.GetGroup(),
 	}
 
 	var (
@@ -546,7 +545,7 @@ func (s *LibrarianServer) ReplicateLaws(
 			Tier:            tier,
 			AppliesTo:       protoLaw.GetAppliesTo(),
 			Representations: storeReps,
-			Division:        protoLaw.GetDivision(),
+			Group:           protoLaw.GetGroup(),
 			SourceFlow:      req.GetSourceFlowNamespace(),
 			PetitionID:      req.GetPetitionId(),
 		}
@@ -670,7 +669,7 @@ func (s *LibrarianServer) GetActiveDisputes(
 
 // SearchSimilarLaws performs a vector similarity search against the law
 // embeddings in the Library. It embeds the query text, searches the vec0
-// virtual table for nearest neighbours, optionally filters by division
+// virtual table for nearest neighbours, optionally filters by group
 // (scope_filter), and returns full Law objects with similarity scores.
 func (s *LibrarianServer) SearchSimilarLaws(
 	ctx context.Context, req *flowv1.SearchSimilarLawsRequest,
@@ -723,8 +722,8 @@ func (s *LibrarianServer) SearchSimilarLaws(
 			continue
 		}
 
-		// Scope filter: if set, only include laws matching the division.
-		if req.GetScopeFilter() != "" && law.Division != req.GetScopeFilter() {
+		// Scope filter: if set, only include laws matching the group.
+		if req.GetScopeFilter() != "" && law.Group != req.GetScopeFilter() {
 			continue
 		}
 
@@ -955,7 +954,7 @@ func storeLawToProto(law sqlite.Law) *flowv1.Law {
 		Representations: reps,
 		Tier:            flowv1.LawTier(law.Tier),
 		AppliesTo:       law.AppliesTo,
-		Division:        law.Division,
+		Group:           law.Group,
 		VersionHash:     law.VersionHash,
 		CreatedAt:       timestamppb.New(law.CreatedAt),
 		UpdatedAt:       timestamppb.New(law.UpdatedAt),

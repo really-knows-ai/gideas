@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const testDivisionSecurity = "security"
+const testGroupSecurity = "security"
 const testLawSecID = "law-sec"
 
 // testEmbeddingDims is a small dimension used for tests so we don't need
@@ -535,38 +535,26 @@ func TestListLawGroups_Empty(t *testing.T) {
 // LawGroup QueryLaws filter tests
 // ---------------------------------------------------------------------------
 
-func TestQueryLaws_GroupFilter(t *testing.T) {
+func TestQueryLaws_GroupFilterByGroup(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	// A law in the "security" group.
+	// Security group.
 	if _, err := s.CreateLaw(ctx, testLawSecID, Law{
 		Goal:            "Security rule",
 		Tier:            1,
-		Division:        "security",
+		Group:           "security",
 		Representations: []Representation{{Type: "text/plain", Content: "s"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw %s: %v", testLawSecID, err)
 	}
-	// A law in the "default" group.
+	// A law in the "default" group (empty Group field).
 	if _, err := s.CreateLaw(ctx, "law-def", Law{
 		Goal:            "Default rule",
 		Tier:            1,
 		Representations: []Representation{{Type: "text/plain", Content: "d"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-def: %v", err)
-	}
-
-	// At this point, both laws have empty law_group ('') because the
-	// CreateLaw SQL does not set law_group. We need to set it manually
-	// for this test.
-	_, err := s.db.ExecContext(ctx, `UPDATE laws SET law_group = 'security' WHERE id = '`+testLawSecID+`'`)
-	if err != nil {
-		t.Fatalf("set law_group security: %v", err)
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE laws SET law_group = 'default' WHERE id = 'law-def'`)
-	if err != nil {
-		t.Fatalf("set law_group default: %v", err)
 	}
 
 	// Filter by security group.
@@ -578,13 +566,13 @@ func TestQueryLaws_GroupFilter(t *testing.T) {
 		t.Fatalf("expected [%s], got %v", testLawSecID, lawIDs(laws))
 	}
 
-	// Filter by default group.
-	laws, err = s.QueryLaws(ctx, QueryFilter{Group: "default"})
+	// Filter by non-existent group returns empty.
+	laws, err = s.QueryLaws(ctx, QueryFilter{Group: "nonexistent"})
 	if err != nil {
-		t.Fatalf("QueryLaws group=default: %v", err)
+		t.Fatalf("QueryLaws group=nonexistent: %v", err)
 	}
-	if len(laws) != 1 || laws[0].ID != "law-def" {
-		t.Fatalf("expected [law-def], got %v", lawIDs(laws))
+	if len(laws) != 0 {
+		t.Fatalf("expected 0 laws, got %d", len(laws))
 	}
 
 	// Empty group filter returns all.
@@ -602,13 +590,13 @@ func TestQueryLaws_GroupAndArtefactFilter(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := s.CreateLaw(ctx, "law-ss", Law{
-		Goal: "Security scoped", Tier: 1, Division: "security", AppliesTo: []string{"source-code"},
+		Goal: "Security scoped", Tier: 1, Group: "security", AppliesTo: []string{"source-code"},
 		Representations: []Representation{{Type: "text/plain", Content: "ss"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-ss: %v", err)
 	}
 	if _, err := s.CreateLaw(ctx, "law-sg", Law{
-		Goal: "Security global", Tier: 1, Division: "security",
+		Goal: "Security global", Tier: 1, Group: "security",
 		Representations: []Representation{{Type: "text/plain", Content: "sg"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-sg: %v", err)
@@ -637,39 +625,39 @@ func TestQueryLaws_GroupAndArtefactFilter(t *testing.T) {
 	}
 }
 
-func TestQueryLaws_GroupAndDivisionFilter(t *testing.T) {
+func TestQueryLaws_GroupFilterCombined(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	if _, err := s.CreateLaw(ctx, "law-sec", Law{
-		Goal: "Security rule", Tier: 1, Division: "security",
+		Goal: "Security rule", Tier: 1, Group: "security",
 		Representations: []Representation{{Type: "text/plain", Content: "s"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-sec: %v", err)
 	}
 	if _, err := s.CreateLaw(ctx, "law-arch", Law{
-		Goal: "Arch rule", Tier: 1, Division: "architecture",
+		Goal: "Arch rule", Tier: 1, Group: "architecture",
 		Representations: []Representation{{Type: "text/plain", Content: "a"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-arch: %v", err)
 	}
 
-	_, err := s.db.ExecContext(ctx, `UPDATE laws SET law_group = 'security' WHERE id = 'law-sec'`)
-	if err != nil {
-		t.Fatalf("set law_group security: %v", err)
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE laws SET law_group = 'security' WHERE id = 'law-arch'`)
-	if err != nil {
-		t.Fatalf("set law_group security for arch: %v", err)
-	}
-
-	// Filter by group + division.
-	laws, err := s.QueryLaws(ctx, QueryFilter{Group: "security", Division: "security"})
+	// Filter by security group — only law-sec should match.
+	laws, err := s.QueryLaws(ctx, QueryFilter{Group: "security"})
 	if err != nil {
 		t.Fatalf("QueryLaws: %v", err)
 	}
 	if len(laws) != 1 || laws[0].ID != "law-sec" {
 		t.Fatalf("expected [law-sec], got %v", lawIDs(laws))
+	}
+
+	// Filter by architecture group — only law-arch should match.
+	laws, err = s.QueryLaws(ctx, QueryFilter{Group: "architecture"})
+	if err != nil {
+		t.Fatalf("QueryLaws: %v", err)
+	}
+	if len(laws) != 1 || laws[0].ID != "law-arch" {
+		t.Fatalf("expected [law-arch], got %v", lawIDs(laws))
 	}
 }
 
@@ -677,11 +665,11 @@ func TestContentHash_Deterministic(t *testing.T) {
 	h1 := ComputeContentHash("goal", 1, []string{"b", "a"}, []Representation{
 		{Type: "text/plain", Content: "content"},
 		{Type: "application/rego", Content: "rule"},
-	}, testDivisionSecurity)
+	}, testGroupSecurity)
 	h2 := ComputeContentHash("goal", 1, []string{"a", "b"}, []Representation{
 		{Type: "application/rego", Content: "rule"},
 		{Type: "text/plain", Content: "content"},
-	}, testDivisionSecurity)
+	}, testGroupSecurity)
 
 	if h1 != h2 {
 		t.Fatalf("content hash should be deterministic regardless of field ordering, got %q and %q", h1, h2)
@@ -789,14 +777,14 @@ func TestGetLawsByScope(t *testing.T) {
 	}
 }
 
-func TestDivision_Persistence(t *testing.T) {
+func TestGroup_Persistence(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	law := Law{
 		Goal:            "Security check",
 		Tier:            1,
-		Division:        testDivisionSecurity,
+		Group:           testGroupSecurity,
 		Representations: []Representation{{Type: "text/plain", Content: "check"}},
 	}
 
@@ -809,12 +797,12 @@ func TestDivision_Persistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLaw: %v", err)
 	}
-	if got.Division != testDivisionSecurity {
-		t.Fatalf("expected division %q, got %q", testDivisionSecurity, got.Division)
+	if got.Group != testGroupSecurity {
+		t.Fatalf("expected group %q, got %q", testGroupSecurity, got.Group)
 	}
 }
 
-func TestDivision_EmptyDefault(t *testing.T) {
+func TestGroup_EmptyDefault(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -833,30 +821,30 @@ func TestDivision_EmptyDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLaw: %v", err)
 	}
-	if got.Division != "" {
-		t.Fatalf("expected empty division, got %q", got.Division)
+	if got.Group != "" {
+		t.Fatalf("expected empty group, got %q", got.Group)
 	}
 }
 
-func TestQueryLaws_DivisionFilter(t *testing.T) {
+func TestQueryLaws_GroupFilter(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	// Security division.
+	// Security group.
 	if _, err := s.CreateLaw(ctx, "law-sec", Law{
-		Goal: "Security rule", Tier: 1, Division: testDivisionSecurity,
+		Goal: "Security rule", Tier: 1, Group: testGroupSecurity,
 		Representations: []Representation{{Type: "text/plain", Content: "s"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-sec: %v", err)
 	}
-	// Architecture division.
+	// Architecture group.
 	if _, err := s.CreateLaw(ctx, "law-arch", Law{
-		Goal: "Architecture rule", Tier: 1, Division: "architecture",
+		Goal: "Architecture rule", Tier: 1, Group: "architecture",
 		Representations: []Representation{{Type: "text/plain", Content: "a"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-arch: %v", err)
 	}
-	// No division (general).
+	// No group (general).
 	if _, err := s.CreateLaw(ctx, "law-gen", Law{
 		Goal: "General rule", Tier: 1,
 		Representations: []Representation{{Type: "text/plain", Content: "g"}},
@@ -864,16 +852,16 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 		t.Fatalf("CreateLaw law-gen: %v", err)
 	}
 
-	// Filter by security division.
-	laws, err := s.QueryLaws(ctx, QueryFilter{Division: testDivisionSecurity})
+	// Filter by security group.
+	laws, err := s.QueryLaws(ctx, QueryFilter{Group: testGroupSecurity})
 	if err != nil {
-		t.Fatalf("QueryLaws division=security: %v", err)
+		t.Fatalf("QueryLaws group=security: %v", err)
 	}
 	if len(laws) != 1 || laws[0].ID != "law-sec" {
 		t.Fatalf("expected [law-sec], got %v", lawIDs(laws))
 	}
 
-	// Empty division filter returns all.
+	// Empty group filter returns all.
 	laws, err = s.QueryLaws(ctx, QueryFilter{})
 	if err != nil {
 		t.Fatalf("QueryLaws no filter: %v", err)
@@ -883,34 +871,34 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 	}
 }
 
-func TestQueryLaws_DivisionWithArtefactFilter(t *testing.T) {
+func TestQueryLaws_GroupWithArtefactFilter(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	// Security + scoped to source-code.
 	if _, err := s.CreateLaw(ctx, "law-ss", Law{
-		Goal: "Security scoped", Tier: 1, Division: testDivisionSecurity, AppliesTo: []string{"source-code"},
+		Goal: "Security scoped", Tier: 1, Group: testGroupSecurity, AppliesTo: []string{"source-code"},
 		Representations: []Representation{{Type: "text/plain", Content: "ss"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-ss: %v", err)
 	}
 	// Architecture + scoped to source-code.
 	if _, err := s.CreateLaw(ctx, "law-as", Law{
-		Goal: "Arch scoped", Tier: 1, Division: "architecture", AppliesTo: []string{"source-code"},
+		Goal: "Arch scoped", Tier: 1, Group: "architecture", AppliesTo: []string{"source-code"},
 		Representations: []Representation{{Type: "text/plain", Content: "as"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-as: %v", err)
 	}
 	// Security + global.
 	if _, err := s.CreateLaw(ctx, "law-sg", Law{
-		Goal: "Security global", Tier: 1, Division: testDivisionSecurity,
+		Goal: "Security global", Tier: 1, Group: testGroupSecurity,
 		Representations: []Representation{{Type: "text/plain", Content: "sg"}},
 	}); err != nil {
 		t.Fatalf("CreateLaw law-sg: %v", err)
 	}
 
-	// Filter: artefact=source-code + division=security.
-	laws, err := s.QueryLaws(ctx, QueryFilter{GovernedArtefact: "source-code", Division: testDivisionSecurity})
+	// Filter: artefact=source-code + group=security.
+	laws, err := s.QueryLaws(ctx, QueryFilter{GovernedArtefact: "source-code", Group: testGroupSecurity})
 	if err != nil {
 		t.Fatalf("QueryLaws: %v", err)
 	}
@@ -923,16 +911,16 @@ func TestQueryLaws_DivisionWithArtefactFilter(t *testing.T) {
 	}
 }
 
-func TestContentHash_DivisionChangesHash(t *testing.T) {
+func TestContentHash_GroupChangesHash(t *testing.T) {
 	h1 := ComputeContentHash("goal", 1, nil, []Representation{{Type: "text/plain", Content: "c"}}, "")
-	h2 := ComputeContentHash("goal", 1, nil, []Representation{{Type: "text/plain", Content: "c"}}, testDivisionSecurity)
+	h2 := ComputeContentHash("goal", 1, nil, []Representation{{Type: "text/plain", Content: "c"}}, testGroupSecurity)
 
 	if h1 == h2 {
-		t.Fatal("different divisions should produce different hashes")
+		t.Fatal("different groups should produce different hashes")
 	}
 }
 
-func TestUpdateLaw_DivisionChange(t *testing.T) {
+func TestUpdateLaw_GroupChange(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -945,23 +933,23 @@ func TestUpdateLaw_DivisionChange(t *testing.T) {
 		t.Fatalf("CreateLaw: %v", err)
 	}
 
-	// Change only division.
-	law.Division = testDivisionSecurity
+	// Change only group.
+	law.Group = testGroupSecurity
 	hash2, err := s.UpdateLaw(ctx, "law-upd", law)
 	if err != nil {
 		t.Fatalf("UpdateLaw: %v", err)
 	}
 
 	if hash1 == hash2 {
-		t.Fatal("changing division should produce a new version hash")
+		t.Fatal("changing group should produce a new version hash")
 	}
 
 	got, err := s.GetLaw(ctx, "law-upd")
 	if err != nil {
 		t.Fatalf("GetLaw: %v", err)
 	}
-	if got.Division != testDivisionSecurity {
-		t.Fatalf("expected division %q, got %q", testDivisionSecurity, got.Division)
+	if got.Group != testGroupSecurity {
+		t.Fatalf("expected group %q, got %q", testGroupSecurity, got.Group)
 	}
 	if got.VersionHash != hash2 {
 		t.Fatalf("expected head hash %q, got %q", hash2, got.VersionHash)
@@ -1217,7 +1205,7 @@ func TestReplicateLaw_StoresWithProvenance(t *testing.T) {
 		Representations: []Representation{
 			{Type: "text/plain", Content: "All code must pass security review."},
 		},
-		Division:   testDivisionSecurity,
+		Group:      testGroupSecurity,
 		SourceFlow: "authority-flow-ns",
 		PetitionID: "petition-abc-123",
 	}
@@ -1244,8 +1232,8 @@ func TestReplicateLaw_StoresWithProvenance(t *testing.T) {
 	if !got.Active {
 		t.Fatal("expected replicated law to be active")
 	}
-	if got.Division != testDivisionSecurity {
-		t.Fatalf("expected division %q, got %q", testDivisionSecurity, got.Division)
+	if got.Group != testGroupSecurity {
+		t.Fatalf("expected group %q, got %q", testGroupSecurity, got.Group)
 	}
 	if got.SourceFlow != "authority-flow-ns" {
 		t.Fatalf("expected source_flow %q, got %q", "authority-flow-ns", got.SourceFlow)

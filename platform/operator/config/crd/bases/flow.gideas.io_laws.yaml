@@ -18,9 +18,6 @@ spec:
     - jsonPath: .spec.tier
       name: Tier
       type: integer
-    - jsonPath: .spec.division
-      name: Division
-      type: string
     - jsonPath: .spec.group
       name: Group
       type: string
@@ -61,11 +58,6 @@ spec:
                 items:
                   type: string
                 type: array
-              division:
-                description: |-
-                  division is an optional specialisation division (e.g. "security", "architecture").
-                  Empty means unset; consumers treat empty as "general".
-                type: string
               goal:
                 description: |-
                   goal is the plain-language statement of what the law enforces, stops, or ensures.

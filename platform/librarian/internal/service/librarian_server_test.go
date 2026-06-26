@@ -19,9 +19,9 @@ const testEmbeddingDims = 4
 
 // Test constants reused across LawGroup tests.
 const (
-	testBundleMode       = "bundle"
-	testLawByLawMode     = "law-by-law"
-	testDivisionSecurity = "security"
+	testBundleMode    = "bundle"
+	testLawByLawMode  = "law-by-law"
+	testGroupSecurity = "security"
 )
 
 var idCounter int
@@ -592,7 +592,7 @@ func TestReplicateLaws_RetainsProvenance(t *testing.T) {
 				Representations: []*flowv1.Representation{
 					{Type: "text/plain", Content: "provenance content"},
 				},
-				Division: "security",
+				Group: "security",
 			},
 		},
 		SourceFlowNamespace: "authority-flow-ns",
@@ -911,18 +911,18 @@ func TestApplyLifecycleAction_UnspecifiedVerdict(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Division support
+// Group support
 // ---------------------------------------------------------------------------
 
-func TestQueryLaws_DivisionFilter(t *testing.T) {
+func TestQueryLaws_GroupFilter(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	// Create laws in different divisions via WriteLaw (which passes division through).
+	// Create laws in different groups via WriteLaw (which passes group through).
 	if _, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Security rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "security",
+			Group:           "security",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "s"}},
 		},
 	}); err != nil {
@@ -931,7 +931,7 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 	if _, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Arch rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "architecture",
+			Group:           "architecture",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "a"}},
 		},
 	}); err != nil {
@@ -948,19 +948,19 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 
 	// Filter by security.
 	resp, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{
-		Filter: &flowv1.LawFilter{Division: testDivisionSecurity},
+		Filter: &flowv1.LawFilter{Group: testGroupSecurity},
 	})
 	if err != nil {
-		t.Fatalf("QueryLaws division=security: %v", err)
+		t.Fatalf("QueryLaws group=security: %v", err)
 	}
 	if len(resp.GetLaws()) != 1 {
 		t.Fatalf("expected 1 security law, got %d", len(resp.GetLaws()))
 	}
-	if resp.GetLaws()[0].GetDivision() != testDivisionSecurity {
-		t.Fatalf("expected division=%s, got %q", testDivisionSecurity, resp.GetLaws()[0].GetDivision())
+	if resp.GetLaws()[0].GetGroup() != testGroupSecurity {
+		t.Fatalf("expected group=%s, got %q", testGroupSecurity, resp.GetLaws()[0].GetGroup())
 	}
 
-	// No division filter returns all.
+	// No group filter returns all.
 	resp, err = srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
 	if err != nil {
 		t.Fatalf("QueryLaws no filter: %v", err)
@@ -970,14 +970,14 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 	}
 }
 
-func TestWriteLaw_DivisionRoundTrip(t *testing.T) {
+func TestWriteLaw_GroupRoundTrip(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
 	writeResp, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Styled rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "style",
+			Group:           "style",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "x"}},
 		},
 	})
@@ -989,16 +989,16 @@ func TestWriteLaw_DivisionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLaw: %v", err)
 	}
-	if getLawResp.GetLaw().GetDivision() != "style" {
-		t.Fatalf("expected division=style, got %q", getLawResp.GetLaw().GetDivision())
+	if getLawResp.GetLaw().GetGroup() != "style" {
+		t.Fatalf("expected group=style, got %q", getLawResp.GetLaw().GetGroup())
 	}
 }
 
-func TestStoreLawToProto_IncludesDivision(t *testing.T) {
+func TestStoreLawToProto_IncludesGroup(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	// RecordFinding doesn't set division (always empty for findings).
+	// RecordFinding doesn't set group (always empty for findings).
 	findResp, _ := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
 		Goal:            "Finding",
 		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "f"}},
@@ -1008,9 +1008,9 @@ func TestStoreLawToProto_IncludesDivision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLaw: %v", err)
 	}
-	// Division should be empty for a RecordFinding (no division in request).
-	if getLawResp.GetLaw().GetDivision() != "" {
-		t.Fatalf("expected empty division for finding, got %q", getLawResp.GetLaw().GetDivision())
+	// Group should be empty for a RecordFinding (no group in request).
+	if getLawResp.GetLaw().GetGroup() != "" {
+		t.Fatalf("expected empty group for finding, got %q", getLawResp.GetLaw().GetGroup())
 	}
 }
 
@@ -1383,11 +1383,11 @@ func TestSearchSimilarLaws_ScopeFilter(t *testing.T) {
 	srv := newTestServerWithEmbedder(t)
 	ctx := context.Background()
 
-	// Create two laws in different divisions.
+	// Create two laws in different groups.
 	_, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Security rule alpha", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "security",
+			Group:           "security",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "s"}},
 		},
 	})
@@ -1397,7 +1397,7 @@ func TestSearchSimilarLaws_ScopeFilter(t *testing.T) {
 	_, err = srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Architecture rule bet", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "architecture",
+			Group:           "architecture",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "a"}},
 		},
 	})
@@ -1415,8 +1415,8 @@ func TestSearchSimilarLaws_ScopeFilter(t *testing.T) {
 		t.Fatalf("SearchSimilarLaws: %v", err)
 	}
 	for _, r := range resp.GetResults() {
-		if r.GetLaw().GetDivision() != "security" {
-			t.Fatalf("expected only security division, got %q", r.GetLaw().GetDivision())
+		if r.GetLaw().GetGroup() != "security" {
+			t.Fatalf("expected only security group, got %q", r.GetLaw().GetGroup())
 		}
 	}
 }
@@ -1855,7 +1855,7 @@ func TestDeleteLawGroup_CapabilityDenied(t *testing.T) {
 }
 
 // TestQueryLaws_GroupFilter is tested at the store level (TestQueryLaws_GroupFilter,
-// TestQueryLaws_GroupAndArtefactFilter, TestQueryLaws_GroupAndDivisionFilter).
+// TestQueryLaws_GroupAndArtefactFilter, TestQueryLaws_GroupFilter).
 // The server handler simply passes the Group field through to the store's QueryFilter.
 // The handler wiring for group filter is verified by TestQueryLaws_AllLaws (no filter)
 // and at the store level.

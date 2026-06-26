@@ -79,24 +79,24 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("reviewer: load config: %w", err)
 	}
 
-	// Read the division artefact before constructing the agent so the
-	// division prompt suffix is baked into the system prompt.
-	divisionResp, err := client.GetArtefact(ctx, handlers.ArtefactDivision)
+	// Read the group artefact before constructing the agent so the
+	// group prompt suffix is baked into the system prompt.
+	groupResp, err := client.GetArtefact(ctx, handlers.ArtefactDivision)
 	if err != nil {
 		return fmt.Errorf("reviewer: read %s: %w", handlers.ArtefactDivision, err)
 	}
 
-	var division handlers.DivisionData
-	if err := json.Unmarshal(divisionResp.GetContent(), &division); err != nil {
-		return fmt.Errorf("reviewer: unmarshal division: %w", err)
+	var groupData handlers.GroupData
+	if err := json.Unmarshal(groupResp.GetContent(), &groupData); err != nil {
+		return fmt.Errorf("reviewer: unmarshal group data: %w", err)
 	}
 
-	// Construct the agent with division suffix and optional prompt overrides.
+	// Construct the agent with group suffix and optional prompt overrides.
 	opts := &ReviewAgentOpts{
 		SystemPrompt:  cfg.SystemPrompt,
 		QueryTemplate: cfg.QueryTemplate,
 	}
-	agent, err := NewReviewAgent(client, cfg, division.PromptSuffix, opts)
+	agent, err := NewReviewAgent(client, cfg, groupData.PromptSuffix, opts)
 	if err != nil {
 		return fmt.Errorf("reviewer: create review agent: %w", err)
 	}

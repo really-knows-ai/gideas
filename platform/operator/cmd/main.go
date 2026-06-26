@@ -68,6 +68,7 @@ func main() {
 	var probeAddr string
 	var grpcAddr string
 	var eventBusAddr string
+	var librarianAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -77,6 +78,8 @@ func main() {
 	flag.StringVar(&grpcAddr, "grpc-bind-address", ":50052", "The address the Operator gRPC server binds to.")
 	flag.StringVar(&eventBusAddr, "event-bus-address", "",
 		"The address of the Event Bus gRPC server for audit publishing (empty = disabled).")
+	flag.StringVar(&librarianAddr, "librarian-address", "",
+		"The address of the Librarian gRPC server for LawGroup sync (empty = disabled).")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -265,9 +268,26 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "CodificationService")
 		os.Exit(1)
 	}
+	// Connect to the Librarian for LawGroup sync.
+	var librarianClient flowv1gen.LibrarianServiceClient
+	if librarianAddr != "" {
+		libConn, libErr := grpc.NewClient(
+			librarianAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if libErr != nil {
+			setupLog.Error(libErr, "Failed to connect to Librarian", "address", librarianAddr)
+			os.Exit(1)
+		}
+		librarianClient = flowv1gen.NewLibrarianServiceClient(libConn)
+		setupLog.Info("Connected to Librarian for LawGroup sync", "address", librarianAddr)
+	} else {
+		setupLog.Info("Librarian not configured, LawGroup sync disabled")
+	}
 	if err := (&controller.LawGroupReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Librarian: librarianClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "LawGroup")
 		os.Exit(1)

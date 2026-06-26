@@ -307,7 +307,6 @@ func defaultTestConfig() *appraiseConfig {
 		GovernedArtefact: "haiku",
 		StampName:        "review",
 		ReviewerNode:     "reviewer",
-		DivisionPrompts:  map[string]string{},
 	}
 }
 
