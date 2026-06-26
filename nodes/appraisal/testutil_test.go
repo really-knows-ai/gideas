@@ -17,9 +17,9 @@ func newLocalListener() (net.Listener, error) {
 	return net.Listen("tcp", "127.0.0.1:0")
 }
 
-// newSpyGRPCServer creates a gRPC server with the appraiseSpy registered
+// newSpyGRPCServer creates a gRPC server with the appraisalSpy registered
 // for all Foundry Flow service interfaces.
-func newSpyGRPCServer(spy *appraiseSpy) *grpc.Server {
+func newSpyGRPCServer(spy *appraisalSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
 	flowv1.RegisterOperatorServiceServer(srv, spy)
@@ -30,10 +30,10 @@ func newSpyGRPCServer(spy *appraiseSpy) *grpc.Server {
 	return srv
 }
 
-// appraiseSpy captures calls to feedback and fan-out operations for test
+// appraisalSpy captures calls to feedback and fan-out operations for test
 // assertions. It embeds all unimplemented servers and overrides the methods
 // the appraise handler calls.
-type appraiseSpy struct {
+type appraisalSpy struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
@@ -83,8 +83,8 @@ type recordedFinding struct {
 	Representations []*flowv1.Representation
 }
 
-func newAppraiseSpy() *appraiseSpy {
-	return &appraiseSpy{
+func newAppraisalSpy() *appraisalSpy {
+	return &appraisalSpy{
 		RejectedFixes:    make(map[string]string),
 		RejectedRefusals: make(map[string]string),
 		ArtefactContents: map[string]string{
@@ -99,13 +99,13 @@ func newAppraiseSpy() *appraiseSpy {
 // Sidecar methods
 // ---------------------------------------------------------------------------
 
-func (s *appraiseSpy) Heartbeat(
+func (s *appraisalSpy) Heartbeat(
 	_ context.Context, _ *flowv1.HeartbeatRequest,
 ) (*flowv1.HeartbeatResponse, error) {
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
-func (s *appraiseSpy) PauseTimer(
+func (s *appraisalSpy) PauseTimer(
 	_ context.Context, _ *flowv1.PauseTimerRequest,
 ) (*flowv1.PauseTimerResponse, error) {
 	s.mu.Lock()
@@ -113,7 +113,7 @@ func (s *appraiseSpy) PauseTimer(
 	return &flowv1.PauseTimerResponse{Acknowledged: true}, nil
 }
 
-func (s *appraiseSpy) ResumeTimer(
+func (s *appraisalSpy) ResumeTimer(
 	_ context.Context, _ *flowv1.ResumeTimerRequest,
 ) (*flowv1.ResumeTimerResponse, error) {
 	s.mu.Lock()
@@ -121,7 +121,7 @@ func (s *appraiseSpy) ResumeTimer(
 	return &flowv1.ResumeTimerResponse{Acknowledged: true}, nil
 }
 
-func (s *appraiseSpy) SubmitResult(
+func (s *appraisalSpy) SubmitResult(
 	_ context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
 	s.mu.Lock()
@@ -137,7 +137,7 @@ func (s *appraiseSpy) SubmitResult(
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
 }
 
-func (s *appraiseSpy) CreateChildWorkitem(
+func (s *appraisalSpy) CreateChildWorkitem(
 	_ context.Context, _ *flowv1.CreateChildWorkitemRequest,
 ) (*flowv1.CreateChildWorkitemResponse, error) {
 	s.mu.Lock()
@@ -147,7 +147,7 @@ func (s *appraiseSpy) CreateChildWorkitem(
 	return &flowv1.CreateChildWorkitemResponse{ChildWorkitemId: id}, nil
 }
 
-func (s *appraiseSpy) GetChildren(
+func (s *appraisalSpy) GetChildren(
 	_ context.Context, _ *flowv1.GetChildrenRequest,
 ) (*flowv1.GetChildrenResponse, error) {
 	s.mu.Lock()
@@ -155,7 +155,7 @@ func (s *appraiseSpy) GetChildren(
 	return &flowv1.GetChildrenResponse{Children: s.ChildStatuses}, nil
 }
 
-func (s *appraiseSpy) RouteChild(
+func (s *appraisalSpy) RouteChild(
 	_ context.Context, _ *flowv1.RouteChildRequest,
 ) (*flowv1.RouteChildResponse, error) {
 	return &flowv1.RouteChildResponse{Accepted: true}, nil
@@ -165,7 +165,7 @@ func (s *appraiseSpy) RouteChild(
 // Archivist methods
 // ---------------------------------------------------------------------------
 
-func (s *appraiseSpy) GetArtefact(
+func (s *appraisalSpy) GetArtefact(
 	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
 	// Parent artefact read.
@@ -181,7 +181,7 @@ func (s *appraiseSpy) GetArtefact(
 	}, nil
 }
 
-func (s *appraiseSpy) StoreArtefact(
+func (s *appraisalSpy) StoreArtefact(
 	_ context.Context, _ *flowv1.StoreArtefactRequest,
 ) (*flowv1.StoreArtefactResponse, error) {
 	return &flowv1.StoreArtefactResponse{
@@ -190,7 +190,7 @@ func (s *appraiseSpy) StoreArtefact(
 	}, nil
 }
 
-func (s *appraiseSpy) StampArtefact(
+func (s *appraisalSpy) StampArtefact(
 	_ context.Context, req *flowv1.StampArtefactRequest,
 ) (*flowv1.StampArtefactResponse, error) {
 	s.mu.Lock()
@@ -199,13 +199,13 @@ func (s *appraiseSpy) StampArtefact(
 	return &flowv1.StampArtefactResponse{Stamp: &flowv1.Stamp{Name: req.GetStampName()}}, nil
 }
 
-func (s *appraiseSpy) GetFeedback(
+func (s *appraisalSpy) GetFeedback(
 	_ context.Context, _ *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
 	return &flowv1.GetFeedbackResponse{FeedbackItems: s.FeedbackItems}, nil
 }
 
-func (s *appraiseSpy) AddFeedback(
+func (s *appraisalSpy) AddFeedback(
 	_ context.Context, req *flowv1.AddFeedbackRequest,
 ) (*flowv1.AddFeedbackResponse, error) {
 	s.mu.Lock()
@@ -220,7 +220,7 @@ func (s *appraiseSpy) AddFeedback(
 	}, nil
 }
 
-func (s *appraiseSpy) AcceptFix(
+func (s *appraisalSpy) AcceptFix(
 	_ context.Context, req *flowv1.AcceptFixRequest,
 ) (*flowv1.AcceptFixResponse, error) {
 	s.mu.Lock()
@@ -231,7 +231,7 @@ func (s *appraiseSpy) AcceptFix(
 	}}, nil
 }
 
-func (s *appraiseSpy) RejectFix(
+func (s *appraisalSpy) RejectFix(
 	_ context.Context, req *flowv1.RejectFixRequest,
 ) (*flowv1.RejectFixResponse, error) {
 	s.mu.Lock()
@@ -242,7 +242,7 @@ func (s *appraiseSpy) RejectFix(
 	}}, nil
 }
 
-func (s *appraiseSpy) AcceptRefusal(
+func (s *appraisalSpy) AcceptRefusal(
 	_ context.Context, req *flowv1.AcceptRefusalRequest,
 ) (*flowv1.AcceptRefusalResponse, error) {
 	s.mu.Lock()
@@ -253,7 +253,7 @@ func (s *appraiseSpy) AcceptRefusal(
 	}}, nil
 }
 
-func (s *appraiseSpy) RejectRefusal(
+func (s *appraisalSpy) RejectRefusal(
 	_ context.Context, req *flowv1.RejectRefusalRequest,
 ) (*flowv1.RejectRefusalResponse, error) {
 	s.mu.Lock()
@@ -268,13 +268,13 @@ func (s *appraiseSpy) RejectRefusal(
 // Librarian methods
 // ---------------------------------------------------------------------------
 
-func (s *appraiseSpy) QueryLaws(
+func (s *appraisalSpy) QueryLaws(
 	_ context.Context, _ *flowv1.QueryLawsRequest,
 ) (*flowv1.QueryLawsResponse, error) {
 	return &flowv1.QueryLawsResponse{Laws: s.Laws}, nil
 }
 
-func (s *appraiseSpy) GetLawGroup(
+func (s *appraisalSpy) GetLawGroup(
 	_ context.Context, req *flowv1.GetLawGroupRequest,
 ) (*flowv1.GetLawGroupResponse, error) {
 	s.mu.Lock()
@@ -286,7 +286,7 @@ func (s *appraiseSpy) GetLawGroup(
 	return &flowv1.GetLawGroupResponse{}, nil
 }
 
-func (s *appraiseSpy) Cite(
+func (s *appraisalSpy) Cite(
 	_ context.Context, req *flowv1.CiteRequest,
 ) (*flowv1.CiteResponse, error) {
 	s.mu.Lock()
@@ -295,7 +295,7 @@ func (s *appraiseSpy) Cite(
 	return &flowv1.CiteResponse{Acknowledged: true}, nil
 }
 
-func (s *appraiseSpy) RecordFinding(
+func (s *appraisalSpy) RecordFinding(
 	_ context.Context, req *flowv1.RecordFindingRequest,
 ) (*flowv1.RecordFindingResponse, error) {
 	s.mu.Lock()
@@ -314,7 +314,7 @@ func (s *appraiseSpy) RecordFinding(
 // FrictionLedger methods
 // ---------------------------------------------------------------------------
 
-func (s *appraiseSpy) RecordTelemetry(
+func (s *appraisalSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
@@ -324,7 +324,7 @@ func (s *appraiseSpy) RecordTelemetry(
 // EventBus methods
 // ---------------------------------------------------------------------------
 
-func (s *appraiseSpy) Publish(
+func (s *appraisalSpy) Publish(
 	_ context.Context, req *flowv1.PublishRequest,
 ) (*flowv1.PublishResponse, error) {
 	s.mu.Lock()
@@ -341,8 +341,8 @@ func (s *appraiseSpy) Publish(
 // ---------------------------------------------------------------------------
 
 // newSpyClient creates a flow.Client backed by a local gRPC server with
-// the appraiseSpy registered for all service interfaces.
-func newSpyClient(t *testing.T, spy *appraiseSpy) *flow.Client {
+// the appraisalSpy registered for all service interfaces.
+func newSpyClient(t *testing.T, spy *appraisalSpy) *flow.Client {
 	t.Helper()
 
 	lis, err := newLocalListener()
@@ -364,8 +364,8 @@ func newSpyClient(t *testing.T, spy *appraiseSpy) *flow.Client {
 }
 
 // newSpyClientWithEventBus creates a flow.Client backed by a local gRPC server
-// with the appraiseSpy registered, including the EventBus service.
-func newSpyClientWithEventBus(t *testing.T, spy *appraiseSpy) *flow.Client {
+// with the appraisalSpy registered, including the EventBus service.
+func newSpyClientWithEventBus(t *testing.T, spy *appraisalSpy) *flow.Client {
 	t.Helper()
 
 	lis, err := newLocalListener()
@@ -389,9 +389,9 @@ func newSpyClientWithEventBus(t *testing.T, spy *appraiseSpy) *flow.Client {
 	return client
 }
 
-// defaultTestConfig returns a standard appraiseConfig for tests.
-func defaultTestConfig() *appraiseConfig {
-	return &appraiseConfig{
+// defaultTestConfig returns a standard appraisalConfig for tests.
+func defaultTestConfig() *appraisalConfig {
+	return &appraisalConfig{
 		InputArtefacts:   []string{"petition"},
 		ReviewArtefact:   "haiku",
 		GovernedArtefact: "haiku",
