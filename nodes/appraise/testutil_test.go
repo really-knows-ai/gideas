@@ -66,6 +66,9 @@ type appraiseSpy struct {
 	ChildStatuses   []*flowv1.ChildWorkitemStatus // statuses returned by GetChildren
 	LawGroups       map[string]*flowv1.LawGroup   // group name -> LawGroup for GetLawGroup
 	PublishedEvents []*flowv1.FlowEvent           // events published to EventBus
+
+	// PublishFail, when true, causes Publish to return an error.
+	PublishFail bool
 }
 
 type addedFeedbackItem struct {
@@ -326,6 +329,9 @@ func (s *appraiseSpy) Publish(
 ) (*flowv1.PublishResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.PublishFail {
+		return nil, fmt.Errorf("simulated publish failure")
+	}
 	s.PublishedEvents = append(s.PublishedEvents, req.GetEvent())
 	return &flowv1.PublishResponse{Acknowledged: true}, nil
 }

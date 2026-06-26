@@ -349,6 +349,31 @@ func TestAppraiseHandler_EmptyAppraisers(t *testing.T) {
 	}
 }
 
+// PublishAuditEvent failure is tolerated: handler succeeds and stamps still apply.
+func TestAppraise_PublishAuditEventFailure(t *testing.T) {
+	spy := newAppraiseSpy()
+	spy.PublishFail = true
+	spy.Laws = defaultLaws()
+	spy.LawGroups["default"] = groupDefaultBundle()
+	spy.ChildStatuses = childStatusesCompleted(1)
+	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	client := spyForHandler(t, spy)
+
+	cfg := defaultHandlerConfig()
+	cfg.Appraisers = []handlers.AppraiserConfig{
+		{ID: "skeptic", Personality: "Strict"},
+	}
+
+	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraise() error: %v", err)
+	}
+
+	// Stamps must still be applied despite Publish failure.
+	if !slices.Contains(spy.StampedArtefacts, "appraise-default") {
+		t.Fatalf("expected stamp 'appraise-default', got stamps: %v", spy.StampedArtefacts)
+	}
+}
+
 // Coverage event payload correctness.
 func TestAppraiseHandler_CoveragePayload(t *testing.T) {
 	spy := newAppraiseSpy()

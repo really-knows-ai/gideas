@@ -247,7 +247,11 @@ func fanOutReview(
 	)
 
 	// If no laws, return empty — nothing to review against.
-	if len(lawsByGroup) == 0 || len(cfg.Appraisers) == 0 {
+	if len(lawsByGroup) == 0 {
+		return &fanOutResult{}, nil
+	}
+	if len(cfg.Appraisers) == 0 {
+		slog.Warn("appraise: no appraisers configured, skipping fan-out")
 		return &fanOutResult{}, nil
 	}
 
