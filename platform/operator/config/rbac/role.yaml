@@ -45,6 +45,7 @@ rules:
   - foundryflows
   - foundrynodes
   - governedartefacts
+  - lawgroups
   - laws
   - treaties
   - workitems
@@ -64,6 +65,7 @@ rules:
   - foundryflows/finalizers
   - foundrynodes/finalizers
   - governedartefacts/finalizers
+  - lawgroups/finalizers
   - laws/finalizers
   - treaties/finalizers
   - workitems/finalizers
@@ -77,6 +79,7 @@ rules:
   - foundryflows/status
   - foundrynodes/status
   - governedartefacts/status
+  - lawgroups/status
   - laws/status
   - treaties/status
   - workitems/status

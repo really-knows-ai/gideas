@@ -4,35 +4,31 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: laws.flow.gideas.io
+  name: lawgroups.flow.gideas.io
 spec:
   group: flow.gideas.io
   names:
-    kind: Law
-    listKind: LawList
-    plural: laws
-    singular: law
+    kind: LawGroup
+    listKind: LawGroupList
+    plural: lawgroups
+    singular: lawgroup
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.tier
-      name: Tier
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    - jsonPath: .spec.passes
+      name: Passes
       type: integer
-    - jsonPath: .spec.division
-      name: Division
-      type: string
-    - jsonPath: .spec.group
-      name: Group
-      type: string
-    - jsonPath: .status.version
-      name: Version
-      type: string
     name: v1
     schema:
       openAPIV3Schema:
         description: |-
-          Law is the Schema for the laws API.
-          Laws are managed by the Librarian and represent enforceable rules within a Flow.
+          LawGroup is the Schema for the lawgroups API.
+          A LawGroup defines the evaluation contract (mode and passes) for a named
+          group of laws. An implicit "default" group exists with {mode: "bundle", passes: 1};
+          creating a LawGroup CRD named "default" overrides these built-in defaults.
         properties:
           apiVersion:
             description: |-
@@ -52,71 +48,34 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Law
+            description: spec defines the desired state of LawGroup
             properties:
-              appliesTo:
+              mode:
                 description: |-
-                  appliesTo lists governed artefact kinds this law applies to.
-                  Empty means global — applies to all kinds in the Flow.
-                items:
-                  type: string
-                type: array
-              division:
-                description: |-
-                  division is an optional specialisation division (e.g. "security", "architecture").
-                  Empty means unset; consumers treat empty as "general".
+                  mode is the evaluation mode for this law group.
+                  "bundle" evaluates all laws in the group as a single unit.
+                  "law-by-law" evaluates each law as its own unit.
+                enum:
+                - bundle
+                - law-by-law
                 type: string
-              goal:
+              passes:
                 description: |-
-                  goal is the plain-language statement of what the law enforces, stops, or ensures.
-                  The law's identity.
-                minLength: 1
-                type: string
-              group:
-                description: |-
-                  group is the law group name. Must match metadata.name of a LawGroup CRD.
-                  Empty means the "default" group.
-                type: string
-              representations:
-                description: |-
-                  representations are one or more typed expressions of the goal.
-                  At least one representation is required.
-                items:
-                  description: Representation is a typed expression of a law's goal.
-                  properties:
-                    content:
-                      description: content is the representation payload.
-                      type: string
-                    type:
-                      description: |-
-                        type is the MIME type identifying the representation format
-                        (e.g. text/markdown, application/smt-lib, application/python, application/rego).
-                      minLength: 1
-                      type: string
-                  required:
-                  - content
-                  - type
-                  type: object
-                minItems: 1
-                type: array
-              tier:
-                description: |-
-                  tier is the law tier: 1 (Finding), 2 (Ruling), 3 (Local Statute),
-                  4 (State Constitution), 5 (Federal Accord).
+                  passes is the number of evaluation passes per unit per appraiser.
+                  Must be at least 1.
                 format: int32
-                maximum: 5
                 minimum: 1
                 type: integer
             required:
-            - goal
-            - representations
-            - tier
+            - mode
+            - passes
             type: object
           status:
-            description: status defines the observed state of Law
+            description: status defines the observed state of LawGroup
             properties:
               conditions:
-                description: conditions represent the current state of the Law resource.
+                description: conditions represent the current state of the LawGroup
+                  resource.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -175,11 +134,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              version:
-                description: |-
-                  version is the content hash of the current law version.
-                  Any mutation to spec produces a new hash.
-                type: string
             type: object
         required:
         - spec
