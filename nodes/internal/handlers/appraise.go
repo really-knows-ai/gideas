@@ -653,7 +653,7 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 		"cycle_id": cycleID,
 		"units":    units,
 	}
-	if err := client.PublishAuditEvent(ctx, "appraisal.coverage", payload); err != nil {
+	if err := client.PublishAuditEvent(ctx, "appraisal.coverage", payload, client.WorkitemID(), ""); err != nil {
 		slog.Warn("appraisal: publish coverage event failed", "error", err)
 	} else {
 		slog.Info("appraisal: coverage event published")
@@ -706,7 +706,7 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 		"violations_total":   totalViolations,
 		"appraiser_verdicts": appraiserVerdicts,
 	}
-	if err := client.PublishAuditEvent(ctx, "appraisal.attestation", payload); err != nil {
+	if err := client.PublishAuditEvent(ctx, "appraisal.attestation", payload, client.WorkitemID(), ""); err != nil {
 		slog.Warn("appraisal: publish attestation event failed", "error", err)
 	} else {
 		slog.Info("appraisal: attestation event published", "status", status)

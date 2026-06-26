@@ -658,7 +658,11 @@ func (c *Client) QueryLawsByGroup(ctx context.Context, governedArtefact, groupNa
 // PublishAuditEvent marshals the payload to JSON and publishes it to the
 // Event Bus on the "audit" channel. This is a best-effort operation:
 // callers should log the error but not fail work execution.
-func (c *Client) PublishAuditEvent(ctx context.Context, eventType string, payload any) error {
+// The workitemID and flowNamespace are set on the FlowEvent for standard
+// event labelling (spec R11). Pass empty strings if unavailable.
+func (c *Client) PublishAuditEvent(
+	ctx context.Context, eventType string, payload any, workitemID, flowNamespace string,
+) error {
 	if c.EventBus == nil {
 		return fmt.Errorf("flow sdk: publish audit event requires Event Bus connection (set EVENT_BUS_ADDRESS)")
 	}
@@ -670,10 +674,12 @@ func (c *Client) PublishAuditEvent(ctx context.Context, eventType string, payloa
 	_, err = c.EventBus.Publish(ctx, &flowv1.PublishRequest{
 		Channel: "audit",
 		Event: &flowv1.FlowEvent{
-			EventId:   fmt.Sprintf("%x", time.Now().UnixNano()),
-			EventType: eventType,
-			Timestamp: timestamppb.Now(),
-			Payload:   raw,
+			EventId:       fmt.Sprintf("%x", time.Now().UnixNano()),
+			EventType:     eventType,
+			WorkitemId:    workitemID,
+			FlowNamespace: flowNamespace,
+			Timestamp:     timestamppb.Now(),
+			Payload:       raw,
 		},
 	})
 	if err != nil {
