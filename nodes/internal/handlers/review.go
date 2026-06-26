@@ -24,20 +24,19 @@ type ReviewConfig struct {
 const (
 	ArtefactLaws         = "laws"
 	ArtefactHistory      = "history"
-	ArtefactGroup        = "group"
 	ArtefactReviewOutput = "review-output"
 )
-
-// GroupData is the JSON structure passed via the "group" artefact.
-type GroupData struct {
-	Name         string `json:"name"`
-	PromptSuffix string `json:"promptSuffix"`
-}
 
 // AppraiserPersonalityData is the JSON structure passed via the "appraiserPersonality" artefact.
 type AppraiserPersonalityData struct {
 	ID          string `json:"id"`
 	Personality string `json:"personality"`
+}
+
+// PassData is the JSON structure passed via the "pass" artefact.
+type PassData struct {
+	Pass int `json:"pass"`
+	Of   int `json:"of"`
 }
 
 // LawData is the minimal law representation passed via the "laws" artefact.
@@ -55,13 +54,30 @@ type HistoryData struct {
 	Message string `json:"message"`
 }
 
+// reviewOutputData wraps the SDK ReviewResult with traceability metadata
+// (appraiser ID and pass number). JSON tags produce the wire format expected
+// by the parent Appraisal handler.
+// ponytail: exists because ReviewResult has no json tags; if tags are added
+// to the SDK types, this wrapper can be deleted.
+type reviewOutputData struct {
+	Feedback  []outputFeedbackItem `json:"feedback"`
+	Appraiser string               `json:"appraiser,omitempty"`
+	Pass      int                  `json:"pass,omitempty"`
+}
+
+// outputFeedbackItem is a single feedback observation in wire format.
+type outputFeedbackItem struct {
+	Message   string   `json:"message"`
+	CitedLaws []string `json:"cited_laws"`
+}
+
 // HandleReview executes the Reviewer node handler logic using the provided
 // contract implementation. The handler is generic — it works with any
 // ReviewContract.
 //
 // Steps: fetch inputs → get review artefact → deserialize laws/history/
-// division from artefacts → call agent → marshal output → store review-output
-// artefact → Complete().
+// appraiser personality from artefacts → call agent → marshal output → store
+// review-output artefact → Complete().
 func HandleReview(
 	ctx context.Context,
 	client *flow.Client,
@@ -105,19 +121,27 @@ func HandleReview(
 		return fmt.Errorf("appraiser: unmarshal history: %w", err)
 	}
 
-	// Read and deserialize group data.
-	groupResp, err := client.GetArtefact(ctx, ArtefactGroup)
-	if err != nil {
-		return fmt.Errorf("appraiser: read %s: %w", ArtefactGroup, err)
+	// Read and deserialize appraiserPersonality (optional, backward compat).
+	var appraiserData AppraiserPersonalityData
+	appraiserResp, appraiserErr := client.GetArtefact(ctx, ArtefactAppraiserPersonality)
+	if appraiserErr == nil {
+		if err := json.Unmarshal(appraiserResp.GetContent(), &appraiserData); err != nil {
+			return fmt.Errorf("appraiser: unmarshal appraiserPersonality: %w", err)
+		}
 	}
+	// If artefact is absent, appraiserData stays zero-valued — fine.
 
-	var groupData GroupData
-	if err := json.Unmarshal(groupResp.GetContent(), &groupData); err != nil {
-		return fmt.Errorf("appraiser: unmarshal group data: %w", err)
+	// Read and deserialize pass (optional, backward compat).
+	var passData PassData
+	passResp, passErr := client.GetArtefact(ctx, ArtefactPass)
+	if passErr == nil {
+		if err := json.Unmarshal(passResp.GetContent(), &passData); err != nil {
+			return fmt.Errorf("appraiser: unmarshal pass: %w", err)
+		}
 	}
 
 	slog.Info("appraiser: reviewing",
-		"group", groupData.Name,
+		"appraiser", appraiserData.ID,
 		"law_count", len(lawItems),
 		"history_count", len(historyItems),
 	)
@@ -149,7 +173,7 @@ func HandleReview(
 	}
 
 	slog.Info("appraiser: review complete",
-		"group", groupData.Name,
+		"appraiser", appraiserData.ID,
 		"feedback_count", len(out.Feedback),
 	)
 
@@ -157,7 +181,20 @@ func HandleReview(
 	// Store review-output artefact for parent to collect
 	// ---------------------------------------------------------------
 
-	outJSON, err := json.Marshal(out)
+	// Build extended output with traceability metadata.
+	outData := reviewOutputData{
+		Appraiser: appraiserData.ID,
+		Pass:      passData.Pass,
+	}
+	outData.Feedback = make([]outputFeedbackItem, len(out.Feedback))
+	for i, fb := range out.Feedback {
+		outData.Feedback[i] = outputFeedbackItem{
+			Message:   fb.Message,
+			CitedLaws: fb.CitedLaws,
+		}
+	}
+
+	outJSON, err := json.Marshal(outData)
 	if err != nil {
 		return fmt.Errorf("appraiser: marshal review output: %w", err)
 	}
@@ -177,7 +214,7 @@ func HandleReview(
 	}
 
 	slog.Info("appraiser: completed",
-		"group", groupData.Name,
+		"appraiser", appraiserData.ID,
 		"workitem_id", os.Getenv(flow.EnvWorkitemID),
 	)
 	return nil

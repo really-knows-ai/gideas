@@ -168,7 +168,7 @@ func TestAppraiserAgent_PromptOmitsEmptySections(t *testing.T) {
 	}
 }
 
-func TestAppraiserAgent_DivisionSuffixInSystemPrompt(t *testing.T) {
+func TestAppraiserAgent_AppraiserPersonalityInSystemPrompt(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
 	mp := &mockModel{
@@ -178,21 +178,21 @@ func TestAppraiserAgent_DivisionSuffixInSystemPrompt(t *testing.T) {
 		},
 	}
 
-	suffix := "Pay special attention to information disclosure and injection risks."
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, suffix, nil)
+	personality := "Pay special attention to information disclosure and injection risks."
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, personality, nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, suffix) {
-		t.Errorf("system prompt should contain division suffix %q, got:\n%s",
-			suffix, mp.capturedSystem)
+	if !strings.Contains(mp.capturedSystem, personality) {
+		t.Errorf("system prompt should contain personality %q, got:\n%s",
+			personality, mp.capturedSystem)
 	}
 }
 
-func TestAppraiserAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
+func TestAppraiserAgent_EmptyPersonalityOmitted(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
 	mp := &mockModel{
@@ -209,9 +209,9 @@ func TestAppraiserAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	// With no suffix, the system prompt should end cleanly after the deviation list.
+	// With no personality, the system prompt should end cleanly after the deviation list.
 	if strings.Contains(mp.capturedSystem, "Pay special attention") {
-		t.Errorf("system prompt should not contain division suffix when empty, got:\n%s",
+		t.Errorf("system prompt should not contain personality when empty, got:\n%s",
 			mp.capturedSystem)
 	}
 }
@@ -364,44 +364,44 @@ func TestAppraiserAgent_ReviewOutputFormat(t *testing.T) {
 // Tests — Handler types deserialization (handlers package types)
 // ---------------------------------------------------------------------------
 
-func TestGroupData_Deserialization(t *testing.T) {
+func TestAppraiserPersonalityData_Deserialization(t *testing.T) {
 	tests := []struct {
-		name           string
-		json           string
-		expectedName   string
-		expectedSuffix string
+		name                string
+		json                string
+		expectedID          string
+		expectedPersonality string
 	}{
 		{
-			name:           "with suffix",
-			json:           `{"name":"security","promptSuffix":"Focus on security."}`,
-			expectedName:   "security",
-			expectedSuffix: "Focus on security.",
+			name:                "with personality",
+			json:                `{"id":"skeptic","personality":"Focus on security."}`,
+			expectedID:          "skeptic",
+			expectedPersonality: "Focus on security.",
 		},
 		{
-			name:           "without suffix",
-			json:           `{"name":"general","promptSuffix":""}`,
-			expectedName:   "general",
-			expectedSuffix: "",
+			name:                "empty personality",
+			json:                `{"id":"auditor","personality":""}`,
+			expectedID:          "auditor",
+			expectedPersonality: "",
 		},
 		{
-			name:           "empty name",
-			json:           `{"name":"","promptSuffix":""}`,
-			expectedName:   "",
-			expectedSuffix: "",
+			name:                "empty id",
+			json:                `{"id":"","personality":"Strict."}`,
+			expectedID:          "",
+			expectedPersonality: "Strict.",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var d handlers.GroupData
+			var d handlers.AppraiserPersonalityData
 			if err := json.Unmarshal([]byte(tt.json), &d); err != nil {
 				t.Fatalf("unmarshal failed: %v", err)
 			}
-			if d.Name != tt.expectedName {
-				t.Fatalf("expected name %q, got %q", tt.expectedName, d.Name)
+			if d.ID != tt.expectedID {
+				t.Fatalf("expected id %q, got %q", tt.expectedID, d.ID)
 			}
-			if d.PromptSuffix != tt.expectedSuffix {
-				t.Fatalf("expected suffix %q, got %q", tt.expectedSuffix, d.PromptSuffix)
+			if d.Personality != tt.expectedPersonality {
+				t.Fatalf("expected personality %q, got %q", tt.expectedPersonality, d.Personality)
 			}
 		})
 	}
@@ -450,9 +450,9 @@ func TestAppraiserAgent_SystemPromptOverride(t *testing.T) {
 	}
 
 	customSystem := `You are a custom reviewer.
-{{- if .DivisionSuffix}}
+{{- if .AppraiserPersonality}}
 
-{{.DivisionSuffix}}
+{{.AppraiserPersonality}}
 {{- end}}`
 
 	opts := &AppraiserAgentOpts{SystemPrompt: customSystem}
@@ -527,7 +527,7 @@ func TestAppraiserAgent_NilOptsUsesDefaults(t *testing.T) {
 	}
 }
 
-func TestAppraiserAgent_SystemPromptOverrideWithDivisionSuffix(t *testing.T) {
+func TestAppraiserAgent_SystemPromptOverrideWithPersonality(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
 	mp := &mockModel{
@@ -538,21 +538,225 @@ func TestAppraiserAgent_SystemPromptOverrideWithDivisionSuffix(t *testing.T) {
 	}
 
 	customSystem := `Custom reviewer.
-{{- if .DivisionSuffix}}
+{{- if .AppraiserPersonality}}
 
-Division: {{.DivisionSuffix}}
+Personality: {{.AppraiserPersonality}}
 {{- end}}`
 
-	suffix := "Focus on security."
+	personality := "Focus on security."
 	opts := &AppraiserAgentOpts{SystemPrompt: customSystem}
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, suffix, opts)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, personality, opts)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "Division: Focus on security.") {
-		t.Errorf("system prompt should render division suffix in custom template, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(mp.capturedSystem, "Personality: Focus on security.") {
+		t.Errorf("system prompt should render personality in custom template, got:\n%s", mp.capturedSystem)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Appraiser Personality
+// ---------------------------------------------------------------------------
+
+func TestAppraiserAgent_AppraiserPersonalityPresent(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newAppraiserSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	personality := "You are strict but fair. Evaluate every claim."
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, personality, nil)
+
+	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if !strings.Contains(mp.capturedSystem, personality) {
+		t.Errorf("system prompt should contain appraiser personality %q, got:\n%s",
+			personality, mp.capturedSystem)
+	}
+}
+
+func TestAppraiserAgent_NoAppraiserPersonality_DefaultPrompt(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newAppraiserSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	// Empty personality — should use default system prompt.
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+
+	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if !strings.Contains(mp.capturedSystem, "governed creative pipeline") {
+		t.Errorf("system prompt should contain default text when personality is empty, got:\n%s",
+			mp.capturedSystem)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Appraiser and Pass in Handler Output
+// ---------------------------------------------------------------------------
+
+func TestReviewOutput_ContainsAppraiserAndPass(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newAppraiserSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": [{"message": "test", "cited_laws": []}]}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	// Set up appraiser and pass artefacts in the spy.
+	spy.ArtefactContents[handlers.ArtefactAppraiserPersonality] = []byte(
+		`{"id":"skeptic","personality":"You are strict."}`)
+	spy.ArtefactContents[handlers.ArtefactPass] = []byte(
+		`{"pass":2,"of":3}`)
+	spy.ArtefactContents[handlers.ArtefactLaws] = []byte(`[]`)
+	spy.ArtefactContents[handlers.ArtefactHistory] = []byte(`[]`)
+	spy.ArtefactContents["input"] = []byte("test petition")
+	spy.ArtefactContents["review"] = []byte("test content")
+
+	client := newSpyClient(t, spy)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "You are strict.", nil)
+
+	handlerCfg := handlers.ReviewConfig{
+		InputArtefacts: cfg.InputArtefacts,
+		ReviewArtefact: cfg.ReviewArtefact,
+	}
+
+	err := handlers.HandleReview(context.Background(), client, agent, handlerCfg)
+	if err != nil {
+		t.Fatalf("HandleReview() returned error: %v", err)
+	}
+
+	// Check the stored review-output artefact.
+	stored, ok := spy.StoredArtefacts[handlers.ArtefactReviewOutput]
+	if !ok {
+		t.Fatal("review-output artefact was not stored")
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal(stored, &output); err != nil {
+		t.Fatalf("failed to unmarshal stored artefact: %v", err)
+	}
+
+	if appraiser, exists := output["appraiser"]; !exists || appraiser != "skeptic" {
+		t.Errorf("expected appraiser 'skeptic' in output, got %v", appraiser)
+	}
+
+	// Pass is int; json unmarshals to float64.
+	if pass, exists := output["pass"]; !exists || int(pass.(float64)) != 2 {
+		t.Errorf("expected pass 2 in output, got %v", pass)
+	}
+}
+
+func TestReviewOutput_OmitsPassWhenAbsent(t *testing.T) {
+	cfg := defaultTestConfig()
+	spy := newAppraiserSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	// Set up artefacts WITHOUT a pass artefact.
+	spy.ArtefactContents[handlers.ArtefactAppraiserPersonality] = []byte(
+		`{"id":"auditor","personality":"Audit for compliance."}`)
+	spy.ArtefactContents[handlers.ArtefactLaws] = []byte(`[]`)
+	spy.ArtefactContents[handlers.ArtefactHistory] = []byte(`[]`)
+	spy.ArtefactContents["input"] = []byte("test petition")
+	spy.ArtefactContents["review"] = []byte("test content")
+
+	client := newSpyClient(t, spy)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+
+	handlerCfg := handlers.ReviewConfig{
+		InputArtefacts: cfg.InputArtefacts,
+		ReviewArtefact: cfg.ReviewArtefact,
+	}
+
+	err := handlers.HandleReview(context.Background(), client, agent, handlerCfg)
+	if err != nil {
+		t.Fatalf("HandleReview() returned error: %v", err)
+	}
+
+	stored, ok := spy.StoredArtefacts[handlers.ArtefactReviewOutput]
+	if !ok {
+		t.Fatal("review-output artefact was not stored")
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal(stored, &output); err != nil {
+		t.Fatalf("failed to unmarshal stored artefact: %v", err)
+	}
+
+	if _, exists := output["pass"]; exists {
+		t.Errorf("expected pass field to be omitted when pass artefact absent, got %v", output["pass"])
+	}
+
+	if appraiser, exists := output["appraiser"]; !exists || appraiser != "auditor" {
+		t.Errorf("expected appraiser 'auditor' in output, got %v", appraiser)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Division Removal (Backward Compat)
+// ---------------------------------------------------------------------------
+
+func TestReviewFlow_WithoutDivisionArtefact(t *testing.T) {
+	// Verify the reviewer works when the parent sends appraiser+pass
+	// artefacts (new flow) and no division artefact is present.
+	cfg := defaultTestConfig()
+	spy := newAppraiserSpy()
+	mp := &mockModel{
+		output: &flow.InferOutput{
+			Output: []byte(`{"feedback": []}`),
+			Cost:   defaultCost(),
+		},
+	}
+
+	spy.ArtefactContents[handlers.ArtefactAppraiserPersonality] = []byte(
+		`{"id":"skeptic","personality":"You are strict."}`)
+	spy.ArtefactContents[handlers.ArtefactPass] = []byte(
+		`{"pass":1,"of":1}`)
+	spy.ArtefactContents[handlers.ArtefactLaws] = []byte(`[]`)
+	spy.ArtefactContents[handlers.ArtefactHistory] = []byte(`[]`)
+	spy.ArtefactContents["input"] = []byte("test petition")
+	spy.ArtefactContents["review"] = []byte("test content")
+
+	client := newSpyClient(t, spy)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "You are strict.", nil)
+
+	handlerCfg := handlers.ReviewConfig{
+		InputArtefacts: cfg.InputArtefacts,
+		ReviewArtefact: cfg.ReviewArtefact,
+	}
+
+	// Should succeed without division artefact.
+	err := handlers.HandleReview(context.Background(), client, agent, handlerCfg)
+	if err != nil {
+		t.Fatalf("HandleReview() failed without division artefact: %v", err)
+	}
+
+	if _, ok := spy.StoredArtefacts[handlers.ArtefactReviewOutput]; !ok {
+		t.Fatal("expected review-output artefact to be stored")
 	}
 }

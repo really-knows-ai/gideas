@@ -81,14 +81,14 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 
 	// Read the appraiser personality artefact before constructing the agent so the
 	// personality prompt suffix is baked into the system prompt.
+	// When the artefact is absent, personality stays "" — backward compat.
+	var personality string
 	apprResp, err := client.GetArtefact(ctx, handlers.ArtefactAppraiserPersonality)
-	if err != nil {
-		return fmt.Errorf("appraiser: read %s: %w", handlers.ArtefactAppraiserPersonality, err)
-	}
-
-	var apprData handlers.AppraiserPersonalityData
-	if err := json.Unmarshal(apprResp.GetContent(), &apprData); err != nil {
-		return fmt.Errorf("appraiser: unmarshal appraiser data: %w", err)
+	if err == nil {
+		var apprData handlers.AppraiserPersonalityData
+		if uErr := json.Unmarshal(apprResp.GetContent(), &apprData); uErr == nil {
+			personality = apprData.Personality
+		}
 	}
 
 	// Construct the agent with appraiser personality and optional prompt overrides.
@@ -96,7 +96,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		SystemPrompt:  cfg.SystemPrompt,
 		QueryTemplate: cfg.QueryTemplate,
 	}
-	agent, err := NewAppraiserAgent(client, cfg, apprData.Personality, opts)
+	agent, err := NewAppraiserAgent(client, cfg, personality, opts)
 	if err != nil {
 		return fmt.Errorf("appraiser: create appraiser agent: %w", err)
 	}

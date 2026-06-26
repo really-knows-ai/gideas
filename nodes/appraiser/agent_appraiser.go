@@ -66,9 +66,9 @@ var appraiserSchema = []byte(`{
 
 // appraiserSystemData holds config-time data for rendering the system prompt.
 type appraiserSystemData struct {
-	ReviewArtefact string
-	InputArtefact  string
-	DivisionSuffix string
+	ReviewArtefact       string
+	InputArtefact        string
+	AppraiserPersonality string
 }
 
 //nolint:lll // Prompt template — readability favors keeping the template intact.
@@ -80,9 +80,9 @@ Feedback states a deviation from a required standard. Every observation must ide
 - Law violation: the artefact breaches a governance law. Cite the law by ID.
 - Prompt deviation: the artefact strays from the creative brief (theme, subject, mood, or explicit instructions).
 - Both: the deviation violates both a law and the creative brief.
-{{- if .DivisionSuffix}}
+{{- if .AppraiserPersonality}}
 
-{{.DivisionSuffix}}
+{{.AppraiserPersonality}}
 {{- end}}`
 
 //nolint:lll // Prompt template — readability favors keeping the template intact.
@@ -172,13 +172,13 @@ type AppraiserAgentOpts struct {
 }
 
 // NewAppraiserAgent creates an AppraiserAgent with the given client, config, and
-// optional appraiser personality suffix. The model (KimiK2Ollama) is created
+// optional appraiser personality string. The model (KimiK2Ollama) is created
 // internally — model choice is a code-time decision, not deploy-time config.
 //
 // opts may be nil to use all baked-in defaults.
 func NewAppraiserAgent(
 	client *flow.Client, cfg *appraiserNodeConfig,
-	personalitySuffix string, opts *AppraiserAgentOpts,
+	personality string, opts *AppraiserAgentOpts,
 ) (*AppraiserAgent, error) {
 	inputLabel := artefacts.InputLabel(cfg.InputArtefacts)
 
@@ -189,9 +189,9 @@ func NewAppraiserAgent(
 	}
 
 	sysData := appraiserSystemData{
-		ReviewArtefact: cfg.ReviewArtefact,
-		InputArtefact:  inputLabel,
-		DivisionSuffix: personalitySuffix,
+		ReviewArtefact:       cfg.ReviewArtefact,
+		InputArtefact:        inputLabel,
+		AppraiserPersonality: personality,
 	}
 
 	// 1. Render system prompt with config + personality suffix.
