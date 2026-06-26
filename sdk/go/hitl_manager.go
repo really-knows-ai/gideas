@@ -209,10 +209,12 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 	qm.peer = &queuePeerServer{
 		store: store,
 		onDecide: func(workitemID, choice string) {
-			// Signal any local WaitForDecision callers. Uses LoadAndDelete
-			// so double-signaling from both queueManagerImpl.Decide() and
-			// the gRPC handler is safe — the second call is a no-op.
-			if ch, ok := qm.decisions.LoadAndDelete(workitemID); ok {
+			// Signal any local WaitForDecision callers. Uses Load so
+			// WaitForDecision always finds the channel; it cleans up after
+			// consuming. Double-signaling from both Decide() and the gRPC
+			// handler is safe — the second caller just sends into the
+			// buffered channel (the first choice wins, second is dropped).
+			if ch, ok := qm.decisions.Load(workitemID); ok {
 				ch.(chan string) <- choice
 			}
 		},
@@ -350,7 +352,10 @@ func (qm *queueManagerImpl) Decide(ctx context.Context, workitemID, choice strin
 		return err
 	}
 	// Signal any WaitForDecision callers.
-	if ch, ok := qm.decisions.LoadAndDelete(workitemID); ok {
+	// ponytail: Uses Load (not LoadAndDelete) so WaitForDecision always finds the
+	// channel. If no caller waits, entries leak until Stop. A cleanup sweep can be
+	// added if leaks become a concern.
+	if ch, ok := qm.decisions.Load(workitemID); ok {
 		ch.(chan string) <- choice
 	}
 	decisionTime := time.Duration(0)
@@ -376,6 +381,7 @@ func (qm *queueManagerImpl) WaitForDecision(ctx context.Context, workitemID stri
 	ch := v.(chan string)
 	select {
 	case choice := <-ch:
+		qm.decisions.Delete(workitemID)
 		return choice, nil
 	case <-ctx.Done():
 		// Clean up the orphaned channel so it doesn't leak in the map.
