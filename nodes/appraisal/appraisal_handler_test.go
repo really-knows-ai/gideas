@@ -213,10 +213,10 @@ func TestAppraisalHandler_AllCompleteStampsAndEvents(t *testing.T) {
 		eventTypes[e.GetEventType()] = true
 	}
 	if !eventTypes["appraisal.coverage"] {
-		t.Error("expected appraise.coverage event")
+		t.Error("expected appraisal.coverage event")
 	}
 	if !eventTypes[eventTypeAttestation] {
-		t.Error("expected appraise.attestation event")
+		t.Error("expected appraisal.attestation event")
 	}
 
 	// Verify attestation payload.

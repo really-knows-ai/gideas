@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"sync"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -257,7 +258,12 @@ func fanOutAppraisal(
 
 	// Step 3: Resolve group configs.
 	groups := make(map[string]*flow.LawGroup, len(lawsByGroup))
-	for groupName := range lawsByGroup {
+	groupNames := make([]string, 0, len(lawsByGroup))
+	for k := range lawsByGroup {
+		groupNames = append(groupNames, k)
+	}
+	sort.Strings(groupNames)
+	for _, groupName := range groupNames {
 		protoGroup, getErr := client.GetLawGroup(ctx, groupName)
 		if getErr != nil {
 			slog.Warn("appraisal: get law group failed, using defaults",
@@ -482,7 +488,13 @@ func applyAppraisalStamps(
 	}
 
 	// Apply stamps per group.
-	for groupName, unitList := range unitsByGroup {
+	groupOrder := make([]string, 0, len(unitsByGroup))
+	for k := range unitsByGroup {
+		groupOrder = append(groupOrder, k)
+	}
+	sort.Strings(groupOrder)
+	for _, groupName := range groupOrder {
+		unitList := unitsByGroup[groupName]
 		groupCfg := groups[groupName]
 		if groupCfg == nil {
 			groupCfg = &flow.LawGroup{Mode: flow.GroupModeBundle}
