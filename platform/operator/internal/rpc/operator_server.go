@@ -637,9 +637,9 @@ func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenR
 	for i := range childList.Items {
 		c := &childList.Items[i]
 		children[i] = &flowv1.ChildWorkitemStatus{
-			WorkitemId:       c.Name,
-			Phase:            c.Status.Phase,
-			CurrentAssignee:  c.Status.CurrentAssignee,
+			WorkitemId:      c.Name,
+			Phase:           c.Status.Phase,
+			CurrentAssignee: c.Status.CurrentAssignee,
 			// Artefact references are populated via Archivist cross-Workitem
 			// reads (Phase 7). For now, return an empty list.
 		}
