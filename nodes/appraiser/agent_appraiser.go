@@ -12,39 +12,39 @@ import (
 	flow "github.com/gideas/flow/sdk/go"
 )
 
-// Compile-time assertion: ReviewAgent implements flow.ReviewContract.
-var _ flow.ReviewContract = (*ReviewAgent)(nil)
+// Compile-time assertion: AppraiserAgent implements flow.ReviewContract.
+var _ flow.ReviewContract = (*AppraiserAgent)(nil)
 
 // ---------------------------------------------------------------------------
-// ReviewAgent — concrete agent for fresh review (Phase 2)
+// AppraiserAgent — concrete agent for fresh review (Phase 2)
 // ---------------------------------------------------------------------------
 
-// ReviewAgent wraps a flow.Agent with review-specific schema, prompts, and
+// AppraiserAgent wraps a flow.Agent with review-specific schema, prompts, and
 // a typed Run() interface. It reviews content against governance laws and
 // produces zero or more new feedback observations.
-type ReviewAgent struct {
+type AppraiserAgent struct {
 	agent *flow.Agent
-	cfg   *reviewerConfig
+	cfg   *appraiserNodeConfig
 }
 
-// reviewRawOutput is the Go representation of the reviewSchema-validated JSON.
+// appraiserRawOutput is the Go representation of the appraiserSchema-validated JSON.
 // It maps the snake_case JSON wire format to the SDK's ReviewResult/ReviewFeedback
 // types.
-type reviewRawOutput struct {
-	Feedback []reviewRawItem `json:"feedback"`
+type appraiserRawOutput struct {
+	Feedback []appraiserRawItem `json:"feedback"`
 }
 
-// reviewRawItem is a single feedback observation from the fresh review in
+// appraiserRawItem is a single feedback observation from the fresh review in
 // wire-format (snake_case).
-type reviewRawItem struct {
+type appraiserRawItem struct {
 	Message   string   `json:"message"`
 	CitedLaws []string `json:"cited_laws"`
 }
 
-// reviewSchema validates the output of fresh review inferences.
+// appraiserSchema validates the output of fresh review inferences.
 // The LLM produces zero or more feedback items, each with a message
 // and optional law citations.
-var reviewSchema = []byte(`{
+var appraiserSchema = []byte(`{
 	"type": "object",
 	"properties": {
 		"feedback": {
@@ -64,8 +64,8 @@ var reviewSchema = []byte(`{
 	"additionalProperties": false
 }`)
 
-// reviewSystemData holds config-time data for rendering the system prompt.
-type reviewSystemData struct {
+// appraiserSystemData holds config-time data for rendering the system prompt.
+type appraiserSystemData struct {
 	ReviewArtefact string
 	InputArtefact  string
 	DivisionSuffix string
@@ -164,22 +164,22 @@ type reviewTemplateQueryData struct {
 	ExampleLawID        string
 }
 
-// ReviewAgentOpts holds optional overrides for ReviewAgent construction.
+// AppraiserAgentOpts holds optional overrides for AppraiserAgent construction.
 // Zero values mean "use baked-in defaults".
-type ReviewAgentOpts struct {
+type AppraiserAgentOpts struct {
 	SystemPrompt  string // override the default system prompt template
 	QueryTemplate string // override the default query prompt template
 }
 
-// NewReviewAgent creates a ReviewAgent with the given client, config, and
-// optional division prompt suffix. The model (KimiK2Ollama) is created
+// NewAppraiserAgent creates an AppraiserAgent with the given client, config, and
+// optional appraiser personality suffix. The model (KimiK2Ollama) is created
 // internally — model choice is a code-time decision, not deploy-time config.
 //
 // opts may be nil to use all baked-in defaults.
-func NewReviewAgent(
-	client *flow.Client, cfg *reviewerConfig,
-	divisionPromptSuffix string, opts *ReviewAgentOpts,
-) (*ReviewAgent, error) {
+func NewAppraiserAgent(
+	client *flow.Client, cfg *appraiserNodeConfig,
+	personalitySuffix string, opts *AppraiserAgentOpts,
+) (*AppraiserAgent, error) {
 	inputLabel := artefacts.InputLabel(cfg.InputArtefacts)
 
 	// Resolve system prompt template (override or default).
@@ -188,21 +188,21 @@ func NewReviewAgent(
 		systemTmplSrc = opts.SystemPrompt
 	}
 
-	sysData := reviewSystemData{
+	sysData := appraiserSystemData{
 		ReviewArtefact: cfg.ReviewArtefact,
 		InputArtefact:  inputLabel,
-		DivisionSuffix: divisionPromptSuffix,
+		DivisionSuffix: personalitySuffix,
 	}
 
-	// 1. Render system prompt with config + division suffix.
+	// 1. Render system prompt with config + personality suffix.
 	sysTmpl, err := template.New("system").Parse(systemTmplSrc)
 	if err != nil {
-		return nil, fmt.Errorf("review agent: parse system template: %w", err)
+		return nil, fmt.Errorf("appraiser agent: parse system template: %w", err)
 	}
 
 	var sysBuf bytes.Buffer
 	if err := sysTmpl.Execute(&sysBuf, sysData); err != nil {
-		return nil, fmt.Errorf("review agent: render system prompt: %w", err)
+		return nil, fmt.Errorf("appraiser agent: render system prompt: %w", err)
 	}
 
 	// Resolve query prompt template (override or default).
@@ -214,25 +214,25 @@ func NewReviewAgent(
 	// 2. Parse query template.
 	queryTmpl, err := template.New("query").Parse(queryTmplSrc)
 	if err != nil {
-		return nil, fmt.Errorf("review agent: parse query template: %w", err)
+		return nil, fmt.Errorf("appraiser agent: parse query template: %w", err)
 	}
 
 	// 3. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
-		flow.WithSchema(reviewSchema),
+		flow.WithSchema(appraiserSchema),
 		flow.WithModel(flow.NewKimiK2Ollama()),
 		flow.WithSystemPrompt(sysBuf.String()),
 		flow.WithQueryTemplate(queryTmpl),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("review agent: create agent: %w", err)
+		return nil, fmt.Errorf("appraiser agent: create agent: %w", err)
 	}
 
-	return &ReviewAgent{agent: agent, cfg: cfg}, nil
+	return &AppraiserAgent{agent: agent, cfg: cfg}, nil
 }
 
 // Run performs a fresh review and returns the review result.
-func (r *ReviewAgent) Run(
+func (r *AppraiserAgent) Run(
 	ctx context.Context,
 	inputContent, reviewContent string,
 	laws []flow.ReviewLaw,
@@ -280,9 +280,9 @@ func (r *ReviewAgent) Run(
 		return nil, err
 	}
 
-	var rawOut reviewRawOutput
+	var rawOut appraiserRawOutput
 	if err := json.Unmarshal(raw, &rawOut); err != nil {
-		return nil, fmt.Errorf("review agent: unmarshal output: %w", err)
+		return nil, fmt.Errorf("appraiser agent: unmarshal output: %w", err)
 	}
 
 	// Map wire-format items to SDK types.

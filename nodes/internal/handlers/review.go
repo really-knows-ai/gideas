@@ -34,6 +34,12 @@ type GroupData struct {
 	PromptSuffix string `json:"promptSuffix"`
 }
 
+// AppraiserPersonalityData is the JSON structure passed via the "appraiserPersonality" artefact.
+type AppraiserPersonalityData struct {
+	ID          string `json:"id"`
+	Personality string `json:"personality"`
+}
+
 // LawData is the minimal law representation passed via the "laws" artefact.
 // Only the fields the ReviewAgent needs are included.
 type LawData struct {

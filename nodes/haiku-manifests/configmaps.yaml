@@ -33,35 +33,37 @@ metadata:
     app.kubernetes.io/name: sort
 data:
   node-config.yaml: |
-    nodeOrder: "quench,appraise"
+    nodeOrder: "quench,appraisal"
     deadlockThreshold: 3
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: appraise-config
+  name: appraisal-config
   namespace: default
   labels:
-    app.kubernetes.io/name: appraise
+    app.kubernetes.io/name: appraisal
 data:
   node-config.yaml: |
     inputArtefacts: ["petition"]
     reviewArtefact: "haiku"
     governedArtefact: "haiku"
-    stampName: "review"
-    reviewerNode: "reviewer"
-    divisionPrompts:
-      security: "Pay special attention to information disclosure and injection risks."
-      architecture: "Focus on structural patterns, separation of concerns, and maintainability."
-      style: "Evaluate adherence to style guides, naming conventions, and consistency."
+    reviewerNode: "appraiser"
+    appraisers:
+      - id: "skeptic"
+        personality: "Pay special attention to information disclosure and injection risks."
+      - id: "auditor"
+        personality: "Focus on structural patterns, separation of concerns, and maintainability."
+      - id: "stylist"
+        personality: "Evaluate adherence to style guides, naming conventions, and consistency."
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: reviewer-config
+  name: appraiser-config
   namespace: default
   labels:
-    app.kubernetes.io/name: reviewer
+    app.kubernetes.io/name: appraiser
 data:
   node-config.yaml: |
     inputArtefacts: ["input"]
@@ -223,28 +225,30 @@ metadata:
     app.kubernetes.io/name: clerk-sort
 data:
   node-config.yaml: |
-    nodeOrder: "appraise"
+    nodeOrder: "appraisal"
     deadlockThreshold: 3
 ---
-# --- Clerk Appraise ---
+# --- Clerk Appraisal ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: clerk-appraise-config
+  name: clerk-appraisal-config
   namespace: default
   labels:
-    app.kubernetes.io/name: clerk-appraise
+    app.kubernetes.io/name: clerk-appraisal
 data:
   node-config.yaml: |
     inputArtefacts: ["verdict-context"]
     reviewArtefact: "petition"
     governedArtefact: "petition"
-    stampName: "review"
-    reviewerNode: "reviewer"
-    divisionPrompts:
-      alignment: "Verify the petition faithfully implements the court's verdict decision. Check that each change is justified by the verdict reasoning."
-      completeness: "Check that all aspects of the verdict are addressed. Verify no law changes are missing or extraneous."
-      feasibility: "Assess whether the proposed law changes are well-formed and internally consistent."
+    reviewerNode: "appraiser"
+    appraisers:
+      - id: "alignment"
+        personality: "Verify the petition faithfully implements the court's verdict decision. Check that each change is justified by the verdict reasoning."
+      - id: "completeness"
+        personality: "Check that all aspects of the verdict are addressed. Verify no law changes are missing or extraneous."
+      - id: "feasibility"
+        personality: "Assess whether the proposed law changes are well-formed and internally consistent."
 ---
 # --- Clerk Refine ---
 apiVersion: v1

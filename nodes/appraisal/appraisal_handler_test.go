@@ -29,20 +29,20 @@ func (m *mockFinding) Run(_ context.Context, _ []*flowv1.FeedbackItem) (*flow.Fi
 }
 
 const (
-	eventTypeAttestation = "appraise.attestation"
+	eventTypeAttestation = "appraisal.attestation"
 )
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-func defaultHandlerConfig() handlers.AppraiseConfig {
-	return handlers.AppraiseConfig{
+func defaultHandlerConfig() handlers.AppraisalConfig {
+	return handlers.AppraisalConfig{
 		InputArtefacts:   []string{"petition"},
 		ReviewArtefact:   "haiku",
 		GovernedArtefact: "haiku",
 		ReviewerNode:     "reviewer",
-		Appraisers: []handlers.AppraiserConfig{
+		Appraisers: []handlers.AppraiserPersonalityConfig{
 			{ID: "skeptic", Personality: "You are strict but fair."},
 		},
 	}
@@ -81,7 +81,7 @@ func reviewOutputJSON(items ...string) string {
 }
 
 // spyForHandler configures the spy for a handler test.
-func spyForHandler(t *testing.T, spy *appraiseSpy) *flow.Client {
+func spyForHandler(t *testing.T, spy *appraisalSpy) *flow.Client {
 	t.Helper()
 	// Override artefact contents for review-output retrieval.
 	spy.ArtefactContents["review-output"] = reviewOutputJSON()
@@ -92,8 +92,8 @@ func spyForHandler(t *testing.T, spy *appraiseSpy) *flow.Client {
 // ComputeUnits: 1 unit (bundle)
 // ComputeDispatchMatrix: 1 unit × 2 appraisers × 1 pass = 2 dispatches
 // Expect: 2 children created.
-func TestAppraiseHandler_BundleModeChildCount(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_BundleModeChildCount(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(2)
@@ -101,13 +101,13 @@ func TestAppraiseHandler_BundleModeChildCount(t *testing.T) {
 	client := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 		{ID: "auditor", Personality: "Detailed"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	if len(spy.CreatedChildren) != 2 {
@@ -119,8 +119,8 @@ func TestAppraiseHandler_BundleModeChildCount(t *testing.T) {
 // ComputeUnits: 3 units (one per law)
 // ComputeDispatchMatrix: 3 units × 2 appraisers × 1 pass = 6 dispatches
 // Expect: 6 children created.
-func TestAppraiseHandler_LawByLawChildCount(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_LawByLawChildCount(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
 		{Id: "L001", Group: "security", Goal: "No secrets in code", Tier: 3},
 		{Id: "L002", Group: "security", Goal: "No hardcoded passwords", Tier: 3},
@@ -132,15 +132,15 @@ func TestAppraiseHandler_LawByLawChildCount(t *testing.T) {
 	client := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 		{ID: "auditor", Personality: "Detailed"},
 	}
 	// No "default" group in LawGroups — uses fallback defaults (bundle, 1 pass)
 	// But all laws are in "security" group, so no dispatches for "default".
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	if len(spy.CreatedChildren) != 6 {
@@ -152,8 +152,8 @@ func TestAppraiseHandler_LawByLawChildCount(t *testing.T) {
 // ComputeUnits: 1 unit per group = 2 units
 // ComputeDispatchMatrix: 2 units × 1 appraiser × 1 pass = 2 dispatches
 // Expect: 2 children created.
-func TestAppraiseHandler_MultiGroupChildCount(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_MultiGroupChildCount(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
 		{Id: "L001", Group: "security", Goal: "Be secure", Tier: 1},
 		{Id: "L002", Group: "style", Goal: "Be clean", Tier: 1},
@@ -166,12 +166,12 @@ func TestAppraiseHandler_MultiGroupChildCount(t *testing.T) {
 
 	cfg := defaultHandlerConfig()
 	// Only 1 appraiser.
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	if len(spy.CreatedChildren) != 2 {
@@ -180,8 +180,8 @@ func TestAppraiseHandler_MultiGroupChildCount(t *testing.T) {
 }
 
 // All children complete → stamps applied, coverage + attestation events emitted.
-func TestAppraiseHandler_AllCompleteStampsAndEvents(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_AllCompleteStampsAndEvents(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(1) // 1 appraiser × 1 pass × 1 unit
@@ -189,12 +189,12 @@ func TestAppraiseHandler_AllCompleteStampsAndEvents(t *testing.T) {
 	client := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	// Should have at least one appraise stamp.
@@ -212,7 +212,7 @@ func TestAppraiseHandler_AllCompleteStampsAndEvents(t *testing.T) {
 	for _, e := range spy.PublishedEvents {
 		eventTypes[e.GetEventType()] = true
 	}
-	if !eventTypes["appraise.coverage"] {
+	if !eventTypes["appraisal.coverage"] {
 		t.Error("expected appraise.coverage event")
 	}
 	if !eventTypes[eventTypeAttestation] {
@@ -238,8 +238,8 @@ func TestAppraiseHandler_AllCompleteStampsAndEvents(t *testing.T) {
 }
 
 // All children fail → no stamps, attestation status "incomplete".
-func TestAppraiseHandler_AllChildrenFail(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_AllChildrenFail(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesFailed(1)
@@ -247,12 +247,12 @@ func TestAppraiseHandler_AllChildrenFail(t *testing.T) {
 	client := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	// No stamps should be applied when all children fail.
@@ -280,8 +280,8 @@ func TestAppraiseHandler_AllChildrenFail(t *testing.T) {
 
 // Partial failure: one group completes, another fails.
 // Only the successful group gets stamped.
-func TestAppraiseHandler_PartialFailure(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_PartialFailure(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
 		{Id: "L001", Group: "security", Goal: "Be secure", Tier: 1},
 		{Id: "L002", Group: "style", Goal: "Be clean", Tier: 1},
@@ -299,12 +299,12 @@ func TestAppraiseHandler_PartialFailure(t *testing.T) {
 	client := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	// Only "style" group should have a stamp (security failed).
@@ -327,8 +327,8 @@ func TestAppraiseHandler_PartialFailure(t *testing.T) {
 }
 
 // Empty appraiser list → zero children, clean completion.
-func TestAppraiseHandler_EmptyAppraisers(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_EmptyAppraisers(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	client := newSpyClientWithEventBus(t, spy)
@@ -336,8 +336,8 @@ func TestAppraiseHandler_EmptyAppraisers(t *testing.T) {
 	cfg := defaultHandlerConfig()
 	cfg.Appraisers = nil // no appraisers
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	if len(spy.CreatedChildren) != 0 {
@@ -350,8 +350,8 @@ func TestAppraiseHandler_EmptyAppraisers(t *testing.T) {
 }
 
 // PublishAuditEvent failure is tolerated: handler succeeds and stamps still apply.
-func TestAppraise_PublishAuditEventFailure(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisal_PublishAuditEventFailure(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.PublishFail = true
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
@@ -360,12 +360,12 @@ func TestAppraise_PublishAuditEventFailure(t *testing.T) {
 	client := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	// Stamps must still be applied despite Publish failure.
@@ -375,8 +375,8 @@ func TestAppraise_PublishAuditEventFailure(t *testing.T) {
 }
 
 // Coverage event payload correctness.
-func TestAppraiseHandler_CoveragePayload(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_CoveragePayload(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(1)
@@ -385,18 +385,18 @@ func TestAppraiseHandler_CoveragePayload(t *testing.T) {
 	spy.ArtefactContents["review-output"] = reviewOutputJSON("issue 1", "issue 2")
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	// Find coverage event.
 	var coveragePayload map[string]any
 	for _, e := range spy.PublishedEvents {
-		if e.GetEventType() == "appraise.coverage" {
+		if e.GetEventType() == "appraisal.coverage" {
 			if err := json.Unmarshal(e.GetPayload(), &coveragePayload); err != nil {
 				t.Fatalf("unmarshal coverage payload: %v", err)
 			}
@@ -427,8 +427,8 @@ func TestAppraiseHandler_CoveragePayload(t *testing.T) {
 }
 
 // Attestation event with violations.
-func TestAppraiseHandler_AttestationWithViolations(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_AttestationWithViolations(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(1)
@@ -436,12 +436,12 @@ func TestAppraiseHandler_AttestationWithViolations(t *testing.T) {
 	spy.ArtefactContents["review-output"] = reviewOutputJSON("violation 1", "violation 2", "violation 3")
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	var attestPayload map[string]any
@@ -471,8 +471,8 @@ func TestAppraiseHandler_AttestationWithViolations(t *testing.T) {
 }
 
 // Law-by-law partial failure: only successful laws get per-law stamps.
-func TestAppraiseHandler_LawByLawPartialFailure(t *testing.T) {
-	spy := newAppraiseSpy()
+func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
+	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
 		{Id: "L001", Group: "security", Goal: "No secrets", Tier: 3},
 		{Id: "L002", Group: "security", Goal: "No passwords", Tier: 3},
@@ -488,12 +488,12 @@ func TestAppraiseHandler_LawByLawPartialFailure(t *testing.T) {
 	spy.ArtefactContents["review-output"] = reviewOutputJSON()
 
 	cfg := defaultHandlerConfig()
-	cfg.Appraisers = []handlers.AppraiserConfig{
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraise(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
-		t.Fatalf("HandleAppraise() error: %v", err)
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
 	// L001 failed → no stamp for it. L002 completed → stamp for it.

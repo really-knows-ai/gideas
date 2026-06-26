@@ -22,7 +22,7 @@ var _ flow.FindingContract = (*FindingAgent)(nil)
 // governance findings.
 type FindingAgent struct {
 	agent *flow.Agent
-	cfg   *appraiseConfig
+	cfg   *appraisalConfig
 }
 
 // findingsOutput is the Go representation of the findingSchema-validated JSON.
@@ -117,7 +117,7 @@ type findingTemplateQueryData struct {
 //
 // If cfg.FindingSystemPrompt or cfg.FindingQueryTemplate are non-empty,
 // they override the baked-in defaults.
-func NewFindingAgent(client *flow.Client, cfg *appraiseConfig) (*FindingAgent, error) {
+func NewFindingAgent(client *flow.Client, cfg *appraisalConfig) (*FindingAgent, error) {
 	sysTmplStr := findingSystemPromptTemplate
 	if cfg.FindingSystemPrompt != "" {
 		sysTmplStr = cfg.FindingSystemPrompt

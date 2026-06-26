@@ -11,12 +11,12 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Tests — ReviewAgent: Schema Validation via Run()
+// Tests — AppraiserAgent: Schema Validation via Run()
 // ---------------------------------------------------------------------------
 
-func TestReviewAgent_ValidOutput(t *testing.T) {
+func TestAppraiserAgent_ValidOutput(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": [{"message": "issue found", "cited_laws": []}]}`),
@@ -24,7 +24,7 @@ func TestReviewAgent_ValidOutput(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -38,9 +38,9 @@ func TestReviewAgent_ValidOutput(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_EmptyFeedback(t *testing.T) {
+func TestAppraiserAgent_EmptyFeedback(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -48,7 +48,7 @@ func TestReviewAgent_EmptyFeedback(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -59,9 +59,9 @@ func TestReviewAgent_EmptyFeedback(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_RejectsEmptyMessage(t *testing.T) {
+func TestAppraiserAgent_RejectsEmptyMessage(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": [{"message": "", "cited_laws": []}]}`),
@@ -69,7 +69,7 @@ func TestReviewAgent_RejectsEmptyMessage(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err == nil {
@@ -77,9 +77,9 @@ func TestReviewAgent_RejectsEmptyMessage(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_RejectsAdditionalProperties(t *testing.T) {
+func TestAppraiserAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": [], "extra": "bad"}`),
@@ -87,7 +87,7 @@ func TestReviewAgent_RejectsAdditionalProperties(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err == nil {
@@ -96,12 +96,12 @@ func TestReviewAgent_RejectsAdditionalProperties(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — ReviewAgent: Template Rendering
+// Tests — AppraiserAgent: Template Rendering
 // ---------------------------------------------------------------------------
 
-func TestReviewAgent_PromptContainsLawsAndHistory(t *testing.T) {
+func TestAppraiserAgent_PromptContainsLawsAndHistory(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -109,7 +109,7 @@ func TestReviewAgent_PromptContainsLawsAndHistory(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	laws := []flow.ReviewLaw{
 		{ID: "law-1", Tier: 2, Goal: "Must evoke a season"},
@@ -142,9 +142,9 @@ func TestReviewAgent_PromptContainsLawsAndHistory(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_PromptOmitsEmptySections(t *testing.T) {
+func TestAppraiserAgent_PromptOmitsEmptySections(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -152,7 +152,7 @@ func TestReviewAgent_PromptOmitsEmptySections(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -168,9 +168,9 @@ func TestReviewAgent_PromptOmitsEmptySections(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_DivisionSuffixInSystemPrompt(t *testing.T) {
+func TestAppraiserAgent_DivisionSuffixInSystemPrompt(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -179,7 +179,7 @@ func TestReviewAgent_DivisionSuffixInSystemPrompt(t *testing.T) {
 	}
 
 	suffix := "Pay special attention to information disclosure and injection risks."
-	agent := newTestReviewAgent(t, mp, spy, cfg, suffix, nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, suffix, nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -192,9 +192,9 @@ func TestReviewAgent_DivisionSuffixInSystemPrompt(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
+func TestAppraiserAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -202,7 +202,7 @@ func TestReviewAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -216,9 +216,9 @@ func TestReviewAgent_EmptyDivisionSuffixOmitted(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_SystemPromptContainsConfig(t *testing.T) {
+func TestAppraiserAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -226,7 +226,7 @@ func TestReviewAgent_SystemPromptContainsConfig(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -243,9 +243,9 @@ func TestReviewAgent_SystemPromptContainsConfig(t *testing.T) {
 // Tests — Agent Integration
 // ---------------------------------------------------------------------------
 
-func TestReviewAgent_HappyPath(t *testing.T) {
+func TestAppraiserAgent_HappyPath(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 
 	mp := &mockModel{
 		output: &flow.InferOutput{
@@ -257,9 +257,9 @@ func TestReviewAgent_HappyPath(t *testing.T) {
 	client := newSpyClient(t, spy)
 
 	// Create agent with division suffix and override model.
-	agent, err := NewReviewAgent(client, cfg, "Focus on security risks.", nil)
+	agent, err := NewAppraiserAgent(client, cfg, "Focus on security risks.", nil)
 	if err != nil {
-		t.Fatalf("NewReviewAgent() failed: %v", err)
+		t.Fatalf("NewAppraiserAgent() failed: %v", err)
 	}
 	flow.OverrideModelForTest(agent.agent, mp)
 
@@ -294,9 +294,9 @@ func TestReviewAgent_HappyPath(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_EmptyLaws(t *testing.T) {
+func TestAppraiserAgent_EmptyLaws(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -304,7 +304,7 @@ func TestReviewAgent_EmptyLaws(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	// Empty laws — reviewer should still work.
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
@@ -316,9 +316,9 @@ func TestReviewAgent_EmptyLaws(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_ReviewOutputFormat(t *testing.T) {
+func TestAppraiserAgent_ReviewOutputFormat(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": [
@@ -329,7 +329,7 @@ func TestReviewAgent_ReviewOutputFormat(t *testing.T) {
 		},
 	}
 
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content",
 		[]flow.ReviewLaw{{ID: "law-1", Tier: 2, Goal: "test"}},
@@ -439,9 +439,9 @@ func TestHistoryData_Deserialization(t *testing.T) {
 // Tests — ConfigMap prompt overrides
 // ---------------------------------------------------------------------------
 
-func TestReviewAgent_SystemPromptOverride(t *testing.T) {
+func TestAppraiserAgent_SystemPromptOverride(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -455,8 +455,8 @@ func TestReviewAgent_SystemPromptOverride(t *testing.T) {
 {{.DivisionSuffix}}
 {{- end}}`
 
-	opts := &ReviewAgentOpts{SystemPrompt: customSystem}
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", opts)
+	opts := &AppraiserAgentOpts{SystemPrompt: customSystem}
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", opts)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -472,9 +472,9 @@ func TestReviewAgent_SystemPromptOverride(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_QueryTemplateOverride(t *testing.T) {
+func TestAppraiserAgent_QueryTemplateOverride(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -484,8 +484,8 @@ func TestReviewAgent_QueryTemplateOverride(t *testing.T) {
 
 	customQuery := `CUSTOM QUERY: {{.InputContent}} | {{.ReviewContent}}`
 
-	opts := &ReviewAgentOpts{QueryTemplate: customQuery}
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", opts)
+	opts := &AppraiserAgentOpts{QueryTemplate: customQuery}
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", opts)
 
 	_, err := agent.Run(context.Background(), "my petition", "my content", nil, nil)
 	if err != nil {
@@ -504,9 +504,9 @@ func TestReviewAgent_QueryTemplateOverride(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_NilOptsUsesDefaults(t *testing.T) {
+func TestAppraiserAgent_NilOptsUsesDefaults(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -515,7 +515,7 @@ func TestReviewAgent_NilOptsUsesDefaults(t *testing.T) {
 	}
 
 	// nil opts — should use baked-in defaults.
-	agent := newTestReviewAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -527,9 +527,9 @@ func TestReviewAgent_NilOptsUsesDefaults(t *testing.T) {
 	}
 }
 
-func TestReviewAgent_SystemPromptOverrideWithDivisionSuffix(t *testing.T) {
+func TestAppraiserAgent_SystemPromptOverrideWithDivisionSuffix(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newReviewerSpy()
+	spy := newAppraiserSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
@@ -544,8 +544,8 @@ Division: {{.DivisionSuffix}}
 {{- end}}`
 
 	suffix := "Focus on security."
-	opts := &ReviewAgentOpts{SystemPrompt: customSystem}
-	agent := newTestReviewAgent(t, mp, spy, cfg, suffix, opts)
+	opts := &AppraiserAgentOpts{SystemPrompt: customSystem}
+	agent := newTestAppraiserAgent(t, mp, spy, cfg, suffix, opts)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {

@@ -335,7 +335,7 @@ func TestFoundryFlow_NodeGroups_Contents(t *testing.T) {
 	ff := findFoundryFlow(t)
 
 	wantMainCycle := []string{
-		"forge", "sort", "quench", "appraise", "reviewer", "refine",
+		"forge", "sort", "quench", "appraisal", "appraiser", "refine",
 	}
 	wantJudiciary := []string{
 		"facilitator", "arbiter", "juror", "tribunal",
@@ -1224,10 +1224,10 @@ func TestClerkSort_FoundryNode_FourOutputs(t *testing.T) {
 	}
 
 	wantOutputs := map[string]string{
-		"appraise": "clerk-appraise",
-		"refine":   "clerk-refine",
-		"arbiter":  "clerk-facilitator",
-		"done":     "clerk-done-router",
+		"appraisal": "clerk-appraise",
+		"refine":    "clerk-refine",
+		"arbiter":   "clerk-facilitator",
+		"done":      "clerk-done-router",
 	}
 
 	foundOutputs := make(map[string]string)
@@ -1409,8 +1409,8 @@ func TestClerkSort_ConfigMap_NodeOrderNoQuench(t *testing.T) {
 
 	if v, ok := cfg["nodeOrder"]; !ok {
 		t.Error("clerk-sort config missing 'nodeOrder' field")
-	} else if v != "appraise" {
-		t.Errorf("clerk-sort config nodeOrder: want %q, got %v", "appraise", v)
+	} else if v != "appraisal" {
+		t.Errorf("clerk-sort config nodeOrder: want %q, got %v", "appraisal", v)
 	}
 }
 
