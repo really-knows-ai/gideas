@@ -24,11 +24,11 @@ type ReviewConfig struct {
 const (
 	ArtefactLaws         = "laws"
 	ArtefactHistory      = "history"
-	ArtefactDivision     = "group"
+	ArtefactGroup        = "group"
 	ArtefactReviewOutput = "review-output"
 )
 
-// GroupData is the JSON structure passed via the "division" artefact.
+// GroupData is the JSON structure passed via the "group" artefact.
 type GroupData struct {
 	Name         string `json:"name"`
 	PromptSuffix string `json:"promptSuffix"`
@@ -100,9 +100,9 @@ func HandleReview(
 	}
 
 	// Read and deserialize group data.
-	groupResp, err := client.GetArtefact(ctx, ArtefactDivision)
+	groupResp, err := client.GetArtefact(ctx, ArtefactGroup)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", ArtefactDivision, err)
+		return fmt.Errorf("reviewer: read %s: %w", ArtefactGroup, err)
 	}
 
 	var groupData GroupData

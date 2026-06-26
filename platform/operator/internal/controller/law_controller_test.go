@@ -97,13 +97,13 @@ var _ = Describe("Law Controller", func() {
 		})
 	})
 
-	Context("When reconciling a law with division", func() {
-		const divisionLawName = "test-law-division"
+	Context("When reconciling a law with group", func() {
+		const groupLawName = "test-law-group"
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
-			Name:      divisionLawName,
+			Name:      groupLawName,
 			Namespace: "default",
 		}
 
@@ -115,11 +115,11 @@ var _ = Describe("Law Controller", func() {
 			}
 		})
 
-		It("should produce a different version hash when division changes", func() {
-			By("Creating a law without division")
+		It("should produce a different version hash when group changes", func() {
+			By("Creating a law without group")
 			law := &flowv1.Law{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      divisionLawName,
+					Name:      groupLawName,
 					Namespace: "default",
 				},
 				Spec: flowv1.LawSpec{

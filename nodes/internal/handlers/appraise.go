@@ -267,7 +267,7 @@ func fanOutReview(
 				{ID: cfg.ReviewArtefact, GovernedArtefact: "review-data", Content: []byte(reviewContent)},
 				{ID: ArtefactLaws, GovernedArtefact: "review-data", Content: lawsJSON},
 				{ID: ArtefactHistory, GovernedArtefact: "review-data", Content: historyJSON},
-				{ID: ArtefactDivision, GovernedArtefact: "review-data", Content: groupJSON},
+				{ID: ArtefactGroup, GovernedArtefact: "review-data", Content: groupJSON},
 			},
 		}
 		tasks = append(tasks, task)

@@ -81,9 +81,9 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 
 	// Read the group artefact before constructing the agent so the
 	// group prompt suffix is baked into the system prompt.
-	groupResp, err := client.GetArtefact(ctx, handlers.ArtefactDivision)
+	groupResp, err := client.GetArtefact(ctx, handlers.ArtefactGroup)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", handlers.ArtefactDivision, err)
+		return fmt.Errorf("reviewer: read %s: %w", handlers.ArtefactGroup, err)
 	}
 
 	var groupData handlers.GroupData
