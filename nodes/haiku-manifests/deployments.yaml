@@ -631,24 +631,24 @@ spec:
           configMap:
             name: ttl-watcher-config
 ---
-# --- HITL Appraise ---
+# --- HITL Appraisal ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hitl-appraise
+  name: hitl-appraisal
   namespace: default
   labels:
-    app.kubernetes.io/name: hitl-appraise
+    app.kubernetes.io/name: hitl-appraisal
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: hitl-appraise
+      app.kubernetes.io/name: hitl-appraisal
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: hitl-appraise
-        flow.gideas.io/node-name: hitl-appraise
+        app.kubernetes.io/name: hitl-appraisal
+        flow.gideas.io/node-name: hitl-appraisal
     spec:
       containers:
         - name: node
@@ -668,7 +668,7 @@ spec:
             - containerPort: 50051
           env:
             - name: FLOW_NODE_ID
-              value: "hitl-appraise"
+              value: "hitl-appraisal"
             - name: FLOW_SIDECAR_PORT
               value: "50051"
             - name: OPERATOR_ADDRESS
@@ -678,7 +678,7 @@ spec:
       volumes:
         - name: node-config
           configMap:
-            name: hitl-appraise-config
+            name: hitl-appraisal-config
 ---
 # --- Arbiter HITL Resolve ---
 apiVersion: apps/v1
@@ -886,28 +886,28 @@ spec:
           configMap:
             name: clerk-sort-config
 ---
-# --- Clerk Appraise ---
+# --- Clerk Appraisal ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: clerk-appraise
+  name: clerk-appraisal
   namespace: default
   labels:
-    app.kubernetes.io/name: clerk-appraise
+    app.kubernetes.io/name: clerk-appraisal
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: clerk-appraise
+      app.kubernetes.io/name: clerk-appraisal
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: clerk-appraise
-        flow.gideas.io/node-name: clerk-appraise
+        app.kubernetes.io/name: clerk-appraisal
+        flow.gideas.io/node-name: clerk-appraisal
     spec:
       containers:
         - name: node
-          image: appraise:latest
+          image: appraisal:latest
           ports:
             - containerPort: 50053
           env:
@@ -925,7 +925,7 @@ spec:
             - containerPort: 50051
           env:
             - name: FLOW_NODE_ID
-              value: "clerk-appraise"
+              value: "clerk-appraisal"
             - name: FLOW_SIDECAR_PORT
               value: "50051"
             - name: OPERATOR_ADDRESS

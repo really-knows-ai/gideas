@@ -340,11 +340,11 @@ func TestFoundryFlow_NodeGroups_Contents(t *testing.T) {
 	wantJudiciary := []string{
 		"facilitator", "arbiter", "juror", "tribunal",
 		"friction-watcher", "ttl-watcher",
-		"hitl-appraise", "arbiter-hitl-resolve", "tribunal-hitl-resolve",
+		"hitl-appraisal", "arbiter-hitl-resolve", "tribunal-hitl-resolve",
 		"law-applicator",
 	}
 	wantClerkCycle := []string{
-		"clerk-forge", "clerk-sort", "clerk-appraise", "clerk-refine",
+		"clerk-forge", "clerk-sort", "clerk-appraisal", "clerk-refine",
 		"clerk-facilitator", "codification", "codify-smt",
 		"clerk-done-router", "hitl-gate",
 	}
@@ -1026,36 +1026,36 @@ func TestTTLWatcher_ConfigMap_Fields(t *testing.T) {
 
 func TestHITLAppraise_FoundryNode_OutputAndExit(t *testing.T) {
 	nodes := findFoundryNodes(t)
-	fn, ok := nodes["hitl-appraise"]
+	fn, ok := nodes["hitl-appraisal"]
 	if !ok {
-		t.Fatal("FoundryNode 'hitl-appraise' not found in flow.yaml")
+		t.Fatal("FoundryNode 'hitl-appraisal' not found in flow.yaml")
 	}
 
 	if fn.Spec.Exit != "clerk-exit" {
-		t.Errorf("hitl-appraise exit: want %q, got %q", "clerk-exit", fn.Spec.Exit)
+		t.Errorf("hitl-appraisal exit: want %q, got %q", "clerk-exit", fn.Spec.Exit)
 	}
 
 	for _, o := range fn.Spec.Outputs {
 		if o.Name == "approved" {
 			if o.Target != "hitl-gate" {
-				t.Errorf("hitl-appraise output 'approved': want target %q, got %q",
+				t.Errorf("hitl-appraisal output 'approved': want target %q, got %q",
 					"hitl-gate", o.Target)
 			}
 			return
 		}
 	}
-	t.Error("hitl-appraise FoundryNode missing output 'approved'")
+	t.Error("hitl-appraisal FoundryNode missing output 'approved'")
 }
 
 func TestHITLAppraise_FoundryNode_WriteFeedbackCapability(t *testing.T) {
 	nodes := findFoundryNodes(t)
-	fn, ok := nodes["hitl-appraise"]
+	fn, ok := nodes["hitl-appraisal"]
 	if !ok {
-		t.Fatal("FoundryNode 'hitl-appraise' not found in flow.yaml")
+		t.Fatal("FoundryNode 'hitl-appraisal' not found in flow.yaml")
 	}
 
 	if !slices.Contains(fn.Spec.Capabilities, "WRITE:feedback") {
-		t.Error("hitl-appraise FoundryNode missing capability 'WRITE:feedback'")
+		t.Error("hitl-appraisal FoundryNode missing capability 'WRITE:feedback'")
 	}
 }
 
@@ -1100,7 +1100,7 @@ func TestTribunalHITLResolve_FoundryNode_ResolutionOutput(t *testing.T) {
 func TestHITL_Deployments_UseHITLImage(t *testing.T) {
 	deps := findDeployments(t)
 
-	hitlNodes := []string{"hitl-appraise", "arbiter-hitl-resolve", "tribunal-hitl-resolve"}
+	hitlNodes := []string{"hitl-appraisal", "arbiter-hitl-resolve", "tribunal-hitl-resolve"}
 	for _, name := range hitlNodes {
 		d, ok := deps[name]
 		if !ok {
@@ -1121,23 +1121,23 @@ func TestHITL_Deployments_UseHITLImage(t *testing.T) {
 
 func TestHITLAppraise_ConfigMap_ChoiceLabels(t *testing.T) {
 	cms := findConfigMaps(t)
-	cm, ok := cms["hitl-appraise-config"]
+	cm, ok := cms["hitl-appraisal-config"]
 	if !ok {
-		t.Fatal("ConfigMap 'hitl-appraise-config' not found in configmaps.yaml")
+		t.Fatal("ConfigMap 'hitl-appraisal-config' not found in configmaps.yaml")
 	}
 
 	raw, ok := cm.Data["node-config.yaml"]
 	if !ok {
-		t.Fatal("hitl-appraise-config missing 'node-config.yaml' key")
+		t.Fatal("hitl-appraisal-config missing 'node-config.yaml' key")
 	}
 
 	var cfg map[string]any
 	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatalf("unmarshalling hitl-appraise config data: %v", err)
+		t.Fatalf("unmarshalling hitl-appraisal config data: %v", err)
 	}
 
 	if _, ok := cfg["choiceLabels"]; !ok {
-		t.Error("hitl-appraise config missing 'choiceLabels' field")
+		t.Error("hitl-appraisal config missing 'choiceLabels' field")
 	}
 }
 
@@ -1224,7 +1224,7 @@ func TestClerkSort_FoundryNode_FourOutputs(t *testing.T) {
 	}
 
 	wantOutputs := map[string]string{
-		"appraisal": "clerk-appraise",
+		"appraisal": "clerk-appraisal",
 		"refine":    "clerk-refine",
 		"arbiter":   "clerk-facilitator",
 		"done":      "clerk-done-router",
@@ -1253,25 +1253,25 @@ func TestClerkSort_FoundryNode_FourOutputs(t *testing.T) {
 
 func TestClerkAppraise_FoundryNode_DefaultOutputToClerkSort(t *testing.T) {
 	nodes := findFoundryNodes(t)
-	fn, ok := nodes["clerk-appraise"]
+	fn, ok := nodes["clerk-appraisal"]
 	if !ok {
-		t.Fatal("FoundryNode 'clerk-appraise' not found in flow.yaml")
+		t.Fatal("FoundryNode 'clerk-appraisal' not found in flow.yaml")
 	}
 
 	for _, o := range fn.Spec.Outputs {
 		if o.Name == outputNameDefault {
 			if o.Target != targetClerkSort {
-				t.Errorf("clerk-appraise output 'default': want target %q, got %q",
+				t.Errorf("clerk-appraisal output 'default': want target %q, got %q",
 					targetClerkSort, o.Target)
 			}
 			// Verify has CREATE:workitem/child
 			if !slices.Contains(fn.Spec.Capabilities, "CREATE:workitem/child") {
-				t.Error("clerk-appraise missing capability 'CREATE:workitem/child'")
+				t.Error("clerk-appraisal missing capability 'CREATE:workitem/child'")
 			}
 			return
 		}
 	}
-	t.Error("clerk-appraise FoundryNode missing output 'default'")
+	t.Error("clerk-appraisal FoundryNode missing output 'default'")
 }
 
 func TestClerkRefine_FoundryNode_DefaultOutputToCodification(t *testing.T) {
@@ -1416,9 +1416,9 @@ func TestClerkSort_ConfigMap_NodeOrderNoQuench(t *testing.T) {
 
 func TestClerkAppraise_Deployment_SidecarEnvVars(t *testing.T) {
 	deps := findDeployments(t)
-	d, ok := deps["clerk-appraise"]
+	d, ok := deps["clerk-appraisal"]
 	if !ok {
-		t.Fatal("Deployment with FLOW_NODE_ID='clerk-appraise' not found in deployments.yaml")
+		t.Fatal("Deployment with FLOW_NODE_ID='clerk-appraisal' not found in deployments.yaml")
 	}
 
 	for _, c := range d.Spec.Template.Spec.Containers {
@@ -1430,13 +1430,13 @@ func TestClerkAppraise_Deployment_SidecarEnvVars(t *testing.T) {
 			required := []string{envLibrarianAddress, "EVENT_BUS_ADDRESS", "FRICTION_LEDGER_ADDRESS"}
 			for _, name := range required {
 				if _, ok := envMap[name]; !ok {
-					t.Errorf("clerk-appraise sidecar missing %s env var", name)
+					t.Errorf("clerk-appraisal sidecar missing %s env var", name)
 				}
 			}
 			return
 		}
 	}
-	t.Error("clerk-appraise Deployment missing sidecar container")
+	t.Error("clerk-appraisal Deployment missing sidecar container")
 }
 
 func TestClerkRefine_ConfigMap_SystemPromptMentionsRevising(t *testing.T) {
@@ -1624,7 +1624,7 @@ func TestClerkDoneRouter_FoundryNode_TwoOutputs(t *testing.T) {
 
 	wantOutputs := map[string]string{
 		"law-applicator": "law-applicator",
-		"hitl-appraise":  "hitl-appraise",
+		"hitl-appraisal": "hitl-appraisal",
 	}
 
 	foundOutputs := make(map[string]string)

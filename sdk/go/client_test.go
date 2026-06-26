@@ -875,8 +875,8 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 	)
 	env := &testEnv{client: client, spy: spy}
 
-	err := env.client.PublishAuditEvent(context.Background(), "appraise.coverage", map[string]string{
-		"stage": "appraise",
+	err := env.client.PublishAuditEvent(context.Background(), "appraisal.coverage", map[string]string{
+		"stage": "appraisal",
 		"cycle": "test-cycle",
 	})
 	if err != nil {
@@ -890,8 +890,8 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 	if req.GetChannel() != "audit" {
 		t.Fatalf("expected channel=audit, got %q", req.GetChannel())
 	}
-	if req.GetEvent().GetEventType() != "appraise.coverage" {
-		t.Fatalf("expected event_type=appraise.coverage, got %q", req.GetEvent().GetEventType())
+	if req.GetEvent().GetEventType() != "appraisal.coverage" {
+		t.Fatalf("expected event_type=appraisal.coverage, got %q", req.GetEvent().GetEventType())
 	}
 	if len(req.GetEvent().GetEventId()) == 0 {
 		t.Fatal("expected non-empty event_id")
@@ -905,8 +905,8 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 	if err := json.Unmarshal(req.GetEvent().GetPayload(), &payload); err != nil {
 		t.Fatalf("expected valid JSON payload, got error: %v", err)
 	}
-	if payload["stage"] != "appraise" {
-		t.Fatalf("expected payload.stage=appraise, got %q", payload["stage"])
+	if payload["stage"] != "appraisal" {
+		t.Fatalf("expected payload.stage=appraisal, got %q", payload["stage"])
 	}
 }
 

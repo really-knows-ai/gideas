@@ -20,7 +20,7 @@ type AppraisalConfig struct {
 	InputArtefacts   []string                     // artefact IDs to read as input (e.g. ["petition"])
 	ReviewArtefact   string                       // artefact ID to review (e.g. "haiku")
 	GovernedArtefact string                       // GovernedArtefact CR name (e.g. "haiku")
-	ReviewerNode     string                       // target node for fan-out review (e.g. "reviewer")
+	ReviewerNode     string                       // target node for fan-out review (e.g. "appraiser")
 	Appraisers       []AppraiserPersonalityConfig // appraiser persona configs
 }
 
@@ -637,7 +637,7 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 		units = append(units, u)
 	}
 	payload := map[string]any{
-		"stage":    "appraise",
+		"stage":    "appraisal",
 		"cycle_id": cycleID,
 		"units":    units,
 	}
@@ -688,7 +688,7 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 	}
 
 	payload := map[string]any{
-		"stage":              "appraise",
+		"stage":              "appraisal",
 		"cycle_id":           cycleID,
 		"status":             status,
 		"violations_total":   totalViolations,

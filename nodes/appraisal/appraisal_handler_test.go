@@ -41,7 +41,7 @@ func defaultHandlerConfig() handlers.AppraisalConfig {
 		InputArtefacts:   []string{"petition"},
 		ReviewArtefact:   "haiku",
 		GovernedArtefact: "haiku",
-		ReviewerNode:     "reviewer",
+		ReviewerNode:     "appraiser",
 		Appraisers: []handlers.AppraiserPersonalityConfig{
 			{ID: "skeptic", Personality: "You are strict but fair."},
 		},

@@ -154,10 +154,10 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: hitl-appraise-config
+  name: hitl-appraisal-config
   namespace: default
   labels:
-    app.kubernetes.io/name: hitl-appraise
+    app.kubernetes.io/name: hitl-appraisal
 data:
   node-config.yaml: |
     choiceLabels:
@@ -336,8 +336,8 @@ data:
         output: "law-applicator"
       - name: "tier-3-5"
         when: 'true'
-        output: "hitl-appraise"
-    default: "hitl-appraise"
+        output: "hitl-appraisal"
+    default: "hitl-appraisal"
 ---
 # --- HITL Gate ---
 apiVersion: v1

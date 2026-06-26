@@ -98,7 +98,7 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 			},
 			Outputs: []*flowv1.FlowOutput{
 				{Name: "quench", Target: "quench"},
-				{Name: "appraise", Target: "appraise"},
+				{Name: "appraisal", Target: "appraisal"},
 				{Name: "refine", Target: "refine"},
 				{Name: "arbiter", Target: "arbiter"},
 			},
@@ -115,8 +115,8 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 				Name:         "quench",
 				Capabilities: []string{"STAMP:artefact/haiku/linter"},
 			},
-			"appraise": {
-				Name:         "appraise",
+			"appraisal": {
+				Name:         "appraisal",
 				Capabilities: []string{"STAMP:artefact/haiku/review"},
 			},
 			"refine": {

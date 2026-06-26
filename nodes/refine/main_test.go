@@ -161,7 +161,7 @@ func TestTriageAgent_PromptContainsContext(t *testing.T) {
 		Message:    "syllable count is wrong",
 		CanWontFix: true, // full prompt includes context
 		History: []*flowv1.FeedbackEvent{
-			{Actor: "appraise", Action: "add", Message: "raised syllable issue"},
+			{Actor: "appraisal", Action: "add", Message: "raised syllable issue"},
 		},
 	}
 
@@ -205,9 +205,9 @@ func TestTriageAgent_PromptContainsHistory(t *testing.T) {
 		Message:    "test issue",
 		CanWontFix: true, // full prompt includes history
 		History: []*flowv1.FeedbackEvent{
-			{Actor: "appraise", Action: "add", Message: "first observation"},
+			{Actor: "appraisal", Action: "add", Message: "first observation"},
 			{Actor: "refine", Action: "resolve", Message: "attempted fix"},
-			{Actor: "appraise", Action: "reject", Message: "fix was insufficient"},
+			{Actor: "appraisal", Action: "reject", Message: "fix was insufficient"},
 		},
 	}
 

@@ -205,7 +205,7 @@ spec:
         - tribunal
         - friction-watcher
         - ttl-watcher
-        - hitl-appraise
+        - hitl-appraisal
         - arbiter-hitl-resolve
         - tribunal-hitl-resolve
         - law-applicator
@@ -213,7 +213,7 @@ spec:
       nodes:
         - clerk-forge
         - clerk-sort
-        - clerk-appraise
+        - clerk-appraisal
         - clerk-refine
         - clerk-facilitator
         - codification
@@ -468,7 +468,7 @@ spec:
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
-  name: hitl-appraise
+  name: hitl-appraisal
   namespace: default
   labels:
     flow.gideas.io/flow-name: haiku-flow
@@ -547,7 +547,7 @@ spec:
   image: sort:latest
   outputs:
     - name: "appraisal"
-      target: "clerk-appraise"
+      target: "clerk-appraisal"
     - name: "refine"
       target: "clerk-refine"
     - name: "arbiter"
@@ -563,12 +563,12 @@ spec:
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
-  name: clerk-appraise
+  name: clerk-appraisal
   namespace: default
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: appraise:latest
+  image: appraisal:latest
   outputs:
     - name: "default"
       target: "clerk-sort"
@@ -673,8 +673,8 @@ spec:
   outputs:
     - name: "law-applicator"
       target: "law-applicator"
-    - name: "hitl-appraise"
-      target: "hitl-appraise"
+    - name: "hitl-appraisal"
+      target: "hitl-appraisal"
   capabilities:
     - "READ:artefact/petition"
 ---
