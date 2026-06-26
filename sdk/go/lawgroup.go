@@ -2,6 +2,7 @@ package flow
 
 import (
 	"fmt"
+	"sort"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 )
@@ -87,7 +88,9 @@ func ComputeUnits(
 	groups map[string]*LawGroup,
 ) map[string][]Unit {
 	out := make(map[string][]Unit, len(lawsByGroup))
-	for groupName, laws := range lawsByGroup {
+	groupNames := sortedGroupNames(lawsByGroup)
+	for _, groupName := range groupNames {
+		laws := lawsByGroup[groupName]
 		cfg := getConfig(groups, groupName)
 		var units []Unit
 		switch cfg.Mode {
@@ -132,7 +135,9 @@ func ComputeDispatchMatrix(
 		return nil
 	}
 	var entries []DispatchEntry
-	for groupName, units := range unitsByGroup {
+	groupOrder := sortedGroupNames(unitsByGroup)
+	for _, groupName := range groupOrder {
+		units := unitsByGroup[groupName]
 		cfg := getConfig(groups, groupName)
 		for _, unit := range units {
 			for _, appraiser := range appraiserIDs {
@@ -160,4 +165,14 @@ func BuildDispatchMatrix(
 	lawsByGroup := PartitionLawsByGroup(laws)
 	unitsByGroup := ComputeUnits(lawsByGroup, groups)
 	return ComputeDispatchMatrix(unitsByGroup, appraiserIDs, groups)
+}
+
+// sortedGroupNames returns the sorted keys of m for deterministic map iteration.
+func sortedGroupNames[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
