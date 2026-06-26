@@ -19,8 +19,9 @@ const testEmbeddingDims = 4
 
 // Test constants reused across LawGroup tests.
 const (
-	testBundleMode   = "bundle"
-	testLawByLawMode = "law-by-law"
+	testBundleMode       = "bundle"
+	testLawByLawMode     = "law-by-law"
+	testDivisionSecurity = "security"
 )
 
 var idCounter int
@@ -947,7 +948,7 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 
 	// Filter by security.
 	resp, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{
-		Filter: &flowv1.LawFilter{Division: "security"},
+		Filter: &flowv1.LawFilter{Division: testDivisionSecurity},
 	})
 	if err != nil {
 		t.Fatalf("QueryLaws division=security: %v", err)
@@ -955,8 +956,8 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 	if len(resp.GetLaws()) != 1 {
 		t.Fatalf("expected 1 security law, got %d", len(resp.GetLaws()))
 	}
-	if resp.GetLaws()[0].GetDivision() != "security" {
-		t.Fatalf("expected division=security, got %q", resp.GetLaws()[0].GetDivision())
+	if resp.GetLaws()[0].GetDivision() != testDivisionSecurity {
+		t.Fatalf("expected division=%s, got %q", testDivisionSecurity, resp.GetLaws()[0].GetDivision())
 	}
 
 	// No division filter returns all.
@@ -1566,8 +1567,8 @@ func TestGetLawGroup_StoredGroup(t *testing.T) {
 	if g.GetName() != "security" {
 		t.Fatalf("expected name %q, got %q", "security", g.GetName())
 	}
-	if g.GetMode() != "law-by-law" {
-		t.Fatalf("expected mode %q, got %q", "law-by-law", g.GetMode())
+	if g.GetMode() != testLawByLawMode {
+		t.Fatalf("expected mode %q, got %q", testLawByLawMode, g.GetMode())
 	}
 	if g.GetPasses() != 3 {
 		t.Fatalf("expected passes 3, got %d", g.GetPasses())
@@ -1586,8 +1587,8 @@ func TestGetLawGroup_UnknownGroupReturnsDefault(t *testing.T) {
 	if g.GetName() != "nonexistent" {
 		t.Fatalf("expected name %q, got %q", "nonexistent", g.GetName())
 	}
-	if g.GetMode() != "bundle" {
-		t.Fatalf("expected default mode %q, got %q", "bundle", g.GetMode())
+	if g.GetMode() != testBundleMode {
+		t.Fatalf("expected default mode %q, got %q", testBundleMode, g.GetMode())
 	}
 	if g.GetPasses() != 1 {
 		t.Fatalf("expected default passes 1, got %d", g.GetPasses())
@@ -1606,8 +1607,8 @@ func TestGetLawGroup_EmptyName(t *testing.T) {
 	if g.GetName() != "" {
 		t.Fatalf("expected empty name, got %q", g.GetName())
 	}
-	if g.GetMode() != "bundle" {
-		t.Fatalf("expected default mode %q, got %q", "bundle", g.GetMode())
+	if g.GetMode() != testBundleMode {
+		t.Fatalf("expected default mode %q, got %q", testBundleMode, g.GetMode())
 	}
 	if g.GetPasses() != 1 {
 		t.Fatalf("expected default passes 1, got %d", g.GetPasses())

@@ -7,6 +7,7 @@ import (
 )
 
 const testDivisionSecurity = "security"
+const testLawSecID = "law-sec"
 
 // testEmbeddingDims is a small dimension used for tests so we don't need
 // to create 2048-dimensional vectors.
@@ -539,13 +540,13 @@ func TestQueryLaws_GroupFilter(t *testing.T) {
 	ctx := context.Background()
 
 	// A law in the "security" group.
-	if _, err := s.CreateLaw(ctx, "law-sec", Law{
+	if _, err := s.CreateLaw(ctx, testLawSecID, Law{
 		Goal:            "Security rule",
 		Tier:            1,
 		Division:        "security",
 		Representations: []Representation{{Type: "text/plain", Content: "s"}},
 	}); err != nil {
-		t.Fatalf("CreateLaw law-sec: %v", err)
+		t.Fatalf("CreateLaw %s: %v", testLawSecID, err)
 	}
 	// A law in the "default" group.
 	if _, err := s.CreateLaw(ctx, "law-def", Law{
@@ -559,7 +560,7 @@ func TestQueryLaws_GroupFilter(t *testing.T) {
 	// At this point, both laws have empty law_group ('') because the
 	// CreateLaw SQL does not set law_group. We need to set it manually
 	// for this test.
-	_, err := s.db.ExecContext(ctx, `UPDATE laws SET law_group = 'security' WHERE id = 'law-sec'`)
+	_, err := s.db.ExecContext(ctx, `UPDATE laws SET law_group = 'security' WHERE id = '`+testLawSecID+`'`)
 	if err != nil {
 		t.Fatalf("set law_group security: %v", err)
 	}
@@ -573,8 +574,8 @@ func TestQueryLaws_GroupFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryLaws group=security: %v", err)
 	}
-	if len(laws) != 1 || laws[0].ID != "law-sec" {
-		t.Fatalf("expected [law-sec], got %v", lawIDs(laws))
+	if len(laws) != 1 || laws[0].ID != testLawSecID {
+		t.Fatalf("expected [%s], got %v", testLawSecID, lawIDs(laws))
 	}
 
 	// Filter by default group.
