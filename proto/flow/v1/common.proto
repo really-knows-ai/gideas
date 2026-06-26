@@ -211,6 +211,18 @@ message ArtefactState {
   string current_version_hash = 4;
 }
 
+// LawGroup defines the evaluation contract for a named group of laws.
+message LawGroup {
+  // Group name (matches metadata.name of a LawGroup CRD).
+  string name = 1;
+
+  // Evaluation mode: "bundle" (one unit per group) or "law-by-law" (one unit per law).
+  string mode = 2;
+
+  // Number of evaluation passes per unit per appraiser. Must be >= 1.
+  int32 passes = 3;
+}
+
 // Version history entry for an artefact.
 message VersionEntry {
   string version_hash = 1;
