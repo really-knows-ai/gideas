@@ -188,13 +188,14 @@ func defaultCost() *flow.CostMetadata {
 
 // newTestAppraiserAgent creates an AppraiserAgent with the mock model injected.
 // opts may be nil to use baked-in defaults.
+// personality is the optional appraiser personality string for the system prompt.
 func newTestAppraiserAgent(
 	t *testing.T, mm *mockModel, spy *appraiserSpy,
-	cfg *appraiserNodeConfig, personalitySuffix string, opts *AppraiserAgentOpts,
+	cfg *appraiserNodeConfig, personality string, opts *AppraiserAgentOpts,
 ) *AppraiserAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
-	agent, err := NewAppraiserAgent(client, cfg, personalitySuffix, opts)
+	agent, err := NewAppraiserAgent(client, cfg, personality, opts)
 	if err != nil {
 		t.Fatalf("NewAppraiserAgent() failed: %v", err)
 	}
