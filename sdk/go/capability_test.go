@@ -86,3 +86,54 @@ func TestParseStampCapabilities_NoMatches(t *testing.T) {
 		t.Fatalf("expected nil when no stamps, got %v", stamps)
 	}
 }
+
+func TestMatchCapability(t *testing.T) {
+	tests := []struct {
+		name     string
+		pattern  string
+		required string
+		want     bool
+	}{
+		// Exact match (no wildcard).
+		{"exact match", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
+		{"exact mismatch", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/approval", false},
+
+		// Single * in artefact-kind position.
+		{"wildcard kind match", "STAMP:artefact/*/appraise-security", "STAMP:artefact/haiku/appraise-security", true},
+		{"wildcard artefact kind other", "STAMP:artefact/*/appraise-security", "STAMP:artefact/code/appraise-security", true},
+
+		// appraise-* prefix match in stamp-name position.
+		{"prefix wildcard stamp", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
+		{"prefix wildcard long", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security-L001", true},
+		{"prefix wildcard stamp no match", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/approval", false},
+
+		// * does NOT match across /.
+		{"wildcard no cross slash", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security", false},
+		{"wildcard no cross slash 2", "STAMP:artefact/*/appraise-*", "STAMP:artefact/code/nested/appraise-review", false},
+
+		// Multiple wildcards in different segments.
+		{"two wildcards match", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
+		{"two wildcards other", "STAMP:artefact/*/appraise-*", "STAMP:artefact/doc/appraise-linter", true},
+		{"two wildcards no match", "STAMP:artefact/*/appraise-*", "STAMP:artefact/doc/review", false},
+
+		// Edge cases.
+		{"empty pattern empty required", "", "", true},
+		{"empty pattern non-empty", "", "STAMP:artefact/haiku/review", false},
+		{"star only", "*", "anything/at/all", false}, // bare * does not match across / boundaries
+		{"star only exact", "*", "*", true},
+
+		// Non-STAMP capabilities.
+		{"read flow exact", "READ:flow", "READ:flow", true},
+		{"read flow mismatch", "READ:flow", "WRITE:flow", false},
+		{"write artefact wildcard", "WRITE:artefact/*", "WRITE:artefact/haiku", true},
+		{"write artefact wildcard no cross", "WRITE:artefact/*", "WRITE:artefact/haiku/extra", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MatchCapability(tt.pattern, tt.required)
+			if got != tt.want {
+				t.Errorf("MatchCapability(%q, %q) = %v, want %v", tt.pattern, tt.required, got, tt.want)
+			}
+		})
+	}
+}
