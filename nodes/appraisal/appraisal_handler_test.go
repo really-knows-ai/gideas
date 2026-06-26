@@ -407,8 +407,8 @@ func TestAppraisalHandler_CoveragePayload(t *testing.T) {
 		t.Fatal("coverage payload not found")
 	}
 
-	if stage, ok := coveragePayload["stage"]; !ok || stage != "appraise" {
-		t.Fatalf("expected stage 'appraise', got %v", stage)
+	if stage, ok := coveragePayload["stage"]; !ok || stage != "appraisal" {
+		t.Fatalf("expected stage 'appraisal', got %v", stage)
 	}
 	units, ok := coveragePayload["units"].([]any)
 	if !ok {
