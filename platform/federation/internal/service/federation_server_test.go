@@ -784,10 +784,10 @@ func TestSubmitPublication_AuthorisedPublisher_Accepted(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-publisher",
 	})
@@ -821,10 +821,10 @@ func TestSubmitPublication_NoPublisherRole_Rejected(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: testFlowAlpha,
 	})
@@ -862,10 +862,10 @@ func TestSubmitPublication_WrongScope_Rejected(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-002",
-			Goal:     "Harden security posture",
-			Division: "security",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-002",
+			Goal:  "Harden security posture",
+			Group: "security",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-publisher",
 	})
@@ -887,10 +887,10 @@ func TestSubmitPublication_NonMember_PermissionDenied(t *testing.T) {
 
 	_, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Some law",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Some law",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-unknown",
 	})
@@ -925,10 +925,10 @@ func TestSubmitPublication_StateLevelPublisher_MustBeInState(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-stateless",
 	})
@@ -966,10 +966,10 @@ func TestSubmitPublication_FederationLevelPublisher_Accepted(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-003",
-			Goal:     "Harden security posture",
-			Division: "security",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-003",
+			Goal:  "Harden security posture",
+			Group: "security",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-fed-pub",
 	})
@@ -987,10 +987,10 @@ func TestSubmitPublication_EmptySourceFlowIdentity_InvalidArgument(t *testing.T)
 
 	_, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Some law",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Some law",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "",
 	})
@@ -1344,10 +1344,10 @@ func TestSubmitPublication_AuthorityPass_QueriesPublisherLibrarians(t *testing.T
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1440,10 +1440,10 @@ func TestSubmitPublication_StateLevelPublication_QueriesOnlySameStateLibrarians(
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1513,10 +1513,10 @@ func TestSubmitPublication_FederationLevelPublication_QueriesAllPublisherLibrari
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Harden security posture",
-			Division: "security",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Harden security posture",
+			Group: "security",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1604,10 +1604,10 @@ func TestSubmitPublication_ResultsConsolidatedFromMultipleLibrarians(t *testing.
 	// performed and results consolidated.
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-new-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-new-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1672,10 +1672,10 @@ func TestSubmitPublication_LibrarianConnectionError_LoggedAndSkipped(t *testing.
 	// Should succeed despite B being unreachable.
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1723,10 +1723,10 @@ func TestSubmitPublication_SearchSimilarLawsError_LoggedAndSkipped(t *testing.T)
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1767,10 +1767,10 @@ func TestSubmitPublication_EmptySearchResults_NoConflicts(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1860,10 +1860,10 @@ func TestSubmitPublication_NoSimilarLaws_AnalyserNotCalled_Accepted(t *testing.T
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1916,10 +1916,10 @@ func TestSubmitPublication_SimilarLaws_NoRealConflicts_Accepted(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-new-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-new-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -1984,10 +1984,10 @@ func TestSubmitPublication_SimilarLaws_RealConflicts_Rejected(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-new-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-new-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -2054,10 +2054,10 @@ func TestSubmitPublication_ConflictRejection_IncludesLawIDsAndRemediation(t *tes
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-new-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-new-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -2198,10 +2198,10 @@ func TestSubmitPublication_AnalyserError_FailSafeReject(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-new-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-new-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -2262,10 +2262,10 @@ func TestSubmitPublication_NoConflicts_AcceptedResponseTrue(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       testLawID,
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    testLawID,
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -2310,10 +2310,10 @@ func TestSubmitPublication_NoConflicts_DispatchesPublishedLawEvent(t *testing.T)
 	srv := newTestServerFull(t, dialer, analyser, dispatcher, publisher)
 
 	submittedLaw := &flowv1.Law{
-		Id:       testLawID,
-		Goal:     "Ensure quality education",
-		Division: "education",
-		Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		Id:    testLawID,
+		Goal:  "Ensure quality education",
+		Group: "education",
+		Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 	}
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
@@ -2374,10 +2374,10 @@ func TestSubmitPublication_StateLevelPublisher_MaterialisationTier4(t *testing.T
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       testLawID,
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    testLawID,
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -2426,10 +2426,10 @@ func TestSubmitPublication_FederationLevelPublisher_MaterialisationTier5(t *test
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-003",
-			Goal:     "Harden security posture",
-			Division: "security",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-003",
+			Goal:  "Harden security posture",
+			Group: "security",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-fed-pub",
 	})
@@ -2479,10 +2479,10 @@ func TestSubmitPublication_PublishedLawEvent_IncludesAllFields(t *testing.T) {
 	srv := newTestServerFull(t, dialer, nil, dispatcher, publisher)
 
 	submittedLaw := &flowv1.Law{
-		Id:       testLawID,
-		Goal:     "Ensure quality education",
-		Division: "education",
-		Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+		Id:    testLawID,
+		Goal:  "Ensure quality education",
+		Group: "education",
+		Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 	}
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
@@ -2579,10 +2579,10 @@ func TestSubmitPublication_ConflictRejection_NoPetitionOutcomeWithoutPetitionID(
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-new-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-new-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -2651,10 +2651,10 @@ func TestSubmitPublication_ConflictRejection_DispatchesPetitionOutcomeEvent(t *t
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-new-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-new-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 		PetitionId:         "petition-abc-123",
@@ -2790,10 +2790,10 @@ func TestSubscribeLawUpdates_RegistersSubscriberAndReceivesEvents(t *testing.T) 
 	// Publish a law (accepted).
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -2897,10 +2897,10 @@ func TestSubscribeLawUpdates_StateLevelPublication_OnlySameStateSubscribersRecei
 	// Publish a state-level law (QLD scope).
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -3002,10 +3002,10 @@ func TestSubscribeLawUpdates_FederationLevelPublication_AllSubscribersReceive(t 
 	// Publish a federation-level law.
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-sec-001",
-			Goal:     "Harden security posture",
-			Division: "security",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-sec-001",
+			Goal:  "Harden security posture",
+			Group: "security",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-fed-pub",
 	})
@@ -3084,10 +3084,10 @@ func TestSubscribeLawUpdates_PublishedLawEvent_IncludesAllFields(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       testLawID,
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    testLawID,
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 		PetitionId:         "petition-001",
@@ -3193,10 +3193,10 @@ func TestSubscribeLawUpdates_DisconnectedSubscriberIsRemoved(t *testing.T) {
 	// has been removed from the registry.
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -3284,10 +3284,10 @@ func TestSubscribeLawUpdates_MultipleSubscribersReceiveSameEvent(t *testing.T) {
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       "law-001",
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    "law-001",
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})
@@ -3364,10 +3364,10 @@ func TestSubmitPublication_Acceptance_DispatchesPetitionOutcomeEvent(t *testing.
 
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       testLawID,
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    testLawID,
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 		PetitionId:         "petition-xyz-789",
@@ -3520,10 +3520,10 @@ func TestSubscribePetitionOutcomes_RegistersAndReceivesAcceptedEvent(t *testing.
 	// Publish a law with petition_id (accepted, no conflicts).
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       testLawID,
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    testLawID,
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 		PetitionId:         "petition-abc-001",
@@ -3597,7 +3597,7 @@ func TestSubscribePetitionOutcomes_ReceivesRejectedEventWithReport(t *testing.T)
 		response: &flowv1.SearchSimilarLawsResponse{
 			Results: []*flowv1.SimilarLaw{
 				{
-					Law:             &flowv1.Law{Id: "existing-law-99", Goal: "Old education standard", Division: "education"},
+					Law:             &flowv1.Law{Id: "existing-law-99", Goal: "Old education standard", Group: "education"},
 					SimilarityScore: 0.95,
 				},
 			},
@@ -3645,10 +3645,10 @@ func TestSubscribePetitionOutcomes_ReceivesRejectedEventWithReport(t *testing.T)
 	// Publish a law with petition_id (will be rejected due to conflict).
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       testLawID,
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    testLawID,
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 		PetitionId:         "petition-rej-001",
@@ -3749,10 +3749,10 @@ func TestSubscribePetitionOutcomes_NoPetitionID_NoEventDispatched(t *testing.T) 
 	// Publish a law WITHOUT petition_id.
 	resp, err := srv.SubmitPublication(context.Background(), &flowv1.SubmitPublicationRequest{
 		Law: &flowv1.Law{
-			Id:       testLawID,
-			Goal:     "Ensure quality education",
-			Division: "education",
-			Tier:     flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
+			Id:    testLawID,
+			Goal:  "Ensure quality education",
+			Group: "education",
+			Tier:  flowv1.LawTier_LAW_TIER_LOCAL_STATUTE,
 		},
 		SourceFlowIdentity: "flow-pub-a",
 	})

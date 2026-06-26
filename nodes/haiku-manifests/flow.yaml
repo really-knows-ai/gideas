@@ -12,15 +12,15 @@
 #                         └──Complete() (exit)
 #
 # Sort's decision tree:
-#   1. Missing "linter" stamp?  → route to Quench
-#   2. Missing "review" stamp?  → route to Appraise
-#   3. Unresolved feedback?     → route to Refine
-#   4. All clear?               → stamp "approval", Complete()
+#   1. Missing "linter" stamp?        → route to Quench
+#   2. Missing "appraise-*" stamp?    → route to Appraisal
+#   3. Unresolved feedback?           → route to Refine
+#   4. All clear?                     → stamp "approval", Complete()
 #
 # Artefacts:
 #   - petition: The creative brief, pre-populated at workitem creation.
-#   - haiku: The governed output, must carry [linter, review, approval].
-#   - review-data: Internal data transfer between Appraise and Reviewer children.
+#   - haiku: The governed output, must carry [linter, appraise-*, approval].
+#   - review-data: Internal data transfer between Appraisal and Appraiser children.
 #
 # Apply order:
 #   1. kubectl apply -f flow.yaml          (this file)
@@ -36,7 +36,7 @@ metadata:
 spec:
   stamps:
     - linter
-    - review
+    - appraise-*
     - approval
 ---
 apiVersion: flow.gideas.io/v1
@@ -177,16 +177,16 @@ spec:
     hearing-entry:
       "law-reference": []
   exitContracts:
-    # The haiku must carry linter, review, and approval stamps to exit.
+    # The haiku must carry linter, appraise-default, and approval stamps to exit.
     standard-exit:
       "haiku":
         - linter
-        - review
+        - appraise-default
         - approval
-    # The petition must carry review + approval stamps to exit the Clerk cycle.
+    # The petition must carry appraise-default + approval stamps to exit the Clerk cycle.
     clerk-exit:
       "petition":
-        - review
+        - appraise-default
         - approval
   nodeGroups:
     main-cycle:
@@ -305,7 +305,7 @@ spec:
     - "WRITE:feedback/new"
     - "WRITE:feedback/resolved"
     - "WRITE:feedback/rejected"
-    - "STAMP:artefact/haiku/appraisal"
+    - "STAMP:artefact/*/appraise-*"
     - "CREATE:workitem/child"
 ---
 apiVersion: flow.gideas.io/v1
@@ -577,7 +577,7 @@ spec:
     - "READ:artefact/petition"
     - "READ:law"
     - "WRITE:feedback/new"
-    - "STAMP:artefact/petition/review"
+    - "STAMP:artefact/*/appraise-*"
     - "CREATE:workitem/child"
 ---
 apiVersion: flow.gideas.io/v1

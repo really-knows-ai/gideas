@@ -457,6 +457,56 @@ func TestValidateFederationConfigSkipsWhenNil(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Capability validation regex tests (Phase 08)
+// ---------------------------------------------------------------------------
+
+func TestCapabilityPattern_AcceptsWildcard(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{
+		"STAMP:artefact/*/appraise-*",
+		"STAMP:artefact/haiku/appraise-*",
+		"STAMP:artefact/haiku/appraise-security",
+		"STAMP:artefact/haiku/appraise-security-L001",
+		"STAMP:artefact/*/approval",
+		"STAMP:artefact/*/appraise-",
+		"READ:artefact/*",
+		"WRITE:artefact/haiku",
+		"WRITE:artefact/*",
+		"CREATE:workitem/child",
+		"CREATE:workitem",
+	}
+
+	for _, cap := range valid {
+		if !capabilityPattern.MatchString(cap) {
+			t.Errorf("capabilityPattern should accept %q", cap)
+		}
+	}
+}
+
+func TestCapabilityPattern_RejectsInvalid(t *testing.T) {
+	t.Parallel()
+
+	invalid := []string{
+		"STAMP:artefact/",
+		"STAMP:artefact/haiku/",
+		"STAMP:artefact//review",
+		"STAMP:",
+		"",
+		"*",
+		"STAMP:artefact/*/",
+		"STAMP:artefact/*//appraise",
+		"STAMP:artefact/ /stamp",
+	}
+
+	for _, cap := range invalid {
+		if capabilityPattern.MatchString(cap) {
+			t.Errorf("capabilityPattern should reject %q", cap)
+		}
+	}
+}
+
 func newControllerTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 

@@ -111,16 +111,26 @@ func TestMatchCapability(t *testing.T) {
 		{"wildcard no cross slash", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security", false},
 		{"wildcard no cross slash 2", "STAMP:artefact/*/appraise-*", "STAMP:artefact/code/nested/appraise-review", false},
 
-		// Multiple wildcards in different segments.
-		{"two wildcards match", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
-		{"two wildcards other", "STAMP:artefact/*/appraise-*", "STAMP:artefact/doc/appraise-linter", true},
-		{"two wildcards no match", "STAMP:artefact/*/appraise-*", "STAMP:artefact/doc/review", false},
+		// Multiple wildcards in different segments (covered by detailed Phase 08 tests below).
 
 		// Edge cases.
 		{"empty pattern empty required", "", "", true},
 		{"empty pattern non-empty", "", "STAMP:artefact/haiku/review", false},
-		{"star only", "*", "anything/at/all", false}, // bare * does not match across / boundaries
-		{"star only exact", "*", "*", true},
+		// (bare * tests covered by Phase 08 cases below)
+
+		// Phase 08 wildcard edge cases.
+		{"*/appraise-* mtch haiku", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
+		{"*/appraise-* mtch L001", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security-L001", true},
+		{"*/appraise-* mtch code", "STAMP:artefact/*/appraise-*", "STAMP:artefact/code/appraise-default", true},
+		{"*/appraise-* empty sfx", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-", true},
+		{"*/appraise-* no appr.", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/approval", false},
+		{"*/appraise-* cross /", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security", false},
+		{"exact review match", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
+		{"exact review no match appraise", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/appraise-security", false},
+
+		// Bare star in different positions.
+		{"top level star only", "*", "*", true},
+		{"top level star no cross", "*", "a/b", false},
 
 		// Non-STAMP capabilities.
 		{"read flow exact", "READ:flow", "READ:flow", true},

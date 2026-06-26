@@ -183,6 +183,42 @@ type deployment struct {
 }
 
 // ---------------------------------------------------------------------------
+// GovernedArtefact types
+// ---------------------------------------------------------------------------
+
+type governedArtefactSpec struct {
+	Stamps []string `yaml:"stamps"`
+}
+
+type governedArtefact struct {
+	k8sObject `yaml:",inline"`
+	Spec      governedArtefactSpec `yaml:"spec"`
+}
+
+// findGovernedArtefacts parses flow.yaml and returns a map of name → governedArtefact
+// for every document with Kind == "GovernedArtefact".
+func findGovernedArtefacts(t *testing.T) map[string]governedArtefact {
+	t.Helper()
+
+	docs := parseMultiDocYAML(t, "flow.yaml")
+	gas := make(map[string]governedArtefact)
+	for _, doc := range docs {
+		var obj k8sObject
+		if err := yaml.Unmarshal(doc, &obj); err != nil {
+			t.Fatalf("unmarshalling k8sObject: %v", err)
+		}
+		if obj.Kind == "GovernedArtefact" {
+			var ga governedArtefact
+			if err := yaml.Unmarshal(doc, &ga); err != nil {
+				t.Fatalf("unmarshalling GovernedArtefact %q: %v", obj.Metadata.Name, err)
+			}
+			gas[ga.Metadata.Name] = ga
+		}
+	}
+	return gas
+}
+
+// ---------------------------------------------------------------------------
 // Helpers: FoundryNode and Deployment finders
 // ---------------------------------------------------------------------------
 
@@ -309,13 +345,37 @@ func TestFoundryFlow_ClerkExitContract(t *testing.T) {
 		t.Fatal("clerk-exit missing 'petition' artefact")
 	}
 
-	expected := []string{"review", "approval"}
+	expected := []string{"appraise-default", "approval"}
 	if len(stamps) != len(expected) {
 		t.Fatalf("clerk-exit/petition stamps: want %v, got %v", expected, stamps)
 	}
 	for i, s := range expected {
 		if stamps[i] != s {
 			t.Errorf("clerk-exit/petition stamp[%d]: want %q, got %q", i, s, stamps[i])
+		}
+	}
+}
+
+func TestFoundryFlow_StandardExitContract_HasAppraiseDefault(t *testing.T) {
+	ff := findFoundryFlow(t)
+
+	exit, ok := ff.Spec.ExitContracts["standard-exit"]
+	if !ok {
+		t.Fatal("exitContracts missing 'standard-exit'")
+	}
+
+	stamps, ok := exit["haiku"]
+	if !ok {
+		t.Fatal("standard-exit missing 'haiku' artefact")
+	}
+
+	expected := []string{"linter", "appraise-default", "approval"}
+	if len(stamps) != len(expected) {
+		t.Fatalf("standard-exit/haiku stamps: want %v, got %v", expected, stamps)
+	}
+	for i, s := range expected {
+		if stamps[i] != s {
+			t.Errorf("standard-exit/haiku stamp[%d]: want %q, got %q", i, s, stamps[i])
 		}
 	}
 }
@@ -1796,6 +1856,84 @@ func TestLawApplicator_Deployment_NoConfigMapMount(t *testing.T) {
 	if len(d.Spec.Template.Spec.Volumes) != 0 {
 		t.Errorf("law-applicator Deployment should have no volumes, got %d",
 			len(d.Spec.Template.Spec.Volumes))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 08 – Haiku manifest law-group updates
+// ---------------------------------------------------------------------------
+
+func TestHaiku_GovernedArtefact_HasAppraiseWildcard(t *testing.T) {
+	gas := findGovernedArtefacts(t)
+	ga, ok := gas["haiku"]
+	if !ok {
+		t.Fatal("GovernedArtefact 'haiku' not found in flow.yaml")
+	}
+
+	if !slices.Contains(ga.Spec.Stamps, "appraise-*") {
+		t.Error("haiku GovernedArtefact stamps missing 'appraise-*'")
+	}
+
+	if slices.Contains(ga.Spec.Stamps, "review") {
+		t.Error("haiku GovernedArtefact stamps should NOT contain 'review' (replaced by appraise-*)")
+	}
+}
+
+func TestAppraisal_FoundryNode_HasWildcardStampCapability(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["appraisal"]
+	if !ok {
+		t.Fatal("FoundryNode 'appraisal' not found in flow.yaml")
+	}
+
+	if !slices.Contains(fn.Spec.Capabilities, "STAMP:artefact/*/appraise-*") {
+		t.Error("appraisal FoundryNode missing capability 'STAMP:artefact/*/appraise-*'")
+	}
+
+	if slices.Contains(fn.Spec.Capabilities, "STAMP:artefact/haiku/appraisal") {
+		t.Error("appraisal FoundryNode should NOT have STAMP:artefact/haiku/appraisal (replaced by wildcard)")
+	}
+}
+
+func TestClerkAppraisal_FoundryNode_HasWildcardStampCapability(t *testing.T) {
+	nodes := findFoundryNodes(t)
+	fn, ok := nodes["clerk-appraisal"]
+	if !ok {
+		t.Fatal("FoundryNode 'clerk-appraisal' not found in flow.yaml")
+	}
+
+	if !slices.Contains(fn.Spec.Capabilities, "STAMP:artefact/*/appraise-*") {
+		t.Error("clerk-appraisal FoundryNode missing capability 'STAMP:artefact/*/appraise-*'")
+	}
+
+	if slices.Contains(fn.Spec.Capabilities, "STAMP:artefact/petition/review") {
+		t.Error("clerk-appraisal FoundryNode should NOT have STAMP:artefact/petition/review (replaced by wildcard)")
+	}
+}
+
+func TestExitContracts_NoReviewStamp(t *testing.T) {
+	ff := findFoundryFlow(t)
+
+	// Check standard-exit does NOT contain 'review'.
+	if exit, ok := ff.Spec.ExitContracts["standard-exit"]; ok {
+		for artefact, stamps := range exit {
+			for _, s := range stamps {
+				if s == "review" {
+					t.Errorf("standard-exit/%q still contains 'review' stamp (should be appraise-default)", artefact)
+				}
+			}
+		}
+	}
+
+	// Check clerk-exit does NOT contain 'review'.
+	if exit, ok := ff.Spec.ExitContracts["clerk-exit"]; ok {
+		for artefact, stamps := range exit {
+			for _, s := range stamps {
+				if s == "review" {
+					t.Errorf("clerk-exit/%q still contains 'review' stamp (should be appraise-default)", artefact)
+				}
+			}
+		}
 	}
 }
 
