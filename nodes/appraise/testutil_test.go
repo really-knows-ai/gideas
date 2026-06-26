@@ -18,7 +18,7 @@ func newLocalListener() (net.Listener, error) {
 }
 
 // newSpyGRPCServer creates a gRPC server with the appraiseSpy registered
-// for all five Foundry Flow service interfaces.
+// for all Foundry Flow service interfaces.
 func newSpyGRPCServer(spy *appraiseSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
@@ -26,6 +26,7 @@ func newSpyGRPCServer(spy *appraiseSpy) *grpc.Server {
 	flowv1.RegisterArchivistServiceServer(srv, spy)
 	flowv1.RegisterLibrarianServiceServer(srv, spy)
 	flowv1.RegisterFrictionLedgerServiceServer(srv, spy)
+	flowv1.RegisterFlowEventBusServiceServer(srv, spy)
 	return srv
 }
 
@@ -38,6 +39,7 @@ type appraiseSpy struct {
 	flowv1.UnimplementedArchivistServiceServer
 	flowv1.UnimplementedLibrarianServiceServer
 	flowv1.UnimplementedFrictionLedgerServiceServer
+	flowv1.UnimplementedFlowEventBusServiceServer
 
 	mu sync.Mutex
 
@@ -58,6 +60,12 @@ type appraiseSpy struct {
 	ArtefactContents map[string]string      // artefact ID -> content
 	FeedbackItems    []*flowv1.FeedbackItem // feedback items returned by GetFeedback
 	Laws             []*flowv1.Law          // laws returned by QueryLaws
+
+	// Fan-out tracking (for integration tests).
+	CreatedChildren []string                      // child workitem IDs created
+	ChildStatuses   []*flowv1.ChildWorkitemStatus // statuses returned by GetChildren
+	LawGroups       map[string]*flowv1.LawGroup   // group name -> LawGroup for GetLawGroup
+	PublishedEvents []*flowv1.FlowEvent           // events published to EventBus
 }
 
 type addedFeedbackItem struct {
@@ -80,6 +88,7 @@ func newAppraiseSpy() *appraiseSpy {
 			"petition": "test-petition",
 			"haiku":    "test-content",
 		},
+		LawGroups: make(map[string]*flowv1.LawGroup),
 	}
 }
 
@@ -123,6 +132,30 @@ func (s *appraiseSpy) SubmitResult(
 		// Complete / Suspend / nil — nothing to record.
 	}
 	return &flowv1.SubmitResultResponse{Accepted: true}, nil
+}
+
+func (s *appraiseSpy) CreateChildWorkitem(
+	_ context.Context, _ *flowv1.CreateChildWorkitemRequest,
+) (*flowv1.CreateChildWorkitemResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := fmt.Sprintf("child-%d", len(s.CreatedChildren))
+	s.CreatedChildren = append(s.CreatedChildren, id)
+	return &flowv1.CreateChildWorkitemResponse{ChildWorkitemId: id}, nil
+}
+
+func (s *appraiseSpy) GetChildren(
+	_ context.Context, _ *flowv1.GetChildrenRequest,
+) (*flowv1.GetChildrenResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return &flowv1.GetChildrenResponse{Children: s.ChildStatuses}, nil
+}
+
+func (s *appraiseSpy) RouteChild(
+	_ context.Context, _ *flowv1.RouteChildRequest,
+) (*flowv1.RouteChildResponse, error) {
+	return &flowv1.RouteChildResponse{Accepted: true}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +271,18 @@ func (s *appraiseSpy) QueryLaws(
 	return &flowv1.QueryLawsResponse{Laws: s.Laws}, nil
 }
 
+func (s *appraiseSpy) GetLawGroup(
+	_ context.Context, req *flowv1.GetLawGroupRequest,
+) (*flowv1.GetLawGroupResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if g, ok := s.LawGroups[req.GetGroupName()]; ok {
+		return &flowv1.GetLawGroupResponse{Group: g}, nil
+	}
+	// Return nil group (nil proto) so handler falls back to defaults
+	return &flowv1.GetLawGroupResponse{}, nil
+}
+
 func (s *appraiseSpy) Cite(
 	_ context.Context, req *flowv1.CiteRequest,
 ) (*flowv1.CiteResponse, error) {
@@ -273,11 +318,24 @@ func (s *appraiseSpy) RecordTelemetry(
 }
 
 // ---------------------------------------------------------------------------
+// EventBus methods
+// ---------------------------------------------------------------------------
+
+func (s *appraiseSpy) Publish(
+	_ context.Context, req *flowv1.PublishRequest,
+) (*flowv1.PublishResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PublishedEvents = append(s.PublishedEvents, req.GetEvent())
+	return &flowv1.PublishResponse{Acknowledged: true}, nil
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
 // newSpyClient creates a flow.Client backed by a local gRPC server with
-// the appraiseSpy registered for all five service interfaces.
+// the appraiseSpy registered for all service interfaces.
 func newSpyClient(t *testing.T, spy *appraiseSpy) *flow.Client {
 	t.Helper()
 
@@ -299,13 +357,38 @@ func newSpyClient(t *testing.T, spy *appraiseSpy) *flow.Client {
 	return client
 }
 
+// newSpyClientWithEventBus creates a flow.Client backed by a local gRPC server
+// with the appraiseSpy registered, including the EventBus service.
+func newSpyClientWithEventBus(t *testing.T, spy *appraiseSpy) *flow.Client {
+	t.Helper()
+
+	lis, err := newLocalListener()
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	srv := newSpyGRPCServer(spy)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.GracefulStop() })
+
+	client, err := flow.NewClient(
+		flow.WithSidecarAddress(lis.Addr().String()),
+		flow.WithEventBusAddress(lis.Addr().String()),
+	)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	return client
+}
+
 // defaultTestConfig returns a standard appraiseConfig for tests.
 func defaultTestConfig() *appraiseConfig {
 	return &appraiseConfig{
 		InputArtefacts:   []string{"petition"},
 		ReviewArtefact:   "haiku",
 		GovernedArtefact: "haiku",
-		StampName:        "review",
 		ReviewerNode:     "reviewer",
 	}
 }

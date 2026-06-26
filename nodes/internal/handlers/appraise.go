@@ -17,17 +17,27 @@ import (
 // Agent-level config (prompts, model, schema) is encapsulated in the
 // concrete eval and finding agents.
 type AppraiseConfig struct {
-	InputArtefacts   []string // artefact IDs to read as input (e.g. ["petition"])
-	ReviewArtefact   string   // artefact ID to review (e.g. "haiku")
-	GovernedArtefact string   // GovernedArtefact CR name (e.g. "haiku")
-	StampName        string   // stamp to apply (e.g. "review")
-	ReviewerNode     string   // target node for fan-out review (e.g. "reviewer")
+	InputArtefacts   []string          // artefact IDs to read as input (e.g. ["petition"])
+	ReviewArtefact   string            // artefact ID to review (e.g. "haiku")
+	GovernedArtefact string            // GovernedArtefact CR name (e.g. "haiku")
+	ReviewerNode     string            // target node for fan-out review (e.g. "reviewer")
+	Appraisers       []AppraiserConfig // appraiser persona configs
+}
+
+// AppraiserConfig defines a single appraiser persona.
+// ponytail: duplicated in nodes/appraise/main.go;
+// promote to SDK if a third definition appears.
+type AppraiserConfig struct {
+	ID          string
+	Personality string
 }
 
 // Appraise-specific constants.
 const (
-	verdictAccept = "accept"
-	verdictReject = "reject"
+	verdictAccept     = "accept"
+	verdictReject     = "reject"
+	ArtefactAppraiser = "appraiser"
+	ArtefactPass      = "pass"
 )
 
 // hasNovelArgument returns true if the feedback item carries a
@@ -76,8 +86,6 @@ func HandleAppraise(
 		"review_artefact", cfg.ReviewArtefact,
 	)
 
-	laws, _ := client.QueryLaws(ctx, cfg.GovernedArtefact, "")
-
 	existingFeedback, err := client.GetFeedback(ctx, cfg.GovernedArtefact)
 	if err != nil {
 		return fmt.Errorf("appraise: get feedback: %w", err)
@@ -98,26 +106,34 @@ func HandleAppraise(
 	// Phase 2: Fan-out review — delegate to child Reviewer nodes
 	// ---------------------------------------------------------------
 
-	mergedFeedback, err := fanOutReview(
-		ctx, client, cfg, laws, existingFeedback,
+	result, err := fanOutReview(
+		ctx, client, cfg, existingFeedback,
 		inputContent, reviewContent)
 	if err != nil {
 		return fmt.Errorf("appraise: fan-out review: %w", err)
 	}
 
 	slog.Info("appraise: review complete",
-		"feedback_count", len(mergedFeedback))
+		"feedback_count", len(result.feedback),
+		"dispatch_count", len(result.dispatchMatrix))
 
-	// ---------------------------------------------------------------
-	// Post-inference: stamp, raise feedback, cite laws
-	// ---------------------------------------------------------------
-
-	if _, err := client.StampArtefact(ctx, cfg.GovernedArtefact, cfg.StampName); err != nil {
-		return fmt.Errorf("appraise: stamp %s: %w", cfg.StampName, err)
+	// Post-fan-out: stamping, coverage, events (only if dispatches exist).
+	if len(result.dispatchMatrix) > 0 {
+		applyAppraiseStamps(ctx, client, cfg.GovernedArtefact,
+			result.dispatchMatrix, result.childStatuses,
+			result.childIDs, result.unitsByGroup, result.groups)
+		coverage := buildCoverageMap(result.dispatchMatrix, result.childStatuses, result.childResults, result.childIDs)
+		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
+		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
+	} else {
+		slog.Info("appraise: no dispatches — skipping stamps and events")
 	}
-	slog.Info("appraise: stamp applied", "stamp", cfg.StampName)
 
-	for i, item := range mergedFeedback {
+	// ---------------------------------------------------------------
+	// Post-inference: raise feedback, cite laws
+	// ---------------------------------------------------------------
+
+	for i, item := range result.feedback {
 		if item.Message == "" {
 			continue
 		}
@@ -144,7 +160,7 @@ func HandleAppraise(
 		}
 	}
 
-	if len(mergedFeedback) == 0 {
+	if len(result.feedback) == 0 {
 		slog.Info("appraise: no feedback — content looks good")
 	}
 
@@ -191,33 +207,84 @@ type reviewOutput struct {
 	Feedback []reviewItem `json:"feedback"`
 }
 
-// fanOutReview groups laws by group, creates FanOutTasks for each group,
-// dispatches them to child Reviewer nodes, waits for completion, and merges
-// the review outputs into a single slice of review items.
+// fanOutResult holds the complete output of the fan-out review phase,
+// including merge feedback, the dispatch matrix, child statuses, and
+// resolved group configs for post-processing (stamping, coverage, events).
+type fanOutResult struct {
+	feedback       []reviewItem
+	dispatchMatrix []flow.DispatchEntry
+	unitsByGroup   map[string][]flow.Unit
+	childStatuses  []flow.ChildWorkitemStatus
+	childResults   []flow.ChildResult
+	groups         map[string]*flow.LawGroup
+	childIDs       []string // child workitem IDs, same order as dispatchMatrix
+}
+
+// fanOutReview computes the dispatch matrix, fans out to Reviewer children
+// via FanOut/AwaitChildren, collects review-output from completed children,
+// merges feedback, and returns the full result for post-processing.
 //
-//nolint:cyclop // Orchestration function — sequential steps are inherently complex.
+//nolint:cyclop,funlen // Orchestration — sequential steps are inherently complex.
 func fanOutReview(
 	ctx context.Context,
 	client *flow.Client,
 	cfg AppraiseConfig,
-	laws []*flowv1.Law,
 	existingFeedback []*flowv1.FeedbackItem,
 	inputContent, reviewContent string,
-) ([]reviewItem, error) {
-	// Group laws by group.
-	groups := flow.PartitionLawsByGroup(laws)
+) (*fanOutResult, error) {
+	// Step 1: Query laws.
+	laws, err := client.QueryLaws(ctx, cfg.GovernedArtefact, "")
+	if err != nil {
+		return nil, fmt.Errorf("appraise: query laws: %w", err)
+	}
+
+	// Step 2: Partition by group.
+	lawsByGroup := flow.PartitionLawsByGroup(laws)
 
 	slog.Info("appraise: fan-out review",
-		"group_count", len(groups),
+		"group_count", len(lawsByGroup),
 		"total_laws", len(laws),
 	)
 
 	// If no laws, return empty — nothing to review against.
-	if len(groups) == 0 {
-		return nil, nil
+	if len(lawsByGroup) == 0 || len(cfg.Appraisers) == 0 {
+		return &fanOutResult{}, nil
 	}
 
-	// Serialize history (shared across all groups).
+	// Step 3: Resolve group configs.
+	groups := make(map[string]*flow.LawGroup, len(lawsByGroup))
+	for groupName := range lawsByGroup {
+		protoGroup, getErr := client.GetLawGroup(ctx, groupName)
+		if getErr != nil {
+			slog.Warn("appraise: get law group failed, using defaults",
+				"group", groupName, "error", getErr)
+			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
+		} else {
+			groups[groupName] = &flow.LawGroup{
+				Name:   protoGroup.GetName(),
+				Mode:   flow.GroupMode(protoGroup.GetMode()),
+				Passes: protoGroup.GetPasses(),
+			}
+		}
+	}
+
+	// Step 4: Extract appraiser IDs and compute units + dispatch matrix.
+	appraiserIDs := make([]string, len(cfg.Appraisers))
+	appraiserMap := make(map[string]string, len(cfg.Appraisers))
+	for i, a := range cfg.Appraisers {
+		appraiserIDs[i] = a.ID
+		appraiserMap[a.ID] = a.Personality
+	}
+
+	unitsByGroup := flow.ComputeUnits(lawsByGroup, groups)
+	dispatchEntries := flow.ComputeDispatchMatrix(unitsByGroup, appraiserIDs, groups)
+
+	if len(dispatchEntries) == 0 {
+		slog.Info("appraise: no dispatch entries — skipping fan-out")
+		return &fanOutResult{}, nil
+	}
+
+	// Step 5: Serialize shared artefacts (history).
 	historyItems := make([]HistoryData, 0, len(existingFeedback))
 	for _, fb := range existingFeedback {
 		historyItems = append(historyItems, HistoryData{
@@ -225,39 +292,62 @@ func fanOutReview(
 			Message: fb.GetMessage(),
 		})
 	}
-
 	historyJSON, err := json.Marshal(historyItems)
 	if err != nil {
 		return nil, fmt.Errorf("marshal history: %w", err)
 	}
 
-	// Build FanOutTasks — one per group.
-	tasks := make([]flow.FanOutTask, 0, len(groups))
-	for groupName, groupLaws := range groups {
-		// Serialize laws for this group.
-		lawItems := make([]LawData, 0, len(groupLaws))
-		for _, law := range groupLaws {
-			lawItems = append(lawItems, LawData{
-				ID:   law.GetId(),
-				Tier: int32(law.GetTier()),
-				Goal: law.GetGoal(),
-			})
+	// Step 6: Build FanOutTasks — one per dispatch entry.
+	tasks := make([]flow.FanOutTask, 0, len(dispatchEntries))
+	for _, de := range dispatchEntries {
+		// Build laws artefact.
+		var lawData []LawData
+		groupLaws := lawsByGroup[de.Group]
+		if de.Unit.Mode == flow.GroupModeLawByLaw {
+			// Law-by-law: only the single law for this unit.
+			for _, l := range groupLaws {
+				if l.GetId() == de.Unit.LawIDs[0] {
+					lawData = append(lawData, LawData{
+						ID:   l.GetId(),
+						Tier: int32(l.GetTier()),
+						Goal: l.GetGoal(),
+					})
+					break
+				}
+			}
+		} else {
+			// Bundle: all laws in the group.
+			for _, l := range groupLaws {
+				lawData = append(lawData, LawData{
+					ID:   l.GetId(),
+					Tier: int32(l.GetTier()),
+					Goal: l.GetGoal(),
+				})
+			}
+		}
+		lawsJSON, jErr := json.Marshal(lawData)
+		if jErr != nil {
+			return nil, fmt.Errorf("marshal laws for group %s: %w", de.Group, jErr)
 		}
 
-		lawsJSON, jsonErr := json.Marshal(lawItems)
-		if jsonErr != nil {
-			return nil, fmt.Errorf("marshal laws for group %s: %w", groupName, jsonErr)
+		// Build appraiser artefact.
+		personality := appraiserMap[de.Appraiser]
+		appraiserJSON, jErr := json.Marshal(map[string]string{
+			"id":          de.Appraiser,
+			"personality": personality,
+		})
+		if jErr != nil {
+			return nil, fmt.Errorf("marshal appraiser: %w", jErr)
 		}
 
-		// Build group data.
-		groupData := GroupData{
-			Name:         groupName,
-			PromptSuffix: "", // TODO(PHASE_06): replace fanOutReview body
-		}
-
-		groupJSON, jsonErr := json.Marshal(groupData)
-		if jsonErr != nil {
-			return nil, fmt.Errorf("marshal group data for %s: %w", groupName, jsonErr)
+		// Build pass artefact.
+		passes := groups[de.Group].Passes
+		passJSON, jErr := json.Marshal(map[string]int{
+			"pass": de.Pass,
+			"of":   int(passes),
+		})
+		if jErr != nil {
+			return nil, fmt.Errorf("marshal pass: %w", jErr)
 		}
 
 		task := flow.FanOutTask{
@@ -267,57 +357,344 @@ func fanOutReview(
 				{ID: cfg.ReviewArtefact, GovernedArtefact: "review-data", Content: []byte(reviewContent)},
 				{ID: ArtefactLaws, GovernedArtefact: "review-data", Content: lawsJSON},
 				{ID: ArtefactHistory, GovernedArtefact: "review-data", Content: historyJSON},
-				{ID: ArtefactGroup, GovernedArtefact: "review-data", Content: groupJSON},
+				{ID: ArtefactAppraiser, GovernedArtefact: "review-data", Content: appraiserJSON},
+				{ID: ArtefactPass, GovernedArtefact: "review-data", Content: passJSON},
 			},
 		}
 		tasks = append(tasks, task)
-
-		slog.Info("appraise: fan-out task",
-			"group", groupName,
-			"law_count", len(groupLaws),
-		)
 	}
 
-	// FanOut: create child workitems, attach artefacts, route to reviewer.
-	_, err = client.FanOut(ctx, tasks)
+	slog.Info("appraise: fan-out tasks built", "task_count", len(tasks))
+
+	// Step 7: FanOut — create children.
+	children, err := client.FanOut(ctx, tasks)
 	if err != nil {
 		return nil, fmt.Errorf("fan-out: %w", err)
 	}
 
-	// AwaitChildren: block until all children reach terminal state.
+	childIDs := make([]string, len(children))
+	for i, ch := range children {
+		childIDs[i] = ch.ID()
+	}
+
+	// Step 8: AwaitChildren — wait for all children to reach terminal state.
 	statuses, err := client.AwaitChildren(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("await children: %w", err)
 	}
 
-	// CollectArtefacts: gather review-output from each child.
-	results, err := client.CollectArtefacts(ctx, statuses, ArtefactReviewOutput)
-	if err != nil {
-		return nil, fmt.Errorf("collect artefacts: %w", err)
+	// Step 9: Collect review-output from completed children.
+	var merged []reviewItem
+	var childResults []flow.ChildResult
+
+	// Build a set of workitem IDs that are completed.
+	completedIDs := make(map[string]bool)
+	for _, s := range statuses {
+		if s.Phase == flow.PhaseCompleted {
+			completedIDs[s.WorkitemID] = true
+		}
 	}
 
-	// Merge all review outputs.
-	var merged []reviewItem
-	for i, result := range results {
-		raw := result.Artefacts[ArtefactReviewOutput]
-		if raw == nil {
-			slog.Warn("appraise: child returned no review-output",
-				"child_index", i,
-				"workitem_id", result.Status.WorkitemID,
-			)
+	for _, s := range statuses {
+		if !completedIDs[s.WorkitemID] {
 			continue
 		}
-
+		resp, getErr := client.GetChildArtefact(ctx, s.WorkitemID, ArtefactReviewOutput)
+		if getErr != nil {
+			slog.Warn("appraise: child completed but no review-output",
+				"workitem_id", s.WorkitemID, "error", getErr)
+			childResults = append(childResults, flow.ChildResult{
+				Status: s, Artefacts: map[string][]byte{ArtefactReviewOutput: nil},
+			})
+			continue
+		}
 		var out reviewOutput
-		if jsonErr := json.Unmarshal(raw, &out); jsonErr != nil {
-			return nil, fmt.Errorf(
-				"unmarshal review-output from child %s: %w",
-				result.Status.WorkitemID, jsonErr)
+		if uErr := json.Unmarshal(resp.GetContent(), &out); uErr != nil {
+			return nil, fmt.Errorf("unmarshal review-output from child %s: %w", s.WorkitemID, uErr)
 		}
 		merged = append(merged, out.Feedback...)
+		childResults = append(childResults, flow.ChildResult{
+			Status: s, Artefacts: map[string][]byte{ArtefactReviewOutput: resp.GetContent()},
+		})
 	}
 
-	return merged, nil
+	slog.Info("appraise: fan-out complete",
+		"children_total", len(statuses),
+		"children_completed", len(completedIDs),
+		"feedback_items", len(merged))
+
+	return &fanOutResult{
+		feedback:       merged,
+		dispatchMatrix: dispatchEntries,
+		unitsByGroup:   unitsByGroup,
+		childStatuses:  statuses,
+		childResults:   childResults,
+		groups:         groups,
+		childIDs:       childIDs,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Post-fan-out: stamping
+// ---------------------------------------------------------------------------
+
+// applyAppraiseStamps applies per-group and per-law stamps based on dispatch
+// completion. A group/law is stamped only if ALL dispatches for that scope
+// completed successfully. Stamping failures are logged but do not fail.
+func applyAppraiseStamps(
+	ctx context.Context,
+	client *flow.Client,
+	governedArtefact string,
+	dispatchMatrix []flow.DispatchEntry,
+	childStatuses []flow.ChildWorkitemStatus,
+	childIDs []string,
+	unitsByGroup map[string][]flow.Unit,
+	groups map[string]*flow.LawGroup,
+) {
+	// Build a set of failed child workitem IDs.
+	failedIDs := make(map[string]bool)
+	for _, s := range childStatuses {
+		if s.Phase == flow.PhaseFailed {
+			failedIDs[s.WorkitemID] = true
+		}
+	}
+
+	// Map each dispatch entry to its child's workitem ID by index.
+	entryFailed := make([]bool, len(dispatchMatrix))
+	for i := range dispatchMatrix {
+		if i < len(childIDs) && failedIDs[childIDs[i]] {
+			entryFailed[i] = true
+		}
+	}
+
+	// Per-group and per-unit failure tracking.
+	groupFailed := make(map[string]bool)
+	unitFailed := make(map[string]bool) // unitID → failed
+	for i, d := range dispatchMatrix {
+		if entryFailed[i] {
+			groupFailed[d.Group] = true
+			unitFailed[d.Unit.UnitID] = true
+		}
+	}
+
+	// Apply stamps per group.
+	for groupName, unitList := range unitsByGroup {
+		groupCfg := groups[groupName]
+		if groupCfg == nil {
+			groupCfg = &flow.LawGroup{Mode: flow.GroupModeBundle}
+		}
+
+		// Group stamp: only if ALL dispatches for this group completed.
+		if !groupFailed[groupName] {
+			stampName := fmt.Sprintf("appraise-%s", groupName)
+			if _, err := client.StampArtefact(ctx, governedArtefact, stampName); err != nil {
+				slog.Warn("appraise: failed to stamp group",
+					"group", groupName, "stamp", stampName, "error", err)
+			} else {
+				slog.Info("appraise: group stamp applied", "stamp", stampName)
+			}
+		} else {
+			slog.Warn("appraise: group has failed dispatches, skipping group stamp",
+				"group", groupName)
+		}
+
+		// Per-law stamps (law-by-law mode only) — evaluated independently
+		// per law, not gated on the group stamp.
+		if groupCfg.Mode == flow.GroupModeLawByLaw {
+			for _, unit := range unitList {
+				if unitFailed[unit.UnitID] {
+					continue
+				}
+				for _, lawID := range unit.LawIDs {
+					lawStamp := fmt.Sprintf("appraise-%s-%s", groupName, lawID)
+					if _, err := client.StampArtefact(ctx, governedArtefact, lawStamp); err != nil {
+						slog.Warn("appraise: failed to stamp law",
+							"group", groupName, "law", lawID, "stamp", lawStamp, "error", err)
+					} else {
+						slog.Info("appraise: law stamp applied", "stamp", lawStamp)
+					}
+				}
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Post-fan-out: coverage map
+// ---------------------------------------------------------------------------
+
+type coverageEntry struct {
+	UnitID      string      `json:"unit_id"`
+	Group       string      `json:"group"`
+	Mode        string      `json:"mode"`
+	LawID       string      `json:"law_id"` // empty for bundle
+	Evaluations []evalEntry `json:"evaluations"`
+	Violations  int         `json:"violations"`
+}
+
+type evalEntry struct {
+	Appraiser string `json:"appraiser"`
+	Pass      int    `json:"pass"`
+	Completed bool   `json:"completed"`
+}
+
+// buildCoverageMap builds a per-unit coverage map from the dispatch matrix,
+// child statuses, and child results (review-output).
+func buildCoverageMap(
+	dispatchMatrix []flow.DispatchEntry,
+	childStatuses []flow.ChildWorkitemStatus,
+	childResults []flow.ChildResult,
+	childIDs []string,
+) map[string]coverageEntry {
+	// Build a map: workitemID → violation count from child results.
+	violationsByID := make(map[string]int)
+	for _, cr := range childResults {
+		raw, ok := cr.Artefacts[ArtefactReviewOutput]
+		if !ok || raw == nil {
+			continue
+		}
+		var out reviewOutput
+		if err := json.Unmarshal(raw, &out); err != nil {
+			continue
+		}
+		violationsByID[cr.Status.WorkitemID] = len(out.Feedback)
+	}
+
+	// Build workitemID → completed map.
+	completedByID := make(map[string]bool)
+	for _, s := range childStatuses {
+		if s.Phase == flow.PhaseCompleted {
+			completedByID[s.WorkitemID] = true
+		}
+	}
+
+	// Group dispatch entries by unit ID.
+	type dispatchInfo struct {
+		appraiser string
+		pass      int
+		wid       string // child workitem ID
+	}
+	dispatchesByUnit := make(map[string][]dispatchInfo)
+	for i, d := range dispatchMatrix {
+		wid := ""
+		if i < len(childIDs) {
+			wid = childIDs[i]
+		}
+		dispatchesByUnit[d.Unit.UnitID] = append(dispatchesByUnit[d.Unit.UnitID], dispatchInfo{
+			appraiser: d.Appraiser,
+			pass:      d.Pass,
+			wid:       wid,
+		})
+	}
+
+	coverage := make(map[string]coverageEntry, len(dispatchesByUnit))
+	for unitID, dispatches := range dispatchesByUnit {
+		entry := coverageEntry{
+			UnitID: unitID,
+		}
+		// Look up in dispatchMatrix for group/mode.
+		for _, d := range dispatchMatrix {
+			if d.Unit.UnitID == unitID {
+				entry.Group = d.Group
+				entry.Mode = string(d.Unit.Mode)
+				if d.Unit.Mode == flow.GroupModeLawByLaw && len(d.Unit.LawIDs) > 0 {
+					entry.LawID = d.Unit.LawIDs[0]
+				}
+				break
+			}
+		}
+
+		entry.Evaluations = make([]evalEntry, 0, len(dispatches))
+		for _, di := range dispatches {
+			completed := completedByID[di.wid]
+			entry.Evaluations = append(entry.Evaluations, evalEntry{
+				Appraiser: di.appraiser,
+				Pass:      di.pass,
+				Completed: completed,
+			})
+			if completed {
+				entry.Violations += violationsByID[di.wid]
+			}
+		}
+		coverage[unitID] = entry
+	}
+	return coverage
+}
+
+// ---------------------------------------------------------------------------
+// Post-fan-out: event emission
+// ---------------------------------------------------------------------------
+
+// emitCoverageEvent publishes an "appraise.coverage" audit event.
+// Errors are logged but do not fail the stage.
+func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
+	units := make([]coverageEntry, 0, len(coverage))
+	for _, u := range coverage {
+		units = append(units, u)
+	}
+	payload := map[string]any{
+		"stage":    "appraise",
+		"cycle_id": cycleID,
+		"units":    units,
+	}
+	if err := client.PublishAuditEvent(ctx, "appraise.coverage", payload); err != nil {
+		slog.Warn("appraise: publish coverage event failed", "error", err)
+	} else {
+		slog.Info("appraise: coverage event published")
+	}
+}
+
+// emitAttestationEvent publishes an "appraise.attestation" audit event.
+// Errors are logged but do not fail the stage.
+func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
+	totalViolations := 0
+	totalEvals := 0
+	completedEvals := 0
+	seenAppraisers := make(map[string]bool)
+
+	for _, u := range coverage {
+		totalViolations += u.Violations
+		for _, e := range u.Evaluations {
+			totalEvals++
+			if e.Completed {
+				completedEvals++
+			}
+			seenAppraisers[e.Appraiser] = true
+		}
+	}
+
+	// Derive status.
+	status := "incomplete"
+	if completedEvals > 0 && totalViolations == 0 {
+		status = "pass"
+	} else if completedEvals > 0 && totalViolations > 0 {
+		status = "fail"
+	}
+
+	appraiserVerdicts := make([]map[string]string, 0, len(seenAppraisers))
+	for a := range seenAppraisers {
+		verdict := "resolved"
+		if totalViolations > 0 {
+			verdict = "violations"
+		}
+		appraiserVerdicts = append(appraiserVerdicts, map[string]string{
+			"appraiser": a,
+			"verdict":   verdict,
+		})
+	}
+
+	payload := map[string]any{
+		"stage":              "appraise",
+		"cycle_id":           cycleID,
+		"status":             status,
+		"violations_total":   totalViolations,
+		"appraiser_verdicts": appraiserVerdicts,
+	}
+	if err := client.PublishAuditEvent(ctx, "appraise.attestation", payload); err != nil {
+		slog.Warn("appraise: publish attestation event failed", "error", err)
+	} else {
+		slog.Info("appraise: attestation event published", "status", status)
+	}
 }
 
 // ---------------------------------------------------------------------------
