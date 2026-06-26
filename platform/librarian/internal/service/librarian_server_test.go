@@ -1415,7 +1415,7 @@ func TestSearchSimilarLaws_ScopeFilter(t *testing.T) {
 		t.Fatalf("SearchSimilarLaws: %v", err)
 	}
 	for _, r := range resp.GetResults() {
-		if r.GetLaw().GetGroup() != "security" {
+		if r.GetLaw().GetGroup() != testGroupSecurity {
 			t.Fatalf("expected only security group, got %q", r.GetLaw().GetGroup())
 		}
 	}
