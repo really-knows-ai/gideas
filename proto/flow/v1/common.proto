@@ -191,6 +191,9 @@ message Law {
   // Optional specialisation division (e.g. "security", "architecture").
   // Empty means unset; consumers treat empty as "general".
   string division = 9;
+  // Law group name. Empty means "default" group.
+  // See: specs/05-reference/crds.md#lawgroup
+  string group = 10;
 }
 
 // A typed representation of a law's goal.

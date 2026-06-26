@@ -65,6 +65,15 @@ type QueryFilter struct {
 	GovernedArtefact   string
 	RepresentationType string
 	Division           string // Filter by division. Empty means all divisions (no filtering).
+	Group              string // Filter by law group. Empty means no group filter (return all).
+}
+
+// LawGroup represents a named group of laws with an evaluation contract.
+type LawGroup struct {
+	Name     string
+	Mode     string // "bundle" or "law-by-law"
+	Passes   int
+	SyncedAt time.Time
 }
 
 // DisputeStatus represents the lifecycle state of a dispute record.
@@ -223,6 +232,28 @@ func (s *Store) initSchema() error {
 			return err
 		}
 	}
+
+	// Law groups table.
+	lgDDL := []string{
+		`CREATE TABLE IF NOT EXISTS law_groups (
+			name      TEXT PRIMARY KEY,
+			mode      TEXT NOT NULL DEFAULT 'bundle' CHECK(mode IN ('bundle', 'law-by-law')),
+			passes    INTEGER NOT NULL DEFAULT 1 CHECK(passes >= 1),
+			synced_at DATETIME NOT NULL DEFAULT (datetime('now'))
+		)`,
+	}
+	for _, stmt := range lgDDL {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+
+	// ALTER TABLE migration: add law_group column to laws table if not present.
+	// go-sqlite3 does not support IF NOT EXISTS for ADD COLUMN, so we attempt
+	// the migration and ignore the error if the column already exists.
+	// ponytail: naive try-and-ignore; a migration tracking table would be needed
+	// for more complex migrations.
+	_, _ = s.db.Exec(`ALTER TABLE laws ADD COLUMN law_group TEXT NOT NULL DEFAULT ''`)
 
 	// Create the sqlite-vec virtual table for vector similarity search.
 	// The law_embeddings table stores one embedding per active law, keyed
@@ -681,12 +712,16 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 	var lawIDs []string
 
 	if filter.GovernedArtefact == "" {
-		// Mode 1: all active laws, optionally filtered by division.
+		// Mode 1: all active laws, optionally filtered by division and/or group.
 		query := `SELECT id FROM laws WHERE active = 1`
 		args := []any{}
 		if filter.Division != "" {
 			query += ` AND division = ?`
 			args = append(args, filter.Division)
+		}
+		if filter.Group != "" {
+			query += ` AND law_group = ?`
+			args = append(args, filter.Group)
 		}
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -705,7 +740,7 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 			return nil, err
 		}
 	} else {
-		// Mode 2/3: scoped + global active laws, optionally filtered by division.
+		// Mode 2/3: scoped + global active laws, optionally filtered by division and/or group.
 		// A law is "global" if it has no entries in law_applies_to.
 		query := `
 			SELECT DISTINCT l.id FROM laws l
@@ -716,6 +751,10 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 		if filter.Division != "" {
 			query += ` AND l.division = ?`
 			args = append(args, filter.Division)
+		}
+		if filter.Group != "" {
+			query += ` AND l.law_group = ?`
+			args = append(args, filter.Group)
 		}
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -814,6 +853,118 @@ func (s *Store) GetLawsByScope(ctx context.Context, appliesTo []string) ([]Law, 
 		laws = append(laws, law)
 	}
 	return laws, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// LawGroup CRUD Operations
+// ---------------------------------------------------------------------------
+
+// UpsertLawGroup inserts or updates a law group. On conflict, mode, passes,
+// and synced_at are updated.
+func (s *Store) UpsertLawGroup(ctx context.Context, name, mode string, passes int) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO law_groups (name, mode, passes, synced_at)
+		 VALUES (?, ?, ?, datetime('now'))
+		 ON CONFLICT(name) DO UPDATE SET
+		   mode = excluded.mode,
+		   passes = excluded.passes,
+		   synced_at = datetime('now')`,
+		name, mode, passes,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert law group: %w", err)
+	}
+	return nil
+}
+
+// DeleteLawGroup removes a law group by name. Returns an error if the group
+// does not exist.
+func (s *Store) DeleteLawGroup(ctx context.Context, name string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM law_groups WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("delete law group: %w", err)
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("law group %q not found", name)
+	}
+	return nil
+}
+
+// GetLawGroup returns a law group by name. Returns an error if the group
+// does not exist.
+func (s *Store) GetLawGroup(ctx context.Context, name string) (*LawGroup, error) {
+	var (
+		mode     string
+		passes   int
+		syncedAt string
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT name, mode, passes, synced_at FROM law_groups WHERE name = ?`, name,
+	).Scan(&name, &mode, &passes, &syncedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("law group %q not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get law group: %w", err)
+	}
+	st, err := parseTime(syncedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse synced_at: %w", err)
+	}
+	return &LawGroup{
+		Name:     name,
+		Mode:     mode,
+		Passes:   passes,
+		SyncedAt: st,
+	}, nil
+}
+
+// ListLawGroups returns all stored law groups, ordered by name.
+// Returns an empty slice (not nil) if no groups are stored.
+func (s *Store) ListLawGroups(ctx context.Context) ([]*LawGroup, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name, mode, passes, synced_at FROM law_groups ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("list law groups: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Collect partial results first, then close the cursor before parsing times
+	// (in-memory SQLite limitation).
+	type partial struct {
+		name     string
+		mode     string
+		passes   int
+		syncedAt string
+	}
+	var partials []partial
+	for rows.Next() {
+		var p partial
+		if err := rows.Scan(&p.name, &p.mode, &p.passes, &p.syncedAt); err != nil {
+			return nil, fmt.Errorf("scan law group: %w", err)
+		}
+		partials = append(partials, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_ = rows.Close()
+
+	groups := make([]*LawGroup, 0, len(partials))
+	for _, p := range partials {
+		st, err := parseTime(p.syncedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse synced_at: %w", err)
+		}
+		groups = append(groups, &LawGroup{
+			Name:     p.name,
+			Mode:     p.mode,
+			Passes:   p.passes,
+			SyncedAt: st,
+		})
+	}
+	return groups, nil
 }
 
 // ---------------------------------------------------------------------------
