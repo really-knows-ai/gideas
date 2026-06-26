@@ -211,9 +211,9 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 		onDecide: func(workitemID, choice string) {
 			// Signal any local WaitForDecision callers. Uses Load so
 			// WaitForDecision always finds the channel; it cleans up after
-			// consuming. Double-signaling from both Decide() and the gRPC
-			// handler is safe — the second caller just sends into the
-			// buffered channel (the first choice wins, second is dropped).
+			// consuming. Double-signaling does not occur in the current
+			// architecture: Decide signals local decisions, onDecide signals
+			// remote gRPC decisions — separate paths.
 			if ch, ok := qm.decisions.Load(workitemID); ok {
 				ch.(chan string) <- choice
 			}
