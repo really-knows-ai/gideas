@@ -14,6 +14,7 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flow "github.com/gideas/flow/sdk/go"
 	apiv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/pkg/eventbus"
 	"github.com/gideas/flow/pkg/randid"
@@ -139,7 +140,7 @@ func checkCapability(ctx context.Context, required string) error {
 	caps := md.Get(metadataKeyCapabilities)
 	for _, c := range caps {
 		for cap := range strings.SplitSeq(c, ",") {
-			if strings.TrimSpace(cap) == required {
+			if flow.MatchCapability(strings.TrimSpace(cap), required) {
 				return nil
 			}
 		}

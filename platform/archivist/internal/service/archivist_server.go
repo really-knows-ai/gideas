@@ -11,12 +11,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"github.com/gideas/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/pkg/randid"
+	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -202,9 +202,14 @@ func capabilitiesFromContext(ctx context.Context) []string {
 }
 
 // hasCapability checks whether the capability list contains the given
-// capability string. The check is exact.
+// capability string. Supports * wildcard matching per MatchCapability rules.
 func hasCapability(caps []string, required string) bool {
-	return slices.Contains(caps, required)
+	for _, c := range caps {
+		if flow.MatchCapability(c, required) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkCapability enforces deny-by-default capability gating for

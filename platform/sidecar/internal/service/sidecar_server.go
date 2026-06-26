@@ -20,6 +20,7 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flow "github.com/gideas/flow/sdk/go"
 	"github.com/gideas/flow/sidecar/internal/buffer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -477,7 +478,7 @@ func checkCapability(ctx context.Context, required string) error {
 	caps := md.Get("x-flow-capabilities")
 	for _, c := range caps {
 		for cap := range strings.SplitSeq(c, ",") {
-			if strings.TrimSpace(cap) == required {
+			if flow.MatchCapability(strings.TrimSpace(cap), required) {
 				return nil
 			}
 		}
