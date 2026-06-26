@@ -14,10 +14,10 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	flow "github.com/gideas/flow/sdk/go"
 	apiv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/pkg/eventbus"
 	"github.com/gideas/flow/pkg/randid"
+	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -275,7 +275,7 @@ func (s *OperatorServer) GetFlowTopology(ctx context.Context, _ *flowv1.GetFlowT
 	slog.Info("GetFlowTopology received", "namespace", namespace, "node_id", nodeID)
 
 	// 2. Resolve the singleton FoundryFlow CRD.
-	flow, err := s.resolveFlow(ctx, namespace)
+	f, err := s.resolveFlow(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func (s *OperatorServer) GetFlowTopology(ctx context.Context, _ *flowv1.GetFlowT
 	// 5. Resolve exit contract if the calling node is exit-bound.
 	exitContract := make(map[string]*flowv1.StampRequirements)
 	if callingNode.Spec.Exit != "" {
-		if contract, ok := flow.Spec.ExitContracts[callingNode.Spec.Exit]; ok {
+		if contract, ok := f.Spec.ExitContracts[callingNode.Spec.Exit]; ok {
 			for kind, stamps := range contract {
 				exitContract[kind] = &flowv1.StampRequirements{Stamps: stamps}
 			}
@@ -351,7 +351,7 @@ func (s *OperatorServer) CreateWorkitem(ctx context.Context, req *flowv1.CreateW
 	slog.Info("CreateWorkitem received", "namespace", namespace, "node_id", nodeID)
 
 	// 2. Resolve the singleton FoundryFlow CRD.
-	flow, err := s.resolveFlow(ctx, namespace)
+	f, err := s.resolveFlow(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +368,7 @@ func (s *OperatorServer) CreateWorkitem(ctx context.Context, req *flowv1.CreateW
 	}
 
 	// Validate the entry contract exists on the flow.
-	if _, ok := flow.Spec.EntryContracts[node.Spec.Entry]; !ok {
+	if _, ok := f.Spec.EntryContracts[node.Spec.Entry]; !ok {
 		return nil, status.Error(codes.FailedPrecondition,
 			fmt.Sprintf("CONTRACT_VIOLATION: entry contract %q not found on flow in namespace %q", node.Spec.Entry, namespace))
 	}
@@ -993,18 +993,18 @@ func (s *OperatorServer) checkNodeGroupRouting(ctx context.Context, namespace, s
 	}
 
 	// Fetch the FoundryFlow to get NodeGroup definitions.
-	flow, err := s.resolveFlow(ctx, namespace)
+	f, err := s.resolveFlow(ctx, namespace)
 	if err != nil {
 		return nil // No flow, no group constraints.
 	}
 
-	if len(flow.Spec.NodeGroups) == 0 {
+	if len(f.Spec.NodeGroups) == 0 {
 		return nil // No groups defined.
 	}
 
 	// Build node-to-group lookup.
 	nodeToGroup := make(map[string]string)
-	for groupName, group := range flow.Spec.NodeGroups {
+	for groupName, group := range f.Spec.NodeGroups {
 		for _, nodeName := range group.Nodes {
 			nodeToGroup[nodeName] = groupName
 		}
@@ -1046,7 +1046,7 @@ func (s *OperatorServer) checkNodeGroupRouting(ctx context.Context, namespace, s
 //
 // The routing instruction is mutated in place with the resolved timeout.
 func (s *OperatorServer) validateSuspendTimeout(ctx context.Context, namespace string, ri *apiv1.RoutingInstruction) error {
-	flow, err := s.resolveFlow(ctx, namespace)
+	f, err := s.resolveFlow(ctx, namespace)
 	if err != nil {
 		// If flow lookup fails, allow the suspend through without timeout
 		// validation. The scheduler will also validate.
@@ -1057,11 +1057,11 @@ func (s *OperatorServer) validateSuspendTimeout(ctx context.Context, namespace s
 		return nil
 	}
 
-	if flow.Spec.Suspension == nil {
+	if f.Spec.Suspension == nil {
 		// No suspension config — no validation or defaults to apply.
 		return nil
 	}
-	cfg := flow.Spec.Suspension
+	cfg := f.Spec.Suspension
 
 	if ri.SuspendTimeout == "" {
 		// No explicit timeout — apply default.

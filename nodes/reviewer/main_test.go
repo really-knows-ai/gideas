@@ -364,7 +364,7 @@ func TestReviewAgent_ReviewOutputFormat(t *testing.T) {
 // Tests — Handler types deserialization (handlers package types)
 // ---------------------------------------------------------------------------
 
-func TestDivisionData_Deserialization(t *testing.T) {
+func TestGroupData_Deserialization(t *testing.T) {
 	tests := []struct {
 		name           string
 		json           string
@@ -393,7 +393,7 @@ func TestDivisionData_Deserialization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var d handlers.DivisionData
+			var d handlers.GroupData
 			if err := json.Unmarshal([]byte(tt.json), &d); err != nil {
 				t.Fatalf("unmarshal failed: %v", err)
 			}

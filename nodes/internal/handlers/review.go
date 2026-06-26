@@ -24,12 +24,12 @@ type ReviewConfig struct {
 const (
 	ArtefactLaws         = "laws"
 	ArtefactHistory      = "history"
-	ArtefactDivision     = "division"
+	ArtefactDivision     = "group"
 	ArtefactReviewOutput = "review-output"
 )
 
-// DivisionData is the JSON structure passed via the "division" artefact.
-type DivisionData struct {
+// GroupData is the JSON structure passed via the "division" artefact.
+type GroupData struct {
 	Name         string `json:"name"`
 	PromptSuffix string `json:"promptSuffix"`
 }
@@ -99,19 +99,19 @@ func HandleReview(
 		return fmt.Errorf("reviewer: unmarshal history: %w", err)
 	}
 
-	// Read and deserialize division.
-	divisionResp, err := client.GetArtefact(ctx, ArtefactDivision)
+	// Read and deserialize group data.
+	groupResp, err := client.GetArtefact(ctx, ArtefactDivision)
 	if err != nil {
 		return fmt.Errorf("reviewer: read %s: %w", ArtefactDivision, err)
 	}
 
-	var division DivisionData
-	if err := json.Unmarshal(divisionResp.GetContent(), &division); err != nil {
-		return fmt.Errorf("reviewer: unmarshal division: %w", err)
+	var groupData GroupData
+	if err := json.Unmarshal(groupResp.GetContent(), &groupData); err != nil {
+		return fmt.Errorf("reviewer: unmarshal group data: %w", err)
 	}
 
 	slog.Info("reviewer: reviewing",
-		"division", division.Name,
+		"group", groupData.Name,
 		"law_count", len(lawItems),
 		"history_count", len(historyItems),
 	)
@@ -143,7 +143,7 @@ func HandleReview(
 	}
 
 	slog.Info("reviewer: review complete",
-		"division", division.Name,
+		"group", groupData.Name,
 		"feedback_count", len(out.Feedback),
 	)
 
@@ -171,7 +171,7 @@ func HandleReview(
 	}
 
 	slog.Info("reviewer: completed",
-		"division", division.Name,
+		"group", groupData.Name,
 		"workitem_id", os.Getenv(flow.EnvWorkitemID),
 	)
 	return nil

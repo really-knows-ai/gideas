@@ -37,6 +37,14 @@ type DispatchEntry struct {
 	Pass      int    // 1-based
 }
 
+// GetGroup returns the group name for a law, or "default" if empty.
+func GetGroup(law *flowv1.Law) string {
+	if g := law.GetGroup(); g != "" {
+		return g
+	}
+	return "default"
+}
+
 // PartitionLawsByGroup groups laws by their Group field.
 // Laws with an empty Group are placed under "default".
 func PartitionLawsByGroup(laws []*flowv1.Law) map[string][]*flowv1.Law {

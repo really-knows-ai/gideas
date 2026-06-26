@@ -36,7 +36,7 @@ type Law struct {
 	Active          bool
 	AppliesTo       []string
 	Representations []Representation
-	Division        string // Optional specialisation division (e.g. "security"). Empty means unset.
+	Group           string // Law group name (e.g. "security"). Empty means unset.
 	VersionHash     string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -64,8 +64,7 @@ type LawEmbedding struct {
 type QueryFilter struct {
 	GovernedArtefact   string
 	RepresentationType string
-	Division           string // Filter by division. Empty means all divisions (no filtering).
-	Group              string // Filter by law group. Empty means no group filter (return all).
+	Group              string // Filter by group. Empty means no group filter (return all).
 }
 
 // LawGroup represents a named group of laws with an evaluation contract.
@@ -174,7 +173,7 @@ func (s *Store) initSchema() error {
 		goal        TEXT NOT NULL,
 		tier        INTEGER NOT NULL CHECK(tier BETWEEN 1 AND 5),
 		active      INTEGER NOT NULL DEFAULT 1,
-		division    TEXT NOT NULL DEFAULT '',
+		law_group   TEXT NOT NULL DEFAULT '',
 		source_flow TEXT NOT NULL DEFAULT '',
 		petition_id TEXT NOT NULL DEFAULT '',
 		created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
@@ -192,7 +191,7 @@ func (s *Store) initSchema() error {
 		version_hash         TEXT NOT NULL,
 		goal                 TEXT NOT NULL,
 		tier                 INTEGER NOT NULL,
-		division             TEXT NOT NULL DEFAULT '',
+		law_group            TEXT NOT NULL DEFAULT '',
 		representations_json TEXT NOT NULL,
 		applies_to_json      TEXT NOT NULL,
 		embedding            BLOB,
@@ -204,7 +203,7 @@ func (s *Store) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_law_versions_law    ON law_versions(law_id);
 	CREATE INDEX IF NOT EXISTS idx_laws_active         ON laws(active);
 	CREATE INDEX IF NOT EXISTS idx_laws_tier           ON laws(tier);
-	CREATE INDEX IF NOT EXISTS idx_laws_division       ON laws(division);
+	CREATE INDEX IF NOT EXISTS idx_laws_group         ON laws(law_group);
 	`
 	if _, err := s.db.Exec(lawSchema); err != nil {
 		return err
@@ -248,12 +247,15 @@ func (s *Store) initSchema() error {
 		}
 	}
 
-	// ALTER TABLE migration: add law_group column to laws table if not present.
-	// go-sqlite3 does not support IF NOT EXISTS for ADD COLUMN, so we attempt
-	// the migration and ignore the error if the column already exists.
+	// ALTER TABLE migration: add law_group column to law_versions (if not present)
+	// and drop the old division column from both tables.
+	// go-sqlite3 does not support IF NOT EXISTS for these operations, so we attempt
+	// the migration and ignore the error if the column already exists or is missing.
 	// ponytail: naive try-and-ignore; a migration tracking table would be needed
 	// for more complex migrations.
-	_, _ = s.db.Exec(`ALTER TABLE laws ADD COLUMN law_group TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE law_versions ADD COLUMN law_group TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE laws DROP COLUMN division`)
+	_, _ = s.db.Exec(`ALTER TABLE law_versions DROP COLUMN division`)
 
 	// Create the sqlite-vec virtual table for vector similarity search.
 	// The law_embeddings table stores one embedding per active law, keyed
@@ -283,11 +285,11 @@ func (s *Store) initSchema() error {
 // ---------------------------------------------------------------------------
 
 // ComputeContentHash computes a deterministic SHA-256 hash of a law's
-// canonical content: goal, tier, division, sorted appliesTo, and sorted
+// canonical content: goal, tier, law_group, sorted appliesTo, and sorted
 // representations (by type then content).
 func ComputeContentHash(
 	goal string, tier int, appliesTo []string,
-	representations []Representation, division string,
+	representations []Representation, group string,
 ) string {
 	// Sort appliesTo.
 	sortedAppliesTo := make([]string, len(appliesTo))
@@ -311,7 +313,7 @@ func ComputeContentHash(
 	binary.BigEndian.PutUint32(tierBytes, uint32(tier))
 	h.Write(tierBytes)
 
-	h.Write([]byte(division))
+	h.Write([]byte(group))
 
 	for _, at := range sortedAppliesTo {
 		h.Write([]byte(at))
@@ -417,7 +419,7 @@ func (s *Store) CreateLawInactive(ctx context.Context, id string, law Law) (stri
 }
 
 func (s *Store) createLaw(ctx context.Context, id string, law Law, active bool) (string, error) {
-	versionHash := ComputeContentHash(law.Goal, law.Tier, law.AppliesTo, law.Representations, law.Division)
+	versionHash := ComputeContentHash(law.Goal, law.Tier, law.AppliesTo, law.Representations, law.Group)
 
 	repsJSON, err := marshalRepresentations(law.Representations)
 	if err != nil {
@@ -444,9 +446,9 @@ func (s *Store) createLaw(ctx context.Context, id string, law Law, active bool) 
 	// Insert into laws.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO laws
-		 (id, goal, tier, division, source_flow, petition_id, active, created_at, updated_at)
+		 (id, goal, tier, law_group, source_flow, petition_id, active, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, law.Goal, law.Tier, law.Division, law.SourceFlow, law.PetitionID,
+		id, law.Goal, law.Tier, law.Group, law.SourceFlow, law.PetitionID,
 		activeInt, now, now,
 	)
 	if err != nil {
@@ -472,9 +474,9 @@ func (s *Store) createLaw(ctx context.Context, id string, law Law, active bool) 
 	// Insert initial version.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO law_versions
-		 (law_id, version_hash, goal, tier, division, representations_json, applies_to_json, created_at)
+		 (law_id, version_hash, goal, tier, law_group, representations_json, applies_to_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, versionHash, law.Goal, law.Tier, law.Division, repsJSON, atJSON, now,
+		id, versionHash, law.Goal, law.Tier, law.Group, repsJSON, atJSON, now,
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert law_version: %w", err)
@@ -495,15 +497,15 @@ func (s *Store) GetLaw(ctx context.Context, id string) (Law, error) {
 		goal       string
 		tier       int
 		activeInt  int
-		division   string
+		groupVal   string
 		sourceFlow string
 		petitionID string
 		createdAt  string
 		updatedAt  string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT goal, tier, active, division, source_flow, petition_id, created_at, updated_at FROM laws WHERE id = ?`, id,
-	).Scan(&goal, &tier, &activeInt, &division, &sourceFlow, &petitionID, &createdAt, &updatedAt)
+		`SELECT goal, tier, active, law_group, source_flow, petition_id, created_at, updated_at FROM laws WHERE id = ?`, id,
+	).Scan(&goal, &tier, &activeInt, &groupVal, &sourceFlow, &petitionID, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return Law{}, fmt.Errorf("law %q not found", id)
 	}
@@ -550,7 +552,7 @@ func (s *Store) GetLaw(ctx context.Context, id string) (Law, error) {
 		Active:          activeInt == 1,
 		AppliesTo:       appliesTo,
 		Representations: reps,
-		Division:        division,
+		Group:           groupVal,
 		VersionHash:     versionHash,
 		CreatedAt:       ct,
 		UpdatedAt:       ut,
@@ -562,7 +564,7 @@ func (s *Store) GetLaw(ctx context.Context, id string) (Law, error) {
 // UpdateLaw appends a new version and updates the laws table. Returns
 // the new version hash.
 func (s *Store) UpdateLaw(ctx context.Context, id string, law Law) (string, error) {
-	versionHash := ComputeContentHash(law.Goal, law.Tier, law.AppliesTo, law.Representations, law.Division)
+	versionHash := ComputeContentHash(law.Goal, law.Tier, law.AppliesTo, law.Representations, law.Group)
 
 	repsJSON, err := marshalRepresentations(law.Representations)
 	if err != nil {
@@ -583,8 +585,8 @@ func (s *Store) UpdateLaw(ctx context.Context, id string, law Law) (string, erro
 
 	// Update the laws table.
 	_, err = tx.ExecContext(ctx,
-		`UPDATE laws SET goal = ?, tier = ?, division = ?, source_flow = ?, petition_id = ?, updated_at = ? WHERE id = ?`,
-		law.Goal, law.Tier, law.Division, law.SourceFlow, law.PetitionID, now, id,
+		`UPDATE laws SET goal = ?, tier = ?, law_group = ?, source_flow = ?, petition_id = ?, updated_at = ? WHERE id = ?`,
+		law.Goal, law.Tier, law.Group, law.SourceFlow, law.PetitionID, now, id,
 	)
 	if err != nil {
 		return "", fmt.Errorf("update law: %w", err)
@@ -614,9 +616,9 @@ func (s *Store) UpdateLaw(ctx context.Context, id string, law Law) (string, erro
 	// content cycles back to a previously-seen hash.
 	_, err = tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO law_versions
-		 (law_id, version_hash, goal, tier, division, representations_json, applies_to_json, created_at)
+		 (law_id, version_hash, goal, tier, law_group, representations_json, applies_to_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, versionHash, law.Goal, law.Tier, law.Division, repsJSON, atJSON, now,
+		id, versionHash, law.Goal, law.Tier, law.Group, repsJSON, atJSON, now,
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert law_version: %w", err)
@@ -706,19 +708,15 @@ func (s *Store) SetTier(ctx context.Context, id string, tier int) error {
 //  3. ArtefactKind + RepresentationType: further filtered by MIME type in
 //     representations, without stripping representations from the result.
 //
-// All modes support an optional Division filter: when set, only laws with
-// that exact division value are returned.
+// All modes support an optional Group filter: when set, only laws with
+// that exact group value are returned.
 func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error) {
 	var lawIDs []string
 
 	if filter.GovernedArtefact == "" {
-		// Mode 1: all active laws, optionally filtered by division and/or group.
+		// Mode 1: all active laws, optionally filtered by group.
 		query := `SELECT id FROM laws WHERE active = 1`
 		args := []any{}
-		if filter.Division != "" {
-			query += ` AND division = ?`
-			args = append(args, filter.Division)
-		}
 		if filter.Group != "" {
 			query += ` AND law_group = ?`
 			args = append(args, filter.Group)
@@ -740,7 +738,7 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 			return nil, err
 		}
 	} else {
-		// Mode 2/3: scoped + global active laws, optionally filtered by division and/or group.
+		// Mode 2/3: scoped + global active laws, optionally filtered by group.
 		// A law is "global" if it has no entries in law_applies_to.
 		query := `
 			SELECT DISTINCT l.id FROM laws l
@@ -748,10 +746,6 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 			WHERE l.active = 1
 			AND (la.artefact_kind = ? OR la.law_id IS NULL)`
 		args := []any{filter.GovernedArtefact}
-		if filter.Division != "" {
-			query += ` AND l.division = ?`
-			args = append(args, filter.Division)
-		}
 		if filter.Group != "" {
 			query += ` AND l.law_group = ?`
 			args = append(args, filter.Group)

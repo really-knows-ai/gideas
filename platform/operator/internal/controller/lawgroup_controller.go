@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,25 +28,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	flowv1gen "github.com/gideas/flow/gen/flow/v1"
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 )
 
-// LawGroupReconciler reconciles a LawGroup object.
-//
-// Stub implementation: logs reconciliation and sets a Ready condition.
-// Full sync-to-Librarian logic is added in Phase 5.
+// LawGroupReconciler reconciles a LawGroup object by syncing it to the
+// Librarian via gRPC.
 type LawGroupReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme    *runtime.Scheme
+	Librarian flowv1gen.LibrarianServiceClient
 }
 
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=lawgroups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=lawgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=lawgroups/finalizers,verbs=update
 
-// Reconcile logs the LawGroup and sets a Ready condition.
-// This is a stub — full sync logic (including Librarian gRPC sync)
-// is implemented in Phase 5.
+// Reconcile syncs the LawGroup CRD into the Librarian.
+// On deletion: calls DeleteLawGroup on the Librarian.
+// On create/update: calls SyncLawGroup on the Librarian.
+// Sets Ready condition based on success or failure.
 func (r *LawGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -61,23 +63,53 @@ func (r *LawGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		"passes", lg.Spec.Passes,
 	)
 
-	// ponytail: Stub — sets Ready without validating mode/passes against
-	// any external system. Phase 5 adds gRPC sync and validation.
-	r.setCondition(&lg, "Ready", metav1.ConditionTrue, "Reconciled",
-		fmt.Sprintf("LawGroup %s reconciled (mode=%s, passes=%d)", lg.Name, lg.Spec.Mode, lg.Spec.Passes))
+	if r.Librarian == nil {
+		err := fmt.Errorf("librarian client not configured")
+		r.setCondition(&lg, metav1.ConditionFalse, "LibrarianUnavailable", err.Error())
+		return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &lg)
+	}
+
+	// Deletion: sync removal to Librarian.
+	if !lg.DeletionTimestamp.IsZero() {
+		if _, err := r.Librarian.DeleteLawGroup(ctx, &flowv1gen.DeleteLawGroupRequest{
+			GroupName: lg.Name,
+		}); err != nil {
+			log.Error(err, "Failed to delete LawGroup from Librarian", "name", lg.Name)
+			r.setCondition(&lg, metav1.ConditionFalse, "DeleteFailed", err.Error())
+			return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &lg)
+		}
+		log.Info("LawGroup deleted from Librarian", "name", lg.Name)
+		return ctrl.Result{}, nil
+	}
+
+	// Create/update: sync to Librarian.
+	reqProto := &flowv1gen.SyncLawGroupRequest{
+		Group: &flowv1gen.LawGroup{
+			Name:   lg.Name,
+			Mode:   lg.Spec.Mode,
+			Passes: lg.Spec.Passes,
+		},
+	}
+	if _, err := r.Librarian.SyncLawGroup(ctx, reqProto); err != nil {
+		log.Error(err, "Failed to sync LawGroup to Librarian", "name", lg.Name)
+		r.setCondition(&lg, metav1.ConditionFalse, "SyncFailed", err.Error())
+		return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &lg)
+	}
+
+	r.setCondition(&lg, metav1.ConditionTrue, "Synced",
+		fmt.Sprintf("LawGroup %s synced (mode=%s, passes=%d)", lg.Name, lg.Spec.Mode, lg.Spec.Passes))
 
 	return ctrl.Result{}, r.persistStatus(ctx, &lg)
 }
 
-// setCondition sets a condition on the LawGroup's status (in memory only).
+// setCondition sets a Ready condition on the LawGroup's status (in memory only).
 func (r *LawGroupReconciler) setCondition(
 	lg *flowv1.LawGroup,
-	condType string,
 	status metav1.ConditionStatus,
 	reason, message string,
 ) {
 	meta.SetStatusCondition(&lg.Status.Conditions, metav1.Condition{
-		Type:               condType,
+		Type:               "Ready",
 		Status:             status,
 		ObservedGeneration: lg.Generation,
 		Reason:             reason,
