@@ -167,6 +167,18 @@ func BuildDispatchMatrix(
 	return ComputeDispatchMatrix(unitsByGroup, appraiserIDs, groups)
 }
 
+// protoLawGroupToSDK converts a protobuf LawGroup to the SDK LawGroup type.
+func protoLawGroupToSDK(g *flowv1.LawGroup) *LawGroup {
+	if g == nil {
+		return nil
+	}
+	return &LawGroup{
+		Name:   g.GetName(),
+		Mode:   GroupMode(g.GetMode()),
+		Passes: g.GetPasses(),
+	}
+}
+
 // sortedGroupNames returns the sorted keys of m for deterministic map iteration.
 func sortedGroupNames[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))

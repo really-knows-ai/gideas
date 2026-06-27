@@ -623,23 +623,28 @@ func (c *Client) RecordFinding(
 // GetLawGroup returns the evaluation contract for a named law group.
 // If the group has no stored entry, the Librarian returns a built-in
 // default {mode:"bundle", passes:1}.
-func (c *Client) GetLawGroup(ctx context.Context, groupName string) (*flowv1.LawGroup, error) {
+func (c *Client) GetLawGroup(ctx context.Context, groupName string) (*LawGroup, error) {
 	resp, err := c.Librarian.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: groupName})
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get law group failed: %w", err)
 	}
-	return resp.GetGroup(), nil
+	return protoLawGroupToSDK(resp.GetGroup()), nil
 }
 
 // ListLawGroups returns all stored law groups.
 // Built-in defaults for groups without entries are NOT included.
 // Returns an empty slice if no groups are stored.
-func (c *Client) ListLawGroups(ctx context.Context) ([]*flowv1.LawGroup, error) {
+func (c *Client) ListLawGroups(ctx context.Context) ([]*LawGroup, error) {
 	resp, err := c.Librarian.ListLawGroups(ctx, &flowv1.ListLawGroupsRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: list law groups failed: %w", err)
 	}
-	return resp.GetGroups(), nil
+	groups := resp.GetGroups()
+	out := make([]*LawGroup, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, protoLawGroupToSDK(g))
+	}
+	return out, nil
 }
 
 // QueryLawsByGroup returns all laws matching the governed artefact and group.

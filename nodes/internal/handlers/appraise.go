@@ -266,17 +266,13 @@ func fanOutAppraisal(
 	}
 	sort.Strings(groupNames)
 	for _, groupName := range groupNames {
-		protoGroup, getErr := client.GetLawGroup(ctx, groupName)
+		group, getErr := client.GetLawGroup(ctx, groupName)
 		if getErr != nil {
 			slog.Warn("appraisal: get law group failed, using defaults",
 				"group", groupName, "error", getErr)
 			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
 		} else {
-			groups[groupName] = &flow.LawGroup{
-				Name:   protoGroup.GetName(),
-				Mode:   flow.GroupMode(protoGroup.GetMode()),
-				Passes: protoGroup.GetPasses(),
-			}
+			groups[groupName] = group
 		}
 	}
 
