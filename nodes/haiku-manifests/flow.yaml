@@ -177,16 +177,16 @@ spec:
     hearing-entry:
       "law-reference": []
   exitContracts:
-    # The haiku must carry linter, appraise-default, and approval stamps to exit.
+    # The haiku must carry linter, appraise-security, and approval stamps to exit.
     standard-exit:
       "haiku":
         - linter
-        - appraise-default
+        - appraise-security
         - approval
-    # The petition must carry appraise-default + approval stamps to exit the Clerk cycle.
+    # The petition must carry appraise-security + approval stamps to exit the Clerk cycle.
     clerk-exit:
       "petition":
-        - appraise-default
+        - appraise-security
         - approval
   nodeGroups:
     main-cycle:

@@ -2,6 +2,7 @@ package v1
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 )
 
@@ -43,4 +44,20 @@ func TestLawGroupDefaultMode(t *testing.T) {
 	if spec.Passes != 0 {
 		t.Fatalf("expected 0 passes for zero-value, got %d", spec.Passes)
 	}
+}
+
+func TestGeneratedLawGroupCRD_HasModeEnum(t *testing.T) {
+	t.Parallel()
+
+	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.gideas.io_lawgroups.yaml"))
+	assertContains(t, content, "enum:")
+	assertContains(t, content, "- bundle")
+	assertContains(t, content, "- law-by-law")
+}
+
+func TestGeneratedLawGroupCRD_HasPassesMinimum(t *testing.T) {
+	t.Parallel()
+
+	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.gideas.io_lawgroups.yaml"))
+	assertContains(t, content, "minimum: 1")
 }

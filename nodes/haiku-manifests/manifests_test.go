@@ -345,7 +345,7 @@ func TestFoundryFlow_ClerkExitContract(t *testing.T) {
 		t.Fatal("clerk-exit missing 'petition' artefact")
 	}
 
-	expected := []string{"appraise-default", "approval"}
+	expected := []string{"appraise-security", "approval"}
 	if len(stamps) != len(expected) {
 		t.Fatalf("clerk-exit/petition stamps: want %v, got %v", expected, stamps)
 	}
@@ -356,7 +356,7 @@ func TestFoundryFlow_ClerkExitContract(t *testing.T) {
 	}
 }
 
-func TestFoundryFlow_StandardExitContract_HasAppraiseDefault(t *testing.T) {
+func TestFoundryFlow_StandardExitContract_HasAppraiseSecurity(t *testing.T) {
 	ff := findFoundryFlow(t)
 
 	exit, ok := ff.Spec.ExitContracts["standard-exit"]
@@ -369,7 +369,7 @@ func TestFoundryFlow_StandardExitContract_HasAppraiseDefault(t *testing.T) {
 		t.Fatal("standard-exit missing 'haiku' artefact")
 	}
 
-	expected := []string{"linter", "appraise-default", "approval"}
+	expected := []string{"linter", "appraise-security", "approval"}
 	if len(stamps) != len(expected) {
 		t.Fatalf("standard-exit/haiku stamps: want %v, got %v", expected, stamps)
 	}
@@ -1919,7 +1919,7 @@ func TestExitContracts_NoReviewStamp(t *testing.T) {
 		for artefact, stamps := range exit {
 			for _, s := range stamps {
 				if s == "review" {
-					t.Errorf("standard-exit/%q still contains 'review' stamp (should be appraise-default)", artefact)
+					t.Errorf("standard-exit/%q still contains 'review' stamp (should be appraise-security)", artefact)
 				}
 			}
 		}
@@ -1930,7 +1930,7 @@ func TestExitContracts_NoReviewStamp(t *testing.T) {
 		for artefact, stamps := range exit {
 			for _, s := range stamps {
 				if s == "review" {
-					t.Errorf("clerk-exit/%q still contains 'review' stamp (should be appraise-default)", artefact)
+					t.Errorf("clerk-exit/%q still contains 'review' stamp (should be appraise-security)", artefact)
 				}
 			}
 		}
