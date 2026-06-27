@@ -7,6 +7,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -29,6 +31,10 @@ const (
 	// metadataKeyWorkitemID is the gRPC metadata key used to propagate
 	// the workitem context on every outgoing call.
 	metadataKeyWorkitemID = "x-flow-workitem-id"
+
+	// EnvFlowNamespace is the environment variable injected by the runtime
+	// to identify the current flow's Kubernetes namespace.
+	EnvFlowNamespace = "FLOW_NAMESPACE"
 )
 
 // EnvEventBusAddress is the environment variable injected by the runtime
@@ -66,6 +72,7 @@ type Client struct {
 	conn         *grpc.ClientConn
 	eventBusConn *grpc.ClientConn
 	workitemID   string
+	flowNamespace string
 
 	// Raw gRPC service clients, exposed for advanced use.
 	Sidecar        flowv1.SidecarServiceClient
@@ -96,6 +103,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	}
 
 	workitemID := os.Getenv(EnvWorkitemID)
+	flowNamespace := os.Getenv(EnvFlowNamespace)
 
 	conn, err := grpc.NewClient(
 		cfg.sidecarAddr,
@@ -112,6 +120,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	c := &Client{
 		conn:           conn,
 		workitemID:     workitemID,
+		flowNamespace:  flowNamespace,
 		Sidecar:        flowv1.NewSidecarServiceClient(conn),
 		Operator:       flowv1.NewOperatorServiceClient(conn),
 		Archivist:      flowv1.NewArchivistServiceClient(conn),
@@ -158,6 +167,11 @@ func (c *Client) Close() error {
 // WorkitemID returns the workitem ID read from the environment at init time.
 func (c *Client) WorkitemID() string {
 	return c.workitemID
+}
+
+// FlowNamespace returns the flow namespace read from the environment at init time.
+func (c *Client) FlowNamespace() string {
+	return c.flowNamespace
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +626,83 @@ func (c *Client) RecordFinding(
 		return "", fmt.Errorf("flow sdk: record finding failed: %w", err)
 	}
 	return resp.GetLawId(), nil
+}
+
+// ---------------------------------------------------------------------------
+// LawGroup Convenience Methods
+// ---------------------------------------------------------------------------
+
+// GetLawGroup returns the evaluation contract for a named law group.
+// If the group has no stored entry, the Librarian returns a built-in
+// default {mode:"bundle", passes:1}.
+func (c *Client) GetLawGroup(ctx context.Context, groupName string) (*LawGroup, error) {
+	resp, err := c.Librarian.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: groupName})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get law group failed: %w", err)
+	}
+	return protoLawGroupToSDK(resp.GetGroup()), nil
+}
+
+// ListLawGroups returns all stored law groups.
+// Built-in defaults for groups without entries are NOT included.
+// Returns an empty slice if no groups are stored.
+func (c *Client) ListLawGroups(ctx context.Context) ([]*LawGroup, error) {
+	resp, err := c.Librarian.ListLawGroups(ctx, &flowv1.ListLawGroupsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: list law groups failed: %w", err)
+	}
+	groups := resp.GetGroups()
+	out := make([]*LawGroup, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, protoLawGroupToSDK(g))
+	}
+	return out, nil
+}
+
+// QueryLawsByGroup returns all laws matching the governed artefact and group.
+func (c *Client) QueryLawsByGroup(ctx context.Context, governedArtefact, groupName string) ([]*flowv1.Law, error) {
+	filter := &flowv1.LawFilter{
+		GovernedArtefact: governedArtefact,
+		Group:            groupName,
+	}
+	resp, err := c.Librarian.QueryLaws(ctx, &flowv1.QueryLawsRequest{Filter: filter})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: query laws by group failed: %w", err)
+	}
+	return resp.GetLaws(), nil
+}
+
+// PublishAuditEvent marshals the payload to JSON and publishes it to the
+// Event Bus on the "audit" channel. This is a best-effort operation:
+// callers should log the error but not fail work execution.
+// The workitemID and flowNamespace are set on the FlowEvent for standard
+// event labelling (spec R11). Pass empty strings if unavailable.
+func (c *Client) PublishAuditEvent(
+	ctx context.Context, eventType string, payload any, workitemID, flowNamespace string,
+) error {
+	if c.EventBus == nil {
+		return fmt.Errorf("flow sdk: publish audit event requires Event Bus connection (set EVENT_BUS_ADDRESS)")
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("flow sdk: marshal audit payload: %w", err)
+	}
+	// ponytail: using time-based ID instead of randid (not available in SDK module).
+	_, err = c.EventBus.Publish(ctx, &flowv1.PublishRequest{
+		Channel: "audit",
+		Event: &flowv1.FlowEvent{
+			EventId:       fmt.Sprintf("%x", time.Now().UnixNano()),
+			EventType:     eventType,
+			WorkitemId:    workitemID,
+			FlowNamespace: flowNamespace,
+			Timestamp:     timestamppb.Now(),
+			Payload:       raw,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("flow sdk: publish audit event failed: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

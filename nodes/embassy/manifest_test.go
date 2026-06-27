@@ -175,7 +175,7 @@ func TestBuildManifest_IncludesLocalStampsAsForeignStamps(t *testing.T) {
 		stamps: map[string][]*flowv1.Stamp{
 			"petition": {
 				{Name: "approval", ApplyingNode: "clerk-sort", ContentHash: "hash-1"},
-				{Name: "review", ApplyingNode: "clerk-appraise", ContentHash: "hash-2"},
+				{Name: "review", ApplyingNode: "clerk-appraisal", ContentHash: "hash-2"},
 			},
 		},
 	}

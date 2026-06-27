@@ -1039,9 +1039,9 @@ type Law struct {
 	VersionHash     string                 `protobuf:"bytes,6,opt,name=version_hash,json=versionHash,proto3" json:"version_hash,omitempty"`
 	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// Optional specialisation division (e.g. "security", "architecture").
-	// Empty means unset; consumers treat empty as "general".
-	Division      string `protobuf:"bytes,9,opt,name=division,proto3" json:"division,omitempty"`
+	// Law group name. Empty means "default" group.
+	// See: specs/05-reference/crds.md#lawgroup
+	Group         string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1132,9 +1132,9 @@ func (x *Law) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *Law) GetDivision() string {
+func (x *Law) GetGroup() string {
 	if x != nil {
-		return x.Division
+		return x.Group
 	}
 	return ""
 }
@@ -1265,6 +1265,70 @@ func (x *ArtefactState) GetCurrentVersionHash() string {
 	return ""
 }
 
+// LawGroup defines the evaluation contract for a named group of laws.
+type LawGroup struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Group name (matches metadata.name of a LawGroup CRD).
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Evaluation mode: "bundle" (one unit per group) or "law-by-law" (one unit per law).
+	Mode string `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	// Number of evaluation passes per unit per appraiser. Must be >= 1.
+	Passes        int32 `protobuf:"varint,3,opt,name=passes,proto3" json:"passes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LawGroup) Reset() {
+	*x = LawGroup{}
+	mi := &file_flow_v1_common_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LawGroup) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LawGroup) ProtoMessage() {}
+
+func (x *LawGroup) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_common_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LawGroup.ProtoReflect.Descriptor instead.
+func (*LawGroup) Descriptor() ([]byte, []int) {
+	return file_flow_v1_common_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *LawGroup) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *LawGroup) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *LawGroup) GetPasses() int32 {
+	if x != nil {
+		return x.Passes
+	}
+	return 0
+}
+
 // Version history entry for an artefact.
 type VersionEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1277,7 +1341,7 @@ type VersionEntry struct {
 
 func (x *VersionEntry) Reset() {
 	*x = VersionEntry{}
-	mi := &file_flow_v1_common_proto_msgTypes[13]
+	mi := &file_flow_v1_common_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1289,7 +1353,7 @@ func (x *VersionEntry) String() string {
 func (*VersionEntry) ProtoMessage() {}
 
 func (x *VersionEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_common_proto_msgTypes[13]
+	mi := &file_flow_v1_common_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1302,7 +1366,7 @@ func (x *VersionEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionEntry.ProtoReflect.Descriptor instead.
 func (*VersionEntry) Descriptor() ([]byte, []int) {
-	return file_flow_v1_common_proto_rawDescGZIP(), []int{13}
+	return file_flow_v1_common_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *VersionEntry) GetVersionHash() string {
@@ -1343,7 +1407,7 @@ type FrictionAggregate struct {
 
 func (x *FrictionAggregate) Reset() {
 	*x = FrictionAggregate{}
-	mi := &file_flow_v1_common_proto_msgTypes[14]
+	mi := &file_flow_v1_common_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1355,7 +1419,7 @@ func (x *FrictionAggregate) String() string {
 func (*FrictionAggregate) ProtoMessage() {}
 
 func (x *FrictionAggregate) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_common_proto_msgTypes[14]
+	mi := &file_flow_v1_common_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1368,7 +1432,7 @@ func (x *FrictionAggregate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FrictionAggregate.ProtoReflect.Descriptor instead.
 func (*FrictionAggregate) Descriptor() ([]byte, []int) {
-	return file_flow_v1_common_proto_rawDescGZIP(), []int{14}
+	return file_flow_v1_common_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *FrictionAggregate) GetLawId() string {
@@ -1438,7 +1502,7 @@ type TimeRange struct {
 
 func (x *TimeRange) Reset() {
 	*x = TimeRange{}
-	mi := &file_flow_v1_common_proto_msgTypes[15]
+	mi := &file_flow_v1_common_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1450,7 +1514,7 @@ func (x *TimeRange) String() string {
 func (*TimeRange) ProtoMessage() {}
 
 func (x *TimeRange) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_common_proto_msgTypes[15]
+	mi := &file_flow_v1_common_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1463,7 +1527,7 @@ func (x *TimeRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TimeRange.ProtoReflect.Descriptor instead.
 func (*TimeRange) Descriptor() ([]byte, []int) {
-	return file_flow_v1_common_proto_rawDescGZIP(), []int{15}
+	return file_flow_v1_common_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TimeRange) GetStart() *timestamppb.Timestamp {
@@ -1492,7 +1556,7 @@ type IntegrationResult struct {
 
 func (x *IntegrationResult) Reset() {
 	*x = IntegrationResult{}
-	mi := &file_flow_v1_common_proto_msgTypes[16]
+	mi := &file_flow_v1_common_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1504,7 +1568,7 @@ func (x *IntegrationResult) String() string {
 func (*IntegrationResult) ProtoMessage() {}
 
 func (x *IntegrationResult) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_common_proto_msgTypes[16]
+	mi := &file_flow_v1_common_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1517,7 +1581,7 @@ func (x *IntegrationResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IntegrationResult.ProtoReflect.Descriptor instead.
 func (*IntegrationResult) Descriptor() ([]byte, []int) {
-	return file_flow_v1_common_proto_rawDescGZIP(), []int{16}
+	return file_flow_v1_common_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *IntegrationResult) GetLawId() string {
@@ -1614,8 +1678,10 @@ const file_flow_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1a\n" +
-	"\bdivision\x18\t \x01(\tR\bdivision\">\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x14\n" +
+	"\x05group\x18\n" +
+	" \x01(\tR\x05groupJ\x04\b\t\x10\n" +
+	"\">\n" +
 	"\x0eRepresentation\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\"\xb0\x01\n" +
@@ -1625,7 +1691,11 @@ const file_flow_v1_common_proto_rawDesc = "" +
 	"\x11governed_artefact\x18\x02 \x01(\tR\x10governedArtefact\x12\x1f\n" +
 	"\vstamp_names\x18\x03 \x03(\tR\n" +
 	"stampNames\x120\n" +
-	"\x14current_version_hash\x18\x04 \x01(\tR\x12currentVersionHash\"\x8b\x01\n" +
+	"\x14current_version_hash\x18\x04 \x01(\tR\x12currentVersionHash\"J\n" +
+	"\bLawGroup\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x16\n" +
+	"\x06passes\x18\x03 \x01(\x05R\x06passes\"\x8b\x01\n" +
 	"\fVersionEntry\x12!\n" +
 	"\fversion_hash\x18\x01 \x01(\tR\vversionHash\x12\x1d\n" +
 	"\n" +
@@ -1696,7 +1766,7 @@ func file_flow_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_flow_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_flow_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_flow_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_flow_v1_common_proto_goTypes = []any{
 	(Severity)(0),                 // 0: flow.v1.Severity
 	(FeedbackState)(0),            // 1: flow.v1.FeedbackState
@@ -1716,34 +1786,35 @@ var file_flow_v1_common_proto_goTypes = []any{
 	(*Law)(nil),                   // 15: flow.v1.Law
 	(*Representation)(nil),        // 16: flow.v1.Representation
 	(*ArtefactState)(nil),         // 17: flow.v1.ArtefactState
-	(*VersionEntry)(nil),          // 18: flow.v1.VersionEntry
-	(*FrictionAggregate)(nil),     // 19: flow.v1.FrictionAggregate
-	(*TimeRange)(nil),             // 20: flow.v1.TimeRange
-	(*IntegrationResult)(nil),     // 21: flow.v1.IntegrationResult
-	nil,                           // 22: flow.v1.WorkitemContext.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
+	(*LawGroup)(nil),              // 18: flow.v1.LawGroup
+	(*VersionEntry)(nil),          // 19: flow.v1.VersionEntry
+	(*FrictionAggregate)(nil),     // 20: flow.v1.FrictionAggregate
+	(*TimeRange)(nil),             // 21: flow.v1.TimeRange
+	(*IntegrationResult)(nil),     // 22: flow.v1.IntegrationResult
+	nil,                           // 23: flow.v1.WorkitemContext.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 24: google.protobuf.Timestamp
 }
 var file_flow_v1_common_proto_depIdxs = []int32{
 	2,  // 0: flow.v1.RoutingInstruction.type:type_name -> flow.v1.RoutingType
-	22, // 1: flow.v1.WorkitemContext.metadata:type_name -> flow.v1.WorkitemContext.MetadataEntry
-	23, // 2: flow.v1.Stamp.created_at:type_name -> google.protobuf.Timestamp
+	23, // 1: flow.v1.WorkitemContext.metadata:type_name -> flow.v1.WorkitemContext.MetadataEntry
+	24, // 2: flow.v1.Stamp.created_at:type_name -> google.protobuf.Timestamp
 	1,  // 3: flow.v1.FeedbackItem.state:type_name -> flow.v1.FeedbackState
 	11, // 4: flow.v1.FeedbackItem.history:type_name -> flow.v1.FeedbackEvent
 	12, // 5: flow.v1.FeedbackItem.justification:type_name -> flow.v1.Justification
-	23, // 6: flow.v1.FeedbackItem.created_at:type_name -> google.protobuf.Timestamp
-	23, // 7: flow.v1.FeedbackEvent.timestamp:type_name -> google.protobuf.Timestamp
+	24, // 6: flow.v1.FeedbackItem.created_at:type_name -> google.protobuf.Timestamp
+	24, // 7: flow.v1.FeedbackEvent.timestamp:type_name -> google.protobuf.Timestamp
 	13, // 8: flow.v1.Justification.citation:type_name -> flow.v1.Citation
 	14, // 9: flow.v1.Justification.novel_argument:type_name -> flow.v1.NovelArgument
 	16, // 10: flow.v1.Law.representations:type_name -> flow.v1.Representation
 	3,  // 11: flow.v1.Law.tier:type_name -> flow.v1.LawTier
-	23, // 12: flow.v1.Law.created_at:type_name -> google.protobuf.Timestamp
-	23, // 13: flow.v1.Law.updated_at:type_name -> google.protobuf.Timestamp
-	23, // 14: flow.v1.VersionEntry.created_at:type_name -> google.protobuf.Timestamp
+	24, // 12: flow.v1.Law.created_at:type_name -> google.protobuf.Timestamp
+	24, // 13: flow.v1.Law.updated_at:type_name -> google.protobuf.Timestamp
+	24, // 14: flow.v1.VersionEntry.created_at:type_name -> google.protobuf.Timestamp
 	3,  // 15: flow.v1.FrictionAggregate.tier:type_name -> flow.v1.LawTier
-	23, // 16: flow.v1.FrictionAggregate.earliest:type_name -> google.protobuf.Timestamp
-	23, // 17: flow.v1.FrictionAggregate.latest:type_name -> google.protobuf.Timestamp
-	23, // 18: flow.v1.TimeRange.start:type_name -> google.protobuf.Timestamp
-	23, // 19: flow.v1.TimeRange.end:type_name -> google.protobuf.Timestamp
+	24, // 16: flow.v1.FrictionAggregate.earliest:type_name -> google.protobuf.Timestamp
+	24, // 17: flow.v1.FrictionAggregate.latest:type_name -> google.protobuf.Timestamp
+	24, // 18: flow.v1.TimeRange.start:type_name -> google.protobuf.Timestamp
+	24, // 19: flow.v1.TimeRange.end:type_name -> google.protobuf.Timestamp
 	20, // [20:20] is the sub-list for method output_type
 	20, // [20:20] is the sub-list for method input_type
 	20, // [20:20] is the sub-list for extension type_name
@@ -1766,7 +1837,7 @@ func file_flow_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_common_proto_rawDesc), len(file_flow_v1_common_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

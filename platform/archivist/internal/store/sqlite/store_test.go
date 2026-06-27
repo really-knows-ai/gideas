@@ -432,7 +432,7 @@ func TestResolveStaleFeedback_SkipsCanWontFixTrue(t *testing.T) {
 	ctx := context.Background()
 
 	// Add feedback with canWontFix=true on an older version.
-	id, err := s.AddFeedback(ctx, "wi-1", "art-1", "appraise", true, "subjective review", "hash-v1")
+	id, err := s.AddFeedback(ctx, "wi-1", "art-1", "appraisal", true, "subjective review", "hash-v1")
 	if err != nil {
 		t.Fatalf("AddFeedback: %v", err)
 	}

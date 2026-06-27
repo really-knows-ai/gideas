@@ -387,8 +387,8 @@ func (s *FederationServer) SubmitPublication(
 
 	// --- Authority validation ---
 	// The member must have at least one publisherRole whose scope matches
-	// the submitted law's division.
-	lawDivision := req.GetLaw().GetDivision()
+	// the submitted law's group.
+	lawGroup := req.GetLaw().GetGroup()
 	if len(member.Spec.PublisherRoles) == 0 {
 		return &flowv1.SubmitPublicationResponse{
 			Accepted: false,
@@ -401,7 +401,7 @@ func (s *FederationServer) SubmitPublication(
 
 	var matchingRole *federationv1.PublisherRoleSpec
 	for i := range member.Spec.PublisherRoles {
-		if member.Spec.PublisherRoles[i].Scope == lawDivision {
+		if member.Spec.PublisherRoles[i].Scope == lawGroup {
 			matchingRole = &member.Spec.PublisherRoles[i]
 			break
 		}
@@ -414,7 +414,7 @@ func (s *FederationServer) SubmitPublication(
 				Reason: flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_OUT_OF_SCOPE,
 				RemediationText: fmt.Sprintf(
 					"flow %q has no publisher role for scope %q",
-					req.GetSourceFlowIdentity(), lawDivision),
+					req.GetSourceFlowIdentity(), lawGroup),
 			},
 		}, nil
 	}
@@ -427,7 +427,7 @@ func (s *FederationServer) SubmitPublication(
 				Reason: flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_UNAUTHORISED,
 				RemediationText: fmt.Sprintf(
 					"flow %q has a state-level publisher role for scope %q but is not assigned to any state",
-					req.GetSourceFlowIdentity(), lawDivision),
+					req.GetSourceFlowIdentity(), lawGroup),
 			},
 		}, nil
 	}
@@ -646,7 +646,7 @@ func (s *FederationServer) searchLibrarian(
 
 	resp, err := libClient.SearchSimilarLaws(ctx, &flowv1.SearchSimilarLawsRequest{
 		QueryText:   candidateLaw.GetGoal(),
-		ScopeFilter: candidateLaw.GetDivision(),
+		ScopeFilter: candidateLaw.GetGroup(),
 		Limit:       20,
 	})
 	if err != nil {

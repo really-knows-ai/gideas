@@ -17,6 +17,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/pkg/randid"
+	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -135,7 +136,7 @@ func checkCapability(ctx context.Context, required string) error {
 	caps := md.Get(metadataKeyCapabilities)
 	for _, c := range caps {
 		for cap := range strings.SplitSeq(c, ",") {
-			if strings.TrimSpace(cap) == required {
+			if flow.MatchCapability(strings.TrimSpace(cap), required) {
 				return nil
 			}
 		}
@@ -162,7 +163,7 @@ func (s *LibrarianServer) QueryLaws(
 	if f := req.GetFilter(); f != nil {
 		filter.GovernedArtefact = f.GetGovernedArtefact()
 		filter.RepresentationType = f.GetRepresentationType()
-		filter.Division = f.GetDivision()
+		filter.Group = f.GetGroup()
 
 		// Validate: if representation_type is set, governed_artefact must also be set.
 		if filter.RepresentationType != "" && filter.GovernedArtefact == "" {
@@ -173,7 +174,7 @@ func (s *LibrarianServer) QueryLaws(
 	slog.Info("QueryLaws",
 		"governed_artefact", filter.GovernedArtefact,
 		"representation_type", filter.RepresentationType,
-		"division", filter.Division,
+		"group", filter.Group,
 	)
 
 	laws, err := s.store.QueryLaws(ctx, filter)
@@ -189,6 +190,111 @@ func (s *LibrarianServer) QueryLaws(
 
 	return &flowv1.QueryLawsResponse{Laws: protoLaws}, nil
 }
+
+// ---------------------------------------------------------------------------
+// LawGroup RPCs
+// ---------------------------------------------------------------------------
+
+// GetLawGroup returns a single LawGroup by name. If the group has no stored
+// entry, a built-in default {mode:"bundle", passes:1} is returned without error.
+func (s *LibrarianServer) GetLawGroup(
+	ctx context.Context, req *flowv1.GetLawGroupRequest,
+) (*flowv1.GetLawGroupResponse, error) {
+	if err := checkCapability(ctx, "READ:law"); err != nil {
+		return nil, err
+	}
+
+	group, err := s.store.GetLawGroup(ctx, req.GetGroupName())
+	if err != nil {
+		// "not found" → return built-in default without error.
+		// Any other store error → propagate as Internal.
+		if strings.Contains(err.Error(), "not found") {
+			return &flowv1.GetLawGroupResponse{
+				Group: &flowv1.LawGroup{
+					Name:   req.GetGroupName(),
+					Mode:   "bundle",
+					Passes: 1,
+				},
+			}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "get law group: %v", err)
+	}
+	return &flowv1.GetLawGroupResponse{Group: storeLawGroupToProto(group)}, nil
+}
+
+// ListLawGroups returns all stored law groups. Does NOT include the built-in
+// default for groups without entries.
+func (s *LibrarianServer) ListLawGroups(
+	ctx context.Context, req *flowv1.ListLawGroupsRequest,
+) (*flowv1.ListLawGroupsResponse, error) {
+	if err := checkCapability(ctx, "READ:law"); err != nil {
+		return nil, err
+	}
+
+	groups, err := s.store.ListLawGroups(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list law groups: %v", err)
+	}
+	proto := make([]*flowv1.LawGroup, 0, len(groups))
+	for _, g := range groups {
+		proto = append(proto, storeLawGroupToProto(g))
+	}
+	return &flowv1.ListLawGroupsResponse{Groups: proto}, nil
+}
+
+// SyncLawGroup upserts a LawGroup from the Operator's CRD watch sync.
+func (s *LibrarianServer) SyncLawGroup(
+	ctx context.Context, req *flowv1.SyncLawGroupRequest,
+) (*flowv1.SyncLawGroupResponse, error) {
+	if err := checkCapability(ctx, "WRITE:law"); err != nil {
+		return nil, err
+	}
+
+	g := req.GetGroup()
+	if g.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "group name is required")
+	}
+	if g.GetMode() != "bundle" && g.GetMode() != "law-by-law" {
+		return nil, status.Error(codes.InvalidArgument, "mode must be 'bundle' or 'law-by-law'")
+	}
+	if g.GetPasses() < 1 {
+		return nil, status.Error(codes.InvalidArgument, "passes must be >= 1")
+	}
+
+	if err := s.store.UpsertLawGroup(ctx, g.GetName(), g.GetMode(), int(g.GetPasses())); err != nil {
+		slog.Error("SyncLawGroup failed", "group", g.GetName(), "error", err)
+		return nil, status.Errorf(codes.Internal, "sync law group: %v", err)
+	}
+
+	slog.Info("SyncLawGroup", "group", g.GetName(), "mode", g.GetMode(), "passes", g.GetPasses())
+	return &flowv1.SyncLawGroupResponse{Acknowledged: true}, nil
+}
+
+// DeleteLawGroup removes a LawGroup from the Librarian store by name.
+func (s *LibrarianServer) DeleteLawGroup(
+	ctx context.Context, req *flowv1.DeleteLawGroupRequest,
+) (*flowv1.DeleteLawGroupResponse, error) {
+	if err := checkCapability(ctx, "WRITE:law"); err != nil {
+		return nil, err
+	}
+
+	if req.GetGroupName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "group name is required")
+	}
+
+	if err := s.store.DeleteLawGroup(ctx, req.GetGroupName()); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil, status.Errorf(codes.NotFound, "law group %q not found", req.GetGroupName())
+		}
+		slog.Error("DeleteLawGroup failed", "group", req.GetGroupName(), "error", err)
+		return nil, status.Errorf(codes.Internal, "delete law group: %v", err)
+	}
+
+	slog.Info("DeleteLawGroup", "group", req.GetGroupName())
+	return &flowv1.DeleteLawGroupResponse{Acknowledged: true}, nil
+}
+
+// ---------------------------------------------------------------------------
 
 // Cite records law usage. The Sidecar wraps this as an AddFriction call.
 func (s *LibrarianServer) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.CiteResponse, error) {
@@ -320,7 +426,7 @@ func (s *LibrarianServer) WriteLaw(ctx context.Context, req *flowv1.WriteLawRequ
 		Tier:            tier,
 		AppliesTo:       protoLaw.GetAppliesTo(),
 		Representations: storeReps,
-		Division:        protoLaw.GetDivision(),
+		Group:           protoLaw.GetGroup(),
 	}
 
 	var (
@@ -439,7 +545,7 @@ func (s *LibrarianServer) ReplicateLaws(
 			Tier:            tier,
 			AppliesTo:       protoLaw.GetAppliesTo(),
 			Representations: storeReps,
-			Division:        protoLaw.GetDivision(),
+			Group:           protoLaw.GetGroup(),
 			SourceFlow:      req.GetSourceFlowNamespace(),
 			PetitionID:      req.GetPetitionId(),
 		}
@@ -563,7 +669,7 @@ func (s *LibrarianServer) GetActiveDisputes(
 
 // SearchSimilarLaws performs a vector similarity search against the law
 // embeddings in the Library. It embeds the query text, searches the vec0
-// virtual table for nearest neighbours, optionally filters by division
+// virtual table for nearest neighbours, optionally filters by group
 // (scope_filter), and returns full Law objects with similarity scores.
 func (s *LibrarianServer) SearchSimilarLaws(
 	ctx context.Context, req *flowv1.SearchSimilarLawsRequest,
@@ -616,8 +722,8 @@ func (s *LibrarianServer) SearchSimilarLaws(
 			continue
 		}
 
-		// Scope filter: if set, only include laws matching the division.
-		if req.GetScopeFilter() != "" && law.Division != req.GetScopeFilter() {
+		// Scope filter: if set, only include laws matching the group.
+		if req.GetScopeFilter() != "" && law.Group != req.GetScopeFilter() {
 			continue
 		}
 
@@ -848,10 +954,18 @@ func storeLawToProto(law sqlite.Law) *flowv1.Law {
 		Representations: reps,
 		Tier:            flowv1.LawTier(law.Tier),
 		AppliesTo:       law.AppliesTo,
-		Division:        law.Division,
+		Group:           law.Group,
 		VersionHash:     law.VersionHash,
 		CreatedAt:       timestamppb.New(law.CreatedAt),
 		UpdatedAt:       timestamppb.New(law.UpdatedAt),
+	}
+}
+
+func storeLawGroupToProto(g *sqlite.LawGroup) *flowv1.LawGroup {
+	return &flowv1.LawGroup{
+		Name:   g.Name,
+		Mode:   g.Mode,
+		Passes: int32(g.Passes),
 	}
 }
 

@@ -15,7 +15,7 @@ const testFeedbackID = "fb-1"
 // Helpers for constructing test agents
 // ---------------------------------------------------------------------------
 
-func newTestEvalAgent(t *testing.T, mm *mockModel, spy *appraiseSpy, cfg *appraiseConfig) *EvalAgent {
+func newTestEvalAgent(t *testing.T, mm *mockModel, spy *appraisalSpy, cfg *appraisalConfig) *EvalAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
 	agent, err := NewEvalAgent(client, cfg)
@@ -26,7 +26,7 @@ func newTestEvalAgent(t *testing.T, mm *mockModel, spy *appraiseSpy, cfg *apprai
 	return agent
 }
 
-func newTestFindingAgent(t *testing.T, mm *mockModel, spy *appraiseSpy, cfg *appraiseConfig) *FindingAgent {
+func newTestFindingAgent(t *testing.T, mm *mockModel, spy *appraisalSpy, cfg *appraisalConfig) *FindingAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
 	agent, err := NewFindingAgent(client, cfg)
@@ -43,7 +43,7 @@ func newTestFindingAgent(t *testing.T, mm *mockModel, spy *appraiseSpy, cfg *app
 
 func TestEvalAgent_ValidAccept(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "fix is adequate"}`),
@@ -72,7 +72,7 @@ func TestEvalAgent_ValidAccept(t *testing.T) {
 
 func TestEvalAgent_ValidReject(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "reject", "reason": "fix is incomplete"}`),
@@ -98,7 +98,7 @@ func TestEvalAgent_ValidReject(t *testing.T) {
 
 func TestEvalAgent_RejectsInvalidVerdict(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "maybe", "reason": "unsure"}`),
@@ -120,7 +120,7 @@ func TestEvalAgent_RejectsInvalidVerdict(t *testing.T) {
 
 func TestEvalAgent_RejectsEmptyReason(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": ""}`),
@@ -139,7 +139,7 @@ func TestEvalAgent_RejectsEmptyReason(t *testing.T) {
 
 func TestEvalAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok", "extra": "bad"}`),
@@ -162,7 +162,7 @@ func TestEvalAgent_RejectsAdditionalProperties(t *testing.T) {
 
 func TestEvalAgent_PromptContainsContext(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "looks good"}`),
@@ -202,7 +202,7 @@ func TestEvalAgent_PromptContainsContext(t *testing.T) {
 
 func TestEvalAgent_WontFixPromptContainsJustification(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "justified"}`),
@@ -240,7 +240,7 @@ func TestEvalAgent_WontFixPromptContainsJustification(t *testing.T) {
 
 func TestEvalAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
@@ -270,7 +270,7 @@ func TestEvalAgent_SystemPromptContainsConfig(t *testing.T) {
 
 func TestFindingAgent_ValidOutput(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": [{"goal": "Be concise", "applies_to": ["haiku"], "rationale": "Brevity matters"}]}`),
@@ -305,7 +305,7 @@ func TestFindingAgent_ValidOutput(t *testing.T) {
 
 func TestFindingAgent_EmptyFindings(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
@@ -333,7 +333,7 @@ func TestFindingAgent_EmptyFindings(t *testing.T) {
 
 func TestFindingAgent_NilItems_ShortCircuits(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{} // no output configured — should not be called
 
 	agent := newTestFindingAgent(t, mp, spy, cfg)
@@ -349,7 +349,7 @@ func TestFindingAgent_NilItems_ShortCircuits(t *testing.T) {
 
 func TestFindingAgent_EmptyItems_ShortCircuits(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{} // no output configured — should not be called
 
 	agent := newTestFindingAgent(t, mp, spy, cfg)
@@ -365,7 +365,7 @@ func TestFindingAgent_EmptyItems_ShortCircuits(t *testing.T) {
 
 func TestFindingAgent_RejectsEmptyGoal(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": [{"goal": "", "applies_to": ["haiku"], "rationale": "reason"}]}`),
@@ -390,7 +390,7 @@ func TestFindingAgent_RejectsEmptyGoal(t *testing.T) {
 
 func TestFindingAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": [], "extra": "bad"}`),
@@ -419,7 +419,7 @@ func TestFindingAgent_RejectsAdditionalProperties(t *testing.T) {
 
 func TestFindingAgent_PromptContainsDiscussions(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
@@ -467,7 +467,7 @@ func TestFindingAgent_PromptContainsDiscussions(t *testing.T) {
 
 func TestFindingAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
@@ -502,7 +502,7 @@ func TestEvalAgent_SystemPromptOverride(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.EvalSystemPrompt = `Custom eval system prompt for {{.ReviewArtefact}}.`
 
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
@@ -531,7 +531,7 @@ func TestEvalAgent_QueryTemplateOverride(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.EvalQueryTemplate = `Custom query: {{.FeedbackMessage}}`
 
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
@@ -561,7 +561,7 @@ func TestFindingAgent_SystemPromptOverride(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.FindingSystemPrompt = `Custom finding system for {{.ReviewArtefact}}.`
 
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
@@ -595,7 +595,7 @@ func TestFindingAgent_QueryTemplateOverride(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.FindingQueryTemplate = `Custom finding query: {{.GovernedArtefact}}`
 
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
@@ -630,7 +630,7 @@ func TestEvalAgent_DefaultPromptsWhenOverrideEmpty(t *testing.T) {
 	cfg := defaultTestConfig()
 	// Leave EvalSystemPrompt and EvalQueryTemplate empty (defaults).
 
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
@@ -661,7 +661,7 @@ func TestFindingAgent_DefaultPromptsWhenOverrideEmpty(t *testing.T) {
 	cfg := defaultTestConfig()
 	// Leave FindingSystemPrompt and FindingQueryTemplate empty (defaults).
 
-	spy := newAppraiseSpy()
+	spy := newAppraisalSpy()
 	mp := &mockModel{
 		output: &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),

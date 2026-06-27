@@ -19,7 +19,7 @@ import (
 // defaultConfig returns a sortConfig matching the reference arrangement.
 func defaultConfig() *sortConfig {
 	return &sortConfig{
-		NodeOrder:         "quench,appraise",
+		NodeOrder:         "quench,appraisal",
 		DeadlockThreshold: 3,
 	}
 }
@@ -103,8 +103,8 @@ func TestSort_RoutesToAppraise_MissingReviewStamp(t *testing.T) {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraise {
-		t.Fatalf("expected route to appraise, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
+		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -281,9 +281,9 @@ func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking, got %v", spy.DeadlockedIDs)
 	}
-	// Linter stamp present + WONT_FIX from quench → appraise (adjudication).
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraise {
-		t.Fatalf("expected route to appraise, got %v", spy.RoutedOutputs)
+	// Linter stamp present + WONT_FIX from quench → appraisal (adjudication).
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
+		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -345,7 +345,7 @@ func TestSort_CustomThreshold(t *testing.T) {
 
 	// Threshold=5: depth 4 is below → should NOT deadlock.
 	cfg := &sortConfig{
-		NodeOrder:         "quench,appraise",
+		NodeOrder:         "quench,appraisal",
 		DeadlockThreshold: 5,
 	}
 	client := setupSortTest(t, spy)
@@ -358,9 +358,9 @@ func TestSort_CustomThreshold(t *testing.T) {
 		t.Fatalf("expected no deadlocking with threshold=5, got %v",
 			spy.DeadlockedIDs)
 	}
-	// Linter stamp present + WONT_FIX from quench → appraise (adjudication).
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraise {
-		t.Fatalf("expected route to appraise, got %v", spy.RoutedOutputs)
+	// Linter stamp present + WONT_FIX from quench → appraisal (adjudication).
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
+		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -375,7 +375,7 @@ func TestSort_ZeroThresholdDefaultsTo3(t *testing.T) {
 
 	// Zero threshold → default 3 used → depth 2 below threshold.
 	cfg := &sortConfig{
-		NodeOrder:         "quench,appraise",
+		NodeOrder:         "quench,appraisal",
 		DeadlockThreshold: 0,
 	}
 	client := setupSortTest(t, spy)
@@ -432,10 +432,10 @@ func TestParseNodeOrder(t *testing.T) {
 	}{
 		{"empty", "", nil},
 		{"single", "quench", []string{"quench"}},
-		{"two nodes", "quench,appraise", []string{"quench", "appraise"}},
-		{"with spaces", " quench , appraise ", []string{"quench", "appraise"}},
-		{"trailing comma", "quench,appraise,", []string{"quench", "appraise"}},
-		{"empty entries", "quench,,appraise", []string{"quench", "appraise"}},
+		{"two nodes", "quench,appraisal", []string{"quench", "appraisal"}},
+		{"with spaces", " quench , appraisal ", []string{"quench", "appraisal"}},
+		{"trailing comma", "quench,appraisal,", []string{"quench", "appraisal"}},
+		{"empty entries", "quench,,appraisal", []string{"quench", "appraisal"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -495,9 +495,9 @@ func TestSort_RoutesToRefine_FeedbackFromAppraise(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
-	// Appraise left unresolved feedback.
+	// Appraisal left unresolved feedback.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-appraise", Source: "appraise", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
+		{Id: "fb-appraisal", Source: "appraisal", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
 	client := setupSortTest(t, spy)
 
@@ -505,7 +505,7 @@ func TestSort_RoutesToRefine_FeedbackFromAppraise(t *testing.T) {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	// Review stamp present + unresolved feedback from appraise → refine.
+	// Review stamp present + unresolved feedback from appraisal → refine.
 	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputRefine {
 		t.Fatalf("expected route to refine, got %v", spy.RoutedOutputs)
 	}

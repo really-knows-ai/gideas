@@ -86,3 +86,64 @@ func TestParseStampCapabilities_NoMatches(t *testing.T) {
 		t.Fatalf("expected nil when no stamps, got %v", stamps)
 	}
 }
+
+func TestMatchCapability(t *testing.T) {
+	tests := []struct {
+		name     string
+		pattern  string
+		required string
+		want     bool
+	}{
+		// Exact match (no wildcard).
+		{"exact match", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
+		{"exact mismatch", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/approval", false},
+
+		// Single * in artefact-kind position.
+		{"wildcard kind match", "STAMP:artefact/*/appraise-security", "STAMP:artefact/haiku/appraise-security", true},
+		{"wildcard artefact kind other", "STAMP:artefact/*/appraise-security", "STAMP:artefact/code/appraise-security", true},
+
+		// appraise-* prefix match in stamp-name position.
+		{"prefix wildcard stamp", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
+		{"prefix wildcard long", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security-L001", true},
+		{"prefix wildcard stamp no match", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/approval", false},
+
+		// * does NOT match across /.
+		{"wildcard no cross slash", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security", false},
+		{"wildcard no cross slash 2", "STAMP:artefact/*/appraise-*", "STAMP:artefact/code/nested/appraise-review", false},
+
+		// Multiple wildcards in different segments (covered by detailed Phase 08 tests below).
+
+		// Edge cases.
+		{"empty pattern empty required", "", "", true},
+		{"empty pattern non-empty", "", "STAMP:artefact/haiku/review", false},
+		// (bare * tests covered by Phase 08 cases below)
+
+		// Phase 08 wildcard edge cases.
+		{"*/appraise-* mtch haiku", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
+		{"*/appraise-* mtch L001", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security-L001", true},
+		{"*/appraise-* mtch code", "STAMP:artefact/*/appraise-*", "STAMP:artefact/code/appraise-default", true},
+		{"*/appraise-* empty sfx", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-", true},
+		{"*/appraise-* no appr.", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/approval", false},
+		{"*/appraise-* cross /", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security", false},
+		{"exact review match", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
+		{"exact review no match appraise", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/appraise-security", false},
+
+		// Bare star in different positions.
+		{"top level star only", "*", "*", true},
+		{"top level star no cross", "*", "a/b", false},
+
+		// Non-STAMP capabilities.
+		{"read flow exact", "READ:flow", "READ:flow", true},
+		{"read flow mismatch", "READ:flow", "WRITE:flow", false},
+		{"write artefact wildcard", "WRITE:artefact/*", "WRITE:artefact/haiku", true},
+		{"write artefact wildcard no cross", "WRITE:artefact/*", "WRITE:artefact/haiku/extra", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MatchCapability(tt.pattern, tt.required)
+			if got != tt.want {
+				t.Errorf("MatchCapability(%q, %q) = %v, want %v", tt.pattern, tt.required, got, tt.want)
+			}
+		})
+	}
+}

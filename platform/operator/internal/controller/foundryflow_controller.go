@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -201,13 +202,25 @@ func (r *FoundryFlowReconciler) validateContractStamps(
 			continue
 		}
 		for _, stamp := range requiredStamps {
-			if !vocab[stamp] {
+			if !vocabMatch(vocab, stamp) {
 				return fmt.Errorf("%s contract %q references stamp %q not in GovernedArtefact %q vocabulary",
 					contractType, contractName, stamp, gaName)
 			}
 		}
 	}
 	return nil
+}
+
+// vocabMatch returns true if any vocab pattern matches stamp using filepath.Match.
+// Vocab patterns may contain * as a single-segment wildcard (e.g., "appraise-*").
+// Patterns with no wildcard must match exactly.
+func vocabMatch(vocab map[string]bool, stamp string) bool {
+	for pattern := range vocab {
+		if ok, err := filepath.Match(pattern, stamp); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // validateImportTypes validates crossFlow.importTypes references if present.

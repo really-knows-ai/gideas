@@ -167,7 +167,7 @@ func buildConflictQueryPrompt(candidateLaw *flowv1.Law, similarLaws []*flowv1.Si
 	b.WriteString("## Candidate Law\n")
 	b.WriteString(fmt.Sprintf("ID: %s\n", candidateLaw.GetId()))
 	b.WriteString(fmt.Sprintf("Goal: %s\n", candidateLaw.GetGoal()))
-	b.WriteString(fmt.Sprintf("Division: %s\n", candidateLaw.GetDivision()))
+	b.WriteString(fmt.Sprintf("Group: %s\n", candidateLaw.GetGroup()))
 	b.WriteString(fmt.Sprintf("Tier: %s\n", candidateLaw.GetTier().String()))
 	if len(candidateLaw.GetRepresentations()) > 0 {
 		b.WriteString("Representations:\n")
@@ -185,7 +185,7 @@ func buildConflictQueryPrompt(candidateLaw *flowv1.Law, similarLaws []*flowv1.Si
 		b.WriteString(fmt.Sprintf("\n### Existing Law %d (similarity: %.2f)\n", i+1, sl.GetSimilarityScore()))
 		b.WriteString(fmt.Sprintf("ID: %s\n", law.GetId()))
 		b.WriteString(fmt.Sprintf("Goal: %s\n", law.GetGoal()))
-		b.WriteString(fmt.Sprintf("Division: %s\n", law.GetDivision()))
+		b.WriteString(fmt.Sprintf("Group: %s\n", law.GetGroup()))
 		b.WriteString(fmt.Sprintf("Tier: %s\n", law.GetTier().String()))
 		if len(law.GetRepresentations()) > 0 {
 			b.WriteString("Representations:\n")

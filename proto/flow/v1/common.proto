@@ -188,9 +188,10 @@ message Law {
   string version_hash = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
-  // Optional specialisation division (e.g. "security", "architecture").
-  // Empty means unset; consumers treat empty as "general".
-  string division = 9;
+  reserved 9;
+  // Law group name. Empty means "default" group.
+  // See: specs/05-reference/crds.md#lawgroup
+  string group = 10;
 }
 
 // A typed representation of a law's goal.
@@ -209,6 +210,18 @@ message ArtefactState {
   string governed_artefact = 2;
   repeated string stamp_names = 3;
   string current_version_hash = 4;
+}
+
+// LawGroup defines the evaluation contract for a named group of laws.
+message LawGroup {
+  // Group name (matches metadata.name of a LawGroup CRD).
+  string name = 1;
+
+  // Evaluation mode: "bundle" (one unit per group) or "law-by-law" (one unit per law).
+  string mode = 2;
+
+  // Number of evaluation passes per unit per appraiser. Must be >= 1.
+  int32 passes = 3;
 }
 
 // Version history entry for an artefact.

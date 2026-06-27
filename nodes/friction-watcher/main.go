@@ -88,7 +88,7 @@ func watchFriction(ctx context.Context, entry *flow.EntryClient) error {
 
 		// Consume events from the stream.
 		if err := consumeEvents(ctx, entry, events, tracker); err != nil {
-			slog.Warn("friction-watcher: stream ended, reconnecting",
+			slog.Debug("friction-watcher: stream ended, reconnecting",
 				"error", err)
 			continue
 		}
