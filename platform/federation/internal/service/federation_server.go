@@ -646,7 +646,7 @@ func (s *FederationServer) searchLibrarian(
 
 	resp, err := libClient.SearchSimilarLaws(ctx, &flowv1.SearchSimilarLawsRequest{
 		QueryText:   candidateLaw.GetGoal(),
-		ScopeFilter: candidateLaw.GetDivision(),
+		ScopeFilter: candidateLaw.GetGroup(),
 		Limit:       20,
 	})
 	if err != nil {
