@@ -66,7 +66,7 @@ metadata:
     app.kubernetes.io/name: appraiser
 data:
   node-config.yaml: |
-    inputArtefacts: ["input"]
+    inputArtefacts: ["inputs"]
     reviewArtefact: "review"
 ---
 apiVersion: v1

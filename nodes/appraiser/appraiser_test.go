@@ -256,7 +256,7 @@ func TestAppraiserAgent_HappyPath(t *testing.T) {
 
 	client := newSpyClient(t, spy)
 
-	// Create agent with division suffix and override model.
+	// Create agent with appraiser suffix and override model.
 	agent, err := NewAppraiserAgent(client, cfg, "Focus on security risks.", nil)
 	if err != nil {
 		t.Fatalf("NewAppraiserAgent() failed: %v", err)
@@ -718,12 +718,12 @@ func TestReviewOutput_OmitsPassWhenAbsent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — Division Removal (Backward Compat)
+// Tests — Appraiser Artefact (Backward Compat)
 // ---------------------------------------------------------------------------
 
-func TestReviewFlow_WithoutDivisionArtefact(t *testing.T) {
+func TestReviewFlow_WithoutAppraiserArtefact(t *testing.T) {
 	// Verify the reviewer works when the parent sends appraiser+pass
-	// artefacts (new flow) and no division artefact is present.
+	// artefacts (new flow) and no appraiser artefact is present.
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
 	mp := &mockModel{
@@ -750,10 +750,10 @@ func TestReviewFlow_WithoutDivisionArtefact(t *testing.T) {
 		ReviewArtefact: cfg.ReviewArtefact,
 	}
 
-	// Should succeed without division artefact.
+	// Should succeed without appraiser artefact.
 	err := handlers.HandleReview(context.Background(), client, agent, handlerCfg)
 	if err != nil {
-		t.Fatalf("HandleReview() failed without division artefact: %v", err)
+		t.Fatalf("HandleReview() failed without appraiser artefact: %v", err)
 	}
 
 	if _, ok := spy.StoredArtefacts[handlers.ArtefactReviewOutput]; !ok {

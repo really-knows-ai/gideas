@@ -24,6 +24,7 @@ type ReviewConfig struct {
 const (
 	ArtefactLaws         = "laws"
 	ArtefactHistory      = "history"
+	ArtefactReview       = "review"
 	ArtefactReviewOutput = "review-output"
 )
 
