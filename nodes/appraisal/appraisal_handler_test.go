@@ -29,7 +29,7 @@ func (m *mockFinding) Run(_ context.Context, _ []*flowv1.FeedbackItem) (*flow.Fi
 }
 
 const (
-	eventTypeAttestation = "appraisal.attestation"
+	eventTypeAttestation = handlers.EventAppraisalAttestation
 )
 
 // ---------------------------------------------------------------------------
@@ -212,7 +212,7 @@ func TestAppraisalHandler_AllCompleteStampsAndEvents(t *testing.T) {
 	for _, e := range spy.PublishedEvents {
 		eventTypes[e.GetEventType()] = true
 	}
-	if !eventTypes["appraisal.coverage"] {
+	if !eventTypes[handlers.EventAppraisalCoverage] {
 		t.Error("expected appraisal.coverage event")
 	}
 	if !eventTypes[eventTypeAttestation] {
@@ -396,7 +396,7 @@ func TestAppraisalHandler_CoveragePayload(t *testing.T) {
 	// Find coverage event.
 	var coveragePayload map[string]any
 	for _, e := range spy.PublishedEvents {
-		if e.GetEventType() == "appraisal.coverage" {
+		if e.GetEventType() == handlers.EventAppraisalCoverage {
 			if err := json.Unmarshal(e.GetPayload(), &coveragePayload); err != nil {
 				t.Fatalf("unmarshal coverage payload: %v", err)
 			}

@@ -39,6 +39,8 @@ const (
 	verdictReject                = "reject"
 	ArtefactAppraiserPersonality = "appraiserPersonality"
 	ArtefactPass                 = "pass"
+	EventAppraisalCoverage       = "appraisal.coverage"
+	EventAppraisalAttestation    = "appraisal.attestation"
 )
 
 // hasNovelArgument returns true if the feedback item carries a
@@ -641,7 +643,7 @@ func buildCoverageMap(
 // Post-fan-out: event emission
 // ---------------------------------------------------------------------------
 
-// emitCoverageEvent publishes an "appraisal.coverage" audit event.
+// emitCoverageEvent publishes an appraisal.coverage audit event.
 // Errors are logged but do not fail the stage.
 func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
 	units := make([]coverageEntry, 0, len(coverage))
@@ -653,14 +655,14 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 		"cycle_id": cycleID,
 		"units":    units,
 	}
-	if err := client.PublishAuditEvent(ctx, "appraisal.coverage", payload, client.WorkitemID(), ""); err != nil {
+	if err := client.PublishAuditEvent(ctx, EventAppraisalCoverage, payload, client.WorkitemID(), ""); err != nil {
 		slog.Warn("appraisal: publish coverage event failed", "error", err)
 	} else {
 		slog.Info("appraisal: coverage event published")
 	}
 }
 
-// emitAttestationEvent publishes an "appraisal.attestation" audit event.
+// emitAttestationEvent publishes an appraisal.attestation audit event.
 // Errors are logged but do not fail the stage.
 func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
 	totalViolations := 0
@@ -706,7 +708,7 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 		"violations_total":   totalViolations,
 		"appraiser_verdicts": appraiserVerdicts,
 	}
-	if err := client.PublishAuditEvent(ctx, "appraisal.attestation", payload, client.WorkitemID(), ""); err != nil {
+	if err := client.PublishAuditEvent(ctx, EventAppraisalAttestation, payload, client.WorkitemID(), ""); err != nil {
 		slog.Warn("appraisal: publish attestation event failed", "error", err)
 	} else {
 		slog.Info("appraisal: attestation event published", "status", status)
