@@ -281,7 +281,7 @@ func fanOutAppraisal(
 				"group", groupName)
 			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
 		} else {
-			slog.Warn("appraisal: law group resolved from Librarian (possibly from defaults)",
+			slog.Info("appraisal: law group resolved from Librarian (possibly from defaults)",
 				"group", groupName)
 			groups[groupName] = group
 		}
