@@ -272,6 +272,10 @@ func fanOutAppraisal(
 				"group", groupName, "error", getErr)
 			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
 		} else {
+			if groupName != "default" && group.Mode == flow.GroupModeBundle && group.Passes == 1 {
+				slog.Warn("appraisal: law group not found, using built-in defaults",
+					"group", groupName)
+			}
 			groups[groupName] = group
 		}
 	}
@@ -317,7 +321,7 @@ func fanOutAppraisal(
 	for _, de := range dispatchEntries {
 		// Skip dispatch entries with unknown appraiser IDs.
 		if de.Appraiser != "" && appraiserMap[de.Appraiser] == "" {
-			slog.Warn("appraisal: unknown appraiser ID in dispatch entry",
+			slog.Error("appraisal: unknown appraiser ID in dispatch entry",
 				"appraiser_id", de.Appraiser, "group", de.Group)
 			skipped++
 			continue
@@ -510,6 +514,10 @@ func applyAppraisalStamps(
 	sort.Strings(groupOrder)
 	for _, groupName := range groupOrder {
 		unitList := unitsByGroup[groupName]
+		if len(unitList) == 0 {
+			// Info log already emitted in fanOutAppraisal for zero-unit groups.
+			continue
+		}
 		groupCfg := groups[groupName]
 		if groupCfg == nil {
 			groupCfg = &flow.LawGroup{Mode: flow.GroupModeBundle}
