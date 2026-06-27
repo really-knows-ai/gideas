@@ -31,6 +31,10 @@ const (
 	// metadataKeyWorkitemID is the gRPC metadata key used to propagate
 	// the workitem context on every outgoing call.
 	metadataKeyWorkitemID = "x-flow-workitem-id"
+
+	// EnvFlowNamespace is the environment variable injected by the runtime
+	// to identify the current flow's Kubernetes namespace.
+	EnvFlowNamespace = "FLOW_NAMESPACE"
 )
 
 // EnvEventBusAddress is the environment variable injected by the runtime
@@ -68,6 +72,7 @@ type Client struct {
 	conn         *grpc.ClientConn
 	eventBusConn *grpc.ClientConn
 	workitemID   string
+	flowNamespace string
 
 	// Raw gRPC service clients, exposed for advanced use.
 	Sidecar        flowv1.SidecarServiceClient
@@ -98,6 +103,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	}
 
 	workitemID := os.Getenv(EnvWorkitemID)
+	flowNamespace := os.Getenv(EnvFlowNamespace)
 
 	conn, err := grpc.NewClient(
 		cfg.sidecarAddr,
@@ -114,6 +120,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	c := &Client{
 		conn:           conn,
 		workitemID:     workitemID,
+		flowNamespace:  flowNamespace,
 		Sidecar:        flowv1.NewSidecarServiceClient(conn),
 		Operator:       flowv1.NewOperatorServiceClient(conn),
 		Archivist:      flowv1.NewArchivistServiceClient(conn),
@@ -160,6 +167,11 @@ func (c *Client) Close() error {
 // WorkitemID returns the workitem ID read from the environment at init time.
 func (c *Client) WorkitemID() string {
 	return c.workitemID
+}
+
+// FlowNamespace returns the flow namespace read from the environment at init time.
+func (c *Client) FlowNamespace() string {
+	return c.flowNamespace
 }
 
 // ---------------------------------------------------------------------------
