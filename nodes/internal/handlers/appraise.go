@@ -124,7 +124,8 @@ func HandleAppraisal(
 	if len(result.dispatchMatrix) > 0 {
 		applyAppraisalStamps(ctx, client, cfg.GovernedArtefact,
 			result.dispatchMatrix, result.childStatuses,
-			result.childIDs, result.unitsByGroup, result.groups)
+			result.childIDs, result.unitsByGroup, result.groups,
+			result.skippedIndices)
 		coverage := buildCoverageMap(result.dispatchMatrix, result.childStatuses, result.childResults, result.childIDs)
 		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
@@ -220,7 +221,8 @@ type fanOutResult struct {
 	childStatuses  []flow.ChildWorkitemStatus
 	childResults   []flow.ChildResult
 	groups         map[string]*flow.LawGroup
-	childIDs       []string // child workitem IDs, same order as dispatchMatrix
+	childIDs       []string        // child workitem IDs, same order as dispatchMatrix
+	skippedIndices map[int]bool    // indices in dispatchMatrix that were skipped (unknown appraiser)
 }
 
 // fanOutAppraisal computes the dispatch matrix, fans out to Reviewer children
@@ -271,11 +273,13 @@ func fanOutAppraisal(
 			slog.Warn("appraisal: get law group failed, using defaults",
 				"group", groupName, "error", getErr)
 			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
+		} else if group == nil {
+			slog.Warn("appraisal: get law group returned nil, using defaults",
+				"group", groupName)
+			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
 		} else {
-			if groupName != "default" && group.Mode == flow.GroupModeBundle && group.Passes == 1 {
-				slog.Warn("appraisal: law group not found, using built-in defaults",
-					"group", groupName)
-			}
+			slog.Warn("appraisal: law group resolved from Librarian (possibly from defaults)",
+				"group", groupName)
 			groups[groupName] = group
 		}
 	}
@@ -317,13 +321,13 @@ func fanOutAppraisal(
 
 	// Step 6: Build FanOutTasks — one per dispatch entry.
 	tasks := make([]flow.FanOutTask, 0, len(dispatchEntries))
-	var skipped int
-	for _, de := range dispatchEntries {
-		// Skip dispatch entries with unknown appraiser IDs.
-		if de.Appraiser != "" && appraiserMap[de.Appraiser] == "" {
+	skippedIndices := make(map[int]bool)
+	for i, de := range dispatchEntries {
+		// Skip dispatch entries with missing or unknown appraiser IDs.
+		if de.Appraiser == "" || appraiserMap[de.Appraiser] == "" {
 			slog.Error("appraisal: unknown appraiser ID in dispatch entry",
 				"appraiser_id", de.Appraiser, "group", de.Group)
-			skipped++
+			skippedIndices[i] = true
 			continue
 		}
 		// Build laws artefact.
@@ -390,8 +394,8 @@ func fanOutAppraisal(
 		tasks = append(tasks, task)
 	}
 
-	if skipped > 0 {
-		slog.Warn("appraisal: skipped dispatch entries with unknown appraiser IDs", "count", skipped)
+	if len(skippedIndices) > 0 {
+		slog.Warn("appraisal: skipped dispatch entries with unknown appraiser IDs", "count", len(skippedIndices))
 	}
 	slog.Info("appraisal: fan-out tasks built", "task_count", len(tasks))
 
@@ -460,6 +464,7 @@ func fanOutAppraisal(
 		childResults:   childResults,
 		groups:         groups,
 		childIDs:       childIDs,
+		skippedIndices: skippedIndices,
 	}, nil
 }
 
@@ -479,6 +484,7 @@ func applyAppraisalStamps(
 	childIDs []string,
 	unitsByGroup map[string][]flow.Unit,
 	groups map[string]*flow.LawGroup,
+	skippedIndices map[int]bool,
 ) {
 	// Build a set of failed child workitem IDs.
 	failedIDs := make(map[string]bool)
@@ -489,9 +495,13 @@ func applyAppraisalStamps(
 	}
 
 	// Map each dispatch entry to its child's workitem ID by index.
+	// Entries that were skipped (unknown appraiser) are treated as failed
+	// so they don't get stamps.
 	entryFailed := make([]bool, len(dispatchMatrix))
 	for i := range dispatchMatrix {
-		if i < len(childIDs) && failedIDs[childIDs[i]] {
+		if skippedIndices[i] {
+			entryFailed[i] = true
+		} else if i < len(childIDs) && failedIDs[childIDs[i]] {
 			entryFailed[i] = true
 		}
 	}
@@ -575,7 +585,10 @@ type evalEntry struct {
 	Appraiser  string `json:"appraiser"`
 	Pass       int    `json:"pass"`
 	Completed  bool   `json:"completed"`
-	Violations int    `json:"violations"`
+	// ponytail: Violations is not in spec R11; kept for debugging and
+	// per-appraiser verdict computation. Extra JSON fields are tolerated
+	// by tolerant parsers.
+	Violations int `json:"violations"`
 }
 
 // buildCoverageMap builds a per-unit coverage map from the dispatch matrix,
@@ -682,7 +695,7 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 		"cycle_id": cycleID,
 		"units":    units,
 	}
-	if err := client.PublishAuditEvent(ctx, EventAppraisalCoverage, payload, client.WorkitemID(), ""); err != nil {
+	if err := client.PublishAuditEvent(ctx, EventAppraisalCoverage, payload, client.WorkitemID(), client.FlowNamespace()); err != nil {
 		slog.Warn("appraisal: publish coverage event failed", "error", err)
 	} else {
 		slog.Info("appraisal: coverage event published")
@@ -735,7 +748,7 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 		"violations_total":   totalViolations,
 		"appraiser_verdicts": appraiserVerdicts,
 	}
-	if err := client.PublishAuditEvent(ctx, EventAppraisalAttestation, payload, client.WorkitemID(), ""); err != nil {
+	if err := client.PublishAuditEvent(ctx, EventAppraisalAttestation, payload, client.WorkitemID(), client.FlowNamespace()); err != nil {
 		slog.Warn("appraisal: publish attestation event failed", "error", err)
 	} else {
 		slog.Info("appraisal: attestation event published", "status", status)
