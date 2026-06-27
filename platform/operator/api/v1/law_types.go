@@ -48,8 +48,8 @@ type LawSpec struct {
 	// +optional
 	AppliesTo []string `json:"appliesTo,omitempty"`
 
-	// group is the law group name. Must match metadata.name of a LawGroup CRD.
-	// Empty means the "default" group.
+	// Group is the law group name. Must match the metadata.name of a LawGroup CRD
+	// or be empty (defaults to "default").
 	// +optional
 	Group string `json:"group,omitempty"`
 }
