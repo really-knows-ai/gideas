@@ -564,9 +564,10 @@ type coverageEntry struct {
 }
 
 type evalEntry struct {
-	Appraiser string `json:"appraiser"`
-	Pass      int    `json:"pass"`
-	Completed bool   `json:"completed"`
+	Appraiser  string `json:"appraiser"`
+	Pass       int    `json:"pass"`
+	Completed  bool   `json:"completed"`
+	Violations int    `json:"violations"`
 }
 
 // buildCoverageMap builds a per-unit coverage map from the dispatch matrix,
@@ -638,13 +639,18 @@ func buildCoverageMap(
 		entry.Evaluations = make([]evalEntry, 0, len(dispatches))
 		for _, di := range dispatches {
 			completed := completedByID[di.wid]
+			v := 0
+			if completed {
+				v = violationsByID[di.wid]
+			}
 			entry.Evaluations = append(entry.Evaluations, evalEntry{
-				Appraiser: di.appraiser,
-				Pass:      di.pass,
-				Completed: completed,
+				Appraiser:  di.appraiser,
+				Pass:       di.pass,
+				Completed:  completed,
+				Violations: v,
 			})
 			if completed {
-				entry.Violations += violationsByID[di.wid]
+				entry.Violations += v
 			}
 		}
 		coverage[unitID] = entry
@@ -681,7 +687,7 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 	totalViolations := 0
 	totalEvals := 0
 	completedEvals := 0
-	seenAppraisers := make(map[string]bool)
+	violationsByAppraiser := make(map[string]int)
 
 	for _, u := range coverage {
 		totalViolations += u.Violations
@@ -690,7 +696,7 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 			if e.Completed {
 				completedEvals++
 			}
-			seenAppraisers[e.Appraiser] = true
+			violationsByAppraiser[e.Appraiser] += e.Violations
 		}
 	}
 
@@ -702,14 +708,14 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 		status = "fail"
 	}
 
-	appraiserVerdicts := make([]map[string]string, 0, len(seenAppraisers))
-	for a := range seenAppraisers {
+	appraiserVerdicts := make([]map[string]string, 0, len(violationsByAppraiser))
+	for appraiser, violations := range violationsByAppraiser {
 		verdict := "resolved"
-		if totalViolations > 0 {
+		if violations > 0 {
 			verdict = "violations"
 		}
 		appraiserVerdicts = append(appraiserVerdicts, map[string]string{
-			"appraiser": a,
+			"appraiser": appraiser,
 			"verdict":   verdict,
 		})
 	}
