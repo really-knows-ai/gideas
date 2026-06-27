@@ -227,7 +227,7 @@ type fanOutResult struct {
 // via FanOut/AwaitChildren, collects review-output from completed children,
 // merges feedback, and returns the full result for post-processing.
 //
-//nolint:cyclop,funlen // Orchestration — sequential steps are inherently complex.
+//nolint:cyclop,funlen,gocyclo // Orchestration — sequential steps are inherently complex.
 func fanOutAppraisal(
 	ctx context.Context,
 	client *flow.Client,
@@ -311,7 +311,15 @@ func fanOutAppraisal(
 
 	// Step 6: Build FanOutTasks — one per dispatch entry.
 	tasks := make([]flow.FanOutTask, 0, len(dispatchEntries))
+	var skipped int
 	for _, de := range dispatchEntries {
+		// Skip dispatch entries with unknown appraiser IDs.
+		if de.Appraiser != "" && appraiserMap[de.Appraiser] == "" {
+			slog.Warn("appraisal: unknown appraiser ID in dispatch entry",
+				"appraiser_id", de.Appraiser, "group", de.Group)
+			skipped++
+			continue
+		}
 		// Build laws artefact.
 		var lawData []LawData
 		groupLaws := lawsByGroup[de.Group]
@@ -376,6 +384,9 @@ func fanOutAppraisal(
 		tasks = append(tasks, task)
 	}
 
+	if skipped > 0 {
+		slog.Warn("appraisal: skipped dispatch entries with unknown appraiser IDs", "count", skipped)
+	}
 	slog.Info("appraisal: fan-out tasks built", "task_count", len(tasks))
 
 	// Step 7: FanOut — create children.
