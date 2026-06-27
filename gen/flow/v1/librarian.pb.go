@@ -123,8 +123,6 @@ type LawFilter struct {
 	GovernedArtefact string `protobuf:"bytes,1,opt,name=governed_artefact,json=governedArtefact,proto3" json:"governed_artefact,omitempty"`
 	// Further filter by representation MIME type.
 	RepresentationType string `protobuf:"bytes,2,opt,name=representation_type,json=representationType,proto3" json:"representation_type,omitempty"`
-	// Filter by division. Empty means all divisions (no filtering).
-	Division string `protobuf:"bytes,3,opt,name=division,proto3" json:"division,omitempty"`
 	// Filter by law group name. Empty means no group filter (return all).
 	Group         string `protobuf:"bytes,4,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -171,13 +169,6 @@ func (x *LawFilter) GetGovernedArtefact() string {
 func (x *LawFilter) GetRepresentationType() string {
 	if x != nil {
 		return x.RepresentationType
-	}
-	return ""
-}
-
-func (x *LawFilter) GetDivision() string {
-	if x != nil {
-		return x.Division
 	}
 	return ""
 }
@@ -1772,12 +1763,11 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\n" +
 	"\x17flow/v1/librarian.proto\x12\aflow.v1\x1a\x14flow/v1/common.proto\x1a\x1fgoogle/protobuf/timestamp.proto\">\n" +
 	"\x10QueryLawsRequest\x12*\n" +
-	"\x06filter\x18\x01 \x01(\v2\x12.flow.v1.LawFilterR\x06filter\"\x9b\x01\n" +
+	"\x06filter\x18\x01 \x01(\v2\x12.flow.v1.LawFilterR\x06filter\"\x85\x01\n" +
 	"\tLawFilter\x12+\n" +
 	"\x11governed_artefact\x18\x01 \x01(\tR\x10governedArtefact\x12/\n" +
-	"\x13representation_type\x18\x02 \x01(\tR\x12representationType\x12\x1a\n" +
-	"\bdivision\x18\x03 \x01(\tR\bdivision\x12\x14\n" +
-	"\x05group\x18\x04 \x01(\tR\x05group\"5\n" +
+	"\x13representation_type\x18\x02 \x01(\tR\x12representationType\x12\x14\n" +
+	"\x05group\x18\x04 \x01(\tR\x05groupJ\x04\b\x03\x10\x04\"5\n" +
 	"\x11QueryLawsResponse\x12 \n" +
 	"\x04laws\x18\x01 \x03(\v2\f.flow.v1.LawR\x04laws\"&\n" +
 	"\vCiteRequest\x12\x17\n" +
