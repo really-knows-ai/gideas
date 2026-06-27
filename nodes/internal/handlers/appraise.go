@@ -289,6 +289,12 @@ func fanOutAppraisal(
 	}
 
 	unitsByGroup := flow.ComputeUnits(lawsByGroup, groups)
+	for gn, units := range unitsByGroup {
+		if len(units) == 0 {
+			slog.Info("appraisal: group has no laws, skipping",
+				"group", gn)
+		}
+	}
 	dispatchEntries := flow.ComputeDispatchMatrix(unitsByGroup, appraiserIDs, groups)
 
 	if len(dispatchEntries) == 0 {
