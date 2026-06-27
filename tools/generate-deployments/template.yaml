@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  namespace: default
+  labels:
+    app.kubernetes.io/name: {{.Name}}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{.Name}}
+        flow.gideas.io/node-name: {{.Name}}
+    spec:
+      containers:
+        - name: node
+          image: {{.Image}}
+          ports:
+            - containerPort: 50053
+          env:
+            - name: FLOW_NODE_PORT
+              value: "50053"
+          {{- if .Ollama }}
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+          {{- end }}
+          {{- if .ConfigMap }}
+          volumeMounts:
+            - name: node-config
+              mountPath: /etc/foundry
+              readOnly: true
+          {{- end }}
+        - name: sidecar
+          image: flow-sidecar:latest
+          ports:
+            - containerPort: 50051
+          env:
+            - name: FLOW_NODE_ID
+              value: "{{.Name}}"
+            - name: FLOW_SIDECAR_PORT
+              value: "50051"
+            - name: OPERATOR_ADDRESS
+              value: "flow-operator:50052"
+            - name: ARCHIVIST_ADDRESS
+              value: "flow-archivist:50054"
+          {{- if .Librarian }}
+            - name: LIBRARIAN_ADDRESS
+              value: "flow-librarian:50058"
+          {{- end }}
+          {{- if .EventBus }}
+            - name: EVENT_BUS_ADDRESS
+              value: "flow-eventbus:50056"
+          {{- end }}
+          {{- if .FrictionLedger }}
+            - name: FRICTION_LEDGER_ADDRESS
+              value: "flow-frictionledger:50057"
+          {{- end }}
+      {{- if .ConfigMap }}
+      volumes:
+        - name: node-config
+          configMap:
+            name: {{.ConfigMap}}
+      {{- end }}

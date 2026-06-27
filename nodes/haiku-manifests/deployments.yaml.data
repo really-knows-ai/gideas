@@ -1,0 +1,111 @@
+nodes:
+  - name: forge
+    image: forge:latest
+    configMap: forge-config
+    ollama: true
+    librarian: true
+    eventBus: true
+    frictionLedger: true
+  - name: quench
+    image: haiku-quench:latest
+  - name: sort
+    image: sort:latest
+    configMap: sort-config
+    librarian: true
+  - name: appraisal
+    image: appraisal:latest
+    configMap: appraisal-config
+    ollama: true
+    librarian: true
+    eventBus: true
+    frictionLedger: true
+  - name: appraiser
+    image: appraiser:latest
+    configMap: appraiser-config
+    ollama: true
+  - name: refine
+    image: refine:latest
+    configMap: refine-config
+    ollama: true
+    librarian: true
+    eventBus: true
+    frictionLedger: true
+  - name: facilitator
+    image: facilitator:latest
+    configMap: facilitator-config
+    librarian: true
+    frictionLedger: true
+  - name: arbiter
+    image: arbiter:latest
+    configMap: arbiter-config
+  - name: juror
+    image: juror:latest
+    configMap: juror-config
+    ollama: true
+  - name: tribunal
+    image: tribunal:latest
+    configMap: tribunal-config
+    librarian: true
+    frictionLedger: true
+  - name: friction-watcher
+    image: friction-watcher:latest
+    eventBus: true
+  - name: ttl-watcher
+    image: ttl-watcher:latest
+    configMap: ttl-watcher-config
+    librarian: true
+  - name: hitl-appraisal
+    image: hitl:latest
+    configMap: hitl-appraisal-config
+  - name: arbiter-hitl-resolve
+    image: hitl:latest
+    configMap: arbiter-hitl-resolve-config
+  - name: tribunal-hitl-resolve
+    image: hitl:latest
+    configMap: tribunal-hitl-resolve-config
+  - name: clerk-forge
+    image: forge:latest
+    configMap: clerk-forge-config
+    ollama: true
+    librarian: true
+    eventBus: true
+    frictionLedger: true
+  - name: clerk-sort
+    image: sort:latest
+    configMap: clerk-sort-config
+    librarian: true
+  - name: clerk-appraisal
+    image: appraisal:latest
+    configMap: clerk-appraisal-config
+    ollama: true
+    librarian: true
+    eventBus: true
+    frictionLedger: true
+  - name: clerk-refine
+    image: refine:latest
+    configMap: clerk-refine-config
+    ollama: true
+    librarian: true
+    eventBus: true
+    frictionLedger: true
+  - name: clerk-facilitator
+    image: facilitator:latest
+    configMap: clerk-facilitator-config
+    librarian: true
+    frictionLedger: true
+  - name: codification
+    image: codification:latest
+    configMap: codification-config
+  - name: codify-smt
+    image: codify-smt:latest
+    configMap: codify-smt-config
+    ollama: true
+  - name: clerk-done-router
+    image: rule-router:latest
+    configMap: clerk-done-router-config
+  - name: hitl-gate
+    image: rule-router:latest
+    configMap: hitl-gate-config
+  - name: law-applicator
+    image: law-applicator:latest
+    librarian: true
