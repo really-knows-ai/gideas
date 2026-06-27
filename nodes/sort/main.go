@@ -295,6 +295,9 @@ func buildOutputRoutes(self *flowv1.FlowNode) map[string]string {
 func stampsProvidedBy(nodeName, kind string, providers map[string]map[string]string) []string {
 	kindMap := providers[kind]
 	if kindMap == nil {
+		kindMap = providers["*"]
+	}
+	if kindMap == nil {
 		return nil
 	}
 	var stamps []string
