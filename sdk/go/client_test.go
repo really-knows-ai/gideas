@@ -786,14 +786,14 @@ func TestGetLawGroup_ReturnsGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLawGroup() returned error: %v", err)
 	}
-	if group.GetName() != "my-group" {
-		t.Fatalf("expected group name my-group, got %q", group.GetName())
+	if group.Name != "my-group" {
+		t.Fatalf("expected group name my-group, got %q", group.Name)
 	}
-	if group.GetMode() != "bundle" {
-		t.Fatalf("expected mode bundle, got %q", group.GetMode())
+	if group.Mode != "bundle" {
+		t.Fatalf("expected mode bundle, got %q", group.Mode)
 	}
-	if group.GetPasses() != 1 {
-		t.Fatalf("expected passes 1, got %d", group.GetPasses())
+	if group.Passes != 1 {
+		t.Fatalf("expected passes 1, got %d", group.Passes)
 	}
 }
 
@@ -821,7 +821,7 @@ func TestListLawGroups_ReturnsGroups(t *testing.T) {
 	}
 	names := map[string]bool{}
 	for _, g := range groups {
-		names[g.GetName()] = true
+		names[g.Name] = true
 	}
 	if !names["group-a"] || !names["group-b"] {
 		t.Fatalf("expected group-a and group-b, got %v", names)
