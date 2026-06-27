@@ -82,7 +82,7 @@ const (
 var capabilityPattern = regexp.MustCompile(
 	`^(READ|WRITE|STAMP|USE|CREATE):` +
 		`(artefact|law|friction|flow|workitem|feedback|support|queue)` +
-		`(/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?)?$`,
+		`(/[a-zA-Z0-9_*-]+(/[a-zA-Z0-9_*-]+)?)?$`,
 )
 
 // FoundryNodeReconciler reconciles a FoundryNode object.
@@ -277,7 +277,7 @@ func (r *FoundryNodeReconciler) validateChildContracts(ctx context.Context, node
 			continue // GovernedArtefact not yet created.
 		}
 		for _, stamp := range requiredStamps {
-			if !vocab[stamp] {
+			if !vocabMatch(vocab, stamp) {
 				return fmt.Errorf("child entry contract references stamp %q not in GovernedArtefact %q vocabulary",
 					stamp, gaName)
 			}
@@ -291,7 +291,7 @@ func (r *FoundryNodeReconciler) validateChildContracts(ctx context.Context, node
 			continue // GovernedArtefact not yet created.
 		}
 		for _, stamp := range requiredStamps {
-			if !vocab[stamp] {
+			if !vocabMatch(vocab, stamp) {
 				return fmt.Errorf("child exit contract references stamp %q not in GovernedArtefact %q vocabulary",
 					stamp, gaName)
 			}

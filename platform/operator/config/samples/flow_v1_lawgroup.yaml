@@ -1,0 +1,8 @@
+apiVersion: flow.gideas.io/v1
+kind: LawGroup
+metadata:
+  name: security
+  namespace: default
+spec:
+  mode: law-by-law
+  passes: 3

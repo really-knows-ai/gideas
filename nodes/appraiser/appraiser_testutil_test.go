@@ -17,9 +17,9 @@ func newLocalListener() (net.Listener, error) {
 	return net.Listen("tcp", "127.0.0.1:0")
 }
 
-// newSpyGRPCServer creates a gRPC server with the reviewerSpy registered
-// for the service interfaces the Reviewer's flow.Client needs.
-func newSpyGRPCServer(spy *reviewerSpy) *grpc.Server {
+// newSpyGRPCServer creates a gRPC server with the appraiserSpy registered
+// for the service interfaces the Appraiser's flow.Client needs.
+func newSpyGRPCServer(spy *appraiserSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
 	flowv1.RegisterOperatorServiceServer(srv, spy)
@@ -29,10 +29,10 @@ func newSpyGRPCServer(spy *reviewerSpy) *grpc.Server {
 	return srv
 }
 
-// reviewerSpy captures calls to service operations for test assertions.
+// appraiserSpy captures calls to service operations for test assertions.
 // It embeds all unimplemented servers and overrides the methods the
-// reviewer handler calls.
-type reviewerSpy struct {
+// appraiser handler calls.
+type appraiserSpy struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
@@ -49,8 +49,8 @@ type reviewerSpy struct {
 	ArtefactContents map[string][]byte // artefact ID -> content
 }
 
-func newReviewerSpy() *reviewerSpy {
-	return &reviewerSpy{
+func newAppraiserSpy() *appraiserSpy {
+	return &appraiserSpy{
 		StoredArtefacts:  make(map[string][]byte),
 		ArtefactContents: make(map[string][]byte),
 	}
@@ -60,13 +60,13 @@ func newReviewerSpy() *reviewerSpy {
 // Sidecar methods
 // ---------------------------------------------------------------------------
 
-func (s *reviewerSpy) Heartbeat(
+func (s *appraiserSpy) Heartbeat(
 	_ context.Context, _ *flowv1.HeartbeatRequest,
 ) (*flowv1.HeartbeatResponse, error) {
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
-func (s *reviewerSpy) SubmitResult(
+func (s *appraiserSpy) SubmitResult(
 	_ context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
 	s.mu.Lock()
@@ -82,7 +82,7 @@ func (s *reviewerSpy) SubmitResult(
 // Archivist methods
 // ---------------------------------------------------------------------------
 
-func (s *reviewerSpy) GetArtefact(
+func (s *appraiserSpy) GetArtefact(
 	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
 	s.mu.Lock()
@@ -98,7 +98,7 @@ func (s *reviewerSpy) GetArtefact(
 	}, nil
 }
 
-func (s *reviewerSpy) StoreArtefact(
+func (s *appraiserSpy) StoreArtefact(
 	_ context.Context, req *flowv1.StoreArtefactRequest,
 ) (*flowv1.StoreArtefactResponse, error) {
 	s.mu.Lock()
@@ -114,7 +114,7 @@ func (s *reviewerSpy) StoreArtefact(
 // FrictionLedger methods
 // ---------------------------------------------------------------------------
 
-func (s *reviewerSpy) RecordTelemetry(
+func (s *appraiserSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
@@ -125,8 +125,8 @@ func (s *reviewerSpy) RecordTelemetry(
 // ---------------------------------------------------------------------------
 
 // newSpyClient creates a flow.Client backed by a local gRPC server with
-// the reviewerSpy registered for all service interfaces.
-func newSpyClient(t *testing.T, spy *reviewerSpy) *flow.Client {
+// the appraiserSpy registered for all service interfaces.
+func newSpyClient(t *testing.T, spy *appraiserSpy) *flow.Client {
 	t.Helper()
 
 	lis, err := newLocalListener()
@@ -147,9 +147,9 @@ func newSpyClient(t *testing.T, spy *reviewerSpy) *flow.Client {
 	return client
 }
 
-// defaultTestConfig returns a standard reviewerConfig for tests.
-func defaultTestConfig() *reviewerConfig {
-	return &reviewerConfig{
+// defaultTestConfig returns a standard appraiserNodeConfig for tests.
+func defaultTestConfig() *appraiserNodeConfig {
+	return &appraiserNodeConfig{
 		InputArtefacts: []string{"input"},
 		ReviewArtefact: "review",
 	}
@@ -186,17 +186,18 @@ func defaultCost() *flow.CostMetadata {
 	}
 }
 
-// newTestReviewAgent creates a ReviewAgent with the mock model injected.
+// newTestAppraiserAgent creates an AppraiserAgent with the mock model injected.
 // opts may be nil to use baked-in defaults.
-func newTestReviewAgent(
-	t *testing.T, mm *mockModel, spy *reviewerSpy,
-	cfg *reviewerConfig, divisionSuffix string, opts *ReviewAgentOpts,
-) *ReviewAgent {
+// personality is the optional appraiser personality string for the system prompt.
+func newTestAppraiserAgent(
+	t *testing.T, mm *mockModel, spy *appraiserSpy,
+	cfg *appraiserNodeConfig, personality string, opts *AppraiserAgentOpts,
+) *AppraiserAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
-	agent, err := NewReviewAgent(client, cfg, divisionSuffix, opts)
+	agent, err := NewAppraiserAgent(client, cfg, personality, opts)
 	if err != nil {
-		t.Fatalf("NewReviewAgent() failed: %v", err)
+		t.Fatalf("NewAppraiserAgent() failed: %v", err)
 	}
 	flow.OverrideModelForTest(agent.agent, mm)
 	return agent

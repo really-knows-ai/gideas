@@ -31,6 +31,10 @@ const (
 	LibrarianService_RetireDisputeRecord_FullMethodName  = "/flow.v1.LibrarianService/RetireDisputeRecord"
 	LibrarianService_GetActiveDisputes_FullMethodName    = "/flow.v1.LibrarianService/GetActiveDisputes"
 	LibrarianService_SearchSimilarLaws_FullMethodName    = "/flow.v1.LibrarianService/SearchSimilarLaws"
+	LibrarianService_GetLawGroup_FullMethodName          = "/flow.v1.LibrarianService/GetLawGroup"
+	LibrarianService_ListLawGroups_FullMethodName        = "/flow.v1.LibrarianService/ListLawGroups"
+	LibrarianService_SyncLawGroup_FullMethodName         = "/flow.v1.LibrarianService/SyncLawGroup"
+	LibrarianService_DeleteLawGroup_FullMethodName       = "/flow.v1.LibrarianService/DeleteLawGroup"
 )
 
 // LibrarianServiceClient is the client API for LibrarianService service.
@@ -80,6 +84,15 @@ type LibrarianServiceClient interface {
 	// similarity search (sqlite-vec). Used by the Federation service for
 	// distributed conflict detection during publication admission.
 	SearchSimilarLaws(ctx context.Context, in *SearchSimilarLawsRequest, opts ...grpc.CallOption) (*SearchSimilarLawsResponse, error)
+	// Returns a single LawGroup by name. Returns a built-in default
+	// ("bundle", passes=1) when no matching group is stored.
+	GetLawGroup(ctx context.Context, in *GetLawGroupRequest, opts ...grpc.CallOption) (*GetLawGroupResponse, error)
+	// Lists all stored LawGroups. Does not return the built-in default.
+	ListLawGroups(ctx context.Context, in *ListLawGroupsRequest, opts ...grpc.CallOption) (*ListLawGroupsResponse, error)
+	// Upserts a LawGroup from the Operator's CRD watch sync.
+	SyncLawGroup(ctx context.Context, in *SyncLawGroupRequest, opts ...grpc.CallOption) (*SyncLawGroupResponse, error)
+	// Deletes a LawGroup from the Librarian store by name.
+	DeleteLawGroup(ctx context.Context, in *DeleteLawGroupRequest, opts ...grpc.CallOption) (*DeleteLawGroupResponse, error)
 }
 
 type librarianServiceClient struct {
@@ -210,6 +223,46 @@ func (c *librarianServiceClient) SearchSimilarLaws(ctx context.Context, in *Sear
 	return out, nil
 }
 
+func (c *librarianServiceClient) GetLawGroup(ctx context.Context, in *GetLawGroupRequest, opts ...grpc.CallOption) (*GetLawGroupResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLawGroupResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_GetLawGroup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *librarianServiceClient) ListLawGroups(ctx context.Context, in *ListLawGroupsRequest, opts ...grpc.CallOption) (*ListLawGroupsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListLawGroupsResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_ListLawGroups_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *librarianServiceClient) SyncLawGroup(ctx context.Context, in *SyncLawGroupRequest, opts ...grpc.CallOption) (*SyncLawGroupResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncLawGroupResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_SyncLawGroup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *librarianServiceClient) DeleteLawGroup(ctx context.Context, in *DeleteLawGroupRequest, opts ...grpc.CallOption) (*DeleteLawGroupResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteLawGroupResponse)
+	err := c.cc.Invoke(ctx, LibrarianService_DeleteLawGroup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LibrarianServiceServer is the server API for LibrarianService service.
 // All implementations must embed UnimplementedLibrarianServiceServer
 // for forward compatibility.
@@ -257,6 +310,15 @@ type LibrarianServiceServer interface {
 	// similarity search (sqlite-vec). Used by the Federation service for
 	// distributed conflict detection during publication admission.
 	SearchSimilarLaws(context.Context, *SearchSimilarLawsRequest) (*SearchSimilarLawsResponse, error)
+	// Returns a single LawGroup by name. Returns a built-in default
+	// ("bundle", passes=1) when no matching group is stored.
+	GetLawGroup(context.Context, *GetLawGroupRequest) (*GetLawGroupResponse, error)
+	// Lists all stored LawGroups. Does not return the built-in default.
+	ListLawGroups(context.Context, *ListLawGroupsRequest) (*ListLawGroupsResponse, error)
+	// Upserts a LawGroup from the Operator's CRD watch sync.
+	SyncLawGroup(context.Context, *SyncLawGroupRequest) (*SyncLawGroupResponse, error)
+	// Deletes a LawGroup from the Librarian store by name.
+	DeleteLawGroup(context.Context, *DeleteLawGroupRequest) (*DeleteLawGroupResponse, error)
 	mustEmbedUnimplementedLibrarianServiceServer()
 }
 
@@ -302,6 +364,18 @@ func (UnimplementedLibrarianServiceServer) GetActiveDisputes(context.Context, *G
 }
 func (UnimplementedLibrarianServiceServer) SearchSimilarLaws(context.Context, *SearchSimilarLawsRequest) (*SearchSimilarLawsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchSimilarLaws not implemented")
+}
+func (UnimplementedLibrarianServiceServer) GetLawGroup(context.Context, *GetLawGroupRequest) (*GetLawGroupResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetLawGroup not implemented")
+}
+func (UnimplementedLibrarianServiceServer) ListLawGroups(context.Context, *ListLawGroupsRequest) (*ListLawGroupsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListLawGroups not implemented")
+}
+func (UnimplementedLibrarianServiceServer) SyncLawGroup(context.Context, *SyncLawGroupRequest) (*SyncLawGroupResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncLawGroup not implemented")
+}
+func (UnimplementedLibrarianServiceServer) DeleteLawGroup(context.Context, *DeleteLawGroupRequest) (*DeleteLawGroupResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteLawGroup not implemented")
 }
 func (UnimplementedLibrarianServiceServer) mustEmbedUnimplementedLibrarianServiceServer() {}
 func (UnimplementedLibrarianServiceServer) testEmbeddedByValue()                          {}
@@ -540,6 +614,78 @@ func _LibrarianService_SearchSimilarLaws_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LibrarianService_GetLawGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLawGroupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).GetLawGroup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_GetLawGroup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).GetLawGroup(ctx, req.(*GetLawGroupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LibrarianService_ListLawGroups_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListLawGroupsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).ListLawGroups(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_ListLawGroups_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).ListLawGroups(ctx, req.(*ListLawGroupsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LibrarianService_SyncLawGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncLawGroupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).SyncLawGroup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_SyncLawGroup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).SyncLawGroup(ctx, req.(*SyncLawGroupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LibrarianService_DeleteLawGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteLawGroupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LibrarianServiceServer).DeleteLawGroup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LibrarianService_DeleteLawGroup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LibrarianServiceServer).DeleteLawGroup(ctx, req.(*DeleteLawGroupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // LibrarianService_ServiceDesc is the grpc.ServiceDesc for LibrarianService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -594,6 +740,22 @@ var LibrarianService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SearchSimilarLaws",
 			Handler:    _LibrarianService_SearchSimilarLaws_Handler,
+		},
+		{
+			MethodName: "GetLawGroup",
+			Handler:    _LibrarianService_GetLawGroup_Handler,
+		},
+		{
+			MethodName: "ListLawGroups",
+			Handler:    _LibrarianService_ListLawGroups_Handler,
+		},
+		{
+			MethodName: "SyncLawGroup",
+			Handler:    _LibrarianService_SyncLawGroup_Handler,
+		},
+		{
+			MethodName: "DeleteLawGroup",
+			Handler:    _LibrarianService_DeleteLawGroup_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

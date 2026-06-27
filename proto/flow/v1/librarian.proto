@@ -69,6 +69,21 @@ service LibrarianService {
   // similarity search (sqlite-vec). Used by the Federation service for
   // distributed conflict detection during publication admission.
   rpc SearchSimilarLaws(SearchSimilarLawsRequest) returns (SearchSimilarLawsResponse);
+
+  // --- LawGroup Methods ---
+
+  // Returns a single LawGroup by name. Returns a built-in default
+  // ("bundle", passes=1) when no matching group is stored.
+  rpc GetLawGroup(GetLawGroupRequest) returns (GetLawGroupResponse);
+
+  // Lists all stored LawGroups. Does not return the built-in default.
+  rpc ListLawGroups(ListLawGroupsRequest) returns (ListLawGroupsResponse);
+
+  // Upserts a LawGroup from the Operator's CRD watch sync.
+  rpc SyncLawGroup(SyncLawGroupRequest) returns (SyncLawGroupResponse);
+
+  // Deletes a LawGroup from the Librarian store by name.
+  rpc DeleteLawGroup(DeleteLawGroupRequest) returns (DeleteLawGroupResponse);
 }
 
 // --- Node-Facing ---
@@ -83,8 +98,9 @@ message LawFilter {
   string governed_artefact = 1;
   // Further filter by representation MIME type.
   string representation_type = 2;
-  // Filter by division. Empty means all divisions (no filtering).
-  string division = 3;
+  reserved 3;
+  // Filter by law group name. Empty means no group filter (return all).
+  string group = 4;
 }
 
 message QueryLawsResponse {
@@ -212,6 +228,46 @@ message GetActiveDisputesRequest {
 
 message GetActiveDisputesResponse {
   repeated DisputeRecord records = 1;
+}
+
+// --- LawGroup Messages ---
+
+message GetLawGroupRequest {
+  string group_name = 1;
+}
+
+message GetLawGroupResponse {
+  // The group. When the requested group is not stored, the server returns
+  // a built-in default (mode: "bundle", passes: 1) — the response is never
+  // a not-found error for missing groups.
+  LawGroup group = 1;
+}
+
+message ListLawGroupsRequest {
+}
+
+message ListLawGroupsResponse {
+  // Only stored (synced) groups, NOT the built-in default.
+  // Callers that need the default for a group should use GetLawGroup.
+  repeated LawGroup groups = 1;
+}
+
+message SyncLawGroupRequest {
+  // Full LawGroup spec to upsert in the Librarian store.
+  // Setting passes=0 or mode="" is a validation error.
+  LawGroup group = 1;
+}
+
+message SyncLawGroupResponse {
+  bool acknowledged = 1;
+}
+
+message DeleteLawGroupRequest {
+  string group_name = 1;
+}
+
+message DeleteLawGroupResponse {
+  bool acknowledged = 1;
 }
 
 // --- Semantic Search Messages ---

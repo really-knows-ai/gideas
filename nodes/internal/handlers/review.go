@@ -24,18 +24,24 @@ type ReviewConfig struct {
 const (
 	ArtefactLaws         = "laws"
 	ArtefactHistory      = "history"
-	ArtefactDivision     = "division"
+	ArtefactReview       = "review"
 	ArtefactReviewOutput = "review-output"
 )
 
-// DivisionData is the JSON structure passed via the "division" artefact.
-type DivisionData struct {
-	Name         string `json:"name"`
-	PromptSuffix string `json:"promptSuffix"`
+// AppraiserPersonalityData is the JSON structure passed via the "appraiserPersonality" artefact.
+type AppraiserPersonalityData struct {
+	ID          string `json:"id"`
+	Personality string `json:"personality"`
+}
+
+// PassData is the JSON structure passed via the "pass" artefact.
+type PassData struct {
+	Pass int `json:"pass"`
+	Of   int `json:"of"`
 }
 
 // LawData is the minimal law representation passed via the "laws" artefact.
-// Only the fields the ReviewAgent needs are included.
+// Only the fields the AppraiserAgent needs are included.
 type LawData struct {
 	ID   string `json:"id"`
 	Tier int32  `json:"tier"`
@@ -49,13 +55,30 @@ type HistoryData struct {
 	Message string `json:"message"`
 }
 
+// reviewOutputData wraps the SDK ReviewResult with traceability metadata
+// (appraiser ID and pass number). JSON tags produce the wire format expected
+// by the parent Appraisal handler.
+// ponytail: exists because ReviewResult has no json tags; if tags are added
+// to the SDK types, this wrapper can be deleted.
+type reviewOutputData struct {
+	Feedback  []outputFeedbackItem `json:"feedback"`
+	Appraiser string               `json:"appraiser,omitempty"`
+	Pass      int                  `json:"pass,omitempty"`
+}
+
+// outputFeedbackItem is a single feedback observation in wire format.
+type outputFeedbackItem struct {
+	Message   string   `json:"message"`
+	CitedLaws []string `json:"cited_laws"`
+}
+
 // HandleReview executes the Reviewer node handler logic using the provided
 // contract implementation. The handler is generic — it works with any
 // ReviewContract.
 //
 // Steps: fetch inputs → get review artefact → deserialize laws/history/
-// division from artefacts → call agent → marshal output → store review-output
-// artefact → Complete().
+// appraiser personality from artefacts → call agent → marshal output → store
+// review-output artefact → Complete().
 func HandleReview(
 	ctx context.Context,
 	client *flow.Client,
@@ -68,50 +91,58 @@ func HandleReview(
 
 	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
 	if err != nil {
-		return fmt.Errorf("reviewer: read inputs: %w", err)
+		return fmt.Errorf("appraiser: read inputs: %w", err)
 	}
 
 	reviewResp, err := client.GetArtefact(ctx, cfg.ReviewArtefact)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", cfg.ReviewArtefact, err)
+		return fmt.Errorf("appraiser: read %s: %w", cfg.ReviewArtefact, err)
 	}
 	reviewContent := string(reviewResp.GetContent())
 
 	// Read and deserialize laws.
 	lawsResp, err := client.GetArtefact(ctx, ArtefactLaws)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", ArtefactLaws, err)
+		return fmt.Errorf("appraiser: read %s: %w", ArtefactLaws, err)
 	}
 
 	var lawItems []LawData
 	if err := json.Unmarshal(lawsResp.GetContent(), &lawItems); err != nil {
-		return fmt.Errorf("reviewer: unmarshal laws: %w", err)
+		return fmt.Errorf("appraiser: unmarshal laws: %w", err)
 	}
 
 	// Read and deserialize history.
 	historyResp, err := client.GetArtefact(ctx, ArtefactHistory)
 	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", ArtefactHistory, err)
+		return fmt.Errorf("appraiser: read %s: %w", ArtefactHistory, err)
 	}
 
 	var historyItems []HistoryData
 	if err := json.Unmarshal(historyResp.GetContent(), &historyItems); err != nil {
-		return fmt.Errorf("reviewer: unmarshal history: %w", err)
+		return fmt.Errorf("appraiser: unmarshal history: %w", err)
 	}
 
-	// Read and deserialize division.
-	divisionResp, err := client.GetArtefact(ctx, ArtefactDivision)
-	if err != nil {
-		return fmt.Errorf("reviewer: read %s: %w", ArtefactDivision, err)
+	// Read and deserialize appraiserPersonality (optional, backward compat).
+	var appraiserData AppraiserPersonalityData
+	appraiserResp, appraiserErr := client.GetArtefact(ctx, ArtefactAppraiserPersonality)
+	if appraiserErr == nil {
+		if err := json.Unmarshal(appraiserResp.GetContent(), &appraiserData); err != nil {
+			return fmt.Errorf("appraiser: unmarshal appraiserPersonality: %w", err)
+		}
+	}
+	// If artefact is absent, appraiserData stays zero-valued — fine.
+
+	// Read and deserialize pass (optional, backward compat).
+	var passData PassData
+	passResp, passErr := client.GetArtefact(ctx, ArtefactPass)
+	if passErr == nil {
+		if err := json.Unmarshal(passResp.GetContent(), &passData); err != nil {
+			return fmt.Errorf("appraiser: unmarshal pass: %w", err)
+		}
 	}
 
-	var division DivisionData
-	if err := json.Unmarshal(divisionResp.GetContent(), &division); err != nil {
-		return fmt.Errorf("reviewer: unmarshal division: %w", err)
-	}
-
-	slog.Info("reviewer: reviewing",
-		"division", division.Name,
+	slog.Info("appraiser: reviewing",
+		"appraiser", appraiserData.ID,
 		"law_count", len(lawItems),
 		"history_count", len(historyItems),
 	)
@@ -139,11 +170,11 @@ func HandleReview(
 
 	out, err := agent.Run(ctx, inputContent, reviewContent, laws, history)
 	if err != nil {
-		return fmt.Errorf("reviewer: review run: %w", err)
+		return fmt.Errorf("appraiser: review run: %w", err)
 	}
 
-	slog.Info("reviewer: review complete",
-		"division", division.Name,
+	slog.Info("appraiser: review complete",
+		"appraiser", appraiserData.ID,
 		"feedback_count", len(out.Feedback),
 	)
 
@@ -151,15 +182,28 @@ func HandleReview(
 	// Store review-output artefact for parent to collect
 	// ---------------------------------------------------------------
 
-	outJSON, err := json.Marshal(out)
+	// Build extended output with traceability metadata.
+	outData := reviewOutputData{
+		Appraiser: appraiserData.ID,
+		Pass:      passData.Pass,
+	}
+	outData.Feedback = make([]outputFeedbackItem, len(out.Feedback))
+	for i, fb := range out.Feedback {
+		outData.Feedback[i] = outputFeedbackItem{
+			Message:   fb.Message,
+			CitedLaws: fb.CitedLaws,
+		}
+	}
+
+	outJSON, err := json.Marshal(outData)
 	if err != nil {
-		return fmt.Errorf("reviewer: marshal review output: %w", err)
+		return fmt.Errorf("appraiser: marshal review output: %w", err)
 	}
 
 	// The governed artefact for child data transfer is "review-data" —
 	// internal plumbing, not a governed work product.
 	if _, err := client.StoreArtefact(ctx, ArtefactReviewOutput, "review-data", outJSON); err != nil {
-		return fmt.Errorf("reviewer: store %s: %w", ArtefactReviewOutput, err)
+		return fmt.Errorf("appraiser: store %s: %w", ArtefactReviewOutput, err)
 	}
 
 	// ---------------------------------------------------------------
@@ -167,11 +211,11 @@ func HandleReview(
 	// ---------------------------------------------------------------
 
 	if _, err := client.Complete(ctx); err != nil {
-		return fmt.Errorf("reviewer: complete: %w", err)
+		return fmt.Errorf("appraiser: complete: %w", err)
 	}
 
-	slog.Info("reviewer: completed",
-		"division", division.Name,
+	slog.Info("appraiser: completed",
+		"appraiser", appraiserData.ID,
 		"workitem_id", os.Getenv(flow.EnvWorkitemID),
 	)
 	return nil

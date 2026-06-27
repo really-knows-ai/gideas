@@ -51,11 +51,11 @@ const (
 
 // nodeLabels maps node names to display labels for the timeline.
 var nodeLabels = map[string]string{
-	"forge":    "FORGE    (create)",
-	"sort":     "SORT     (gate)",
-	"quench":   "QUENCH   (validate)",
-	"appraise": "APPRAISE (review)",
-	"refine":   "REFINE   (revise)",
+	"forge":     "FORGE    (create)",
+	"sort":      "SORT     (gate)",
+	"quench":    "QUENCH   (validate)",
+	"appraisal": "APPRAISAL (review)",
+	"refine":    "REFINE   (revise)",
 }
 
 // phaseSymbols maps phases to visual indicators.
@@ -219,7 +219,7 @@ func main() {
 	fmt.Printf("    Watching workitem: %s/%s\n", *namespace, *workitemName)
 	fmt.Println()
 	fmt.Println("    Topology:")
-	fmt.Println("    Forge -> Sort -> Quench -> Sort -> Appraise -> Sort -> Complete")
+	fmt.Println("    Forge -> Sort -> Quench -> Sort -> Appraisal -> Sort -> Complete")
 	fmt.Println("                |                         |")
 	fmt.Println("                +--------- Refine <-------+")
 	fmt.Println()

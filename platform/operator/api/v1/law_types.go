@@ -48,10 +48,10 @@ type LawSpec struct {
 	// +optional
 	AppliesTo []string `json:"appliesTo,omitempty"`
 
-	// division is an optional specialisation division (e.g. "security", "architecture").
-	// Empty means unset; consumers treat empty as "general".
+	// Group is the law group name. Must match the metadata.name of a LawGroup CRD
+	// or be empty (defaults to "default").
 	// +optional
-	Division string `json:"division,omitempty"`
+	Group string `json:"group,omitempty"`
 }
 
 // Representation is a typed expression of a law's goal.
@@ -85,7 +85,7 @@ type LawStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:printcolumn:name="Tier",type=integer,JSONPath=".spec.tier"
-// +kubebuilder:printcolumn:name="Division",type=string,JSONPath=".spec.division"
+// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=".spec.group"
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".status.version"
 
 // Law is the Schema for the laws API.

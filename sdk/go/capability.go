@@ -1,6 +1,9 @@
 package flow
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // StampCapability represents a parsed STAMP:artefact/<kind>/<stamp> capability.
 type StampCapability struct {
@@ -39,4 +42,46 @@ func ParseStampCapabilities(capabilities []string) []StampCapability {
 		}
 	}
 	return stamps
+}
+
+// MatchCapability returns true if cap matches the required pattern.
+// Wildcard rules:
+//   - * matches any sequence of characters within a single /-delimited segment.
+//   - * does NOT match across / boundaries.
+//   - No wildcard means exact string comparison (same as cap == required).
+//
+// Examples:
+//
+//	MatchCapability("STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security") → true
+//	MatchCapability("STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security") → true
+//	MatchCapability("STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review") → true  (exact)
+//	MatchCapability("STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security") → false
+//	MatchCapability("STAMP:artefact/haiku/review", "STAMP:artefact/haiku/approval") → false
+func MatchCapability(capability, required string) bool {
+	// Fast path: no wildcard at all — exact match.
+	if !strings.Contains(capability, "*") {
+		return capability == required
+	}
+
+	// Segment-by-segment matching. Split both into /-delimited segments.
+	capSegs := strings.Split(capability, "/")
+	reqSegs := strings.Split(required, "/")
+
+	if len(capSegs) != len(reqSegs) {
+		return false // Different segment counts — cannot match (wildcard does not cross /).
+	}
+
+	for i := range capSegs {
+		if !matchSegment(capSegs[i], reqSegs[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// matchSegment returns true if pattern matches segment using filepath.Match rules.
+// * matches any sequence of characters (but not /, which is guaranteed by the caller).
+func matchSegment(pattern, segment string) bool {
+	ok, err := filepath.Match(pattern, segment)
+	return ok && err == nil
 }

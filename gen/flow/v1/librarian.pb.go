@@ -123,8 +123,8 @@ type LawFilter struct {
 	GovernedArtefact string `protobuf:"bytes,1,opt,name=governed_artefact,json=governedArtefact,proto3" json:"governed_artefact,omitempty"`
 	// Further filter by representation MIME type.
 	RepresentationType string `protobuf:"bytes,2,opt,name=representation_type,json=representationType,proto3" json:"representation_type,omitempty"`
-	// Filter by division. Empty means all divisions (no filtering).
-	Division      string `protobuf:"bytes,3,opt,name=division,proto3" json:"division,omitempty"`
+	// Filter by law group name. Empty means no group filter (return all).
+	Group         string `protobuf:"bytes,4,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -173,9 +173,9 @@ func (x *LawFilter) GetRepresentationType() string {
 	return ""
 }
 
-func (x *LawFilter) GetDivision() string {
+func (x *LawFilter) GetGroup() string {
 	if x != nil {
-		return x.Division
+		return x.Group
 	}
 	return ""
 }
@@ -1246,6 +1246,357 @@ func (x *GetActiveDisputesResponse) GetRecords() []*DisputeRecord {
 	return nil
 }
 
+type GetLawGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GroupName     string                 `protobuf:"bytes,1,opt,name=group_name,json=groupName,proto3" json:"group_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetLawGroupRequest) Reset() {
+	*x = GetLawGroupRequest{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetLawGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetLawGroupRequest) ProtoMessage() {}
+
+func (x *GetLawGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetLawGroupRequest.ProtoReflect.Descriptor instead.
+func (*GetLawGroupRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetLawGroupRequest) GetGroupName() string {
+	if x != nil {
+		return x.GroupName
+	}
+	return ""
+}
+
+type GetLawGroupResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The group. When the requested group is not stored, the server returns
+	// a built-in default (mode: "bundle", passes: 1) — the response is never
+	// a not-found error for missing groups.
+	Group         *LawGroup `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetLawGroupResponse) Reset() {
+	*x = GetLawGroupResponse{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetLawGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetLawGroupResponse) ProtoMessage() {}
+
+func (x *GetLawGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetLawGroupResponse.ProtoReflect.Descriptor instead.
+func (*GetLawGroupResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *GetLawGroupResponse) GetGroup() *LawGroup {
+	if x != nil {
+		return x.Group
+	}
+	return nil
+}
+
+type ListLawGroupsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListLawGroupsRequest) Reset() {
+	*x = ListLawGroupsRequest{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListLawGroupsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListLawGroupsRequest) ProtoMessage() {}
+
+func (x *ListLawGroupsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListLawGroupsRequest.ProtoReflect.Descriptor instead.
+func (*ListLawGroupsRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{26}
+}
+
+type ListLawGroupsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Only stored (synced) groups, NOT the built-in default.
+	// Callers that need the default for a group should use GetLawGroup.
+	Groups        []*LawGroup `protobuf:"bytes,1,rep,name=groups,proto3" json:"groups,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListLawGroupsResponse) Reset() {
+	*x = ListLawGroupsResponse{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListLawGroupsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListLawGroupsResponse) ProtoMessage() {}
+
+func (x *ListLawGroupsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListLawGroupsResponse.ProtoReflect.Descriptor instead.
+func (*ListLawGroupsResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ListLawGroupsResponse) GetGroups() []*LawGroup {
+	if x != nil {
+		return x.Groups
+	}
+	return nil
+}
+
+type SyncLawGroupRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Full LawGroup spec to upsert in the Librarian store.
+	// Setting passes=0 or mode="" is a validation error.
+	Group         *LawGroup `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncLawGroupRequest) Reset() {
+	*x = SyncLawGroupRequest{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncLawGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncLawGroupRequest) ProtoMessage() {}
+
+func (x *SyncLawGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncLawGroupRequest.ProtoReflect.Descriptor instead.
+func (*SyncLawGroupRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *SyncLawGroupRequest) GetGroup() *LawGroup {
+	if x != nil {
+		return x.Group
+	}
+	return nil
+}
+
+type SyncLawGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Acknowledged  bool                   `protobuf:"varint,1,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncLawGroupResponse) Reset() {
+	*x = SyncLawGroupResponse{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncLawGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncLawGroupResponse) ProtoMessage() {}
+
+func (x *SyncLawGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncLawGroupResponse.ProtoReflect.Descriptor instead.
+func (*SyncLawGroupResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SyncLawGroupResponse) GetAcknowledged() bool {
+	if x != nil {
+		return x.Acknowledged
+	}
+	return false
+}
+
+type DeleteLawGroupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GroupName     string                 `protobuf:"bytes,1,opt,name=group_name,json=groupName,proto3" json:"group_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteLawGroupRequest) Reset() {
+	*x = DeleteLawGroupRequest{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteLawGroupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteLawGroupRequest) ProtoMessage() {}
+
+func (x *DeleteLawGroupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteLawGroupRequest.ProtoReflect.Descriptor instead.
+func (*DeleteLawGroupRequest) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *DeleteLawGroupRequest) GetGroupName() string {
+	if x != nil {
+		return x.GroupName
+	}
+	return ""
+}
+
+type DeleteLawGroupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Acknowledged  bool                   `protobuf:"varint,1,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteLawGroupResponse) Reset() {
+	*x = DeleteLawGroupResponse{}
+	mi := &file_flow_v1_librarian_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteLawGroupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteLawGroupResponse) ProtoMessage() {}
+
+func (x *DeleteLawGroupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_librarian_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteLawGroupResponse.ProtoReflect.Descriptor instead.
+func (*DeleteLawGroupResponse) Descriptor() ([]byte, []int) {
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *DeleteLawGroupResponse) GetAcknowledged() bool {
+	if x != nil {
+		return x.Acknowledged
+	}
+	return false
+}
+
 type SearchSimilarLawsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The text to search for semantically similar laws.
@@ -1260,7 +1611,7 @@ type SearchSimilarLawsRequest struct {
 
 func (x *SearchSimilarLawsRequest) Reset() {
 	*x = SearchSimilarLawsRequest{}
-	mi := &file_flow_v1_librarian_proto_msgTypes[24]
+	mi := &file_flow_v1_librarian_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1272,7 +1623,7 @@ func (x *SearchSimilarLawsRequest) String() string {
 func (*SearchSimilarLawsRequest) ProtoMessage() {}
 
 func (x *SearchSimilarLawsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_librarian_proto_msgTypes[24]
+	mi := &file_flow_v1_librarian_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1285,7 +1636,7 @@ func (x *SearchSimilarLawsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchSimilarLawsRequest.ProtoReflect.Descriptor instead.
 func (*SearchSimilarLawsRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{24}
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SearchSimilarLawsRequest) GetQueryText() string {
@@ -1318,7 +1669,7 @@ type SearchSimilarLawsResponse struct {
 
 func (x *SearchSimilarLawsResponse) Reset() {
 	*x = SearchSimilarLawsResponse{}
-	mi := &file_flow_v1_librarian_proto_msgTypes[25]
+	mi := &file_flow_v1_librarian_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1330,7 +1681,7 @@ func (x *SearchSimilarLawsResponse) String() string {
 func (*SearchSimilarLawsResponse) ProtoMessage() {}
 
 func (x *SearchSimilarLawsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_librarian_proto_msgTypes[25]
+	mi := &file_flow_v1_librarian_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1343,7 +1694,7 @@ func (x *SearchSimilarLawsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchSimilarLawsResponse.ProtoReflect.Descriptor instead.
 func (*SearchSimilarLawsResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{25}
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SearchSimilarLawsResponse) GetResults() []*SimilarLaw {
@@ -1364,7 +1715,7 @@ type SimilarLaw struct {
 
 func (x *SimilarLaw) Reset() {
 	*x = SimilarLaw{}
-	mi := &file_flow_v1_librarian_proto_msgTypes[26]
+	mi := &file_flow_v1_librarian_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1376,7 +1727,7 @@ func (x *SimilarLaw) String() string {
 func (*SimilarLaw) ProtoMessage() {}
 
 func (x *SimilarLaw) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_librarian_proto_msgTypes[26]
+	mi := &file_flow_v1_librarian_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1389,7 +1740,7 @@ func (x *SimilarLaw) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SimilarLaw.ProtoReflect.Descriptor instead.
 func (*SimilarLaw) Descriptor() ([]byte, []int) {
-	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{26}
+	return file_flow_v1_librarian_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *SimilarLaw) GetLaw() *Law {
@@ -1415,8 +1766,8 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\x06filter\x18\x01 \x01(\v2\x12.flow.v1.LawFilterR\x06filter\"\x85\x01\n" +
 	"\tLawFilter\x12+\n" +
 	"\x11governed_artefact\x18\x01 \x01(\tR\x10governedArtefact\x12/\n" +
-	"\x13representation_type\x18\x02 \x01(\tR\x12representationType\x12\x1a\n" +
-	"\bdivision\x18\x03 \x01(\tR\bdivision\"5\n" +
+	"\x13representation_type\x18\x02 \x01(\tR\x12representationType\x12\x14\n" +
+	"\x05group\x18\x04 \x01(\tR\x05groupJ\x04\b\x03\x10\x04\"5\n" +
 	"\x11QueryLawsResponse\x12 \n" +
 	"\x04laws\x18\x01 \x03(\v2\f.flow.v1.LawR\x04laws\"&\n" +
 	"\vCiteRequest\x12\x17\n" +
@@ -1476,7 +1827,24 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\x18GetActiveDisputesRequest\x12\x15\n" +
 	"\x06law_id\x18\x01 \x01(\tR\x05lawId\"M\n" +
 	"\x19GetActiveDisputesResponse\x120\n" +
-	"\arecords\x18\x01 \x03(\v2\x16.flow.v1.DisputeRecordR\arecords\"r\n" +
+	"\arecords\x18\x01 \x03(\v2\x16.flow.v1.DisputeRecordR\arecords\"3\n" +
+	"\x12GetLawGroupRequest\x12\x1d\n" +
+	"\n" +
+	"group_name\x18\x01 \x01(\tR\tgroupName\">\n" +
+	"\x13GetLawGroupResponse\x12'\n" +
+	"\x05group\x18\x01 \x01(\v2\x11.flow.v1.LawGroupR\x05group\"\x16\n" +
+	"\x14ListLawGroupsRequest\"B\n" +
+	"\x15ListLawGroupsResponse\x12)\n" +
+	"\x06groups\x18\x01 \x03(\v2\x11.flow.v1.LawGroupR\x06groups\">\n" +
+	"\x13SyncLawGroupRequest\x12'\n" +
+	"\x05group\x18\x01 \x01(\v2\x11.flow.v1.LawGroupR\x05group\":\n" +
+	"\x14SyncLawGroupResponse\x12\"\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"6\n" +
+	"\x15DeleteLawGroupRequest\x12\x1d\n" +
+	"\n" +
+	"group_name\x18\x01 \x01(\tR\tgroupName\"<\n" +
+	"\x16DeleteLawGroupResponse\x12\"\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"r\n" +
 	"\x18SearchSimilarLawsRequest\x12\x1d\n" +
 	"\n" +
 	"query_text\x18\x01 \x01(\tR\tqueryText\x12!\n" +
@@ -1491,7 +1859,8 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\rDisputeStatus\x12\x1e\n" +
 	"\x1aDISPUTE_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15DISPUTE_STATUS_ACTIVE\x10\x01\x12\x1a\n" +
-	"\x16DISPUTE_STATUS_RETIRED\x10\x022\xcc\a\n" +
+	"\x16DISPUTE_STATUS_RETIRED\x10\x022\x86\n" +
+	"\n" +
 	"\x10LibrarianService\x12B\n" +
 	"\tQueryLaws\x12\x19.flow.v1.QueryLawsRequest\x1a\x1a.flow.v1.QueryLawsResponse\x123\n" +
 	"\x04Cite\x12\x14.flow.v1.CiteRequest\x1a\x15.flow.v1.CiteResponse\x12N\n" +
@@ -1504,7 +1873,11 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\x13CreateDisputeRecord\x12#.flow.v1.CreateDisputeRecordRequest\x1a$.flow.v1.CreateDisputeRecordResponse\x12`\n" +
 	"\x13RetireDisputeRecord\x12#.flow.v1.RetireDisputeRecordRequest\x1a$.flow.v1.RetireDisputeRecordResponse\x12Z\n" +
 	"\x11GetActiveDisputes\x12!.flow.v1.GetActiveDisputesRequest\x1a\".flow.v1.GetActiveDisputesResponse\x12Z\n" +
-	"\x11SearchSimilarLaws\x12!.flow.v1.SearchSimilarLawsRequest\x1a\".flow.v1.SearchSimilarLawsResponseB\x85\x01\n" +
+	"\x11SearchSimilarLaws\x12!.flow.v1.SearchSimilarLawsRequest\x1a\".flow.v1.SearchSimilarLawsResponse\x12H\n" +
+	"\vGetLawGroup\x12\x1b.flow.v1.GetLawGroupRequest\x1a\x1c.flow.v1.GetLawGroupResponse\x12N\n" +
+	"\rListLawGroups\x12\x1d.flow.v1.ListLawGroupsRequest\x1a\x1e.flow.v1.ListLawGroupsResponse\x12K\n" +
+	"\fSyncLawGroup\x12\x1c.flow.v1.SyncLawGroupRequest\x1a\x1d.flow.v1.SyncLawGroupResponse\x12Q\n" +
+	"\x0eDeleteLawGroup\x12\x1e.flow.v1.DeleteLawGroupRequest\x1a\x1f.flow.v1.DeleteLawGroupResponseB\x85\x01\n" +
 	"\vcom.flow.v1B\x0eLibrarianProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
@@ -1520,7 +1893,7 @@ func file_flow_v1_librarian_proto_rawDescGZIP() []byte {
 }
 
 var file_flow_v1_librarian_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_flow_v1_librarian_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_flow_v1_librarian_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_flow_v1_librarian_proto_goTypes = []any{
 	(DisputeStatus)(0),                   // 0: flow.v1.DisputeStatus
 	(*QueryLawsRequest)(nil),             // 1: flow.v1.QueryLawsRequest
@@ -1547,59 +1920,79 @@ var file_flow_v1_librarian_proto_goTypes = []any{
 	(*RetireDisputeRecordResponse)(nil),  // 22: flow.v1.RetireDisputeRecordResponse
 	(*GetActiveDisputesRequest)(nil),     // 23: flow.v1.GetActiveDisputesRequest
 	(*GetActiveDisputesResponse)(nil),    // 24: flow.v1.GetActiveDisputesResponse
-	(*SearchSimilarLawsRequest)(nil),     // 25: flow.v1.SearchSimilarLawsRequest
-	(*SearchSimilarLawsResponse)(nil),    // 26: flow.v1.SearchSimilarLawsResponse
-	(*SimilarLaw)(nil),                   // 27: flow.v1.SimilarLaw
-	(*Law)(nil),                          // 28: flow.v1.Law
-	(*Representation)(nil),               // 29: flow.v1.Representation
-	(*IntegrationResult)(nil),            // 30: flow.v1.IntegrationResult
-	(Verdict)(0),                         // 31: flow.v1.Verdict
-	(*timestamppb.Timestamp)(nil),        // 32: google.protobuf.Timestamp
+	(*GetLawGroupRequest)(nil),           // 25: flow.v1.GetLawGroupRequest
+	(*GetLawGroupResponse)(nil),          // 26: flow.v1.GetLawGroupResponse
+	(*ListLawGroupsRequest)(nil),         // 27: flow.v1.ListLawGroupsRequest
+	(*ListLawGroupsResponse)(nil),        // 28: flow.v1.ListLawGroupsResponse
+	(*SyncLawGroupRequest)(nil),          // 29: flow.v1.SyncLawGroupRequest
+	(*SyncLawGroupResponse)(nil),         // 30: flow.v1.SyncLawGroupResponse
+	(*DeleteLawGroupRequest)(nil),        // 31: flow.v1.DeleteLawGroupRequest
+	(*DeleteLawGroupResponse)(nil),       // 32: flow.v1.DeleteLawGroupResponse
+	(*SearchSimilarLawsRequest)(nil),     // 33: flow.v1.SearchSimilarLawsRequest
+	(*SearchSimilarLawsResponse)(nil),    // 34: flow.v1.SearchSimilarLawsResponse
+	(*SimilarLaw)(nil),                   // 35: flow.v1.SimilarLaw
+	(*Law)(nil),                          // 36: flow.v1.Law
+	(*Representation)(nil),               // 37: flow.v1.Representation
+	(*IntegrationResult)(nil),            // 38: flow.v1.IntegrationResult
+	(Verdict)(0),                         // 39: flow.v1.Verdict
+	(*timestamppb.Timestamp)(nil),        // 40: google.protobuf.Timestamp
+	(*LawGroup)(nil),                     // 41: flow.v1.LawGroup
 }
 var file_flow_v1_librarian_proto_depIdxs = []int32{
 	2,  // 0: flow.v1.QueryLawsRequest.filter:type_name -> flow.v1.LawFilter
-	28, // 1: flow.v1.QueryLawsResponse.laws:type_name -> flow.v1.Law
-	29, // 2: flow.v1.RecordFindingRequest.representations:type_name -> flow.v1.Representation
-	28, // 3: flow.v1.GetLawResponse.law:type_name -> flow.v1.Law
-	28, // 4: flow.v1.WriteLawRequest.law:type_name -> flow.v1.Law
-	28, // 5: flow.v1.ReplicateLawsRequest.laws:type_name -> flow.v1.Law
-	30, // 6: flow.v1.ReplicateLawsResponse.integration_results:type_name -> flow.v1.IntegrationResult
-	31, // 7: flow.v1.ApplyLifecycleActionRequest.verdict:type_name -> flow.v1.Verdict
-	32, // 8: flow.v1.DisputeRecord.created_at:type_name -> google.protobuf.Timestamp
+	36, // 1: flow.v1.QueryLawsResponse.laws:type_name -> flow.v1.Law
+	37, // 2: flow.v1.RecordFindingRequest.representations:type_name -> flow.v1.Representation
+	36, // 3: flow.v1.GetLawResponse.law:type_name -> flow.v1.Law
+	36, // 4: flow.v1.WriteLawRequest.law:type_name -> flow.v1.Law
+	36, // 5: flow.v1.ReplicateLawsRequest.laws:type_name -> flow.v1.Law
+	38, // 6: flow.v1.ReplicateLawsResponse.integration_results:type_name -> flow.v1.IntegrationResult
+	39, // 7: flow.v1.ApplyLifecycleActionRequest.verdict:type_name -> flow.v1.Verdict
+	40, // 8: flow.v1.DisputeRecord.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 9: flow.v1.DisputeRecord.status:type_name -> flow.v1.DisputeStatus
 	18, // 10: flow.v1.CreateDisputeRecordResponse.record:type_name -> flow.v1.DisputeRecord
 	18, // 11: flow.v1.GetActiveDisputesResponse.records:type_name -> flow.v1.DisputeRecord
-	27, // 12: flow.v1.SearchSimilarLawsResponse.results:type_name -> flow.v1.SimilarLaw
-	28, // 13: flow.v1.SimilarLaw.law:type_name -> flow.v1.Law
-	1,  // 14: flow.v1.LibrarianService.QueryLaws:input_type -> flow.v1.QueryLawsRequest
-	4,  // 15: flow.v1.LibrarianService.Cite:input_type -> flow.v1.CiteRequest
-	6,  // 16: flow.v1.LibrarianService.RecordFinding:input_type -> flow.v1.RecordFindingRequest
-	8,  // 17: flow.v1.LibrarianService.GetLaw:input_type -> flow.v1.GetLawRequest
-	10, // 18: flow.v1.LibrarianService.WriteLaw:input_type -> flow.v1.WriteLawRequest
-	12, // 19: flow.v1.LibrarianService.RetireLaw:input_type -> flow.v1.RetireLawRequest
-	14, // 20: flow.v1.LibrarianService.ReplicateLaws:input_type -> flow.v1.ReplicateLawsRequest
-	16, // 21: flow.v1.LibrarianService.ApplyLifecycleAction:input_type -> flow.v1.ApplyLifecycleActionRequest
-	19, // 22: flow.v1.LibrarianService.CreateDisputeRecord:input_type -> flow.v1.CreateDisputeRecordRequest
-	21, // 23: flow.v1.LibrarianService.RetireDisputeRecord:input_type -> flow.v1.RetireDisputeRecordRequest
-	23, // 24: flow.v1.LibrarianService.GetActiveDisputes:input_type -> flow.v1.GetActiveDisputesRequest
-	25, // 25: flow.v1.LibrarianService.SearchSimilarLaws:input_type -> flow.v1.SearchSimilarLawsRequest
-	3,  // 26: flow.v1.LibrarianService.QueryLaws:output_type -> flow.v1.QueryLawsResponse
-	5,  // 27: flow.v1.LibrarianService.Cite:output_type -> flow.v1.CiteResponse
-	7,  // 28: flow.v1.LibrarianService.RecordFinding:output_type -> flow.v1.RecordFindingResponse
-	9,  // 29: flow.v1.LibrarianService.GetLaw:output_type -> flow.v1.GetLawResponse
-	11, // 30: flow.v1.LibrarianService.WriteLaw:output_type -> flow.v1.WriteLawResponse
-	13, // 31: flow.v1.LibrarianService.RetireLaw:output_type -> flow.v1.RetireLawResponse
-	15, // 32: flow.v1.LibrarianService.ReplicateLaws:output_type -> flow.v1.ReplicateLawsResponse
-	17, // 33: flow.v1.LibrarianService.ApplyLifecycleAction:output_type -> flow.v1.ApplyLifecycleActionResponse
-	20, // 34: flow.v1.LibrarianService.CreateDisputeRecord:output_type -> flow.v1.CreateDisputeRecordResponse
-	22, // 35: flow.v1.LibrarianService.RetireDisputeRecord:output_type -> flow.v1.RetireDisputeRecordResponse
-	24, // 36: flow.v1.LibrarianService.GetActiveDisputes:output_type -> flow.v1.GetActiveDisputesResponse
-	26, // 37: flow.v1.LibrarianService.SearchSimilarLaws:output_type -> flow.v1.SearchSimilarLawsResponse
-	26, // [26:38] is the sub-list for method output_type
-	14, // [14:26] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	41, // 12: flow.v1.GetLawGroupResponse.group:type_name -> flow.v1.LawGroup
+	41, // 13: flow.v1.ListLawGroupsResponse.groups:type_name -> flow.v1.LawGroup
+	41, // 14: flow.v1.SyncLawGroupRequest.group:type_name -> flow.v1.LawGroup
+	35, // 15: flow.v1.SearchSimilarLawsResponse.results:type_name -> flow.v1.SimilarLaw
+	36, // 16: flow.v1.SimilarLaw.law:type_name -> flow.v1.Law
+	1,  // 17: flow.v1.LibrarianService.QueryLaws:input_type -> flow.v1.QueryLawsRequest
+	4,  // 18: flow.v1.LibrarianService.Cite:input_type -> flow.v1.CiteRequest
+	6,  // 19: flow.v1.LibrarianService.RecordFinding:input_type -> flow.v1.RecordFindingRequest
+	8,  // 20: flow.v1.LibrarianService.GetLaw:input_type -> flow.v1.GetLawRequest
+	10, // 21: flow.v1.LibrarianService.WriteLaw:input_type -> flow.v1.WriteLawRequest
+	12, // 22: flow.v1.LibrarianService.RetireLaw:input_type -> flow.v1.RetireLawRequest
+	14, // 23: flow.v1.LibrarianService.ReplicateLaws:input_type -> flow.v1.ReplicateLawsRequest
+	16, // 24: flow.v1.LibrarianService.ApplyLifecycleAction:input_type -> flow.v1.ApplyLifecycleActionRequest
+	19, // 25: flow.v1.LibrarianService.CreateDisputeRecord:input_type -> flow.v1.CreateDisputeRecordRequest
+	21, // 26: flow.v1.LibrarianService.RetireDisputeRecord:input_type -> flow.v1.RetireDisputeRecordRequest
+	23, // 27: flow.v1.LibrarianService.GetActiveDisputes:input_type -> flow.v1.GetActiveDisputesRequest
+	33, // 28: flow.v1.LibrarianService.SearchSimilarLaws:input_type -> flow.v1.SearchSimilarLawsRequest
+	25, // 29: flow.v1.LibrarianService.GetLawGroup:input_type -> flow.v1.GetLawGroupRequest
+	27, // 30: flow.v1.LibrarianService.ListLawGroups:input_type -> flow.v1.ListLawGroupsRequest
+	29, // 31: flow.v1.LibrarianService.SyncLawGroup:input_type -> flow.v1.SyncLawGroupRequest
+	31, // 32: flow.v1.LibrarianService.DeleteLawGroup:input_type -> flow.v1.DeleteLawGroupRequest
+	3,  // 33: flow.v1.LibrarianService.QueryLaws:output_type -> flow.v1.QueryLawsResponse
+	5,  // 34: flow.v1.LibrarianService.Cite:output_type -> flow.v1.CiteResponse
+	7,  // 35: flow.v1.LibrarianService.RecordFinding:output_type -> flow.v1.RecordFindingResponse
+	9,  // 36: flow.v1.LibrarianService.GetLaw:output_type -> flow.v1.GetLawResponse
+	11, // 37: flow.v1.LibrarianService.WriteLaw:output_type -> flow.v1.WriteLawResponse
+	13, // 38: flow.v1.LibrarianService.RetireLaw:output_type -> flow.v1.RetireLawResponse
+	15, // 39: flow.v1.LibrarianService.ReplicateLaws:output_type -> flow.v1.ReplicateLawsResponse
+	17, // 40: flow.v1.LibrarianService.ApplyLifecycleAction:output_type -> flow.v1.ApplyLifecycleActionResponse
+	20, // 41: flow.v1.LibrarianService.CreateDisputeRecord:output_type -> flow.v1.CreateDisputeRecordResponse
+	22, // 42: flow.v1.LibrarianService.RetireDisputeRecord:output_type -> flow.v1.RetireDisputeRecordResponse
+	24, // 43: flow.v1.LibrarianService.GetActiveDisputes:output_type -> flow.v1.GetActiveDisputesResponse
+	34, // 44: flow.v1.LibrarianService.SearchSimilarLaws:output_type -> flow.v1.SearchSimilarLawsResponse
+	26, // 45: flow.v1.LibrarianService.GetLawGroup:output_type -> flow.v1.GetLawGroupResponse
+	28, // 46: flow.v1.LibrarianService.ListLawGroups:output_type -> flow.v1.ListLawGroupsResponse
+	30, // 47: flow.v1.LibrarianService.SyncLawGroup:output_type -> flow.v1.SyncLawGroupResponse
+	32, // 48: flow.v1.LibrarianService.DeleteLawGroup:output_type -> flow.v1.DeleteLawGroupResponse
+	33, // [33:49] is the sub-list for method output_type
+	17, // [17:33] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_librarian_proto_init() }
@@ -1614,7 +2007,7 @@ func file_flow_v1_librarian_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_librarian_proto_rawDesc), len(file_flow_v1_librarian_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   27,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

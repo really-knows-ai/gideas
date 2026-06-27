@@ -254,7 +254,7 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 			Image: "sort:latest",
 			Outputs: []apiv1.Output{
 				{Name: "quench", Target: "quench"},
-				{Name: "appraise", Target: "appraise"},
+				{Name: "appraisal", Target: "appraisal"},
 				{Name: "refine", Target: "refine"},
 				{Name: "arbiter", Target: "arbiter"},
 			},
@@ -277,17 +277,17 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 		},
 	}
 
-	appraiseNode := &apiv1.FoundryNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "appraise", Namespace: "default"},
+	appraisalNode := &apiv1.FoundryNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "appraisal", Namespace: "default"},
 		Spec: apiv1.FoundryNodeSpec{
-			Image:        "appraise:latest",
+			Image:        "appraisal:latest",
 			Capabilities: []string{"READ:artefact", "STAMP:artefact/haiku/review", "WRITE:feedback/new"},
 		},
 	}
 
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(flow, sortNode, quenchNode, appraiseNode).
+		WithObjects(flow, sortNode, quenchNode, appraisalNode).
 		Build()
 
 	srv := NewOperatorServer(k8s)
@@ -313,8 +313,8 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 	if _, ok := resp.GetNodes()["quench"]; !ok {
 		t.Fatal("Expected quench in nodes map")
 	}
-	if _, ok := resp.GetNodes()["appraise"]; !ok {
-		t.Fatal("Expected appraise in nodes map")
+	if _, ok := resp.GetNodes()["appraisal"]; !ok {
+		t.Fatal("Expected appraisal in nodes map")
 	}
 
 	// Verify exit contract.

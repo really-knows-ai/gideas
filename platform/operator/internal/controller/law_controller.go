@@ -62,7 +62,7 @@ func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		"name", law.Name,
 		"namespace", law.Namespace,
 		"tier", law.Spec.Tier,
-		"division", law.Spec.Division,
+		"group", law.Spec.Group,
 	)
 
 	// Validate appliesTo references against GovernedArtefacts.

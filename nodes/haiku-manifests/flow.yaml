@@ -6,21 +6,21 @@
 #
 # Topology:
 #   Forge ──[default]──→ Sort ──[quench]──→ Quench ──[default]──→ Sort
-#                         │──[appraise]──→ Appraise ──[default]──→ Sort
-#                         │                  └──[fan-out]──→ Reviewer(s) ──[Complete]──┘
+#                         │──[appraisal]──→ Appraisal ──[default]──→ Sort
+#                         │                  └──[fan-out]──→ Appraiser(s) ──[Complete]──┘
 #                         │──[refine]────→ Refine ──[default]───→ Sort
 #                         └──Complete() (exit)
 #
 # Sort's decision tree:
-#   1. Missing "linter" stamp?  → route to Quench
-#   2. Missing "review" stamp?  → route to Appraise
-#   3. Unresolved feedback?     → route to Refine
-#   4. All clear?               → stamp "approval", Complete()
+#   1. Missing "linter" stamp?        → route to Quench
+#   2. Missing "appraise-*" stamp?    → route to Appraisal
+#   3. Unresolved feedback?           → route to Refine
+#   4. All clear?                     → stamp "approval", Complete()
 #
 # Artefacts:
 #   - petition: The creative brief, pre-populated at workitem creation.
-#   - haiku: The governed output, must carry [linter, review, approval].
-#   - review-data: Internal data transfer between Appraise and Reviewer children.
+#   - haiku: The governed output, must carry [linter, appraise-*, approval].
+#   - review-data: Internal data transfer between Appraisal and Appraiser children.
 #
 # Apply order:
 #   1. kubectl apply -f flow.yaml          (this file)
@@ -36,7 +36,7 @@ metadata:
 spec:
   stamps:
     - linter
-    - review
+    - appraise-*
     - approval
 ---
 apiVersion: flow.gideas.io/v1
@@ -177,16 +177,16 @@ spec:
     hearing-entry:
       "law-reference": []
   exitContracts:
-    # The haiku must carry linter, review, and approval stamps to exit.
+    # The haiku must carry linter, appraise-security, and approval stamps to exit.
     standard-exit:
       "haiku":
         - linter
-        - review
+        - appraise-security
         - approval
-    # The petition must carry review + approval stamps to exit the Clerk cycle.
+    # The petition must carry appraise-security + approval stamps to exit the Clerk cycle.
     clerk-exit:
       "petition":
-        - review
+        - appraise-security
         - approval
   nodeGroups:
     main-cycle:
@@ -194,8 +194,8 @@ spec:
         - forge
         - sort
         - quench
-        - appraise
-        - reviewer
+        - appraisal
+        - appraiser
         - refine
     judiciary:
       nodes:
@@ -205,7 +205,7 @@ spec:
         - tribunal
         - friction-watcher
         - ttl-watcher
-        - hitl-appraise
+        - hitl-appraisal
         - arbiter-hitl-resolve
         - tribunal-hitl-resolve
         - law-applicator
@@ -213,7 +213,7 @@ spec:
       nodes:
         - clerk-forge
         - clerk-sort
-        - clerk-appraise
+        - clerk-appraisal
         - clerk-refine
         - clerk-facilitator
         - codification
@@ -258,8 +258,8 @@ spec:
   outputs:
     - name: "quench"
       target: "quench"
-    - name: "appraise"
-      target: "appraise"
+    - name: "appraisal"
+      target: "appraisal"
     - name: "refine"
       target: "refine"
     - name: "arbiter"
@@ -289,12 +289,12 @@ spec:
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
-  name: appraise
+  name: appraisal
   namespace: default
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: appraise:latest
+  image: appraisal:latest
   outputs:
     - name: "default"
       target: "sort"
@@ -305,18 +305,18 @@ spec:
     - "WRITE:feedback/new"
     - "WRITE:feedback/resolved"
     - "WRITE:feedback/rejected"
-    - "STAMP:artefact/haiku/review"
+    - "STAMP:artefact/*/appraise-*"
     - "CREATE:workitem/child"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
-  name: reviewer
+  name: appraiser
   namespace: default
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: reviewer:latest
+  image: appraiser:latest
   outputs: []
   capabilities:
     - "READ:artefact/review-data"
@@ -468,7 +468,7 @@ spec:
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
-  name: hitl-appraise
+  name: hitl-appraisal
   namespace: default
   labels:
     flow.gideas.io/flow-name: haiku-flow
@@ -546,8 +546,8 @@ metadata:
 spec:
   image: sort:latest
   outputs:
-    - name: "appraise"
-      target: "clerk-appraise"
+    - name: "appraisal"
+      target: "clerk-appraisal"
     - name: "refine"
       target: "clerk-refine"
     - name: "arbiter"
@@ -563,12 +563,12 @@ spec:
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
-  name: clerk-appraise
+  name: clerk-appraisal
   namespace: default
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: appraise:latest
+  image: appraisal:latest
   outputs:
     - name: "default"
       target: "clerk-sort"
@@ -577,7 +577,7 @@ spec:
     - "READ:artefact/petition"
     - "READ:law"
     - "WRITE:feedback/new"
-    - "STAMP:artefact/petition/review"
+    - "STAMP:artefact/*/appraise-*"
     - "CREATE:workitem/child"
 ---
 apiVersion: flow.gideas.io/v1
@@ -673,8 +673,8 @@ spec:
   outputs:
     - name: "law-applicator"
       target: "law-applicator"
-    - name: "hitl-appraise"
-      target: "hitl-appraise"
+    - name: "hitl-appraisal"
+      target: "hitl-appraisal"
   capabilities:
     - "READ:artefact/petition"
 ---

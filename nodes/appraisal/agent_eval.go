@@ -23,7 +23,7 @@ var _ flow.EvalContract = (*EvalAgent)(nil)
 // feedback item is adequate.
 type EvalAgent struct {
 	agent *flow.Agent
-	cfg   *appraiseConfig
+	cfg   *appraisalConfig
 }
 
 // evalOutput is the Go representation of the evalSchema-validated JSON.
@@ -102,7 +102,7 @@ type evalTemplateQueryData struct {
 //
 // If cfg.EvalSystemPrompt or cfg.EvalQueryTemplate are non-empty, they
 // override the baked-in defaults.
-func NewEvalAgent(client *flow.Client, cfg *appraiseConfig) (*EvalAgent, error) {
+func NewEvalAgent(client *flow.Client, cfg *appraisalConfig) (*EvalAgent, error) {
 	inputLabel := artefacts.InputLabel(cfg.InputArtefacts)
 
 	sysTmplStr := evalSystemPromptTemplate

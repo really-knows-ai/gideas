@@ -114,7 +114,7 @@ func watchOutcomesWithClient(
 
 		// Consume events from the stream.
 		if err := consumeOutcomes(ctx, stream, tracker, entry); err != nil {
-			slog.Warn("petition-watcher: stream ended, reconnecting",
+			slog.Debug("petition-watcher: stream ended, reconnecting",
 				"error", err)
 			continue
 		}

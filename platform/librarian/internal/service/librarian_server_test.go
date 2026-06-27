@@ -17,6 +17,13 @@ import (
 // testEmbeddingDims matches the store test dimension.
 const testEmbeddingDims = 4
 
+// Test constants reused across LawGroup tests.
+const (
+	testBundleMode    = "bundle"
+	testLawByLawMode  = "law-by-law"
+	testGroupSecurity = "security"
+)
+
 var idCounter int
 
 func testIDGen() string {
@@ -585,7 +592,7 @@ func TestReplicateLaws_RetainsProvenance(t *testing.T) {
 				Representations: []*flowv1.Representation{
 					{Type: "text/plain", Content: "provenance content"},
 				},
-				Division: "security",
+				Group: "security",
 			},
 		},
 		SourceFlowNamespace: "authority-flow-ns",
@@ -904,18 +911,18 @@ func TestApplyLifecycleAction_UnspecifiedVerdict(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Division support
+// Group support
 // ---------------------------------------------------------------------------
 
-func TestQueryLaws_DivisionFilter(t *testing.T) {
+func TestQueryLaws_GroupFilter(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	// Create laws in different divisions via WriteLaw (which passes division through).
+	// Create laws in different groups via WriteLaw (which passes group through).
 	if _, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Security rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "security",
+			Group:           "security",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "s"}},
 		},
 	}); err != nil {
@@ -924,7 +931,7 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 	if _, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Arch rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "architecture",
+			Group:           "architecture",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "a"}},
 		},
 	}); err != nil {
@@ -941,19 +948,19 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 
 	// Filter by security.
 	resp, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{
-		Filter: &flowv1.LawFilter{Division: "security"},
+		Filter: &flowv1.LawFilter{Group: testGroupSecurity},
 	})
 	if err != nil {
-		t.Fatalf("QueryLaws division=security: %v", err)
+		t.Fatalf("QueryLaws group=security: %v", err)
 	}
 	if len(resp.GetLaws()) != 1 {
 		t.Fatalf("expected 1 security law, got %d", len(resp.GetLaws()))
 	}
-	if resp.GetLaws()[0].GetDivision() != "security" {
-		t.Fatalf("expected division=security, got %q", resp.GetLaws()[0].GetDivision())
+	if resp.GetLaws()[0].GetGroup() != testGroupSecurity {
+		t.Fatalf("expected group=%s, got %q", testGroupSecurity, resp.GetLaws()[0].GetGroup())
 	}
 
-	// No division filter returns all.
+	// No group filter returns all.
 	resp, err = srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
 	if err != nil {
 		t.Fatalf("QueryLaws no filter: %v", err)
@@ -963,14 +970,14 @@ func TestQueryLaws_DivisionFilter(t *testing.T) {
 	}
 }
 
-func TestWriteLaw_DivisionRoundTrip(t *testing.T) {
+func TestWriteLaw_GroupRoundTrip(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
 	writeResp, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Styled rule", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "style",
+			Group:           "style",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "x"}},
 		},
 	})
@@ -982,16 +989,16 @@ func TestWriteLaw_DivisionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLaw: %v", err)
 	}
-	if getLawResp.GetLaw().GetDivision() != "style" {
-		t.Fatalf("expected division=style, got %q", getLawResp.GetLaw().GetDivision())
+	if getLawResp.GetLaw().GetGroup() != "style" {
+		t.Fatalf("expected group=style, got %q", getLawResp.GetLaw().GetGroup())
 	}
 }
 
-func TestStoreLawToProto_IncludesDivision(t *testing.T) {
+func TestStoreLawToProto_IncludesGroup(t *testing.T) {
 	srv := newTestServer(t)
 	ctx := context.Background()
 
-	// RecordFinding doesn't set division (always empty for findings).
+	// RecordFinding doesn't set group (always empty for findings).
 	findResp, _ := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
 		Goal:            "Finding",
 		Representations: []*flowv1.Representation{{Type: "text/plain", Content: "f"}},
@@ -1001,9 +1008,9 @@ func TestStoreLawToProto_IncludesDivision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLaw: %v", err)
 	}
-	// Division should be empty for a RecordFinding (no division in request).
-	if getLawResp.GetLaw().GetDivision() != "" {
-		t.Fatalf("expected empty division for finding, got %q", getLawResp.GetLaw().GetDivision())
+	// Group should be empty for a RecordFinding (no group in request).
+	if getLawResp.GetLaw().GetGroup() != "" {
+		t.Fatalf("expected empty group for finding, got %q", getLawResp.GetLaw().GetGroup())
 	}
 }
 
@@ -1376,11 +1383,11 @@ func TestSearchSimilarLaws_ScopeFilter(t *testing.T) {
 	srv := newTestServerWithEmbedder(t)
 	ctx := context.Background()
 
-	// Create two laws in different divisions.
+	// Create two laws in different groups.
 	_, err := srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Security rule alpha", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "security",
+			Group:           "security",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "s"}},
 		},
 	})
@@ -1390,7 +1397,7 @@ func TestSearchSimilarLaws_ScopeFilter(t *testing.T) {
 	_, err = srv.WriteLaw(ctx, &flowv1.WriteLawRequest{
 		Law: &flowv1.Law{
 			Goal: "Architecture rule bet", Tier: flowv1.LawTier_LAW_TIER_RULING,
-			Division:        "architecture",
+			Group:           "architecture",
 			Representations: []*flowv1.Representation{{Type: "text/plain", Content: "a"}},
 		},
 	})
@@ -1408,8 +1415,8 @@ func TestSearchSimilarLaws_ScopeFilter(t *testing.T) {
 		t.Fatalf("SearchSimilarLaws: %v", err)
 	}
 	for _, r := range resp.GetResults() {
-		if r.GetLaw().GetDivision() != "security" {
-			t.Fatalf("expected only security division, got %q", r.GetLaw().GetDivision())
+		if r.GetLaw().GetGroup() != testGroupSecurity {
+			t.Fatalf("expected only security group, got %q", r.GetLaw().GetGroup())
 		}
 	}
 }
@@ -1533,6 +1540,325 @@ func TestSearchSimilarLaws_NoEmbedder(t *testing.T) {
 		t.Fatalf("expected FailedPrecondition, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// LawGroup RPCs
+// ---------------------------------------------------------------------------
+
+func TestGetLawGroup_StoredGroup(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	// Sync a group first.
+	_, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{
+			Name: "security", Mode: "law-by-law", Passes: 3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SyncLawGroup: %v", err)
+	}
+
+	resp, err := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: "security"})
+	if err != nil {
+		t.Fatalf("GetLawGroup: %v", err)
+	}
+	g := resp.GetGroup()
+	if g.GetName() != "security" {
+		t.Fatalf("expected name %q, got %q", "security", g.GetName())
+	}
+	if g.GetMode() != testLawByLawMode {
+		t.Fatalf("expected mode %q, got %q", testLawByLawMode, g.GetMode())
+	}
+	if g.GetPasses() != 3 {
+		t.Fatalf("expected passes 3, got %d", g.GetPasses())
+	}
+}
+
+func TestGetLawGroup_UnknownGroupReturnsDefault(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	resp, err := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: "nonexistent"})
+	if err != nil {
+		t.Fatalf("GetLawGroup for unknown group: %v", err)
+	}
+	g := resp.GetGroup()
+	if g.GetName() != "nonexistent" {
+		t.Fatalf("expected name %q, got %q", "nonexistent", g.GetName())
+	}
+	if g.GetMode() != testBundleMode {
+		t.Fatalf("expected default mode %q, got %q", testBundleMode, g.GetMode())
+	}
+	if g.GetPasses() != 1 {
+		t.Fatalf("expected default passes 1, got %d", g.GetPasses())
+	}
+}
+
+func TestGetLawGroup_EmptyName(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	resp, err := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{})
+	if err != nil {
+		t.Fatalf("GetLawGroup for empty name: %v", err)
+	}
+	g := resp.GetGroup()
+	if g.GetName() != "" {
+		t.Fatalf("expected empty name, got %q", g.GetName())
+	}
+	if g.GetMode() != testBundleMode {
+		t.Fatalf("expected default mode %q, got %q", testBundleMode, g.GetMode())
+	}
+	if g.GetPasses() != 1 {
+		t.Fatalf("expected default passes 1, got %d", g.GetPasses())
+	}
+}
+
+func TestGetLawGroup_CapabilityDenied(t *testing.T) {
+	srv := newTestServer(t)
+	md := metadata.Pairs(metadataKeyCapabilities, "WRITE:law", metadataKeyNodeID, "node-1")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: "security"})
+	if err == nil {
+		t.Fatal("expected PermissionDenied, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestListLawGroups_ReturnsStored(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, _ = srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "group-a", Mode: "bundle", Passes: 1},
+	})
+	_, _ = srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "group-b", Mode: "law-by-law", Passes: 2},
+	})
+
+	resp, err := srv.ListLawGroups(ctx, &flowv1.ListLawGroupsRequest{})
+	if err != nil {
+		t.Fatalf("ListLawGroups: %v", err)
+	}
+	if len(resp.GetGroups()) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(resp.GetGroups()))
+	}
+	names := map[string]bool{}
+	for _, g := range resp.GetGroups() {
+		names[g.GetName()] = true
+	}
+	if !names["group-a"] || !names["group-b"] {
+		t.Fatalf("expected group-a and group-b, got %v", names)
+	}
+}
+
+func TestListLawGroups_Empty(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	resp, err := srv.ListLawGroups(ctx, &flowv1.ListLawGroupsRequest{})
+	if err != nil {
+		t.Fatalf("ListLawGroups: %v", err)
+	}
+	if len(resp.GetGroups()) != 0 {
+		t.Fatalf("expected 0 groups, got %d", len(resp.GetGroups()))
+	}
+}
+
+func TestListLawGroups_CapabilityDenied(t *testing.T) {
+	srv := newTestServer(t)
+	md := metadata.Pairs(metadataKeyCapabilities, "WRITE:law", metadataKeyNodeID, "node-1")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.ListLawGroups(ctx, &flowv1.ListLawGroupsRequest{})
+	if err == nil {
+		t.Fatal("expected PermissionDenied, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestSyncLawGroup_InsertAndGet(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	resp, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "security", Mode: "law-by-law", Passes: 3},
+	})
+	if err != nil {
+		t.Fatalf("SyncLawGroup: %v", err)
+	}
+	if !resp.GetAcknowledged() {
+		t.Fatal("expected acknowledged=true")
+	}
+
+	// Verify via GetLawGroup.
+	getResp, err := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: "security"})
+	if err != nil {
+		t.Fatalf("GetLawGroup after SyncLawGroup: %v", err)
+	}
+	if getResp.GetGroup().GetPasses() != 3 {
+		t.Fatalf("expected passes 3, got %d", getResp.GetGroup().GetPasses())
+	}
+}
+
+func TestSyncLawGroup_UpdateExisting(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, _ = srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "security", Mode: "bundle", Passes: 1},
+	})
+	_, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "security", Mode: "law-by-law", Passes: 5},
+	})
+	if err != nil {
+		t.Fatalf("SyncLawGroup update: %v", err)
+	}
+
+	getResp, _ := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: "security"})
+	if getResp.GetGroup().GetMode() != "law-by-law" {
+		t.Fatalf("expected mode %q, got %q", "law-by-law", getResp.GetGroup().GetMode())
+	}
+	if getResp.GetGroup().GetPasses() != 5 {
+		t.Fatalf("expected passes 5, got %d", getResp.GetGroup().GetPasses())
+	}
+}
+
+func TestSyncLawGroup_EmptyName(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Mode: "bundle", Passes: 1},
+	})
+	if err == nil {
+		t.Fatal("expected InvalidArgument for empty name")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestSyncLawGroup_InvalidMode(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "test", Mode: "invalid", Passes: 1},
+	})
+	if err == nil {
+		t.Fatal("expected InvalidArgument for invalid mode")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestSyncLawGroup_PassesLessThanOne(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "test", Mode: "bundle", Passes: 0},
+	})
+	if err == nil {
+		t.Fatal("expected InvalidArgument for passes < 1")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestSyncLawGroup_CapabilityDenied(t *testing.T) {
+	srv := newTestServer(t)
+	md := metadata.Pairs(metadataKeyCapabilities, "READ:law", metadataKeyNodeID, "node-1")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "test", Mode: "bundle", Passes: 1},
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied, got nil")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestDeleteLawGroup_RemovesGroup(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, _ = srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
+		Group: &flowv1.LawGroup{Name: "security", Mode: "bundle", Passes: 1},
+	})
+
+	resp, err := srv.DeleteLawGroup(ctx, &flowv1.DeleteLawGroupRequest{GroupName: "security"})
+	if err != nil {
+		t.Fatalf("DeleteLawGroup: %v", err)
+	}
+	if !resp.GetAcknowledged() {
+		t.Fatal("expected acknowledged=true")
+	}
+
+	// After delete, GetLawGroup returns the built-in default.
+	getResp, err := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: "security"})
+	if err != nil {
+		t.Fatalf("GetLawGroup after delete: %v", err)
+	}
+	if getResp.GetGroup().GetMode() != "bundle" {
+		t.Fatalf("expected default mode after delete, got %q", getResp.GetGroup().GetMode())
+	}
+}
+
+func TestDeleteLawGroup_NonExistent(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.DeleteLawGroup(ctx, &flowv1.DeleteLawGroupRequest{GroupName: "nonexistent"})
+	if err == nil {
+		t.Fatal("expected NotFound for non-existent group")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+func TestDeleteLawGroup_EmptyName(t *testing.T) {
+	srv := newTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.DeleteLawGroup(ctx, &flowv1.DeleteLawGroupRequest{})
+	if err == nil {
+		t.Fatal("expected InvalidArgument for empty name")
+	}
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestDeleteLawGroup_CapabilityDenied(t *testing.T) {
+	srv := newTestServer(t)
+	md := metadata.Pairs(metadataKeyCapabilities, "READ:law", metadataKeyNodeID, "node-1")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := srv.DeleteLawGroup(ctx, &flowv1.DeleteLawGroupRequest{GroupName: "test"})
+	if err == nil {
+		t.Fatal("expected PermissionDenied, got nil")
+	}
+}
+
+// TestQueryLaws_GroupFilter is tested at the store level (TestQueryLaws_GroupFilter,
+// TestQueryLaws_GroupAndArtefactFilter, TestQueryLaws_GroupFilter).
+// The server handler simply passes the Group field through to the store's QueryFilter.
+// The handler wiring for group filter is verified by TestQueryLaws_AllLaws (no filter)
+// and at the store level.
 
 func TestReplicateLaws_StoresVecEmbedding(t *testing.T) {
 	srv := newTestServerWithEmbedder(t)
