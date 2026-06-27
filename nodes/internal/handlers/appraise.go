@@ -221,8 +221,8 @@ type fanOutResult struct {
 	childStatuses  []flow.ChildWorkitemStatus
 	childResults   []flow.ChildResult
 	groups         map[string]*flow.LawGroup
-	childIDs       []string        // child workitem IDs, same order as dispatchMatrix
-	skippedIndices map[int]bool    // indices in dispatchMatrix that were skipped (unknown appraiser)
+	childIDs       []string     // child workitem IDs, same order as dispatchMatrix
+	skippedIndices map[int]bool // indices in dispatchMatrix that were skipped (unknown appraiser)
 }
 
 // fanOutAppraisal computes the dispatch matrix, fans out to Reviewer children
@@ -582,9 +582,9 @@ type coverageEntry struct {
 }
 
 type evalEntry struct {
-	Appraiser  string `json:"appraiser"`
-	Pass       int    `json:"pass"`
-	Completed  bool   `json:"completed"`
+	Appraiser string `json:"appraiser"`
+	Pass      int    `json:"pass"`
+	Completed bool   `json:"completed"`
 	// ponytail: Violations is not in spec R11; kept for debugging and
 	// per-appraiser verdict computation. Extra JSON fields are tolerated
 	// by tolerant parsers.
@@ -695,7 +695,10 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 		"cycle_id": cycleID,
 		"units":    units,
 	}
-	if err := client.PublishAuditEvent(ctx, EventAppraisalCoverage, payload, client.WorkitemID(), client.FlowNamespace()); err != nil {
+	if err := client.PublishAuditEvent(ctx,
+		EventAppraisalCoverage, payload,
+		client.WorkitemID(), client.FlowNamespace(),
+	); err != nil {
 		slog.Warn("appraisal: publish coverage event failed", "error", err)
 	} else {
 		slog.Info("appraisal: coverage event published")
@@ -748,7 +751,10 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 		"violations_total":   totalViolations,
 		"appraiser_verdicts": appraiserVerdicts,
 	}
-	if err := client.PublishAuditEvent(ctx, EventAppraisalAttestation, payload, client.WorkitemID(), client.FlowNamespace()); err != nil {
+	if err := client.PublishAuditEvent(ctx,
+		EventAppraisalAttestation, payload,
+		client.WorkitemID(), client.FlowNamespace(),
+	); err != nil {
 		slog.Warn("appraisal: publish attestation event failed", "error", err)
 	} else {
 		slog.Info("appraisal: attestation event published", "status", status)

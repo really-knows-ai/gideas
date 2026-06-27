@@ -98,8 +98,7 @@ message LawFilter {
   string governed_artefact = 1;
   // Further filter by representation MIME type.
   string representation_type = 2;
-  // Filter by division. Empty means all divisions (no filtering).
-  string division = 3;
+  reserved 3;
   // Filter by law group name. Empty means no group filter (return all).
   string group = 4;
 }

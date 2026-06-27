@@ -1039,9 +1039,6 @@ type Law struct {
 	VersionHash     string                 `protobuf:"bytes,6,opt,name=version_hash,json=versionHash,proto3" json:"version_hash,omitempty"`
 	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// Optional specialisation division (e.g. "security", "architecture").
-	// Empty means unset; consumers treat empty as "general".
-	Division string `protobuf:"bytes,9,opt,name=division,proto3" json:"division,omitempty"`
 	// Law group name. Empty means "default" group.
 	// See: specs/05-reference/crds.md#lawgroup
 	Group         string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
@@ -1133,13 +1130,6 @@ func (x *Law) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
-}
-
-func (x *Law) GetDivision() string {
-	if x != nil {
-		return x.Division
-	}
-	return ""
 }
 
 func (x *Law) GetGroup() string {
@@ -1676,7 +1666,7 @@ const file_flow_v1_common_proto_rawDesc = "" +
 	"\bCitation\x12!\n" +
 	"\fcitation_ids\x18\x01 \x03(\tR\vcitationIds\"+\n" +
 	"\rNovelArgument\x12\x1a\n" +
-	"\bargument\x18\x01 \x01(\tR\bargument\"\xfc\x02\n" +
+	"\bargument\x18\x01 \x01(\tR\bargument\"\xe6\x02\n" +
 	"\x03Law\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04goal\x18\x02 \x01(\tR\x04goal\x12A\n" +
@@ -1688,10 +1678,10 @@ const file_flow_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1a\n" +
-	"\bdivision\x18\t \x01(\tR\bdivision\x12\x14\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x14\n" +
 	"\x05group\x18\n" +
-	" \x01(\tR\x05group\">\n" +
+	" \x01(\tR\x05groupJ\x04\b\t\x10\n" +
+	"\">\n" +
 	"\x0eRepresentation\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\"\xb0\x01\n" +
