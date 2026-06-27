@@ -124,9 +124,12 @@ func HandleAppraisal(
 	if len(result.dispatchMatrix) > 0 {
 		applyAppraisalStamps(ctx, client, cfg.GovernedArtefact,
 			result.dispatchMatrix, result.childStatuses,
-			result.childIDs, result.unitsByGroup, result.groups,
+			result.childByDispatchIdx, result.unitsByGroup, result.groups,
 			result.skippedIndices)
-		coverage := buildCoverageMap(result.dispatchMatrix, result.childStatuses, result.childResults, result.childIDs)
+		coverage := buildCoverageMap(
+			result.dispatchMatrix, result.childStatuses,
+			result.childResults, result.childByDispatchIdx,
+		)
 		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 	} else {
@@ -215,14 +218,14 @@ type reviewOutput struct {
 // including merge feedback, the dispatch matrix, child statuses, and
 // resolved group configs for post-processing (stamping, coverage, events).
 type fanOutResult struct {
-	feedback       []reviewItem
-	dispatchMatrix []flow.DispatchEntry
-	unitsByGroup   map[string][]flow.Unit
-	childStatuses  []flow.ChildWorkitemStatus
-	childResults   []flow.ChildResult
-	groups         map[string]*flow.LawGroup
-	childIDs       []string     // child workitem IDs, same order as dispatchMatrix
-	skippedIndices map[int]bool // indices in dispatchMatrix that were skipped (unknown appraiser)
+	feedback           []reviewItem
+	dispatchMatrix     []flow.DispatchEntry
+	unitsByGroup       map[string][]flow.Unit
+	childStatuses      []flow.ChildWorkitemStatus
+	childResults       []flow.ChildResult
+	groups             map[string]*flow.LawGroup
+	childByDispatchIdx map[int]string // dispatch matrix index → child workitem ID (empty if skipped)
+	skippedIndices     map[int]bool   // indices in dispatchMatrix that were skipped (unknown appraiser)
 }
 
 // fanOutAppraisal computes the dispatch matrix, fans out to Reviewer children
@@ -384,7 +387,7 @@ func fanOutAppraisal(
 			TargetNode: cfg.ReviewerNode,
 			Artefacts: []flow.ChildArtefact{
 				{ID: "inputs", GovernedArtefact: "review-data", Content: []byte(inputContent)},
-				{ID: cfg.ReviewArtefact, GovernedArtefact: "review-data", Content: []byte(reviewContent)},
+				{ID: ArtefactReview, GovernedArtefact: "review-data", Content: []byte(reviewContent)},
 				{ID: ArtefactLaws, GovernedArtefact: "review-data", Content: lawsJSON},
 				{ID: ArtefactHistory, GovernedArtefact: "review-data", Content: historyJSON},
 				{ID: ArtefactAppraiserPersonality, GovernedArtefact: "review-data", Content: appraiserJSON},
@@ -405,9 +408,17 @@ func fanOutAppraisal(
 		return nil, fmt.Errorf("fan-out: %w", err)
 	}
 
-	childIDs := make([]string, len(children))
-	for i, ch := range children {
-		childIDs[i] = ch.ID()
+	// Build map: dispatch matrix index → child workitem ID.
+	// Entries that were skipped have an empty string.
+	childByDispatchIdx := make(map[int]string, len(dispatchEntries))
+	childIdx := 0
+	for i := range dispatchEntries {
+		if skippedIndices[i] {
+			childByDispatchIdx[i] = ""
+		} else if childIdx < len(children) {
+			childByDispatchIdx[i] = children[childIdx].ID()
+			childIdx++
+		}
 	}
 
 	// Step 8: AwaitChildren — wait for all children to reach terminal state.
@@ -457,14 +468,14 @@ func fanOutAppraisal(
 		"feedback_items", len(merged))
 
 	return &fanOutResult{
-		feedback:       merged,
-		dispatchMatrix: dispatchEntries,
-		unitsByGroup:   unitsByGroup,
-		childStatuses:  statuses,
-		childResults:   childResults,
-		groups:         groups,
-		childIDs:       childIDs,
-		skippedIndices: skippedIndices,
+		feedback:           merged,
+		dispatchMatrix:     dispatchEntries,
+		unitsByGroup:       unitsByGroup,
+		childStatuses:      statuses,
+		childResults:       childResults,
+		groups:             groups,
+		childByDispatchIdx: childByDispatchIdx,
+		skippedIndices:     skippedIndices,
 	}, nil
 }
 
@@ -481,7 +492,7 @@ func applyAppraisalStamps(
 	governedArtefact string,
 	dispatchMatrix []flow.DispatchEntry,
 	childStatuses []flow.ChildWorkitemStatus,
-	childIDs []string,
+	childByDispatchIdx map[int]string,
 	unitsByGroup map[string][]flow.Unit,
 	groups map[string]*flow.LawGroup,
 	skippedIndices map[int]bool,
@@ -501,7 +512,7 @@ func applyAppraisalStamps(
 	for i := range dispatchMatrix {
 		if skippedIndices[i] {
 			entryFailed[i] = true
-		} else if i < len(childIDs) && failedIDs[childIDs[i]] {
+		} else if wid := childByDispatchIdx[i]; wid != "" && failedIDs[wid] {
 			entryFailed[i] = true
 		}
 	}
@@ -597,7 +608,7 @@ func buildCoverageMap(
 	dispatchMatrix []flow.DispatchEntry,
 	childStatuses []flow.ChildWorkitemStatus,
 	childResults []flow.ChildResult,
-	childIDs []string,
+	childByDispatchIdx map[int]string,
 ) map[string]coverageEntry {
 	// Build a map: workitemID → violation count from child results.
 	violationsByID := make(map[string]int)
@@ -629,10 +640,7 @@ func buildCoverageMap(
 	}
 	dispatchesByUnit := make(map[string][]dispatchInfo)
 	for i, d := range dispatchMatrix {
-		wid := ""
-		if i < len(childIDs) {
-			wid = childIDs[i]
-		}
+		wid := childByDispatchIdx[i]
 		dispatchesByUnit[d.Unit.UnitID] = append(dispatchesByUnit[d.Unit.UnitID], dispatchInfo{
 			appraiser: d.Appraiser,
 			pass:      d.Pass,
@@ -699,7 +707,7 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 		EventAppraisalCoverage, payload,
 		client.WorkitemID(), client.FlowNamespace(),
 	); err != nil {
-		slog.Warn("appraisal: publish coverage event failed", "error", err)
+		slog.Error("appraisal: publish coverage event failed", "error", err)
 	} else {
 		slog.Info("appraisal: coverage event published")
 	}
@@ -755,7 +763,7 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 		EventAppraisalAttestation, payload,
 		client.WorkitemID(), client.FlowNamespace(),
 	); err != nil {
-		slog.Warn("appraisal: publish attestation event failed", "error", err)
+		slog.Error("appraisal: publish attestation event failed", "error", err)
 	} else {
 		slog.Info("appraisal: attestation event published", "status", status)
 	}
