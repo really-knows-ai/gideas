@@ -1,6 +1,9 @@
 package flow
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // StampCapability represents a parsed STAMP:artefact/<kind>/<stamp> capability.
 type StampCapability struct {
@@ -76,33 +79,9 @@ func MatchCapability(capability, required string) bool {
 	return true
 }
 
-// matchSegment returns true if pattern matches segment.
-// pattern supports * as a single-segment wildcard (matches any sequence of characters).
-// No other glob syntax is supported.
+// matchSegment returns true if pattern matches segment using filepath.Match rules.
+// * matches any sequence of characters (but not /, which is guaranteed by the caller).
 func matchSegment(pattern, segment string) bool {
-	if pattern == "*" {
-		return true // Matches any segment content.
-	}
-	if !strings.Contains(pattern, "*") {
-		return pattern == segment // Exact match.
-	}
-	// Prefix/suffix wildcard: pattern starts or ends with *.
-	// For simplicity, only support trailing * (e.g., "appraise-*") or leading * or full *.
-	// Split on * and check if the non-wildcard parts match as prefix/suffix.
-	parts := strings.Split(pattern, "*")
-	// If the pattern has multiple * or * in the middle, use simple prefix/suffix check.
-	// After splitting, parts are in order: [prefix, suffix] or [prefix] or [""].
-	// parts[0] is the prefix before the first *.
-	// parts[len(parts)-1] is the suffix after the last *.
-	if parts[0] != "" {
-		if !strings.HasPrefix(segment, parts[0]) {
-			return false
-		}
-	}
-	if parts[len(parts)-1] != "" {
-		if !strings.HasSuffix(segment, parts[len(parts)-1]) {
-			return false
-		}
-	}
-	return true
+	ok, err := filepath.Match(pattern, segment)
+	return ok && err == nil
 }
