@@ -30,6 +30,9 @@ func (m *mockFinding) Run(_ context.Context, _ []*flowv1.FeedbackItem) (*flow.Fi
 
 const (
 	eventTypeAttestation = handlers.EventAppraisalAttestation
+	stampSecurity        = "appraise-security"
+	stampSecurityL001    = "appraise-security-L001"
+	stampSecurityL002    = "appraise-security-L002"
 )
 
 // ---------------------------------------------------------------------------
@@ -312,7 +315,7 @@ func TestAppraisalHandler_PartialFailure(t *testing.T) {
 	hasStyleStamp := false
 	for _, s := range spy.StampedArtefacts {
 		switch s {
-		case "appraise-security":
+		case stampSecurity:
 			hasSecurityStamp = true
 		case "appraise-style":
 			hasStyleStamp = true
@@ -503,11 +506,11 @@ func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
 	hasL002Stamp := false
 	for _, s := range spy.StampedArtefacts {
 		switch s {
-		case "appraise-security":
+		case stampSecurity:
 			hasGroupStamp = true
-		case "appraise-security-L001":
+		case stampSecurityL001:
 			hasL001Stamp = true
-		case "appraise-security-L002":
+		case stampSecurityL002:
 			hasL002Stamp = true
 		}
 	}
@@ -519,6 +522,52 @@ func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
 	}
 	if !hasL002Stamp {
 		t.Error("expected stamp for completed law L002")
+	}
+}
+
+// All dispatches succeed in law-by-law mode → group stamp + per-law stamps.
+func TestAppraisalHandler_LawByLawAllSuccess(t *testing.T) {
+	spy := newAppraisalSpy()
+	spy.Laws = []*flowv1.Law{
+		{Id: "L001", Group: "security", Goal: "No secrets", Tier: 3},
+		{Id: "L002", Group: "security", Goal: "No passwords", Tier: 3},
+	}
+	spy.LawGroups["security"] = groupSecurityLawByLaw()
+	// 2 dispatches (2 laws × 1 appraiser × 1 pass), all complete.
+	spy.ChildStatuses = childStatusesCompleted(2)
+	client := spyForHandler(t, spy)
+
+	cfg := defaultHandlerConfig()
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
+		{ID: "skeptic", Personality: "Strict"},
+	}
+
+	if err := handlers.HandleAppraisal(context.Background(), client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
+	}
+
+	// All succeed → group stamp + per-law stamps.
+	hasGroupStamp := false
+	hasL001Stamp := false
+	hasL002Stamp := false
+	for _, s := range spy.StampedArtefacts {
+		switch s {
+		case stampSecurity:
+			hasGroupStamp = true
+		case stampSecurityL001:
+			hasL001Stamp = true
+		case stampSecurityL002:
+			hasL002Stamp = true
+		}
+	}
+	if !hasGroupStamp {
+		t.Error("expected group stamp 'appraise-security'")
+	}
+	if !hasL001Stamp {
+		t.Error("expected law stamp 'appraise-security-L001'")
+	}
+	if !hasL002Stamp {
+		t.Error("expected law stamp 'appraise-security-L002'")
 	}
 }
 
