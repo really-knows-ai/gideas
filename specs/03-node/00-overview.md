@@ -24,6 +24,8 @@ Nodes fall into five categories based on their runtime role:
 
 ## Ownership and Mutation Boundaries
 
+Workitems carry no `WorkitemType` or `spec.type` discriminator and no freeform context bag. All work context is represented by explicit governed artefacts.
+
 See [Governance Runtime Mechanics](../02-flow/00-overview.md#governance-runtime-mechanics) and [Exit Completion Model](../02-flow/00-overview.md#exit-completion-model) for the capability-gating model, completion semantics, and judiciary authority bounds.
 
 ## Relationship to SDK Documents
@@ -39,14 +41,3 @@ This document defines runtime authority and boundary semantics. API-level behavi
 
 Wire and schema references remain in [gRPC API](../05-reference/grpc-api.md) and [CRD Reference](../05-reference/crds.md).
 
-## Runtime Invariants
-
-1. One assignment has one active assignee and one routing outcome.
-2. Nodes do not mutate Workitem lifecycle fields directly.
-3. Sidecar mediation is mandatory for node-originated runtime operations.
-4. Operator is the sole authority for lifecycle transition persistence.
-5. `complete()` is exit-node-only and Operator-validated against bound exit contract.
-6. Workitems do not use `WorkitemType`, `spec.type`, or a freeform context bag.
-7. Stamp-provider routing and gate logic are configuration-driven, not hardcoded by node name.
-8. Stamp authority is capability-scoped and write-once per artefact version.
-9. External service integration does not bypass Sidecar for authenticated Flow runtime operations.

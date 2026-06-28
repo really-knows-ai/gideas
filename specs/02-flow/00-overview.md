@@ -102,7 +102,7 @@ When a Workitem is handed to the [Embassy](./06-cross-flow.md) for cross-flow tr
 
 ## Data Ownership Boundaries
 
-The runtime splits control-plane state from provenance state. [Artefacts](../01-concepts/03-data-model.md#artefacts) are associated with Workitems in the [Archivist](./04-system-services.md#archivist), which stores artefact version history, passport stamps, feedback in SQLite, and raw content bytes in a blob store keyed by content hash. Nodes access artefact and governance state through Sidecar and SDK surfaces, including Flow Support Services consumed through the same Sidecar trust boundary.
+The runtime splits control-plane state from provenance state. [Artefacts](../01-concepts/03-data-model.md#artefacts) are associated with Workitems in the [Archivist](./04-system-services.md#archivist), which stores artefact version history, passport stamps, feedback in SQLite, and raw content bytes in a blob store keyed by content hash. Nodes access artefact and governance state through Sidecar and SDK surfaces, including Flow Support Services consumed through the same Sidecar trust boundary. Flow Support Services do not process Workitems — they are consumed by nodes through the Sidecar.
 
 This split keeps Workitems small and watchable while retaining full provenance depth.
 
@@ -147,22 +147,3 @@ A running Flow emits three first-class signal families:
 
 These signals are runtime outputs, not optional observability add-ons.
 
-## Runtime Invariants
-
-The following invariants hold for every Flow deployment:
-
-1. A Workitem is assigned to exactly one node at a time.
-2. Flow routing decisions are enforced by the Operator.
-3. Sidecar mediates authenticated node access and write operations.
-4. Law writing is capability-gated; nodes without a `WRITE:law/tierN` capability grant cannot write laws.
-5. Stamp-provider routing is configuration-discovered, not hardcoded by node name.
-6. Stamps are named checkpoints with write-once-per-version behaviour.
-7. Exit completion is exit-node-only and Operator-validated against bound contracts.
-8. Workitem admission is entry-contract-bound.
-9. Artefact provenance (versions, stamps, feedback) is Archivist-owned, not Workitem-owned.
-10. The Judiciary is always present and cannot exceed its authority ceiling.
-11. Cross-flow verifiability and local authority are distinct and topology-dependent.
-12. Imported Workitems are created in `Pending` by the Embassy and routed according to the resolved effective import-type policy.
-13. Flow Support Services are consumed through Sidecar mediation by nodes and do not process Workitems.
-
-These invariants are elaborated normatively in the remaining `02-flow` documents.
