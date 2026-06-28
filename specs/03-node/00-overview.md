@@ -4,57 +4,11 @@
 
 ## Node Runtime Boundary
 
-Nodes are data-plane executors. They process assigned work, evaluate artefact state, and decide the next routing outcome. They do not persist [Workitem](../02-flow/02-workitem.md) control-plane state.
-
-Boundary responsibilities are fixed:
-
-- [Flow Operator](../02-flow/01-operator.md) owns assignment state, lifecycle transitions, and routing/exit guard evaluation.
-- [Sidecar](./01-sidecar.md) is the mandatory mediation path for node-originated runtime operations.
-- [Archivist](../02-flow/04-system-services.md) owns artefact provenance (versions, feedback, stamps, content bytes).
-- [Librarian](../02-flow/04-system-services.md) owns law storage and law retrieval surfaces.
-
-Node pods can remain warm for efficiency, but execution state is rebuilt per assignment from Workitem and Archivist state. A node that sees the same Workitem again treats it as fresh runtime input.
+Nodes are [data-plane executors](../01-concepts/01-architecture.md#data-plane). See [Runtime Composition](../02-flow/00-overview.md#runtime-composition) for the fixed boundary responsibilities across Operator, Sidecar, Archivist, and Librarian.
 
 ## Assignment Lifecycle from the Node Perspective
 
-Assignment handling is single-owner and single-outcome.
-
-1. Operator selects a `Pending` Workitem and assigns it to one node.
-2. Sidecar invokes the node handler for the assigned Workitem.
-3. Node executes using SDK abstractions for artefact, feedback, and legal reads/writes.
-4. Node returns exactly one routing instruction: `route_to_output`, `route_to`, or `complete`.
-5. Sidecar submits the routing instruction and Workitem mutation requests to Operator.
-6. Operator validates guards and applies the next lifecycle transition or rejects with structured errors.
-
-```mermaid
-sequenceDiagram
-    participant OP as Operator
-    participant SC as Sidecar
-    participant ND as Node
-    participant SV as Services
-
-    OP->>SC: Assign Workitem to node
-    SC->>ND: Invoke handler
-    ND->>SC: SDK operations
-    SC->>SV: Authenticated proxied requests
-    SV-->>SC: Responses
-    ND-->>SC: route_to_output / route_to / complete
-    SC-->>OP: Instruction plus Workitem mutation requests
-    OP->>OP: Validate guards and transition
-```
-
-## Runtime Interaction Model
-
-Runtime interactions separate business execution from persistence authority:
-
-- Node <-> Sidecar: assignment-scoped SDK calls and routing outcomes.
-- Sidecar -> Operator: control-plane mutation requests and routing instructions.
-- Sidecar -> Archivist: artefact versions, feedback, and stamp operations.
-- Sidecar -> Librarian: law retrieval and legal context queries.
-- Sidecar -> telemetry surfaces: metrics, traces, and mediation logs.
-- Sidecar -> Flow Support Services: capability-gated operations on Flow-Architect-deployed services.
-
-Node code may call external business services over the data-plane network path. That does not change Flow runtime authority boundaries: authenticated runtime operations still pass through Sidecar mediation.
+Assignment handling is single-owner and single-outcome. See [Runtime Loop](../02-flow/00-overview.md#runtime-loop) for the end-to-end sequence diagram and [Service Interaction](../02-flow/00-overview.md#runtime-composition) for the component interaction model.
 
 ## Node Categories
 
@@ -70,24 +24,7 @@ Nodes fall into five categories based on their runtime role:
 
 ## Ownership and Mutation Boundaries
 
-Mutation authority is intentionally split and enforced at runtime boundaries:
-
-- Workitem lifecycle and routing persistence are Operator-owned.
-- Artefact provenance persistence is Archivist-owned.
-- Law lifecycle persistence is Librarian-owned.
-
-Nodes express intent through SDK operations. Sidecar mediates authenticated service calls, and Operator/Archivist/Librarian authorise and validate effects on their owned state surfaces.
-
-Completion semantics are configuration-bound:
-
-- `complete()` is accepted only for exit-bound nodes.
-- Operator validates completion against the node's bound exit contract.
-- Non-exit completion attempts are rejected.
-
-Law and stamp access is capability-gated:
-
-- A node without a `WRITE:law/tierN` capability grant cannot write laws regardless of its role. In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Forge](../01-concepts/02-foundry-cycle.md#forge-creator) node reads laws for context seeding and does not write them.
-- The [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) resolves Tier 1-2 conflicts (via the Arbiter with internal tally), proposes Tier 3 changes (via [HITL nodes](../01-concepts/02-foundry-cycle.md#hitl-nodes)), petitions Tier 4-5 changes (via [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) and [Embassy](../02-flow/06-cross-flow.md) `law-petition` export), and codifies rulings (via the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle), which drafts petitions, fans out to [Codification nodes](../01-concepts/02-foundry-cycle.md#codification-nodes), and routes through [Rule Router](../01-concepts/02-foundry-cycle.md#rule-router) for tier-based dispatch).
+See [Governance Runtime Mechanics](../02-flow/00-overview.md#governance-runtime-mechanics) and [Exit Completion Model](../02-flow/00-overview.md#exit-completion-model) for the capability-gating model, completion semantics, and judiciary authority bounds.
 
 ## Relationship to SDK Documents
 
