@@ -1003,14 +1003,10 @@ func TestSuspended_InvalidTimeout_FailsWorkitem(t *testing.T) {
 	}
 }
 
-func TestSuspended_CELConditionMet_ResumesToPending(t *testing.T) {
+func TestSuspended_ChildrenCompleted_ResumesToPending(t *testing.T) {
 	flow := testFlow(100)
 	suspendedAt := metav1.NewTime(time.Now())
-	wi := testSuspendedWorkitem(testAssignee,
-		`children.all(c, c.phase == "Completed")`,
-		"1h",
-		suspendedAt,
-	)
+	wi := testSuspendedWorkitem(testAssignee, "children-completed", "1h", suspendedAt)
 
 	// All children are Completed — condition should evaluate to true.
 	child1 := &flowv1.Workitem{
@@ -1064,14 +1060,10 @@ func TestSuspended_CELConditionMet_ResumesToPending(t *testing.T) {
 	}
 }
 
-func TestSuspended_CELConditionNotMet_Requeues(t *testing.T) {
+func TestSuspended_ChildrenNotCompleted_Requeues(t *testing.T) {
 	flow := testFlow(100)
 	suspendedAt := metav1.NewTime(time.Now())
-	wi := testSuspendedWorkitem(testAssignee,
-		`children.all(c, c.phase == "Completed")`,
-		"1h",
-		suspendedAt,
-	)
+	wi := testSuspendedWorkitem(testAssignee, "children-completed", "1h", suspendedAt)
 
 	// One child still Running — condition evaluates to false.
 	child1 := &flowv1.Workitem{
@@ -1154,11 +1146,7 @@ func TestSuspended_NoCondition_NoTimeout_Requeues(t *testing.T) {
 func TestSuspended_ResumePreservesAssignee(t *testing.T) {
 	flow := testFlow(100)
 	suspendedAt := metav1.NewTime(time.Now())
-	wi := testSuspendedWorkitem("sort",
-		`children.all(c, c.phase == "Completed" || c.phase == "Failed")`,
-		"1h",
-		suspendedAt,
-	)
+	wi := testSuspendedWorkitem("sort", "children-terminal", "1h", suspendedAt)
 
 	// All children terminal — condition met.
 	child := &flowv1.Workitem{

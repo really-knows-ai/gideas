@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/cel-go/cel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
@@ -653,20 +652,19 @@ func (r *WorkitemReconciler) reconcileSuspended(ctx context.Context, workitem *f
 		}
 	}
 
-	// --- 2. CEL condition evaluation ---
+	// --- 2. Child completion check ---
+	// A suspended workitem with a resume condition resumes when all its
+	// children reach a terminal phase (Completed or Failed).
 	if workitem.Status.ResumeCondition != "" {
-		met, evalErr := r.evaluateResumeCondition(ctx, workitem)
-		if evalErr != nil {
-			log.Error(evalErr, "Failed to evaluate resume condition",
+		hasActive, checkErr := r.hasNonTerminalChildren(ctx, workitem.Namespace, workitem.Name)
+		if checkErr != nil {
+			log.Error(checkErr, "Failed to check children for resume",
 				"name", workitem.Name,
-				"condition", workitem.Status.ResumeCondition,
 			)
-			// Evaluation error is not terminal — requeue to retry.
 			return ctrl.Result{RequeueAfter: suspendCheckInterval}, nil
 		}
-
-		if met {
-			log.Info("Resume condition met, transitioning to Pending",
+		if !hasActive {
+			log.Info("All children terminal, resuming Workitem",
 				"name", workitem.Name,
 				"assignee", workitem.Status.CurrentAssignee,
 			)
@@ -730,75 +728,6 @@ func (r *WorkitemReconciler) resumeWorkitem(ctx context.Context, workitem *flowv
 	r.publishLifecycle(workitem, wiPhasePending, assignee)
 
 	return ctrl.Result{}, nil
-}
-
-// evaluateResumeCondition compiles and evaluates the CEL resume condition
-// against the current child workitem states. Returns true if the condition
-// is met.
-//
-// The CEL environment exposes a single variable:
-//
-//	children: list of objects with { phase: string }
-//
-// Example condition: children.all(c, c.phase == "Completed")
-func (r *WorkitemReconciler) evaluateResumeCondition(ctx context.Context, workitem *flowv1.Workitem) (bool, error) {
-	// List child workitems.
-	var childList flowv1.WorkitemList
-	if err := r.List(ctx, &childList,
-		client.InNamespace(workitem.Namespace),
-		client.MatchingLabels{"flow.gideas.io/parent": workitem.Name},
-	); err != nil {
-		return false, fmt.Errorf("list child workitems: %w", err)
-	}
-
-	// Build the children data for CEL.
-	children := make([]map[string]any, len(childList.Items))
-	for i := range childList.Items {
-		children[i] = map[string]any{
-			"phase": childList.Items[i].Status.Phase,
-		}
-	}
-
-	// Create the CEL environment with a `children` variable typed as
-	// list(map(string, string)). Using DynType for the list elements
-	// avoids the need for a custom CEL type adapter.
-	env, err := cel.NewEnv(
-		cel.Variable("children", cel.ListType(cel.DynType)),
-	)
-	if err != nil {
-		return false, fmt.Errorf("create CEL env: %w", err)
-	}
-
-	// Parse and check the expression.
-	ast, issues := env.Compile(workitem.Status.ResumeCondition)
-	if issues != nil && issues.Err() != nil {
-		return false, fmt.Errorf("compile CEL expression: %w", issues.Err())
-	}
-
-	// The condition must evaluate to a boolean.
-	if ast.OutputType() != cel.BoolType {
-		return false, fmt.Errorf("CEL expression must return bool, got %s", ast.OutputType())
-	}
-
-	prg, err := env.Program(ast)
-	if err != nil {
-		return false, fmt.Errorf("program CEL expression: %w", err)
-	}
-
-	// Evaluate.
-	out, _, err := prg.Eval(map[string]any{
-		"children": children,
-	})
-	if err != nil {
-		return false, fmt.Errorf("eval CEL expression: %w", err)
-	}
-
-	result, ok := out.Value().(bool)
-	if !ok {
-		return false, fmt.Errorf("CEL expression returned %T, expected bool", out.Value())
-	}
-
-	return result, nil
 }
 
 // failWorkitem transitions a Workitem to the Failed phase with a structured
