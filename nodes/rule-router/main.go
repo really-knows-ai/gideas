@@ -35,7 +35,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -45,6 +44,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -133,7 +133,7 @@ func handleRuleRouter(
 	}
 
 	// Telemetry: started.
-	emitTelemetry(ctx, client, "foundry.rule_router.started", map[string]any{
+	nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.started", map[string]any{
 		"rule_count":  len(compiled),
 		"has_default": cfg.Default != "",
 	})
@@ -157,7 +157,7 @@ func handleRuleRouter(
 			"rule_name", cr.name,
 			"output", cr.output,
 		)
-		emitTelemetry(ctx, client, "foundry.rule_router.matched", map[string]any{
+		nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.matched", map[string]any{
 			"rule_index": i,
 			"rule_name":  cr.name,
 			"output":     cr.output,
@@ -174,7 +174,7 @@ func handleRuleRouter(
 		slog.Info("rule-router: no rule matched, using default",
 			"output", cfg.Default,
 		)
-		emitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
+		nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
 			"output":  cfg.Default,
 			"default": true,
 		})
@@ -186,23 +186,10 @@ func handleRuleRouter(
 	}
 
 	// No rule matched and no default — error.
-	emitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
+	nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
 		"default": false,
 	})
 	return fmt.Errorf("rule-router: no rule matched and no default output configured")
-}
-
-// emitTelemetry records a structured telemetry event. Errors are logged
-// but not propagated — telemetry failures must not block routing.
-func emitTelemetry(ctx context.Context, client *flow.Client, eventType string, payload map[string]any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		slog.Warn("rule-router: marshal telemetry payload", "event", eventType, "error", err)
-		return
-	}
-	if err := client.RecordTelemetry(ctx, eventType, data); err != nil {
-		slog.Warn("rule-router: record telemetry", "event", eventType, "error", err)
-	}
 }
 
 // validateConfig checks that the rule router configuration is usable.

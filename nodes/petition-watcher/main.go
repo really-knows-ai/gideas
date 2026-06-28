@@ -28,6 +28,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -100,10 +101,10 @@ func watchOutcomesWithClient(
 		if err != nil {
 			slog.Warn("petition-watcher: subscribe failed, retrying",
 				"error", err, "delay", delay)
-			if !sleepCtx(ctx, delay) {
+			if !nodeutil.SleepCtx(ctx, delay) {
 				return ctx.Err()
 			}
-			delay = nextBackoff(delay)
+			delay = nodeutil.NextBackoff(delay, reconnectMaxDelay)
 			continue
 		}
 
@@ -349,26 +350,4 @@ func resumeHeldWorkitems(ctx context.Context, entry *flow.EntryClient, petitionI
 				"workitem_id", wiID, "petition_id", petitionID)
 		}
 	}
-}
-
-// sleepCtx sleeps for the given duration, respecting context cancellation.
-// Returns true if the sleep completed, false if cancelled.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-// nextBackoff doubles the delay up to reconnectMaxDelay.
-func nextBackoff(current time.Duration) time.Duration {
-	next := current * 2
-	if next > reconnectMaxDelay {
-		return reconnectMaxDelay
-	}
-	return next
 }

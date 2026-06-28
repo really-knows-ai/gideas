@@ -2,18 +2,13 @@ package main
 
 import (
 	"context"
-	"net"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 )
-
-// newLocalListener creates a TCP listener on an ephemeral localhost port.
-func newLocalListener() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
-}
 
 // newSpyGRPCServer creates a gRPC server with no-op implementations of all
 // five Foundry Flow service interfaces. This allows a flow.Client to connect
@@ -57,7 +52,7 @@ func (s *noopSpy) RecordTelemetry(
 func newSpyClient(t *testing.T) *flow.Client {
 	t.Helper()
 
-	lis, err := newLocalListener()
+	lis, err := nodeutil.NewLocalListener()
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}

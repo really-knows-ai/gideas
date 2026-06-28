@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"net"
 	"sync"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -15,11 +15,6 @@ import (
 
 // testWorkitemID is the workitem ID used across all law-applicator tests.
 const testWorkitemID = "test-workitem"
-
-// newLocalListener creates a TCP listener on an ephemeral localhost port.
-func newLocalListener() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
-}
 
 // newSpyGRPCServer creates a gRPC server with the applicatorSpy registered
 // for the Foundry Flow service interfaces the law-applicator depends on.
@@ -122,9 +117,9 @@ func newApplicatorSpy() *applicatorSpy {
 func setupApplicatorTest(t *testing.T, spy *applicatorSpy) *flow.Client {
 	t.Helper()
 
-	lis, err := newLocalListener()
+	lis, err := nodeutil.NewLocalListener()
 	if err != nil {
-		t.Fatalf("newLocalListener: %v", err)
+		t.Fatalf("NewLocalListener: %v", err)
 	}
 
 	srv := newSpyGRPCServer(spy)

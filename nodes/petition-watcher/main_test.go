@@ -9,6 +9,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -24,33 +25,33 @@ const (
 
 func TestNextBackoff(t *testing.T) {
 	// Should double.
-	if got := nextBackoff(1 * time.Second); got != 2*time.Second {
+	if got := nodeutil.NextBackoff(1*time.Second, reconnectMaxDelay); got != 2*time.Second {
 		t.Fatalf("expected 2s, got %v", got)
 	}
 
 	// Should cap at max.
-	if got := nextBackoff(20 * time.Second); got != reconnectMaxDelay {
+	if got := nodeutil.NextBackoff(20*time.Second, reconnectMaxDelay); got != reconnectMaxDelay {
 		t.Fatalf("expected %v, got %v", reconnectMaxDelay, got)
 	}
 
 	// At max should stay at max.
-	if got := nextBackoff(reconnectMaxDelay); got != reconnectMaxDelay {
+	if got := nodeutil.NextBackoff(reconnectMaxDelay, reconnectMaxDelay); got != reconnectMaxDelay {
 		t.Fatalf("expected %v, got %v", reconnectMaxDelay, got)
 	}
 }
 
 func TestSleepCtx_Completes(t *testing.T) {
 	ctx := context.Background()
-	if !sleepCtx(ctx, 10*time.Millisecond) {
-		t.Fatal("expected sleepCtx to complete")
+	if !nodeutil.SleepCtx(ctx, 10*time.Millisecond) {
+		t.Fatal("expected SleepCtx to complete")
 	}
 }
 
 func TestSleepCtx_Cancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
-	if sleepCtx(ctx, 10*time.Second) {
-		t.Fatal("expected sleepCtx to return false on cancelled context")
+	if nodeutil.SleepCtx(ctx, 10*time.Second) {
+		t.Fatal("expected SleepCtx to return false on cancelled context")
 	}
 }
 
