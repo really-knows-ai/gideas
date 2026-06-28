@@ -26,10 +26,10 @@ const (
 	DefaultBufferSize = 1024
 
 	// defaultRetryBase is the initial backoff delay on publish failure.
-	defaultRetryBase = 500 * time.Millisecond
+	defaultRetryBase = 100 * time.Millisecond
 
 	// defaultRetryMax caps the exponential backoff.
-	defaultRetryMax = 30 * time.Second
+	defaultRetryMax = 5 * time.Second
 )
 
 // Option configures an [AsyncPublisher].
@@ -45,27 +45,6 @@ func WithBufferSize(size int) Option {
 	}
 }
 
-// WithRetry sets the base and maximum delay for exponential-backoff retry.
-// Zero or negative values are replaced with defaults.
-func WithRetry(base, max time.Duration) Option {
-	return func(p *AsyncPublisher) {
-		if base > 0 {
-			p.retryBase = base
-		}
-		if max > 0 {
-			p.retryMax = max
-		}
-	}
-}
-
-// WithOnDrop registers a callback invoked (non-blocking) whenever an event
-// is dropped because the buffer is full. Useful for metrics.
-func WithOnDrop(fn func(*flowv1.PublishRequest)) Option {
-	return func(p *AsyncPublisher) {
-		p.onDrop = fn
-	}
-}
-
 // AsyncPublisher buffers [flowv1.PublishRequest] messages and drains them
 // asynchronously via a single background goroutine with exponential-backoff
 // retry.
@@ -78,10 +57,7 @@ func WithOnDrop(fn func(*flowv1.PublishRequest)) Option {
 type AsyncPublisher struct {
 	pub flowv1.FlowEventBusServiceClient
 
-	bufSize   int
-	retryBase time.Duration
-	retryMax  time.Duration
-	onDrop    func(*flowv1.PublishRequest)
+	bufSize int
 
 	ch     chan *flowv1.PublishRequest
 	stopCh chan struct{}
@@ -94,10 +70,8 @@ type AsyncPublisher struct {
 // drain goroutine begins immediately.
 func NewAsyncPublisher(client flowv1.FlowEventBusServiceClient, opts ...Option) *AsyncPublisher {
 	p := &AsyncPublisher{
-		pub:       client,
-		bufSize:   DefaultBufferSize,
-		retryBase: defaultRetryBase,
-		retryMax:  defaultRetryMax,
+		pub:     client,
+		bufSize: DefaultBufferSize,
 	}
 	for _, o := range opts {
 		o(p)
@@ -114,8 +88,7 @@ func NewAsyncPublisher(client flowv1.FlowEventBusServiceClient, opts ...Option) 
 
 // Submit enqueues a publish request for async delivery. Non-blocking: if
 // the buffer is full, the event is dropped and the drop counter is
-// incremented. The optional OnDrop callback is invoked synchronously in the
-// caller's goroutine.
+// incremented.
 func (p *AsyncPublisher) Submit(req *flowv1.PublishRequest) {
 	select {
 	case p.ch <- req:
@@ -126,9 +99,6 @@ func (p *AsyncPublisher) Submit(req *flowv1.PublishRequest) {
 			"event_type", req.GetEvent().GetEventType(),
 			"dropped_total", p.dropped.Load(),
 		)
-		if p.onDrop != nil {
-			p.onDrop(req)
-		}
 	}
 }
 
@@ -192,7 +162,7 @@ func (p *AsyncPublisher) drainRemaining() {
 // publishWithRetry publishes a single request, retrying with exponential
 // backoff on failure until success or shutdown.
 func (p *AsyncPublisher) publishWithRetry(req *flowv1.PublishRequest) {
-	delay := p.retryBase
+	delay := defaultRetryBase
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_, err := p.pub.Publish(ctx, req)
@@ -211,8 +181,8 @@ func (p *AsyncPublisher) publishWithRetry(req *flowv1.PublishRequest) {
 		select {
 		case <-time.After(delay):
 			delay *= 2
-			if delay > p.retryMax {
-				delay = p.retryMax
+			if delay > defaultRetryMax {
+				delay = defaultRetryMax
 			}
 		case <-p.stopCh:
 			return
