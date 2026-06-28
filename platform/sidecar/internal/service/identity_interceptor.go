@@ -28,12 +28,6 @@ const (
 	MetadataKeyCapabilities = "x-flow-capabilities"
 )
 
-// SessionResolver looks up active assignment sessions by workitem ID.
-// This interface decouples the interceptor from the concrete SidecarServer.
-type SessionResolver interface {
-	LookupSession(workitemID string) *SessionIdentity
-}
-
 // IdentityInterceptor returns a gRPC unary server interceptor that enriches
 // incoming metadata with authoritative identity and capability fields.
 //
@@ -56,7 +50,7 @@ type SessionResolver interface {
 // The namespace and nodeID are Sidecar-level constants provided at startup.
 // The capabilities string comes from the FLOW_CAPABILITIES environment
 // variable set by the Operator.
-func IdentityInterceptor(resolver SessionResolver, namespace, nodeID, capabilities string) grpc.UnaryServerInterceptor {
+func IdentityInterceptor(server *SidecarServer, namespace, nodeID, capabilities string) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
 		req any,
@@ -71,7 +65,7 @@ func IdentityInterceptor(resolver SessionResolver, namespace, nodeID, capabiliti
 		// Try session-based enrichment first.
 		vals := md.Get(MetadataKeyWorkitemID)
 		if len(vals) > 0 {
-			identity := resolver.LookupSession(vals[0])
+			identity := server.LookupSession(vals[0])
 			if identity != nil {
 				slog.Info("Identity interceptor: injecting session identity",
 					"namespace", namespace,

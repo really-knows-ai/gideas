@@ -153,8 +153,8 @@ func main() {
 	}
 
 	// OperatorService is proxied to the real Operator.
-	// The SidecarServer implements ChildTracker so the OperatorProxy can
-	// register child Workitem IDs in the session's local cache.
+	// The SidecarServer tracks child Workitem IDs so the OperatorProxy can
+	// register them in the session's local cache.
 	operatorProxy, err := proxy.NewOperatorProxy(operatorAddr, sidecarSrv)
 	if err != nil {
 		slog.Error("Failed to connect to Operator", "address", operatorAddr, "error", err)

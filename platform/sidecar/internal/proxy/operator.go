@@ -27,14 +27,14 @@ type OperatorProxy struct {
 	// childTracker records child Workitem IDs created during the current
 	// session so the Sidecar can authorise cross-Workitem operations
 	// without an Operator round-trip. May be nil (child tracking disabled).
-	childTracker service.ChildTracker
+	childTracker *service.SidecarServer
 }
 
 // NewOperatorProxy dials the Operator gRPC endpoint and returns a proxy
 // handler ready to be registered on the Sidecar's gRPC server.
 // The childTracker, if non-nil, is notified when CreateChildWorkitem
 // succeeds so that the session can authorise cross-Workitem operations.
-func NewOperatorProxy(operatorAddr string, childTracker service.ChildTracker) (*OperatorProxy, error) {
+func NewOperatorProxy(operatorAddr string, childTracker *service.SidecarServer) (*OperatorProxy, error) {
 	conn, err := grpc.NewClient(
 		operatorAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -120,7 +120,7 @@ func (p *OperatorProxy) GetFlowTopology(
 // ---------------------------------------------------------------------------
 
 // CreateChildWorkitem forwards to the Operator and, on success, records the
-// child Workitem ID in the session's local cache via the ChildTracker.
+// child Workitem ID in the session's local cache.
 // This enables the ArchivistProxy to authorise cross-Workitem operations
 // (e.g. StoreArtefact on a child) without an Operator round-trip.
 func (p *OperatorProxy) CreateChildWorkitem(
