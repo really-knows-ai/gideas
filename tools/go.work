@@ -2,6 +2,5 @@ go 1.25.3
 
 use (
 	./generate-deployments
-	./haiku-watch
 	../gen
 )

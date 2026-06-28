@@ -14,5 +14,4 @@ use (
 	./platform/pkg/randid
 	./platform/sidecar
 	./sdk/go
-	./tools/haiku-watch
 )
