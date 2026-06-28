@@ -255,15 +255,27 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.FlowSupportServiceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		ServiceReconciler: controller.ServiceReconciler{
+			Client:        mgr.GetClient(),
+			Scheme:        mgr.GetScheme(),
+			ContainerName: "support-service",
+			AppLabelName:  "flowsupportservice",
+			LabelKey:      "flow.gideas.io/support",
+			TypeName:      "FlowSupportService",
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "FlowSupportService")
 		os.Exit(1)
 	}
 	if err := (&controller.CodificationServiceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		ServiceReconciler: controller.ServiceReconciler{
+			Client:        mgr.GetClient(),
+			Scheme:        mgr.GetScheme(),
+			ContainerName: "codification-service",
+			AppLabelName:  "codificationservice",
+			LabelKey:      "flow.gideas.io/codification",
+			TypeName:      "CodificationService",
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CodificationService")
 		os.Exit(1)

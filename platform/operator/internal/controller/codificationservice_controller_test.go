@@ -80,8 +80,14 @@ var _ = Describe("CodificationService Controller", func() {
 		It("should create a Deployment and set status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &CodificationServiceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				ServiceReconciler: ServiceReconciler{
+					Client:        k8sClient,
+					Scheme:        k8sClient.Scheme(),
+					ContainerName: "codification-service",
+					AppLabelName:  "codificationservice",
+					LabelKey:      "flow.gideas.io/codification",
+					TypeName:      "CodificationService",
+				},
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
