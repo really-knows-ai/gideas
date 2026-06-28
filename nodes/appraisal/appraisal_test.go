@@ -15,25 +15,25 @@ const testFeedbackID = "fb-1"
 // Helpers for constructing test agents
 // ---------------------------------------------------------------------------
 
-func newTestEvalAgent(t *testing.T, mm *mockModel, spy *appraisalSpy, cfg *appraisalConfig) *EvalAgent {
+func newTestEvalAgent(t *testing.T, inferFn flow.InferFunc, spy *appraisalSpy, cfg *appraisalConfig) *EvalAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
 	agent, err := NewEvalAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewEvalAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(agent.agent, mm)
+	flow.OverrideModelForTest(agent.agent, inferFn)
 	return agent
 }
 
-func newTestFindingAgent(t *testing.T, mm *mockModel, spy *appraisalSpy, cfg *appraisalConfig) *FindingAgent {
+func newTestFindingAgent(t *testing.T, inferFn flow.InferFunc, spy *appraisalSpy, cfg *appraisalConfig) *FindingAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
 	agent, err := NewFindingAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewFindingAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(agent.agent, mm)
+	flow.OverrideModelForTest(agent.agent, inferFn)
 	return agent
 }
 
@@ -44,14 +44,14 @@ func newTestFindingAgent(t *testing.T, mm *mockModel, spy *appraisalSpy, cfg *ap
 func TestEvalAgent_ValidAccept(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "fix is adequate"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{
 		Id:      testFeedbackID,
 		Message: "test feedback",
@@ -73,14 +73,14 @@ func TestEvalAgent_ValidAccept(t *testing.T) {
 func TestEvalAgent_ValidReject(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "reject", "reason": "fix is incomplete"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{
 		Id:      testFeedbackID,
 		Message: "test feedback",
@@ -99,14 +99,14 @@ func TestEvalAgent_ValidReject(t *testing.T) {
 func TestEvalAgent_RejectsInvalidVerdict(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "maybe", "reason": "unsure"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", "actioned")
@@ -121,14 +121,14 @@ func TestEvalAgent_RejectsInvalidVerdict(t *testing.T) {
 func TestEvalAgent_RejectsEmptyReason(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": ""}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", "actioned")
@@ -140,14 +140,14 @@ func TestEvalAgent_RejectsEmptyReason(t *testing.T) {
 func TestEvalAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok", "extra": "bad"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", "actioned")
@@ -163,14 +163,16 @@ func TestEvalAgent_RejectsAdditionalProperties(t *testing.T) {
 func TestEvalAgent_PromptContainsContext(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "looks good"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{
 		Id:      testFeedbackID,
 		Message: "syllable count is wrong",
@@ -185,7 +187,7 @@ func TestEvalAgent_PromptContainsContext(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	checks := []string{
 		"write about autumn",
 		"autumn moon",
@@ -203,14 +205,16 @@ func TestEvalAgent_PromptContainsContext(t *testing.T) {
 func TestEvalAgent_WontFixPromptContainsJustification(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "justified"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{
 		Id:      testFeedbackID,
 		Message: "test feedback",
@@ -229,7 +233,7 @@ func TestEvalAgent_WontFixPromptContainsJustification(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "artistic license permits this") {
 		t.Errorf("query should contain novel argument, got:\n%s", query)
 	}
@@ -241,14 +245,16 @@ func TestEvalAgent_WontFixPromptContainsJustification(t *testing.T) {
 func TestEvalAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", "actioned")
@@ -256,11 +262,11 @@ func TestEvalAgent_SystemPromptContainsConfig(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "haiku") {
-		t.Errorf("system prompt should contain review artefact name, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "haiku") {
+		t.Errorf("system prompt should contain review artefact name, got:\n%s", capturedSystem)
 	}
-	if !strings.Contains(mp.capturedSystem, "petition") {
-		t.Errorf("system prompt should contain input artefact name, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "petition") {
+		t.Errorf("system prompt should contain input artefact name, got:\n%s", capturedSystem)
 	}
 }
 
@@ -271,14 +277,14 @@ func TestEvalAgent_SystemPromptContainsConfig(t *testing.T) {
 func TestFindingAgent_ValidOutput(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": [{"goal": "Be concise", "applies_to": ["haiku"], "rationale": "Brevity matters"}]}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{
 			Id:      testFeedbackID,
@@ -306,14 +312,14 @@ func TestFindingAgent_ValidOutput(t *testing.T) {
 func TestFindingAgent_EmptyFindings(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{Id: testFeedbackID, Message: "test", Justification: &flowv1.Justification{
 			Kind: &flowv1.Justification_NovelArgument{
@@ -334,9 +340,12 @@ func TestFindingAgent_EmptyFindings(t *testing.T) {
 func TestFindingAgent_NilItems_ShortCircuits(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{} // no output configured — should not be called
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		t.Fatal("should not be called")
+		return nil, nil
+	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 
 	out, err := agent.Run(context.Background(), nil)
 	if err != nil {
@@ -350,9 +359,12 @@ func TestFindingAgent_NilItems_ShortCircuits(t *testing.T) {
 func TestFindingAgent_EmptyItems_ShortCircuits(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{} // no output configured — should not be called
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		t.Fatal("should not be called")
+		return nil, nil
+	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 
 	out, err := agent.Run(context.Background(), []*flowv1.FeedbackItem{})
 	if err != nil {
@@ -366,14 +378,14 @@ func TestFindingAgent_EmptyItems_ShortCircuits(t *testing.T) {
 func TestFindingAgent_RejectsEmptyGoal(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": [{"goal": "", "applies_to": ["haiku"], "rationale": "reason"}]}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{Id: testFeedbackID, Message: "test", Justification: &flowv1.Justification{
 			Kind: &flowv1.Justification_NovelArgument{
@@ -391,14 +403,14 @@ func TestFindingAgent_RejectsEmptyGoal(t *testing.T) {
 func TestFindingAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": [], "extra": "bad"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{Id: testFeedbackID, Message: "test", Justification: &flowv1.Justification{
 			Kind: &flowv1.Justification_NovelArgument{
@@ -420,14 +432,16 @@ func TestFindingAgent_RejectsAdditionalProperties(t *testing.T) {
 func TestFindingAgent_PromptContainsDiscussions(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{
 			Id:      testFeedbackID,
@@ -451,7 +465,7 @@ func TestFindingAgent_PromptContainsDiscussions(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	checks := []string{
 		"the moon reference is weak",
 		"abstract imagery is valid",
@@ -468,14 +482,16 @@ func TestFindingAgent_PromptContainsDiscussions(t *testing.T) {
 func TestFindingAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{Id: testFeedbackID, Message: "test", Justification: &flowv1.Justification{
 			Kind: &flowv1.Justification_NovelArgument{
@@ -489,8 +505,8 @@ func TestFindingAgent_SystemPromptContainsConfig(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "haiku") {
-		t.Errorf("system prompt should contain review artefact name, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "haiku") {
+		t.Errorf("system prompt should contain review artefact name, got:\n%s", capturedSystem)
 	}
 }
 
@@ -503,14 +519,16 @@ func TestEvalAgent_SystemPromptOverride(t *testing.T) {
 	cfg.EvalSystemPrompt = `Custom eval system prompt for {{.ReviewArtefact}}.`
 
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", "actioned")
@@ -518,11 +536,11 @@ func TestEvalAgent_SystemPromptOverride(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "Custom eval system prompt for haiku.") {
-		t.Errorf("expected overridden system prompt, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "Custom eval system prompt for haiku.") {
+		t.Errorf("expected overridden system prompt, got:\n%s", capturedSystem)
 	}
 	// Must NOT contain the default system prompt text.
-	if strings.Contains(mp.capturedSystem, "reviewer evaluating a previous feedback item") {
+	if strings.Contains(capturedSystem, "reviewer evaluating a previous feedback item") {
 		t.Error("system prompt should not contain default text when overridden")
 	}
 }
@@ -532,14 +550,16 @@ func TestEvalAgent_QueryTemplateOverride(t *testing.T) {
 	cfg.EvalQueryTemplate = `Custom query: {{.FeedbackMessage}}`
 
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test message"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", "actioned")
@@ -547,7 +567,7 @@ func TestEvalAgent_QueryTemplateOverride(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "Custom query: test message") {
 		t.Errorf("expected overridden query prompt, got:\n%s", query)
 	}
@@ -562,14 +582,16 @@ func TestFindingAgent_SystemPromptOverride(t *testing.T) {
 	cfg.FindingSystemPrompt = `Custom finding system for {{.ReviewArtefact}}.`
 
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{Id: testFeedbackID, Message: "test", Justification: &flowv1.Justification{
 			Kind: &flowv1.Justification_NovelArgument{
@@ -583,10 +605,10 @@ func TestFindingAgent_SystemPromptOverride(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "Custom finding system for haiku.") {
-		t.Errorf("expected overridden system prompt, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "Custom finding system for haiku.") {
+		t.Errorf("expected overridden system prompt, got:\n%s", capturedSystem)
 	}
-	if strings.Contains(mp.capturedSystem, "governance analyst") {
+	if strings.Contains(capturedSystem, "governance analyst") {
 		t.Error("system prompt should not contain default text when overridden")
 	}
 }
@@ -596,14 +618,16 @@ func TestFindingAgent_QueryTemplateOverride(t *testing.T) {
 	cfg.FindingQueryTemplate = `Custom finding query: {{.GovernedArtefact}}`
 
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{Id: testFeedbackID, Message: "test", Justification: &flowv1.Justification{
 			Kind: &flowv1.Justification_NovelArgument{
@@ -617,7 +641,7 @@ func TestFindingAgent_QueryTemplateOverride(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "Custom finding query: haiku") {
 		t.Errorf("expected overridden query prompt, got:\n%s", query)
 	}
@@ -631,14 +655,18 @@ func TestEvalAgent_DefaultPromptsWhenOverrideEmpty(t *testing.T) {
 	// Leave EvalSystemPrompt and EvalQueryTemplate empty (defaults).
 
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, systemPrompt string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"verdict": "accept", "reason": "ok"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestEvalAgent(t, mp, spy, cfg)
+	agent := newTestEvalAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", "actioned")
@@ -647,11 +675,11 @@ func TestEvalAgent_DefaultPromptsWhenOverrideEmpty(t *testing.T) {
 	}
 
 	// Should contain default system prompt text.
-	if !strings.Contains(mp.capturedSystem, "reviewer evaluating a previous feedback item") {
-		t.Errorf("expected default system prompt, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "reviewer evaluating a previous feedback item") {
+		t.Errorf("expected default system prompt, got:\n%s", capturedSystem)
 	}
 	// Should contain default query template text.
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "## CONTEXT") {
 		t.Errorf("expected default query template, got:\n%s", query)
 	}
@@ -662,14 +690,18 @@ func TestFindingAgent_DefaultPromptsWhenOverrideEmpty(t *testing.T) {
 	// Leave FindingSystemPrompt and FindingQueryTemplate empty (defaults).
 
 	spy := newAppraisalSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, systemPrompt string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"findings": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestFindingAgent(t, mp, spy, cfg)
+	agent := newTestFindingAgent(t, inferFn, spy, cfg)
 	items := []*flowv1.FeedbackItem{
 		{Id: testFeedbackID, Message: "test", Justification: &flowv1.Justification{
 			Kind: &flowv1.Justification_NovelArgument{
@@ -683,10 +715,10 @@ func TestFindingAgent_DefaultPromptsWhenOverrideEmpty(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "governance analyst") {
-		t.Errorf("expected default system prompt, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "governance analyst") {
+		t.Errorf("expected default system prompt, got:\n%s", capturedSystem)
 	}
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "RESOLVED DISCUSSIONS") {
 		t.Errorf("expected default query template, got:\n%s", query)
 	}

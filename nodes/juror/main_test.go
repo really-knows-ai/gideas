@@ -13,26 +13,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Mock Model (same pattern as forge tests)
-// ---------------------------------------------------------------------------
-
-type mockModel struct {
-	output         *flow.InferOutput
-	err            error
-	capturedSystem string
-	capturedQuery  []byte
-}
-
-func (m *mockModel) Infer(_ context.Context, systemPrompt string, query []byte) (*flow.InferOutput, error) {
-	m.capturedSystem = systemPrompt
-	m.capturedQuery = query
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.output, nil
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -44,10 +24,10 @@ func TestJuror_HappyPath(t *testing.T) {
 	client := setupJurorTest(t, spy)
 
 	verdictJSON := `{"outcome":"favour_refiner","reasoning":"The refiner's argument is stronger."}`
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(verdictJSON),
-		},
+		}, nil
 	}
 
 	// Build agent manually (same as handleJuror does) so we can inject mock.
@@ -61,13 +41,14 @@ func TestJuror_HappyPath(t *testing.T) {
 	}
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(mm),
+		flow.WithModelName("test-model"),
 		flow.WithSystemPrompt(defaultPrompts["textualist"]),
 		flow.WithQueryTemplate(queryTmpl),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
+	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(
 		context.Background(), client, agent,
@@ -110,10 +91,12 @@ func TestJuror_WithPriorRoundReasoning(t *testing.T) {
 	client := setupJurorTest(t, spy)
 
 	verdictJSON := `{"outcome":"favour_reviewer","reasoning":"Persuaded by prior arguments."}`
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, query []byte) (*flow.InferOutput, error) {
+		capturedQuery = query
+		return &flow.InferOutput{
 			Output: []byte(verdictJSON),
-		},
+		}, nil
 	}
 
 	schemaBytes, err := buildOutputSchema([]string{"favour_refiner", "favour_reviewer"})
@@ -126,13 +109,14 @@ func TestJuror_WithPriorRoundReasoning(t *testing.T) {
 	}
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(mm),
+		flow.WithModelName("test-model"),
 		flow.WithSystemPrompt(defaultPrompts["textualist"]),
 		flow.WithQueryTemplate(queryTmpl),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
+	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(
 		context.Background(), client, agent,
@@ -144,10 +128,10 @@ func TestJuror_WithPriorRoundReasoning(t *testing.T) {
 	}
 
 	// Verify prior round was included in the query.
-	if len(mm.capturedQuery) == 0 {
+	if len(capturedQuery) == 0 {
 		t.Fatal("query was not captured")
 	}
-	queryStr := string(mm.capturedQuery)
+	queryStr := string(capturedQuery)
 	if !containsSubstring(queryStr, "Prior round arguments") {
 		t.Error("query does not include prior round arguments section")
 	}
@@ -219,8 +203,8 @@ func TestJuror_Error_AgentInferFails(t *testing.T) {
 
 	client := setupJurorTest(t, spy)
 
-	mm := &mockModel{
-		err: fmt.Errorf("inference exploded"),
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return nil, fmt.Errorf("inference exploded")
 	}
 
 	schemaBytes, err := buildOutputSchema([]string{"a", "b"})
@@ -233,13 +217,14 @@ func TestJuror_Error_AgentInferFails(t *testing.T) {
 	}
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(mm),
+		flow.WithModelName("test-model"),
 		flow.WithSystemPrompt("test"),
 		flow.WithQueryTemplate(queryTmpl),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
+	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(context.Background(), client, agent, "question", "evidence", []string{"a", "b"}, "")
 	if err == nil {
@@ -258,8 +243,8 @@ func TestJuror_Error_StoreVerdictFails(t *testing.T) {
 	client := setupJurorTest(t, spy)
 
 	verdictJSON := `{"outcome":"a","reasoning":"because"}`
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: []byte(verdictJSON)},
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{Output: []byte(verdictJSON)}, nil
 	}
 
 	schemaBytes, err := buildOutputSchema([]string{"a", "b"})
@@ -272,13 +257,14 @@ func TestJuror_Error_StoreVerdictFails(t *testing.T) {
 	}
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(mm),
+		flow.WithModelName("test-model"),
 		flow.WithSystemPrompt("test"),
 		flow.WithQueryTemplate(queryTmpl),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
+	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(context.Background(), client, agent, "question", "evidence", []string{"a", "b"}, "")
 	if err == nil {

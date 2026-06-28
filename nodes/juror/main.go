@@ -273,7 +273,7 @@ func handleJuror(ctx context.Context, client *flow.Client, cfg *jurorConfig) err
 
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(flow.NewKimiK2Ollama()),
+		flow.WithModelName("kimi-k2.5:cloud"),
 		flow.WithSystemPrompt(cfg.systemPrompt()),
 		flow.WithQueryTemplate(queryTmpl),
 	)

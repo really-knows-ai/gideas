@@ -20,7 +20,7 @@ const (
 // Helpers for constructing test agents
 // ---------------------------------------------------------------------------
 
-func newTestTriageAgent(t *testing.T, mm *mockModel, spy *refineSpy, cfg *refineConfig) *TriageAgent {
+func newTestTriageAgent(t *testing.T, inferFn flow.InferFunc, spy *refineSpy, cfg *refineConfig) *TriageAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
 	agent, err := NewTriageAgent(client, cfg)
@@ -28,19 +28,19 @@ func newTestTriageAgent(t *testing.T, mm *mockModel, spy *refineSpy, cfg *refine
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
 	// Override model on both internal agents (action-only and full).
-	flow.OverrideModelForTest(agent.actionOnlyAgent, mm)
-	flow.OverrideModelForTest(agent.fullAgent, mm)
+	flow.OverrideModelForTest(agent.actionOnlyAgent, inferFn)
+	flow.OverrideModelForTest(agent.fullAgent, inferFn)
 	return agent
 }
 
-func newTestRevisionAgent(t *testing.T, mm *mockModel, spy *refineSpy, cfg *refineConfig) *RevisionAgent {
+func newTestRevisionAgent(t *testing.T, inferFn flow.InferFunc, spy *refineSpy, cfg *refineConfig) *RevisionAgent {
 	t.Helper()
 	client := newSpyClient(t, spy)
 	agent, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(agent.agent, mm)
+	flow.OverrideModelForTest(agent.agent, inferFn)
 	return agent
 }
 
@@ -105,14 +105,14 @@ func TestTriageAgent_SchemaValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := defaultTestConfig()
 			spy := newRefineSpy()
-			mp := &mockModel{
-				output: &flow.InferOutput{
+			inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+				return &flow.InferOutput{
 					Output: []byte(tt.llmOutput),
 					Cost:   defaultCost(),
-				},
+				}, nil
 			}
 
-			agent := newTestTriageAgent(t, mp, spy, cfg)
+			agent := newTestTriageAgent(t, inferFn, spy, cfg)
 			fb := &flowv1.FeedbackItem{
 				Id:      testFeedbackID,
 				Message: "test feedback",
@@ -148,14 +148,16 @@ func TestTriageAgent_SchemaValidation(t *testing.T) {
 func TestTriageAgent_PromptContainsContext(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{
 		Id:         testFeedbackID,
 		Message:    "syllable count is wrong",
@@ -174,7 +176,7 @@ func TestTriageAgent_PromptContainsContext(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	checks := []string{
 		"autumn leaves fall",
 		"syllable count is wrong",
@@ -192,14 +194,16 @@ func TestTriageAgent_PromptContainsContext(t *testing.T) {
 func TestTriageAgent_PromptContainsHistory(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{
 		Id:         testFeedbackID,
 		Message:    "test issue",
@@ -216,7 +220,7 @@ func TestTriageAgent_PromptContainsHistory(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	checks := []string{
 		"first observation",
 		"attempted fix",
@@ -232,14 +236,16 @@ func TestTriageAgent_PromptContainsHistory(t *testing.T) {
 func TestTriageAgent_PromptContainsLaws(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 	laws := []*flowv1.Law{
 		{Id: "law-1", Tier: 1, Goal: "exactly 5-7-5 syllables"},
@@ -251,7 +257,7 @@ func TestTriageAgent_PromptContainsLaws(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	checks := []string{"law-1", "law-2", "exactly 5-7-5 syllables", "use seasonal imagery"}
 	for _, want := range checks {
 		if !strings.Contains(query, want) {
@@ -263,14 +269,16 @@ func TestTriageAgent_PromptContainsLaws(t *testing.T) {
 func TestTriageAgent_PromptOmitsLawsWhenNone(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
@@ -278,7 +286,7 @@ func TestTriageAgent_PromptOmitsLawsWhenNone(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if strings.Contains(query, "APPLICABLE LAWS") {
 		t.Errorf("query should not contain APPLICABLE LAWS when no laws, got:\n%s", query)
 	}
@@ -287,14 +295,16 @@ func TestTriageAgent_PromptOmitsLawsWhenNone(t *testing.T) {
 func TestTriageAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test"}
 
 	_, err := agent.Run(context.Background(), fb, "", "", nil)
@@ -302,8 +312,8 @@ func TestTriageAgent_SystemPromptContainsConfig(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "haiku") {
-		t.Errorf("system prompt should contain output artefact name, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "haiku") {
+		t.Errorf("system prompt should contain output artefact name, got:\n%s", capturedSystem)
 	}
 }
 
@@ -343,14 +353,14 @@ func TestRevisionAgent_SchemaValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := defaultTestConfig()
 			spy := newRefineSpy()
-			mp := &mockModel{
-				output: &flow.InferOutput{
+			inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+				return &flow.InferOutput{
 					Output: []byte(tt.llmOutput),
 					Cost:   defaultCost(),
-				},
+				}, nil
 			}
 
-			agent := newTestRevisionAgent(t, mp, spy, cfg)
+			agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 			actioned := []flow.ActionedFeedback{
 				{FeedbackID: testFeedbackID, Message: "issue", FixDescription: "fix"},
 			}
@@ -375,14 +385,14 @@ func TestRevisionAgent_SchemaValidation(t *testing.T) {
 func TestRevisionAgent_ExtractsOutputField(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "autumn moonlight\na worm digs silently\ninto the chestnut"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestRevisionAgent(t, mp, spy, cfg)
+	agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 	actioned := []flow.ActionedFeedback{
 		{FeedbackID: testFeedbackID, Message: "issue", FixDescription: "fix"},
 	}
@@ -404,14 +414,16 @@ func TestRevisionAgent_ExtractsOutputField(t *testing.T) {
 func TestRevisionAgent_PromptContainsContext(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "revised haiku"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestRevisionAgent(t, mp, spy, cfg)
+	agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 	laws := []*flowv1.Law{
 		{Id: "law-1", Tier: 1, Goal: "use seasonal imagery"},
 	}
@@ -425,7 +437,7 @@ func TestRevisionAgent_PromptContainsContext(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	checks := []string{
 		"write about autumn",
 		"autumn leaves fall",
@@ -445,14 +457,16 @@ func TestRevisionAgent_PromptContainsContext(t *testing.T) {
 func TestRevisionAgent_PromptOmitsLawsWhenNone(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "revised haiku"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestRevisionAgent(t, mp, spy, cfg)
+	agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 	actioned := []flow.ActionedFeedback{
 		{FeedbackID: testFeedbackID, Message: "issue", FixDescription: "fix"},
 	}
@@ -462,7 +476,7 @@ func TestRevisionAgent_PromptOmitsLawsWhenNone(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if strings.Contains(query, "GOVERNANCE LAWS") {
 		t.Errorf("query should not contain GOVERNANCE LAWS when no laws, got:\n%s", query)
 	}
@@ -474,14 +488,16 @@ func TestRevisionAgent_PromptOmitsLawsWhenNone(t *testing.T) {
 func TestRevisionAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "revised haiku"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestRevisionAgent(t, mp, spy, cfg)
+	agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 	actioned := []flow.ActionedFeedback{
 		{FeedbackID: testFeedbackID, Message: "issue", FixDescription: "fix"},
 	}
@@ -491,8 +507,8 @@ func TestRevisionAgent_SystemPromptContainsConfig(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "haiku") {
-		t.Errorf("system prompt should contain output artefact name, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "haiku") {
+		t.Errorf("system prompt should contain output artefact name, got:\n%s", capturedSystem)
 	}
 }
 
@@ -515,11 +531,18 @@ func TestHandleRefine_AllActioned(t *testing.T) {
 	triageOut := `{"decision": "action", "message": "will fix syllables"}`
 	revisionOut := `{"haiku": "revised haiku content"}`
 
-	mp := &mockModel{
-		outputs: []*flow.InferOutput{
-			{Output: []byte(triageOut), Cost: defaultCost()},
-			{Output: []byte(revisionOut), Cost: defaultCost()},
-		},
+	var callIdx int
+	outputs := []*flow.InferOutput{
+		{Output: []byte(triageOut), Cost: defaultCost()},
+		{Output: []byte(revisionOut), Cost: defaultCost()},
+	}
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		idx := callIdx
+		callIdx++
+		if idx < len(outputs) {
+			return outputs[idx], nil
+		}
+		return nil, nil
 	}
 
 	client := newSpyClient(t, spy)
@@ -528,13 +551,13 @@ func TestHandleRefine_AllActioned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
-	flow.OverrideModelForTest(triage.fullAgent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, inferFn)
+	flow.OverrideModelForTest(triage.fullAgent, inferFn)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(revision.agent, mp)
+	flow.OverrideModelForTest(revision.agent, inferFn)
 
 	handlerCfg := handlers.RefineConfig{
 		InputArtefacts:   cfg.InputArtefacts,
@@ -582,11 +605,11 @@ func TestHandleRefine_AllRefused(t *testing.T) {
 
 	refuseOut := `{"decision": "refuse", "message": "law says so",` +
 		` "justification_type": "citation", "citation_ids": ["law-1"]}`
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(refuseOut),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	client := newSpyClient(t, spy)
@@ -595,13 +618,13 @@ func TestHandleRefine_AllRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
-	flow.OverrideModelForTest(triage.fullAgent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, inferFn)
+	flow.OverrideModelForTest(triage.fullAgent, inferFn)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(revision.agent, mp)
+	flow.OverrideModelForTest(revision.agent, inferFn)
 
 	handlerCfg := handlers.RefineConfig{
 		InputArtefacts:   cfg.InputArtefacts,
@@ -659,12 +682,19 @@ func TestHandleRefine_MixedItems(t *testing.T) {
 		` "justification_type": "citation", "citation_ids": ["law-1"]}`
 	revisionOut := `{"haiku": "revised haiku for mixed"}`
 
-	mp := &mockModel{
-		outputs: []*flow.InferOutput{
-			{Output: []byte(actionOut), Cost: defaultCost()},
-			{Output: []byte(refuseOut), Cost: defaultCost()},
-			{Output: []byte(revisionOut), Cost: defaultCost()},
-		},
+	var callIdx int
+	outputs := []*flow.InferOutput{
+		{Output: []byte(actionOut), Cost: defaultCost()},
+		{Output: []byte(refuseOut), Cost: defaultCost()},
+		{Output: []byte(revisionOut), Cost: defaultCost()},
+	}
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		idx := callIdx
+		callIdx++
+		if idx < len(outputs) {
+			return outputs[idx], nil
+		}
+		return nil, nil
 	}
 
 	client := newSpyClient(t, spy)
@@ -673,13 +703,13 @@ func TestHandleRefine_MixedItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
-	flow.OverrideModelForTest(triage.fullAgent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, inferFn)
+	flow.OverrideModelForTest(triage.fullAgent, inferFn)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(revision.agent, mp)
+	flow.OverrideModelForTest(revision.agent, inferFn)
 
 	handlerCfg := handlers.RefineConfig{
 		InputArtefacts:   cfg.InputArtefacts,
@@ -722,7 +752,9 @@ func TestHandleRefine_NoFeedback(t *testing.T) {
 	spy := newRefineSpy()
 	// No feedback items — spy default is empty
 
-	mp := &mockModel{} // no output — should not be called
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return nil, nil
+	}
 
 	client := newSpyClient(t, spy)
 
@@ -732,13 +764,13 @@ func TestHandleRefine_NoFeedback(t *testing.T) {
 	}
 	// No feedback items, so the triage agent is not called.
 	// Override models to avoid nil agent panics.
-	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
-	flow.OverrideModelForTest(triage.fullAgent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, inferFn)
+	flow.OverrideModelForTest(triage.fullAgent, inferFn)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(revision.agent, mp)
+	flow.OverrideModelForTest(revision.agent, inferFn)
 
 	handlerCfg := handlers.RefineConfig{
 		InputArtefacts:   cfg.InputArtefacts,
@@ -826,14 +858,16 @@ func TestTriageAgent_ConfigMapOverrideSystemPrompt(t *testing.T) {
 	cfg.TriageSystemPrompt = "You are an overridden {{.OutputArtefact}} triage system."
 
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
@@ -841,8 +875,8 @@ func TestTriageAgent_ConfigMapOverrideSystemPrompt(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "overridden haiku triage system") {
-		t.Errorf("system prompt should use override, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "overridden haiku triage system") {
+		t.Errorf("system prompt should use override, got:\n%s", capturedSystem)
 	}
 }
 
@@ -851,14 +885,16 @@ func TestTriageAgent_ConfigMapOverrideQueryTemplate(t *testing.T) {
 	cfg.TriageQueryTemplate = "CUSTOM QUERY: {{.FeedbackMessage}}"
 
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "custom feedback msg", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
@@ -866,7 +902,7 @@ func TestTriageAgent_ConfigMapOverrideQueryTemplate(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "CUSTOM QUERY: custom feedback msg") {
 		t.Errorf("query prompt should use override, got:\n%s", query)
 	}
@@ -877,14 +913,16 @@ func TestRevisionAgent_ConfigMapOverrideSystemPrompt(t *testing.T) {
 	cfg.RevisionSystemPrompt = "You are an overridden {{.OutputArtefact}} revision system."
 
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "revised content"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestRevisionAgent(t, mp, spy, cfg)
+	agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 	actioned := []flow.ActionedFeedback{
 		{FeedbackID: testFeedbackID, Message: "issue", FixDescription: "fix"},
 	}
@@ -894,8 +932,8 @@ func TestRevisionAgent_ConfigMapOverrideSystemPrompt(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "overridden haiku revision system") {
-		t.Errorf("system prompt should use override, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "overridden haiku revision system") {
+		t.Errorf("system prompt should use override, got:\n%s", capturedSystem)
 	}
 }
 
@@ -904,14 +942,16 @@ func TestRevisionAgent_ConfigMapOverrideQueryTemplate(t *testing.T) {
 	cfg.RevisionQueryTemplate = "CUSTOM REVISION: {{.Fixes}}"
 
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "revised content"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestRevisionAgent(t, mp, spy, cfg)
+	agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 	actioned := []flow.ActionedFeedback{
 		{FeedbackID: testFeedbackID, Message: "the issue", FixDescription: "the fix"},
 	}
@@ -921,7 +961,7 @@ func TestRevisionAgent_ConfigMapOverrideQueryTemplate(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "CUSTOM REVISION:") {
 		t.Errorf("query prompt should use override, got:\n%s", query)
 	}
@@ -935,14 +975,16 @@ func TestTriageAgent_EmptyOverrideUsesDefault(t *testing.T) {
 	// Leave overrides empty — should use baked-in defaults.
 
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"decision": "action", "message": "will fix"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestTriageAgent(t, mp, spy, cfg)
+	agent := newTestTriageAgent(t, inferFn, spy, cfg)
 	fb := &flowv1.FeedbackItem{Id: testFeedbackID, Message: "test", CanWontFix: true}
 
 	_, err := agent.Run(context.Background(), fb, "petition", "haiku", nil)
@@ -951,8 +993,8 @@ func TestTriageAgent_EmptyOverrideUsesDefault(t *testing.T) {
 	}
 
 	// Default system prompt should contain the standard text.
-	if !strings.Contains(mp.capturedSystem, "poet revising your work") {
-		t.Errorf("system prompt should use default when override is empty, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "poet revising your work") {
+		t.Errorf("system prompt should use default when override is empty, got:\n%s", capturedSystem)
 	}
 }
 
@@ -961,14 +1003,16 @@ func TestRevisionAgent_EmptyOverrideUsesDefault(t *testing.T) {
 	// Leave overrides empty — should use baked-in defaults.
 
 	spy := newRefineSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "revised content"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestRevisionAgent(t, mp, spy, cfg)
+	agent := newTestRevisionAgent(t, inferFn, spy, cfg)
 	actioned := []flow.ActionedFeedback{
 		{FeedbackID: testFeedbackID, Message: "issue", FixDescription: "fix"},
 	}
@@ -979,8 +1023,8 @@ func TestRevisionAgent_EmptyOverrideUsesDefault(t *testing.T) {
 	}
 
 	// Default system prompt should contain the standard text.
-	if !strings.Contains(mp.capturedSystem, "poet revising your work") {
-		t.Errorf("system prompt should use default when override is empty, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "poet revising your work") {
+		t.Errorf("system prompt should use default when override is empty, got:\n%s", capturedSystem)
 	}
 }
 
@@ -998,10 +1042,17 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	}
 
 	revisionOut := `{"haiku": "revised after contempt"}`
-	mp := &mockModel{
-		outputs: []*flow.InferOutput{
-			{Output: []byte(revisionOut), Cost: defaultCost()},
-		},
+	var callIdx int
+	outputs := []*flow.InferOutput{
+		{Output: []byte(revisionOut), Cost: defaultCost()},
+	}
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		idx := callIdx
+		callIdx++
+		if idx < len(outputs) {
+			return outputs[idx], nil
+		}
+		return nil, nil
 	}
 
 	client := newSpyClient(t, spy)
@@ -1010,13 +1061,13 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(triage.actionOnlyAgent, mp)
-	flow.OverrideModelForTest(triage.fullAgent, mp)
+	flow.OverrideModelForTest(triage.actionOnlyAgent, inferFn)
+	flow.OverrideModelForTest(triage.fullAgent, inferFn)
 	revision, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(revision.agent, mp)
+	flow.OverrideModelForTest(revision.agent, inferFn)
 
 	handlerCfg := handlers.RefineConfig{
 		InputArtefacts:   cfg.InputArtefacts,
@@ -1057,7 +1108,7 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	}
 
 	// Verify no LLM triage calls were made (contempt guard should skip triage).
-	if mp.callIdx != 1 {
-		t.Fatalf("expected 1 model call (revision only, no triage), got %d", mp.callIdx)
+	if callIdx != 1 {
+		t.Fatalf("expected 1 model call (revision only, no triage), got %d", callIdx)
 	}
 }

@@ -399,38 +399,6 @@ func defaultTestConfig() *appraisalConfig {
 	}
 }
 
-// mockModel implements flow.Model for test isolation.
-// It supports both single-call and multi-call (parallel) test patterns.
-type mockModel struct {
-	mu sync.Mutex
-
-	output *flow.InferOutput
-	err    error
-
-	capturedSystem string
-	capturedQuery  []byte
-
-	// For parallel tests: per-call responses keyed by call index.
-	outputs []*flow.InferOutput
-	callIdx int
-}
-
-func (m *mockModel) Infer(
-	_ context.Context, systemPrompt string, queryPrompt []byte,
-) (*flow.InferOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.capturedSystem = systemPrompt
-	m.capturedQuery = queryPrompt
-
-	if m.outputs != nil && m.callIdx < len(m.outputs) {
-		out := m.outputs[m.callIdx]
-		m.callIdx++
-		return out, m.err
-	}
-	return m.output, m.err
-}
-
 // defaultCost returns a standard CostMetadata for tests.
 func defaultCost() *flow.CostMetadata {
 	return &flow.CostMetadata{

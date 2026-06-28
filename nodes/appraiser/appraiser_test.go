@@ -17,14 +17,14 @@ import (
 func TestAppraiserAgent_ValidOutput(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": [{"message": "issue found", "cited_laws": []}]}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -41,14 +41,14 @@ func TestAppraiserAgent_ValidOutput(t *testing.T) {
 func TestAppraiserAgent_EmptyFeedback(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -62,14 +62,14 @@ func TestAppraiserAgent_EmptyFeedback(t *testing.T) {
 func TestAppraiserAgent_RejectsEmptyMessage(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": [{"message": "", "cited_laws": []}]}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err == nil {
@@ -80,14 +80,14 @@ func TestAppraiserAgent_RejectsEmptyMessage(t *testing.T) {
 func TestAppraiserAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": [], "extra": "bad"}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err == nil {
@@ -102,14 +102,16 @@ func TestAppraiserAgent_RejectsAdditionalProperties(t *testing.T) {
 func TestAppraiserAgent_PromptContainsLawsAndHistory(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	laws := []flow.ReviewLaw{
 		{ID: "law-1", Tier: 2, Goal: "Must evoke a season"},
@@ -124,7 +126,7 @@ func TestAppraiserAgent_PromptContainsLawsAndHistory(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	checks := []string{
 		"Must evoke a season",
 		"Use natural imagery",
@@ -145,21 +147,23 @@ func TestAppraiserAgent_PromptContainsLawsAndHistory(t *testing.T) {
 func TestAppraiserAgent_PromptOmitsEmptySections(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if strings.Contains(query, "GOVERNANCE LAWS") {
 		t.Errorf("query should not contain GOVERNANCE LAWS when no laws, got:\n%s", query)
 	}
@@ -171,38 +175,42 @@ func TestAppraiserAgent_PromptOmitsEmptySections(t *testing.T) {
 func TestAppraiserAgent_AppraiserPersonalityInSystemPrompt(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	personality := "Pay special attention to information disclosure and injection risks."
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, personality, nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, personality, nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, personality) {
+	if !strings.Contains(capturedSystem, personality) {
 		t.Errorf("system prompt should contain personality %q, got:\n%s",
-			personality, mp.capturedSystem)
+			personality, capturedSystem)
 	}
 }
 
 func TestAppraiserAgent_EmptyPersonalityOmitted(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
@@ -210,32 +218,34 @@ func TestAppraiserAgent_EmptyPersonalityOmitted(t *testing.T) {
 	}
 
 	// With no personality, the system prompt should end cleanly after the deviation list.
-	if strings.Contains(mp.capturedSystem, "Pay special attention") {
+	if strings.Contains(capturedSystem, "Pay special attention") {
 		t.Errorf("system prompt should not contain personality when empty, got:\n%s",
-			mp.capturedSystem)
+			capturedSystem)
 	}
 }
 
 func TestAppraiserAgent_SystemPromptContainsConfig(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "review") {
+	if !strings.Contains(capturedSystem, "review") {
 		t.Errorf("system prompt should contain review artefact name, got:\n%s",
-			mp.capturedSystem)
+			capturedSystem)
 	}
 }
 
@@ -247,11 +257,11 @@ func TestAppraiserAgent_HappyPath(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
 
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": [{"message": "weak imagery", "cited_laws": ["law-1"]}]}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	client := newSpyClient(t, spy)
@@ -261,7 +271,7 @@ func TestAppraiserAgent_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAppraiserAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(agent.agent, mp)
+	flow.OverrideModelForTest(agent.agent, inferFn)
 
 	laws := []flow.ReviewLaw{{ID: "law-1", Tier: 2, Goal: "Must evoke a season"}}
 	history := []flow.ReviewHistory{{State: "RESOLVED", Message: "old issue fixed"}}
@@ -297,14 +307,14 @@ func TestAppraiserAgent_HappyPath(t *testing.T) {
 func TestAppraiserAgent_EmptyLaws(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	// Empty laws — reviewer should still work.
 	out, err := agent.Run(context.Background(), "petition", "content", nil, nil)
@@ -319,17 +329,17 @@ func TestAppraiserAgent_EmptyLaws(t *testing.T) {
 func TestAppraiserAgent_ReviewOutputFormat(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": [
 				{"message": "issue one", "cited_laws": []},
 				{"message": "issue two", "cited_laws": ["law-1", "law-2"]}
 			]}`),
 			Cost: defaultCost(),
-		},
+		}, nil
 	}
 
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	out, err := agent.Run(context.Background(), "petition", "content",
 		[]flow.ReviewLaw{{ID: "law-1", Tier: 2, Goal: "test"}},
@@ -442,11 +452,13 @@ func TestHistoryData_Deserialization(t *testing.T) {
 func TestAppraiserAgent_SystemPromptOverride(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	customSystem := `You are a custom reviewer.
@@ -456,43 +468,45 @@ func TestAppraiserAgent_SystemPromptOverride(t *testing.T) {
 {{- end}}`
 
 	opts := &AppraiserAgentOpts{SystemPrompt: customSystem}
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", opts)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", opts)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "custom reviewer") {
-		t.Errorf("system prompt should contain custom override, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "custom reviewer") {
+		t.Errorf("system prompt should contain custom override, got:\n%s", capturedSystem)
 	}
 	// The default template text should NOT be present.
-	if strings.Contains(mp.capturedSystem, "governed creative pipeline") {
-		t.Errorf("system prompt should not contain default template text when overridden, got:\n%s", mp.capturedSystem)
+	if strings.Contains(capturedSystem, "governed creative pipeline") {
+		t.Errorf("system prompt should not contain default template text when overridden, got:\n%s", capturedSystem)
 	}
 }
 
 func TestAppraiserAgent_QueryTemplateOverride(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	customQuery := `CUSTOM QUERY: {{.InputContent}} | {{.ReviewContent}}`
 
 	opts := &AppraiserAgentOpts{QueryTemplate: customQuery}
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", opts)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", opts)
 
 	_, err := agent.Run(context.Background(), "my petition", "my content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mp.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "CUSTOM QUERY:") {
 		t.Errorf("query should contain custom override, got:\n%s", query)
 	}
@@ -507,34 +521,38 @@ func TestAppraiserAgent_QueryTemplateOverride(t *testing.T) {
 func TestAppraiserAgent_NilOptsUsesDefaults(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	// nil opts — should use baked-in defaults.
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "governed creative pipeline") {
-		t.Errorf("system prompt should contain default template text, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "governed creative pipeline") {
+		t.Errorf("system prompt should contain default template text, got:\n%s", capturedSystem)
 	}
 }
 
 func TestAppraiserAgent_SystemPromptOverrideWithPersonality(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	customSystem := `Custom reviewer.
@@ -545,15 +563,15 @@ Personality: {{.AppraiserPersonality}}
 
 	personality := "Focus on security."
 	opts := &AppraiserAgentOpts{SystemPrompt: customSystem}
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, personality, opts)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, personality, opts)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "Personality: Focus on security.") {
-		t.Errorf("system prompt should render personality in custom template, got:\n%s", mp.capturedSystem)
+	if !strings.Contains(capturedSystem, "Personality: Focus on security.") {
+		t.Errorf("system prompt should render personality in custom template, got:\n%s", capturedSystem)
 	}
 }
 
@@ -564,48 +582,52 @@ Personality: {{.AppraiserPersonality}}
 func TestAppraiserAgent_AppraiserPersonalityPresent(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	personality := "You are strict but fair. Evaluate every claim."
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, personality, nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, personality, nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, personality) {
+	if !strings.Contains(capturedSystem, personality) {
 		t.Errorf("system prompt should contain appraiser personality %q, got:\n%s",
-			personality, mp.capturedSystem)
+			personality, capturedSystem)
 	}
 }
 
 func TestAppraiserAgent_NoAppraiserPersonality_DefaultPrompt(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	// Empty personality — should use default system prompt.
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	_, err := agent.Run(context.Background(), "petition", "content", nil, nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(mp.capturedSystem, "governed creative pipeline") {
+	if !strings.Contains(capturedSystem, "governed creative pipeline") {
 		t.Errorf("system prompt should contain default text when personality is empty, got:\n%s",
-			mp.capturedSystem)
+			capturedSystem)
 	}
 }
 
@@ -616,11 +638,11 @@ func TestAppraiserAgent_NoAppraiserPersonality_DefaultPrompt(t *testing.T) {
 func TestReviewOutput_ContainsAppraiserAndPass(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": [{"message": "test", "cited_laws": []}]}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	// Set up appraiser and pass artefacts in the spy.
@@ -634,7 +656,7 @@ func TestReviewOutput_ContainsAppraiserAndPass(t *testing.T) {
 	spy.ArtefactContents["review"] = []byte("test content")
 
 	client := newSpyClient(t, spy)
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "You are strict.", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "You are strict.", nil)
 
 	handlerCfg := handlers.ReviewConfig{
 		InputArtefacts: cfg.InputArtefacts,
@@ -670,11 +692,11 @@ func TestReviewOutput_ContainsAppraiserAndPass(t *testing.T) {
 func TestReviewOutput_OmitsPassWhenAbsent(t *testing.T) {
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	// Set up artefacts WITHOUT a pass artefact.
@@ -686,7 +708,7 @@ func TestReviewOutput_OmitsPassWhenAbsent(t *testing.T) {
 	spy.ArtefactContents["review"] = []byte("test content")
 
 	client := newSpyClient(t, spy)
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	handlerCfg := handlers.ReviewConfig{
 		InputArtefacts: cfg.InputArtefacts,
@@ -726,11 +748,11 @@ func TestReviewFlow_WithoutAppraiserArtefact(t *testing.T) {
 	// artefacts (new flow) and no appraiser artefact is present.
 	cfg := defaultTestConfig()
 	spy := newAppraiserSpy()
-	mp := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"feedback": []}`),
 			Cost:   defaultCost(),
-		},
+		}, nil
 	}
 
 	spy.ArtefactContents[handlers.ArtefactAppraiserPersonality] = []byte(
@@ -743,7 +765,7 @@ func TestReviewFlow_WithoutAppraiserArtefact(t *testing.T) {
 	spy.ArtefactContents["review"] = []byte("test content")
 
 	client := newSpyClient(t, spy)
-	agent := newTestAppraiserAgent(t, mp, spy, cfg, "You are strict.", nil)
+	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "You are strict.", nil)
 
 	handlerCfg := handlers.ReviewConfig{
 		InputArtefacts: cfg.InputArtefacts,
