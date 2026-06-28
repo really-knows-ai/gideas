@@ -18,6 +18,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/gideas/flow/pkg/sqldbutil"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -36,10 +37,6 @@ var (
 	// linked ruling, preventing a second ruling from being attached.
 	ErrContemptGuard = errors.New("ruling already linked (contempt guard)")
 )
-
-// sqliteTimeFormat is the format used to store and retrieve timestamps in
-// SQLite. It matches the output of datetime('now') and strftime.
-const sqliteTimeFormat = "2006-01-02 15:04:05"
 
 // ArtefactVersion records a single version in an artefact's history.
 type ArtefactVersion struct {
@@ -101,16 +98,10 @@ func New(dsn string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	// Enable WAL mode for better concurrent read performance.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	// Enable standard SQLite pragmas.
+	if err := sqldbutil.SetPragmas(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
-	}
-
-	// Enable foreign keys.
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+		return nil, err
 	}
 
 	s := &Store{db: db}
@@ -844,9 +835,6 @@ func (s *Store) ResolveStaleFeedback(
 // parseTime parses a SQLite datetime string. Falls back to RFC3339 if the
 // default format does not match.
 func parseTime(s string) time.Time {
-	t, err := time.Parse(sqliteTimeFormat, s)
-	if err != nil {
-		t, _ = time.Parse(time.RFC3339, s)
-	}
+	t, _ := sqldbutil.ParseTime(s)
 	return t
 }

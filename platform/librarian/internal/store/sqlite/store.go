@@ -25,6 +25,7 @@ import (
 	"time"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
+	"github.com/gideas/flow/pkg/sqldbutil"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -94,10 +95,6 @@ type DisputeRecord struct {
 	Status      DisputeStatus
 }
 
-// sqliteTimeFormat is the format used to store and retrieve timestamps in
-// SQLite. It matches the output of datetime('now') and strftime.
-const sqliteTimeFormat = "2006-01-02 15:04:05"
-
 // DefaultEmbeddingDimension is the default vector dimension for the
 // law_embeddings vec0 virtual table. This matches the output dimension of
 // the default Ollama embedding model (qwen3-embedding:4b).
@@ -129,16 +126,10 @@ func New(dsn string, opts ...StoreOption) (*Store, error) {
 		db.SetMaxOpenConns(1)
 	}
 
-	// Enable WAL mode for better concurrent read performance.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	// Enable standard SQLite pragmas.
+	if err := sqldbutil.SetPragmas(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
-	}
-
-	// Enable foreign keys.
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+		return nil, err
 	}
 
 	s := &Store{db: db, embeddingDims: DefaultEmbeddingDimension}
@@ -331,15 +322,11 @@ func ComputeContentHash(
 // ---------------------------------------------------------------------------
 
 func formatTime(t time.Time) string {
-	return t.UTC().Format(sqliteTimeFormat)
+	return sqldbutil.FormatTime(t)
 }
 
 func parseTime(s string) (time.Time, error) {
-	t, err := time.Parse(sqliteTimeFormat, s)
-	if err == nil {
-		return t, nil
-	}
-	return time.Parse(time.RFC3339, s)
+	return sqldbutil.ParseTime(s)
 }
 
 // ---------------------------------------------------------------------------

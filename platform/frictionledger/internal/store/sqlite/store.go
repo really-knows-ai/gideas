@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gideas/flow/pkg/sqldbutil"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -78,16 +79,10 @@ func New(dsn string) (*Store, error) {
 		db.SetMaxOpenConns(1)
 	}
 
-	// Enable WAL mode for better concurrent read performance.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	// Enable standard SQLite pragmas.
+	if err := sqldbutil.SetPragmas(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
-	}
-
-	// Enable foreign keys.
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+		return nil, err
 	}
 
 	s := &Store{db: db}
@@ -170,18 +165,14 @@ func (s *Store) AddFriction(ctx context.Context, id string, event FrictionEvent,
 	return tx.Commit()
 }
 
-// sqliteTimeFormat is the format used to store and retrieve timestamps in
-// SQLite. It matches the output of datetime('now') and strftime.
-const sqliteTimeFormat = "2006-01-02 15:04:05"
-
 // formatTime serialises a time.Time into the SQLite text format.
 func formatTime(t time.Time) string {
-	return t.UTC().Format(sqliteTimeFormat)
+	return sqldbutil.FormatTime(t)
 }
 
 // parseTime deserialises a SQLite text timestamp into a time.Time.
 func parseTime(s string) (time.Time, error) {
-	return time.Parse(sqliteTimeFormat, s)
+	return sqldbutil.ParseTime(s)
 }
 
 // QueryFriction returns aggregated friction data matching the given filter.

@@ -6,6 +6,7 @@ require (
 	github.com/gideas/flow/gen v0.0.0
 	github.com/gideas/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
 	github.com/gideas/flow/pkg/randid v0.0.0-00010101000000-000000000000
+	github.com/gideas/flow/pkg/sqldbutil v0.0.0-00010101000000-000000000000
 	github.com/gideas/flow/sdk/go v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.34
@@ -26,5 +27,7 @@ replace github.com/gideas/flow/gen => ../../gen
 replace github.com/gideas/flow/pkg/eventbus => ../pkg/eventbus
 
 replace github.com/gideas/flow/pkg/randid => ../pkg/randid
+
+replace github.com/gideas/flow/pkg/sqldbutil => ../pkg/sqldbutil
 
 replace github.com/gideas/flow/sdk/go => ../../sdk/go
