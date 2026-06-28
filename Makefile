@@ -18,8 +18,11 @@ help: ## Display this help.
 ##@ Testing
 # ---------------------------------------------------------------------------
 
+# Platform test services that require CGO for SQLite.
+CGO_TEST_SERVICES = archivist monitor eventbus frictionledger librarian
+
 .PHONY: test
-test: test-sdk test-sidecar test-archivist test-monitor test-eventbus test-frictionledger test-librarian test-nodes ## Run all unit tests.
+test: test-sdk test-sidecar $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -29,25 +32,8 @@ test-sdk: ## Run SDK unit tests.
 test-sidecar: ## Run Sidecar unit tests.
 	go test -v ./platform/sidecar/...
 
-.PHONY: test-archivist
-test-archivist: ## Run Archivist unit tests.
-	CGO_ENABLED=1 go test -v ./platform/archivist/...
-
-.PHONY: test-monitor
-test-monitor: ## Run Monitor unit tests.
-	CGO_ENABLED=1 go test -v ./platform/monitor/...
-
-.PHONY: test-eventbus
-test-eventbus: ## Run Event Bus unit tests.
-	CGO_ENABLED=1 go test -v ./platform/eventbus/...
-
-.PHONY: test-frictionledger
-test-frictionledger: ## Run Friction Ledger unit tests.
-	CGO_ENABLED=1 go test -v ./platform/frictionledger/...
-
-.PHONY: test-librarian
-test-librarian: ## Run Librarian unit tests.
-	CGO_ENABLED=1 go test -v ./platform/librarian/...
+$(foreach srv,$(CGO_TEST_SERVICES),$(eval .PHONY: test-$(srv)))
+$(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; CGO_ENABLED=1 go test -v ./platform/$(srv)/...))
 
 .PHONY: test-nodes
 test-nodes: ## Run Node unit tests across the shared nodes module.
@@ -64,8 +50,14 @@ test-all: test test-operator ## Run every test suite including the operator.
 ##@ Building
 # ---------------------------------------------------------------------------
 
+# CGO-enabled node binaries (built from ./nodes/<name>/).
+CGO_NODE_BINS = forge sort appraise reviewer refine arbiter juror codify-smt codification friction-watcher ttl-watcher rule-router facilitator hitl law-applicator tribunal
+
+# CGO-enabled platform service binaries (built from ./platform/<name>/cmd/).
+CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian
+
 .PHONY: build
-build: build-sidecar build-null-node build-forge build-sort build-appraise build-reviewer build-refine build-arbiter build-juror build-codify-smt build-codification build-rule-router build-facilitator build-hitl build-law-applicator build-tribunal build-friction-watcher build-ttl-watcher build-archivist build-monitor build-eventbus build-frictionledger build-librarian ## Build all binaries.
+build: build-sidecar build-null-node $(addprefix build-,$(CGO_NODE_BINS)) $(addprefix build-,$(CGO_PLATFORM_BINS)) ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -75,89 +67,11 @@ build-sidecar: ## Build the Sidecar binary.
 build-null-node: ## Build the Null Node binary.
 	go build -o bin/null-node ./nodes/null-node
 
-.PHONY: build-forge
-build-forge: ## Build the Forge node binary.
-	CGO_ENABLED=1 go build -o bin/forge ./nodes/forge
+$(foreach bin,$(CGO_NODE_BINS),$(eval .PHONY: build-$(bin)))
+$(foreach bin,$(CGO_NODE_BINS),$(eval build-$(bin): ; CGO_ENABLED=1 go build -o bin/$(bin) ./nodes/$(bin)))
 
-.PHONY: build-sort
-build-sort: ## Build the Sort node binary.
-	CGO_ENABLED=1 go build -o bin/sort ./nodes/sort
-
-.PHONY: build-appraise
-build-appraise: ## Build the Appraise node binary.
-	CGO_ENABLED=1 go build -o bin/appraise ./nodes/appraise
-
-.PHONY: build-reviewer
-build-reviewer: ## Build the Reviewer node binary.
-	CGO_ENABLED=1 go build -o bin/reviewer ./nodes/reviewer
-
-.PHONY: build-refine
-build-refine: ## Build the Refine node binary.
-	CGO_ENABLED=1 go build -o bin/refine ./nodes/refine
-
-.PHONY: build-arbiter
-build-arbiter: ## Build the Arbiter node binary.
-	CGO_ENABLED=1 go build -o bin/arbiter ./nodes/arbiter
-
-.PHONY: build-juror
-build-juror: ## Build the Juror node binary.
-	CGO_ENABLED=1 go build -o bin/juror ./nodes/juror
-
-.PHONY: build-codify-smt
-build-codify-smt: ## Build the codify-smt node binary.
-	CGO_ENABLED=1 go build -o bin/codify-smt ./nodes/codify-smt
-
-.PHONY: build-codification
-build-codification: ## Build the Codification node binary.
-	CGO_ENABLED=1 go build -o bin/codification ./nodes/codification
-
-.PHONY: build-friction-watcher
-build-friction-watcher: ## Build the Friction Watcher node binary.
-	CGO_ENABLED=1 go build -o bin/friction-watcher ./nodes/friction-watcher
-
-.PHONY: build-ttl-watcher
-build-ttl-watcher: ## Build the TTL Watcher node binary.
-	CGO_ENABLED=1 go build -o bin/ttl-watcher ./nodes/ttl-watcher
-
-.PHONY: build-rule-router
-build-rule-router: ## Build the Rule Router node binary.
-	CGO_ENABLED=1 go build -o bin/rule-router ./nodes/rule-router
-
-.PHONY: build-facilitator
-build-facilitator: ## Build the Facilitator node binary.
-	CGO_ENABLED=1 go build -o bin/facilitator ./nodes/facilitator
-
-.PHONY: build-hitl
-build-hitl: ## Build the HITL node binary.
-	CGO_ENABLED=1 go build -o bin/hitl ./nodes/hitl
-
-.PHONY: build-law-applicator
-build-law-applicator: ## Build the Law Applicator node binary.
-	CGO_ENABLED=1 go build -o bin/law-applicator ./nodes/law-applicator
-
-.PHONY: build-tribunal
-build-tribunal: ## Build the Tribunal node binary.
-	CGO_ENABLED=1 go build -o bin/tribunal ./nodes/tribunal
-
-.PHONY: build-archivist
-build-archivist: ## Build the Archivist binary.
-	CGO_ENABLED=1 go build -o bin/archivist ./platform/archivist/cmd
-
-.PHONY: build-monitor
-build-monitor: ## Build the Monitor binary.
-	CGO_ENABLED=1 go build -o bin/monitor ./platform/monitor/cmd
-
-.PHONY: build-eventbus
-build-eventbus: ## Build the Event Bus binary.
-	CGO_ENABLED=1 go build -o bin/eventbus ./platform/eventbus/cmd
-
-.PHONY: build-frictionledger
-build-frictionledger: ## Build the Friction Ledger binary.
-	CGO_ENABLED=1 go build -o bin/frictionledger ./platform/frictionledger/cmd
-
-.PHONY: build-librarian
-build-librarian: ## Build the Librarian binary.
-	CGO_ENABLED=1 go build -o bin/librarian ./platform/librarian/cmd
+$(foreach bin,$(CGO_PLATFORM_BINS),$(eval .PHONY: build-$(bin)))
+$(foreach bin,$(CGO_PLATFORM_BINS),$(eval build-$(bin): ; CGO_ENABLED=1 go build -o bin/$(bin) ./platform/$(bin)/cmd))
 
 .PHONY: build-operator
 build-operator: ## Build the Operator binary (delegates to operator/Makefile).
