@@ -117,7 +117,7 @@ kubectl port-forward svc/flow-librarian 50056:50056 &
 ### 7. Watch it
 
 ```bash
-go run ./tools/haiku-watch --workitem haiku-<id> --archivist localhost:50054
+bash ./tools/haiku-watch/watch.sh haiku-<id>
 ```
 
 ## Development
