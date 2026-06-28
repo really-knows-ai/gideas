@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package flow.v1;
 
-option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
 
 import "flow/v1/common.proto";
 

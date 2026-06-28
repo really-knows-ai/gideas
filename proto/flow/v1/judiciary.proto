@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package flow.v1;
 
-option go_package = "github.com/gideas/flow/proto/flow/v1;flowv1";
 
 // Shared types for the judiciary subsystem (Juror nodes, Deliberation Gate,
 // Clerk node, Tribunal, Arbiter). No service definition -- the judiciary
