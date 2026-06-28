@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -17,7 +18,7 @@ import (
 func setupRuleRouterTest(t *testing.T, spy *ruleRouterSpy) *flow.Client {
 	t.Helper()
 
-	lis, err := newLocalListener()
+	lis, err := nodeutil.NewLocalListener()
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}

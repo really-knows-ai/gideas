@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -24,7 +25,7 @@ func newSpyClientWithSpy(
 ) (*flow.Client, func()) {
 	t.Helper()
 
-	lis, err := newLocalListener()
+	lis, err := nodeutil.NewLocalListener()
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}

@@ -45,6 +45,7 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/artefacts"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -185,13 +186,13 @@ func handleFacilitator(
 
 	children := resp.GetChildren()
 	if hasCompletedChild(children) {
-		emitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
+		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
 			"phase": "resume",
 		})
 		return handlePostResume(ctx, client, children)
 	}
 
-	emitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
+	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
 		"phase": "first",
 	})
 	return handleFirstInvocation(ctx, client, cfg, wctx)
@@ -236,7 +237,7 @@ func handleFirstInvocation(
 	// No deadlocked feedback — route to resolved with a warning.
 	if disputed == nil {
 		slog.Warn("facilitator: no deadlocked feedback found, routing to resolved")
-		emitTelemetry(ctx, client, "foundry.facilitator.no_deadlock", map[string]any{
+		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.no_deadlock", map[string]any{
 			"output": outputResolved,
 		})
 		if _, err := client.RouteToOutput(ctx, outputResolved); err != nil {
@@ -274,7 +275,7 @@ func handleFirstInvocation(
 		return err
 	}
 
-	emitTelemetry(ctx, client, "foundry.facilitator.evidence_assembled", map[string]any{
+	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.evidence_assembled", map[string]any{
 		"artefact_kind": artefactKind,
 		"feedback_id":   disputed.GetId(),
 	})
@@ -333,7 +334,7 @@ func handleFirstInvocation(
 		return fmt.Errorf("facilitator: suspend: %w", err)
 	}
 
-	emitTelemetry(ctx, client, "foundry.facilitator.suspended", map[string]any{
+	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.suspended", map[string]any{
 		"child_id":      child.ID(),
 		"arbiter_node":  cfg.arbiterNode(),
 		"artefact_kind": artefactKind,
@@ -345,19 +346,6 @@ func handleFirstInvocation(
 }
 
 // ── Telemetry ────────────────────────────────────────────────────────────
-
-// emitTelemetry records a structured telemetry event. Errors are logged
-// but not propagated — telemetry failures must not block the handler.
-func emitTelemetry(ctx context.Context, client *flow.Client, eventType string, payload map[string]any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		slog.Warn("facilitator: marshal telemetry payload", "event", eventType, "error", err)
-		return
-	}
-	if err := client.RecordTelemetry(ctx, eventType, data); err != nil {
-		slog.Warn("facilitator: record telemetry", "event", eventType, "error", err)
-	}
-}
 
 // ── Deadlock selection ───────────────────────────────────────────────────
 
@@ -654,7 +642,7 @@ func handlePostResume(
 
 	if reason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
 		slog.Info("facilitator: child cancelled, propagating cancellation")
-		emitTelemetry(ctx, client, "foundry.facilitator.cancelled", map[string]any{
+		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.cancelled", map[string]any{
 			"child_id": completed.GetWorkitemId(),
 		})
 		if _, err := client.Complete(ctx, flow.WithReason(
@@ -667,7 +655,7 @@ func handlePostResume(
 
 	// Success (UNSPECIFIED = normal completion).
 	slog.Info("facilitator: child succeeded, routing to resolved")
-	emitTelemetry(ctx, client, "foundry.facilitator.resolved", map[string]any{
+	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.resolved", map[string]any{
 		"child_id": completed.GetWorkitemId(),
 		"output":   outputResolved,
 	})

@@ -2,18 +2,12 @@ package main
 
 import (
 	"context"
-	"net"
 	"slices"
 	"sync"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 )
-
-// newLocalListener creates a TCP listener on an ephemeral localhost port.
-func newLocalListener() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
-}
 
 // newSpyGRPCServer creates a gRPC server with the sortSpy registered
 // for all five Foundry Flow service interfaces.

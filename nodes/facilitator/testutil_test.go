@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"sync"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,11 +17,6 @@ import (
 
 // testWorkitemID is the workitem ID used across all facilitator tests.
 const testWorkitemID = "test-workitem"
-
-// newLocalListener creates a TCP listener on an ephemeral localhost port.
-func newLocalListener() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
-}
 
 // newSpyGRPCServer creates a gRPC server with the facilitatorSpy registered
 // for the five Foundry Flow service interfaces the Facilitator depends on.
@@ -248,7 +243,7 @@ func defaultWorkitemContext() *flowv1.WorkitemContext {
 func setupFacilitatorTest(t *testing.T, spy *facilitatorSpy) *flow.Client {
 	t.Helper()
 
-	lis, err := newLocalListener()
+	lis, err := nodeutil.NewLocalListener()
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}

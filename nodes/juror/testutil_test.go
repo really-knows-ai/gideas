@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"sync"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -122,10 +122,6 @@ func (s *jurorSpy) StoreArtefact(
 // Helpers
 // ---------------------------------------------------------------------------
 
-func newLocalListener() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
-}
-
 func newSpyGRPCServer(spy *jurorSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
@@ -137,9 +133,9 @@ func newSpyGRPCServer(spy *jurorSpy) *grpc.Server {
 func setupJurorTest(t *testing.T, spy *jurorSpy) *flow.Client {
 	t.Helper()
 
-	lis, err := newLocalListener()
+	lis, err := nodeutil.NewLocalListener()
 	if err != nil {
-		t.Fatalf("newLocalListener: %v", err)
+		t.Fatalf("NewLocalListener: %v", err)
 	}
 
 	srv := newSpyGRPCServer(spy)
