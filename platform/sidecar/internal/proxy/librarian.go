@@ -8,8 +8,8 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/sidecar/internal/buffer"
+	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 )
 
 const (
@@ -85,7 +85,7 @@ func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*fl
 
 	// Submit friction to TelemetryBuffer.
 	if p.telemetryBuffer != nil {
-		namespace, workitemID, nodeID := extractIdentityFromMetadata(ctx)
+		namespace, workitemID, nodeID := service.ExtractIdentityFromMD(ctx)
 
 		p.telemetryBuffer.Submit(buffer.Event{
 			Priority:   buffer.PriorityHigh,
@@ -154,25 +154,4 @@ func (p *LibrarianProxy) SearchSimilarLaws(
 	ctx context.Context, req *flowv1.SearchSimilarLawsRequest,
 ) (*flowv1.SearchSimilarLawsResponse, error) {
 	return p.client.SearchSimilarLaws(ctx, req)
-}
-
-// ---------------------------------------------------------------------------
-// Identity extraction from metadata
-// ---------------------------------------------------------------------------
-
-func extractIdentityFromMetadata(ctx context.Context) (namespace, workitemID, nodeID string) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return
-	}
-	if vals := md.Get("x-flow-namespace"); len(vals) > 0 {
-		namespace = vals[0]
-	}
-	if vals := md.Get("x-flow-workitem-id"); len(vals) > 0 {
-		workitemID = vals[0]
-	}
-	if vals := md.Get("x-flow-node-id"); len(vals) > 0 {
-		nodeID = vals[0]
-	}
-	return
 }
