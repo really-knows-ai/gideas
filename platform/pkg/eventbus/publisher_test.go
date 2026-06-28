@@ -24,7 +24,7 @@ type spyPublisher struct {
 	publishDelay time.Duration
 }
 
-func (s *spyPublisher) Publish(_ context.Context, req *flowv1.PublishRequest) (*flowv1.PublishResponse, error) {
+func (s *spyPublisher) Publish(_ context.Context, req *flowv1.PublishRequest, _ ...grpc.CallOption) (*flowv1.PublishResponse, error) {
 	if s.publishDelay > 0 {
 		time.Sleep(s.publishDelay)
 	}
@@ -35,6 +35,10 @@ func (s *spyPublisher) Publish(_ context.Context, req *flowv1.PublishRequest) (*
 		return nil, s.err
 	}
 	return &flowv1.PublishResponse{Acknowledged: true, Sequence: uint64(len(s.calls))}, nil
+}
+
+func (s *spyPublisher) Subscribe(_ context.Context, _ *flowv1.SubscribeRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[flowv1.FlowEvent], error) {
+	return nil, errors.New("unimplemented")
 }
 
 func (s *spyPublisher) callCount() int {
@@ -72,7 +76,7 @@ func makeReq(channel, eventType string) *flowv1.PublishRequest {
 
 func TestAsyncPublisher_SubmitAndDrain(t *testing.T) {
 	spy := &spyPublisher{}
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(10))
+	pub := NewAsyncPublisher(spy, WithBufferSize(10))
 	defer pub.Stop()
 
 	pub.Submit(makeReq("audit", "audit.test"))
@@ -98,7 +102,7 @@ func TestAsyncPublisher_SubmitAndDrain(t *testing.T) {
 
 func TestAsyncPublisher_MultipleEvents(t *testing.T) {
 	spy := &spyPublisher{}
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(100))
+	pub := NewAsyncPublisher(spy, WithBufferSize(100))
 	defer pub.Stop()
 
 	const n = 50
@@ -119,7 +123,7 @@ func TestAsyncPublisher_MultipleEvents(t *testing.T) {
 
 func TestAsyncPublisher_DropOnFullBuffer(t *testing.T) {
 	spy := &spyPublisher{publishDelay: 50 * time.Millisecond} // slow drain
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(2))
+	pub := NewAsyncPublisher(spy, WithBufferSize(2))
 
 	// Fill the buffer: 2 in channel + 1 being drained = 3 accepted.
 	// Then more should be dropped.
@@ -142,7 +146,7 @@ func TestAsyncPublisher_DropCallbackInvoked(t *testing.T) {
 	spy := &spyPublisher{publishDelay: 100 * time.Millisecond}
 	var dropCount atomic.Int64
 
-	pub := NewAsyncPublisherFromPublisher(spy,
+	pub := NewAsyncPublisher(spy,
 		WithBufferSize(1),
 		WithOnDrop(func(req *flowv1.PublishRequest) {
 			dropCount.Add(1)
@@ -170,7 +174,7 @@ func TestAsyncPublisher_RetryOnFailure(t *testing.T) {
 	failErr := errors.New("transient failure")
 	spy.setErr(failErr)
 
-	pub := NewAsyncPublisherFromPublisher(spy,
+	pub := NewAsyncPublisher(spy,
 		WithBufferSize(10),
 		WithRetry(10*time.Millisecond, 50*time.Millisecond), // fast retry for test
 	)
@@ -208,7 +212,7 @@ func TestAsyncPublisher_RetryOnFailure(t *testing.T) {
 
 func TestAsyncPublisher_StopDrainsRemaining(t *testing.T) {
 	spy := &spyPublisher{publishDelay: 20 * time.Millisecond}
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(100))
+	pub := NewAsyncPublisher(spy, WithBufferSize(100))
 
 	// Submit a bunch of events.
 	for range 10 {
@@ -229,7 +233,7 @@ func TestAsyncPublisher_StopDrainsRemaining(t *testing.T) {
 func TestAsyncPublisher_NonBlocking(t *testing.T) {
 	spy := &spyPublisher{publishDelay: 100 * time.Millisecond}
 	// Tiny buffer, slow drain — should still never block.
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(1))
+	pub := NewAsyncPublisher(spy, WithBufferSize(1))
 
 	done := make(chan struct{})
 	go func() {
@@ -251,7 +255,7 @@ func TestAsyncPublisher_NonBlocking(t *testing.T) {
 
 func TestAsyncPublisher_ConcurrentSubmitSafety(t *testing.T) {
 	spy := &spyPublisher{}
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(1000))
+	pub := NewAsyncPublisher(spy, WithBufferSize(1000))
 
 	var wg sync.WaitGroup
 	const goroutines = 10
@@ -285,7 +289,7 @@ func TestAsyncPublisher_ConcurrentSubmitSafety(t *testing.T) {
 
 func TestAsyncPublisher_StopIdempotent(t *testing.T) {
 	spy := &spyPublisher{}
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(10))
+	pub := NewAsyncPublisher(spy, WithBufferSize(10))
 
 	pub.Submit(makeReq("audit", "audit.stop"))
 	pub.Stop()
@@ -294,7 +298,7 @@ func TestAsyncPublisher_StopIdempotent(t *testing.T) {
 
 func TestAsyncPublisher_ZeroBufferSize_UsesDefault(t *testing.T) {
 	spy := &spyPublisher{}
-	pub := NewAsyncPublisherFromPublisher(spy, WithBufferSize(0))
+	pub := NewAsyncPublisher(spy, WithBufferSize(0))
 	defer pub.Stop()
 
 	// Should use DefaultBufferSize. Just verify it works.
@@ -317,7 +321,7 @@ func TestAsyncPublisher_RetryBackoffRespected(t *testing.T) {
 
 	base := 20 * time.Millisecond
 
-	pub := NewAsyncPublisherFromPublisher(spy,
+	pub := NewAsyncPublisher(spy,
 		WithBufferSize(10),
 		WithRetry(base, 100*time.Millisecond),
 	)

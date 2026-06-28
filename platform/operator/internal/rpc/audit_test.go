@@ -9,23 +9,28 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	apiv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/pkg/eventbus"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// spyPublisher implements eventbus.Publisher and captures published requests
+// spyPublisher implements flowv1.FlowEventBusServiceClient and captures published requests
 // for test assertions.
 type spyPublisher struct {
 	mu     sync.Mutex
 	events []*flowv1.PublishRequest
 }
 
-func (s *spyPublisher) Publish(_ context.Context, req *flowv1.PublishRequest) (*flowv1.PublishResponse, error) {
+func (s *spyPublisher) Publish(_ context.Context, req *flowv1.PublishRequest, _ ...grpc.CallOption) (*flowv1.PublishResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, req)
 	return &flowv1.PublishResponse{Acknowledged: true}, nil
+}
+
+func (s *spyPublisher) Subscribe(_ context.Context, _ *flowv1.SubscribeRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[flowv1.FlowEvent], error) {
+	return nil, nil
 }
 
 func (s *spyPublisher) last() *flowv1.PublishRequest {
@@ -47,7 +52,7 @@ func (s *spyPublisher) count() int {
 // The returned stop function must be called to drain the publisher.
 func newTestAuditor() (*spyPublisher, *eventbus.AsyncPublisher, func()) {
 	spy := &spyPublisher{}
-	pub := eventbus.NewAsyncPublisherFromPublisher(spy)
+	pub := eventbus.NewAsyncPublisher(spy)
 	return spy, pub, func() { pub.Stop() }
 }
 

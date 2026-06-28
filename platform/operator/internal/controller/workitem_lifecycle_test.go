@@ -9,6 +9,7 @@ import (
 	flowv1gen "github.com/gideas/flow/gen/flow/v1"
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/pkg/eventbus"
+	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -23,11 +24,15 @@ type lifecycleSpy struct {
 	events []*flowv1gen.PublishRequest
 }
 
-func (s *lifecycleSpy) Publish(_ context.Context, req *flowv1gen.PublishRequest) (*flowv1gen.PublishResponse, error) {
+func (s *lifecycleSpy) Publish(_ context.Context, req *flowv1gen.PublishRequest, _ ...grpc.CallOption) (*flowv1gen.PublishResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, req)
 	return &flowv1gen.PublishResponse{Acknowledged: true}, nil
+}
+
+func (s *lifecycleSpy) Subscribe(_ context.Context, _ *flowv1gen.SubscribeRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[flowv1gen.FlowEvent], error) {
+	return nil, nil
 }
 
 // byChannel returns events matching the given channel.
@@ -57,7 +62,7 @@ func testReconcilerWithAuditor(objs ...client.Object) (*WorkitemReconciler, *lif
 	}
 
 	spy := &lifecycleSpy{}
-	pub := eventbus.NewAsyncPublisherFromPublisher(spy)
+	pub := eventbus.NewAsyncPublisher(spy)
 
 	r := &WorkitemReconciler{
 		Client:  builder.Build(),

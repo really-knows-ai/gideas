@@ -7,10 +7,10 @@ import (
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/pkg/eventbus"
+	"google.golang.org/grpc"
 )
 
-// spyPublisher implements [eventbus.Publisher] for testing.
+// spyPublisher implements [flowv1.FlowEventBusServiceClient] for testing.
 type spyPublisher struct {
 	mu           sync.Mutex
 	publishCalls []*flowv1.PublishRequest
@@ -18,7 +18,7 @@ type spyPublisher struct {
 }
 
 func (s *spyPublisher) Publish(
-	_ context.Context, req *flowv1.PublishRequest,
+	_ context.Context, req *flowv1.PublishRequest, _ ...grpc.CallOption,
 ) (*flowv1.PublishResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -29,7 +29,11 @@ func (s *spyPublisher) Publish(
 	return &flowv1.PublishResponse{Acknowledged: true, Sequence: uint64(len(s.publishCalls))}, nil
 }
 
-var _ eventbus.Publisher = (*spyPublisher)(nil)
+func (s *spyPublisher) Subscribe(
+	_ context.Context, _ *flowv1.SubscribeRequest, _ ...grpc.CallOption,
+) (grpc.ServerStreamingClient[flowv1.FlowEvent], error) {
+	return nil, nil
+}
 
 func (s *spyPublisher) calls() int {
 	s.mu.Lock()

@@ -59,23 +59,7 @@ type TelemetryBuffer struct {
 
 // NewTelemetryBuffer creates a buffer with the given capacity per priority
 // channel. If size <= 0, DefaultBufferSize is used.
-//
-// The publisher argument is the Event Bus gRPC client (or any
-// implementation of [eventbus.Publisher]) used to send events.
-func NewTelemetryBuffer(pub eventbus.Publisher, size int) *TelemetryBuffer {
-	if size <= 0 {
-		size = DefaultBufferSize
-	}
-	return &TelemetryBuffer{
-		highPub:   eventbus.NewAsyncPublisherFromPublisher(pub, eventbus.WithBufferSize(size)),
-		normalPub: eventbus.NewAsyncPublisherFromPublisher(pub, eventbus.WithBufferSize(size)),
-	}
-}
-
-// NewTelemetryBufferFromClient creates a buffer from a
-// [flowv1.FlowEventBusServiceClient], adapting it to the [eventbus.Publisher]
-// interface internally.
-func NewTelemetryBufferFromClient(client flowv1.FlowEventBusServiceClient, size int) *TelemetryBuffer {
+func NewTelemetryBuffer(client flowv1.FlowEventBusServiceClient, size int) *TelemetryBuffer {
 	if size <= 0 {
 		size = DefaultBufferSize
 	}
@@ -83,6 +67,12 @@ func NewTelemetryBufferFromClient(client flowv1.FlowEventBusServiceClient, size 
 		highPub:   eventbus.NewAsyncPublisher(client, eventbus.WithBufferSize(size)),
 		normalPub: eventbus.NewAsyncPublisher(client, eventbus.WithBufferSize(size)),
 	}
+}
+
+// NewTelemetryBufferFromClient creates a buffer from a
+// [flowv1.FlowEventBusServiceClient].
+func NewTelemetryBufferFromClient(client flowv1.FlowEventBusServiceClient, size int) *TelemetryBuffer {
+	return NewTelemetryBuffer(client, size)
 }
 
 // Submit enqueues an event for async delivery. Non-blocking: if the
