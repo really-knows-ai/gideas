@@ -15,7 +15,6 @@ import (
 	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -45,12 +44,7 @@ type ArchivistProxy struct {
 // The childAuth, if non-nil, is used to validate cross-Workitem operations
 // against the session's local child cache.
 func NewArchivistProxy(archivistAddr string, childAuth *service.SidecarServer) (*ArchivistProxy, error) {
-	conn, err := grpc.NewClient(
-		archivistAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
-		grpc.WithStreamInterceptor(metadataStreamInterceptor),
-	)
+	conn, err := dialService(archivistAddr)
 	if err != nil {
 		return nil, err
 	}

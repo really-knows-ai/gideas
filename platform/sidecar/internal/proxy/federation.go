@@ -7,7 +7,6 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // FederationProxy implements flowv1.FederationServiceServer by forwarding
@@ -23,12 +22,7 @@ type FederationProxy struct {
 // NewFederationProxy dials the Federation gRPC endpoint and returns a proxy
 // handler ready to be registered on the Sidecar's gRPC server.
 func NewFederationProxy(addr string) (*FederationProxy, error) {
-	conn, err := grpc.NewClient(
-		addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
-		grpc.WithStreamInterceptor(metadataStreamInterceptor),
-	)
+	conn, err := dialService(addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial federation: %w", err)
 	}

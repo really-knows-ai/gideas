@@ -13,7 +13,6 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -35,12 +34,7 @@ type OperatorProxy struct {
 // The childTracker, if non-nil, is notified when CreateChildWorkitem
 // succeeds so that the session can authorise cross-Workitem operations.
 func NewOperatorProxy(operatorAddr string, childTracker *service.SidecarServer) (*OperatorProxy, error) {
-	conn, err := grpc.NewClient(
-		operatorAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
-		grpc.WithStreamInterceptor(metadataStreamInterceptor),
-	)
+	conn, err := dialService(operatorAddr)
 	if err != nil {
 		return nil, err
 	}
