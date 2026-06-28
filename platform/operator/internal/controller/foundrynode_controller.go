@@ -25,9 +25,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -124,22 +122,30 @@ func (r *FoundryNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Validate capability syntax.
 	if err := r.validateCapabilities(&node); err != nil {
-		return r.setCondition(ctx, &node, metav1.ConditionFalse, "InvalidCapability", err.Error())
+		return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "InvalidCapability", err.Error(),
+			func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+		)
 	}
 
 	// Validate against Flow-level constraints.
 	if err := r.validateAgainstFlow(ctx, &node); err != nil {
-		return r.setCondition(ctx, &node, metav1.ConditionFalse, "ValidationFailed", err.Error())
+		return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "ValidationFailed", err.Error(),
+			func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+		)
 	}
 
 	// Validate routing output targets exist.
 	if err := r.validateOutputTargets(ctx, &node); err != nil {
-		return r.setCondition(ctx, &node, metav1.ConditionFalse, "InvalidOutputTarget", err.Error())
+		return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "InvalidOutputTarget", err.Error(),
+			func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+		)
 	}
 
 	// Validate child Workitem contract stamp references.
 	if err := r.validateChildContracts(ctx, &node); err != nil {
-		return r.setCondition(ctx, &node, metav1.ConditionFalse, "InvalidChildContract", err.Error())
+		return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "InvalidChildContract", err.Error(),
+			func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+		)
 	}
 
 	// Check if the parent FoundryFlow has federation configured.
@@ -151,22 +157,30 @@ func (r *FoundryNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Reconcile the workload (Deployment or StatefulSet).
 	if useStatefulSet {
 		if err := r.reconcileStatefulSet(ctx, &node, fedEnabled); err != nil {
-			return r.setCondition(ctx, &node, metav1.ConditionFalse, "ReconcileFailed", err.Error())
+			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "ReconcileFailed", err.Error(),
+				func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+			)
 		}
 	} else {
 		if err := r.reconcileDeployment(ctx, &node, fedEnabled); err != nil {
-			return r.setCondition(ctx, &node, metav1.ConditionFalse, "ReconcileFailed", err.Error())
+			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "ReconcileFailed", err.Error(),
+				func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+			)
 		}
 	}
 
 	// Reconcile Headless Service for USE:queue/server nodes.
 	if r.hasQueueServerCapability(&node) {
 		if err := r.reconcileHeadlessService(ctx, &node); err != nil {
-			return r.setCondition(ctx, &node, metav1.ConditionFalse, "ServiceReconcileFailed", err.Error())
+			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "ServiceReconcileFailed", err.Error(),
+				func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+			)
 		}
 	}
 
-	return r.setCondition(ctx, &node, metav1.ConditionTrue, "Reconciled", "Node workload reconciled successfully")
+	return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionTrue, "Reconciled", "Node workload reconciled successfully",
+		func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
+	)
 }
 
 // validateCapabilities checks that all capability strings match the grammar.
@@ -544,49 +558,6 @@ func (r *FoundryNodeReconciler) reconcileHeadlessService(ctx context.Context, no
 		"result", result,
 	)
 	return nil
-}
-
-// setCondition updates the Ready status condition on the FoundryNode and persists it.
-func (r *FoundryNodeReconciler) setCondition(
-	ctx context.Context,
-	node *flowv1.FoundryNode,
-	status metav1.ConditionStatus,
-	reason, message string,
-) (ctrl.Result, error) {
-	newCondition := metav1.Condition{
-		Type:               conditionReady,
-		Status:             status,
-		ObservedGeneration: node.Generation,
-		Reason:             reason,
-		Message:            message,
-	}
-
-	// Check if condition already matches to avoid unnecessary writes.
-	existing := meta.FindStatusCondition(node.Status.Conditions, conditionReady)
-	if existing != nil &&
-		existing.Status == status &&
-		existing.Reason == reason &&
-		existing.Message == message &&
-		existing.ObservedGeneration == node.Generation {
-		return ctrl.Result{}, nil
-	}
-
-	meta.SetStatusCondition(&node.Status.Conditions, newCondition)
-
-	// Re-fetch to get latest resourceVersion.
-	var fresh flowv1.FoundryNode
-	if err := r.Get(ctx, client.ObjectKeyFromObject(node), &fresh); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	if !equality.Semantic.DeepEqual(fresh.Status.Conditions, node.Status.Conditions) {
-		fresh.Status.Conditions = node.Status.Conditions
-		if err := r.Status().Update(ctx, &fresh); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	return ctrl.Result{}, nil
 }
 
 // labelsForNode returns standard labels for resources owned by this FoundryNode.
