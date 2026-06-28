@@ -32,23 +32,6 @@ const (
 	defaultRetryMax = 30 * time.Second
 )
 
-// Publisher is the subset of [flowv1.FlowEventBusServiceClient] used by
-// AsyncPublisher. Accepting an interface rather than the concrete client
-// simplifies testing and avoids pulling in gRPC dial dependencies.
-type Publisher interface {
-	Publish(ctx context.Context, req *flowv1.PublishRequest) (*flowv1.PublishResponse, error)
-}
-
-// publisherAdapter wraps a [flowv1.FlowEventBusServiceClient] to satisfy the
-// [Publisher] interface (strips the variadic CallOption).
-type publisherAdapter struct {
-	client flowv1.FlowEventBusServiceClient
-}
-
-func (a *publisherAdapter) Publish(ctx context.Context, req *flowv1.PublishRequest) (*flowv1.PublishResponse, error) {
-	return a.client.Publish(ctx, req)
-}
-
 // Option configures an [AsyncPublisher].
 type Option func(*AsyncPublisher)
 
@@ -93,7 +76,7 @@ func WithOnDrop(fn func(*flowv1.PublishRequest)) Option {
 // Stop signals the drain goroutine to exit and performs a best-effort flush
 // of remaining buffered events (without retry).
 type AsyncPublisher struct {
-	pub Publisher
+	pub flowv1.FlowEventBusServiceClient
 
 	bufSize   int
 	retryBase time.Duration
@@ -109,19 +92,9 @@ type AsyncPublisher struct {
 
 // NewAsyncPublisher creates and starts a new AsyncPublisher. The background
 // drain goroutine begins immediately.
-//
-// client may be a [flowv1.FlowEventBusServiceClient]; it is automatically
-// adapted. Alternatively, pass a value satisfying the [Publisher] interface
-// directly via [NewAsyncPublisherFromPublisher].
 func NewAsyncPublisher(client flowv1.FlowEventBusServiceClient, opts ...Option) *AsyncPublisher {
-	return NewAsyncPublisherFromPublisher(&publisherAdapter{client: client}, opts...)
-}
-
-// NewAsyncPublisherFromPublisher creates and starts a new AsyncPublisher
-// using the provided [Publisher] implementation.
-func NewAsyncPublisherFromPublisher(pub Publisher, opts ...Option) *AsyncPublisher {
 	p := &AsyncPublisher{
-		pub:       pub,
+		pub:       client,
 		bufSize:   DefaultBufferSize,
 		retryBase: defaultRetryBase,
 		retryMax:  defaultRetryMax,
