@@ -28,6 +28,7 @@ import (
 	"github.com/gideas/flow/sidecar/internal/proxy"
 	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -110,26 +111,23 @@ func main() {
 		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, namespace, nodeID, capabilities)),
 	)
 
-	// Event Bus: create proxy and telemetry buffer.
+	// Event Bus: dial and create telemetry buffer.
 	var eventBusCloser func() error
-	var eventBusProxy *proxy.EventBusProxy
 	if eventBusAddr != "" {
-		ebProxy, err := proxy.NewEventBusProxy(eventBusAddr)
+		conn, err := grpc.NewClient(eventBusAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			slog.Error("Failed to connect to Event Bus", "address", eventBusAddr, "error", err)
 			os.Exit(1)
 		}
-		eventBusProxy = ebProxy
-		eventBusCloser = ebProxy.Close
-
-		// Create telemetry buffer using the underlying gRPC client.
-		tb := buffer.NewTelemetryBufferFromClient(ebProxy.Client(), 0) // 0 = default size
+		client := flowv1.NewFlowEventBusServiceClient(conn)
+		tb := buffer.NewTelemetryBufferFromClient(client, 0) // 0 = default size
 		sidecarSrv.TelemetryBuffer = tb
+		eventBusCloser = func() error { return conn.Close() }
 
-		slog.Info("Event Bus proxy enabled", "address", eventBusAddr)
+		slog.Info("Telemetry buffer enabled", "address", eventBusAddr)
 	} else {
 		eventBusCloser = func() error { return nil }
-		slog.Info("Event Bus proxy disabled (no EVENT_BUS_ADDRESS set)")
+		slog.Info("Telemetry buffer disabled (no EVENT_BUS_ADDRESS set)")
 	}
 
 	// Register service handlers.
@@ -167,7 +165,7 @@ func main() {
 	// LibrarianService: proxy to real Librarian if address is set, otherwise skip.
 	var librarianCloser func() error
 	if librarianAddr != "" {
-		librarianProxy, err := proxy.NewLibrarianProxy(librarianAddr, eventBusProxy)
+		librarianProxy, err := proxy.NewLibrarianProxy(librarianAddr, sidecarSrv.TelemetryBuffer)
 		if err != nil {
 			slog.Error("Failed to connect to Librarian", "address", librarianAddr, "error", err)
 			os.Exit(1)
