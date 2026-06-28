@@ -87,17 +87,15 @@ func (p *FederationProxy) SubmitPublication(
 	return p.client.SubmitPublication(ctx, req)
 }
 
-// ---------------------------------------------------------------------------
-// Server-streaming RPC forwarding
-// ---------------------------------------------------------------------------
-
-// SubscribeLawUpdates proxies the server-streaming RPC to the Federation
-// backend, forwarding each PublishedLawEvent to the caller.
-func (p *FederationProxy) SubscribeLawUpdates(
-	req *flowv1.SubscribeLawUpdatesRequest,
-	stream grpc.ServerStreamingServer[flowv1.PublishedLawEvent],
+// streamProxy forwards a server-streaming gRPC call from the client to the
+// server stream, handling io.EOF as normal completion.
+func streamProxy[Req, Res any](
+	ctx context.Context,
+	subscribe func(context.Context, *Req, ...grpc.CallOption) (grpc.ServerStreamingClient[Res], error),
+	req *Req,
+	stream grpc.ServerStreamingServer[Res],
 ) error {
-	clientStream, err := p.client.SubscribeLawUpdates(stream.Context(), req)
+	clientStream, err := subscribe(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -115,26 +113,24 @@ func (p *FederationProxy) SubscribeLawUpdates(
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Server-streaming RPC forwarding
+// ---------------------------------------------------------------------------
+
+// SubscribeLawUpdates proxies the server-streaming RPC to the Federation
+// backend, forwarding each PublishedLawEvent to the caller.
+func (p *FederationProxy) SubscribeLawUpdates(
+	req *flowv1.SubscribeLawUpdatesRequest,
+	stream grpc.ServerStreamingServer[flowv1.PublishedLawEvent],
+) error {
+	return streamProxy(stream.Context(), p.client.SubscribeLawUpdates, req, stream)
+}
+
 // SubscribePetitionOutcomes proxies the server-streaming RPC to the
 // Federation backend, forwarding each PetitionOutcomeEvent to the caller.
 func (p *FederationProxy) SubscribePetitionOutcomes(
 	req *flowv1.SubscribePetitionOutcomesRequest,
 	stream grpc.ServerStreamingServer[flowv1.PetitionOutcomeEvent],
 ) error {
-	clientStream, err := p.client.SubscribePetitionOutcomes(stream.Context(), req)
-	if err != nil {
-		return err
-	}
-	for {
-		msg, err := clientStream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		if err := stream.Send(msg); err != nil {
-			return err
-		}
-	}
+	return streamProxy(stream.Context(), p.client.SubscribePetitionOutcomes, req, stream)
 }
