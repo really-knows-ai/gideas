@@ -22,8 +22,6 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -68,19 +66,25 @@ func (r *TreatyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Validate the PEM-encoded CA certificate.
 	if err := r.validateCACert(&treaty); err != nil {
-		return r.setCondition(ctx, &treaty, metav1.ConditionFalse,
-			"CACertInvalid", err.Error())
+		return SetStatusCondition(ctx, r.Client, &treaty, conditionReady, metav1.ConditionFalse,
+			"CACertInvalid", err.Error(),
+			func(t *flowv1.Treaty) *[]metav1.Condition { return &t.Status.Conditions },
+		)
 	}
 
 	// Validate allowed import types against the receiving Flow's published types.
 	if err := r.validateAllowedImportTypes(ctx, &treaty); err != nil {
-		return r.setCondition(ctx, &treaty, metav1.ConditionFalse,
-			"AllowedImportTypesInvalid", err.Error())
+		return SetStatusCondition(ctx, r.Client, &treaty, conditionReady, metav1.ConditionFalse,
+			"AllowedImportTypesInvalid", err.Error(),
+			func(t *flowv1.Treaty) *[]metav1.Condition { return &t.Status.Conditions },
+		)
 	}
 
 	// All validations passed.
-	return r.setCondition(ctx, &treaty, metav1.ConditionTrue,
-		"Reconciled", fmt.Sprintf("Treaty with remote %q (%s) validated", treaty.Spec.RemoteName, treaty.Spec.Direction))
+	return SetStatusCondition(ctx, r.Client, &treaty, conditionReady, metav1.ConditionTrue,
+		"Reconciled", fmt.Sprintf("Treaty with remote %q (%s) validated", treaty.Spec.RemoteName, treaty.Spec.Direction),
+		func(t *flowv1.Treaty) *[]metav1.Condition { return &t.Status.Conditions },
+	)
 }
 
 // validateCACert parses and validates the PEM-encoded CA certificate.
@@ -127,48 +131,6 @@ func (r *TreatyReconciler) validateAllowedImportTypes(ctx context.Context, treat
 	}
 
 	return nil
-}
-
-// setCondition updates the Ready status condition on the Treaty and persists it.
-func (r *TreatyReconciler) setCondition(
-	ctx context.Context,
-	treaty *flowv1.Treaty,
-	status metav1.ConditionStatus,
-	reason, message string,
-) (ctrl.Result, error) {
-	newCondition := metav1.Condition{
-		Type:               conditionReady,
-		Status:             status,
-		ObservedGeneration: treaty.Generation,
-		Reason:             reason,
-		Message:            message,
-	}
-
-	// Check if condition already matches to avoid unnecessary writes.
-	existing := meta.FindStatusCondition(treaty.Status.Conditions, conditionReady)
-	if existing != nil &&
-		existing.Status == status &&
-		existing.Reason == reason &&
-		existing.Message == message &&
-		existing.ObservedGeneration == treaty.Generation {
-		return ctrl.Result{}, nil
-	}
-
-	// Re-fetch to get latest resourceVersion.
-	var fresh flowv1.Treaty
-	if err := r.Get(ctx, client.ObjectKeyFromObject(treaty), &fresh); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	meta.SetStatusCondition(&fresh.Status.Conditions, newCondition)
-
-	if !equality.Semantic.DeepEqual(fresh.Status.Conditions, treaty.Status.Conditions) {
-		if err := r.Status().Update(ctx, &fresh); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

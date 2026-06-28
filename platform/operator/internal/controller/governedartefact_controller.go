@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -63,53 +62,18 @@ func (r *GovernedArtefactReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	seen := make(map[string]bool)
 	for _, stamp := range ga.Spec.Stamps {
 		if seen[stamp] {
-			return r.setCondition(ctx, &ga, metav1.ConditionFalse,
-				"DuplicateStamp", "Duplicate stamp name in vocabulary: "+stamp)
+			return SetStatusCondition(ctx, r.Client, &ga, conditionReady, metav1.ConditionFalse,
+				"DuplicateStamp", "Duplicate stamp name in vocabulary: "+stamp,
+				func(ga *flowv1.GovernedArtefact) *[]metav1.Condition { return &ga.Status.Conditions },
+			)
 		}
 		seen[stamp] = true
 	}
 
-	return r.setCondition(ctx, &ga, metav1.ConditionTrue,
-		"Reconciled", "GovernedArtefact stamp vocabulary registered")
-}
-
-// setCondition updates the Ready status condition on the GovernedArtefact and persists it.
-func (r *GovernedArtefactReconciler) setCondition(
-	ctx context.Context,
-	ga *flowv1.GovernedArtefact,
-	status metav1.ConditionStatus,
-	reason, message string,
-) (ctrl.Result, error) {
-	newCondition := metav1.Condition{
-		Type:               conditionReady,
-		Status:             status,
-		ObservedGeneration: ga.Generation,
-		Reason:             reason,
-		Message:            message,
-	}
-
-	existing := meta.FindStatusCondition(ga.Status.Conditions, conditionReady)
-	if existing != nil &&
-		existing.Status == status &&
-		existing.Reason == reason &&
-		existing.Message == message &&
-		existing.ObservedGeneration == ga.Generation {
-		return ctrl.Result{}, nil
-	}
-
-	// Re-fetch to get latest resourceVersion.
-	var fresh flowv1.GovernedArtefact
-	if err := r.Get(ctx, client.ObjectKeyFromObject(ga), &fresh); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	meta.SetStatusCondition(&fresh.Status.Conditions, newCondition)
-
-	if err := r.Status().Update(ctx, &fresh); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
+	return SetStatusCondition(ctx, r.Client, &ga, conditionReady, metav1.ConditionTrue,
+		"Reconciled", "GovernedArtefact stamp vocabulary registered",
+		func(ga *flowv1.GovernedArtefact) *[]metav1.Condition { return &ga.Status.Conditions },
+	)
 }
 
 // SetupWithManager sets up the controller with the Manager.
