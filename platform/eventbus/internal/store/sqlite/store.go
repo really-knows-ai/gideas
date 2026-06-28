@@ -12,10 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gideas/flow/pkg/sqldbutil"
 	_ "github.com/mattn/go-sqlite3" // SQLite driver.
 )
-
-const timeFormat = "2006-01-02 15:04:05"
 
 // Label is a key-value pair stored alongside an event for server-side
 // filtering. Multiple labels with the same key are permitted.
@@ -245,14 +244,8 @@ func (s *Store) Evict(ctx context.Context, channel string, maxAge time.Duration,
 // initSchema creates the events and event_labels tables if they do not
 // exist.
 func (s *Store) initSchema() error {
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-	}
-	for _, p := range pragmas {
-		if _, err := s.db.Exec(p); err != nil {
-			return fmt.Errorf("pragma %q: %w", p, err)
-		}
+	if err := sqldbutil.SetPragmas(s.db); err != nil {
+		return err
 	}
 
 	schema := `
@@ -380,9 +373,9 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 	return events, rows.Err()
 }
 
-func formatTime(t time.Time) string { return t.UTC().Format(timeFormat) }
+func formatTime(t time.Time) string { return sqldbutil.FormatTime(t) }
 
 func parseTime(s string) time.Time {
-	t, _ := time.Parse(timeFormat, s)
+	t, _ := sqldbutil.ParseTime(s)
 	return t.UTC()
 }
