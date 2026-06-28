@@ -65,6 +65,73 @@ const (
 	operatorPort         = 50052
 )
 
+// infraServiceConfig holds the per-service parameters used to reconcile a
+// control-plane infrastructure Deployment. One instance per service.
+type infraServiceConfig struct {
+	Name        string
+	Container   string
+	Image       string
+	Port        int
+	MountPath   string                          // empty = no volume mount
+	ServicePort string                          // "grpc" or "http-metrics"
+	EnvVars     func(*flowv1.FoundryFlow) []corev1.EnvVar
+}
+
+// reconcileInfraDeployment creates or updates a single Deployment for one of
+// the control-plane infrastructure services (EventBus, FrictionLedger, etc.).
+// A single shared implementation replaces six near-identical copies.
+func (r *FoundryFlowReconciler) reconcileInfraDeployment(ctx context.Context, flow *flowv1.FoundryFlow, cfg infraServiceConfig) error {
+	replicas := int32(1)
+	labels := infraLabels(cfg.Name)
+
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cfg.Name,
+			Namespace: flow.Namespace,
+		},
+	}
+
+	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+		deploy.Labels = labels
+		deploy.Spec.Replicas = &replicas
+		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		podSpec := corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:            cfg.Container,
+				Image:           cfg.Image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Ports: []corev1.ContainerPort{{
+					Name:          cfg.ServicePort,
+					ContainerPort: int32(cfg.Port),
+					Protocol:      corev1.ProtocolTCP,
+				}},
+				Env: cfg.EnvVars(flow),
+			}},
+		}
+		if cfg.MountPath != "" {
+			podSpec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: "data", MountPath: cfg.MountPath}}
+			podSpec.Volumes = []corev1.Volume{{
+				Name: "data",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			}}
+		}
+		deploy.Spec.Template = corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec:       podSpec,
+		}
+		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("could not reconcile %s Deployment: %w", cfg.Name, err)
+	}
+	logf.FromContext(ctx).Info("Reconciled "+cfg.Name+" Deployment",
+		"name", deploy.Name, "result", result,
+	)
+	return nil
+}
+
 // reconcileInfrastructure ensures that the Event Bus, Friction Ledger, and Flow Monitor
 // Deployments and Services exist in the Flow's namespace. This is called during every
 // reconcile after validation succeeds.
@@ -108,60 +175,14 @@ func (r *FoundryFlowReconciler) reconcileInfrastructure(ctx context.Context, flo
 // -----------------------------------------------------------------------
 
 func (r *FoundryFlowReconciler) reconcileEventBus(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	if err := r.reconcileEventBusDeployment(ctx, flow); err != nil {
+	if err := r.reconcileInfraDeployment(ctx, flow, infraServiceConfig{
+		Name: eventBusServiceName, Container: "eventbus", Image: eventBusImage,
+		Port: eventBusPort, MountPath: "/data", ServicePort: "grpc",
+		EnvVars: r.eventBusEnvVars,
+	}); err != nil {
 		return err
 	}
 	return r.reconcileService(ctx, flow, eventBusServiceName, eventBusPort, "grpc")
-}
-
-func (r *FoundryFlowReconciler) reconcileEventBusDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	replicas := int32(1)
-	labels := infraLabels(eventBusServiceName)
-
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      eventBusServiceName,
-			Namespace: flow.Namespace,
-		},
-	}
-
-	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		deploy.Labels = labels
-		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:            "eventbus",
-					Image:           eventBusImage,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Ports: []corev1.ContainerPort{{
-						Name:          "grpc",
-						ContainerPort: int32(eventBusPort),
-						Protocol:      corev1.ProtocolTCP,
-					}},
-					Env:          r.eventBusEnvVars(flow),
-					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
-				}},
-				Volumes: []corev1.Volume{{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				}},
-			},
-		}
-		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
-	})
-	if err != nil {
-		return fmt.Errorf("could not reconcile Event Bus Deployment: %w", err)
-	}
-
-	logf.FromContext(ctx).Info("Reconciled Event Bus Deployment",
-		"name", deploy.Name, "result", result,
-	)
-	return nil
 }
 
 // eventBusEnvVars builds the Event Bus env var list from the FoundryFlow spec.
@@ -194,60 +215,14 @@ func (r *FoundryFlowReconciler) eventBusEnvVars(flow *flowv1.FoundryFlow) []core
 // -----------------------------------------------------------------------
 
 func (r *FoundryFlowReconciler) reconcileFrictionLedger(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	if err := r.reconcileFrictionLedgerDeployment(ctx, flow); err != nil {
+	if err := r.reconcileInfraDeployment(ctx, flow, infraServiceConfig{
+		Name: frictionLedgerSvcNm, Container: "frictionledger", Image: frictionLedgerImage,
+		Port: frictionLedgerPort, MountPath: "/data", ServicePort: "grpc",
+		EnvVars: r.frictionLedgerEnvVars,
+	}); err != nil {
 		return err
 	}
 	return r.reconcileService(ctx, flow, frictionLedgerSvcNm, frictionLedgerPort, "grpc")
-}
-
-func (r *FoundryFlowReconciler) reconcileFrictionLedgerDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	replicas := int32(1)
-	labels := infraLabels(frictionLedgerSvcNm)
-
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      frictionLedgerSvcNm,
-			Namespace: flow.Namespace,
-		},
-	}
-
-	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		deploy.Labels = labels
-		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:            "frictionledger",
-					Image:           frictionLedgerImage,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Ports: []corev1.ContainerPort{{
-						Name:          "grpc",
-						ContainerPort: int32(frictionLedgerPort),
-						Protocol:      corev1.ProtocolTCP,
-					}},
-					Env:          r.frictionLedgerEnvVars(flow),
-					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
-				}},
-				Volumes: []corev1.Volume{{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				}},
-			},
-		}
-		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
-	})
-	if err != nil {
-		return fmt.Errorf("could not reconcile Friction Ledger Deployment: %w", err)
-	}
-
-	logf.FromContext(ctx).Info("Reconciled Friction Ledger Deployment",
-		"name", deploy.Name, "result", result,
-	)
-	return nil
 }
 
 // frictionLedgerEnvVars builds the Friction Ledger env var list, including
@@ -284,64 +259,23 @@ func (r *FoundryFlowReconciler) frictionLedgerEnvVars(flow *flowv1.FoundryFlow) 
 // -----------------------------------------------------------------------
 
 func (r *FoundryFlowReconciler) reconcileFlowMonitor(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	if err := r.reconcileFlowMonitorDeployment(ctx, flow); err != nil {
+	if err := r.reconcileInfraDeployment(ctx, flow, infraServiceConfig{
+		Name: flowMonitorSvcName, Container: "monitor", Image: flowMonitorImage,
+		Port: flowMonitorHTTPPort, MountPath: "/data", ServicePort: "http-metrics",
+		EnvVars: r.flowMonitorEnvVars,
+	}); err != nil {
 		return err
 	}
 	return r.reconcileService(ctx, flow, flowMonitorSvcName, flowMonitorHTTPPort, "http-metrics")
 }
 
-func (r *FoundryFlowReconciler) reconcileFlowMonitorDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	replicas := int32(1)
-	labels := infraLabels(flowMonitorSvcName)
-
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      flowMonitorSvcName,
-			Namespace: flow.Namespace,
-		},
+// flowMonitorEnvVars builds the Flow Monitor env var list.
+func (r *FoundryFlowReconciler) flowMonitorEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "FLOW_MONITOR_PORT", Value: fmt.Sprintf("%d", flowMonitorHTTPPort)},
+		{Name: "FLOW_MONITOR_CHECKPOINT_PATH", Value: monitorCheckpointPth},
+		{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
 	}
-
-	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		deploy.Labels = labels
-		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:            "monitor",
-					Image:           flowMonitorImage,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Ports: []corev1.ContainerPort{{
-						Name:          "http-metrics",
-						ContainerPort: int32(flowMonitorHTTPPort),
-						Protocol:      corev1.ProtocolTCP,
-					}},
-					Env: []corev1.EnvVar{
-						{Name: "FLOW_MONITOR_PORT", Value: fmt.Sprintf("%d", flowMonitorHTTPPort)},
-						{Name: "FLOW_MONITOR_CHECKPOINT_PATH", Value: monitorCheckpointPth},
-						{Name: "EVENT_BUS_ADDRESS", Value: fmt.Sprintf("%s:%d", eventBusServiceName, eventBusPort)},
-					},
-					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
-				}},
-				Volumes: []corev1.Volume{{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				}},
-			},
-		}
-		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
-	})
-	if err != nil {
-		return fmt.Errorf("could not reconcile Flow Monitor Deployment: %w", err)
-	}
-
-	logf.FromContext(ctx).Info("Reconciled Flow Monitor Deployment",
-		"name", deploy.Name, "result", result,
-	)
-	return nil
 }
 
 // -----------------------------------------------------------------------
@@ -349,60 +283,14 @@ func (r *FoundryFlowReconciler) reconcileFlowMonitorDeployment(ctx context.Conte
 // -----------------------------------------------------------------------
 
 func (r *FoundryFlowReconciler) reconcileLibrarian(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	if err := r.reconcileLibrarianDeployment(ctx, flow); err != nil {
+	if err := r.reconcileInfraDeployment(ctx, flow, infraServiceConfig{
+		Name: librarianSvcName, Container: "librarian", Image: librarianImage,
+		Port: librarianPort, MountPath: "/data", ServicePort: "grpc",
+		EnvVars: r.librarianEnvVars,
+	}); err != nil {
 		return err
 	}
 	return r.reconcileService(ctx, flow, librarianSvcName, librarianPort, "grpc")
-}
-
-func (r *FoundryFlowReconciler) reconcileLibrarianDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	replicas := int32(1)
-	labels := infraLabels(librarianSvcName)
-
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      librarianSvcName,
-			Namespace: flow.Namespace,
-		},
-	}
-
-	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		deploy.Labels = labels
-		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:            "librarian",
-					Image:           librarianImage,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Ports: []corev1.ContainerPort{{
-						Name:          "grpc",
-						ContainerPort: int32(librarianPort),
-						Protocol:      corev1.ProtocolTCP,
-					}},
-					Env:          r.librarianEnvVars(flow),
-					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
-				}},
-				Volumes: []corev1.Volume{{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				}},
-			},
-		}
-		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
-	})
-	if err != nil {
-		return fmt.Errorf("could not reconcile Librarian Deployment: %w", err)
-	}
-
-	logf.FromContext(ctx).Info("Reconciled Librarian Deployment",
-		"name", deploy.Name, "result", result,
-	)
-	return nil
 }
 
 // librarianEnvVars builds the Librarian env var list, including Event Bus address,
@@ -440,60 +328,14 @@ func (r *FoundryFlowReconciler) librarianEnvVars(flow *flowv1.FoundryFlow) []cor
 // -----------------------------------------------------------------------
 
 func (r *FoundryFlowReconciler) reconcileEmbassy(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	if err := r.reconcileEmbassyDeployment(ctx, flow); err != nil {
+	if err := r.reconcileInfraDeployment(ctx, flow, infraServiceConfig{
+		Name: embassySvcName, Container: "embassy", Image: embassyImage,
+		Port: embassyPort, MountPath: embassyDataPath, ServicePort: "grpc",
+		EnvVars: r.embassyEnvVars,
+	}); err != nil {
 		return err
 	}
 	return r.reconcileService(ctx, flow, embassySvcName, embassyPort, "grpc")
-}
-
-func (r *FoundryFlowReconciler) reconcileEmbassyDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	replicas := int32(1)
-	labels := infraLabels(embassySvcName)
-
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      embassySvcName,
-			Namespace: flow.Namespace,
-		},
-	}
-
-	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		deploy.Labels = labels
-		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:            "embassy",
-					Image:           embassyImage,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Ports: []corev1.ContainerPort{{
-						Name:          "grpc",
-						ContainerPort: int32(embassyPort),
-						Protocol:      corev1.ProtocolTCP,
-					}},
-					Env:          r.embassyEnvVars(flow),
-					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: embassyDataPath}},
-				}},
-				Volumes: []corev1.Volume{{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				}},
-			},
-		}
-		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
-	})
-	if err != nil {
-		return fmt.Errorf("could not reconcile Embassy Deployment: %w", err)
-	}
-
-	logf.FromContext(ctx).Info("Reconciled Embassy Deployment",
-		"name", deploy.Name, "result", result,
-	)
-	return nil
 }
 
 func (r *FoundryFlowReconciler) embassyEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
@@ -568,53 +410,14 @@ func flowImportTypesEnvVar(importTypes map[string]flowv1.ImportTypeSpec) corev1.
 // -----------------------------------------------------------------------
 
 func (r *FoundryFlowReconciler) reconcileFederation(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	if err := r.reconcileFederationDeployment(ctx, flow); err != nil {
+	if err := r.reconcileInfraDeployment(ctx, flow, infraServiceConfig{
+		Name: federationSvcName, Container: "federation", Image: federationImage,
+		Port: federationPort, MountPath: "", ServicePort: "grpc",
+		EnvVars: r.federationEnvVars,
+	}); err != nil {
 		return err
 	}
 	return r.reconcileService(ctx, flow, federationSvcName, federationPort, "grpc")
-}
-
-func (r *FoundryFlowReconciler) reconcileFederationDeployment(ctx context.Context, flow *flowv1.FoundryFlow) error {
-	replicas := int32(1)
-	labels := infraLabels(federationSvcName)
-
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      federationSvcName,
-			Namespace: flow.Namespace,
-		},
-	}
-
-	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		deploy.Labels = labels
-		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:            "federation",
-					Image:           federationImage,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Ports: []corev1.ContainerPort{{
-						Name:          "grpc",
-						ContainerPort: int32(federationPort),
-						Protocol:      corev1.ProtocolTCP,
-					}},
-					Env: r.federationEnvVars(flow),
-				}},
-			},
-		}
-		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
-	})
-	if err != nil {
-		return fmt.Errorf("could not reconcile Federation Deployment: %w", err)
-	}
-
-	logf.FromContext(ctx).Info("Reconciled Federation Deployment",
-		"name", deploy.Name, "result", result,
-	)
-	return nil
 }
 
 func (r *FoundryFlowReconciler) federationEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
