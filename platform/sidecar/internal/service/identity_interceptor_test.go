@@ -9,28 +9,18 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Fake SessionResolver for testing
-// ---------------------------------------------------------------------------
-
-type fakeResolver struct {
-	sessions map[string]*SessionIdentity
-}
-
-func (f *fakeResolver) LookupSession(workitemID string) *SessionIdentity {
-	return f.sessions[workitemID]
-}
-
-// ---------------------------------------------------------------------------
 // IdentityInterceptor Tests — Session Mode
 // ---------------------------------------------------------------------------
 
 func TestIdentityInterceptor_InjectsSessionIdentity(t *testing.T) {
-	resolver := &fakeResolver{
-		sessions: map[string]*SessionIdentity{
-			"wi-42": {WorkitemID: "wi-42", NodeID: "node-X"},
-		},
-	}
-	interceptor := IdentityInterceptor(resolver, "ns-A", "node-X", "READ:artefact,WRITE:artefact")
+	srv := NewSidecarServer("ns-A", "node-X", "")
+	sess, _ := newSession(context.Background(), "wi-42", "node-X", DefaultTimeout)
+	defer sess.stop()
+	srv.mu.Lock()
+	srv.sessions["wi-42"] = sess
+	srv.mu.Unlock()
+
+	interceptor := IdentityInterceptor(srv, "ns-A", "node-X", "READ:artefact,WRITE:artefact")
 
 	// Build incoming context with SDK-supplied workitem ID.
 	md := metadata.Pairs(MetadataKeyWorkitemID, "wi-42")
@@ -64,12 +54,14 @@ func TestIdentityInterceptor_InjectsSessionIdentity(t *testing.T) {
 }
 
 func TestIdentityInterceptor_OverwritesNodeSuppliedValues(t *testing.T) {
-	resolver := &fakeResolver{
-		sessions: map[string]*SessionIdentity{
-			"wi-1": {WorkitemID: "wi-1", NodeID: "real-node"},
-		},
-	}
-	interceptor := IdentityInterceptor(resolver, "real-ns", "real-node", "READ:law")
+	srv := NewSidecarServer("real-ns", "real-node", "")
+	sess, _ := newSession(context.Background(), "wi-1", "real-node", DefaultTimeout)
+	defer sess.stop()
+	srv.mu.Lock()
+	srv.sessions["wi-1"] = sess
+	srv.mu.Unlock()
+
+	interceptor := IdentityInterceptor(srv, "real-ns", "real-node", "READ:law")
 
 	// Node attempts to spoof namespace, node_id, and capabilities.
 	md := metadata.Pairs(
@@ -108,8 +100,8 @@ func TestIdentityInterceptor_OverwritesNodeSuppliedValues(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIdentityInterceptor_EntryBoundFallback(t *testing.T) {
-	resolver := &fakeResolver{sessions: map[string]*SessionIdentity{}}
-	interceptor := IdentityInterceptor(resolver, "entry-ns", "entry-node", "READ:artefact")
+	srv := NewSidecarServer("entry-ns", "entry-node", "")
+	interceptor := IdentityInterceptor(srv, "entry-ns", "entry-node", "READ:artefact")
 
 	// No workitem ID in metadata — entry-bound call.
 	md := metadata.Pairs("x-other-key", "value")
@@ -147,8 +139,8 @@ func TestIdentityInterceptor_EntryBoundFallback(t *testing.T) {
 }
 
 func TestIdentityInterceptor_EntryBoundFallback_UnknownWorkitem(t *testing.T) {
-	resolver := &fakeResolver{sessions: map[string]*SessionIdentity{}}
-	interceptor := IdentityInterceptor(resolver, "entry-ns", "entry-node", "")
+	srv := NewSidecarServer("entry-ns", "entry-node", "")
+	interceptor := IdentityInterceptor(srv, "entry-ns", "entry-node", "")
 
 	// Workitem ID present but no matching session — falls through to entry-bound.
 	md := metadata.Pairs(MetadataKeyWorkitemID, "unknown-wi")
@@ -181,8 +173,8 @@ func TestIdentityInterceptor_EntryBoundFallback_UnknownWorkitem(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIdentityInterceptor_NoMetadata_NoNamespace_PassesThrough(t *testing.T) {
-	resolver := &fakeResolver{sessions: map[string]*SessionIdentity{}}
-	interceptor := IdentityInterceptor(resolver, "", "", "")
+	srv := NewSidecarServer("", "", "")
+	interceptor := IdentityInterceptor(srv, "", "", "")
 
 	ctx := context.Background()
 	called := false
@@ -202,12 +194,14 @@ func TestIdentityInterceptor_NoMetadata_NoNamespace_PassesThrough(t *testing.T) 
 }
 
 func TestIdentityInterceptor_PreservesOtherMetadata(t *testing.T) {
-	resolver := &fakeResolver{
-		sessions: map[string]*SessionIdentity{
-			"wi-1": {WorkitemID: "wi-1", NodeID: "n"},
-		},
-	}
-	interceptor := IdentityInterceptor(resolver, "ns-f", "n", "READ:artefact")
+	srv := NewSidecarServer("ns-f", "n", "")
+	sess, _ := newSession(context.Background(), "wi-1", "n", DefaultTimeout)
+	defer sess.stop()
+	srv.mu.Lock()
+	srv.sessions["wi-1"] = sess
+	srv.mu.Unlock()
+
+	interceptor := IdentityInterceptor(srv, "ns-f", "n", "READ:artefact")
 
 	md := metadata.Pairs(
 		MetadataKeyWorkitemID, "wi-1",

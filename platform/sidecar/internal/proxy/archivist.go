@@ -24,12 +24,12 @@ import (
 // as the security boundary by computing the SHA-256 content hash
 // server-side — the node is not trusted to supply this value.
 //
-// When a ChildAuthorizer is set, the proxy validates cross-Workitem
-// operations (target_workitem_id) against the session's local child cache.
-// If the session created children and the target is not one of them, the
-// request is rejected. If the session has no children (collection phase
-// at a different node), the request passes through and the Archivist
-// performs its own Operator-backed validation (defense in depth).
+// When a SidecarServer is set (childAuth), the proxy validates
+// cross-Workitem operations (target_workitem_id) against the session's
+// local child cache. If the session created children and the target is
+// not one of them, the request is rejected. If the session has no children
+// (collection phase at a different node), the request passes through and
+// the Archivist performs its own Operator-backed validation (defense in depth).
 type ArchivistProxy struct {
 	flowv1.UnimplementedArchivistServiceServer
 	client flowv1.ArchivistServiceClient
@@ -37,14 +37,14 @@ type ArchivistProxy struct {
 
 	// childAuth validates cross-Workitem operations against the session's
 	// local child cache. May be nil (authorization disabled).
-	childAuth service.ChildAuthorizer
+	childAuth *service.SidecarServer
 }
 
 // NewArchivistProxy dials the Archivist gRPC endpoint and returns a proxy
 // handler ready to be registered on the Sidecar's gRPC server.
 // The childAuth, if non-nil, is used to validate cross-Workitem operations
 // against the session's local child cache.
-func NewArchivistProxy(archivistAddr string, childAuth service.ChildAuthorizer) (*ArchivistProxy, error) {
+func NewArchivistProxy(archivistAddr string, childAuth *service.SidecarServer) (*ArchivistProxy, error) {
 	conn, err := grpc.NewClient(
 		archivistAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

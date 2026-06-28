@@ -2,10 +2,10 @@ package proxy
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -108,29 +108,7 @@ func (s *captureOperatorServer) ListSuspendedWorkitems(
 	return s.listSuspendedResp, nil
 }
 
-// fakeChildTracker records TrackChild calls for assertions.
-type fakeChildTracker struct {
-	mu       sync.Mutex
-	children map[string][]string // parentID -> []childID
-}
-
-func newFakeChildTracker() *fakeChildTracker {
-	return &fakeChildTracker{children: make(map[string][]string)}
-}
-
 const childWI42 = "child-42"
-
-func (f *fakeChildTracker) TrackChild(parentWorkitemID, childWorkitemID string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.children[parentWorkitemID] = append(f.children[parentWorkitemID], childWorkitemID)
-}
-
-func (f *fakeChildTracker) getChildren(parentID string) []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.children[parentID]
-}
 
 func setupOperatorProxy(t *testing.T) (*OperatorProxy, *captureOperatorServer) {
 	t.Helper()
@@ -243,7 +221,7 @@ func TestOperatorProxy_GetFlowTopology_PropagatesIdentityMetadata(t *testing.T) 
 // CreateChildWorkitem proxy tests
 // ---------------------------------------------------------------------------
 
-func setupOperatorProxyWithTracker(t *testing.T) (*OperatorProxy, *captureOperatorServer, *fakeChildTracker) {
+func setupOperatorProxyWithTracker(t *testing.T) (*OperatorProxy, *captureOperatorServer, *service.SidecarServer) {
 	t.Helper()
 
 	capture := &captureOperatorServer{
@@ -266,19 +244,20 @@ func setupOperatorProxyWithTracker(t *testing.T) (*OperatorProxy, *captureOperat
 		flowv1.RegisterOperatorServiceServer(srv, capture)
 	})
 
-	tracker := newFakeChildTracker()
+	sidecarSrv := service.NewSidecarServer("ns", "node", "")
+	sidecarSrv.InjectSessionForTest("parent-wi", "node")
 
 	proxy := &OperatorProxy{
 		client:       flowv1.NewOperatorServiceClient(conn),
 		conn:         conn,
-		childTracker: tracker,
+		childTracker: sidecarSrv,
 	}
 
-	return proxy, capture, tracker
+	return proxy, capture, sidecarSrv
 }
 
 func TestOperatorProxy_CreateChildWorkitem_ForwardsAndTracksChild(t *testing.T) {
-	proxy, _, tracker := setupOperatorProxyWithTracker(t)
+	proxy, _, srv := setupOperatorProxyWithTracker(t)
 
 	// Simulate identity-enriched incoming metadata.
 	md := metadata.Pairs("x-flow-workitem-id", "parent-wi")
@@ -293,10 +272,9 @@ func TestOperatorProxy_CreateChildWorkitem_ForwardsAndTracksChild(t *testing.T) 
 			childWI42, resp.GetChildWorkitemId())
 	}
 
-	// Verify the child was tracked in the session.
-	children := tracker.getChildren("parent-wi")
-	if len(children) != 1 || children[0] != childWI42 {
-		t.Fatalf("expected tracked child [child-42], got %v", children)
+	// Verify the child was tracked in the session via AuthorizeChildAccess.
+	if decision := srv.AuthorizeChildAccess("parent-wi", childWI42); decision != service.ChildAccessAllowed {
+		t.Fatalf("expected child_workitem to be authorized, got %v", decision)
 	}
 }
 
@@ -328,7 +306,7 @@ func TestOperatorProxy_CreateChildWorkitem_PropagatesMetadata(t *testing.T) {
 }
 
 func TestOperatorProxy_CreateChildWorkitem_ErrorNoTracking(t *testing.T) {
-	proxy, capture, tracker := setupOperatorProxyWithTracker(t)
+	proxy, capture, srv := setupOperatorProxyWithTracker(t)
 	capture.createChildErr = status.Error(codes.PermissionDenied, "no capability")
 
 	md := metadata.Pairs("x-flow-workitem-id", "parent-wi")
@@ -339,10 +317,9 @@ func TestOperatorProxy_CreateChildWorkitem_ErrorNoTracking(t *testing.T) {
 		t.Fatal("expected error when Operator rejects")
 	}
 
-	// No child should be tracked on error.
-	children := tracker.getChildren("parent-wi")
-	if len(children) != 0 {
-		t.Fatalf("expected no tracked children on error, got %v", children)
+	// No child should be tracked on error — AuthorizeChildAccess returns Unknown.
+	if decision := srv.AuthorizeChildAccess("parent-wi", childWI42); decision != service.ChildAccessUnknown {
+		t.Fatalf("expected no children tracked on error, got %v", decision)
 	}
 }
 

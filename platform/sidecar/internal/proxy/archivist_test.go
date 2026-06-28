@@ -102,41 +102,8 @@ func setupArchivistProxy(t *testing.T) (*ArchivistProxy, *captureArchivistServer
 	return proxy, capture
 }
 
-// fakeChildAuthorizer implements service.ChildAuthorizer for testing.
-type fakeChildAuthorizer struct {
-	decisions map[string]service.ChildAccessDecision // key: "parent:child"
-}
-
-func newFakeChildAuthorizer() *fakeChildAuthorizer {
-	return &fakeChildAuthorizer{
-		decisions: make(map[string]service.ChildAccessDecision),
-	}
-}
-
-func (f *fakeChildAuthorizer) allow(parent, child string) {
-	f.decisions[parent+":"+child] = service.ChildAccessAllowed
-}
-
-func (f *fakeChildAuthorizer) deny(parent, child string) {
-	f.decisions[parent+":"+child] = service.ChildAccessDenied
-}
-
-func (f *fakeChildAuthorizer) unknown(parent, child string) {
-	f.decisions[parent+":"+child] = service.ChildAccessUnknown
-}
-
-func (f *fakeChildAuthorizer) AuthorizeChildAccess(
-	parentWorkitemID, targetWorkitemID string,
-) service.ChildAccessDecision {
-	key := parentWorkitemID + ":" + targetWorkitemID
-	if d, ok := f.decisions[key]; ok {
-		return d
-	}
-	return service.ChildAccessUnknown
-}
-
 func setupArchivistProxyWithAuth(
-	t *testing.T, auth service.ChildAuthorizer,
+	t *testing.T, auth *service.SidecarServer,
 ) (*ArchivistProxy, *captureArchivistServer) {
 	t.Helper()
 
@@ -345,8 +312,9 @@ func TestArchivistProxy_ListArtefacts_ForwardsTargetWorkitemID(t *testing.T) {
 // --- GetArtefact authorization ---
 
 func TestArchivistProxy_GetArtefact_CrossWorkitem_Allowed(t *testing.T) {
-	auth := newFakeChildAuthorizer()
-	auth.allow(parentWIStr, childWIStr)
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	auth.TrackChild(parentWIStr, childWIStr)
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -370,8 +338,9 @@ func TestArchivistProxy_GetArtefact_CrossWorkitem_Allowed(t *testing.T) {
 }
 
 func TestArchivistProxy_GetArtefact_CrossWorkitem_Denied(t *testing.T) {
-	auth := newFakeChildAuthorizer()
-	auth.deny(parentWIStr, "rogue-wi")
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	auth.TrackChild(parentWIStr, "other-child") // Session has children, but not "rogue-wi"
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -392,8 +361,9 @@ func TestArchivistProxy_GetArtefact_CrossWorkitem_Denied(t *testing.T) {
 }
 
 func TestArchivistProxy_GetArtefact_CrossWorkitem_Unknown_PassesThrough(t *testing.T) {
-	auth := newFakeChildAuthorizer()
-	auth.unknown(parentWIStr, childWIStr)
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	// No children added — session exists but has no children → ChildAccessUnknown.
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -416,7 +386,7 @@ func TestArchivistProxy_GetArtefact_CrossWorkitem_Unknown_PassesThrough(t *testi
 }
 
 func TestArchivistProxy_GetArtefact_NoTargetWorkitem_NoAuth(t *testing.T) {
-	auth := newFakeChildAuthorizer()
+	auth := service.NewSidecarServer("ns", "node", "")
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -450,8 +420,9 @@ func TestArchivistProxy_GetArtefact_NilAuth_PassesThrough(t *testing.T) {
 // --- ListArtefacts authorization ---
 
 func TestArchivistProxy_ListArtefacts_CrossWorkitem_Allowed(t *testing.T) {
-	auth := newFakeChildAuthorizer()
-	auth.allow(parentWIStr, childWIStr)
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	auth.TrackChild(parentWIStr, childWIStr)
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -473,8 +444,9 @@ func TestArchivistProxy_ListArtefacts_CrossWorkitem_Allowed(t *testing.T) {
 }
 
 func TestArchivistProxy_ListArtefacts_CrossWorkitem_Denied(t *testing.T) {
-	auth := newFakeChildAuthorizer()
-	auth.deny(parentWIStr, "rogue-wi")
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	auth.TrackChild(parentWIStr, "other-child")
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -496,7 +468,7 @@ func TestArchivistProxy_ListArtefacts_CrossWorkitem_Denied(t *testing.T) {
 // --- StoreArtefact authorization ---
 
 func TestArchivistProxy_StoreArtefact_SameWorkitem_NoAuth(t *testing.T) {
-	auth := newFakeChildAuthorizer()
+	auth := service.NewSidecarServer("ns", "node", "")
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", "wi-1")
@@ -514,8 +486,9 @@ func TestArchivistProxy_StoreArtefact_SameWorkitem_NoAuth(t *testing.T) {
 }
 
 func TestArchivistProxy_StoreArtefact_ChildWorkitem_Allowed(t *testing.T) {
-	auth := newFakeChildAuthorizer()
-	auth.allow(parentWIStr, childWIStr)
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	auth.TrackChild(parentWIStr, childWIStr)
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -536,8 +509,9 @@ func TestArchivistProxy_StoreArtefact_ChildWorkitem_Allowed(t *testing.T) {
 }
 
 func TestArchivistProxy_StoreArtefact_ChildWorkitem_Denied(t *testing.T) {
-	auth := newFakeChildAuthorizer()
-	auth.deny(parentWIStr, "rogue-wi")
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	auth.TrackChild(parentWIStr, "other-child")
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)
@@ -559,7 +533,9 @@ func TestArchivistProxy_StoreArtefact_ChildWorkitem_Denied(t *testing.T) {
 }
 
 func TestArchivistProxy_StoreArtefact_ChildWorkitem_Unknown_Denied(t *testing.T) {
-	auth := newFakeChildAuthorizer()
+	auth := service.NewSidecarServer("ns", "node", "")
+	auth.InjectSessionForTest(parentWIStr, "node")
+	// No children — ChildAccessUnknown but StoreArtefact treats Unknown as Denied for writes.
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
 	md := metadata.Pairs("x-flow-workitem-id", parentWIStr)

@@ -118,13 +118,6 @@ type SessionIdentity struct {
 	NodeID     string
 }
 
-// ChildTracker records child Workitem IDs created during a session.
-// The OperatorProxy calls TrackChild after a successful CreateChildWorkitem
-// to register the child in the session's local cache.
-type ChildTracker interface {
-	TrackChild(parentWorkitemID, childWorkitemID string)
-}
-
 // ChildAccessDecision represents the outcome of a cross-Workitem
 // authorisation check by the Sidecar.
 type ChildAccessDecision int
@@ -141,22 +134,6 @@ const (
 	ChildAccessUnknown
 )
 
-// ChildAuthorizer validates whether a target Workitem ID is a known child
-// of the given parent session. Used by the ArchivistProxy to authorise
-// cross-Workitem operations without an Operator round-trip.
-type ChildAuthorizer interface {
-	// AuthorizeChildAccess checks if the target is an authorised child of
-	// the parent session.
-	//
-	// Returns:
-	//   - ChildAccessAllowed: target is a known child, access permitted
-	//   - ChildAccessDenied: session has children but target is not one of
-	//     them, access should be blocked
-	//   - ChildAccessUnknown: no session found or session has no children,
-	//     the Sidecar cannot make a determination (defer to Archivist)
-	AuthorizeChildAccess(parentWorkitemID, targetWorkitemID string) ChildAccessDecision
-}
-
 // TrackChild records a child Workitem ID in the session for the given
 // parent. No-op if no session exists for the parent.
 func (s *SidecarServer) TrackChild(parentWorkitemID, childWorkitemID string) {
@@ -167,8 +144,8 @@ func (s *SidecarServer) TrackChild(parentWorkitemID, childWorkitemID string) {
 	sess.addChild(childWorkitemID)
 }
 
-// AuthorizeChildAccess implements ChildAuthorizer. It checks the session's
-// local child cache to determine if the target is an authorised child.
+// AuthorizeChildAccess checks the session's local child cache to determine
+// if the target is an authorised child.
 func (s *SidecarServer) AuthorizeChildAccess(parentWorkitemID, targetWorkitemID string) ChildAccessDecision {
 	sess := s.getSession(parentWorkitemID)
 	if sess == nil {
@@ -201,6 +178,23 @@ func (s *SidecarServer) LookupSession(workitemID string) *SessionIdentity {
 		WorkitemID: sess.workitemID,
 		NodeID:     sess.nodeID,
 	}
+}
+
+// InjectSessionForTest creates a session for the given workitem ID
+// without going through the full AssignWork RPC flow. This is exposed
+// for testing so that proxy-package tests can exercise TrackChild
+// and AuthorizeChildAccess.
+//
+// ponytail: exists because proxy tests are in a different package and
+// cannot access unexported session fields. Should be replaced if
+// AssignWork ever exposes session creation separately.
+func (s *SidecarServer) InjectSessionForTest(workitemID, nodeID string) {
+	ctx := context.Background()
+	sess, _ := newSession(ctx, workitemID, nodeID, s.timeout())
+	sess.stop() // Prevent timer goroutine from leaking.
+	s.mu.Lock()
+	s.sessions[workitemID] = sess
+	s.mu.Unlock()
 }
 
 // Heartbeat resets the Sidecar's inactivity timer for the specified
