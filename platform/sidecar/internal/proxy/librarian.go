@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/sidecar/internal/buffer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -18,21 +19,21 @@ const (
 )
 
 // LibrarianProxy implements flowv1.LibrarianServiceServer by forwarding
-// calls to the real Librarian gRPC endpoint. For Cite, it also emits a
-// friction event to the Event Bus via the EventBusProxy.
+// calls to the real Librarian gRPC endpoint. For Cite, it also submits a
+// friction event to the TelemetryBuffer.
 type LibrarianProxy struct {
 	flowv1.UnimplementedLibrarianServiceServer
-	client        flowv1.LibrarianServiceClient
-	eventBusProxy *EventBusProxy
-	conn          *grpc.ClientConn
-	magnitude     float64
+	client          flowv1.LibrarianServiceClient
+	telemetryBuffer *buffer.TelemetryBuffer
+	conn            *grpc.ClientConn
+	magnitude       float64
 }
 
 // NewLibrarianProxy dials the Librarian gRPC endpoint and returns a proxy
 // handler ready to be registered on the Sidecar's gRPC server. The
-// eventBusProxy is used to publish friction events on Cite calls; if nil,
+// telemetryBuffer is used to submit friction events on Cite calls; if nil,
 // friction emission is skipped.
-func NewLibrarianProxy(librarianAddr string, eventBusProxy *EventBusProxy) (*LibrarianProxy, error) {
+func NewLibrarianProxy(librarianAddr string, telemetryBuffer *buffer.TelemetryBuffer) (*LibrarianProxy, error) {
 	conn, err := grpc.NewClient(
 		librarianAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -44,10 +45,10 @@ func NewLibrarianProxy(librarianAddr string, eventBusProxy *EventBusProxy) (*Lib
 	}
 
 	return &LibrarianProxy{
-		client:        flowv1.NewLibrarianServiceClient(conn),
-		eventBusProxy: eventBusProxy,
-		conn:          conn,
-		magnitude:     citationMagnitude(),
+		client:          flowv1.NewLibrarianServiceClient(conn),
+		telemetryBuffer: telemetryBuffer,
+		conn:            conn,
+		magnitude:       citationMagnitude(),
 	}, nil
 }
 
@@ -79,8 +80,8 @@ func (p *LibrarianProxy) QueryLaws(
 	return p.client.QueryLaws(ctx, req)
 }
 
-// Cite forwards to the Librarian and then emits a friction event to the
-// Event Bus via the EventBusProxy with fixed citation magnitude.
+// Cite forwards to the Librarian and then submits a friction event to the
+// TelemetryBuffer with fixed citation magnitude.
 func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.CiteResponse, error) {
 	// Forward to Librarian.
 	resp, err := p.client.Cite(ctx, req)
@@ -88,16 +89,19 @@ func (p *LibrarianProxy) Cite(ctx context.Context, req *flowv1.CiteRequest) (*fl
 		return nil, err
 	}
 
-	// Emit friction to Event Bus.
-	if p.eventBusProxy != nil {
+	// Submit friction to TelemetryBuffer.
+	if p.telemetryBuffer != nil {
 		namespace, workitemID, nodeID := extractIdentityFromMetadata(ctx)
 
-		p.eventBusProxy.PublishFriction(
-			namespace, workitemID, nodeID,
-			req.GetLawIds(),
-			p.magnitude,
-		)
-		slog.Info("Cite: friction emitted",
+		p.telemetryBuffer.Submit(buffer.Event{
+			Priority:   buffer.PriorityHigh,
+			Namespace:  namespace,
+			WorkitemID: workitemID,
+			NodeID:     nodeID,
+			LawIDs:     req.GetLawIds(),
+			Magnitude:  p.magnitude,
+		})
+		slog.Info("Cite: friction submitted",
 			"law_ids", req.GetLawIds(),
 			"magnitude", p.magnitude,
 		)

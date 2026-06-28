@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"testing"
-	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -80,23 +79,9 @@ func (s *captureLibrarianServer) SearchSimilarLaws(
 	}, nil
 }
 
-// captureEventBusForLibrarian captures Event Bus Publish calls for assertions.
-type captureEventBusForLibrarian struct {
-	flowv1.UnimplementedFlowEventBusServiceServer
-	lastPublishReq *flowv1.PublishRequest
-}
-
-func (s *captureEventBusForLibrarian) Publish(
-	_ context.Context, req *flowv1.PublishRequest,
-) (*flowv1.PublishResponse, error) {
-	s.lastPublishReq = req
-	return &flowv1.PublishResponse{Acknowledged: true, Sequence: 1}, nil
-}
-
 type librarianTestEnv struct {
 	proxy        *LibrarianProxy
 	librarianSpy *captureLibrarianServer
-	eventBusSpy  *captureEventBusForLibrarian
 }
 
 func setupLibrarianProxy(t *testing.T) *librarianTestEnv {
@@ -107,28 +92,20 @@ func setupLibrarianProxy(t *testing.T) *librarianTestEnv {
 		flowv1.RegisterLibrarianServiceServer(s, libSpy)
 	})
 
-	busSpy := &captureEventBusForLibrarian{}
-	busConn := dialBufconn(t, func(s *grpc.Server) {
-		flowv1.RegisterFlowEventBusServiceServer(s, busSpy)
-	})
-
-	ebProxy := NewEventBusProxyFromClient(flowv1.NewFlowEventBusServiceClient(busConn))
-
 	p := &LibrarianProxy{
-		client:        flowv1.NewLibrarianServiceClient(libConn),
-		eventBusProxy: ebProxy,
-		conn:          libConn,
-		magnitude:     1,
+		client:          flowv1.NewLibrarianServiceClient(libConn),
+		telemetryBuffer: nil,
+		conn:            libConn,
+		magnitude:       1,
 	}
 
 	return &librarianTestEnv{
 		proxy:        p,
 		librarianSpy: libSpy,
-		eventBusSpy:  busSpy,
 	}
 }
 
-func TestLibrarianProxy_Cite_ForwardsAndEmitsFriction(t *testing.T) {
+func TestLibrarianProxy_Cite_ForwardsToLibrarian(t *testing.T) {
 	env := setupLibrarianProxy(t)
 
 	md := metadata.Pairs(
@@ -154,42 +131,6 @@ func TestLibrarianProxy_Cite_ForwardsAndEmitsFriction(t *testing.T) {
 	}
 	if len(env.librarianSpy.lastCiteReq.GetLawIds()) != 2 {
 		t.Fatalf("expected 2 law_ids forwarded, got %d", len(env.librarianSpy.lastCiteReq.GetLawIds()))
-	}
-
-	// Verify friction was published to Event Bus (async — wait briefly).
-	time.Sleep(100 * time.Millisecond)
-	if env.eventBusSpy.lastPublishReq == nil {
-		t.Fatal("Friction was not published to Event Bus")
-	}
-	evt := env.eventBusSpy.lastPublishReq.GetEvent()
-	if evt.GetEventType() != "friction" {
-		t.Fatalf("expected event_type=friction, got %q", evt.GetEventType())
-	}
-	if evt.GetFlowNamespace() != "ns-test" {
-		t.Fatalf("expected flow_namespace=ns-test, got %q", evt.GetFlowNamespace())
-	}
-	if evt.GetWorkitemId() != "wi-test" {
-		t.Fatalf("expected workitem_id=wi-test, got %q", evt.GetWorkitemId())
-	}
-	if evt.GetNodeId() != "node-test" {
-		t.Fatalf("expected node_id=node-test, got %q", evt.GetNodeId())
-	}
-	// law_ids are now in labels, not CSV attributes.
-	labels := evt.GetLabels()
-	if len(labels) != 2 {
-		t.Fatalf("expected 2 law_id labels, got %d", len(labels))
-	}
-	lawIDs := make(map[string]bool)
-	for _, l := range labels {
-		if l.GetKey() == "law_id" {
-			lawIDs[l.GetValue()] = true
-		}
-	}
-	if !lawIDs["law-1"] || !lawIDs["law-2"] {
-		t.Fatalf("expected law_id labels law-1 and law-2, got %v", lawIDs)
-	}
-	if evt.GetAttributes()["magnitude"] != "1" {
-		t.Fatalf("expected magnitude=1, got %q", evt.GetAttributes()["magnitude"])
 	}
 }
 
