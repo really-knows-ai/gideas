@@ -219,7 +219,7 @@ func (r *ServiceReconciler) labelsForService(svc ServiceObject) map[string]strin
 	return map[string]string{
 		"app.kubernetes.io/name":       r.AppLabelName,
 		"app.kubernetes.io/instance":   svc.GetName(),
-		"app.kubernetes.io/managed-by": "foundry-operator",
+		"app.kubernetes.io/managed-by": managedByOperator,
 		r.LabelKey:                     svc.GetName(),
 	}
 }

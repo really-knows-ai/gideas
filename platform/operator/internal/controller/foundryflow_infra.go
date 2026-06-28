@@ -470,12 +470,14 @@ func (r *FoundryFlowReconciler) reconcileService(
 	return nil
 }
 
+const managedByOperator = "foundry-operator"
+
 // infraLabels returns standard labels for control-plane infrastructure resources.
 func infraLabels(name string) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       name,
 		"app.kubernetes.io/part-of":    "foundry-flow",
 		"app.kubernetes.io/component":  "control-plane",
-		"app.kubernetes.io/managed-by": "foundry-operator",
+		"app.kubernetes.io/managed-by": managedByOperator,
 	}
 }

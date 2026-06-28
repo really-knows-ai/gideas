@@ -565,7 +565,7 @@ func (r *FoundryNodeReconciler) labelsForNode(node *flowv1.FoundryNode) map[stri
 	return map[string]string{
 		"app.kubernetes.io/name":       "foundrynode",
 		"app.kubernetes.io/instance":   node.Name,
-		"app.kubernetes.io/managed-by": "foundry-operator",
+		"app.kubernetes.io/managed-by": managedByOperator,
 		"flow.gideas.io/node":          node.Name,
 		"flow.gideas.io/node-name":     node.Name,
 	}
