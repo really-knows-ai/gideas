@@ -401,7 +401,7 @@ func (s *SidecarServer) AddFriction(
 		return nil, err
 	}
 
-	_, workitemID, nodeID := extractIdentityFromMD(ctx)
+	_, workitemID, nodeID := ExtractIdentityFromMD(ctx)
 
 	slog.Info("AddFriction: submitting to telemetry buffer",
 		"namespace", s.Namespace,
@@ -433,7 +433,7 @@ func (s *SidecarServer) RecordTelemetry(
 			"telemetry buffer not configured — Event Bus not available")
 	}
 
-	_, workitemID, nodeID := extractIdentityFromMD(ctx)
+	_, workitemID, nodeID := ExtractIdentityFromMD(ctx)
 
 	slog.Info("RecordTelemetry: submitting to telemetry buffer",
 		"namespace", s.Namespace,
@@ -482,23 +482,21 @@ func checkCapability(ctx context.Context, required string) error {
 		"CAPABILITY_DENIED: missing required capability %q", required)
 }
 
-// extractIdentityFromMD extracts Sidecar-injected identity from incoming
+// ExtractIdentityFromMD extracts Sidecar-injected identity from incoming
 // gRPC metadata. The namespace field reads x-flow-namespace; workitem_id
 // and node_id are unchanged.
-//
-//nolint:unparam // namespace reserved for future callers
-func extractIdentityFromMD(ctx context.Context) (namespace, workitemID, nodeID string) {
+func ExtractIdentityFromMD(ctx context.Context) (namespace, workitemID, nodeID string) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return
 	}
-	if vals := md.Get("x-flow-namespace"); len(vals) > 0 {
+	if vals := md.Get(MetadataKeyNamespace); len(vals) > 0 {
 		namespace = vals[0]
 	}
-	if vals := md.Get("x-flow-workitem-id"); len(vals) > 0 {
+	if vals := md.Get(MetadataKeyWorkitemID); len(vals) > 0 {
 		workitemID = vals[0]
 	}
-	if vals := md.Get("x-flow-node-id"); len(vals) > 0 {
+	if vals := md.Get(MetadataKeyNodeID); len(vals) > 0 {
 		nodeID = vals[0]
 	}
 	return

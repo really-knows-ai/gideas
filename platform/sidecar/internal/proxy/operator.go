@@ -131,7 +131,7 @@ func (p *OperatorProxy) CreateChildWorkitem(
 	// Track the child in the session so the Sidecar can authorise
 	// cross-Workitem writes/reads without an Operator round-trip.
 	if p.childTracker != nil {
-		parentWorkitemID := extractWorkitemIDFromMD(ctx)
+		_, parentWorkitemID, _ := service.ExtractIdentityFromMD(ctx)
 		if parentWorkitemID != "" && resp.GetChildWorkitemId() != "" {
 			p.childTracker.TrackChild(parentWorkitemID, resp.GetChildWorkitemId())
 			slog.Info("Tracked child Workitem in session",
@@ -184,20 +184,6 @@ func (p *OperatorProxy) ListSuspendedWorkitems(
 		"condition_contains", req.GetConditionContains(),
 	)
 	return p.client.ListSuspendedWorkitems(ctx, req)
-}
-
-// extractWorkitemIDFromMD reads the workitem ID from incoming gRPC metadata.
-// Returns empty string if not present.
-func extractWorkitemIDFromMD(ctx context.Context) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	vals := md.Get("x-flow-workitem-id")
-	if len(vals) == 0 {
-		return ""
-	}
-	return vals[0]
 }
 
 // metadataUnaryInterceptor copies incoming gRPC metadata to the outgoing

@@ -80,7 +80,7 @@ func (p *ArchivistProxy) authorizeTargetWorkitem(ctx context.Context, targetWork
 		return nil
 	}
 
-	callerWorkitemID := extractWorkitemIDFromMD(ctx)
+	_, callerWorkitemID, _ := service.ExtractIdentityFromMD(ctx)
 	if callerWorkitemID == "" {
 		return nil
 	}
@@ -118,7 +118,7 @@ func (p *ArchivistProxy) authorizeWorkitemWrite(ctx context.Context, targetWorki
 		return nil
 	}
 
-	callerWorkitemID := extractWorkitemIDFromMD(ctx)
+	_, callerWorkitemID, _ := service.ExtractIdentityFromMD(ctx)
 	if callerWorkitemID == "" || callerWorkitemID == targetWorkitemID {
 		return nil // Same workitem or no session identity -- normal case.
 	}
