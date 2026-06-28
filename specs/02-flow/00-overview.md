@@ -75,21 +75,13 @@ sequenceDiagram
 
 ## Reference Arrangement and Topology Freedom
 
-The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement that Flow Architects adapt by adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations while preserving platform invariants.
-
-The runtime enforces behaviour through configuration and capabilities, not node names. [Forge](../01-concepts/02-foundry-cycle.md#forge-creator), [Sort](../01-concepts/02-foundry-cycle.md#sort-gate), and [Refine](../01-concepts/02-foundry-cycle.md#refine-refiner) describe standard responsibilities in the reference arrangement, but any deployment can map those responsibilities differently.
-
-The [Judiciary](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem) is the exception: it is a standard runtime subsystem present in every Flow, comprising a lifecycle node (Facilitator), orchestration nodes (Arbiter, Tribunal), deliberation nodes (Juror), watcher nodes (Friction Watcher, TTL Watcher, petition-outcome-watcher), a legislative inner cycle (the Clerk cycle using Codification, Rule Router, and law-applicator nodes), and generic HITL nodes for human review. The [Embassy](./06-cross-flow.md) is the standard cross-flow boundary node in every Flow. The [Federation service](./08-federation.md) manages inter-flow trust, membership, and published-law distribution.
+The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement. The runtime enforces behaviour through configuration and capabilities, not node names. The [Judiciary](../01-concepts/02-foundry-cycle.md#the-judiciary--standard-subsystem) is a standard subsystem present in every Flow; see the Foundry Cycle document for its composition.
 
 ## Governance Runtime Mechanics
 
 [Law](../01-concepts/03-data-model.md#laws) and [stamp](../01-concepts/03-data-model.md#passports-and-stamps) behaviour is enforced by the platform through capabilities and configuration:
 
-- Law writing is capability-gated. A node without a `WRITE:law/tierN` capability grant cannot write laws regardless of its role or name.
-- Laws are single objects with one goal and one-or-more representations; any mutation creates a new whole-law version.
-- Stamp names are named governance checkpoints chosen by the Flow Architect; the platform attaches no built-in semantics to names.
 - Stamp-provider routing is configuration-discovered. A node granted `READ:flow` capability can query the topology to discover stamp-to-node mappings at runtime.
-- `approval` is a naming convention used by the [reference arrangement](../01-concepts/02-foundry-cycle.md), not a privileged system stamp.
 - Judiciary authority is bounded: resolve conflicts involving Tier 1-2 laws by minting Tier 2 Rulings (via Clerk cycle), propose at Tier 3 (via HITL review), petition at Tier 4-5 (via Embassy `law-petition` export).
 
 In the [reference arrangement](../01-concepts/02-foundry-cycle.md), the standard [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) node uses these platform mechanisms to implement gate routing: unresolved non-deadlocked feedback routes toward refinement, deadlocked feedback toward the Arbiter, missing stamps toward the configured provider, and fully satisfied governance toward exit completion. Deadlocked feedback is unresolved by state, so gate implementations must treat deadlock as a special-case branch when evaluating unresolved feedback predicates.
@@ -110,13 +102,7 @@ When a Workitem is handed to the [Embassy](./06-cross-flow.md) for cross-flow tr
 
 ## Data Ownership Boundaries
 
-The runtime splits control-plane state from provenance state:
-
-- Workitem CRD stores assignment state and routing outcomes. Artefacts are associated with Workitems in the Archivist.
-- [Archivist](./04-system-services.md#archivist) stores artefact version history, passport stamps, and feedback in an embedded relational database (SQLite).
-- Archivist stores raw artefact content bytes in a blob store (typically fast PVC-backed storage, optionally cloud object storage) keyed by content hash.
-- Nodes access artefact and governance state through Sidecar and SDK surfaces; nodes do not call system services directly.
-- Flow Support Services are accessed through Sidecar mediation when consumed by nodes, extending the same trust boundary to pluggable capabilities.
+The runtime splits control-plane state from provenance state. [Artefacts](../01-concepts/03-data-model.md#artefacts) are associated with Workitems in the [Archivist](./04-system-services.md#archivist), which stores artefact version history, passport stamps, feedback in SQLite, and raw content bytes in a blob store keyed by content hash. Nodes access artefact and governance state through Sidecar and SDK surfaces, including Flow Support Services consumed through the same Sidecar trust boundary.
 
 This split keeps Workitems small and watchable while retaining full provenance depth.
 
