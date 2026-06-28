@@ -6,7 +6,6 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // FrictionLedgerProxy implements flowv1.FrictionLedgerServiceServer by
@@ -22,12 +21,7 @@ type FrictionLedgerProxy struct {
 // NewFrictionLedgerProxy dials the Friction Ledger gRPC endpoint and returns
 // a proxy handler ready to be registered on the Sidecar's gRPC server.
 func NewFrictionLedgerProxy(frictionLedgerAddr string) (*FrictionLedgerProxy, error) {
-	conn, err := grpc.NewClient(
-		frictionLedgerAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
-		grpc.WithStreamInterceptor(metadataStreamInterceptor),
-	)
+	conn, err := dialService(frictionLedgerAddr)
 	if err != nil {
 		return nil, err
 	}

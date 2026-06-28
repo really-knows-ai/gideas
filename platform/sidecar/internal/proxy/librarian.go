@@ -9,7 +9,6 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/sidecar/internal/buffer"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -34,12 +33,7 @@ type LibrarianProxy struct {
 // telemetryBuffer is used to submit friction events on Cite calls; if nil,
 // friction emission is skipped.
 func NewLibrarianProxy(librarianAddr string, telemetryBuffer *buffer.TelemetryBuffer) (*LibrarianProxy, error) {
-	conn, err := grpc.NewClient(
-		librarianAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(metadataUnaryInterceptor),
-		grpc.WithStreamInterceptor(metadataStreamInterceptor),
-	)
+	conn, err := dialService(librarianAddr)
 	if err != nil {
 		return nil, err
 	}
