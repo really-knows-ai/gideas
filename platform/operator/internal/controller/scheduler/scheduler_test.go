@@ -420,16 +420,6 @@ func TestThrashGuard_NilWorkitemSkipsCheck(t *testing.T) {
 // Exit contract validation tests
 // ---------------------------------------------------------------------------
 
-// mockQuerier implements ArtefactQuerier for testing.
-type mockQuerier struct {
-	states []ArtefactState
-	err    error
-}
-
-func (m *mockQuerier) QueryArtefactState(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
-	return m.states, m.err
-}
-
 func TestExitContract_Satisfied(t *testing.T) {
 	node := flowv1.FoundryNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "exit-node", Namespace: "default"},
@@ -439,10 +429,10 @@ func TestExitContract_Satisfied(t *testing.T) {
 		},
 	}
 	sched := newTestScheduler(node)
-	sched.Querier = &mockQuerier{
-		states: []ArtefactState{
+	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
+		return []ArtefactState{
 			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"linter", "review", "approval"}},
-		},
+		}, nil
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
@@ -472,10 +462,10 @@ func TestExitContract_MissingStamp(t *testing.T) {
 		},
 	}
 	sched := newTestScheduler(node)
-	sched.Querier = &mockQuerier{
-		states: []ArtefactState{
+	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
+		return []ArtefactState{
 			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"linter"}},
-		},
+		}, nil
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
@@ -503,8 +493,8 @@ func TestExitContract_MissingArtefact(t *testing.T) {
 		},
 	}
 	sched := newTestScheduler(node)
-	sched.Querier = &mockQuerier{
-		states: []ArtefactState{}, // No artefacts returned.
+	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
+		return []ArtefactState{}, nil // No artefacts returned.
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
@@ -532,11 +522,11 @@ func TestExitContract_MultipleArtefacts_AllMustSatisfy(t *testing.T) {
 		},
 	}
 	sched := newTestScheduler(node)
-	sched.Querier = &mockQuerier{
-		states: []ArtefactState{
+	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
+		return []ArtefactState{
 			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"linter", "review"}},
 			{ArtefactID: "art-2", GovernedArtefact: "haiku", StampNames: []string{"linter"}}, // Missing "review".
-		},
+		}, nil
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
@@ -564,7 +554,9 @@ func TestExitContract_EmptyContractPasses(t *testing.T) {
 		},
 	}
 	sched := newTestScheduler(node)
-	sched.Querier = &mockQuerier{states: nil}
+	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
+		return nil, nil
+	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
 		"simple-exit": {}, // Empty contract — no requirements.
@@ -593,7 +585,9 @@ func TestExitContract_ContractNotFoundOnFlow(t *testing.T) {
 		},
 	}
 	sched := newTestScheduler(node)
-	sched.Querier = &mockQuerier{states: nil}
+	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
+		return nil, nil
+	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
 		"standard-exit": {"haiku": {"linter"}}, // "missing-contract" not present.

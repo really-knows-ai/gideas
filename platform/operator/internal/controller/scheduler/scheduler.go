@@ -26,15 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ArtefactQuerier queries the Archivist for artefact state.
-// The Operator uses this to validate exit contracts against current
-// artefact presence and stamp state.
-type ArtefactQuerier interface {
-	// QueryArtefactState returns artefact presence and stamp state for the
-	// given workitem, filtered by governed artefact names.
-	QueryArtefactState(ctx context.Context, workitemID string, governedArtefacts []string) ([]ArtefactState, error)
-}
-
 // ArtefactState represents a single artefact's state for contract validation.
 type ArtefactState struct {
 	ArtefactID       string
@@ -78,7 +69,9 @@ type Result struct {
 type Scheduler struct {
 	Client    client.Client
 	Namespace string
-	Querier   ArtefactQuerier
+	// Querier, if set, queries artefact state for contract validation.
+	// Signature: (ctx, workitemID, governedNames) -> (states, error).
+	Querier func(ctx context.Context, workitemID string, governedArtefacts []string) ([]ArtefactState, error)
 }
 
 // New returns a Scheduler wired to the given Kubernetes client and namespace.
@@ -340,7 +333,7 @@ func (s *Scheduler) validateContract(ctx context.Context, workitemID string, con
 	governedNames := slices.Collect(maps.Keys(contract))
 
 	// Query the Archivist for artefact state.
-	states, err := s.Querier.QueryArtefactState(ctx, workitemID, governedNames)
+	states, err := s.Querier(ctx, workitemID, governedNames)
 	if err != nil {
 		return fmt.Errorf("failed to query artefact state: %w", err)
 	}
