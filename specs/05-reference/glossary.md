@@ -10,10 +10,6 @@ A Judiciary orchestration node that resolves deadlocked feedback disputes. Recei
 
 The system service that manages artefact lifecycle data — version history, passport stamps, and feedback in an embedded relational database (SQLite in the reference implementation); raw content bytes in a content-addressed blob store. The single source of truth for all artefact provenance. Detail: [System Services](../02-flow/04-system-services.md#archivist).
 
-### Assay
-
-**Superseded.** The former judicial node present in every Flow. Replaced by the [Judiciary](#judiciary) subsystem comprising orchestration nodes (Arbiter, Tribunal), deliberation nodes ([Juror](#juror)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher), [petition-outcome-watcher](#petition-outcome-watcher)), and legislative inner cycle nodes ([Clerk cycle](#clerk-cycle), Codification nodes, [Rule Router](#rule-router), [law-applicator](#law-applicator), [HITL node](#hitl-node), [Facilitator](#facilitator)). Cross-flow transfer is handled separately by the [Embassy](#embassy). See [Judiciary](#judiciary).
-
 ### assignment
 
 The binding of a single Workitem to a single node for processing. A Workitem has exactly one assignee at a time. The Sidecar establishes an assignment session and all SDK calls are automatically scoped to it. Detail: [Operator](../02-flow/01-operator.md), [SDK Core](../04-sdk/01-sdk-core.md).
@@ -370,10 +366,6 @@ The process by which imported artefacts and foreign stamps gain local governance
 
 A Flow that shares membership in at least one federation-defined state with another Flow. Sibling relationships derive from shared state membership and federation policy, not from a dedicated runtime. Federation-member exchange between sibling Flows uses the federation trust root; Treaties are only needed for non-federation exchange.
 
-### State Root
-
-**Superseded.** Replaced by the federation trust root. In the current model, the [Federation](#federation) service holds the root CA and issues intermediate CA certificates to member Flows.
-
 ### treaty
 
 A directed trust policy enabling collaboration between Flows that do not share federation membership. Declared via a [Treaty CRD](./crds.md#treaty), each Treaty represents one direction of trust and may constrain which import types the remote Flow may use. Two-way exchange requires two Treaty CRDs. Detail: [Governance](../01-concepts/04-governance.md#higher-authority-escalation), [Cross-Flow](../02-flow/06-cross-flow.md).
@@ -406,40 +398,9 @@ A FoundryNode CRD field (`exit`) that references a named exit contract on the Fo
 
 A named set of governed-artefact requirements that a Workitem must satisfy for completion. Defined on the FoundryFlow CRD (`exitContracts`). Enforced by the Operator when an exit node calls `complete()`. When the Embassy performs cross-flow export, only governed artefacts listed in its bound exit contract are exported. Detail: [Data Model](../01-concepts/03-data-model.md#entry-and-exit-contracts), [Configuration](../02-flow/05-configuration.md).
 
-### import node
-
-**Superseded.** The former single-node cross-flow intake field on the FoundryFlow CRD. Replaced by `crossFlow.importTypes`, which maps each published import type to an entry-bound target node and optional foreign-stamp requirements.
-
----
-
-## Superseded Terms
-
-These legacy terms are explicitly out of scope in v1. They must not appear in spec documents except in this superseded-term listing.
-
-| Superseded Term | Replacement | Notes |
-|-----------------|-------------|-------|
-| `Assay` | Judiciary (Arbiter, Tribunal, Embassy, Juror, Facilitator, Clerk cycle, Codification nodes, Rule Router, law-applicator, HITL node, Friction Watcher, TTL Watcher) | Single judicial node decomposed into orchestration, deliberation, watcher, and legislative inner-cycle nodes. |
-| `Jury` (service) | Juror nodes + orchestrator-internal tally | Monolithic deliberation service replaced by Juror fan-out with Arbiter/Tribunal tallying verdicts internally. |
-| `Clerk` (service) | Clerk cycle + Codification nodes + law-applicator | Monolithic law drafting service replaced by node-based petition drafting, codification, review, and application. |
-| `Deliberate()` RPC | Juror fan-out via child Workitems | gRPC deliberation call replaced by externalised Workitem transitions. |
-| `DraftLaw()` RPC | Clerk-cycle petition drafting via Workitems | gRPC law drafting call replaced by node-based Clerk-cycle execution. |
-| `CreateHearingWorkitem` RPC | Friction Watcher / TTL Watcher nodes using generic `CreateWorkitem` | Judiciary-specific Operator RPC replaced by entry-bound watcher nodes. |
-| `WorkitemType` | Entry/exit contracts | Flow admission is not type-gated. |
-| `spec.type` | Entry/exit contracts | No Workitem type discriminator exists. |
-| `spec.context` / `status.context` | Governed artefacts | No freeform context bag. All work context is represented by explicit Workitem state and governed artefacts. |
-| `entryNode` | `crossFlow.importTypes` + entry bindings | Import entry is published per import type; local admission uses entry-bound nodes. |
-| `terminalContract` / `terminalContracts` | `exitContracts` + exit bindings | Exit contracts are named on the FoundryFlow; nodes bind to them via `exit`. |
-| node `terminal` binding | `exit` binding | Nodes are exit-bound via the `exit` field, not a `terminal` flag. |
-| Law Groups (`group` field) | Single-object multi-representation law | A law is one object with a goal and multiple representations, not a group of linked CRDs. |
-| `ReviewHearing` CRD | Standard Workitems at the Tribunal | Hearings use standard Workitems with explicit artefacts and contract bindings. |
-| Reserved underscore context keys | Governed artefacts | No reserved key namespace for bag-style metadata. |
-
----
-
 ## Glossary Invariants
 
 1. Every term defined here has exactly one canonical definition.
-2. Superseded terms must not appear in normative spec prose outside this glossary.
-3. Term definitions must remain consistent with [AGENTS.md key decisions](../AGENTS.md) — when a glossary definition and a key decision conflict, the key decision governs.
-4. Cross-reference links point to the first normative detail location for each term.
-5. British spelling is used for all spec prose (`artefact`, `naturalisation`, `organisation`, `behaviour`). US spelling is reserved for literal external identifiers.
+2. Term definitions must remain consistent with [AGENTS.md key decisions](../AGENTS.md) — when a glossary definition and a key decision conflict, the key decision governs.
+3. Cross-reference links point to the first normative detail location for each term.
+4. British spelling is used for all spec prose (`artefact`, `naturalisation`, `organisation`, `behaviour`). US spelling is reserved for literal external identifiers.
