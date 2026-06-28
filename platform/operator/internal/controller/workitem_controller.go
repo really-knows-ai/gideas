@@ -77,7 +77,7 @@ type WorkitemReconciler struct {
 	// ArtefactQuerier is used by the scheduler to validate exit contracts
 	// against artefact state in the Archivist. May be nil in tests or when
 	// the Archivist is not yet available (contract validation is skipped).
-	ArtefactQuerier scheduler.ArtefactQuerier
+	ArtefactQuerier func(ctx context.Context, workitemID string, governedArtefacts []string) ([]scheduler.ArtefactState, error)
 
 	// Auditor publishes lifecycle events to the Event Bus via async submit.
 	// nil-safe: audit publishing degrades gracefully.
