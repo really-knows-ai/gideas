@@ -107,6 +107,8 @@ The SDK does not implement built-in error routing. When an SDK call fails, the h
 
 Telemetry emission failures are non-blocking. If the telemetry sink is degraded, the SDK logs a warning and continues processing. Work execution never fails because telemetry delivery failed.
 
+Capability gates are enforced by the owning service, not by the SDK or the node. The SDK does not expose Kubernetes CRD field paths, direct service addresses, or a freeform context bag. No SDK surface provides a `WorkitemType` or `spec.type` discriminator.
+
 Stable error codes and their semantics are catalogued in the [Error Catalogue](../05-reference/error-catalogue.md). Wire-level error mappings are in the [gRPC API Reference](../05-reference/grpc-api.md).
 
 ## Relationship to Reference Documents
@@ -117,17 +119,4 @@ The SDK documents define behavioural contracts and API semantics. Implementation
 - [CRD Reference](../05-reference/crds.md) — Kubernetes resource schemas, field constraints, validation rules.
 - [Error Catalogue](../05-reference/error-catalogue.md) — complete error code inventory, causes, and caller response guidance.
 - [Glossary](../05-reference/glossary.md) — canonical term definitions.
-
-## SDK Invariants
-
-1. All SDK operations are scoped to the current Workitem assignment.
-2. All node-originated runtime operations transit the Sidecar.
-3. The SDK expresses intent; authoritative state persistence belongs to runtime services.
-4. Node containers hold no Flow runtime credentials.
-5. Structured errors with stable codes are the sole failure signalling mechanism.
-6. Capability gates are enforced by the owning service, not by the SDK or the node.
-7. Telemetry failures do not block or fail work execution.
-8. The SDK does not expose Kubernetes CRD field paths or direct service addresses.
-9. `FlowSupportService` is a distinct SDK surface from the Workitem-scoped handler contract.
-10. No SDK surface provides a freeform context bag, `WorkitemType`, or `spec.type` discriminator.
-11. Cross-flow import and export are exposed through the [Cross-Flow SDK surface](./09-sdk-cross-flow.md). Node handlers see imported Workitems as normal assignments with `imported-*` attestation stamps.
+- [Cross-Flow SDK surface](./09-sdk-cross-flow.md) — cross-flow import and export. Node handlers see imported Workitems as normal assignments with `imported-*` attestation stamps.

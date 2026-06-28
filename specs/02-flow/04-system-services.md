@@ -491,28 +491,6 @@ Service outages degrade behaviour predictably:
 - Friction Ledger unavailable: friction aggregation pauses. Raw friction events accumulate in the Bus's telemetry channel log within the retention window. On Friction Ledger recovery, it replays from its last-seen sequence number. Threshold-crossing signals are delayed but not lost. `QueryFriction` calls from the Tribunal return errors; hearing evidence retrieval is blocked until recovery.
 - Support Service unavailable: operations requiring that service's capability fail closed for the requesting actor. Codification degrades gracefully — individual Codification Service failures are logged and their representations omitted; the Clerk cycle (clerk-forge) proceeds with whatever representations succeeded (prose at minimum).
 
-Fail-open behaviour is prohibited for governance integrity paths.
-
-## Service Invariants
-
-All deployments preserve these service invariants:
-
-1. Archivist is the source of truth for artefact provenance beyond raw bytes.
-2. Workitem CRD carries no artefact references. Artefact-to-Workitem associations are Archivist-owned.
-3. Laws are single objects with one goal and multiple representations under whole-law versioning.
-4. Friction-threshold hearing triggers are owned by the [Friction Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) node, which subscribes to the Friction Ledger's threshold-crossing signals on the Flow Event Bus's friction channel (via Sidecar) and creates hearing Workitems via generic `CreateWorkitem`.
-5. Review-TTL-expiry hearing triggers are owned by the [TTL Watcher](./03-nodes-external.md#the-judiciary--standard-subsystem) node, which polls the Librarian for laws exceeding their tier's review TTL and creates hearing Workitems via generic `CreateWorkitem`.
-6. Tribunal evidence retrieval includes friction data from the Friction Ledger.
-7. Hearing adjudication remains a Tribunal responsibility, not a service-local shortcut.
-8. Friction is first-class and queryable by source attribution.
-9. Backup ownership boundaries are explicit between services and cluster administration.
-10. Federation service law distribution preserves tiered supremacy, grace-period semantics, and audit continuity.
-11. Flow Support Services are optional, Flow-Architect-deployed, and do not process Workitems.
-12. Codification Services are optional; their absence degrades governance hardening to prose-only petitions.
-13. The Flow Event Bus is durable. Events are persisted to SQLite before fan-out. Retention is per-channel and operator-configurable.
-14. Audit events are published by the authoritative service, not by nodes.
-15. The Friction Ledger is the sole aggregation and query surface for friction data.
-16. The Flow Monitor is a stateless pipeline adapter. It does not persist events or serve query APIs. It may persist a lightweight replay checkpoint (last-seen sequence number per channel) to avoid delivery gaps across restarts; this is not an event store.
-17. The Workitem channel publishes lifecycle events for every Workitem phase transition. Filtering by `parent_workitem_id` enables child Workitem observability.
+Fail-open behaviour is prohibited for governance integrity paths. Audit events are published by the authoritative service, not by nodes.
 
 Node-facing implications of these services are detailed in [SDK Core](../04-sdk/01-sdk-core.md), [SDK Artefacts](../04-sdk/02-sdk-artefacts.md), [SDK Legal](../04-sdk/03-sdk-legal.md), [SDK Feedback](../04-sdk/04-sdk-feedback.md), and [SDK Telemetry](../04-sdk/06-sdk-telemetry.md).
