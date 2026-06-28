@@ -220,7 +220,7 @@ func NewAppraiserAgent(
 	// 3. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(appraiserSchema),
-		flow.WithModel(flow.NewKimiK2Ollama()),
+		flow.WithModelName("kimi-k2.5:cloud"),
 		flow.WithSystemPrompt(sysBuf.String()),
 		flow.WithQueryTemplate(queryTmpl),
 	)

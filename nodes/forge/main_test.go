@@ -10,37 +10,17 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Mock Model for forge tests
+// Test helper — creates a ForgeAgent with a custom InferFunc
 // ---------------------------------------------------------------------------
 
-type mockModel struct {
-	output *flow.InferOutput
-	err    error
-
-	capturedSystem string
-	capturedQuery  []byte
-}
-
-func (m *mockModel) Infer(
-	_ context.Context, systemPrompt string, queryPrompt []byte,
-) (*flow.InferOutput, error) {
-	m.capturedSystem = systemPrompt
-	m.capturedQuery = queryPrompt
-	return m.output, m.err
-}
-
-// ---------------------------------------------------------------------------
-// Test helper — creates a ForgeAgent with a mock model
-// ---------------------------------------------------------------------------
-
-func newTestForgeAgent(t *testing.T, mm *mockModel, cfg *forgeConfig) *ForgeAgent {
+func newTestForgeAgent(t *testing.T, inferFn flow.InferFunc, cfg *forgeConfig) *ForgeAgent {
 	t.Helper()
 	client := newSpyClient(t)
 	agent, err := NewForgeAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewForgeAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(agent.agent, mm)
+	flow.OverrideModelForTest(agent.agent, inferFn)
 	return agent
 }
 
@@ -59,8 +39,8 @@ func defaultTestConfig() *forgeConfig {
 
 func TestForgeAgent_ValidOutput(t *testing.T) {
 	cfg := defaultTestConfig()
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "autumn moonlight\na worm digs silently\ninto the chestnut"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -68,10 +48,10 @@ func TestForgeAgent_ValidOutput(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	result, err := agent.Run(context.Background(), "write a haiku about autumn", nil)
 	if err != nil {
@@ -86,8 +66,8 @@ func TestForgeAgent_ValidOutput(t *testing.T) {
 
 func TestForgeAgent_RejectsEmptyOutput(t *testing.T) {
 	cfg := defaultTestConfig()
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": ""}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -95,10 +75,10 @@ func TestForgeAgent_RejectsEmptyOutput(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err == nil {
@@ -111,8 +91,8 @@ func TestForgeAgent_RejectsEmptyOutput(t *testing.T) {
 
 func TestForgeAgent_RejectsMissingField(t *testing.T) {
 	cfg := defaultTestConfig()
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"poem": "not a haiku"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -120,10 +100,10 @@ func TestForgeAgent_RejectsMissingField(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err == nil {
@@ -133,8 +113,8 @@ func TestForgeAgent_RejectsMissingField(t *testing.T) {
 
 func TestForgeAgent_RejectsAdditionalProperties(t *testing.T) {
 	cfg := defaultTestConfig()
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku", "extra": "not allowed"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -142,10 +122,10 @@ func TestForgeAgent_RejectsAdditionalProperties(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err == nil {
@@ -165,8 +145,8 @@ func TestForgeAgent_CustomOutputField(t *testing.T) {
 		OutputField:      "document",
 	}
 
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{
 			Output: []byte(`{"document": "generated document content"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -174,10 +154,10 @@ func TestForgeAgent_CustomOutputField(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	result, err := agent.Run(context.Background(), "write a document", nil)
 	if err != nil {
@@ -194,8 +174,10 @@ func TestForgeAgent_CustomOutputField(t *testing.T) {
 
 func TestForgeAgent_PromptContainsInput(t *testing.T) {
 	cfg := defaultTestConfig()
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -203,10 +185,10 @@ func TestForgeAgent_PromptContainsInput(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write about autumn leaves", nil)
 	if err != nil {
@@ -214,15 +196,17 @@ func TestForgeAgent_PromptContainsInput(t *testing.T) {
 	}
 
 	// Verify the query prompt contains the input.
-	if !strings.Contains(string(mm.capturedQuery), "write about autumn leaves") {
-		t.Fatalf("query prompt should contain input, got: %s", mm.capturedQuery)
+	if !strings.Contains(string(capturedQuery), "write about autumn leaves") {
+		t.Fatalf("query prompt should contain input, got: %s", capturedQuery)
 	}
 }
 
 func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 	cfg := defaultTestConfig()
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -230,10 +214,10 @@ func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	laws := []*flowv1.Law{
 		{Goal: "The haiku must evoke a season"},
@@ -246,7 +230,7 @@ func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 	}
 
 	// Verify the query prompt contains the laws.
-	query := string(mm.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "The haiku must evoke a season") {
 		t.Fatalf("query prompt should contain first law, got: %s", query)
 	}
@@ -257,8 +241,10 @@ func TestForgeAgent_PromptContainsLaws(t *testing.T) {
 
 func TestForgeAgent_SystemPromptContainsOutputField(t *testing.T) {
 	cfg := defaultTestConfig()
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "test haiku"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -266,10 +252,10 @@ func TestForgeAgent_SystemPromptContainsOutputField(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err != nil {
@@ -277,8 +263,8 @@ func TestForgeAgent_SystemPromptContainsOutputField(t *testing.T) {
 	}
 
 	// Verify the system prompt references the output field.
-	if !strings.Contains(mm.capturedSystem, `"haiku"`) {
-		t.Fatalf("system prompt should contain output field name, got: %s", mm.capturedSystem)
+	if !strings.Contains(capturedSystem, `"haiku"`) {
+		t.Fatalf("system prompt should contain output field name, got: %s", capturedSystem)
 	}
 }
 
@@ -314,8 +300,10 @@ func TestForgeAgent_CustomSystemPromptOverride(t *testing.T) {
 		SystemPrompt:     customPrompt,
 	}
 
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "custom prompt haiku"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -323,10 +311,10 @@ func TestForgeAgent_CustomSystemPromptOverride(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku", nil)
 	if err != nil {
@@ -334,15 +322,15 @@ func TestForgeAgent_CustomSystemPromptOverride(t *testing.T) {
 	}
 
 	// The captured system prompt should contain the custom text, not the default.
-	if !strings.Contains(mm.capturedSystem, "You are a poet") {
-		t.Fatalf("system prompt should contain custom override, got: %s", mm.capturedSystem)
+	if !strings.Contains(capturedSystem, "You are a poet") {
+		t.Fatalf("system prompt should contain custom override, got: %s", capturedSystem)
 	}
-	if strings.Contains(mm.capturedSystem, "You are a creative writer") {
-		t.Fatalf("system prompt should NOT contain default text when overridden, got: %s", mm.capturedSystem)
+	if strings.Contains(capturedSystem, "You are a creative writer") {
+		t.Fatalf("system prompt should NOT contain default text when overridden, got: %s", capturedSystem)
 	}
 	// Template interpolation should still work — OutputField should be expanded.
-	if !strings.Contains(mm.capturedSystem, `"haiku"`) {
-		t.Fatalf("system prompt should interpolate OutputField, got: %s", mm.capturedSystem)
+	if !strings.Contains(capturedSystem, `"haiku"`) {
+		t.Fatalf("system prompt should interpolate OutputField, got: %s", capturedSystem)
 	}
 }
 
@@ -356,8 +344,10 @@ func TestForgeAgent_CustomQueryTemplateOverride(t *testing.T) {
 		QueryTemplate:    customQuery,
 	}
 
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "custom query haiku"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -365,17 +355,17 @@ func TestForgeAgent_CustomQueryTemplateOverride(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write about cherry blossoms", nil)
 	if err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	query := string(mm.capturedQuery)
+	query := string(capturedQuery)
 	if !strings.Contains(query, "Custom brief:") {
 		t.Fatalf("query prompt should contain custom template text, got: %s", query)
 	}
@@ -398,8 +388,12 @@ func TestForgeAgent_EmptyOverridesUseDefaults(t *testing.T) {
 		QueryTemplate:    "", // empty — should use default
 	}
 
-	mm := &mockModel{
-		output: &flow.InferOutput{
+	var capturedSystem string
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, systemPrompt string, queryPrompt []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		capturedQuery = queryPrompt
+		return &flow.InferOutput{
 			Output: []byte(`{"haiku": "default prompt haiku"}`),
 			Cost: &flow.CostMetadata{
 				Model:        "test-model",
@@ -407,10 +401,10 @@ func TestForgeAgent_EmptyOverridesUseDefaults(t *testing.T) {
 				OutputTokens: 5,
 				DurationMs:   100,
 			},
-		},
+		}, nil
 	}
 
-	agent := newTestForgeAgent(t, mm, cfg)
+	agent := newTestForgeAgent(t, inferFn, cfg)
 
 	_, err := agent.Run(context.Background(), "write a haiku about rain", nil)
 	if err != nil {
@@ -418,11 +412,11 @@ func TestForgeAgent_EmptyOverridesUseDefaults(t *testing.T) {
 	}
 
 	// System prompt should contain the default text.
-	if !strings.Contains(mm.capturedSystem, "You are a creative writer") {
-		t.Fatalf("system prompt should use default when override is empty, got: %s", mm.capturedSystem)
+	if !strings.Contains(capturedSystem, "You are a creative writer") {
+		t.Fatalf("system prompt should use default when override is empty, got: %s", capturedSystem)
 	}
 	// Query prompt should contain the default "Request:" prefix.
-	if !strings.Contains(string(mm.capturedQuery), "Request:") {
-		t.Fatalf("query prompt should use default when override is empty, got: %s", mm.capturedQuery)
+	if !strings.Contains(string(capturedQuery), "Request:") {
+		t.Fatalf("query prompt should use default when override is empty, got: %s", capturedQuery)
 	}
 }

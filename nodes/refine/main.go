@@ -100,7 +100,7 @@ func buildAgent(
 	// 3. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schema),
-		flow.WithModel(flow.NewGptOss120bOllama()),
+		flow.WithModelName("gpt-oss:120b-cloud"),
 		flow.WithSystemPrompt(sysBuf.String()),
 		flow.WithQueryTemplate(queryTmpl),
 	)

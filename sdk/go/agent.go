@@ -34,7 +34,8 @@ type AgentOption func(*agentConfig)
 type agentConfig struct {
 	heartbeatInterval time.Duration
 	schema            []byte
-	model             Model
+	modelName         string
+	inferFn           InferFunc
 	systemPrompt      string
 	queryTemplate     *template.Template
 }
@@ -56,12 +57,12 @@ func WithSchema(schema []byte) AgentOption {
 	}
 }
 
-// WithModel sets the Model for inference dispatch. The Model encapsulates
-// both the model identity and the provider; the Agent never references
-// either directly.
-func WithModel(m Model) AgentOption {
+// WithModelName sets the model name string for inference dispatch.
+// The Agent uses this to identify the model when calling the infer function.
+// Required; empty model names are rejected at construction time.
+func WithModelName(name string) AgentOption {
 	return func(c *agentConfig) {
-		c.model = m
+		c.modelName = name
 	}
 }
 
@@ -101,7 +102,8 @@ func WithQueryTemplate(tmpl *template.Template) AgentOption {
 type Agent struct {
 	client        *Client
 	schema        *jsonschema.Schema
-	model         Model
+	inferFn       InferFunc
+	modelName     string
 	systemPrompt  string
 	queryTemplate *template.Template
 	cfg           agentConfig
@@ -110,9 +112,12 @@ type Agent struct {
 // NewAgent creates a FoundryAgent with functional options.
 //
 // Required options:
-//   - WithModel: Model binding a model identifier to a provider
+//   - WithModelName: model name string
 //   - WithSchema: JSON Schema bytes for output validation
 //   - WithQueryTemplate: query prompt template
+//
+// By default, the Agent uses an Ollama-backed InferFunc. Tests can override
+// this with OverrideModelForTest.
 //
 // The Client must already be connected (via NewClient). The Agent uses the
 // Client's Heartbeat() and RecordTelemetry() methods for managed liveness
@@ -129,14 +134,19 @@ func NewAgent(client *Client, opts ...AgentOption) (*Agent, error) {
 		o(&cfg)
 	}
 
-	if cfg.model == nil {
-		return nil, fmt.Errorf("flow agent: model must not be nil (use WithModel)")
+	if cfg.modelName == "" {
+		return nil, fmt.Errorf("flow agent: model name must not be empty (use WithModelName)")
 	}
 	if cfg.schema == nil {
 		return nil, fmt.Errorf("flow agent: schema must not be nil (use WithSchema)")
 	}
 	if cfg.queryTemplate == nil {
 		return nil, fmt.Errorf("flow agent: query template must not be nil (use WithQueryTemplate)")
+	}
+
+	// Default to Ollama-backed infer function if none set.
+	if cfg.inferFn == nil {
+		cfg.inferFn = NewOllamaInferFunc()
 	}
 
 	// Compile the JSON Schema at construction time.
@@ -148,7 +158,8 @@ func NewAgent(client *Client, opts ...AgentOption) (*Agent, error) {
 	return &Agent{
 		client:        client,
 		schema:        compiled,
-		model:         cfg.model,
+		inferFn:       cfg.inferFn,
+		modelName:     cfg.modelName,
 		systemPrompt:  cfg.systemPrompt,
 		queryTemplate: cfg.queryTemplate,
 		cfg:           cfg,
@@ -189,7 +200,7 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	go a.heartbeatLoop(hbCtx)
 
 	// 3. Execute the provider's inference logic.
-	result, err := a.model.Infer(ctx, a.systemPrompt, queryBuf.Bytes())
+	result, err := a.inferFn(ctx, a.modelName, a.systemPrompt, queryBuf.Bytes())
 
 	// 4. Stop heartbeat (deferred cancel fires).
 	hbCancel()
@@ -213,7 +224,7 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 			// (spec: "Telemetry failures do not block or fail work execution").
 			slog.Warn("flow agent: cost telemetry emission failed (non-blocking)",
 				"error", err,
-				"model", a.model,
+				"model", a.modelName,
 			)
 		}
 	}
@@ -320,4 +331,10 @@ func (a *Agent) emitCostTelemetry(ctx context.Context, cost *CostMetadata) error
 	}
 
 	return a.client.RecordTelemetry(ctx, telemetryEventLLMCost, data)
+}
+
+// OverrideModelForTest replaces the infer function on an Agent. Named to make
+// misuse in production code obvious. Use only in tests.
+func OverrideModelForTest(a *Agent, fn InferFunc) {
+	a.inferFn = fn
 }

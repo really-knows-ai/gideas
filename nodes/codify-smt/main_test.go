@@ -13,26 +13,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Mock Model (same pattern as forge/juror tests)
-// ---------------------------------------------------------------------------
-
-type mockModel struct {
-	output         *flow.InferOutput
-	err            error
-	capturedSystem string
-	capturedQuery  []byte
-}
-
-func (m *mockModel) Infer(_ context.Context, systemPrompt string, query []byte) (*flow.InferOutput, error) {
-	m.capturedSystem = systemPrompt
-	m.capturedQuery = query
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.output, nil
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -48,11 +28,11 @@ func TestCodifySMT_HappyPath(t *testing.T) {
 (assert (forall ((a Artefact)) (naming-consistent a)))`
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: smtContent})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{Output: agentJSON}, nil
 	}
 
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
+	agent := buildTestAgent(t, client, inferFn, defaultSystemPrompt)
 
 	cfg := &codifyConfig{}
 	goal := &codificationGoal{
@@ -97,11 +77,11 @@ func TestCodifySMT_CustomOutputFormat(t *testing.T) {
 	client := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{Output: agentJSON}, nil
 	}
 
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
+	agent := buildTestAgent(t, client, inferFn, defaultSystemPrompt)
 
 	cfg := &codifyConfig{OutputFormat: "application/custom-smt"}
 	goal := &codificationGoal{
@@ -133,11 +113,13 @@ func TestCodifySMT_QueryIncludesGoalContext(t *testing.T) {
 	client := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
+	var capturedQuery []byte
+	inferFn := func(_ context.Context, _, _ string, query []byte) (*flow.InferOutput, error) {
+		capturedQuery = query
+		return &flow.InferOutput{Output: agentJSON}, nil
 	}
 
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
+	agent := buildTestAgent(t, client, inferFn, defaultSystemPrompt)
 
 	cfg := &codifyConfig{}
 	goal := &codificationGoal{
@@ -152,7 +134,7 @@ func TestCodifySMT_QueryIncludesGoalContext(t *testing.T) {
 		t.Fatalf("runCodify: %v", err)
 	}
 
-	queryStr := string(mm.capturedQuery)
+	queryStr := string(capturedQuery)
 	if !containsSubstring(queryStr, "Enforce naming") {
 		t.Error("query does not include goal")
 	}
@@ -171,11 +153,13 @@ func TestCodifySMT_SystemPromptUsesDefault(t *testing.T) {
 	client := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{Output: agentJSON}, nil
 	}
 
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
+	agent := buildTestAgent(t, client, inferFn, defaultSystemPrompt)
 
 	cfg := &codifyConfig{}
 	goal := &codificationGoal{
@@ -190,7 +174,7 @@ func TestCodifySMT_SystemPromptUsesDefault(t *testing.T) {
 		t.Fatalf("runCodify: %v", err)
 	}
 
-	if !containsSubstring(mm.capturedSystem, "SMT-LIB") {
+	if !containsSubstring(capturedSystem, "SMT-LIB") {
 		t.Error("default system prompt should mention SMT-LIB")
 	}
 }
@@ -202,12 +186,14 @@ func TestCodifySMT_CustomSystemPrompt(t *testing.T) {
 	client := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
+	var capturedSystem string
+	inferFn := func(_ context.Context, _, systemPrompt string, _ []byte) (*flow.InferOutput, error) {
+		capturedSystem = systemPrompt
+		return &flow.InferOutput{Output: agentJSON}, nil
 	}
 
 	customPrompt := "You are a custom SMT translator."
-	agent := buildTestAgent(t, client, mm, customPrompt)
+	agent := buildTestAgent(t, client, inferFn, customPrompt)
 
 	cfg := &codifyConfig{SystemPrompt: customPrompt}
 	goal := &codificationGoal{
@@ -222,8 +208,8 @@ func TestCodifySMT_CustomSystemPrompt(t *testing.T) {
 		t.Fatalf("runCodify: %v", err)
 	}
 
-	if mm.capturedSystem != customPrompt {
-		t.Errorf("system prompt = %q, want %q", mm.capturedSystem, customPrompt)
+	if capturedSystem != customPrompt {
+		t.Errorf("system prompt = %q, want %q", capturedSystem, customPrompt)
 	}
 }
 
@@ -281,11 +267,11 @@ func TestCodifySMT_Error_AgentInferFails(t *testing.T) {
 
 	client := setupCodifyTest(t, spy)
 
-	mm := &mockModel{
-		err: fmt.Errorf("inference exploded"),
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return nil, fmt.Errorf("inference exploded")
 	}
 
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
+	agent := buildTestAgent(t, client, inferFn, defaultSystemPrompt)
 
 	cfg := &codifyConfig{}
 	goal := &codificationGoal{
@@ -312,13 +298,13 @@ func TestCodifySMT_Error_AgentOutputEmpty(t *testing.T) {
 
 	// Agent returns valid JSON but with empty smt_content.
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: ""})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		return &flow.InferOutput{Output: agentJSON}, nil
 	}
 
 	// The schema requires minLength=1 for smt_content, so the agent
 	// framework will reject it during validation. We test this path.
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
+	agent := buildTestAgent(t, client, inferFn, defaultSystemPrompt)
 
 	cfg := &codifyConfig{}
 	goal := &codificationGoal{
@@ -334,65 +320,49 @@ func TestCodifySMT_Error_AgentOutputEmpty(t *testing.T) {
 	}
 }
 
-func TestCodifySMT_Error_StoreResultFails(t *testing.T) {
-	spy := newCodifySpy()
-	seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
-	spy.StoreArtefactErr = status.Errorf(codes.Internal, "store broken")
-
-	client := setupCodifyTest(t, spy)
-
-	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
+func TestCodifySMT_Error_StoreOrCompleteFails(t *testing.T) {
+	tests := []struct {
+		name     string
+		setupSpy func(*codifySpy)
+		errMsg   string
+		errMatch string
+	}{
+		{"store result fails", func(s *codifySpy) { s.StoreArtefactErr = status.Errorf(codes.Internal, "store broken") },
+			"expected error when store fails", "store codification-result"},
+		{"complete fails", func(s *codifySpy) { s.CompleteErr = status.Errorf(codes.Internal, "complete broken") },
+			"expected error when complete fails", "complete"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spy := newCodifySpy()
+			seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
+			tt.setupSpy(spy)
 
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
+			client := setupCodifyTest(t, spy)
 
-	cfg := &codifyConfig{}
-	goal := &codificationGoal{
-		Goal:      "Some goal",
-		AppliesTo: []string{"haiku"},
-		Tier:      1,
-		Action:    "create",
-	}
+			agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
+			inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+				return &flow.InferOutput{Output: agentJSON}, nil
+			}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
-	if err == nil {
-		t.Fatal("expected error when store fails")
-	}
-	if !containsSubstring(err.Error(), "store codification-result") {
-		t.Errorf("error should mention store codification-result: %v", err)
-	}
-}
+			agent := buildTestAgent(t, client, inferFn, defaultSystemPrompt)
 
-func TestCodifySMT_Error_CompleteFails(t *testing.T) {
-	spy := newCodifySpy()
-	seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
-	spy.CompleteErr = status.Errorf(codes.Internal, "complete broken")
+			cfg := &codifyConfig{}
+			goal := &codificationGoal{
+				Goal:      "Some goal",
+				AppliesTo: []string{"haiku"},
+				Tier:      1,
+				Action:    "create",
+			}
 
-	client := setupCodifyTest(t, spy)
-
-	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
-	mm := &mockModel{
-		output: &flow.InferOutput{Output: agentJSON},
-	}
-
-	agent := buildTestAgent(t, client, mm, defaultSystemPrompt)
-
-	cfg := &codifyConfig{}
-	goal := &codificationGoal{
-		Goal:      "Some goal",
-		AppliesTo: []string{"haiku"},
-		Tier:      1,
-		Action:    "create",
-	}
-
-	err := runCodify(context.Background(), client, agent, cfg, goal)
-	if err == nil {
-		t.Fatal("expected error when complete fails")
-	}
-	if !containsSubstring(err.Error(), "complete") {
-		t.Errorf("error should mention complete: %v", err)
+			err := runCodify(context.Background(), client, agent, cfg, goal)
+			if err == nil {
+				t.Fatal(tt.errMsg)
+			}
+			if !containsSubstring(err.Error(), tt.errMatch) {
+				t.Errorf("error should mention %s: %v", tt.errMatch, err)
+			}
+		})
 	}
 }
 
@@ -455,8 +425,8 @@ func TestBuildOutputSchema_Valid(t *testing.T) {
 // Test Helpers
 // ---------------------------------------------------------------------------
 
-// buildTestAgent creates a FoundryAgent with a mock model for testing.
-func buildTestAgent(t *testing.T, client *flow.Client, mm *mockModel, sysPrompt string) *flow.Agent {
+// buildTestAgent creates a FoundryAgent with a custom InferFunc for testing.
+func buildTestAgent(t *testing.T, client *flow.Client, inferFn flow.InferFunc, sysPrompt string) *flow.Agent {
 	t.Helper()
 
 	schemaBytes, err := buildOutputSchema()
@@ -469,13 +439,14 @@ func buildTestAgent(t *testing.T, client *flow.Client, mm *mockModel, sysPrompt 
 	}
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModel(mm),
+		flow.WithModelName("test-model"),
 		flow.WithSystemPrompt(sysPrompt),
 		flow.WithQueryTemplate(queryTmpl),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
+	flow.OverrideModelForTest(agent, inferFn)
 	return agent
 }
 

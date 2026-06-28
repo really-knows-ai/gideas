@@ -155,27 +155,6 @@ func defaultTestConfig() *appraiserNodeConfig {
 	}
 }
 
-// mockModel implements flow.Model for test isolation.
-type mockModel struct {
-	mu sync.Mutex
-
-	output *flow.InferOutput
-	err    error
-
-	capturedSystem string
-	capturedQuery  []byte
-}
-
-func (m *mockModel) Infer(
-	_ context.Context, systemPrompt string, queryPrompt []byte,
-) (*flow.InferOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.capturedSystem = systemPrompt
-	m.capturedQuery = queryPrompt
-	return m.output, m.err
-}
-
 // defaultCost returns a standard CostMetadata for tests.
 func defaultCost() *flow.CostMetadata {
 	return &flow.CostMetadata{
@@ -186,11 +165,11 @@ func defaultCost() *flow.CostMetadata {
 	}
 }
 
-// newTestAppraiserAgent creates an AppraiserAgent with the mock model injected.
+// newTestAppraiserAgent creates an AppraiserAgent with a custom InferFunc.
 // opts may be nil to use baked-in defaults.
 // personality is the optional appraiser personality string for the system prompt.
 func newTestAppraiserAgent(
-	t *testing.T, mm *mockModel, spy *appraiserSpy,
+	t *testing.T, inferFn flow.InferFunc, spy *appraiserSpy,
 	cfg *appraiserNodeConfig, personality string, opts *AppraiserAgentOpts,
 ) *AppraiserAgent {
 	t.Helper()
@@ -199,6 +178,6 @@ func newTestAppraiserAgent(
 	if err != nil {
 		t.Fatalf("NewAppraiserAgent() failed: %v", err)
 	}
-	flow.OverrideModelForTest(agent.agent, mm)
+	flow.OverrideModelForTest(agent.agent, inferFn)
 	return agent
 }

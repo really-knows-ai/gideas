@@ -69,9 +69,9 @@ func WithEventBusAddress(addr string) ClientOption {
 // Client is the primary SDK entry point for Foundry Flow nodes.
 // It wraps the generated gRPC clients and provides convenience methods.
 type Client struct {
-	conn         *grpc.ClientConn
-	eventBusConn *grpc.ClientConn
-	workitemID   string
+	conn          *grpc.ClientConn
+	eventBusConn  *grpc.ClientConn
+	workitemID    string
 	flowNamespace string
 
 	// Raw gRPC service clients, exposed for advanced use.

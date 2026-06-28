@@ -2,14 +2,9 @@ package flow
 
 import "context"
 
-// provider abstracts LLM inference backends. Each implementation decides
-// how to present the system and query prompts to its backend (concatenation,
-// message roles, etc.).
-//
-// Implementations must be safe for concurrent use.
-type provider interface {
-	infer(ctx context.Context, model, systemPrompt string, queryPrompt []byte) (*InferOutput, error)
-}
+// InferFunc performs LLM inference. Implementations must be safe for
+// concurrent use.
+type InferFunc func(ctx context.Context, model, systemPrompt string, queryPrompt []byte) (*InferOutput, error)
 
 // InferOutput holds the raw LLM response and optional cost metadata.
 type InferOutput struct {

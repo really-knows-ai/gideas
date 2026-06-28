@@ -87,6 +87,16 @@ type ollamaGenerateResponse struct {
 	TotalDuration   int64  `json:"total_duration"` // nanoseconds
 }
 
+// NewOllamaInferFunc creates an InferFunc backed by Ollama's /api/generate endpoint.
+// The base URL is read from the OLLAMA_BASE_URL environment variable, falling back
+// to http://localhost:11434.
+func NewOllamaInferFunc() InferFunc {
+	p := newOllamaProvider()
+	return func(ctx context.Context, model, systemPrompt string, queryPrompt []byte) (*InferOutput, error) {
+		return p.infer(ctx, model, systemPrompt, queryPrompt)
+	}
+}
+
 // infer sends a prompt to the Ollama /api/generate endpoint and returns the
 // response with cost metadata.
 //
