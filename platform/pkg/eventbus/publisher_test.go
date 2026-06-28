@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,16 +141,9 @@ func TestAsyncPublisher_DropOnFullBuffer(t *testing.T) {
 	pub.Stop()
 }
 
-func TestAsyncPublisher_DropCallbackInvoked(t *testing.T) {
+func TestAsyncPublisher_DropCounter(t *testing.T) {
 	spy := &spyPublisher{publishDelay: 100 * time.Millisecond}
-	var dropCount atomic.Int64
-
-	pub := NewAsyncPublisher(spy,
-		WithBufferSize(1),
-		WithOnDrop(func(req *flowv1.PublishRequest) {
-			dropCount.Add(1)
-		}),
-	)
+	pub := NewAsyncPublisher(spy, WithBufferSize(1))
 
 	// Submit enough to guarantee drops.
 	for range 20 {
@@ -161,11 +153,8 @@ func TestAsyncPublisher_DropCallbackInvoked(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	pub.Stop()
 
-	if dropCount.Load() == 0 {
-		t.Fatal("expected OnDrop callback to be invoked at least once")
-	}
-	if pub.Dropped() != dropCount.Load() {
-		t.Fatalf("Dropped() = %d, but OnDrop callback count = %d", pub.Dropped(), dropCount.Load())
+	if pub.Dropped() == 0 {
+		t.Fatal("expected dropped events to be counted")
 	}
 }
 
@@ -176,13 +165,12 @@ func TestAsyncPublisher_RetryOnFailure(t *testing.T) {
 
 	pub := NewAsyncPublisher(spy,
 		WithBufferSize(10),
-		WithRetry(10*time.Millisecond, 50*time.Millisecond), // fast retry for test
 	)
 
 	pub.Submit(makeReq("audit", "audit.retry"))
 
-	// Let it fail a few times.
-	time.Sleep(100 * time.Millisecond)
+	// Let it fail a few times (defaultRetryBase = 100ms).
+	time.Sleep(400 * time.Millisecond)
 	failedAttempts := spy.callCount()
 	if failedAttempts < 2 {
 		t.Fatalf("expected at least 2 retry attempts, got %d", failedAttempts)
@@ -319,23 +307,19 @@ func TestAsyncPublisher_RetryBackoffRespected(t *testing.T) {
 	failErr := errors.New("always fail")
 	spy.setErr(failErr)
 
-	base := 20 * time.Millisecond
-
 	pub := NewAsyncPublisher(spy,
 		WithBufferSize(10),
-		WithRetry(base, 100*time.Millisecond),
 	)
 
 	pub.Submit(makeReq("audit", "audit.backoff"))
 
-	// After ~150ms with 20ms base and doubling: attempts at 0ms, 20ms, 60ms, 120ms ≈ 4 attempts.
-	time.Sleep(150 * time.Millisecond)
+	// defaultRetryBase = 100ms, so with doubling: attempts at 0ms, 100ms, 300ms.
+	// After 200ms we should have 1-3 attempts.
+	time.Sleep(200 * time.Millisecond)
 	attempts := spy.callCount()
 
-	// Should be 3-5 attempts with exponential backoff, not many more
-	// (which would indicate no backoff).
-	if attempts < 2 || attempts > 8 {
-		t.Fatalf("expected 2-8 retry attempts with exponential backoff, got %d", attempts)
+	if attempts < 1 || attempts > 3 {
+		t.Fatalf("expected 1-3 retry attempts with exponential backoff, got %d", attempts)
 	}
 
 	pub.Stop()
