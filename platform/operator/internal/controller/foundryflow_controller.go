@@ -30,7 +30,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 )
@@ -457,6 +459,30 @@ func (r *FoundryFlowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&flowv1.FoundryFlow{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Watches(&flowv1.FoundryNode{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueFlowsInNamespace),
+		).
 		Named("foundryflow").
 		Complete(r)
+}
+
+// enqueueFlowsInNamespace maps a FoundryNode event to reconcile requests for
+// all FoundryFlows in the same namespace. This closes the race where the
+// FoundryFlow is reconciled before its FoundryNodes exist — the controller
+// re-triggers automatically when nodes are created or updated.
+func (r *FoundryFlowReconciler) enqueueFlowsInNamespace(ctx context.Context, _ client.Object) []reconcile.Request {
+	var flows flowv1.FoundryFlowList
+	if err := r.List(ctx, &flows); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(flows.Items))
+	for _, f := range flows.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Namespace: f.Namespace,
+				Name:      f.Name,
+			},
+		})
+	}
+	return reqs
 }

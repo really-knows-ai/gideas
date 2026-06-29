@@ -35,7 +35,7 @@ import (
 
 // Control Plane infrastructure images.
 const (
-	archivistImage       = "flow-archivist:fix2"
+	archivistImage       = "flow-archivist:latest"
 	eventBusImage        = "flow-eventbus:latest"
 	frictionLedgerImage  = "flow-frictionledger:latest"
 	flowMonitorImage     = "flow-monitor:latest"
@@ -77,8 +77,8 @@ type infraServiceConfig struct {
 	Container   string
 	Image       string
 	Port        int
-	MountPath   string                          // empty = no volume mount
-	ServicePort string                          // "grpc" or "http-metrics"
+	MountPath   string // empty = no volume mount
+	ServicePort string // "grpc" or "http-metrics"
 	EnvVars     func(*flowv1.FoundryFlow) []corev1.EnvVar
 }
 
@@ -493,13 +493,13 @@ func (r *FoundryFlowReconciler) reconcileOllama(ctx context.Context, flow *flowv
 						ContainerPort: int32(ollamaPort),
 						Protocol:      corev1.ProtocolTCP,
 					}},
-				Env: append(r.ollamaEnvVars(flow), corev1.EnvVar{
-					Name:  "OLLAMA_API_KEY",
-					Value: os.Getenv("OLLAMA_API_KEY"),
-				}),
-				Command: []string{"sh", "-c",
-					"ollama serve & sleep 2 && ollama pull gemma4:31b-cloud && ollama pull deepseek-v4-flash:cloud && wait",
-				},
+					Env: append(r.ollamaEnvVars(flow), corev1.EnvVar{
+						Name:  "OLLAMA_API_KEY",
+						Value: os.Getenv("OLLAMA_API_KEY"),
+					}),
+					Command: []string{"sh", "-c",
+						"ollama serve & sleep 2 && ollama pull gemma4:31b-cloud && ollama pull deepseek-v4-flash:cloud && wait",
+					},
 				}},
 			},
 		}

@@ -9,6 +9,7 @@ resources:
 - bases/flow.gideas.io_laws.yaml
 - bases/flow.gideas.io_treaties.yaml
 - bases/flow.gideas.io_flowsupportservices.yaml
+- bases/flow.gideas.io_lawgroups.yaml
 - bases/flow.gideas.io_codificationservices.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 

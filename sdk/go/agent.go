@@ -314,8 +314,8 @@ func stripCodeFences(in []byte) []byte {
 	if strings.HasPrefix(s, "```") {
 		s = s[strings.Index(s, "\n")+1:]
 	}
-	if strings.HasSuffix(s, "```") {
-		s = strings.TrimSuffix(s, "```")
+	if before, ok := strings.CutSuffix(s, "```"); ok {
+		s = before
 	}
 	return []byte(strings.TrimSpace(s))
 }

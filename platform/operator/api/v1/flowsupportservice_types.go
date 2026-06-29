@@ -115,11 +115,11 @@ func (c *FlowSupportService) GetSpecDeploymentStrategy() string              { r
 func (c *FlowSupportService) GetSpecResources() *corev1.ResourceRequirements { return c.Spec.Resources }
 func (c *FlowSupportService) GetSpecStorage() *StorageConfig                 { return c.Spec.Storage }
 
-func (c *FlowSupportService) GetPhase() string                  { return c.Status.Phase }
-func (c *FlowSupportService) SetPhase(p string)                 { c.Status.Phase = p }
-func (c *FlowSupportService) GetAvailableReplicas() int32       { return c.Status.AvailableReplicas }
-func (c *FlowSupportService) SetAvailableReplicas(r int32)      { c.Status.AvailableReplicas = r }
-func (c *FlowSupportService) GetConditions() []metav1.Condition { return c.Status.Conditions }
+func (c *FlowSupportService) GetPhase() string                    { return c.Status.Phase }
+func (c *FlowSupportService) SetPhase(p string)                   { c.Status.Phase = p }
+func (c *FlowSupportService) GetAvailableReplicas() int32         { return c.Status.AvailableReplicas }
+func (c *FlowSupportService) SetAvailableReplicas(r int32)        { c.Status.AvailableReplicas = r }
+func (c *FlowSupportService) GetConditions() []metav1.Condition   { return c.Status.Conditions }
 func (c *FlowSupportService) SetConditions(cs []metav1.Condition) { c.Status.Conditions = cs }
 
 func init() {
