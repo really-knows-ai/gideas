@@ -112,18 +112,20 @@ type CodificationServiceList struct {
 	Items           []CodificationService `json:"items"`
 }
 
-func (c *CodificationService) GetSpecImage() string                           { return c.Spec.Image }
-func (c *CodificationService) GetSpecMinReplicas() *int32                     { return c.Spec.MinReplicas }
-func (c *CodificationService) GetSpecDeploymentStrategy() string              { return c.Spec.DeploymentStrategy }
-func (c *CodificationService) GetSpecOutputFormat() string                    { return c.Spec.OutputFormat }
-func (c *CodificationService) GetSpecResources() *corev1.ResourceRequirements { return c.Spec.Resources }
-func (c *CodificationService) GetSpecStorage() *StorageConfig                 { return c.Spec.Storage }
+func (c *CodificationService) GetSpecImage() string              { return c.Spec.Image }
+func (c *CodificationService) GetSpecMinReplicas() *int32        { return c.Spec.MinReplicas }
+func (c *CodificationService) GetSpecDeploymentStrategy() string { return c.Spec.DeploymentStrategy }
+func (c *CodificationService) GetSpecOutputFormat() string       { return c.Spec.OutputFormat }
+func (c *CodificationService) GetSpecResources() *corev1.ResourceRequirements {
+	return c.Spec.Resources
+}
+func (c *CodificationService) GetSpecStorage() *StorageConfig { return c.Spec.Storage }
 
-func (c *CodificationService) GetPhase() string                  { return c.Status.Phase }
-func (c *CodificationService) SetPhase(p string)                 { c.Status.Phase = p }
-func (c *CodificationService) GetAvailableReplicas() int32       { return c.Status.AvailableReplicas }
-func (c *CodificationService) SetAvailableReplicas(r int32)      { c.Status.AvailableReplicas = r }
-func (c *CodificationService) GetConditions() []metav1.Condition { return c.Status.Conditions }
+func (c *CodificationService) GetPhase() string                    { return c.Status.Phase }
+func (c *CodificationService) SetPhase(p string)                   { c.Status.Phase = p }
+func (c *CodificationService) GetAvailableReplicas() int32         { return c.Status.AvailableReplicas }
+func (c *CodificationService) SetAvailableReplicas(r int32)        { c.Status.AvailableReplicas = r }
+func (c *CodificationService) GetConditions() []metav1.Condition   { return c.Status.Conditions }
 func (c *CodificationService) SetConditions(cs []metav1.Condition) { c.Status.Conditions = cs }
 
 func init() {
