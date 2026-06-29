@@ -14,13 +14,13 @@
 # it (and bumps tier by 1), so we write at tier-1.
 #
 # Requires:
-#   - kubectl port-forward svc/flow-librarian 50056:50056
+#   - kubectl port-forward svc/flow-librarian 50058:50058
 #   - grpcurl installed
 set -euo pipefail
 
 GOAL="${1:?Usage: add-law <goal-text> [tier]}"
 DESIRED_TIER="${2:-3}"
-LIBRARIAN="localhost:50056"
+LIBRARIAN="localhost:50058"
 
 # WriteLaw creates inactive. PROMOTE activates and increments tier by 1.
 # So write at desired_tier - 1 (minimum 1).

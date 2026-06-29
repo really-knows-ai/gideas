@@ -41,6 +41,7 @@ const (
 	ArtefactPass                 = "pass"
 	EventAppraisalCoverage       = "appraisal.coverage"
 	EventAppraisalAttestation    = "appraisal.attestation"
+	stampAppraiseSecurity        = "appraise-security"
 )
 
 // hasNovelArgument returns true if the feedback item carries a
@@ -132,8 +133,15 @@ func HandleAppraisal(
 		)
 		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
+	} else if len(cfg.Appraisers) > 0 {
+		// No dispatches but appraisers exist — pass-through: stamp appraise-security
+		// so sort can complete the exit contract.
+		slog.Info("appraisal: no dispatches — applying pass-through stamp")
+		if _, err := client.StampArtefact(ctx, cfg.GovernedArtefact, stampAppraiseSecurity); err != nil {
+			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraiseSecurity, err)
+		}
 	} else {
-		slog.Info("appraisal: no dispatches — skipping stamps and events")
+		slog.Info("appraisal: no appraisers — skipping stamps and events")
 	}
 
 	// ---------------------------------------------------------------

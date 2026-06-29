@@ -12,6 +12,8 @@ ENV GOWORK=off
 COPY gen/go.mod gen/go.sum gen/
 COPY gen/flow/ gen/flow/
 COPY platform/pkg/eventbus/ platform/pkg/eventbus/
+COPY platform/pkg/randid/ platform/pkg/randid/
+COPY sdk/go/ sdk/go/
 
 # Copy operator module and download deps
 COPY platform/operator/go.mod platform/operator/go.sum platform/operator/

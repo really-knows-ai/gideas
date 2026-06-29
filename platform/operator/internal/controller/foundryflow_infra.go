@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -34,12 +35,13 @@ import (
 
 // Control Plane infrastructure images.
 const (
-	eventBusImage        = "ghcr.io/gideas/flow/eventbus:latest"
-	frictionLedgerImage  = "ghcr.io/gideas/flow/frictionledger:latest"
-	flowMonitorImage     = "ghcr.io/gideas/flow/monitor:latest"
-	librarianImage       = "ghcr.io/gideas/flow/librarian:latest"
-	embassyImage         = "ghcr.io/gideas/flow/embassy:latest"
-	federationImage      = "ghcr.io/gideas/flow/federation:latest"
+	archivistImage       = "flow-archivist:fix2"
+	eventBusImage        = "flow-eventbus:latest"
+	frictionLedgerImage  = "flow-frictionledger:latest"
+	flowMonitorImage     = "flow-monitor:latest"
+	librarianImage       = "flow-librarian:latest"
+	embassyImage         = "embassy:latest"
+	federationImage      = "flow-federation:latest"
 	eventBusPort         = 50056
 	frictionLedgerPort   = 50057
 	librarianPort        = 50058
@@ -56,6 +58,9 @@ const (
 	librarianSvcName     = "flow-librarian"
 	embassySvcName       = "flow-embassy"
 	federationSvcName    = "flow-federation"
+	ollamaSvcName        = "flow-ollama"
+	ollamaPort           = 11434
+	ollamaImage          = "ollama/ollama:latest"
 	eventBusDBPath       = "/data/eventbus.db"
 	frictionLedgerDBPath = "/data/frictionledger.db"
 	librarianDBPath      = "/data/librarian.db"
@@ -145,6 +150,10 @@ func (r *FoundryFlowReconciler) reconcileInfrastructure(ctx context.Context, flo
 		return fmt.Errorf("could not reconcile Event Bus: %w", err)
 	}
 
+	if err := r.reconcileArchivist(ctx, flow); err != nil {
+		return fmt.Errorf("could not reconcile Archivist: %w", err)
+	}
+
 	if err := r.reconcileFrictionLedger(ctx, flow); err != nil {
 		return fmt.Errorf("could not reconcile Friction Ledger: %w", err)
 	}
@@ -167,7 +176,33 @@ func (r *FoundryFlowReconciler) reconcileInfrastructure(ctx context.Context, flo
 		}
 	}
 
+	if err := r.reconcileOllama(ctx, flow); err != nil {
+		return fmt.Errorf("could not reconcile Ollama: %w", err)
+	}
+
 	return nil
+}
+
+// -----------------------------------------------------------------------
+// Archivist
+// -----------------------------------------------------------------------
+
+func (r *FoundryFlowReconciler) reconcileArchivist(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	if err := r.reconcileInfraDeployment(ctx, flow, infraServiceConfig{
+		Name: archivistSvcName, Container: "archivist", Image: archivistImage,
+		Port: archivistPort, MountPath: "/data", ServicePort: "grpc",
+		EnvVars: r.archivistEnvVars,
+	}); err != nil {
+		return err
+	}
+	return r.reconcileService(ctx, flow, archivistSvcName, archivistPort, "grpc")
+}
+
+func (r *FoundryFlowReconciler) archivistEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "ARCHIVIST_PORT", Value: fmt.Sprintf("%d", archivistPort)},
+		{Name: "ARCHIVIST_DB_PATH", Value: "/data/archivist.db"},
+	}
 }
 
 // -----------------------------------------------------------------------
@@ -424,6 +459,65 @@ func (r *FoundryFlowReconciler) federationEnvVars(flow *flowv1.FoundryFlow) []co
 	return []corev1.EnvVar{
 		{Name: "FEDERATION_PORT", Value: fmt.Sprintf("%d", federationPort)},
 		{Name: "FEDERATION_NAMESPACE", Value: flow.Namespace},
+	}
+}
+
+// -----------------------------------------------------------------------
+// Ollama
+// -----------------------------------------------------------------------
+
+func (r *FoundryFlowReconciler) reconcileOllama(ctx context.Context, flow *flowv1.FoundryFlow) error {
+	replicas := int32(1)
+	labels := infraLabels(ollamaSvcName)
+
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ollamaSvcName,
+			Namespace: flow.Namespace,
+		},
+	}
+
+	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+		deploy.Labels = labels
+		deploy.Spec.Replicas = &replicas
+		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		deploy.Spec.Template = corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name:            "ollama",
+					Image:           ollamaImage,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Ports: []corev1.ContainerPort{{
+						Name:          "ollama",
+						ContainerPort: int32(ollamaPort),
+						Protocol:      corev1.ProtocolTCP,
+					}},
+				Env: append(r.ollamaEnvVars(flow), corev1.EnvVar{
+					Name:  "OLLAMA_API_KEY",
+					Value: os.Getenv("OLLAMA_API_KEY"),
+				}),
+				Command: []string{"sh", "-c",
+					"ollama serve & sleep 2 && ollama pull gemma4:31b-cloud && ollama pull deepseek-v4-flash:cloud && wait",
+				},
+				}},
+			},
+		}
+		return controllerutil.SetControllerReference(flow, deploy, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("could not reconcile %s Deployment: %w", ollamaSvcName, err)
+	}
+	logf.FromContext(ctx).Info("Reconciled "+ollamaSvcName+" Deployment",
+		"name", deploy.Name, "result", result,
+	)
+
+	return r.reconcileService(ctx, flow, ollamaSvcName, ollamaPort, "ollama")
+}
+
+func (r *FoundryFlowReconciler) ollamaEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "OLLAMA_HOST", Value: fmt.Sprintf("0.0.0.0:%d", ollamaPort)},
 	}
 }
 

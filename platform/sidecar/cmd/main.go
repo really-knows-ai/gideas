@@ -58,6 +58,9 @@ func main() {
 
 	nodeID := os.Getenv(envNodeID)
 	if nodeID == "" {
+		nodeID = os.Getenv("FLOW_NODE_NAME")
+	}
+	if nodeID == "" {
 		nodeID = "unknown-node"
 	}
 

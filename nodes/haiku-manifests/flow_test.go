@@ -12,17 +12,17 @@ func TestFoundryFlow_EntryContracts(t *testing.T) {
 		name  string
 		check func(*testing.T, foundryFlow)
 	}{
-		{"hearing-entry has law-reference artefact with empty stamps", func(t *testing.T, ff foundryFlow) {
-			entry, ok := ff.Spec.EntryContracts["hearing-entry"]
+		{"standard-entry has petition artefact with empty stamps", func(t *testing.T, ff foundryFlow) {
+			entry, ok := ff.Spec.EntryContracts["standard-entry"]
 			if !ok {
-				t.Fatal("entryContracts missing 'hearing-entry'")
+				t.Fatal("entryContracts missing 'standard-entry'")
 			}
-			artefacts, ok := entry["law-reference"]
+			artefacts, ok := entry["petition"]
 			if !ok {
-				t.Fatal("hearing-entry missing 'law-reference' artefact")
+				t.Fatal("standard-entry missing 'petition' artefact")
 			}
 			if len(artefacts) != 0 {
-				t.Errorf("hearing-entry/law-reference expected empty stamps, got %v", artefacts)
+				t.Errorf("standard-entry/petition expected empty stamps, got %v", artefacts)
 			}
 		}},
 	}
@@ -37,25 +37,6 @@ func TestFoundryFlow_ExitContracts(t *testing.T) {
 		name  string
 		check func(*testing.T, foundryFlow)
 	}{
-		{"clerk-exit/petition has appraise-security approval", func(t *testing.T, ff foundryFlow) {
-			exit, ok := ff.Spec.ExitContracts["clerk-exit"]
-			if !ok {
-				t.Fatal("exitContracts missing 'clerk-exit'")
-			}
-			stamps, ok := exit["petition"]
-			if !ok {
-				t.Fatal("clerk-exit missing 'petition' artefact")
-			}
-			expected := []string{"appraise-security", "approval"}
-			if len(stamps) != len(expected) {
-				t.Fatalf("clerk-exit/petition stamps: want %v, got %v", expected, stamps)
-			}
-			for i, s := range expected {
-				if stamps[i] != s {
-					t.Errorf("clerk-exit/petition stamp[%d]: want %q, got %q", i, s, stamps[i])
-				}
-			}
-		}},
 		{"standard-exit/haiku has linter appraise-security approval", func(t *testing.T, ff foundryFlow) {
 			exit, ok := ff.Spec.ExitContracts["standard-exit"]
 			if !ok {
@@ -85,11 +66,8 @@ func TestFoundryFlow_NodeGroups(t *testing.T) {
 	ff := findFoundryFlow(t)
 
 	t.Run("groups_exist", func(t *testing.T) {
-		requiredGroups := []string{"main-cycle", "judiciary", "clerk-cycle"}
-		for _, g := range requiredGroups {
-			if _, ok := ff.Spec.NodeGroups[g]; !ok {
-				t.Errorf("nodeGroups missing %q", g)
-			}
+		if _, ok := ff.Spec.NodeGroups["main-cycle"]; !ok {
+			t.Errorf("nodeGroups missing %q", "main-cycle")
 		}
 	})
 
@@ -97,21 +75,7 @@ func TestFoundryFlow_NodeGroups(t *testing.T) {
 		wantMainCycle := []string{
 			"forge", "sort", "quench", "appraisal", "appraiser", "refine",
 		}
-		wantJudiciary := []string{
-			"facilitator", "arbiter", "juror", "tribunal",
-			"friction-watcher", "ttl-watcher",
-			"hitl-appraisal", "arbiter-hitl-resolve", "tribunal-hitl-resolve",
-			"law-applicator",
-		}
-		wantClerkCycle := []string{
-			"clerk-forge", "clerk-sort", "clerk-appraisal", "clerk-refine",
-			"clerk-facilitator", "codification", "codify-smt",
-			"clerk-done-router", "hitl-gate",
-		}
-
 		assertGroupEqual(t, ff.Spec.NodeGroups, "main-cycle", wantMainCycle)
-		assertGroupEqual(t, ff.Spec.NodeGroups, "judiciary", wantJudiciary)
-		assertGroupEqual(t, ff.Spec.NodeGroups, "clerk-cycle", wantClerkCycle)
 	})
 
 	t.Run("total_count", func(t *testing.T) {
@@ -119,8 +83,8 @@ func TestFoundryFlow_NodeGroups(t *testing.T) {
 		for _, group := range ff.Spec.NodeGroups {
 			total += len(group.Nodes)
 		}
-		if total != 25 {
-			t.Errorf("total node-group entries: want 25, got %d", total)
+		if total != 6 {
+			t.Errorf("total node-group entries: want 6, got %d", total)
 		}
 	})
 
@@ -167,38 +131,16 @@ func TestFoundryNode_Outputs(t *testing.T) {
 		empty       bool
 		expectCount int
 	}{
-		{name: "sort/arbiter", nodeID: "sort", outputs: map[string]string{"arbiter": "facilitator"}},
-		{name: "facilitator/resolved", nodeID: "facilitator", outputs: map[string]string{"resolved": "sort"}},
-		{name: "arbiter/hung", nodeID: "arbiter", outputs: map[string]string{"hung": "arbiter-hitl-resolve"}},
-		{name: "juror", nodeID: "juror", empty: true},
-		{name: "tribunal/hung", nodeID: "tribunal", outputs: map[string]string{"hung": "tribunal-hitl-resolve"}},
-		{name: "friction-watcher/default", nodeID: "friction-watcher", outputs: map[string]string{"default": "tribunal"}},
-		{name: "ttl-watcher/default", nodeID: "ttl-watcher", outputs: map[string]string{"default": "tribunal"}},
-		{name: "hitl-appraisal/approved", nodeID: "hitl-appraisal", outputs: map[string]string{"approved": "hitl-gate"}},
-		{name: "arbiter-hitl-resolve/resolution", nodeID: "arbiter-hitl-resolve",
-			outputs: map[string]string{"resolution": "arbiter"}},
-		{name: "tribunal-hitl-resolve/resolution", nodeID: "tribunal-hitl-resolve",
-			outputs: map[string]string{"resolution": "tribunal"}},
-		{name: "clerk-forge/default", nodeID: "clerk-forge", outputs: map[string]string{"default": "codification"}},
-		{name: "clerk-sort", nodeID: "clerk-sort", outputs: map[string]string{
-			"appraisal": "clerk-appraisal",
-			"refine":    "clerk-refine",
-			"arbiter":   "clerk-facilitator",
-			"done":      "clerk-done-router",
-		}, expectCount: 4},
-		{name: "clerk-appraisal/default", nodeID: "clerk-appraisal", outputs: map[string]string{"default": "clerk-sort"}},
-		{name: "clerk-refine/default", nodeID: "clerk-refine", outputs: map[string]string{"default": "codification"}},
-		{name: "clerk-facilitator/resolved", nodeID: "clerk-facilitator",
-			outputs: map[string]string{"resolved": "clerk-sort"}},
-		{name: "codification/default", nodeID: "codification", outputs: map[string]string{"default": "clerk-sort"}},
-		{name: "codify-smt", nodeID: "codify-smt", empty: true},
-		{name: "clerk-done-router", nodeID: "clerk-done-router", outputs: map[string]string{
-			"law-applicator": "law-applicator",
-			"hitl-appraisal": "hitl-appraisal",
-		}},
-		{name: "hitl-gate/law-applicator", nodeID: "hitl-gate",
-			outputs: map[string]string{"law-applicator": "law-applicator"}},
-		{name: "law-applicator/embassy", nodeID: "law-applicator", outputs: map[string]string{"embassy": "embassy"}},
+		{name: "forge/default", nodeID: "forge", outputs: map[string]string{"default": "sort"}},
+		{name: "quench/default", nodeID: "quench", outputs: map[string]string{"default": "sort"}},
+		{name: "appraisal/default", nodeID: "appraisal", outputs: map[string]string{"default": "sort"}},
+		{name: "appraiser", nodeID: "appraiser", empty: true},
+		{name: "refine/default", nodeID: "refine", outputs: map[string]string{"default": "sort"}},
+		{name: "sort/outputs", nodeID: "sort", outputs: map[string]string{
+			"quench":    "quench",
+			"appraisal": "appraisal",
+			"refine":    "refine",
+		}, expectCount: 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,41 +183,27 @@ func TestFoundryNode_Capabilities(t *testing.T) {
 		has    []string
 		hasNot []string
 	}{
-		{name: "sort/suspend", nodeID: "sort", has: []string{"SUSPEND:workitem"}},
-		{name: "facilitator", nodeID: "facilitator", has: []string{
-			"SUSPEND:workitem",
-			"CREATE:workitem/child",
-			"READ:artefact/petition",
-			"READ:artefact/haiku",
-			"READ:feedback",
-			"READ:law",
+		{name: "forge", nodeID: "forge", has: []string{
+			"READ:artefact", "WRITE:artefact/haiku", "READ:law",
 		}},
-		{name: "arbiter", nodeID: "arbiter", has: []string{
-			"SUSPEND:workitem",
-			"CREATE:workitem/child",
+		{name: "sort", nodeID: "sort", has: []string{
+			"READ:artefact/haiku", "READ:feedback", "READ:flow", "STAMP:artefact/haiku/approval",
 		}},
-		{name: "juror", nodeID: "juror", has: []string{
-			"READ:artefact/question",
-			"READ:artefact/evidence",
-			"READ:artefact/allowed-outcomes",
-			"READ:artefact/prior-round-reasoning",
-			"WRITE:artefact/verdict",
+		{name: "quench", nodeID: "quench", has: []string{
+			"READ:artefact/haiku", "READ:feedback", "WRITE:feedback/new", "STAMP:artefact/haiku/linter",
 		}},
-		{name: "tribunal", nodeID: "tribunal", has: []string{
-			"READ:law",
-			"CREATE:workitem/child",
-		}, hasNot: []string{"SUSPEND:workitem"}},
-		{name: "hitl-appraisal/feedback", nodeID: "hitl-appraisal", has: []string{"WRITE:feedback"}},
-		{name: "clerk-forge/verdict-context", nodeID: "clerk-forge", has: []string{"READ:artefact/verdict-context"}},
-		{name: "clerk-appraisal", nodeID: "clerk-appraisal", has: []string{
-			"CREATE:workitem/child",
-			"STAMP:artefact/*/appraise-*",
-		}, hasNot: []string{"STAMP:artefact/petition/review"}},
-		{name: "codification", nodeID: "codification", has: []string{"CREATE:workitem/child"}},
-		{name: "appraisal/wildcard", nodeID: "appraisal", has: []string{
-			"STAMP:artefact/*/appraise-*",
-		}, hasNot: []string{"STAMP:artefact/haiku/appraisal"}},
-		{name: "law-applicator/write-law", nodeID: "law-applicator", has: []string{"WRITE:law"}},
+		{name: "appraisal", nodeID: "appraisal", has: []string{
+			"READ:artefact/petition", "READ:artefact/haiku", "READ:feedback", "READ:law",
+			"WRITE:feedback/new", "WRITE:feedback/resolved", "WRITE:feedback/rejected",
+			"STAMP:artefact/haiku/appraise-security", "CREATE:workitem/child",
+		}},
+		{name: "appraiser", nodeID: "appraiser", has: []string{
+			"READ:artefact/review-data", "WRITE:artefact/review-data",
+		}},
+		{name: "refine", nodeID: "refine", has: []string{
+			"READ:artefact/petition", "READ:artefact/haiku", "WRITE:artefact/haiku",
+			"READ:feedback", "WRITE:feedback/actioned", "WRITE:feedback/wont_fix", "READ:law",
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -302,23 +230,17 @@ func TestFoundryNode_ImageAndEntryExit(t *testing.T) {
 	tests := []struct {
 		name   string
 		nodeID string
-		image  string
 		entry  string
 		exit   string
 	}{
-		{name: "clerk-forge/image", nodeID: "clerk-forge", image: "forge:latest"},
-		{name: "friction-watcher/entry", nodeID: "friction-watcher", entry: "hearing-entry"},
-		{name: "ttl-watcher/entry", nodeID: "ttl-watcher", entry: "hearing-entry"},
-		{name: "hitl-appraisal/exit", nodeID: "hitl-appraisal", exit: "clerk-exit"},
+		{name: "forge/entry", nodeID: "forge", entry: "standard-entry"},
+		{name: "sort/exit", nodeID: "sort", exit: "standard-exit"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fn, ok := nodes[tt.nodeID]
 			if !ok {
 				t.Fatalf("FoundryNode %q not found in flow.yaml", tt.nodeID)
-			}
-			if tt.image != "" && fn.Spec.Image != tt.image {
-				t.Errorf("%q image: want %q, got %q", tt.nodeID, tt.image, fn.Spec.Image)
 			}
 			if tt.entry != "" && fn.Spec.Entry != tt.entry {
 				t.Errorf("%q entry: want %q, got %q", tt.nodeID, tt.entry, fn.Spec.Entry)
@@ -337,12 +259,9 @@ func TestGovernedArtefact_Stamps(t *testing.T) {
 		artefactID string
 		check      func(*testing.T, governedArtefact)
 	}{
-		{"haiku has appraise-* wildcard and not review", "haiku", func(t *testing.T, ga governedArtefact) {
+		{"haiku has appraise-* wildcard", "haiku", func(t *testing.T, ga governedArtefact) {
 			if !slices.Contains(ga.Spec.Stamps, "appraise-*") {
 				t.Error("haiku GovernedArtefact stamps missing 'appraise-*'")
-			}
-			if slices.Contains(ga.Spec.Stamps, "review") {
-				t.Error("haiku GovernedArtefact stamps should NOT contain 'review' (replaced by appraise-*)")
 			}
 		}},
 	}
@@ -365,16 +284,6 @@ func TestExitContracts_NoReviewStamp(t *testing.T) {
 			for _, s := range stamps {
 				if s == "review" {
 					t.Errorf("standard-exit/%q still contains 'review' stamp (should be appraise-security)", artefact)
-				}
-			}
-		}
-	}
-
-	if exit, ok := ff.Spec.ExitContracts["clerk-exit"]; ok {
-		for artefact, stamps := range exit {
-			for _, s := range stamps {
-				if s == "review" {
-					t.Errorf("clerk-exit/%q still contains 'review' stamp (should be appraise-security)", artefact)
 				}
 			}
 		}

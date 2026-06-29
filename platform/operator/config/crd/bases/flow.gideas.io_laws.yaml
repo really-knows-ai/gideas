@@ -66,8 +66,8 @@ spec:
                 type: string
               group:
                 description: |-
-                  group is the law group name. Must match metadata.name of a LawGroup CRD.
-                  Empty means the "default" group.
+                  Group is the law group name. Must match the metadata.name of a LawGroup CRD
+                  or be empty (defaults to "default").
                 type: string
               representations:
                 description: |-

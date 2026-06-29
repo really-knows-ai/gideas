@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y gcc libc6-dev && rm -rf /var/lib/apt/li
 
 COPY gen/go.mod gen/go.sum gen/
 COPY gen/flow/ gen/flow/
+COPY platform/pkg/randid/ platform/pkg/randid/
+COPY platform/pkg/sqldbutil/ platform/pkg/sqldbutil/
 
 COPY platform/eventbus/go.mod platform/eventbus/go.sum platform/eventbus/
 RUN cd platform/eventbus && go mod download

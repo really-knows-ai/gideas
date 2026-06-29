@@ -8,10 +8,10 @@
 # PersistentVolumeClaim.
 #
 # Prerequisites:
-#   - Build archivist image: docker build -t flow-archivist:latest -f archivist/Dockerfile .
+#   - Build archivist image: docker build -t flow-archivist:fix2 -f archivist/Dockerfile .
 #
 # For Kind cluster:
-#   kind load docker-image flow-archivist:latest --name <cluster>
+#   kind load docker-image flow-archivist:fix2 --name <cluster>
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: archivist
-          image: flow-archivist:latest
+          image: flow-archivist:fix2
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc

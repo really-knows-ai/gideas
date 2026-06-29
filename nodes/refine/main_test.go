@@ -50,10 +50,11 @@ func newTestRevisionAgent(t *testing.T, inferFn flow.InferFunc, spy *refineSpy, 
 
 func TestTriageAgent_SchemaValidation(t *testing.T) {
 	tests := []struct {
-		name      string
-		llmOutput string
-		wantErr   bool
-		errMsg    string
+		name       string
+		llmOutput  string
+		canWontFix bool // true = use full schema (allows refuse + structured justification)
+		wantErr    bool
+		errMsg     string
 	}{
 		{
 			name:      "valid_action",
@@ -61,23 +62,26 @@ func TestTriageAgent_SchemaValidation(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name: "valid_refuse_citation",
+			name:       "valid_refuse_citation",
+			canWontFix: true,
 			llmOutput: `{"decision": "refuse", "message": "existing law supports this",` +
 				` "justification_type": "citation", "citation_ids": ["law-1"]}`,
 			wantErr: false,
 		},
 		{
-			name: "valid_refuse_novel_argument",
+			name:       "valid_refuse_novel_argument",
+			canWontFix: true,
 			llmOutput: `{"decision": "refuse", "message": "the feedback is subjective",` +
 				` "justification_type": "novel_argument",` +
 				` "argument": "seasonal imagery is not required by any law"}`,
 			wantErr: false,
 		},
 		{
-			name:      "rejects_invalid_decision",
+			// With freeform decision schema, any non-empty decision string is valid.
+			// The handler treats anything not matching "refuse" as an action.
+			name:      "accepts_any_decision",
 			llmOutput: `{"decision": "maybe", "message": "not sure"}`,
-			wantErr:   true,
-			errMsg:    "output validation failed",
+			wantErr:   false,
 		},
 		{
 			name:      "rejects_empty_message",
@@ -95,9 +99,10 @@ func TestTriageAgent_SchemaValidation(t *testing.T) {
 			wantErr:   true,
 		},
 		{
-			name:      "rejects_invalid_justification_type",
-			llmOutput: `{"decision": "refuse", "message": "nope", "justification_type": "invalid"}`,
-			wantErr:   true,
+			name:       "rejects_invalid_justification_type",
+			canWontFix: true,
+			llmOutput:  `{"decision": "refuse", "message": "nope", "justification_type": "invalid"}`,
+			wantErr:    true,
 		},
 	}
 
@@ -114,11 +119,10 @@ func TestTriageAgent_SchemaValidation(t *testing.T) {
 
 			agent := newTestTriageAgent(t, inferFn, spy, cfg)
 			fb := &flowv1.FeedbackItem{
-				Id:      testFeedbackID,
-				Message: "test feedback",
-				State:   flowv1.FeedbackState_FEEDBACK_STATE_NEW,
-				// Refuse tests require canWontFix=true.
-				CanWontFix: strings.Contains(tt.name, "refuse"),
+				Id:         testFeedbackID,
+				Message:    "test feedback",
+				State:      flowv1.FeedbackState_FEEDBACK_STATE_NEW,
+				CanWontFix: tt.canWontFix,
 			}
 
 			out, err := agent.Run(context.Background(), fb, "petition text", "haiku text", nil)

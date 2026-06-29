@@ -7,8 +7,7 @@
 # Apply order:
 #   1. kubectl apply -f flow.yaml          (CRDs)
 #   2. kubectl apply -f configmaps.yaml    (this file)
-#   3. kubectl apply -f deployments.yaml   (node pods)
-#   4. kubectl apply -f workitem.yaml      (trigger the cycle)
+#   3. kubectl apply -f workitem.yaml      (trigger the cycle)
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -35,6 +34,17 @@ data:
   node-config.yaml: |
     nodeOrder: "quench,appraisal"
     deadlockThreshold: 3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quench-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: quench
+data:
+  node-config.yaml: |
+    {}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -354,3 +364,16 @@ data:
         when: 'true'
         output: "law-applicator"
     default: "law-applicator"
+---
+# --- Embassy ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: embassy-config
+  namespace: default
+  labels:
+    app.kubernetes.io/name: embassy
+data:
+  node-config.yaml: |
+    systemImportTypes: {}
+    flowImportTypes: {}

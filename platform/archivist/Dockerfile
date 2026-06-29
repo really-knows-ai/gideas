@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y gcc libc6-dev && rm -rf /var/lib/apt/li
 COPY gen/go.mod gen/go.sum gen/
 COPY gen/flow/ gen/flow/
 COPY platform/pkg/eventbus/ platform/pkg/eventbus/
+COPY platform/pkg/randid/ platform/pkg/randid/
+COPY platform/pkg/sqldbutil/ platform/pkg/sqldbutil/
+COPY sdk/go/ sdk/go/
 
 COPY platform/archivist/go.mod platform/archivist/go.sum platform/archivist/
 RUN cd platform/archivist && go mod download

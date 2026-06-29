@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y gcc libc6-dev && rm -rf /var/lib/apt/li
 
 COPY gen/go.mod gen/go.sum gen/
 COPY gen/flow/ gen/flow/
+COPY platform/pkg/randid/ platform/pkg/randid/
+COPY platform/pkg/sqldbutil/ platform/pkg/sqldbutil/
 
 COPY platform/frictionledger/go.mod platform/frictionledger/go.sum platform/frictionledger/
 RUN cd platform/frictionledger && go mod download

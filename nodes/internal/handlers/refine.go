@@ -23,6 +23,7 @@ type RefineConfig struct {
 // Refine-specific constants for triage decisions.
 const (
 	decisionAction = "action"
+	decisionEdit   = "edit"
 	decisionRefuse = "refuse"
 
 	justTypeCitation      = "citation"
@@ -204,18 +205,6 @@ func triageFeedback(
 		}
 
 		switch out.Decision {
-		case decisionAction:
-			slog.Info("refine: actioning feedback",
-				"feedback_id", fbID, "message", out.Message)
-			if err := client.ResolveFeedback(ctx, fbID, out.Message); err != nil {
-				return nil, fmt.Errorf("refine: resolve feedback %s: %w", fbID, err)
-			}
-			actioned = append(actioned, flow.ActionedFeedback{
-				FeedbackID:     fbID,
-				Message:        task.item.GetMessage(),
-				FixDescription: out.Message,
-			})
-
 		case decisionRefuse:
 			justification, err := buildJustification(*out)
 			if err != nil {
@@ -230,8 +219,16 @@ func triageFeedback(
 			}
 
 		default:
-			return nil, fmt.Errorf("refine: unexpected decision %q for feedback %s",
-				out.Decision, fbID)
+			slog.Info("refine: actioning feedback",
+				"feedback_id", fbID, "decision", out.Decision, "message", out.Message)
+			if err := client.ResolveFeedback(ctx, fbID, out.Message); err != nil {
+				return nil, fmt.Errorf("refine: resolve feedback %s: %w", fbID, err)
+			}
+			actioned = append(actioned, flow.ActionedFeedback{
+				FeedbackID:     fbID,
+				Message:        task.item.GetMessage(),
+				FixDescription: out.Message,
+			})
 		}
 	}
 
