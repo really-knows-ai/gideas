@@ -15,6 +15,7 @@ import (
 const (
 	ollamaDefaultBaseURL = "http://localhost:11434"
 	ollamaEnvBaseURL     = "OLLAMA_BASE_URL"
+	ollamaEnvAPIKey      = "OLLAMA_API_KEY"
 	ollamaDefaultTimeout = 5 * time.Minute
 )
 
@@ -25,6 +26,7 @@ const (
 // are extracted from the response to populate CostMetadata.
 type ollamaProvider struct {
 	baseURL    string
+	apiKey     string
 	httpClient *http.Client
 }
 
@@ -61,6 +63,7 @@ func newOllamaProvider(opts ...ollamaOption) *ollamaProvider {
 
 	p := &ollamaProvider{
 		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  os.Getenv(ollamaEnvAPIKey),
 		httpClient: &http.Client{
 			Timeout: ollamaDefaultTimeout,
 		},
@@ -129,6 +132,9 @@ func (p *ollamaProvider) infer(
 		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {

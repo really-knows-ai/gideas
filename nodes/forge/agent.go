@@ -121,7 +121,7 @@ func NewForgeAgent(client *flow.Client, cfg *forgeConfig) (*ForgeAgent, error) {
 	// 4. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schemaBytes),
-		flow.WithModelName("gpt-oss:120b-cloud"),
+		flow.WithModelName("gemma4:31b-cloud"),
 		flow.WithSystemPrompt(systemPrompt),
 		flow.WithQueryTemplate(queryTmpl),
 	)

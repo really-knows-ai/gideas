@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y gcc libc6-dev libsqlite3-dev && rm -rf 
 COPY gen/go.mod gen/go.sum gen/
 COPY gen/flow/ gen/flow/
 COPY platform/pkg/eventbus/ platform/pkg/eventbus/
+COPY platform/pkg/randid/ platform/pkg/randid/
+COPY platform/pkg/sqldbutil/ platform/pkg/sqldbutil/
+COPY sdk/go/ sdk/go/
 
 COPY platform/librarian/go.mod platform/librarian/go.sum platform/librarian/
 RUN cd platform/librarian && go mod download

@@ -40,7 +40,7 @@ import (
 
 const (
 	// sidecarImage is the container image for the Sidecar injected into every node pod.
-	sidecarImage = "flow-sidecar:dbg2"
+	sidecarImage = "flow-sidecar:latest"
 
 	// sidecarGRPCPort is the port the Sidecar listens on for gRPC.
 	sidecarGRPCPort = 50051

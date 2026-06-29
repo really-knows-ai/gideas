@@ -25,11 +25,21 @@ A governed workflow runtime on Kubernetes. Work progresses through adversarial c
 ## Prerequisites
 
 - **Go 1.25+**
-- **Docker**
+- **Docker** (Docker Desktop or equivalent)
 - **kubectl**
-- **A Kubernetes cluster** (Kind, Docker Desktop, or any conformant cluster)
+- **A Kubernetes cluster** (Docker Desktop Kubernetes, Kind, or any conformant cluster)
 - **[Buf CLI](https://buf.build/docs/installation)** (only if regenerating proto code)
-- **[grpcurl](https://github.com/fullstorydev/grpcurl)** (only for the demo scripts)
+- **[grpcurl](https://github.com/fullstorydev/grpcurl)** (for demo scripts)
+- **[Ollama](https://ollama.com)** running locally on `localhost:11434` with these models pulled:
+  ```bash
+  ollama pull gemma4:31b-cloud
+  ollama pull deepseek-v4-flash:cloud
+  ollama pull kimi-k2.5:cloud
+  ```
+  And signed in to ollama.com:
+  ```bash
+  ollama login
+  ```
 
 ## Getting Started
 
@@ -37,6 +47,7 @@ A governed workflow runtime on Kubernetes. Work progresses through adversarial c
 
 ```bash
 make -C platform/operator install
+kubectl apply -f platform/operator/config/crd/bases/
 ```
 
 ### 2. Build container images
@@ -57,8 +68,8 @@ docker build -t flow-eventbus:latest       -f platform/eventbus/Dockerfile .
 docker build -t flow-frictionledger:latest -f platform/frictionledger/Dockerfile .
 docker build -t flow-monitor:latest        -f platform/monitor/Dockerfile .
 
-# Haiku demo nodes (one image per node)
-for node in forge haiku-quench sort appraise refine; do
+# Haiku demo nodes
+for node in forge haiku-quench sort appraisal appraiser refine embassy; do
   docker build -t "$node:latest" --build-arg NODE="$node" -f nodes/Dockerfile .
 done
 ```
@@ -67,8 +78,8 @@ If using Kind, load the images into the cluster:
 
 ```bash
 for img in flow-operator flow-sidecar flow-archivist flow-librarian \
-           flow-eventbus flow-frictionledger flow-monitor \
-           forge haiku-quench sort appraise refine; do
+            flow-eventbus flow-frictionledger flow-monitor \
+            forge haiku-quench sort appraisal appraiser refine embassy; do
   kind load docker-image "$img:latest" --name <cluster-name>
 done
 ```
@@ -76,36 +87,31 @@ done
 ### 3. Deploy the Operator
 
 ```bash
-make -C platform/operator deploy
+# Pass your Ollama API key for in-cluster model pulling.
+# Get one from https://ollama.com/settings/api-keys
+export OLLAMA_API_KEY="your-key-here"
+
+make -C platform/operator deploy IMG=flow-operator:latest
 ```
 
-### 4. Deploy system services
+### 4. Deploy the Haiku demo
 
-```bash
-kubectl apply -f platform/archivist/deployment.yaml
-kubectl apply -f platform/librarian/deployment.yaml
-kubectl apply -f platform/eventbus/deployment.yaml
-kubectl apply -f platform/frictionledger/deployment.yaml
-kubectl apply -f platform/monitor/deployment.yaml
-```
-
-### 5. Deploy the Haiku demo
-
-The Haiku demo runs a full Foundry Cycle — Forge, Quench, Appraise, Sort, Refine — producing governed haiku artefacts.
+The Haiku demo runs a full Foundry Cycle — Forge, Sort, Quench, Appraisal, Appraiser, Refine — producing a syllable-validated, security-reviewed, and governance-stamped haiku.
 
 ```bash
 kubectl apply -f nodes/haiku-manifests/flow.yaml
 kubectl apply -f nodes/haiku-manifests/configmaps.yaml
-kubectl apply -f nodes/haiku-manifests/deployments.yaml
 ```
 
-### 6. Seed a workitem
+The operator automatically creates all system services (Archivist, Librarian, EventBus, FrictionLedger, Monitor, Embassy, Ollama) and node deployments from the `FoundryFlow` and `FoundryNode` resources.
+
+### 5. Seed a workitem
 
 Port-forward the Archivist and Librarian, then use the demo scripts:
 
 ```bash
 kubectl port-forward svc/flow-archivist 50054:50054 &
-kubectl port-forward svc/flow-librarian 50056:50056 &
+kubectl port-forward svc/flow-librarian 50058:50058 &
 
 # Optionally add a governance law
 ./tools/demo/add-law "The haiku must evoke a season"
@@ -114,11 +120,55 @@ kubectl port-forward svc/flow-librarian 50056:50056 &
 ./tools/demo/new-haiku "write me a haiku about autumn leaves"
 ```
 
-### 7. Watch it
+### 6. Watch it
 
 ```bash
 bash ./tools/haiku-watch/watch.sh haiku-<id>
 ```
+
+Or watch all workitems:
+
+```bash
+watch kubectl get workitems
+```
+
+## The Haiku Flow
+
+```
+forge          # Generate haiku (LLM: gemma4:31b-cloud)
+  │
+sort           # Check stamps and feedback
+  │
+quench         # Validate syllable count (5-7-5), stamp linter, raise feedback
+  │
+sort           # Detect unaddressed feedback → route to refine
+  │
+refine         # Triage feedback (LLM: deepseek-v4-flash:cloud), action fix, revise haiku
+  │
+sort           # Re-check, route to quench for re-validation
+  │
+quench         # Re-validate, stamp linter if valid
+  │
+sort           # Missing appraise-security stamp → route to appraisal
+  │
+appraisal      # Evaluate actioned feedback, accept/reject fix, stamp appraise-security
+  │
+sort           # All stamps present, no unaddressed feedback → stamp approval
+  │
+COMPLETE       # Exit contract satisfied
+```
+
+Each `sort` visit checks the exit contract (`linter`, `appraise-security`, `approval`). Stamps and feedback determine the next node. The sort node stamps `approval` when all governance conditions are met.
+
+## Troubleshooting
+
+**Workitems stuck in Pending:** Check the operator logs (`kubectl logs -n operator-system deployment/operator-controller-manager`). The operator must be running and have all CRDs installed.
+
+**LLM calls failing:** Ensure Ollama is running locally (`curl http://localhost:11434/api/tags`). The node containers reach the host at `host.docker.internal:11434`. Models must be pulled and you must be signed in (`ollama login`).
+
+**Image cache issues (Docker Desktop):** Docker Desktop's containerd image store caches manifests by digest. If you rebuild an image with the same tag, pods may still use the old image. Use unique tags (`image:fix2`, `image:fix-v2`, etc.) to bypass the cache.
+
+**Operator CrashLoopBackOff:** Verify all CRDs are installed (`kubectl get crd | grep flow.gideas.io`). Missing CRDs (especially `lawgroups`) will cause the operator to fail on startup.
 
 ## Development
 

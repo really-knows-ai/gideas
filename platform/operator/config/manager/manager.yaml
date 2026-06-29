@@ -65,6 +65,9 @@ spec:
           - --health-probe-bind-address=:8081
         image: controller:latest
         name: manager
+        env:
+        - name: OLLAMA_API_KEY
+          value: ""
         ports: []
         securityContext:
           readOnlyRootFilesystem: true

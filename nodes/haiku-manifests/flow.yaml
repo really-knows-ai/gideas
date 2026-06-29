@@ -1,6 +1,6 @@
 # Haiku Foundry Cycle — Flow Configuration
 #
-# This defines the complete Foundry Cycle for haiku creation with Sort as the
+# This defines the hello-world Foundry Cycle for haiku creation with Sort as the
 # central routing hub. Every node feeds back to Sort, which triages governance
 # state and routes accordingly.
 #
@@ -19,14 +19,13 @@
 #
 # Artefacts:
 #   - petition: The creative brief, pre-populated at workitem creation.
-#   - haiku: The governed output, must carry [linter, appraise-*, approval].
+#   - haiku: The governed output, must carry [linter, appraise-security, approval].
 #   - review-data: Internal data transfer between Appraisal and Appraiser children.
 #
 # Apply order:
 #   1. kubectl apply -f flow.yaml          (this file)
 #   2. kubectl apply -f configmaps.yaml    (node configuration)
-#   3. kubectl apply -f deployments.yaml   (node pods)
-#   4. kubectl apply -f workitem.yaml      (trigger the cycle)
+#   3. kubectl apply -f workitem.yaml      (trigger the cycle)
 ---
 apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
@@ -36,6 +35,7 @@ metadata:
 spec:
   stamps:
     - linter
+    - appraise-security
     - appraise-*
     - approval
 ---
@@ -45,120 +45,14 @@ metadata:
   name: petition
   namespace: default
 spec:
-  stamps: []
+  stamps:
+    - appraise-security
+    - approval
 ---
 apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
 metadata:
   name: review-data
-  namespace: default
-spec:
-  stamps: []
----
-# --- Judiciary GovernedArtefact CRDs ---
-# These artefact types are used exclusively within the judiciary subsystem.
-# All declare empty stamp vocabularies — judiciary artefacts are not stamped.
-
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: question
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: evidence
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: allowed-outcomes
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: prior-round-reasoning
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: verdict
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: verdict-context
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: deliberation-result
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: round-count
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: law-reference
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: codification-goal
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: codification-result
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: human-decision
-  namespace: default
-spec:
-  stamps: []
----
-apiVersion: flow.gideas.io/v1
-kind: GovernedArtefact
-metadata:
-  name: approval-stamp
   namespace: default
 spec:
   stamps: []
@@ -173,19 +67,11 @@ spec:
     # The petition must exist when the workitem enters the flow.
     standard-entry:
       "petition": []
-    # A law-reference artefact must exist for judiciary watcher entry.
-    hearing-entry:
-      "law-reference": []
   exitContracts:
     # The haiku must carry linter, appraise-security, and approval stamps to exit.
     standard-exit:
       "haiku":
         - linter
-        - appraise-security
-        - approval
-    # The petition must carry appraise-security + approval stamps to exit the Clerk cycle.
-    clerk-exit:
-      "petition":
         - appraise-security
         - approval
   nodeGroups:
@@ -197,29 +83,6 @@ spec:
         - appraisal
         - appraiser
         - refine
-    judiciary:
-      nodes:
-        - facilitator
-        - arbiter
-        - juror
-        - tribunal
-        - friction-watcher
-        - ttl-watcher
-        - hitl-appraisal
-        - arbiter-hitl-resolve
-        - tribunal-hitl-resolve
-        - law-applicator
-    clerk-cycle:
-      nodes:
-        - clerk-forge
-        - clerk-sort
-        - clerk-appraisal
-        - clerk-refine
-        - clerk-facilitator
-        - codification
-        - codify-smt
-        - clerk-done-router
-        - hitl-gate
   governancePolicy:
     maxVisits: 20
     defaultTimeout: "10m"
@@ -235,7 +98,7 @@ metadata:
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: forge:latest
+  image: forge:fix-models
   entry: "standard-entry"
   outputs:
     - name: "default"
@@ -262,13 +125,11 @@ spec:
       target: "appraisal"
     - name: "refine"
       target: "refine"
-    - name: "arbiter"
-      target: "facilitator"
   capabilities:
     - "READ:artefact/haiku"
     - "READ:feedback"
+    - "READ:flow"
     - "STAMP:artefact/haiku/approval"
-    - "SUSPEND:workitem"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
@@ -284,6 +145,8 @@ spec:
       target: "sort"
   capabilities:
     - "READ:artefact/haiku"
+    - "READ:feedback"
+    - "WRITE:feedback/new"
     - "STAMP:artefact/haiku/linter"
 ---
 apiVersion: flow.gideas.io/v1
@@ -301,11 +164,12 @@ spec:
   capabilities:
     - "READ:artefact/petition"
     - "READ:artefact/haiku"
+    - "READ:feedback"
     - "READ:law"
     - "WRITE:feedback/new"
     - "WRITE:feedback/resolved"
     - "WRITE:feedback/rejected"
-    - "STAMP:artefact/*/appraise-*"
+    - "STAMP:artefact/haiku/appraise-security"
     - "CREATE:workitem/child"
 ---
 apiVersion: flow.gideas.io/v1
@@ -330,7 +194,7 @@ metadata:
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: refine:latest
+  image: refine:fix-models
   outputs:
     - name: "default"
       target: "sort"
@@ -342,373 +206,3 @@ spec:
     - "WRITE:feedback/actioned"
     - "WRITE:feedback/wont_fix"
     - "READ:law"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: facilitator
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: facilitator:latest
-  outputs:
-    - name: "resolved"
-      target: "sort"
-  capabilities:
-    - "READ:artefact/petition"
-    - "READ:artefact/haiku"
-    - "READ:feedback"
-    - "READ:law"
-    - "CREATE:workitem/child"
-    - "SUSPEND:workitem"
-    - "WRITE:artefact/dispute-workitem"
-    - "WRITE:artefact/dispute-details"
-    - "WRITE:artefact/dispute-artefact"
-    - "WRITE:artefact/dispute-inputs"
-    - "WRITE:artefact/appendix"
-    - "WRITE:artefact/disputed-artefact"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: arbiter
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: arbiter:latest
-  outputs:
-    - name: "hung"
-      target: "arbiter-hitl-resolve"
-  capabilities:
-    - "READ:artefact/evidence-bundle"
-    - "WRITE:artefact/verdict-context"
-    - "WRITE:artefact/question"
-    - "WRITE:artefact/evidence"
-    - "WRITE:artefact/allowed-outcomes"
-    - "WRITE:artefact/prior-round-reasoning"
-    - "CREATE:workitem/child"
-    - "SUSPEND:workitem"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: juror
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: juror:latest
-  outputs: []
-  capabilities:
-    - "READ:artefact/question"
-    - "READ:artefact/evidence"
-    - "READ:artefact/allowed-outcomes"
-    - "READ:artefact/prior-round-reasoning"
-    - "WRITE:artefact/verdict"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: tribunal
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: tribunal:latest
-  outputs:
-    - name: "hung"
-      target: "tribunal-hitl-resolve"
-  capabilities:
-    - "READ:artefact/law-reference"
-    - "WRITE:artefact/verdict-context"
-    - "WRITE:artefact/question"
-    - "WRITE:artefact/evidence"
-    - "WRITE:artefact/allowed-outcomes"
-    - "WRITE:artefact/prior-round-reasoning"
-    - "READ:law"
-    - "CREATE:workitem/child"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: friction-watcher
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: friction-watcher:latest
-  entry: "hearing-entry"
-  outputs:
-    - name: "default"
-      target: "tribunal"
-  capabilities:
-    - "WRITE:artefact/law-reference"
-    - "CREATE:workitem"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: ttl-watcher
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: ttl-watcher:latest
-  entry: "hearing-entry"
-  outputs:
-    - name: "default"
-      target: "tribunal"
-  capabilities:
-    - "WRITE:artefact/law-reference"
-    - "CREATE:workitem"
-    - "READ:law"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: hitl-appraisal
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: hitl:latest
-  exit: "clerk-exit"
-  outputs:
-    - name: "approved"
-      target: "hitl-gate"
-  capabilities:
-    - "READ:artefact/petition"
-    - "WRITE:feedback"
-    - "STAMP:artefact/petition/approval"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: arbiter-hitl-resolve
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: hitl:latest
-  exit: "clerk-exit"
-  outputs:
-    - name: "resolution"
-      target: "arbiter"
-  capabilities:
-    - "READ:artefact/evidence-bundle"
-    - "READ:artefact/deliberation-result"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: tribunal-hitl-resolve
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: hitl:latest
-  exit: "clerk-exit"
-  outputs:
-    - name: "resolution"
-      target: "tribunal"
-  capabilities:
-    - "READ:artefact/evidence-bundle"
-    - "READ:artefact/deliberation-result"
----
-# --- Clerk Cycle Node Definitions ---
-
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: clerk-forge
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: forge:latest
-  outputs:
-    - name: "default"
-      target: "codification"
-  capabilities:
-    - "READ:artefact/verdict-context"
-    - "WRITE:artefact/petition"
-    - "READ:law"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: clerk-sort
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: sort:latest
-  outputs:
-    - name: "appraisal"
-      target: "clerk-appraisal"
-    - name: "refine"
-      target: "clerk-refine"
-    - name: "arbiter"
-      target: "clerk-facilitator"
-    - name: "done"
-      target: "clerk-done-router"
-  capabilities:
-    - "READ:artefact/petition"
-    - "READ:feedback"
-    - "STAMP:artefact/petition/approval"
-    - "SUSPEND:workitem"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: clerk-appraisal
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: appraisal:latest
-  outputs:
-    - name: "default"
-      target: "clerk-sort"
-  capabilities:
-    - "READ:artefact/verdict-context"
-    - "READ:artefact/petition"
-    - "READ:law"
-    - "WRITE:feedback/new"
-    - "STAMP:artefact/*/appraise-*"
-    - "CREATE:workitem/child"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: clerk-refine
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: refine:latest
-  outputs:
-    - name: "default"
-      target: "codification"
-  capabilities:
-    - "READ:artefact/verdict-context"
-    - "READ:artefact/petition"
-    - "WRITE:artefact/petition"
-    - "READ:feedback"
-    - "WRITE:feedback/actioned"
-    - "READ:law"
----
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: clerk-facilitator
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: facilitator:latest
-  outputs:
-    - name: "resolved"
-      target: "clerk-sort"
-  capabilities:
-    - "READ:artefact/verdict-context"
-    - "READ:artefact/petition"
-    - "READ:feedback"
-    - "READ:law"
-    - "CREATE:workitem/child"
-    - "SUSPEND:workitem"
-    - "WRITE:artefact/dispute-workitem"
-    - "WRITE:artefact/dispute-details"
-    - "WRITE:artefact/dispute-artefact"
-    - "WRITE:artefact/dispute-inputs"
-    - "WRITE:artefact/appendix"
-    - "WRITE:artefact/disputed-artefact"
----
-# --- Codification ---
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: codification
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: codification:latest
-  outputs:
-    - name: "default"
-      target: "clerk-sort"
-  capabilities:
-    - "READ:artefact/petition"
-    - "WRITE:artefact/petition"
-    - "WRITE:artefact/codification-goal"
-    - "CREATE:workitem/child"
----
-# --- Codify SMT (child node) ---
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: codify-smt
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: codify-smt:latest
-  outputs: []
-  capabilities:
-    - "READ:artefact/codification-goal"
-    - "WRITE:artefact/codification-result"
----
-# --- Clerk Done Router ---
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: clerk-done-router
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: rule-router:latest
-  outputs:
-    - name: "law-applicator"
-      target: "law-applicator"
-    - name: "hitl-appraisal"
-      target: "hitl-appraisal"
-  capabilities:
-    - "READ:artefact/petition"
----
-# --- HITL Gate ---
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: hitl-gate
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: rule-router:latest
-  outputs:
-    - name: "law-applicator"
-      target: "law-applicator"
-  capabilities:
-    - "READ:artefact/petition"
----
-# --- Law Applicator ---
-apiVersion: flow.gideas.io/v1
-kind: FoundryNode
-metadata:
-  name: law-applicator
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  image: law-applicator:latest
-  outputs:
-    - name: "embassy"
-      target: "embassy"
-  capabilities:
-    - "READ:artefact/petition"
-    - "WRITE:artefact/approval-stamp"
-    - "READ:law"
-    - "WRITE:law"

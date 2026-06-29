@@ -203,9 +203,17 @@ func capabilitiesFromContext(ctx context.Context) []string {
 
 // hasCapability checks whether the capability list contains the given
 // capability string. Supports * wildcard matching per MatchCapability rules.
+// A scoped READ grant also satisfies a broad READ requirement:
+// READ:artefact/haiku satisfies READ:artefact.
 func hasCapability(caps []string, required string) bool {
 	for _, c := range caps {
 		if flow.MatchCapability(c, required) {
+			return true
+		}
+		// Scoped-grant-satisfies-broad: only for READ actions where
+		// a scoped grant like READ:artefact/haiku implies broad READ:artefact.
+		if strings.HasPrefix(c, "READ:") && strings.HasPrefix(required, "READ:") &&
+			strings.HasPrefix(c, required+"/") {
 			return true
 		}
 	}

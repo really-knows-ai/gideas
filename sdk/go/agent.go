@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 	"text/template"
 	"time"
 
@@ -213,7 +214,8 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	}
 
 	// 5. Validate output against the declared schema.
-	if err := a.validateOutput(result.Output); err != nil {
+	cleaned, err := a.validateOutput(result.Output)
+	if err != nil {
 		return nil, fmt.Errorf("flow agent: output validation failed: %w", err)
 	}
 
@@ -234,7 +236,7 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	// Hook point: after template rendering, after provider call, before return.
 
 	// 8. Return validated output.
-	return result.Output, nil
+	return cleaned, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -288,17 +290,34 @@ func compileSchema(schema []byte) (*jsonschema.Schema, error) {
 }
 
 // validateOutput validates JSON output bytes against the compiled schema.
-func (a *Agent) validateOutput(output []byte) error {
+// Returns the cleaned (code-fence stripped) output.
+func (a *Agent) validateOutput(output []byte) ([]byte, error) {
+	// Strip markdown code fences (```json ... ```) if present.
+	cleaned := stripCodeFences(output)
+
 	var outputDoc any
-	if err := json.Unmarshal(output, &outputDoc); err != nil {
-		return fmt.Errorf("output is not valid JSON: %w", err)
+	if err := json.Unmarshal(cleaned, &outputDoc); err != nil {
+		return nil, fmt.Errorf("output is not valid JSON: %w", err)
 	}
 
 	err := a.schema.Validate(outputDoc)
 	if err != nil {
-		return formatValidationError(err)
+		return nil, formatValidationError(err)
 	}
-	return nil
+	return cleaned, nil
+}
+
+// stripCodeFences removes markdown JSON code fences from output.
+func stripCodeFences(in []byte) []byte {
+	s := strings.TrimSpace(string(in))
+	// Remove opening ```json or ``` and closing ```
+	if strings.HasPrefix(s, "```") {
+		s = s[strings.Index(s, "\n")+1:]
+	}
+	if strings.HasSuffix(s, "```") {
+		s = strings.TrimSuffix(s, "```")
+	}
+	return []byte(strings.TrimSpace(s))
 }
 
 // formatValidationError converts jsonschema validation errors into a

@@ -2,7 +2,7 @@
 //
 // It reads the "petition" (creative brief), the current "haiku", applicable
 // governance laws, and any unresolved feedback, then uses an LLM
-// (gpt-oss:120b-cloud via Ollama) to decide how to handle each item and
+// (deepseek-v4-flash:cloud via Ollama) to decide how to handle each item and
 // produce a revised haiku.
 //
 // Refine operates in two phases:
@@ -100,7 +100,7 @@ func buildAgent(
 	// 3. Create flow.Agent with schema, model, prompts.
 	agent, err := flow.NewAgent(client,
 		flow.WithSchema(schema),
-		flow.WithModelName("gpt-oss:120b-cloud"),
+		flow.WithModelName("deepseek-v4-flash:cloud"),
 		flow.WithSystemPrompt(sysBuf.String()),
 		flow.WithQueryTemplate(queryTmpl),
 	)

@@ -32,7 +32,7 @@ type TriageAgent struct {
 var triageSchemaActionOnly = []byte(`{
 	"type": "object",
 	"properties": {
-		"decision":           { "type": "string", "enum": ["action"] },
+		"decision":           { "type": "string", "minLength": 1 },
 		"message":            { "type": "string", "minLength": 1 },
 		"justification_type": { "type": "string" },
 		"citation_ids":       { "type": "array", "items": { "type": "string" } },
@@ -47,7 +47,7 @@ var triageSchemaActionOnly = []byte(`{
 var triageSchemaFull = []byte(`{
 	"type": "object",
 	"properties": {
-		"decision":           { "type": "string", "enum": ["action", "refuse"] },
+		"decision":           { "type": "string", "minLength": 1 },
 		"message":            { "type": "string", "minLength": 1 },
 		"justification_type": { "type": "string", "enum": ["citation", "novel_argument"] },
 		"citation_ids":       { "type": "array", "items": { "type": "string" } },
