@@ -248,8 +248,9 @@ func fanOutAppraisal(
 	existingFeedback []*flowv1.FeedbackItem,
 	inputContent, reviewContent string,
 ) (*fanOutResult, error) {
-	// Step 1: Query laws.
-	laws, err := client.QueryLaws(ctx, cfg.GovernedArtefact, "")
+	// Step 1: Query laws with text/markdown representations only.
+	// Appraisers receive subjective law content, not code.
+	laws, err := client.QueryLaws(ctx, cfg.GovernedArtefact, "text/markdown")
 	if err != nil {
 		return nil, fmt.Errorf("appraisal: query laws: %w", err)
 	}
@@ -484,17 +485,12 @@ func fanOutAppraisal(
 // ---------------------------------------------------------------------------
 
 // lawToData converts a proto Law to LawData for serialization to review children.
-// Only text representations (markdown, plain text) are included — appraisers
-// receive the law's subjective content, not executable code.
+// Representations are already filtered to text/markdown by the QueryLaws call.
 func lawToData(l *flowv1.Law) LawData {
 	reps := l.GetRepresentations()
 	contents := make([]string, 0, len(reps))
 	for _, r := range reps {
-		if r.GetContent() == "" {
-			continue
-		}
-		switch r.GetType() {
-		case "text/markdown", "text/plain", "":
+		if r.GetContent() != "" {
 			contents = append(contents, r.GetContent())
 		}
 	}
