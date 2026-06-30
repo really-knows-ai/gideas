@@ -88,77 +88,8 @@ spec:
     defaultTimeout: "10m"
     maxTimeout: "30m"
 ---
-# --- LawGroup & Law — Governance constraints on haiku content ---
-#
-# Law Group for content governance
-apiVersion: flow.gideas.io/v1
-kind: LawGroup
-metadata:
-  name: content
-  namespace: default
-spec:
-  mode: law-by-law
-  passes: 2
----
-# Prohibition on weather references in haiku
-apiVersion: flow.gideas.io/v1
-kind: Law
-metadata:
-  name: no-weather
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  goal: "Absolutely no references to the weather or meteorological phenomena"
-  tier: 3
-  group: "content"
-  appliesTo:
-    - haiku
-  representations:
-    - type: text/markdown
-      content: |
-        Haiku must not reference weather or meteorological phenomena of any kind.
+# --- Node Definitions (Topology) ---
 
-        Prohibited: rain, snow, sleet, hail, thunder, lightning, storms, 
-        wind, breeze, gale, temperature (hot, cold, warm), humidity.
-
-        Examples:
-        - "winter rain" — weather reference
-        - "cold wind blows" — temperature + wind
-
-        The governing body tolerates zero weather.
----
-# Prohibition on atmospheric and seasonal references in haiku
-apiVersion: flow.gideas.io/v1
-kind: Law
-metadata:
-  name: no-atmosphere
-  namespace: default
-  labels:
-    flow.gideas.io/flow-name: haiku-flow
-spec:
-  goal: "Absolutely no references to atmospheric conditions, sky, or seasonal imagery"
-  tier: 3
-  group: "content"
-  appliesTo:
-    - haiku
-  representations:
-    - type: text/markdown
-      content: |
-        Haiku must not reference atmospheric conditions, the sky, or seasonal
-        imagery of any kind.
-
-        Prohibited: sun, moon, stars, sky, clouds, fog, mist, frost, dew,
-        dawn, dusk, twilight, seasons (spring, summer, autumn, winter), 
-        seasonal markers (cherry blossoms, falling leaves, snow on branches).
-
-        Examples:
-        - "autumn leaves fall" — seasonal reference
-        - "morning frost melts" — atmospheric condition
-        - "clouds drift by" — sky reference
-
-        The haiku must stay earthbound.
----
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
