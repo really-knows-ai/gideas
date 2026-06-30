@@ -109,25 +109,55 @@ metadata:
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  goal: "Absolutely no references to the weather or atmospheric conditions in general"
-  tier: 2
+  goal: "Absolutely no references to the weather or meteorological phenomena"
+  tier: 3
   group: "content"
   appliesTo:
     - haiku
   representations:
     - type: text/markdown
       content: |
-        Haiku must not reference weather, atmospheric conditions, seasons, 
-        temperature, precipitation, wind, clouds, or any meteorological phenomena.
+        Haiku must not reference weather or meteorological phenomena of any kind.
 
-        Examples of prohibited content:
-        - "spring rain falls" (weather reference)
-        - "autumn leaves" (seasonal reference)
-        - "cold wind blows" (temperature + wind)
-        - "morning frost" (atmospheric condition)
+        Prohibited: rain, snow, sleet, hail, thunder, lightning, storms, 
+        wind, breeze, gale, temperature (hot, cold, warm), humidity.
 
-        The haiku must find its imagery elsewhere — the human experience,
-        not the sky.
+        Examples:
+        - "winter rain" — weather reference
+        - "cold wind blows" — temperature + wind
+
+        The governing body tolerates zero weather.
+---
+# Prohibition on atmospheric and seasonal references in haiku
+apiVersion: flow.gideas.io/v1
+kind: Law
+metadata:
+  name: no-atmosphere
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  goal: "Absolutely no references to atmospheric conditions, sky, or seasonal imagery"
+  tier: 3
+  group: "content"
+  appliesTo:
+    - haiku
+  representations:
+    - type: text/markdown
+      content: |
+        Haiku must not reference atmospheric conditions, the sky, or seasonal
+        imagery of any kind.
+
+        Prohibited: sun, moon, stars, sky, clouds, fog, mist, frost, dew,
+        dawn, dusk, twilight, seasons (spring, summer, autumn, winter), 
+        seasonal markers (cherry blossoms, falling leaves, snow on branches).
+
+        Examples:
+        - "autumn leaves fall" — seasonal reference
+        - "morning frost melts" — atmospheric condition
+        - "clouds drift by" — sky reference
+
+        The haiku must stay earthbound.
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
