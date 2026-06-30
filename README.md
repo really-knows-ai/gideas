@@ -136,6 +136,7 @@ Then seed a workitem deliberately designed to violate them:
 
 ```bash
 ./tools/demo/new-haiku "A raging storm over the north sea"
+bash ./tools/haiku-watch/watch.sh haiku-<id>
 ```
 
 The Forge generates a haiku — likely full of weather imagery. The Appraisal node checks the `no-weather` and `no-atmosphere` laws, finds violations, and the Refine node must strip out every meteorological and atmospheric reference. Watch the friction build as the cycle wrestles the haiku into compliance.
