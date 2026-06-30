@@ -244,6 +244,10 @@ func (r *AppraiserAgent) Run(
 		for _, law := range laws {
 			fmt.Fprintf(&lawBlock, "- [%s] (Tier %d): %s\n",
 				law.ID, law.Tier, law.Goal)
+			for _, rep := range law.Representations {
+				indented := strings.ReplaceAll(rep, "\n", "\n  ")
+				fmt.Fprintf(&lawBlock, "  %s\n", indented)
+			}
 		}
 	}
 
