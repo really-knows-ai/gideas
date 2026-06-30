@@ -43,9 +43,10 @@ type PassData struct {
 // LawData is the minimal law representation passed via the "laws" artefact.
 // Only the fields the AppraiserAgent needs are included.
 type LawData struct {
-	ID   string `json:"id"`
-	Tier int32  `json:"tier"`
-	Goal string `json:"goal"`
+	ID              string   `json:"id"`
+	Tier            int32    `json:"tier"`
+	Goal            string   `json:"goal"`
+	Representations []string `json:"representations"`
 }
 
 // HistoryData is a single feedback history item passed via the "history"
@@ -154,9 +155,10 @@ func HandleReview(
 	laws := make([]flow.ReviewLaw, len(lawItems))
 	for i, l := range lawItems {
 		laws[i] = flow.ReviewLaw{
-			ID:   l.ID,
-			Tier: l.Tier,
-			Goal: l.Goal,
+			ID:              l.ID,
+			Tier:            l.Tier,
+			Goal:            l.Goal,
+			Representations: l.Representations,
 		}
 	}
 

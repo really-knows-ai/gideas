@@ -348,22 +348,14 @@ func fanOutAppraisal(
 			// Law-by-law: only the single law for this unit.
 			for _, l := range groupLaws {
 				if l.GetId() == de.Unit.LawIDs[0] {
-					lawData = append(lawData, LawData{
-						ID:   l.GetId(),
-						Tier: int32(l.GetTier()),
-						Goal: l.GetGoal(),
-					})
+					lawData = append(lawData, lawToData(l))
 					break
 				}
 			}
 		} else {
 			// Bundle: all laws in the group.
 			for _, l := range groupLaws {
-				lawData = append(lawData, LawData{
-					ID:   l.GetId(),
-					Tier: int32(l.GetTier()),
-					Goal: l.GetGoal(),
-				})
+				lawData = append(lawData, lawToData(l))
 			}
 		}
 		lawsJSON, jErr := json.Marshal(lawData)
@@ -490,6 +482,29 @@ func fanOutAppraisal(
 // ---------------------------------------------------------------------------
 // Post-fan-out: stamping
 // ---------------------------------------------------------------------------
+
+// lawToData converts a proto Law to LawData for serialization to review children.
+// Only text representations (markdown, plain text) are included — appraisers
+// receive the law's subjective content, not executable code.
+func lawToData(l *flowv1.Law) LawData {
+	reps := l.GetRepresentations()
+	contents := make([]string, 0, len(reps))
+	for _, r := range reps {
+		if r.GetContent() == "" {
+			continue
+		}
+		switch r.GetType() {
+		case "text/markdown", "text/plain", "":
+			contents = append(contents, r.GetContent())
+		}
+	}
+	return LawData{
+		ID:              l.GetId(),
+		Tier:            int32(l.GetTier()),
+		Goal:            l.GetGoal(),
+		Representations: contents,
+	}
+}
 
 // applyAppraisalStamps applies per-group and per-law stamps based on dispatch
 // completion. A group/law is stamped only if ALL dispatches for that scope

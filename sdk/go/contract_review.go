@@ -54,6 +54,9 @@ type ReviewLaw struct {
 
 	// Goal is the law's governance goal statement.
 	Goal string
+
+	// Representations are the law's typed expression payloads (e.g. markdown content).
+	Representations []string
 }
 
 // ReviewHistory is a single prior feedback entry provided to review agents
