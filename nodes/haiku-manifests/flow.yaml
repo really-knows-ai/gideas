@@ -88,8 +88,47 @@ spec:
     defaultTimeout: "10m"
     maxTimeout: "30m"
 ---
-# --- Node Definitions (Topology) ---
+# --- LawGroup & Law — Governance constraints on haiku content ---
+#
+# Law Group for content governance
+apiVersion: flow.gideas.io/v1
+kind: LawGroup
+metadata:
+  name: content
+  namespace: default
+spec:
+  mode: law-by-law
+  passes: 2
+---
+# Prohibition on weather references in haiku
+apiVersion: flow.gideas.io/v1
+kind: Law
+metadata:
+  name: no-weather
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  goal: "Absolutely no references to the weather or atmospheric conditions in general"
+  tier: 2
+  group: "content"
+  appliesTo:
+    - haiku
+  representations:
+    - type: text/markdown
+      content: |
+        Haiku must not reference weather, atmospheric conditions, seasons, 
+        temperature, precipitation, wind, clouds, or any meteorological phenomena.
 
+        Examples of prohibited content:
+        - "spring rain falls" (weather reference)
+        - "autumn leaves" (seasonal reference)
+        - "cold wind blows" (temperature + wind)
+        - "morning frost" (atmospheric condition)
+
+        The haiku must find its imagery elsewhere — the human experience,
+        not the sky.
+---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
