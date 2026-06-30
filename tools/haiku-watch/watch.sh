@@ -96,15 +96,19 @@ stamp_vocab() {
         | jq -r '.spec.stamps // [] | join(", ")' 2>/dev/null || echo "n/a"
 }
 
-# Start port-forward to Archivist in background
-echo -ne "${DIM}Starting port-forward to flow-archivist...${RESET} "
-kubectl port-forward "svc/flow-archivist" "${ARCHIVIST_PORT}:50054" -n "$NS" &>/dev/null &
-PF_PID=$!
-sleep 2
-if kill -0 "$PF_PID" 2>/dev/null; then
-    echo -e "${GREEN}ready${RESET}"
+# Start port-forward to Archivist in background (only if not already reachable)
+if grpcurl -plaintext "localhost:${ARCHIVIST_PORT}" list flow.v1.ArchivistService &>/dev/null; then
+    echo -e "${DIM}Archivist already reachable on :${ARCHIVIST_PORT}${RESET}"
 else
-    echo -e "${RED}failed${RESET}"
+    echo -ne "${DIM}Starting port-forward to flow-archivist...${RESET} "
+    kubectl port-forward "svc/flow-archivist" "${ARCHIVIST_PORT}:50054" -n "$NS" &>/dev/null &
+    PF_PID=$!
+    sleep 2
+    if kill -0 "$PF_PID" 2>/dev/null; then
+        echo -e "${GREEN}ready${RESET}"
+    else
+        echo -e "${RED}failed${RESET}"
+    fi
 fi
 
 # Header
