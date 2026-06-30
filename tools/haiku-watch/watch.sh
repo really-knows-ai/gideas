@@ -125,10 +125,6 @@ LAST_PHASE=""
 LAST_NODE=""
 HAIKU_SHOWN_FOR=""
 
-watch_workitem() {
-    kubectl get workitem "$NAME" -n "$NS" -w -o json --ignore-not-found 2>/dev/null
-}
-
 thrash_summary() {
     echo "$1" | jq -r '
         (.status.thrashCounters // {}) | to_entries
@@ -136,6 +132,54 @@ thrash_summary() {
         | map("\(.key):\(.value)")
         | join("  ")
     ' 2>/dev/null
+}
+
+# Show current state before entering watch loop
+CURRENT=$(kubectl get workitem "$NAME" -n "$NS" -o json --ignore-not-found 2>/dev/null)
+if [ -n "$CURRENT" ]; then
+    CUR_PHASE=$(echo "$CURRENT" | jq -r '.status.phase // ""' 2>/dev/null)
+    CUR_NODE=$(echo "$CURRENT" | jq -r '.status.currentAssignee // ""' 2>/dev/null)
+    CUR_VISITS=$(echo "$CURRENT" | jq -r '[.status.thrashCounters // {} | to_entries | .[].value] | add // 0' 2>/dev/null)
+    CUR_THRASH=$(thrash_summary "$CURRENT")
+    echo -e "${DIM}Current state:${RESET}"
+
+    case "$CUR_PHASE" in
+        Running)
+            echo -e "  $(style_phase "$CUR_PHASE")  on ${BOLD}${CUR_NODE}${RESET}"
+            [ -n "$CUR_THRASH" ] && echo -e "  ${DIM}visits: ${RESET}${CUR_THRASH}"
+            ;;
+        Completed)
+            echo -e "  $(style_phase "$CUR_PHASE")  ${CUR_VISITS} visit$(plural "$CUR_VISITS")"
+            [ -n "$CUR_THRASH" ] && echo -e "  ${DIM}visits: ${RESET}${CUR_THRASH}"
+            sleep 1
+            HAIKU=$(fetch_haiku)
+            if [ -n "$HAIKU" ]; then
+                display_haiku "$HAIKU"
+            fi
+            echo -e "${GREEN}${BOLD}╭─── Flow already complete ───╮${RESET}"
+            echo -e "${GREEN}${BOLD}╰─────────────────────────────╯${RESET}"
+            exit 0
+            ;;
+        Failed)
+            CUR_FAILURE=$(echo "$CURRENT" | jq -r '.status.failureReason // ""' 2>/dev/null)
+            echo -e "  $(style_phase "$CUR_PHASE")  ${CUR_FAILURE}"
+            [ -n "$CUR_THRASH" ] && echo -e "  ${DIM}visits: ${RESET}${CUR_THRASH}"
+            exit 1
+            ;;
+        *)
+            echo -e "  $(style_phase "$CUR_PHASE")  ${CUR_NODE}"
+            ;;
+    esac
+    echo ""
+    LAST_PHASE="$CUR_PHASE"
+    LAST_NODE="$CUR_NODE"
+else
+    echo -e "${DIM}Workitem not yet created, waiting...${RESET}"
+    echo ""
+fi
+
+watch_workitem() {
+    kubectl get workitem "$NAME" -n "$NS" -w -o json --ignore-not-found 2>/dev/null
 }
 
 # Main loop — reconnect on disconnect
