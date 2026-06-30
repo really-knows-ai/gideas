@@ -53,12 +53,9 @@ func TestManifest_CrossCuttingConsistency(t *testing.T) {
 	})
 
 	t.Run("deployment_crd_alignment", func(t *testing.T) {
-		for nodeID := range deps {
-			if _, ok := nodes[nodeID]; !ok {
-				// Deployments.yaml may contain entries for nodes not in the
-				// simplified demo flow. Only flag nodes that actually have
-				// FoundryNode definitions in flow.yaml.
-				continue
+		for nodeID, node := range nodes {
+			if node.Spec.Capabilities == nil {
+				t.Errorf("FoundryNode %q has no capabilities", nodeID)
 			}
 		}
 	})

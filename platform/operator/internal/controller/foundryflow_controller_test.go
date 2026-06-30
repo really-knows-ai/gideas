@@ -435,7 +435,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 			By("Verifying Librarian env vars")
 			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
 			Expect(envMap).To(HaveKeyWithValue("EVENT_BUS_ADDRESS", "flow-eventbus:50056"))
-			Expect(envMap).To(HaveKeyWithValue("OPERATOR_ADDRESS", "flow-operator:50052"))
+			Expect(envMap).To(HaveKeyWithValue("OPERATOR_ADDRESS", "flow-operator.operator-system.svc.cluster.local:50052"))
 			Expect(envMap).To(HaveKeyWithValue("REVIEW_TTL_TIER1", "24h0m0s"))
 			Expect(envMap).NotTo(HaveKey("REVIEW_TTL_TIER2"))
 
@@ -471,7 +471,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 			By("Verifying Embassy env vars")
 			envMap := envVarMap(deploy.Spec.Template.Spec.Containers[0].Env)
 			Expect(envMap).To(HaveKeyWithValue("EVENT_BUS_ADDRESS", "flow-eventbus:50056"))
-			Expect(envMap).To(HaveKeyWithValue("OPERATOR_ADDRESS", "flow-operator:50052"))
+			Expect(envMap).To(HaveKeyWithValue("OPERATOR_ADDRESS", "flow-operator.operator-system.svc.cluster.local:50052"))
 			Expect(envMap).To(HaveKeyWithValue("EMBASSY_PORT", "50059"))
 
 			By("Verifying the Embassy Service exists")
@@ -788,7 +788,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 				Namespace: testNamespace,
 			}, &deploy)).To(Succeed())
 			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
-			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/gideas/flow/federation:latest"))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("flow-federation:latest"))
 			Expect(deploy.Spec.Template.Spec.Containers[0].Ports).To(HaveLen(1))
 			Expect(deploy.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(50061)))
 
