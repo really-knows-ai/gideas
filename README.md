@@ -110,9 +110,6 @@ The operator automatically creates all system services (Archivist, Librarian, Ev
 Seed a workitem with a safe prompt to see the flow complete under structural governance (3-line haiku, 5-7-5 syllables):
 
 ```bash
-kubectl port-forward svc/flow-archivist 50054:50054 &
-kubectl port-forward svc/flow-librarian 50058:50058 &
-
 ./tools/demo/new-haiku "write me a haiku about a quiet room"
 ```
 
