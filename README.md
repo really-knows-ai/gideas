@@ -105,32 +105,40 @@ kubectl apply -f nodes/haiku-manifests/configmaps.yaml
 
 The operator automatically creates all system services (Archivist, Librarian, EventBus, FrictionLedger, Monitor, Embassy, Ollama) and node deployments from the `FoundryFlow` and `FoundryNode` resources.
 
-### 5. Seed a workitem
+#### Phase 1 — Structural rules only
 
-Port-forward the Archivist and Librarian, then use the demo scripts:
+Seed a workitem with a safe prompt to see the flow complete under structural governance (3-line haiku, 5-7-5 syllables):
 
 ```bash
 kubectl port-forward svc/flow-archivist 50054:50054 &
 kubectl port-forward svc/flow-librarian 50058:50058 &
 
-# Optionally add a governance law
-./tools/demo/add-law "The haiku must evoke a season"
-
-# Create a new haiku workitem
-./tools/demo/new-haiku "write me a haiku about autumn leaves"
+./tools/demo/new-haiku "write me a haiku about a quiet room"
 ```
 
-### 6. Watch it
+Watch it run:
 
 ```bash
 bash ./tools/haiku-watch/watch.sh haiku-<id>
 ```
 
-Or watch all workitems:
+The cycle completes when all stamps (`linter`, `appraise-security`, `approval`) are on the haiku.
+
+#### Phase 2 — Add content laws, pick a fight
+
+Now apply content governance laws that prohibit weather and atmospheric references:
 
 ```bash
-watch kubectl get workitems
+kubectl apply -f nodes/haiku-manifests/laws.yaml
 ```
+
+Then seed a workitem deliberately designed to violate them:
+
+```bash
+./tools/demo/new-haiku "A raging storm over the north sea"
+```
+
+The Forge generates a haiku — likely full of weather imagery. The Appraisal node checks the `no-weather` and `no-atmosphere` laws, finds violations, and the Refine node must strip out every meteorological and atmospheric reference. Watch the friction build as the cycle wrestles the haiku into compliance.
 
 ## The Haiku Flow
 
