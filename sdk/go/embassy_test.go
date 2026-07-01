@@ -81,7 +81,7 @@ func TestEmbassyClient_PreflightManifest_Success(t *testing.T) {
 	spy := &embassySpyServer{}
 	client := setupEmbassyTestClient(t, spy)
 
-	resp, err := client.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := client.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		TransferId: "tx-1",
 	}, "remote-treaty")
@@ -103,7 +103,7 @@ func TestEmbassyClient_StreamPackage_SendsChunks(t *testing.T) {
 	spy := &embassySpyServer{}
 	client := setupEmbassyTestClient(t, spy)
 
-	resp, err := client.StreamPackage(context.Background(), []*flowv1.PackageChunk{
+	resp, err := client.StreamPackage([]*flowv1.PackageChunk{
 		{Chunk: &flowv1.PackageChunk_Manifest{Manifest: &flowv1.TransferManifest{TransferId: "tx-2"}}},
 		{Chunk: &flowv1.PackageChunk_Content{Content: []byte("payload")}},
 	})
@@ -124,7 +124,7 @@ func TestEmbassyClient_StreamPackage_SendsChunks(t *testing.T) {
 	}
 }
 
-func TestEmbassyClient_ExportPackage_ReceivesChunks(t *testing.T) {
+func TestEmbassyClient_ExportPackage_RecvChunksAndStop(t *testing.T) {
 	spy := &embassySpyServer{
 		exportChunks: []*flowv1.PackageChunk{
 			{Chunk: &flowv1.PackageChunk_Manifest{Manifest: &flowv1.TransferManifest{TransferId: "tx-3"}}},
@@ -133,7 +133,7 @@ func TestEmbassyClient_ExportPackage_ReceivesChunks(t *testing.T) {
 	}
 	client := setupEmbassyTestClient(t, spy)
 
-	stream, err := client.ExportPackage(context.Background(), "wi-123", "law-petition")
+	stream, err := client.ExportPackage("wi-123", "law-petition")
 	if err != nil {
 		t.Fatalf("ExportPackage() returned error: %v", err)
 	}
@@ -146,9 +146,12 @@ func TestEmbassyClient_ExportPackage_ReceivesChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recv() second chunk returned error: %v", err)
 	}
+
+	// Stop and verify post-stop error.
+	stream.Stop()
 	_, err = stream.Recv()
-	if err != io.EOF {
-		t.Fatalf("expected EOF after final chunk, got %v", err)
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
 	}
 
 	if spy.lastExport.GetWorkitemId() != "wi-123" {
@@ -165,10 +168,94 @@ func TestEmbassyClient_ExportPackage_ReceivesChunks(t *testing.T) {
 	}
 }
 
+func TestEmbassyClient_ExportPackage_RecvThenStop(t *testing.T) {
+	spy := &embassySpyServer{
+		exportChunks: []*flowv1.PackageChunk{
+			{Chunk: &flowv1.PackageChunk_Manifest{Manifest: &flowv1.TransferManifest{TransferId: "tx-1"}}},
+		},
+	}
+	client := setupEmbassyTestClient(t, spy)
+
+	stream, err := client.ExportPackage("wi-456", "law-petition")
+	if err != nil {
+		t.Fatalf("ExportPackage() returned error: %v", err)
+	}
+
+	// Read one chunk.
+	chunk, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv() first chunk returned error: %v", err)
+	}
+	if chunk.GetManifest().GetTransferId() != "tx-1" {
+		t.Fatalf("expected manifest transfer id tx-1, got %q", chunk.GetManifest().GetTransferId())
+	}
+
+	// Stop must not panic.
+	stream.Stop()
+}
+
 func TestEmbassyClient_PreflightManifest_NoConnection(t *testing.T) {
 	client := &EmbassyClient{}
-	_, err := client.PreflightManifest(context.Background(), &flowv1.TransferManifest{}, "")
+	_, err := client.PreflightManifest(&flowv1.TransferManifest{}, "")
 	if err == nil {
 		t.Fatal("expected error when embassy connection is missing")
 	}
+}
+
+func TestEmbassyClient_StreamPackage_NoConnection(t *testing.T) {
+	client := &EmbassyClient{}
+	_, err := client.StreamPackage(nil)
+	if err == nil {
+		t.Fatal("expected error when embassy connection is missing")
+	}
+}
+
+func TestEmbassyClient_ExportPackage_NoConnection(t *testing.T) {
+	client := &EmbassyClient{}
+	_, err := client.ExportPackage("", "")
+	if err == nil {
+		t.Fatal("expected error when embassy connection is missing")
+	}
+}
+
+// --- Watcher lifecycle edge cases ---
+
+func TestEmbassyClient_ExportPackage_StopBeforeRecv(t *testing.T) {
+	spy := &embassySpyServer{
+		exportChunks: []*flowv1.PackageChunk{
+			{Chunk: &flowv1.PackageChunk_Manifest{Manifest: &flowv1.TransferManifest{TransferId: "tx-1"}}},
+		},
+	}
+	client := setupEmbassyTestClient(t, spy)
+
+	stream, err := client.ExportPackage("wi-789", "law-petition")
+	if err != nil {
+		t.Fatalf("ExportPackage() returned error: %v", err)
+	}
+
+	stream.Stop()
+
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
+	}
+}
+
+func TestEmbassyClient_ExportPackage_EOFThenStop(t *testing.T) {
+	// Server returns 0 chunks — Recv returns io.EOF, Stop is safe.
+	spy := &embassySpyServer{}
+	client := setupEmbassyTestClient(t, spy)
+
+	stream, err := client.ExportPackage("wi-000", "law-petition")
+	if err != nil {
+		t.Fatalf("ExportPackage() returned error: %v", err)
+	}
+
+	_, err = stream.Recv()
+	if err != io.EOF {
+		t.Fatalf("expected io.EOF for empty stream, got %v", err)
+	}
+
+	// Stop after EOF must not panic.
+	stream.Stop()
 }

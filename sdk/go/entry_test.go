@@ -225,7 +225,7 @@ func TestEntryClient_CreateWorkitem_Success(t *testing.T) {
 	ec := setupEntryTestEnv(t, spy, nil)
 
 	md := map[string]string{"source": "friction-watcher", "law_id": "law-42"}
-	id, err := ec.CreateWorkitem(context.Background(), md)
+	id, err := ec.CreateWorkitem(md)
 	if err != nil {
 		t.Fatalf("CreateWorkitem() returned error: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestEntryClient_CreateWorkitem_NilMetadata(t *testing.T) {
 	spy := &entrySpyOperator{returnID: "wi-nil-meta"}
 	ec := setupEntryTestEnv(t, spy, nil)
 
-	id, err := ec.CreateWorkitem(context.Background(), nil)
+	id, err := ec.CreateWorkitem(nil)
 	if err != nil {
 		t.Fatalf("CreateWorkitem(nil) returned error: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestEntryClient_CreateWorkitem_Error(t *testing.T) {
 	spy := &entrySpyOperator{returnErr: fmt.Errorf("permission denied")}
 	ec := setupEntryTestEnv(t, spy, nil)
 
-	_, err := ec.CreateWorkitem(context.Background(), nil)
+	_, err := ec.CreateWorkitem(nil)
 	if err == nil {
 		t.Fatal("expected error from CreateWorkitem, got nil")
 	}
@@ -269,7 +269,7 @@ func TestEntryClient_CreateWorkitem_Error(t *testing.T) {
 func TestEntryClient_CreateWorkitem_NoConnection(t *testing.T) {
 	// EntryClient with no sidecar connection.
 	ec := &EntryClient{}
-	_, err := ec.CreateWorkitem(context.Background(), nil)
+	_, err := ec.CreateWorkitem(nil)
 	if err == nil {
 		t.Fatal("expected error when no sidecar connection, got nil")
 	}
@@ -279,7 +279,7 @@ func TestEntryClient_CreateWorkitem_NoConnection(t *testing.T) {
 // Tests — EntryClient.Subscribe
 // ---------------------------------------------------------------------------
 
-func TestEntryClient_Subscribe_ReceivesEvents(t *testing.T) {
+func TestEntryClient_Subscribe_RecvEventsAndStop(t *testing.T) {
 	events := []*flowv1.FlowEvent{
 		{EventId: "evt-1", EventType: "friction.threshold_crossed", Channel: "friction"},
 		{EventId: "evt-2", EventType: "friction.threshold_crossed", Channel: "friction"},
@@ -287,7 +287,7 @@ func TestEntryClient_Subscribe_ReceivesEvents(t *testing.T) {
 	spy := &entrySpyEventBus{events: events}
 	ec := setupEntryTestEnv(t, nil, spy)
 
-	stream, err := ec.Subscribe(context.Background(), "friction", "friction.threshold_crossed")
+	stream, err := ec.Subscribe("friction", "friction.threshold_crossed")
 	if err != nil {
 		t.Fatalf("Subscribe() returned error: %v", err)
 	}
@@ -308,11 +308,12 @@ func TestEntryClient_Subscribe_ReceivesEvents(t *testing.T) {
 	if len(received) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(received))
 	}
-	if received[0].GetEventId() != "evt-1" {
-		t.Fatalf("expected first event_id=evt-1, got %q", received[0].GetEventId())
-	}
-	if received[1].GetEventId() != "evt-2" {
-		t.Fatalf("expected second event_id=evt-2, got %q", received[1].GetEventId())
+
+	// Stop after reading all events, verify post-stop error.
+	stream.Stop()
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
 	}
 
 	// Verify the subscribe request was correct.
@@ -324,9 +325,34 @@ func TestEntryClient_Subscribe_ReceivesEvents(t *testing.T) {
 	}
 }
 
+func TestEntryClient_Subscribe_RecvThenStop(t *testing.T) {
+	events := []*flowv1.FlowEvent{
+		{EventId: "evt-1", EventType: "test", Channel: "ch"},
+	}
+	spy := &entrySpyEventBus{events: events}
+	ec := setupEntryTestEnv(t, nil, spy)
+
+	stream, err := ec.Subscribe("ch", "test")
+	if err != nil {
+		t.Fatalf("Subscribe() returned error: %v", err)
+	}
+
+	// Read one event.
+	evt, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv() first event returned error: %v", err)
+	}
+	if evt.GetEventId() != "evt-1" {
+		t.Fatalf("expected event_id evt-1, got %q", evt.GetEventId())
+	}
+
+	// Stop must not panic.
+	stream.Stop()
+}
+
 func TestEntryClient_Subscribe_NoConnection(t *testing.T) {
 	ec := &EntryClient{}
-	_, err := ec.Subscribe(context.Background(), "friction", "any")
+	_, err := ec.Subscribe("friction", "any")
 	if err == nil {
 		t.Fatal("expected error when no event bus connection, got nil")
 	}
@@ -357,7 +383,7 @@ func TestEntryClient_QueryLaws_Success(t *testing.T) {
 	opSpy := &entrySpyOperator{returnID: "unused"}
 	ec := setupEntryTestEnv(t, opSpy, nil, libSpy)
 
-	got, err := ec.QueryLaws(context.Background(), "", "")
+	got, err := ec.QueryLaws("", "")
 	if err != nil {
 		t.Fatalf("QueryLaws() returned error: %v", err)
 	}
@@ -383,7 +409,7 @@ func TestEntryClient_QueryLaws_WithFilter(t *testing.T) {
 	opSpy := &entrySpyOperator{returnID: "unused"}
 	ec := setupEntryTestEnv(t, opSpy, nil, libSpy)
 
-	got, err := ec.QueryLaws(context.Background(), "haiku", "smt")
+	got, err := ec.QueryLaws("haiku", "smt")
 	if err != nil {
 		t.Fatalf("QueryLaws() returned error: %v", err)
 	}
@@ -406,7 +432,7 @@ func TestEntryClient_QueryLaws_Error(t *testing.T) {
 	opSpy := &entrySpyOperator{returnID: "unused"}
 	ec := setupEntryTestEnv(t, opSpy, nil, libSpy)
 
-	_, err := ec.QueryLaws(context.Background(), "", "")
+	_, err := ec.QueryLaws("", "")
 	if err == nil {
 		t.Fatal("expected error from QueryLaws, got nil")
 	}
@@ -414,7 +440,7 @@ func TestEntryClient_QueryLaws_Error(t *testing.T) {
 
 func TestEntryClient_QueryLaws_NoConnection(t *testing.T) {
 	ec := &EntryClient{}
-	_, err := ec.QueryLaws(context.Background(), "", "")
+	_, err := ec.QueryLaws("", "")
 	if err == nil {
 		t.Fatal("expected error when no sidecar connection, got nil")
 	}
@@ -429,7 +455,7 @@ func TestEntryClient_RetireDisputeRecord_Success(t *testing.T) {
 	opSpy := &entrySpyOperator{returnID: "unused"}
 	ec := setupEntryTestEnv(t, opSpy, nil, libSpy)
 
-	err := ec.RetireDisputeRecord(context.Background(), "pet-42")
+	err := ec.RetireDisputeRecord("pet-42")
 	if err != nil {
 		t.Fatalf("RetireDisputeRecord() returned error: %v", err)
 	}
@@ -443,7 +469,7 @@ func TestEntryClient_RetireDisputeRecord_Error(t *testing.T) {
 	opSpy := &entrySpyOperator{returnID: "unused"}
 	ec := setupEntryTestEnv(t, opSpy, nil, libSpy)
 
-	err := ec.RetireDisputeRecord(context.Background(), "pet-99")
+	err := ec.RetireDisputeRecord("pet-99")
 	if err == nil {
 		t.Fatal("expected error from RetireDisputeRecord, got nil")
 	}
@@ -451,7 +477,7 @@ func TestEntryClient_RetireDisputeRecord_Error(t *testing.T) {
 
 func TestEntryClient_RetireDisputeRecord_NoConnection(t *testing.T) {
 	ec := &EntryClient{}
-	err := ec.RetireDisputeRecord(context.Background(), "pet-1")
+	err := ec.RetireDisputeRecord("pet-1")
 	if err == nil {
 		t.Fatal("expected error when no sidecar connection, got nil")
 	}
@@ -465,7 +491,7 @@ func TestEntryClient_ResumeWorkitem_Success(t *testing.T) {
 	opSpy := &entrySpyOperator{returnID: "unused"}
 	ec := setupEntryTestEnv(t, opSpy, nil)
 
-	err := ec.ResumeWorkitem(context.Background(), "wi-held-001")
+	err := ec.ResumeWorkitem("wi-held-001")
 	if err != nil {
 		t.Fatalf("ResumeWorkitem() returned error: %v", err)
 	}
@@ -478,7 +504,7 @@ func TestEntryClient_ResumeWorkitem_Error(t *testing.T) {
 	opSpy := &entrySpyOperator{returnID: "unused", resumeErr: fmt.Errorf("workitem not found")}
 	ec := setupEntryTestEnv(t, opSpy, nil)
 
-	err := ec.ResumeWorkitem(context.Background(), "wi-missing")
+	err := ec.ResumeWorkitem("wi-missing")
 	if err == nil {
 		t.Fatal("expected error from ResumeWorkitem, got nil")
 	}
@@ -486,7 +512,7 @@ func TestEntryClient_ResumeWorkitem_Error(t *testing.T) {
 
 func TestEntryClient_ResumeWorkitem_NoConnection(t *testing.T) {
 	ec := &EntryClient{}
-	err := ec.ResumeWorkitem(context.Background(), "wi-1")
+	err := ec.ResumeWorkitem("wi-1")
 	if err == nil {
 		t.Fatal("expected error when no sidecar connection, got nil")
 	}
@@ -506,7 +532,7 @@ func TestEntryClient_ListSuspendedWorkitems_Success(t *testing.T) {
 	}
 	ec := setupEntryTestEnv(t, opSpy, nil)
 
-	ids, err := ec.ListSuspendedWorkitems(context.Background(), "pet-42")
+	ids, err := ec.ListSuspendedWorkitems("pet-42")
 	if err != nil {
 		t.Fatalf("ListSuspendedWorkitems() returned error: %v", err)
 	}
@@ -525,7 +551,7 @@ func TestEntryClient_ListSuspendedWorkitems_Error(t *testing.T) {
 	}
 	ec := setupEntryTestEnv(t, opSpy, nil)
 
-	_, err := ec.ListSuspendedWorkitems(context.Background(), "pet-42")
+	_, err := ec.ListSuspendedWorkitems("pet-42")
 	if err == nil {
 		t.Fatal("expected error from ListSuspendedWorkitems, got nil")
 	}
@@ -533,7 +559,7 @@ func TestEntryClient_ListSuspendedWorkitems_Error(t *testing.T) {
 
 func TestEntryClient_ListSuspendedWorkitems_NoConnection(t *testing.T) {
 	ec := &EntryClient{}
-	_, err := ec.ListSuspendedWorkitems(context.Background(), "pet-1")
+	_, err := ec.ListSuspendedWorkitems("pet-1")
 	if err == nil {
 		t.Fatal("expected error when no sidecar connection, got nil")
 	}

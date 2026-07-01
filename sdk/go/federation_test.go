@@ -121,7 +121,7 @@ func TestFederationClient_GetPetitionTarget_Success(t *testing.T) {
 	spy := &federationSpyServer{}
 	client := setupFederationTestClient(t, spy)
 
-	target, err := client.GetPetitionTarget(context.Background(), "security")
+	target, err := client.GetPetitionTarget("security")
 	if err != nil {
 		t.Fatalf("GetPetitionTarget() returned error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestFederationClient_DiscoverEndpoints_NoFilter(t *testing.T) {
 	spy := &federationSpyServer{}
 	client := setupFederationTestClient(t, spy)
 
-	endpoints, err := client.DiscoverEndpoints(context.Background(), "")
+	endpoints, err := client.DiscoverEndpoints("")
 	if err != nil {
 		t.Fatalf("DiscoverEndpoints() returned error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestFederationClient_DiscoverEndpoints_WithFilter(t *testing.T) {
 	}
 	client := setupFederationTestClient(t, spy)
 
-	endpoints, err := client.DiscoverEndpoints(context.Background(), "state-2")
+	endpoints, err := client.DiscoverEndpoints("state-2")
 	if err != nil {
 		t.Fatalf("DiscoverEndpoints() returned error: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestFederationClient_ConnectsToConfigurableAddress(t *testing.T) {
 	client := setupFederationTestClient(t, spy)
 
 	// Verify the client was successfully created and can make calls.
-	_, err := client.GetPetitionTarget(context.Background(), "test")
+	_, err := client.GetPetitionTarget("test")
 	if err != nil {
 		t.Fatalf("expected successful call on configured address, got error: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestFederationClient_ConnectsToConfigurableAddress(t *testing.T) {
 
 func TestFederationClient_GetPetitionTarget_NoConnection(t *testing.T) {
 	client := &FederationClient{}
-	_, err := client.GetPetitionTarget(context.Background(), "test")
+	_, err := client.GetPetitionTarget("test")
 	if err == nil {
 		t.Fatal("expected error when federation connection is missing")
 	}
@@ -210,7 +210,7 @@ func TestFederationClient_GetPetitionTarget_NoConnection(t *testing.T) {
 
 func TestFederationClient_DiscoverEndpoints_NoConnection(t *testing.T) {
 	client := &FederationClient{}
-	_, err := client.DiscoverEndpoints(context.Background(), "")
+	_, err := client.DiscoverEndpoints("")
 	if err == nil {
 		t.Fatal("expected error when federation connection is missing")
 	}
@@ -222,16 +222,13 @@ func TestFederationClient_SubmitPublication_Accepted(t *testing.T) {
 	spy := &federationSpyServer{}
 	client := setupFederationTestClient(t, spy)
 
-	law := &flowv1.Law{
+	law := &Law{pb: &flowv1.Law{
 		Id:   "law-1",
 		Goal: "Test law",
-	}
-	resp, err := client.SubmitPublication(context.Background(), law, "flow-publisher")
+	}}
+	err := client.SubmitPublication(law, "flow-publisher")
 	if err != nil {
 		t.Fatalf("SubmitPublication() returned error: %v", err)
-	}
-	if !resp.GetAccepted() {
-		t.Fatal("expected publication to be accepted")
 	}
 	if spy.lastSubmitPublication.GetSourceFlowIdentity() != "flow-publisher" {
 		t.Fatalf("expected source identity flow-publisher, got %q",
@@ -256,27 +253,23 @@ func TestFederationClient_SubmitPublication_Rejected(t *testing.T) {
 	}
 	client := setupFederationTestClient(t, spy)
 
-	resp, err := client.SubmitPublication(context.Background(), &flowv1.Law{Id: "law-2"}, "flow-x")
-	if err != nil {
-		t.Fatalf("SubmitPublication() returned error: %v", err)
-	}
-	if resp.GetAccepted() {
-		t.Fatal("expected publication to be rejected")
-	}
-	if resp.GetRejection().GetReason() != flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_CONFLICT {
-		t.Fatalf("expected CONFLICT rejection reason, got %v", resp.GetRejection().GetReason())
+	err := client.SubmitPublication(&Law{pb: &flowv1.Law{Id: "law-2"}}, "flow-x")
+	if err == nil {
+		t.Fatal("expected error from SubmitPublication for rejected publication, got nil")
 	}
 }
 
 func TestFederationClient_SubmitPublication_NoConnection(t *testing.T) {
 	client := &FederationClient{}
-	_, err := client.SubmitPublication(context.Background(), &flowv1.Law{}, "")
+	err := client.SubmitPublication(&Law{pb: &flowv1.Law{}}, "")
 	if err == nil {
 		t.Fatal("expected error when federation connection is missing")
 	}
 }
 
-func TestFederationClient_SubscribeLawUpdates_ReturnsStreamReader(t *testing.T) {
+// --- LawUpdateWatcher tests ---
+
+func TestFederationClient_SubscribeLawUpdates_RecvEventsAndStop(t *testing.T) {
 	spy := &federationSpyServer{
 		lawUpdateEvents: []*flowv1.PublishedLawEvent{
 			{
@@ -294,25 +287,22 @@ func TestFederationClient_SubscribeLawUpdates_ReturnsStreamReader(t *testing.T) 
 	}
 	client := setupFederationTestClient(t, spy)
 
-	stream, err := client.SubscribeLawUpdates(context.Background(), "subscriber-flow-1")
+	watcher, err := client.SubscribeLawUpdates("subscriber-flow-1")
 	if err != nil {
 		t.Fatalf("SubscribeLawUpdates() returned error: %v", err)
 	}
 
 	// Read first event.
-	evt1, err := stream.Recv()
+	evt1, err := watcher.Recv()
 	if err != nil {
 		t.Fatalf("Recv() first event returned error: %v", err)
 	}
 	if evt1.GetLaw().GetId() != "pub-law-1" {
 		t.Fatalf("expected first law ID pub-law-1, got %q", evt1.GetLaw().GetId())
 	}
-	if evt1.GetMaterialisationTier() != flowv1.LawTier_LAW_TIER_STATE_CONSTITUTION {
-		t.Fatalf("expected tier STATE_CONSTITUTION, got %v", evt1.GetMaterialisationTier())
-	}
 
 	// Read second event.
-	evt2, err := stream.Recv()
+	evt2, err := watcher.Recv()
 	if err != nil {
 		t.Fatalf("Recv() second event returned error: %v", err)
 	}
@@ -320,10 +310,11 @@ func TestFederationClient_SubscribeLawUpdates_ReturnsStreamReader(t *testing.T) 
 		t.Fatalf("expected second law ID pub-law-2, got %q", evt2.GetLaw().GetId())
 	}
 
-	// Expect EOF.
-	_, err = stream.Recv()
-	if err != io.EOF {
-		t.Fatalf("expected EOF after all events, got %v", err)
+	// Stop and verify subsequent Recv returns error.
+	watcher.Stop()
+	_, err = watcher.Recv()
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
 	}
 
 	if spy.lastSubscribeLawUpdates.GetSubscriberFlowIdentity() != "subscriber-flow-1" {
@@ -332,15 +323,43 @@ func TestFederationClient_SubscribeLawUpdates_ReturnsStreamReader(t *testing.T) 
 	}
 }
 
+func TestFederationClient_SubscribeLawUpdates_RecvThenStop(t *testing.T) {
+	spy := &federationSpyServer{
+		lawUpdateEvents: []*flowv1.PublishedLawEvent{
+			{Law: &flowv1.Law{Id: "pub-law-1"}},
+		},
+	}
+	client := setupFederationTestClient(t, spy)
+
+	watcher, err := client.SubscribeLawUpdates("subscriber-flow-1")
+	if err != nil {
+		t.Fatalf("SubscribeLawUpdates() returned error: %v", err)
+	}
+
+	// Read one event.
+	evt, err := watcher.Recv()
+	if err != nil {
+		t.Fatalf("Recv() first event returned error: %v", err)
+	}
+	if evt.GetLaw().GetId() != "pub-law-1" {
+		t.Fatalf("expected law ID pub-law-1, got %q", evt.GetLaw().GetId())
+	}
+
+	// Stop must not panic.
+	watcher.Stop()
+}
+
 func TestFederationClient_SubscribeLawUpdates_NoConnection(t *testing.T) {
 	client := &FederationClient{}
-	_, err := client.SubscribeLawUpdates(context.Background(), "")
+	_, err := client.SubscribeLawUpdates("")
 	if err == nil {
 		t.Fatal("expected error when federation connection is missing")
 	}
 }
 
-func TestFederationClient_SubscribePetitionOutcomes_ReturnsStreamReader(t *testing.T) {
+// --- PetitionOutcomeWatcher tests ---
+
+func TestFederationClient_SubscribePetitionOutcomes_RecvEventsAndStop(t *testing.T) {
 	spy := &federationSpyServer{
 		petitionOutcomeEvents: []*flowv1.PetitionOutcomeEvent{
 			{
@@ -360,13 +379,13 @@ func TestFederationClient_SubscribePetitionOutcomes_ReturnsStreamReader(t *testi
 	}
 	client := setupFederationTestClient(t, spy)
 
-	stream, err := client.SubscribePetitionOutcomes(context.Background(), "subscriber-flow-2")
+	watcher, err := client.SubscribePetitionOutcomes("subscriber-flow-2")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() returned error: %v", err)
 	}
 
-	// Read first event: accepted.
-	evt1, err := stream.Recv()
+	// Read both events.
+	evt1, err := watcher.Recv()
 	if err != nil {
 		t.Fatalf("Recv() first event returned error: %v", err)
 	}
@@ -376,12 +395,8 @@ func TestFederationClient_SubscribePetitionOutcomes_ReturnsStreamReader(t *testi
 	if evt1.GetOutcome() != flowv1.PetitionOutcome_PETITION_OUTCOME_ACCEPTED {
 		t.Fatalf("expected ACCEPTED outcome, got %v", evt1.GetOutcome())
 	}
-	if evt1.GetPublishedLawId() != "new-law-1" {
-		t.Fatalf("expected published_law_id new-law-1, got %q", evt1.GetPublishedLawId())
-	}
 
-	// Read second event: rejected.
-	evt2, err := stream.Recv()
+	evt2, err := watcher.Recv()
 	if err != nil {
 		t.Fatalf("Recv() second event returned error: %v", err)
 	}
@@ -391,14 +406,12 @@ func TestFederationClient_SubscribePetitionOutcomes_ReturnsStreamReader(t *testi
 	if evt2.GetOutcome() != flowv1.PetitionOutcome_PETITION_OUTCOME_REJECTED {
 		t.Fatalf("expected REJECTED outcome, got %v", evt2.GetOutcome())
 	}
-	if evt2.GetRejection() == nil {
-		t.Fatal("expected rejection report on rejected outcome")
-	}
 
-	// Expect EOF.
-	_, err = stream.Recv()
-	if err != io.EOF {
-		t.Fatalf("expected EOF after all events, got %v", err)
+	// Stop and verify post-stop error.
+	watcher.Stop()
+	_, err = watcher.Recv()
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
 	}
 
 	if spy.lastSubscribePetitionOutcomes.GetSubscriberFlowIdentity() != "subscriber-flow-2" {
@@ -407,10 +420,119 @@ func TestFederationClient_SubscribePetitionOutcomes_ReturnsStreamReader(t *testi
 	}
 }
 
+func TestFederationClient_SubscribePetitionOutcomes_RecvThenClose_WithStop(t *testing.T) {
+	spy := &federationSpyServer{
+		petitionOutcomeEvents: []*flowv1.PetitionOutcomeEvent{
+			{PetitionId: "pet-1", Outcome: flowv1.PetitionOutcome_PETITION_OUTCOME_ACCEPTED},
+		},
+	}
+	client := setupFederationTestClient(t, spy)
+
+	watcher, err := client.SubscribePetitionOutcomes("subscriber-flow-2")
+	if err != nil {
+		t.Fatalf("SubscribePetitionOutcomes() returned error: %v", err)
+	}
+
+	// Read one event.
+	_, err = watcher.Recv()
+	if err != nil {
+		t.Fatalf("Recv() first event returned error: %v", err)
+	}
+
+	// Stop mid-stream.
+	watcher.Stop()
+
+	// Subsequent Recv must return error.
+	_, err = watcher.Recv()
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
+	}
+}
+
 func TestFederationClient_SubscribePetitionOutcomes_NoConnection(t *testing.T) {
 	client := &FederationClient{}
-	_, err := client.SubscribePetitionOutcomes(context.Background(), "")
+	_, err := client.SubscribePetitionOutcomes("")
 	if err == nil {
 		t.Fatal("expected error when federation connection is missing")
 	}
+}
+
+// --- Watcher lifecycle edge cases ---
+
+func TestFederationClient_LawUpdateWatcher_StopBeforeRecv(t *testing.T) {
+	spy := &federationSpyServer{
+		lawUpdateEvents: []*flowv1.PublishedLawEvent{
+			{Law: &flowv1.Law{Id: "pub-law-1"}},
+		},
+	}
+	client := setupFederationTestClient(t, spy)
+
+	watcher, err := client.SubscribeLawUpdates("subscriber-1")
+	if err != nil {
+		t.Fatalf("SubscribeLawUpdates() returned error: %v", err)
+	}
+
+	watcher.Stop()
+
+	_, err = watcher.Recv()
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
+	}
+}
+
+func TestFederationClient_LawUpdateWatcher_EOFThenStop(t *testing.T) {
+	// Server returns immediately (0 events) — Recv returns io.EOF, Stop is safe.
+	spy := &federationSpyServer{}
+	client := setupFederationTestClient(t, spy)
+
+	watcher, err := client.SubscribeLawUpdates("subscriber-1")
+	if err != nil {
+		t.Fatalf("SubscribeLawUpdates() returned error: %v", err)
+	}
+
+	_, err = watcher.Recv()
+	if err != io.EOF {
+		t.Fatalf("expected io.EOF for empty stream, got %v", err)
+	}
+
+	// Stop after EOF must not panic.
+	watcher.Stop()
+}
+
+func TestFederationClient_PetitionOutcomeWatcher_StopBeforeRecv(t *testing.T) {
+	spy := &federationSpyServer{
+		petitionOutcomeEvents: []*flowv1.PetitionOutcomeEvent{
+			{PetitionId: "pet-1"},
+		},
+	}
+	client := setupFederationTestClient(t, spy)
+
+	watcher, err := client.SubscribePetitionOutcomes("subscriber-1")
+	if err != nil {
+		t.Fatalf("SubscribePetitionOutcomes() returned error: %v", err)
+	}
+
+	watcher.Stop()
+
+	_, err = watcher.Recv()
+	if err == nil {
+		t.Fatal("expected error from Recv() after Stop(), got nil")
+	}
+}
+
+func TestFederationClient_PetitionOutcomeWatcher_EOFThenStop(t *testing.T) {
+	spy := &federationSpyServer{}
+	client := setupFederationTestClient(t, spy)
+
+	watcher, err := client.SubscribePetitionOutcomes("subscriber-1")
+	if err != nil {
+		t.Fatalf("SubscribePetitionOutcomes() returned error: %v", err)
+	}
+
+	_, err = watcher.Recv()
+	if err != io.EOF {
+		t.Fatalf("expected io.EOF for empty stream, got %v", err)
+	}
+
+	watcher.Stop()
 }

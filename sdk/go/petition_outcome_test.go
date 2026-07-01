@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"context"
 	"io"
 	"testing"
 
@@ -108,7 +107,7 @@ func TestPetitionOutcomeStream_DeserializesFromFederationStream(t *testing.T) {
 	}
 	client := setupFederationTestClient(t, spy)
 
-	stream, err := client.SubscribePetitionOutcomes(context.Background(), "watcher-flow")
+	stream, err := client.SubscribePetitionOutcomes("watcher-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() returned error: %v", err)
 	}
