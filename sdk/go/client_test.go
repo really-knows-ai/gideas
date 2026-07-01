@@ -143,7 +143,10 @@ func (s *spyServer) GetArtefact(
 func (s *spyServer) QueryLaws(ctx context.Context, req *flowv1.QueryLawsRequest) (*flowv1.QueryLawsResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	s.lastQueryLawsReq = req
-	return &flowv1.QueryLawsResponse{Laws: []*flowv1.Law{{Id: "law-1"}}}, nil
+	return &flowv1.QueryLawsResponse{Laws: []*flowv1.Law{{
+		Id:              "law-1",
+		Representations: []*flowv1.Representation{{Type: "text/markdown"}},
+	}}}, nil
 }
 
 func (s *spyServer) GetLawGroup(

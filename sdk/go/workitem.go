@@ -232,20 +232,23 @@ func (w *Workitem) HasUnresolvedFeedback(artefactID string) (bool, error) {
 
 // GetLawGroups returns all law groups for the given representation type.
 // repType may be empty to query all laws without filtering by rep type.
-// Composes QueryLaws + ListLawGroups.
+// GetLawGroups queries the Librarian for all laws, groups them by
+// Group, and returns LawGroup domain objects. When repType is non-empty,
+// only law groups containing at least one law with a representation of
+// that type are returned (filtered client-side to avoid the Librarian's
+// requirement that representation_type be paired with governed_artefact).
 func (w *Workitem) GetLawGroups(repType string) ([]*LawGroup, error) {
-	var filter *flowv1.LawFilter
-	if repType != "" {
-		filter = &flowv1.LawFilter{RepresentationType: repType}
-	}
-	lawsResp, err := w.session.Librarian.QueryLaws(context.Background(), &flowv1.QueryLawsRequest{Filter: filter})
+	lawsResp, err := w.session.Librarian.QueryLaws(context.Background(), &flowv1.QueryLawsRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: query laws failed: %w", err)
 	}
 
-	// Collect unique group names from matching laws.
+	// Collect unique group names, optionally filtering by representation type.
 	groupNames := make(map[string]bool)
 	for _, law := range lawsResp.GetLaws() {
+		if repType != "" && !hasRepresentationType(law.GetRepresentations(), repType) {
+			continue
+		}
 		gn := law.GetGroup()
 		if gn == "" {
 			gn = DefaultGroup
@@ -362,6 +365,19 @@ func (w *Workitem) GetTopology() (*Flow, error) {
 		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
 	}
 	return newFlow(resp, w.namespace), nil
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func hasRepresentationType(reps []*flowv1.Representation, repType string) bool {
+	for _, r := range reps {
+		if r.GetType() == repType {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

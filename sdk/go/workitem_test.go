@@ -610,14 +610,14 @@ func TestWorkitem_VerifyLawAttestations(t *testing.T) {
 	const wantID = "wi-verifyattest-001"
 	wi, env := setupWorkitemTestEnv(t, wantID)
 
-	// The spy QueryLaws returns [{Id: "law-1"}] which has no representations.
-	// So expected stamps is empty, and verify should return nil.
+	// The spy QueryLaws returns [{Id: "law-1"}] with text/markdown rep.
+	// So expected stamp is law-law-1-text-markdown.
 	missing, err := wi.VerifyLawAttestations(testPetitionID)
 	if err != nil {
 		t.Fatalf("VerifyLawAttestations() returned error: %v", err)
 	}
-	if len(missing) != 0 {
-		t.Fatalf("expected 0 missing stamps, got %d: %v", len(missing), missing)
+	if len(missing) != 1 || missing[0] != "law-law-1-text-markdown" {
+		t.Fatalf("expected [law-law-1-text-markdown], got %v", missing)
 	}
 
 	// Verify QueryLaws was called with the correct governed artefact.
