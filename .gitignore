@@ -23,6 +23,31 @@ plans/
 # OpenCode local state
 .opencode/package-lock.json
 
+# Node binary artifacts (compiled by go build in nodes/*/)
+appraisal
+appraiser
+arbiter
+codification
+codify-smt
+embassy
+facilitator
+forge
+friction-watcher
+haiku-quench
+hitl
+hitl-appraise
+hitl-sort
+juror
+law-applicator
+null-node
+petition-watcher
+refine
+reviewer
+rule-router
+sort
+tribunal
+ttl-watcher
+
 # Git worktrees for phased plan execution
 .worktrees/
 session-ses_*.md
