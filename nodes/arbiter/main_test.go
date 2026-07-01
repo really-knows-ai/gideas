@@ -9,6 +9,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/tally"
+	flow "github.com/gideas/flow/sdk/go"
 )
 
 // ---------------------------------------------------------------------------
@@ -801,7 +802,7 @@ func TestArbiter_AwaitChildrenError(t *testing.T) {
 func TestArbiter_HasCompletedChild_Detection(t *testing.T) {
 	tests := []struct {
 		name     string
-		children []*flowv1.ChildWorkitemStatus
+		children []flow.ChildWorkitemStatus
 		want     bool
 	}{
 		{
@@ -811,28 +812,28 @@ func TestArbiter_HasCompletedChild_Detection(t *testing.T) {
 		},
 		{
 			name:     "empty",
-			children: []*flowv1.ChildWorkitemStatus{},
+			children: []flow.ChildWorkitemStatus{},
 			want:     false,
 		},
 		{
 			name: "running only",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
 			},
 			want: false,
 		},
 		{
 			name: "one completed",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Completed"},
 			},
 			want: true,
 		},
 		{
 			name: "mixed with completed",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
-				{WorkitemId: "c2", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
+				{WorkitemID: "c2", Phase: "Completed"},
 			},
 			want: true,
 		},
@@ -859,8 +860,8 @@ func TestArbiter_PostResume_NoCompletedChild_Error(t *testing.T) {
 	// This triggers post-resume detection (hasCompletedChild returns
 	// false for Running), so it takes the first-invocation path.
 	// To test the defensive path in handlePostResume, call it directly.
-	children := []*flowv1.ChildWorkitemStatus{
-		{WorkitemId: "c1", Phase: "Running"},
+	children := []flow.ChildWorkitemStatus{
+		{WorkitemID: "c1", Phase: "Running"},
 	}
 
 	_, workitem := setupArbiterTest(t, spy)

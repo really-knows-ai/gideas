@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	testFeedbackID  = "fb-1"
-	testRouteTarget = "default"
+	testFeedbackID       = "fb-1"
+	testRouteTarget      = "default"
+	testTriageActionJSON = `{"decision": "action", "message": "will fix syllables"}`
 )
 
 // ---------------------------------------------------------------------------
@@ -532,7 +533,7 @@ func TestHandleRefine_AllActioned(t *testing.T) {
 		},
 	}
 
-	triageOut := `{"decision": "action", "message": "will fix syllables"}`
+	triageOut := testTriageActionJSON
 	revisionOut := `{"haiku": "revised haiku content"}`
 
 	var callIdx int
@@ -681,7 +682,7 @@ func TestHandleRefine_MixedItems(t *testing.T) {
 		},
 	}
 
-	actionOut := `{"decision": "action", "message": "will fix syllables"}`
+	actionOut := testTriageActionJSON
 	refuseOut := `{"decision": "refuse", "message": "law says so",` +
 		` "justification_type": "citation", "citation_ids": ["law-1"]}`
 	revisionOut := `{"haiku": "revised haiku for mixed"}`
@@ -824,7 +825,7 @@ func TestTriageOutput_Unmarshal(t *testing.T) {
 	}{
 		{
 			name:     "action",
-			raw:      `{"decision": "action", "message": "will fix syllables"}`,
+			raw:      testTriageActionJSON,
 			decision: "action",
 			message:  "will fix syllables",
 		},
@@ -1048,7 +1049,7 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	// ponytail: The contempt guard (skip LLM for REJECTED+LinkedRuling) is
 	// disabled because the domain Feedback does not expose GetLinkedRuling().
 	// The REJECTED feedback goes through LLM triage, followed by revision.
-	triageOut := `{"decision": "action", "message": "will fix syllables"}`
+	triageOut := testTriageActionJSON
 	revisionOut := `{"haiku": "revised after contempt"}`
 	var callIdx int
 	outputs := []*flow.InferOutput{

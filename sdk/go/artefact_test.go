@@ -7,6 +7,8 @@ import (
 	"google.golang.org/grpc"
 )
 
+const stampLinter = "linter"
+
 func newTestArtefact(sess *session, artefactID, governedArtefact, versionHash string) *Artefact {
 	return &Artefact{
 		artefactID:       artefactID,
@@ -187,8 +189,8 @@ func TestArtefact_GetStamps(t *testing.T) {
 	if len(stamps) != 2 {
 		t.Fatalf("GetStamps() returned %d stamps, want 2", len(stamps))
 	}
-	if stamps[0].Name != "linter" {
-		t.Errorf("stamps[0].Name = %q, want %q", stamps[0].Name, "linter")
+	if stamps[0].Name != stampLinter {
+		t.Errorf("stamps[0].Name = %q, want %q", stamps[0].Name, stampLinter)
 	}
 	if stamps[0].ApplyingNode != "node-a" {
 		t.Errorf("stamps[0].ApplyingNode = %q, want %q", stamps[0].ApplyingNode, "node-a")
@@ -215,12 +217,12 @@ func TestArtefact_GetStamps_Error(t *testing.T) {
 
 func TestArtefact_HasStamp(t *testing.T) {
 	env, art := setupArtefactTestEnv(t, "wid-hasstamp-001")
-	ok, err := art.HasStamp("linter")
+	ok, err := art.HasStamp(stampLinter)
 	if err != nil {
 		t.Fatalf("HasStamp() returned error: %v", err)
 	}
 	if !ok {
-		t.Error("HasStamp('linter') = false, want true")
+		t.Errorf("HasStamp(%q) = false, want true", stampLinter)
 	}
 	ok, err = art.HasStamp("nonexistent")
 	if err != nil {
@@ -237,7 +239,7 @@ func TestArtefact_HasStamp(t *testing.T) {
 
 func TestArtefact_HasStamp_Error(t *testing.T) {
 	art := setupArtefactErrorEnv(t, "wid-hasstamp-err-001")
-	_, err := art.HasStamp("linter")
+	_, err := art.HasStamp(stampLinter)
 	if err == nil {
 		t.Fatal("HasStamp() expected error, got nil")
 	}

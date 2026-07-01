@@ -252,7 +252,7 @@ func (w *Workitem) GetLawGroups(repType string) ([]*LawGroup, error) {
 	for _, law := range lawsResp.GetLaws() {
 		gn := law.GetGroup()
 		if gn == "" {
-			gn = "default"
+			gn = DefaultGroup
 		}
 		groupNames[gn] = true
 	}

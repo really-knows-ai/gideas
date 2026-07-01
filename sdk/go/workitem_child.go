@@ -35,10 +35,11 @@ func (w *Workitem) GetChildren() ([]ChildWorkitemStatus, error) {
 	children := make([]ChildWorkitemStatus, 0, len(resp.GetChildren()))
 	for _, ch := range resp.GetChildren() {
 		children = append(children, ChildWorkitemStatus{
-			WorkitemID:      ch.GetWorkitemId(),
-			Phase:           ch.GetPhase(),
-			CurrentAssignee: ch.GetCurrentAssignee(),
-			Artefacts:       ch.GetArtefacts(),
+			WorkitemID:       ch.GetWorkitemId(),
+			Phase:            ch.GetPhase(),
+			CurrentAssignee:  ch.GetCurrentAssignee(),
+			Artefacts:        ch.GetArtefacts(),
+			CompletionReason: ch.GetCompletionReason().String(),
 		})
 	}
 	return children, nil

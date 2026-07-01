@@ -167,19 +167,23 @@ type errorSpyServer struct {
 	flowv1.UnimplementedArchivistServiceServer
 }
 
-func (s *errorSpyServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
+func (s *errorSpyServer) GetArtefact(ctx context.Context,
+	req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
 	return nil, fmt.Errorf("archivist error: get artefact failed")
 }
 
-func (s *errorSpyServer) StoreArtefact(ctx context.Context, req *flowv1.StoreArtefactRequest) (*flowv1.StoreArtefactResponse, error) {
+func (s *errorSpyServer) StoreArtefact(ctx context.Context,
+	req *flowv1.StoreArtefactRequest) (*flowv1.StoreArtefactResponse, error) {
 	return nil, fmt.Errorf("archivist error: store artefact failed")
 }
 
-func (s *errorSpyServer) StampArtefact(ctx context.Context, req *flowv1.StampArtefactRequest) (*flowv1.StampArtefactResponse, error) {
+func (s *errorSpyServer) StampArtefact(ctx context.Context,
+	req *flowv1.StampArtefactRequest) (*flowv1.StampArtefactResponse, error) {
 	return nil, fmt.Errorf("archivist error: stamp artefact failed")
 }
 
-func (s *errorSpyServer) GetStamps(ctx context.Context, req *flowv1.GetStampsRequest) (*flowv1.GetStampsResponse, error) {
+func (s *errorSpyServer) GetStamps(ctx context.Context,
+	req *flowv1.GetStampsRequest) (*flowv1.GetStampsResponse, error) {
 	return nil, fmt.Errorf("archivist error: get stamps failed")
 }
 
@@ -187,10 +191,12 @@ func (s *errorSpyServer) HasStamp(ctx context.Context, req *flowv1.HasStampReque
 	return nil, fmt.Errorf("archivist error: has stamp failed")
 }
 
-func (s *errorSpyServer) GetFeedback(ctx context.Context, req *flowv1.GetFeedbackRequest) (*flowv1.GetFeedbackResponse, error) {
+func (s *errorSpyServer) GetFeedback(ctx context.Context,
+	req *flowv1.GetFeedbackRequest) (*flowv1.GetFeedbackResponse, error) {
 	return nil, fmt.Errorf("archivist error: get feedback failed")
 }
 
-func (s *errorSpyServer) HasUnresolvedFeedback(ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest) (*flowv1.HasUnresolvedFeedbackResponse, error) {
+func (s *errorSpyServer) HasUnresolvedFeedback(ctx context.Context,
+	req *flowv1.HasUnresolvedFeedbackRequest) (*flowv1.HasUnresolvedFeedbackResponse, error) {
 	return nil, fmt.Errorf("archivist error: has unresolved feedback failed")
 }

@@ -110,7 +110,9 @@ func TestAppraisalHandler_BundleModeChildCount(t *testing.T) {
 		{ID: "auditor", Personality: "Detailed"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -143,7 +145,9 @@ func TestAppraisalHandler_LawByLawChildCount(t *testing.T) {
 	// No "default" group in LawGroups — uses fallback defaults (bundle, 1 pass)
 	// But all laws are in "security" group, so no dispatches for "default".
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -174,7 +178,9 @@ func TestAppraisalHandler_MultiGroupChildCount(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -197,7 +203,9 @@ func TestAppraisalHandler_AllCompleteStampsAndEvents(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -255,7 +263,9 @@ func TestAppraisalHandler_AllChildrenFail(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -307,7 +317,9 @@ func TestAppraisalHandler_PartialFailure(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -340,7 +352,9 @@ func TestAppraisalHandler_EmptyAppraisers(t *testing.T) {
 	cfg := defaultHandlerConfig()
 	cfg.Appraisers = nil // no appraisers
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -368,7 +382,9 @@ func TestAppraisal_PublishAuditEventFailure(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -393,7 +409,9 @@ func TestAppraisalHandler_CoveragePayload(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -444,7 +462,9 @@ func TestAppraisalHandler_AttestationWithViolations(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -496,7 +516,9 @@ func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
@@ -543,7 +565,9 @@ func TestAppraisalHandler_LawByLawAllSuccess(t *testing.T) {
 		{ID: "skeptic", Personality: "Strict"},
 	}
 
-	if err := handlers.HandleAppraisal(context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg); err != nil {
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 

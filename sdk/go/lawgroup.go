@@ -14,6 +14,7 @@ type GroupMode string
 const (
 	GroupModeBundle   GroupMode = "bundle"
 	GroupModeLawByLaw GroupMode = "law-by-law"
+	DefaultGroup                = "default"
 )
 
 // LawGroup defines the evaluation contract for a law group and provides
@@ -83,16 +84,16 @@ type DispatchEntry struct {
 	Pass      int    // 1-based
 }
 
-// GetGroup returns the group name for a law, or "default" if empty.
+// GetGroup returns the group name for a law, or DefaultGroup if empty.
 func GetGroup(law *flowv1.Law) string {
 	if g := law.GetGroup(); g != "" {
 		return g
 	}
-	return "default"
+	return DefaultGroup
 }
 
 // PartitionLawsByGroup groups laws by their Group field.
-// Laws with an empty Group are placed under "default".
+// Laws with an empty Group are placed under DefaultGroup.
 func PartitionLawsByGroup(laws []*flowv1.Law) map[string][]*flowv1.Law {
 	if len(laws) == 0 {
 		return map[string][]*flowv1.Law{}
@@ -101,7 +102,7 @@ func PartitionLawsByGroup(laws []*flowv1.Law) map[string][]*flowv1.Law {
 	for _, law := range laws {
 		g := law.GetGroup()
 		if g == "" {
-			g = "default"
+			g = DefaultGroup
 		}
 		out[g] = append(out[g], law)
 	}

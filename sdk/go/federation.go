@@ -155,7 +155,8 @@ func (c *FederationClient) SubmitPublication(law *Law, sourceFlowIdentity string
 		return fmt.Errorf("flow sdk: federation client: submit publication failed: %w", err)
 	}
 	if !resp.GetAccepted() {
-		return fmt.Errorf("flow sdk: federation client: submit publication rejected: %s", resp.GetRejection().GetRemediationText())
+		return fmt.Errorf("flow sdk: federation client: submit publication rejected: %s",
+			resp.GetRejection().GetRemediationText())
 	}
 	return nil
 }

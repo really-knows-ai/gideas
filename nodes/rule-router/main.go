@@ -131,7 +131,7 @@ func handleRuleRouter(
 
 	// Determine which variables are referenced by any rule expression and
 	// lazily load only the data that is actually needed.
-	activation, err := buildActivation(ctx, client, wi.ID(), cfg.Rules, metadata)
+	activation, err := buildActivation(ctx, client, wi, cfg.Rules, metadata)
 	if err != nil {
 		return fmt.Errorf("rule-router: load variables: %w", err)
 	}
@@ -299,7 +299,7 @@ func needsVar(rules []ruleEntry, varName string) bool {
 func buildActivation(
 	ctx context.Context,
 	client *flow.Client,
-	workitemID string,
+	wi *flow.Workitem,
 	rules []ruleEntry,
 	metadata map[string]string,
 ) (map[string]any, error) {
@@ -313,6 +313,8 @@ func buildActivation(
 		"stamps":    map[string]any{},
 		"children":  []any{},
 	}
+
+	workitemID := wi.ID()
 
 	// Artefacts — needed by both "artefacts" and "feedback" variables.
 	var artefactIDs []string
@@ -348,9 +350,9 @@ func buildActivation(
 		act["stamps"] = st
 	}
 
-	// Children — raw proto for completion_reason access.
+	// Children — SDK domain method now includes CompletionReason.
 	if needsVar(rules, "children") {
-		ch, err := loadChildren(ctx, client)
+		ch, err := loadChildren(wi)
 		if err != nil {
 			return nil, fmt.Errorf("load children: %w", err)
 		}
@@ -378,7 +380,8 @@ func loadArtefacts(ctx context.Context, client *flow.Client, workitemID string) 
 // loadFeedback aggregates feedback across all artefacts into the feedback
 // CEL variable shape: {unresolved_count, has_deadlocked, total_count}.
 // ponytail: uses RawArchivist escape hatch for proto feedback access.
-func loadFeedback(ctx context.Context, client *flow.Client, workitemID string, artefactIDs []string) (map[string]any, error) {
+func loadFeedback(ctx context.Context, client *flow.Client,
+	workitemID string, artefactIDs []string) (map[string]any, error) {
 	var totalCount, unresolvedCount int
 	var hasDeadlocked bool
 
@@ -412,7 +415,8 @@ func loadFeedback(ctx context.Context, client *flow.Client, workitemID string, a
 
 // loadStamps fetches per-artefact stamp names via QueryArtefactState.
 // Returns map[artefactID] -> []stampName for the CEL stamps variable.
-func loadStamps(ctx context.Context, client *flow.Client, workitemID string, artefactIDs []string) (map[string]any, error) {
+func loadStamps(ctx context.Context, client *flow.Client,
+	workitemID string, artefactIDs []string) (map[string]any, error) {
 	// Derive governed artefact names for the query.
 	resp, err := client.RawArchivist().ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
 		WorkitemId: workitemID,
@@ -456,20 +460,19 @@ func loadStamps(ctx context.Context, client *flow.Client, workitemID string, art
 	return stamps, nil
 }
 
-// loadChildren fetches child workitem statuses using the raw Operator RPC
-// (not the SDK convenience method) to preserve CompletionReason.
-func loadChildren(ctx context.Context, client *flow.Client) ([]any, error) {
-	resp, err := client.RawOperator().GetChildren(ctx, &flowv1.GetChildrenRequest{})
+// loadChildren fetches child workitem statuses using the SDK domain method.
+func loadChildren(wi *flow.Workitem) ([]any, error) {
+	children, err := wi.GetChildren()
 	if err != nil {
 		return nil, err
 	}
-	children := make([]any, len(resp.GetChildren()))
-	for i, ch := range resp.GetChildren() {
-		children[i] = map[string]any{
-			"workitem_id":       ch.GetWorkitemId(),
-			"phase":             ch.GetPhase(),
-			"completion_reason": ch.GetCompletionReason().String(),
+	celChildren := make([]any, len(children))
+	for i, ch := range children {
+		celChildren[i] = map[string]any{
+			"workitem_id":       ch.WorkitemID,
+			"phase":             ch.Phase,
+			"completion_reason": ch.CompletionReason,
 		}
 	}
-	return children, nil
+	return celChildren, nil
 }

@@ -28,7 +28,7 @@ func TestPartitionLawsByGroup_EmptyGroupFallsBack(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(got))
 	}
-	defLaws := got["default"]
+	defLaws := got[DefaultGroup]
 	if len(defLaws) != 2 {
 		t.Fatalf("expected 2 laws in default, got %d", len(defLaws))
 	}
@@ -395,8 +395,8 @@ func TestBuildDispatchMatrix_Integration(t *testing.T) {
 	if groupsSeen["style"] != 2 {
 		t.Fatalf("expected 2 style entries, got %d", groupsSeen["style"])
 	}
-	if groupsSeen["default"] != 2 {
-		t.Fatalf("expected 2 default entries, got %d", groupsSeen["default"])
+	if groupsSeen[DefaultGroup] != 2 {
+		t.Fatalf("expected 2 default entries, got %d", groupsSeen[DefaultGroup])
 	}
 }
 

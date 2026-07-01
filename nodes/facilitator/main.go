@@ -182,15 +182,10 @@ func handleFacilitator(
 	_ = workitem.Heartbeat()
 
 	// ── Phase detection ──────────────────────────────────────────────
-	// Use the raw Operator stub because the SDK's GetChildren() strips
-	// CompletionReason from the response. We need CompletionReason for
-	// the post-resume path.
-	resp, err := client.RawOperator().GetChildren(workitem.Ctx(), &flowv1.GetChildrenRequest{})
+	children, err := workitem.GetChildren()
 	if err != nil {
 		return fmt.Errorf("facilitator: get children: %w", err)
 	}
-
-	children := resp.GetChildren()
 	if hasCompletedChild(children) {
 		nodeutil.EmitTelemetry(client, "foundry.facilitator.started", map[string]any{
 			"phase": "resume",
@@ -206,9 +201,9 @@ func handleFacilitator(
 
 // hasCompletedChild returns true if at least one child is in the Completed
 // phase, indicating this is a post-resume invocation.
-func hasCompletedChild(children []*flowv1.ChildWorkitemStatus) bool {
+func hasCompletedChild(children []flow.ChildWorkitemStatus) bool {
 	for _, ch := range children {
-		if ch.GetPhase() == flow.PhaseCompleted {
+		if ch.Phase == flow.PhaseCompleted {
 			return true
 		}
 	}
@@ -627,13 +622,13 @@ func buildAppendix(
 func handlePostResume(
 	client *flow.Client,
 	workitem *flow.Workitem,
-	children []*flowv1.ChildWorkitemStatus,
+	children []flow.ChildWorkitemStatus,
 ) error {
 	// Find the first completed child.
-	var completed *flowv1.ChildWorkitemStatus
-	for _, ch := range children {
-		if ch.GetPhase() == flow.PhaseCompleted {
-			completed = ch
+	var completed *flow.ChildWorkitemStatus
+	for i := range children {
+		if children[i].Phase == flow.PhaseCompleted {
+			completed = &children[i]
 			break
 		}
 	}
@@ -645,16 +640,14 @@ func handlePostResume(
 	}
 
 	slog.Info("facilitator: post-resume",
-		"child_id", completed.GetWorkitemId(),
-		"completion_reason", completed.GetCompletionReason().String(),
+		"child_id", completed.WorkitemID,
+		"completion_reason", completed.CompletionReason,
 	)
 
-	reason := completed.GetCompletionReason()
-
-	if reason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
+	if completed.CompletionReason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED.String() {
 		slog.Info("facilitator: child cancelled, propagating cancellation")
 		nodeutil.EmitTelemetry(client, "foundry.facilitator.cancelled", map[string]any{
-			"child_id": completed.GetWorkitemId(),
+			"child_id": completed.WorkitemID,
 		})
 		if err := workitem.Complete(flow.WithReason(
 			flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
@@ -667,7 +660,7 @@ func handlePostResume(
 	// Success (UNSPECIFIED = normal completion).
 	slog.Info("facilitator: child succeeded, routing to resolved")
 	nodeutil.EmitTelemetry(client, "foundry.facilitator.resolved", map[string]any{
-		"child_id": completed.GetWorkitemId(),
+		"child_id": completed.WorkitemID,
 		"output":   outputResolved,
 	})
 	if err := workitem.RouteTo(outputResolved); err != nil {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flow "github.com/gideas/flow/sdk/go"
 )
 
 // Test constants for frequently used string values.
@@ -935,7 +936,7 @@ func TestFacilitator_ValidateConfig(t *testing.T) {
 func TestHasCompletedChild(t *testing.T) {
 	tests := []struct {
 		name     string
-		children []*flowv1.ChildWorkitemStatus
+		children []flow.ChildWorkitemStatus
 		want     bool
 	}{
 		{
@@ -945,28 +946,28 @@ func TestHasCompletedChild(t *testing.T) {
 		},
 		{
 			name:     "empty children",
-			children: []*flowv1.ChildWorkitemStatus{},
+			children: []flow.ChildWorkitemStatus{},
 			want:     false,
 		},
 		{
 			name: "only running",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
 			},
 			want: false,
 		},
 		{
 			name: "one completed",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Completed"},
 			},
 			want: true,
 		},
 		{
 			name: "mixed phases",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
-				{WorkitemId: "c2", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
+				{WorkitemID: "c2", Phase: "Completed"},
 			},
 			want: true,
 		},
@@ -1301,7 +1302,8 @@ func TestFacilitator_Error_GetInputArtefactFails(t *testing.T) {
 	wctx := defaultWorkitemContext()
 	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{InputArtefacts: []string{"petition"}}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem,
+		&facilitatorConfig{InputArtefacts: []string{"petition"}}, wctx)
 	if err == nil {
 		t.Fatal("expected error from GetArtefact failure")
 	}

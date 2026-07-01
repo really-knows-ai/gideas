@@ -196,14 +196,10 @@ func handleArbiter(ctx context.Context, client *flow.Client, workitem *flow.Work
 	_ = workitem.Heartbeat()
 
 	// ── Phase detection ──────────────────────────────────────────────
-	// Use the raw Operator stub because the SDK's GetChildren() strips
-	// CompletionReason from the response.
-	resp, err := client.RawOperator().GetChildren(workitem.Ctx(), &flowv1.GetChildrenRequest{})
+	children, err := workitem.GetChildren()
 	if err != nil {
 		return fmt.Errorf("arbiter: get children: %w", err)
 	}
-
-	children := resp.GetChildren()
 	if hasCompletedChild(children) {
 		return handlePostResume(workitem, children)
 	}
@@ -213,9 +209,9 @@ func handleArbiter(ctx context.Context, client *flow.Client, workitem *flow.Work
 
 // hasCompletedChild returns true if at least one child is in the Completed
 // phase, indicating this is a post-resume invocation.
-func hasCompletedChild(children []*flowv1.ChildWorkitemStatus) bool {
+func hasCompletedChild(children []flow.ChildWorkitemStatus) bool {
 	for _, ch := range children {
-		if ch.GetPhase() == flow.PhaseCompleted {
+		if ch.Phase == flow.PhaseCompleted {
 			return true
 		}
 	}
@@ -226,7 +222,8 @@ func hasCompletedChild(children []*flowv1.ChildWorkitemStatus) bool {
 // First invocation — deliberation loop
 // ---------------------------------------------------------------------------
 
-func handleFirstInvocation(ctx context.Context, client *flow.Client, workitem *flow.Workitem, cfg *arbiterConfig) error {
+func handleFirstInvocation(ctx context.Context, client *flow.Client,
+	workitem *flow.Workitem, cfg *arbiterConfig) error {
 	// ── Step 1: Read evidence-bundle artefact ────────────────────────
 	evidenceArt, err := workitem.GetArtefact(artefactEvidenceBundle)
 	if err != nil {
@@ -444,13 +441,13 @@ func synthesizeDecision(result tally.TallyResult) string {
 // child's CompletionReason and completes accordingly.
 func handlePostResume(
 	workitem *flow.Workitem,
-	children []*flowv1.ChildWorkitemStatus,
+	children []flow.ChildWorkitemStatus,
 ) error {
 	// Find the first completed child.
-	var completed *flowv1.ChildWorkitemStatus
-	for _, ch := range children {
-		if ch.GetPhase() == flow.PhaseCompleted {
-			completed = ch
+	var completed *flow.ChildWorkitemStatus
+	for i := range children {
+		if children[i].Phase == flow.PhaseCompleted {
+			completed = &children[i]
 			break
 		}
 	}
@@ -460,13 +457,11 @@ func handlePostResume(
 	}
 
 	slog.Info("arbiter: post-resume",
-		"child_id", completed.GetWorkitemId(),
-		"completion_reason", completed.GetCompletionReason().String(),
+		"child_id", completed.WorkitemID,
+		"completion_reason", completed.CompletionReason,
 	)
 
-	reason := completed.GetCompletionReason()
-
-	if reason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
+	if completed.CompletionReason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED.String() {
 		slog.Info("arbiter: clerk child cancelled, propagating cancellation")
 		if err := workitem.Complete(flow.WithReason(
 			flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,

@@ -10,7 +10,7 @@ func TestParseStampCapability_Valid(t *testing.T) {
 	}{
 		{"STAMP:artefact/haiku/review", "haiku", "review"},
 		{"STAMP:artefact/doc/security-review", "doc", "security-review"},
-		{"STAMP:artefact/petition-draft/linter", "petition-draft", "linter"},
+		{"STAMP:artefact/petition-draft/linter", "petition-draft", stampLinter},
 	}
 	for _, tt := range tests {
 		sc, ok := ParseStampCapability(tt.input)
@@ -62,7 +62,7 @@ func TestParseStampCapabilities_MixedList(t *testing.T) {
 	if stamps[0].GovernedArtefact != "haiku" || stamps[0].StampName != "review" {
 		t.Errorf("stamps[0] = %+v, want haiku/review", stamps[0])
 	}
-	if stamps[1].GovernedArtefact != "doc" || stamps[1].StampName != "linter" {
+	if stamps[1].GovernedArtefact != "doc" || stamps[1].StampName != stampLinter {
 		t.Errorf("stamps[1] = %+v, want doc/linter", stamps[1])
 	}
 }

@@ -216,6 +216,8 @@ func (l *bufconnListener) DialContext(ctx context.Context) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "tcp", l.Addr().String())
 }
 
+const testLaw42 = "law-42"
+
 // ---------------------------------------------------------------------------
 // Tests — EntryClient.CreateWorkitem
 // ---------------------------------------------------------------------------
@@ -224,7 +226,7 @@ func TestEntryClient_CreateWorkitem_Success(t *testing.T) {
 	spy := &entrySpyOperator{returnID: "wi-new-001"}
 	ec := setupEntryTestEnv(t, spy, nil)
 
-	md := map[string]string{"source": "friction-watcher", "law_id": "law-42"}
+	md := map[string]string{"source": "friction-watcher", "law_id": testLaw42}
 	id, err := ec.CreateWorkitem(md)
 	if err != nil {
 		t.Fatalf("CreateWorkitem() returned error: %v", err)
@@ -235,8 +237,8 @@ func TestEntryClient_CreateWorkitem_Success(t *testing.T) {
 	if spy.lastMetadata["source"] != "friction-watcher" {
 		t.Fatalf("expected metadata source=friction-watcher, got %q", spy.lastMetadata["source"])
 	}
-	if spy.lastMetadata["law_id"] != "law-42" {
-		t.Fatalf("expected metadata law_id=law-42, got %q", spy.lastMetadata["law_id"])
+	if spy.lastMetadata["law_id"] != testLaw42 {
+		t.Fatalf("expected metadata law_id=%s, got %q", testLaw42, spy.lastMetadata["law_id"])
 	}
 }
 

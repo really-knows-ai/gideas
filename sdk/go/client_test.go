@@ -123,7 +123,7 @@ func (s *spyServer) GetFlowTopology(
 			"other":      {Name: "other"},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{
-			"doc": {Stamps: []string{"linter", "approval"}},
+			"doc": {Stamps: []string{stampLinter, "approval"}},
 		},
 	}, nil
 }
@@ -420,7 +420,7 @@ func (s *spyServer) GetStamps(
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.GetStampsResponse{
 		Stamps: []*flowv1.Stamp{
-			{Name: "linter", ApplyingNode: "node-a", ContentHash: "ch-1"},
+			{Name: stampLinter, ApplyingNode: "node-a", ContentHash: "ch-1"},
 			{Name: "approval", ApplyingNode: "node-b", ContentHash: "ch-1"},
 		},
 	}, nil
@@ -430,7 +430,7 @@ func (s *spyServer) HasStamp(
 	ctx context.Context, req *flowv1.HasStampRequest,
 ) (*flowv1.HasStampResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
-	return &flowv1.HasStampResponse{Exists: req.GetStampName() == "linter"}, nil
+	return &flowv1.HasStampResponse{Exists: req.GetStampName() == stampLinter}, nil
 }
 
 func (s *spyServer) GetFeedback(
@@ -627,7 +627,7 @@ func TestGetFlow(t *testing.T) {
 	if !ok {
 		t.Fatal("missing doc in exit contract")
 	}
-	if len(stamps) != 2 || stamps[0] != "linter" {
+	if len(stamps) != 2 || stamps[0] != stampLinter {
 		t.Fatalf("unexpected doc stamps: %v", stamps)
 	}
 }

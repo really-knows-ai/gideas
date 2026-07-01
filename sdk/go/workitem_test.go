@@ -565,8 +565,8 @@ func TestWorkitem_GetLawGroups(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 law group, got %d", len(groups))
 	}
-	if groups[0].Name() != "default" {
-		t.Fatalf("group[0].Name() = %q, want %q", groups[0].Name(), "default")
+	if groups[0].Name() != DefaultGroup {
+		t.Fatalf("group[0].Name() = %q, want %q", groups[0].Name(), DefaultGroup)
 	}
 	if groups[0].Mode() != GroupModeBundle {
 		t.Fatalf("group[0].Mode() = %q, want %q", groups[0].Mode(), GroupModeBundle)
@@ -588,8 +588,8 @@ func TestWorkitem_GetLawGroups_EmptyRepType(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 law group, got %d", len(groups))
 	}
-	if groups[0].Name() != "default" {
-		t.Fatalf("group[0].Name() = %q, want %q", groups[0].Name(), "default")
+	if groups[0].Name() != DefaultGroup {
+		t.Fatalf("group[0].Name() = %q, want %q", groups[0].Name(), DefaultGroup)
 	}
 
 	// Verify QueryLaws was called.

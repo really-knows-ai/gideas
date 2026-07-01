@@ -101,6 +101,8 @@ Every refusal creates a traceable governance record — either a link to existin
 
 The forced-choice structure prevents drive-by refusals. A node cannot dismiss feedback without either pointing to governance that supports its position or articulating a new principle for the record.
 
+The SDK exposes the justification as the proto type `*flowv1.Justification` directly — there is no domain wrapper. This is consistent with other proto-exposed types (`Representation`, `FrictionFilter`, `FrictionAggregate`). Nodes that need to inspect or construct justifications use the proto type directly.
+
 ## Deadlock and Arbiter Interaction
 
 When the gate node determines that a feedback item's history depth warrants escalation, it calls `DeadlockFeedback(feedbackId)` to transition the item to `deadlocked`, then returns a routing instruction to send the Workitem to the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem). The threshold applies per feedback item, not per Workitem — a Workitem can have dozens of feedback items cycling normally while a single contentious item triggers escalation.

@@ -9,6 +9,8 @@ import (
 	"google.golang.org/grpc"
 )
 
+const testScopeSecurity = "security"
+
 // federationSpyServer implements the FederationServiceServer interface for
 // test-time request capture and configurable responses.
 type federationSpyServer struct {
@@ -121,7 +123,7 @@ func TestFederationClient_GetPetitionTarget_Success(t *testing.T) {
 	spy := &federationSpyServer{}
 	client := setupFederationTestClient(t, spy)
 
-	target, err := client.GetPetitionTarget("security")
+	target, err := client.GetPetitionTarget(testScopeSecurity)
 	if err != nil {
 		t.Fatalf("GetPetitionTarget() returned error: %v", err)
 	}
@@ -131,8 +133,8 @@ func TestFederationClient_GetPetitionTarget_Success(t *testing.T) {
 	if target.EmbassyEndpoint != "authority-flow-1.embassy:50059" {
 		t.Fatalf("expected embassy endpoint authority-flow-1.embassy:50059, got %q", target.EmbassyEndpoint)
 	}
-	if spy.lastGetPetitionTarget.GetScope() != "security" {
-		t.Fatalf("expected scope security, got %q", spy.lastGetPetitionTarget.GetScope())
+	if spy.lastGetPetitionTarget.GetScope() != testScopeSecurity {
+		t.Fatalf("expected scope %s, got %q", testScopeSecurity, spy.lastGetPetitionTarget.GetScope())
 	}
 }
 

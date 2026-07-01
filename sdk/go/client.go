@@ -7,7 +7,6 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -16,7 +15,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -115,48 +113,6 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	}
 
 	return &Client{session: sess}, nil
-}
-
-// ---------------------------------------------------------------------------
-// Raw gRPC client accessors (escape hatch for advanced callers)
-// ---------------------------------------------------------------------------
-
-// RawOperator returns the raw OperatorServiceClient for advanced use cases
-// where the domain surface does not provide the needed operation (e.g. arbiter
-// reading CompletionReason via GetChildren). Prefer Workitem domain methods
-// when available.
-func (c *Client) RawOperator() flowv1.OperatorServiceClient {
-	if c.session == nil {
-		return nil
-	}
-	return c.session.Operator
-}
-
-// RawArchivist returns the raw ArchivistServiceClient for advanced use cases.
-// Prefer Workitem domain methods when available.
-func (c *Client) RawArchivist() flowv1.ArchivistServiceClient {
-	if c.session == nil {
-		return nil
-	}
-	return c.session.Archivist
-}
-
-// RawLibrarian returns the raw LibrarianServiceClient for advanced use cases.
-// Prefer Client.GetLaw() or Workitem domain methods when available.
-func (c *Client) RawLibrarian() flowv1.LibrarianServiceClient {
-	if c.session == nil {
-		return nil
-	}
-	return c.session.Librarian
-}
-
-// RawFrictionLedger returns the raw FrictionLedgerServiceClient for advanced
-// use cases. Prefer Workitem.QueryFriction() when available.
-func (c *Client) RawFrictionLedger() flowv1.FrictionLedgerServiceClient {
-	if c.session == nil {
-		return nil
-	}
-	return c.session.FrictionLedger
 }
 
 // Close releases the underlying gRPC connections.
@@ -287,75 +243,6 @@ func WithSuspendTimeout(d time.Duration) SuspendOption {
 	return func(a *flowv1.SuspendAction) {
 		a.Timeout = durationpb.New(d)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Kept Convenience Methods (no ctx per R2)
-// ---------------------------------------------------------------------------
-
-// Resume requests that a suspended workitem be resumed. Unlike Suspend
-// (which operates on the caller's own workitem via Workitem), Resume targets
-// another workitem by ID — typically a child that the caller previously suspended.
-func (c *Client) Resume(workitemID string) error {
-	_, err := c.session.Operator.ResumeWorkitem(context.Background(), &flowv1.ResumeWorkitemRequest{
-		WorkitemId: workitemID,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: resume failed: %w", err)
-	}
-	return nil
-}
-
-// PublishAuditEvent marshals the payload to JSON and publishes it to the
-// Event Bus on the "audit" channel. This is a best-effort operation:
-// callers should log the error but not fail work execution.
-// The workitemID and flowNamespace are set on the FlowEvent for standard
-// event labelling (spec R11). Pass empty strings if unavailable.
-func (c *Client) PublishAuditEvent(
-	eventType string, payload any, workitemID, flowNamespace string,
-) error {
-	if c.session.EventBus == nil {
-		return fmt.Errorf("flow sdk: publish audit event requires Event Bus connection (set EVENT_BUS_ADDRESS)")
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("flow sdk: marshal audit payload: %w", err)
-	}
-	// ponytail: using time-based ID instead of randid (not available in SDK module).
-	_, err = c.session.EventBus.Publish(context.Background(), &flowv1.PublishRequest{
-		Channel: "audit",
-		Event: &flowv1.FlowEvent{
-			EventId:       fmt.Sprintf("%x", time.Now().UnixNano()),
-			EventType:     eventType,
-			WorkitemId:    workitemID,
-			FlowNamespace: flowNamespace,
-			Timestamp:     timestamppb.Now(),
-			Payload:       raw,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: publish audit event failed: %w", err)
-	}
-	return nil
-}
-
-// RecordTelemetry emits a custom telemetry event through the Sidecar to the
-// Event Bus. The eventType identifies the event kind (use the "foundry."
-// namespace prefix). The payload must be JSON-serializable and at most 64 KB.
-// The Sidecar wraps the event in a standard envelope with identity context.
-//
-// Telemetry emission is non-blocking from the caller's perspective; however,
-// the gRPC call itself is synchronous. Delivery failures are returned as
-// errors but should not fail work execution.
-func (c *Client) RecordTelemetry(eventType string, payload []byte) error {
-	_, err := c.session.Sidecar.RecordTelemetry(context.Background(), &flowv1.RecordTelemetryRequest{
-		EventType: eventType,
-		Payload:   payload,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: record telemetry failed: %w", err)
-	}
-	return nil
 }
 
 // ---------------------------------------------------------------------------
