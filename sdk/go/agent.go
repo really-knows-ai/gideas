@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"strings"
 	"text/template"
 	"time"
 
@@ -39,6 +38,7 @@ type agentConfig struct {
 	inferFn           InferFunc
 	systemPrompt      string
 	queryTemplate     *template.Template
+	validationRetries int
 }
 
 // WithHeartbeatInterval overrides the default heartbeat interval for managed
@@ -80,6 +80,16 @@ func WithSystemPrompt(prompt string) AgentOption {
 func WithQueryTemplate(tmpl *template.Template) AgentOption {
 	return func(c *agentConfig) {
 		c.queryTemplate = tmpl
+	}
+}
+
+// WithOutputValidationRetries sets how many additional inference attempts are
+// allowed when provider output is invalid JSON or fails schema validation.
+func WithOutputValidationRetries(retries int) AgentOption {
+	return func(c *agentConfig) {
+		if retries > 0 {
+			c.validationRetries = retries
+		}
 	}
 }
 
@@ -200,23 +210,36 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	defer hbCancel()
 	go a.heartbeatLoop(hbCtx)
 
-	// 3. Execute the provider's inference logic.
-	result, err := a.inferFn(ctx, a.modelName, a.systemPrompt, queryBuf.Bytes())
+	// 3. Execute the provider's inference logic, retrying only invalid content.
+	queryPrompt := queryBuf.Bytes()
+	var result *InferOutput
+	var validationErr error
+	for attempt := 0; attempt <= a.cfg.validationRetries; attempt++ {
+		var err error
+		result, err = a.inferFn(ctx, a.modelName, a.systemPrompt, queryPrompt)
+		if err != nil {
+			hbCancel()
+			return nil, fmt.Errorf("flow agent: provider infer failed: %w", err)
+		}
+		if result == nil {
+			hbCancel()
+			return nil, fmt.Errorf("flow agent: provider returned nil result")
+		}
+
+		if validationErr = a.validateOutput(result.Output); validationErr == nil {
+			break
+		}
+		if attempt < a.cfg.validationRetries {
+			queryPrompt = retryValidationPrompt(queryBuf.Bytes(), validationErr)
+		}
+	}
 
 	// 4. Stop heartbeat (deferred cancel fires).
 	hbCancel()
 
-	if err != nil {
-		return nil, fmt.Errorf("flow agent: provider infer failed: %w", err)
-	}
-	if result == nil {
-		return nil, fmt.Errorf("flow agent: provider returned nil result")
-	}
-
 	// 5. Validate output against the declared schema.
-	cleaned, err := a.validateOutput(result.Output)
-	if err != nil {
-		return nil, fmt.Errorf("flow agent: output validation failed: %w", err)
+	if validationErr != nil {
+		return nil, fmt.Errorf("flow agent: output validation failed: %w", validationErr)
 	}
 
 	// 6. Emit foundry.cost.llm telemetry.
@@ -236,7 +259,15 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	// Hook point: after template rendering, after provider call, before return.
 
 	// 8. Return validated output.
-	return cleaned, nil
+	return result.Output, nil
+}
+
+func retryValidationPrompt(queryPrompt []byte, validationErr error) []byte {
+	return fmt.Appendf(nil, "%s\n\n%s: %v\n%s",
+		queryPrompt,
+		"Your previous response failed output validation",
+		validationErr,
+		"Return only valid JSON matching the required schema. Do not include markdown fences or explanatory text.")
 }
 
 // ---------------------------------------------------------------------------
@@ -292,34 +323,17 @@ func compileSchema(schema []byte) (*jsonschema.Schema, error) {
 }
 
 // validateOutput validates JSON output bytes against the compiled schema.
-// Returns the cleaned (code-fence stripped) output.
-func (a *Agent) validateOutput(output []byte) ([]byte, error) {
-	// Strip markdown code fences (```json ... ```) if present.
-	cleaned := stripCodeFences(output)
-
+func (a *Agent) validateOutput(output []byte) error {
 	var outputDoc any
-	if err := json.Unmarshal(cleaned, &outputDoc); err != nil {
-		return nil, fmt.Errorf("output is not valid JSON: %w", err)
+	if err := json.Unmarshal(output, &outputDoc); err != nil {
+		return fmt.Errorf("output is not valid JSON: %w", err)
 	}
 
 	err := a.schema.Validate(outputDoc)
 	if err != nil {
-		return nil, formatValidationError(err)
+		return formatValidationError(err)
 	}
-	return cleaned, nil
-}
-
-// stripCodeFences removes markdown JSON code fences from output.
-func stripCodeFences(in []byte) []byte {
-	s := strings.TrimSpace(string(in))
-	// Remove opening ```json or ``` and closing ```
-	if strings.HasPrefix(s, "```") {
-		s = s[strings.Index(s, "\n")+1:]
-	}
-	if before, ok := strings.CutSuffix(s, "```"); ok {
-		s = before
-	}
-	return []byte(strings.TrimSpace(s))
+	return nil
 }
 
 // formatValidationError converts jsonschema validation errors into a

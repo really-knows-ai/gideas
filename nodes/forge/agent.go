@@ -124,6 +124,7 @@ func NewForgeAgent(client *flow.Client, cfg *forgeConfig) (*ForgeAgent, error) {
 		flow.WithModelName("gemma4:31b-cloud"),
 		flow.WithSystemPrompt(systemPrompt),
 		flow.WithQueryTemplate(queryTmpl),
+		flow.WithOutputValidationRetries(cfg.ValidationRetries),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("forge agent: create agent: %w", err)

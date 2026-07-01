@@ -94,6 +94,12 @@ export OLLAMA_API_KEY="your-key-here"
 make -C platform/operator deploy IMG=flow-operator:latest
 ```
 
+The generated operator deployment includes
+`--librarian-address=flow-librarian.default.svc.cluster.local:50058`. Keep that
+argument if you customize deployment manifests; without it, `Law` and
+`LawGroup` CRDs reconcile in Kubernetes but are not materialized into the
+Librarian, so appraisal sees zero enforceable laws.
+
 ### 4. Deploy the Haiku demo
 
 The Haiku demo runs a full Foundry Cycle — Forge, Sort, Quench, Appraisal, Appraiser, Refine — producing a syllable-validated, security-reviewed, and governance-stamped haiku.
@@ -175,6 +181,11 @@ Each `sort` visit checks the exit contract (`linter`, `appraise-security`, `appr
 **Image cache issues (Docker Desktop):** Docker Desktop's containerd image store caches manifests by digest. If you rebuild an image with the same tag, pods may still use the old image. Use unique tags (`image:fix2`, `image:fix-v2`, etc.) to bypass the cache.
 
 **Operator CrashLoopBackOff:** Verify all CRDs are installed (`kubectl get crd | grep flow.gideas.io`). Missing CRDs (especially `lawgroups`) will cause the operator to fail on startup.
+
+**Laws appear Ready but appraisal reports `total_laws=0`:** Check that the
+operator deployment has `--librarian-address=flow-librarian.default.svc.cluster.local:50058`
+and restart it. The operator must sync `Law` CRDs into the Librarian before
+nodes can query and enforce them.
 
 ## Development
 

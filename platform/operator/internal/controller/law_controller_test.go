@@ -80,8 +80,9 @@ var _ = Describe("Law Controller", func() {
 		It("should compute a version hash and set Ready condition", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &LawReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Librarian: &mockLibrarianClient{},
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -133,8 +134,9 @@ var _ = Describe("Law Controller", func() {
 			Expect(k8sClient.Create(ctx, law)).To(Succeed())
 
 			controllerReconciler := &LawReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Librarian: &mockLibrarianClient{},
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

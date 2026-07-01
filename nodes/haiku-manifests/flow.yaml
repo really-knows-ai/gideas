@@ -126,6 +126,7 @@ spec:
     - name: "refine"
       target: "refine"
   capabilities:
+    - "READ:artefact"
     - "READ:artefact/haiku"
     - "READ:feedback"
     - "READ:flow"
@@ -144,6 +145,7 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
+    - "READ:artefact"
     - "READ:artefact/haiku"
     - "READ:feedback"
     - "WRITE:feedback/new"
@@ -162,8 +164,10 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
+    - "READ:artefact"
     - "READ:artefact/petition"
     - "READ:artefact/haiku"
+    - "WRITE:artefact/review-data"
     - "READ:feedback"
     - "READ:law"
     - "WRITE:feedback/new"
@@ -183,6 +187,7 @@ spec:
   image: appraiser:latest
   outputs: []
   capabilities:
+    - "READ:artefact"
     - "READ:artefact/review-data"
     - "WRITE:artefact/review-data"
 ---
@@ -199,6 +204,7 @@ spec:
     - name: "default"
       target: "sort"
   capabilities:
+    - "READ:artefact"
     - "READ:artefact/petition"
     - "READ:artefact/haiku"
     - "WRITE:artefact/haiku"

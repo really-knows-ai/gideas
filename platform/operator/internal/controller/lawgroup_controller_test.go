@@ -24,8 +24,12 @@ import (
 // which is fine since the controller never calls them.
 type mockLibrarianClient struct {
 	mu            sync.Mutex
+	SyncedLaws    []string // IDs of laws that were synced
 	SyncedGroups  []string // names of groups that were synced
+	RetiredLaws   []string // IDs of laws that were retired
 	DeletedGroups []string // names of groups that were deleted
+	SyncLawError  error    // error to return from ReplicateLaws
+	RetireError   error    // error to return from RetireLaw
 	SyncError     error    // error to return from SyncLawGroup
 	DeleteError   error    // error to return from DeleteLawGroup
 }
@@ -76,12 +80,28 @@ func (m *mockLibrarianClient) WriteLaw(_ context.Context, _ *flowv1gen.WriteLawR
 	return nil, fmt.Errorf("unexpected call: WriteLaw")
 }
 
-func (m *mockLibrarianClient) RetireLaw(_ context.Context, _ *flowv1gen.RetireLawRequest, _ ...grpc.CallOption) (*flowv1gen.RetireLawResponse, error) {
-	return nil, fmt.Errorf("unexpected call: RetireLaw")
+func (m *mockLibrarianClient) RetireLaw(_ context.Context, req *flowv1gen.RetireLawRequest, _ ...grpc.CallOption) (*flowv1gen.RetireLawResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.RetireError != nil {
+		return nil, m.RetireError
+	}
+	m.RetiredLaws = append(m.RetiredLaws, req.GetLawId())
+	return &flowv1gen.RetireLawResponse{Acknowledged: true}, nil
 }
 
-func (m *mockLibrarianClient) ReplicateLaws(_ context.Context, _ *flowv1gen.ReplicateLawsRequest, _ ...grpc.CallOption) (*flowv1gen.ReplicateLawsResponse, error) {
-	return nil, fmt.Errorf("unexpected call: ReplicateLaws")
+func (m *mockLibrarianClient) ReplicateLaws(_ context.Context, req *flowv1gen.ReplicateLawsRequest, _ ...grpc.CallOption) (*flowv1gen.ReplicateLawsResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.SyncLawError != nil {
+		return nil, m.SyncLawError
+	}
+	results := make([]*flowv1gen.IntegrationResult, 0, len(req.GetLaws()))
+	for _, law := range req.GetLaws() {
+		m.SyncedLaws = append(m.SyncedLaws, law.GetId())
+		results = append(results, &flowv1gen.IntegrationResult{LawId: law.GetId(), Accepted: true})
+	}
+	return &flowv1gen.ReplicateLawsResponse{IntegrationResults: results}, nil
 }
 
 func (m *mockLibrarianClient) ApplyLifecycleAction(_ context.Context, _ *flowv1gen.ApplyLifecycleActionRequest, _ ...grpc.CallOption) (*flowv1gen.ApplyLifecycleActionResponse, error) {

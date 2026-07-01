@@ -35,12 +35,13 @@ import (
 // forgeConfig holds the node's configuration, loaded from a ConfigMap-mounted
 // YAML file via nodeconfig.Load.
 type forgeConfig struct {
-	InputArtefacts   []string `yaml:"inputArtefacts"`   // artefact IDs to read as input (e.g. ["petition"])
-	OutputArtefact   string   `yaml:"outputArtefact"`   // artefact ID to write (e.g. "haiku")
-	GovernedArtefact string   `yaml:"governedArtefact"` // GovernedArtefact CR name (e.g. "haiku")
-	OutputField      string   `yaml:"outputField"`      // JSON key to extract from validated output
-	SystemPrompt     string   `yaml:"systemPrompt"`     // optional: overrides baked-in system prompt template
-	QueryTemplate    string   `yaml:"queryTemplate"`    // optional: overrides baked-in query prompt template
+	InputArtefacts    []string `yaml:"inputArtefacts"`          // artefact IDs to read as input (e.g. ["petition"])
+	OutputArtefact    string   `yaml:"outputArtefact"`          // artefact ID to write (e.g. "haiku")
+	GovernedArtefact  string   `yaml:"governedArtefact"`        // GovernedArtefact CR name (e.g. "haiku")
+	OutputField       string   `yaml:"outputField"`             // JSON key to extract from validated output
+	SystemPrompt      string   `yaml:"systemPrompt"`            // optional: overrides baked-in system prompt template
+	QueryTemplate     string   `yaml:"queryTemplate"`           // optional: overrides baked-in query prompt template
+	ValidationRetries int      `yaml:"outputValidationRetries"` // optional: invalid output retry count
 }
 
 func main() {

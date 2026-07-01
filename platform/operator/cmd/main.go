@@ -211,6 +211,23 @@ func main() {
 		setupLog.Info("Event Bus not configured, audit publishing disabled")
 	}
 
+	// Connect to the Librarian for CRD-backed Law and LawGroup sync.
+	var librarianClient flowv1gen.LibrarianServiceClient
+	if librarianAddr != "" {
+		libConn, libErr := grpc.NewClient(
+			librarianAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if libErr != nil {
+			setupLog.Error(libErr, "Failed to connect to Librarian", "address", librarianAddr)
+			os.Exit(1)
+		}
+		librarianClient = flowv1gen.NewLibrarianServiceClient(libConn)
+		setupLog.Info("Connected to Librarian for Law sync", "address", librarianAddr)
+	} else {
+		setupLog.Info("Librarian not configured, Law sync disabled")
+	}
+
 	if err := (&controller.FoundryFlowReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -241,8 +258,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.LawReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Librarian: librarianClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Law")
 		os.Exit(1)
@@ -279,22 +297,6 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CodificationService")
 		os.Exit(1)
-	}
-	// Connect to the Librarian for LawGroup sync.
-	var librarianClient flowv1gen.LibrarianServiceClient
-	if librarianAddr != "" {
-		libConn, libErr := grpc.NewClient(
-			librarianAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if libErr != nil {
-			setupLog.Error(libErr, "Failed to connect to Librarian", "address", librarianAddr)
-			os.Exit(1)
-		}
-		librarianClient = flowv1gen.NewLibrarianServiceClient(libConn)
-		setupLog.Info("Connected to Librarian for LawGroup sync", "address", librarianAddr)
-	} else {
-		setupLog.Info("Librarian not configured, LawGroup sync disabled")
 	}
 	if err := (&controller.LawGroupReconciler{
 		Client:    mgr.GetClient(),

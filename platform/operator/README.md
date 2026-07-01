@@ -39,6 +39,13 @@ make install
 make deploy IMG=<some-registry>/operator:tag
 ```
 
+The deployment manifest passes
+`--librarian-address=flow-librarian.default.svc.cluster.local:50058`. This is
+required for the operator to materialize `Law` and `LawGroup` CRDs into the
+Librarian service. If you deploy the manager by hand or generate alternate
+manifests, preserve that argument or Law CRDs will only have Kubernetes status
+and appraisers will query zero enforceable laws.
+
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
 privileges or be logged in as admin.
 

@@ -187,21 +187,22 @@ func TestFoundryNode_Capabilities(t *testing.T) {
 			"READ:artefact", "WRITE:artefact/haiku", "READ:law",
 		}},
 		{name: "sort", nodeID: "sort", has: []string{
-			"READ:artefact/haiku", "READ:feedback", "READ:flow", "STAMP:artefact/haiku/approval",
+			"READ:artefact", "READ:artefact/haiku", "READ:feedback", "READ:flow", "STAMP:artefact/haiku/approval",
 		}},
 		{name: "quench", nodeID: "quench", has: []string{
-			"READ:artefact/haiku", "READ:feedback", "WRITE:feedback/new", "STAMP:artefact/haiku/linter",
+			"READ:artefact", "READ:artefact/haiku", "READ:feedback", "WRITE:feedback/new", "STAMP:artefact/haiku/linter",
 		}},
 		{name: "appraisal", nodeID: "appraisal", has: []string{
-			"READ:artefact/petition", "READ:artefact/haiku", "READ:feedback", "READ:law",
+			"READ:artefact", "READ:artefact/petition", "READ:artefact/haiku",
+			"WRITE:artefact/review-data", "READ:feedback", "READ:law",
 			"WRITE:feedback/new", "WRITE:feedback/resolved", "WRITE:feedback/rejected",
 			"STAMP:artefact/haiku/appraise-security", "CREATE:workitem/child",
 		}},
 		{name: "appraiser", nodeID: "appraiser", has: []string{
-			"READ:artefact/review-data", "WRITE:artefact/review-data",
+			"READ:artefact", "READ:artefact/review-data", "WRITE:artefact/review-data",
 		}},
 		{name: "refine", nodeID: "refine", has: []string{
-			"READ:artefact/petition", "READ:artefact/haiku", "WRITE:artefact/haiku",
+			"READ:artefact", "READ:artefact/petition", "READ:artefact/haiku", "WRITE:artefact/haiku",
 			"READ:feedback", "WRITE:feedback/actioned", "WRITE:feedback/wont_fix", "READ:law",
 		}},
 	}

@@ -64,6 +64,32 @@ func TestForgeAgent_ValidOutput(t *testing.T) {
 	}
 }
 
+func TestForgeAgent_UsesConfiguredOutputValidationRetries(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.ValidationRetries = 1
+
+	attempts := 0
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
+		attempts++
+		if attempts == 1 {
+			return &flow.InferOutput{Output: []byte("not JSON")}, nil
+		}
+		return &flow.InferOutput{Output: []byte(`{"haiku": "valid haiku"}`)}, nil
+	}
+
+	agent := newTestForgeAgent(t, inferFn, cfg)
+	result, err := agent.Run(context.Background(), "write a haiku", nil)
+	if err != nil {
+		t.Fatalf("expected retry to produce valid output, got error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	if result != "valid haiku" {
+		t.Fatalf("result = %q, want valid haiku", result)
+	}
+}
+
 func TestForgeAgent_RejectsEmptyOutput(t *testing.T) {
 	cfg := defaultTestConfig()
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {

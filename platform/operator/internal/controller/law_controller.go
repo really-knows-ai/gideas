@@ -21,16 +21,21 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	flowv1gen "github.com/gideas/flow/gen/flow/v1"
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 )
+
+const lawLibrarianSyncFinalizer = "flow.gideas.io/law-librarian-sync"
 
 // LawReconciler reconciles a Law object.
 //
@@ -40,7 +45,8 @@ import (
 //   - Set status conditions reflecting reconciliation health.
 type LawReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme    *runtime.Scheme
+	Librarian flowv1gen.LibrarianServiceClient
 }
 
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=laws,verbs=get;list;watch;create;update;patch;delete
@@ -48,7 +54,8 @@ type LawReconciler struct {
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=laws/finalizers,verbs=update
 // +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts,verbs=get;list;watch
 
-// Reconcile computes the content hash for the Law spec and validates structural invariants.
+// Reconcile computes the content hash for the Law spec, validates structural
+// invariants, and materializes the CRD-backed law in the Librarian.
 func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -65,6 +72,32 @@ func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		"group", law.Spec.Group,
 	)
 
+	if r.Librarian == nil {
+		err := fmt.Errorf("librarian client not configured")
+		r.setCondition(&law, "Ready", metav1.ConditionFalse, "LibrarianUnavailable", err.Error())
+		return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &law)
+	}
+
+	if !law.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(&law, lawLibrarianSyncFinalizer) {
+			if _, err := r.Librarian.RetireLaw(ctx, &flowv1gen.RetireLawRequest{LawId: law.Name}); err != nil {
+				log.Error(err, "Failed to retire Law from Librarian", "name", law.Name)
+				r.setCondition(&law, "Ready", metav1.ConditionFalse, "RetireFailed", err.Error())
+				return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &law)
+			}
+			controllerutil.RemoveFinalizer(&law, lawLibrarianSyncFinalizer)
+			return ctrl.Result{}, r.Update(ctx, &law)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(&law, lawLibrarianSyncFinalizer) {
+		controllerutil.AddFinalizer(&law, lawLibrarianSyncFinalizer)
+		if err := r.Update(ctx, &law); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Validate appliesTo references against GovernedArtefacts.
 	if err := r.validateAppliesTo(ctx, &law); err != nil {
 		r.setCondition(&law, "Ready", metav1.ConditionFalse, "ValidationFailed", err.Error())
@@ -79,10 +112,47 @@ func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	law.Status.Version = version
+	if err := r.syncLaw(ctx, &law); err != nil {
+		log.Error(err, "Failed to sync Law to Librarian", "name", law.Name)
+		r.setCondition(&law, "Ready", metav1.ConditionFalse, "SyncFailed", err.Error())
+		return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &law)
+	}
+
 	r.setCondition(&law, "Ready", metav1.ConditionTrue, "Reconciled",
-		fmt.Sprintf("Law version %s computed", version))
+		fmt.Sprintf("Law version %s computed and synced", version))
 
 	return ctrl.Result{}, r.persistStatus(ctx, &law)
+}
+
+func (r *LawReconciler) syncLaw(ctx context.Context, law *flowv1.Law) error {
+	reps := make([]*flowv1gen.Representation, 0, len(law.Spec.Representations))
+	for _, rep := range law.Spec.Representations {
+		reps = append(reps, &flowv1gen.Representation{Type: rep.Type, Content: rep.Content})
+	}
+
+	resp, err := r.Librarian.ReplicateLaws(ctx, &flowv1gen.ReplicateLawsRequest{
+		SourceFlowNamespace: law.Namespace,
+		Laws: []*flowv1gen.Law{{
+			Id:              law.Name,
+			Goal:            law.Spec.Goal,
+			Tier:            flowv1gen.LawTier(law.Spec.Tier),
+			AppliesTo:       law.Spec.AppliesTo,
+			Representations: reps,
+			Group:           law.Spec.Group,
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	for _, result := range resp.GetIntegrationResults() {
+		if result.GetLawId() == law.Name && result.GetAccepted() {
+			return nil
+		}
+		if result.GetLawId() == law.Name {
+			return fmt.Errorf("librarian rejected law %q: %s", law.Name, result.GetConflictReason())
+		}
+	}
+	return fmt.Errorf("librarian returned no integration result for law %q", law.Name)
 }
 
 // validateAppliesTo checks that appliesTo entries reference existing GovernedArtefacts.

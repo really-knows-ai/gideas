@@ -63,6 +63,7 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --librarian-address=flow-librarian.default.svc.cluster.local:50058
         image: controller:latest
         name: manager
         env:

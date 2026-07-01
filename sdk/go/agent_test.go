@@ -259,6 +259,23 @@ func TestNewAgent_CustomHeartbeatInterval(t *testing.T) {
 	}
 }
 
+func TestNewAgent_CustomOutputValidationRetries(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-agent-retries")
+
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithModelName("test-model"),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+		WithOutputValidationRetries(2),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent() returned error: %v", err)
+	}
+	if agent.cfg.validationRetries != 2 {
+		t.Fatalf("expected validation retries 2, got %d", agent.cfg.validationRetries)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests — Run: Template Rendering
 // ---------------------------------------------------------------------------
@@ -406,6 +423,80 @@ func TestAgent_Run_OutputNotJSON(t *testing.T) {
 	_, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
 		t.Fatal("Run() should return error for non-JSON output")
+	}
+	if !strings.Contains(err.Error(), "output validation failed") {
+		t.Fatalf("expected 'output validation failed' in error, got: %v", err)
+	}
+}
+
+func TestAgent_Run_OutputValidation_RetrySuccess(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-val-retry-success")
+
+	attempts := 0
+	var retryQuery []byte
+	inferFn := func(_ context.Context, _, _ string, queryPrompt []byte) (*InferOutput, error) {
+		attempts++
+		if attempts == 1 {
+			return &InferOutput{Output: []byte("not JSON")}, nil
+		}
+		retryQuery = append([]byte(nil), queryPrompt...)
+		return &InferOutput{Output: []byte(`{"haiku": "test haiku"}`)}, nil
+	}
+
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithModelName("test-model"),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+		WithHeartbeatInterval(time.Hour),
+		WithOutputValidationRetries(1),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent() error: %v", err)
+	}
+	OverrideModelForTest(agent, inferFn)
+
+	got, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	if string(got) != `{"haiku": "test haiku"}` {
+		t.Fatalf("Run() output = %s", got)
+	}
+	if !strings.Contains(string(retryQuery), "previous response failed output validation") {
+		t.Fatalf("retry query missing validation feedback: %q", string(retryQuery))
+	}
+}
+
+func TestAgent_Run_OutputValidation_RetryExhausted(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-val-retry-exhausted")
+
+	attempts := 0
+	inferFn := func(_ context.Context, _, _ string, _ []byte) (*InferOutput, error) {
+		attempts++
+		return &InferOutput{Output: []byte("not JSON")}, nil
+	}
+
+	agent, err := NewAgent(env.client,
+		WithSchema([]byte(validHaikuSchema)),
+		WithModelName("test-model"),
+		WithQueryTemplate(simpleQueryTemplate(t)),
+		WithHeartbeatInterval(time.Hour),
+		WithOutputValidationRetries(2),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent() error: %v", err)
+	}
+	OverrideModelForTest(agent, inferFn)
+
+	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
+	if err == nil {
+		t.Fatal("Run() should return error for exhausted invalid output retries")
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
 	}
 	if !strings.Contains(err.Error(), "output validation failed") {
 		t.Fatalf("expected 'output validation failed' in error, got: %v", err)
