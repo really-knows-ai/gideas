@@ -155,9 +155,17 @@ func (c *Client) GetWorkitem(workitemID ...string) (*Workitem, error) {
 		if c.session == nil || c.session.workitemID == "" {
 			return nil, fmt.Errorf("flow sdk: no workitem ID available — FLOW_WORKITEM_ID not set")
 		}
-		return &Workitem{session: c.session, id: c.session.workitemID}, nil
+		return &Workitem{
+			session:   c.session,
+			id:        c.session.workitemID,
+			namespace: c.session.namespace,
+		}, nil
 	case 1:
-		return &Workitem{session: c.session, id: workitemID[0]}, nil
+		return &Workitem{
+			session:   c.session,
+			id:        workitemID[0],
+			namespace: c.session.namespace,
+		}, nil
 	default:
 		return nil, fmt.Errorf("flow sdk: GetWorkitem accepts 0 or 1 workitem IDs, got %d", len(workitemID))
 	}

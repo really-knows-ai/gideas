@@ -162,6 +162,17 @@ func (a *Artefact) GetFeedback() ([]*Feedback, error) {
 	return feedback, nil
 }
 
+// newArtefact creates an Artefact domain object from response fields.
+func newArtefact(sess *session, artefactID, governedArtefact string, content []byte, versionHash string) *Artefact {
+	return &Artefact{
+		artefactID:       artefactID,
+		governedArtefact: governedArtefact,
+		content:          content,
+		versionHash:      versionHash,
+		session:          sess,
+	}
+}
+
 // HasUnresolvedFeedback returns true if any feedback is unresolved.
 func (a *Artefact) HasUnresolvedFeedback() (bool, error) {
 	resp, err := a.session.Archivist.HasUnresolvedFeedback(context.Background(), &flowv1.HasUnresolvedFeedbackRequest{

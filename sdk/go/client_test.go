@@ -40,6 +40,16 @@ type spyServer struct {
 	lastResumeReq *flowv1.ResumeWorkitemRequest
 	// lastAddFeedbackReq is the request captured from the most recent AddFeedback call.
 	lastAddFeedbackReq *flowv1.AddFeedbackRequest
+	// lastPauseTimerReq captures the most recent PauseTimer request.
+	lastPauseTimerReq *flowv1.PauseTimerRequest
+	// lastResumeTimerReq captures the most recent ResumeTimer request.
+	lastResumeTimerReq *flowv1.ResumeTimerRequest
+	// lastGetArtefactReq captures the most recent GetArtefact request.
+	lastGetArtefactReq *flowv1.GetArtefactRequest
+	// lastGetFeedbackReq captures the most recent GetFeedback request.
+	lastGetFeedbackReq *flowv1.GetFeedbackRequest
+	// lastHasUnresolvedReq captures the most recent HasUnresolvedFeedback request.
+	lastHasUnresolvedReq *flowv1.HasUnresolvedFeedbackRequest
 	// lastQueryLawsReq captures the most recent QueryLaws request.
 	lastQueryLawsReq *flowv1.QueryLawsRequest
 	// lastPublishReq captures the most recent Publish request.
@@ -66,6 +76,22 @@ type spyServer struct {
 func (s *spyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatRequest) (*flowv1.HeartbeatResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
+}
+
+func (s *spyServer) PauseTimer(
+	ctx context.Context, req *flowv1.PauseTimerRequest,
+) (*flowv1.PauseTimerResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastPauseTimerReq = req
+	return &flowv1.PauseTimerResponse{}, nil
+}
+
+func (s *spyServer) ResumeTimer(
+	ctx context.Context, req *flowv1.ResumeTimerRequest,
+) (*flowv1.ResumeTimerResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastResumeTimerReq = req
+	return &flowv1.ResumeTimerResponse{}, nil
 }
 
 func (s *spyServer) SubmitResult(
@@ -108,6 +134,7 @@ func (s *spyServer) GetArtefact(
 	ctx context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastGetArtefactReq = req
 	return &flowv1.GetArtefactResponse{
 		Content:          []byte("test-content"),
 		VersionHash:      "test-hash",
@@ -412,6 +439,7 @@ func (s *spyServer) GetFeedback(
 	ctx context.Context, req *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastGetFeedbackReq = req
 	return &flowv1.GetFeedbackResponse{
 		FeedbackItems: []*flowv1.FeedbackItem{
 			{Id: "fb-001", Message: "needs revision"},
@@ -424,6 +452,7 @@ func (s *spyServer) HasUnresolvedFeedback(
 	ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest,
 ) (*flowv1.HasUnresolvedFeedbackResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastHasUnresolvedReq = req
 	return &flowv1.HasUnresolvedFeedbackResponse{HasUnresolved: true}, nil
 }
 
