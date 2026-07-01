@@ -195,7 +195,7 @@ func handleFacilitator(
 		nodeutil.EmitTelemetry(client, "foundry.facilitator.started", map[string]any{
 			"phase": "resume",
 		})
-		return handlePostResume(ctx, client, workitem, children)
+		return handlePostResume(client, workitem, children)
 	}
 
 	nodeutil.EmitTelemetry(client, "foundry.facilitator.started", map[string]any{
@@ -236,7 +236,7 @@ func handleFirstInvocation(
 	exitContract := topology.GetExitContract()
 
 	// ── Step 2: Find deadlocked feedback ─────────────────────────────
-	artefactKind, disputed, err := selectDisputedFeedback(ctx, client, workitem, exitContract)
+	artefactKind, disputed, err := selectDisputedFeedback(workitem, exitContract)
 	if err != nil {
 		return err
 	}
@@ -260,19 +260,19 @@ func handleFirstInvocation(
 
 	// ── Step 3: Assemble evidence artefacts ──────────────────────────
 
-	disputeWorkitem, err := buildDisputeWorkitem(ctx, client, workitem, wctx)
+	disputeWorkitem, err := buildDisputeWorkitem(workitem, wctx)
 	if err != nil {
 		return err
 	}
 
-	disputeDetails := buildDisputeDetails(ctx, client, workitem, disputed)
+	disputeDetails := buildDisputeDetails(client, workitem, disputed)
 
-	disputeArtefactContent, err := buildDisputeArtefact(ctx, client, workitem, artefactKind)
+	disputeArtefactContent, err := buildDisputeArtefact(workitem, artefactKind)
 	if err != nil {
 		return err
 	}
 
-	disputeInputs, err := buildDisputeInputs(ctx, client, workitem, cfg.InputArtefacts)
+	disputeInputs, err := buildDisputeInputs(workitem, cfg.InputArtefacts)
 	if err != nil {
 		return err
 	}
@@ -371,8 +371,6 @@ type disputedArtefactRef struct {
 //
 // Returns ("", nil, nil) when no deadlocked feedback exists.
 func selectDisputedFeedback(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	exitContract map[string][]string,
 ) (string, *flow.Feedback, error) {
@@ -407,8 +405,6 @@ func selectDisputedFeedback(
 // workitem context (ID, namespace, node, metadata) and workitem-level
 // friction summary.
 func buildDisputeWorkitem(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	wctx *flowv1.WorkitemContext,
 ) (string, error) {
@@ -458,7 +454,6 @@ func buildDisputeWorkitem(
 // retrieve individual cited laws or their friction are logged but do not
 // fail the function — they are best-effort enrichment.
 func buildDisputeDetails(
-	ctx context.Context,
 	client *flow.Client,
 	workitem *flow.Workitem,
 	fb *flow.Feedback,
@@ -554,8 +549,6 @@ func extractCitedLawIDs(item *flowv1.FeedbackItem) []string {
 // buildDisputeArtefact fetches the raw artefact content for the disputed
 // artefact kind and returns it as bytes.
 func buildDisputeArtefact(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	artefactKind string,
 ) ([]byte, error) {
@@ -569,8 +562,6 @@ func buildDisputeArtefact(
 // buildDisputeInputs fetches each configured input artefact and
 // concatenates them with headers into a single Markdown document.
 func buildDisputeInputs(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	inputArtefacts []string,
 ) (string, error) {
@@ -634,7 +625,6 @@ func buildAppendix(
 // cancelled (e.g. HITL abort), the Facilitator propagates the cancellation.
 // Otherwise, the dispute is resolved and we route back into the cycle.
 func handlePostResume(
-	ctx context.Context,
 	client *flow.Client,
 	workitem *flow.Workitem,
 	children []*flowv1.ChildWorkitemStatus,

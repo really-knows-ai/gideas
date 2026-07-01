@@ -23,7 +23,7 @@ func setupArtefactTestEnv(t *testing.T, workitemID string) (*testEnv, *Artefact)
 	return env, art
 }
 
-func setupArtefactErrorEnv(t *testing.T, workitemID string) (*testEnv, *Artefact) {
+func setupArtefactErrorEnv(t *testing.T, workitemID string) *Artefact {
 	t.Helper()
 	spy := &spyServer{}
 	errSpy := &errorSpyServer{}
@@ -37,7 +37,7 @@ func setupArtefactErrorEnv(t *testing.T, workitemID string) (*testEnv, *Artefact
 	})
 	env := &testEnv{client: client, spy: spy, srv: srv}
 	art := newTestArtefact(env.client.session, "art-001", "doc", "v1-hash")
-	return env, art
+	return art
 }
 
 func TestArtefact_ID(t *testing.T) {
@@ -121,7 +121,7 @@ func TestArtefact_GetContent_UpdatesVersionHash(t *testing.T) {
 }
 
 func TestArtefact_GetContent_Error(t *testing.T) {
-	_, art := setupArtefactErrorEnv(t, "wid-err-001")
+	art := setupArtefactErrorEnv(t, "wid-err-001")
 	_, err := art.GetContent()
 	if err == nil {
 		t.Fatal("GetContent() expected error, got nil")
@@ -151,7 +151,7 @@ func TestArtefact_Store(t *testing.T) {
 }
 
 func TestArtefact_Store_Error(t *testing.T) {
-	_, art := setupArtefactErrorEnv(t, "wid-store-err-001")
+	art := setupArtefactErrorEnv(t, "wid-store-err-001")
 	err := art.Store([]byte("content"))
 	if err == nil {
 		t.Fatal("Store() expected error, got nil")
@@ -171,7 +171,7 @@ func TestArtefact_Stamp(t *testing.T) {
 }
 
 func TestArtefact_Stamp_Error(t *testing.T) {
-	_, art := setupArtefactErrorEnv(t, "wid-stamp-err-001")
+	art := setupArtefactErrorEnv(t, "wid-stamp-err-001")
 	err := art.Stamp("approval")
 	if err == nil {
 		t.Fatal("Stamp() expected error, got nil")
@@ -206,7 +206,7 @@ func TestArtefact_GetStamps(t *testing.T) {
 }
 
 func TestArtefact_GetStamps_Error(t *testing.T) {
-	_, art := setupArtefactErrorEnv(t, "wid-stamps-err-001")
+	art := setupArtefactErrorEnv(t, "wid-stamps-err-001")
 	_, err := art.GetStamps()
 	if err == nil {
 		t.Fatal("GetStamps() expected error, got nil")
@@ -236,7 +236,7 @@ func TestArtefact_HasStamp(t *testing.T) {
 }
 
 func TestArtefact_HasStamp_Error(t *testing.T) {
-	_, art := setupArtefactErrorEnv(t, "wid-hasstamp-err-001")
+	art := setupArtefactErrorEnv(t, "wid-hasstamp-err-001")
 	_, err := art.HasStamp("linter")
 	if err == nil {
 		t.Fatal("HasStamp() expected error, got nil")
@@ -271,7 +271,7 @@ func TestArtefact_GetFeedback(t *testing.T) {
 }
 
 func TestArtefact_GetFeedback_Error(t *testing.T) {
-	_, art := setupArtefactErrorEnv(t, "wid-fb-err-001")
+	art := setupArtefactErrorEnv(t, "wid-fb-err-001")
 	_, err := art.GetFeedback()
 	if err == nil {
 		t.Fatal("GetFeedback() expected error, got nil")
@@ -294,7 +294,7 @@ func TestArtefact_HasUnresolvedFeedback(t *testing.T) {
 }
 
 func TestArtefact_HasUnresolvedFeedback_Error(t *testing.T) {
-	_, art := setupArtefactErrorEnv(t, "wid-hasufb-err-001")
+	art := setupArtefactErrorEnv(t, "wid-hasufb-err-001")
 	_, err := art.HasUnresolvedFeedback()
 	if err == nil {
 		t.Fatal("HasUnresolvedFeedback() expected error, got nil")

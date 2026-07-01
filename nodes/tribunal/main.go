@@ -246,7 +246,7 @@ func handleTribunal(ctx context.Context, client *flow.Client, workitem *flow.Wor
 		return nil
 	}
 
-	return spawnClerkChild(ctx, client, workitem, cfg, law, question, lastResult)
+	return spawnClerkChild(workitem, cfg, law, question, lastResult)
 }
 
 func queryRelatedLaws(
@@ -286,8 +286,6 @@ func filterRoundChildren(
 }
 
 func spawnClerkChild(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	cfg *tribunalConfig,
 	law *flow.Law,

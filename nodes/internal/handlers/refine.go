@@ -88,7 +88,7 @@ func HandleRefine(
 	// Phase 1: Per-item triage (sequential)
 	// ---------------------------------------------------------------
 
-	actionedItems, err := triageFeedback(ctx, triage, workitem,
+	actionedItems, err := triageFeedback(ctx, triage,
 		feedbackItems, inputContent, reviewContent, protoLaws)
 	if err != nil {
 		return fmt.Errorf("refine: triage feedback: %w", err)
@@ -140,7 +140,6 @@ func HandleRefine(
 func triageFeedback(
 	ctx context.Context,
 	triage flow.TriageContract,
-	workitem *flow.Workitem,
 	feedback []*flow.Feedback,
 	inputContent, reviewContent string,
 	laws []*flowv1.Law,

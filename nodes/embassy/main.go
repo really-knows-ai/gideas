@@ -464,7 +464,7 @@ func handleExport(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		},
 	}
 
-	return processExport(ctx, client, workitem, wctx, deps)
+	return processExport(ctx, workitem, wctx, deps)
 }
 
 // sidecarArchivistAdapter adapts a raw ArchivistServiceClient to the
@@ -505,7 +505,6 @@ func (a *sidecarArchivistAdapter) GetStamps(
 //  7. Complete the local workitem.
 func processExport(
 	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	wctx *flowv1.WorkitemContext,
 	deps *exportDeps,
@@ -520,7 +519,7 @@ func processExport(
 	scope := metadata["scope"]
 
 	// --- 1. Resolve target via Federation ---
-	target, err := resolveExportTarget(ctx, deps.fedClient, importType, scope)
+	target, err := resolveExportTarget(deps.fedClient, importType, scope)
 	if err != nil {
 		return fmt.Errorf("embassy export: %w", err)
 	}

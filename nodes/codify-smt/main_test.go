@@ -42,7 +42,7 @@ func TestCodifySMT_HappyPath(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+	err := runCodify(context.Background(), workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCodifySMT_CustomOutputFormat(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+	err := runCodify(context.Background(), workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestCodifySMT_QueryIncludesGoalContext(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+	err := runCodify(context.Background(), workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestCodifySMT_SystemPromptUsesDefault(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+	err := runCodify(context.Background(), workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestCodifySMT_CustomSystemPrompt(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+	err := runCodify(context.Background(), workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestCodifySMT_Error_AgentInferFails(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+	err := runCodify(context.Background(), workitem, agent, cfg, goal)
 	if err == nil {
 		t.Fatal("expected error when inference fails")
 	}
@@ -314,7 +314,7 @@ func TestCodifySMT_Error_AgentOutputEmpty(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+	err := runCodify(context.Background(), workitem, agent, cfg, goal)
 	if err == nil {
 		t.Fatal("expected error when smt_content is empty")
 	}
@@ -355,7 +355,7 @@ func TestCodifySMT_Error_StoreOrCompleteFails(t *testing.T) {
 				Action:    "create",
 			}
 
-			err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
+			err := runCodify(context.Background(), workitem, agent, cfg, goal)
 			if err == nil {
 				t.Fatal(tt.errMsg)
 			}

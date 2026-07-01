@@ -358,7 +358,7 @@ func (s *appraisalSpy) Publish(
 // newSpyClient creates a flow.Client backed by a local gRPC server with
 // the appraisalSpy registered for all service interfaces, and returns the
 // current workitem.
-func newSpyClient(t *testing.T, spy *appraisalSpy) (*flow.Client, *flow.Workitem) {
+func newSpyClient(t *testing.T, spy *appraisalSpy) *flow.Client {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -377,12 +377,7 @@ func newSpyClient(t *testing.T, spy *appraisalSpy) (*flow.Client, *flow.Workitem
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	workitem, err := client.GetWorkitem()
-	if err != nil {
-		t.Fatalf("GetWorkitem() failed: %v", err)
-	}
-
-	return client, workitem
+	return client
 }
 
 // newSpyClientWithEventBus creates a flow.Client backed by a local gRPC server

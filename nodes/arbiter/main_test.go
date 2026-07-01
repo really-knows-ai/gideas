@@ -863,8 +863,8 @@ func TestArbiter_PostResume_NoCompletedChild_Error(t *testing.T) {
 		{WorkitemId: "c1", Phase: "Running"},
 	}
 
-	client, workitem := setupArbiterTest(t, spy)
-	err := handlePostResume(context.Background(), client, workitem, children)
+	_, workitem := setupArbiterTest(t, spy)
+	err := handlePostResume(workitem, children)
 	if err == nil {
 		t.Fatal("expected error when no completed child found")
 	}

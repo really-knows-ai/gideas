@@ -205,7 +205,7 @@ func handleArbiter(ctx context.Context, client *flow.Client, workitem *flow.Work
 
 	children := resp.GetChildren()
 	if hasCompletedChild(children) {
-		return handlePostResume(ctx, client, workitem, children)
+		return handlePostResume(workitem, children)
 	}
 
 	return handleFirstInvocation(ctx, client, workitem, cfg)
@@ -325,13 +325,11 @@ func handleFirstInvocation(ctx context.Context, client *flow.Client, workitem *f
 	}
 
 	// ── Step 4: Post-loop outcomes ──────────────────────────────────
-	return handleDeliberationOutcome(ctx, client, workitem, cfg, lastResult)
+	return handleDeliberationOutcome(workitem, cfg, lastResult)
 }
 
 // handleDeliberationOutcome branches on the tally result.
 func handleDeliberationOutcome(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	cfg *arbiterConfig,
 	result tally.TallyResult,
@@ -355,14 +353,12 @@ func handleDeliberationOutcome(
 	}
 
 	// Consensus for law change — create Clerk child and suspend.
-	return spawnClerkAndSuspend(ctx, client, workitem, cfg, result)
+	return spawnClerkAndSuspend(workitem, cfg, result)
 }
 
 // spawnClerkAndSuspend synthesizes the prose verdict-context, creates a
 // Clerk child with the verdict-context artefact, and suspends.
 func spawnClerkAndSuspend(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	cfg *arbiterConfig,
 	result tally.TallyResult,
@@ -447,8 +443,6 @@ func synthesizeDecision(result tally.TallyResult) string {
 // the suspend condition was met (clerk child completed). It checks the
 // child's CompletionReason and completes accordingly.
 func handlePostResume(
-	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	children []*flowv1.ChildWorkitemStatus,
 ) error {

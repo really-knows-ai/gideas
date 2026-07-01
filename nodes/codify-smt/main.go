@@ -244,7 +244,7 @@ func handleCodify(ctx context.Context, client *flow.Client, workitem *flow.Worki
 		return fmt.Errorf("codify-smt: create agent: %w", err)
 	}
 
-	return runCodify(ctx, client, workitem, agent, cfg, &goal)
+	return runCodify(ctx, workitem, agent, cfg, &goal)
 }
 
 // runCodify runs the agent and stores the result. Separated from
@@ -252,7 +252,6 @@ func handleCodify(ctx context.Context, client *flow.Client, workitem *flow.Worki
 // OverrideModelForTest before calling this function.
 func runCodify(
 	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	agent *flow.Agent,
 	cfg *codifyConfig,

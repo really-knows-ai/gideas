@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -238,7 +237,7 @@ func TestScanAndCreate_CreatesWorkitems(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, libSpy)
 	tracker := internal.NewPendingTracker()
 
-	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
+	err := scanAndCreate(ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("scanAndCreate() returned error: %v", err)
 	}
@@ -272,13 +271,13 @@ func TestScanAndCreate_DeduplicatesPending(t *testing.T) {
 	tracker := internal.NewPendingTracker()
 
 	// First scan — should create workitem.
-	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
+	err := scanAndCreate(ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("first scan error: %v", err)
 	}
 
 	// Second scan — same law still expired, but should be deduped.
-	err = scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
+	err = scanAndCreate(ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("second scan error: %v", err)
 	}
@@ -304,7 +303,7 @@ func TestScanAndCreate_CreateWorkitemError_ClearsPending(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, libSpy)
 	tracker := internal.NewPendingTracker()
 
-	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
+	err := scanAndCreate(ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("scanAndCreate() returned error: %v", err)
 	}
@@ -326,7 +325,7 @@ func TestScanAndCreate_QueryLawsError(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, libSpy)
 	tracker := internal.NewPendingTracker()
 
-	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, time.Now)
+	err := scanAndCreate(ec, tierTTLs, tracker, time.Now)
 	if err == nil {
 		t.Fatal("expected error from scanAndCreate when QueryLaws fails")
 	}
@@ -350,7 +349,7 @@ func TestScanAndCreate_NoExpiredLaws(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, libSpy)
 	tracker := internal.NewPendingTracker()
 
-	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
+	err := scanAndCreate(ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("scanAndCreate() returned error: %v", err)
 	}
@@ -381,7 +380,7 @@ func TestScanAndCreate_MultipleTiers(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, libSpy)
 	tracker := internal.NewPendingTracker()
 
-	err := scanAndCreate(context.Background(), ec, tierTTLs, tracker, func() time.Time { return now })
+	err := scanAndCreate(ec, tierTTLs, tracker, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("scanAndCreate() returned error: %v", err)
 	}

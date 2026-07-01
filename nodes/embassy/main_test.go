@@ -621,7 +621,7 @@ func TestHandleExport_MissingImportTypeReturnsError(t *testing.T) {
 	}
 
 	wi := getExportTestWorkitem(t, client, wctx.GetWorkitemId())
-	err := processExport(context.Background(), client, wi, wctx, deps)
+	err := processExport(context.Background(), wi, wctx, deps)
 	if err == nil {
 		t.Fatal("expected processExport to return error when import_type is missing")
 	}

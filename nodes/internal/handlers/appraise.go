@@ -105,7 +105,7 @@ func HandleAppraisal(
 	// ---------------------------------------------------------------
 
 	novelResolved, err := evaluateFeedback(
-		ctx, eval, workitem,
+		ctx, eval,
 		existingFeedback, inputContent, reviewContent)
 	if err != nil {
 		return fmt.Errorf("appraisal: evaluate feedback: %w", err)
@@ -116,7 +116,7 @@ func HandleAppraisal(
 	// ---------------------------------------------------------------
 
 	result, err := fanOutAppraisal(
-		ctx, workitem, cfg, existingFeedback,
+		workitem, cfg, existingFeedback,
 		inputContent, reviewContent)
 	if err != nil {
 		return fmt.Errorf("appraisal: fan-out review: %w", err)
@@ -128,7 +128,7 @@ func HandleAppraisal(
 
 	// Post-fan-out: stamping, coverage, events (only if dispatches exist).
 	if len(result.dispatchMatrix) > 0 {
-		applyAppraisalStamps(ctx, workitem, cfg.GovernedArtefact,
+		applyAppraisalStamps(workitem, cfg.GovernedArtefact,
 			result.dispatchMatrix, result.childStatuses,
 			result.childByDispatchIdx, result.unitsByGroup, result.groups,
 			result.skippedIndices)
@@ -251,7 +251,6 @@ type fanOutResult struct {
 //
 //nolint:cyclop,funlen,gocyclo // Orchestration — sequential steps are inherently complex.
 func fanOutAppraisal(
-	ctx context.Context,
 	workitem *flow.Workitem,
 	cfg AppraisalConfig,
 	existingFeedback []*flow.Feedback,
@@ -520,7 +519,6 @@ func lawToData(l *flowv1.Law) LawData {
 // completion. A group/law is stamped only if ALL dispatches for that scope
 // completed successfully. Stamping failures are logged but do not fail.
 func applyAppraisalStamps(
-	ctx context.Context,
 	workitem *flow.Workitem,
 	governedArtefact string,
 	dispatchMatrix []flow.DispatchEntry,
@@ -821,7 +819,6 @@ func emitAttestationEvent(_ context.Context, client *flow.Client, coverage map[s
 func evaluateFeedback(
 	ctx context.Context,
 	eval flow.EvalContract,
-	workitem *flow.Workitem,
 	feedback []*flow.Feedback,
 	inputContent, reviewContent string,
 ) ([]*flow.Feedback, error) {

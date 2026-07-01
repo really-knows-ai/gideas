@@ -51,7 +51,7 @@ func TestJuror_HappyPath(t *testing.T) {
 	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(
-		context.Background(), client, workitem, agent,
+		context.Background(), workitem, agent,
 		"Should the feedback be upheld?", "Some evidence",
 		[]string{"favour_refiner", "favour_reviewer"}, "",
 	)
@@ -119,7 +119,7 @@ func TestJuror_WithPriorRoundReasoning(t *testing.T) {
 	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(
-		context.Background(), client, workitem, agent,
+		context.Background(), workitem, agent,
 		"Should the feedback be upheld?", "Evidence",
 		[]string{"favour_refiner", "favour_reviewer"}, priorRound,
 	)
@@ -226,7 +226,7 @@ func TestJuror_Error_AgentInferFails(t *testing.T) {
 	}
 	flow.OverrideModelForTest(agent, inferFn)
 
-	err = runJuror(context.Background(), client, workitem, agent, "question", "evidence", []string{"a", "b"}, "")
+	err = runJuror(context.Background(), workitem, agent, "question", "evidence", []string{"a", "b"}, "")
 	if err == nil {
 		t.Fatal("expected error when inference fails")
 	}
@@ -266,7 +266,7 @@ func TestJuror_Error_StoreVerdictFails(t *testing.T) {
 	}
 	flow.OverrideModelForTest(agent, inferFn)
 
-	err = runJuror(context.Background(), client, workitem, agent, "question", "evidence", []string{"a", "b"}, "")
+	err = runJuror(context.Background(), workitem, agent, "question", "evidence", []string{"a", "b"}, "")
 	if err == nil {
 		t.Fatal("expected error when store verdict fails")
 	}

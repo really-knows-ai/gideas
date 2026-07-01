@@ -116,7 +116,7 @@ func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
 	tracker := internal.NewPendingTracker()
 
 	// Run the first scan immediately, then on a timer.
-	if err := scanAndCreate(ctx, entry, tierTTLs, tracker, time.Now); err != nil {
+	if err := scanAndCreate(entry, tierTTLs, tracker, time.Now); err != nil {
 		slog.Warn("ttl-watcher: initial scan failed", "error", err)
 	}
 
@@ -128,7 +128,7 @@ func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := scanAndCreate(ctx, entry, tierTTLs, tracker, time.Now); err != nil {
+			if err := scanAndCreate(entry, tierTTLs, tracker, time.Now); err != nil {
 				slog.Warn("ttl-watcher: scan failed", "error", err)
 			}
 		}
@@ -139,7 +139,6 @@ func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
 // workitems for any whose age exceeds the configured tier TTL.
 // The nowFunc parameter exists for testability.
 func scanAndCreate(
-	ctx context.Context,
 	entry *flow.EntryClient,
 	tierTTLs map[flowv1.LawTier]time.Duration,
 	tracker *internal.PendingTracker,

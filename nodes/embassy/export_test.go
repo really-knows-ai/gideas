@@ -98,7 +98,7 @@ func TestProcessExport_ConnectsToRemoteEmbassyAndTransfers(t *testing.T) {
 	}
 
 	wi := getExportTestWorkitem(t, env.client, wctx.GetWorkitemId())
-	err := processExport(context.Background(), env.client, wi, wctx, env.deps)
+	err := processExport(context.Background(), wi, wctx, env.deps)
 	if err != nil {
 		t.Fatalf("processExport() returned error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestProcessExport_PreflightRejectedFailsWithRejectionReason(t *testing.T) {
 	}
 
 	wi := getExportTestWorkitem(t, client, wctx.GetWorkitemId())
-	err = processExport(context.Background(), client, wi, wctx, deps)
+	err = processExport(context.Background(), wi, wctx, deps)
 	if err == nil {
 		t.Fatal("expected error when preflight is rejected")
 	}
@@ -198,7 +198,7 @@ func TestProcessExport_SuccessfulTransferCallsComplete(t *testing.T) {
 	}
 
 	wi := getExportTestWorkitem(t, env.client, wctx.GetWorkitemId())
-	err := processExport(context.Background(), env.client, wi, wctx, env.deps)
+	err := processExport(context.Background(), wi, wctx, env.deps)
 	if err != nil {
 		t.Fatalf("processExport() returned error: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestProcessExport_TransferFailureReturnsError(t *testing.T) {
 	}
 
 	exportWI := getExportTestWorkitem(t, client, wctx.GetWorkitemId())
-	err = processExport(context.Background(), client, exportWI, wctx, deps)
+	err = processExport(context.Background(), exportWI, wctx, deps)
 	if err == nil {
 		t.Fatal("expected error when federation returns error")
 	}

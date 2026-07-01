@@ -162,11 +162,11 @@ func consumeOutcomes(
 			slog.Info("petition-watcher: petition accepted",
 				"petition_id", petitionID,
 				"published_law_id", evt.GetPublishedLawId())
-			handleAccepted(ctx, entry, petitionID)
+			handleAccepted(entry, petitionID)
 		} else if flow.IsPetitionRejected(evt) {
 			slog.Info("petition-watcher: petition rejected",
 				"petition_id", petitionID)
-			handleRejected(ctx, entry, petitionID, evt)
+			handleRejected(entry, petitionID, evt)
 		} else {
 			slog.Warn("petition-watcher: unknown outcome",
 				"petition_id", petitionID,
@@ -178,7 +178,7 @@ func consumeOutcomes(
 // handleAccepted processes an accepted petition: retires the dispute record
 // via the Librarian. Errors are logged but do not stop processing (best-effort).
 // Held workitem discovery and resume will be added in slice 13.10.4.
-func handleAccepted(ctx context.Context, entry *flow.EntryClient, petitionID string) {
+func handleAccepted(entry *flow.EntryClient, petitionID string) {
 	if entry == nil {
 		slog.Warn("petition-watcher: no entry client, skipping retire dispute record",
 			"petition_id", petitionID)
@@ -200,7 +200,7 @@ func handleAccepted(ctx context.Context, entry *flow.EntryClient, petitionID str
 		"petition_id", petitionID)
 	// Discover and resume held workitems whose suspend condition references
 	// this petition_id.
-	resumeHeldWorkitems(ctx, entry, petitionID)
+	resumeHeldWorkitems(entry, petitionID)
 }
 
 // rejectionReport is the JSON-serializable structure stored in the
@@ -216,7 +216,7 @@ type rejectionReport struct {
 // (best-effort, same as acceptance) and creates a new Clerk cycle Workitem
 // with rejection context metadata. Errors are logged but do not stop
 // processing.
-func handleRejected(ctx context.Context, entry *flow.EntryClient, petitionID string, evt *flowv1.PetitionOutcomeEvent) {
+func handleRejected(entry *flow.EntryClient, petitionID string, evt *flowv1.PetitionOutcomeEvent) {
 	if entry == nil {
 		slog.Warn("petition-watcher: no entry client, skipping rejection handling",
 			"petition_id", petitionID)
@@ -274,7 +274,7 @@ func handleRejected(ctx context.Context, entry *flow.EntryClient, petitionID str
 		"petition_id", petitionID, "workitem_id", wiID)
 	// Discover and resume held workitems whose suspend condition references
 	// this petition_id.
-	resumeHeldWorkitems(ctx, entry, petitionID)
+	resumeHeldWorkitems(entry, petitionID)
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +332,7 @@ func processOutcome(workitem *flow.Workitem, wctx *flowv1.WorkitemContext) error
 // contains the petition_id and resumes each one. Errors are logged but do not
 // stop processing (best-effort). A failure to resume one workitem does not
 // prevent resuming others.
-func resumeHeldWorkitems(ctx context.Context, entry *flow.EntryClient, petitionID string) {
+func resumeHeldWorkitems(entry *flow.EntryClient, petitionID string) {
 	workitemIDs, err := entry.ListSuspendedWorkitems(petitionID)
 	if err != nil {
 		slog.Warn("petition-watcher: list suspended workitems failed",

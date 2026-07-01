@@ -301,7 +301,7 @@ func handleJuror(ctx context.Context, client *flow.Client, workitem *flow.Workit
 		return fmt.Errorf("juror: create agent: %w", err)
 	}
 
-	return runJuror(ctx, client, workitem, agent, question, evidence, allowedOutcomes, priorRound)
+	return runJuror(ctx, workitem, agent, question, evidence, allowedOutcomes, priorRound)
 }
 
 // runJuror runs the agent and stores the verdict. Separated from handleJuror
@@ -309,7 +309,6 @@ func handleJuror(ctx context.Context, client *flow.Client, workitem *flow.Workit
 // calling this function.
 func runJuror(
 	ctx context.Context,
-	client *flow.Client,
 	workitem *flow.Workitem,
 	agent *flow.Agent,
 	question, evidence string,
