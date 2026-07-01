@@ -199,7 +199,7 @@ func (c *Client) GetLaw(lawID string) (*Law, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get law failed: %w", err)
 	}
-	return &Law{session: c.session, pb: resp.GetLaw()}, nil
+	return newLaw(resp.GetLaw(), c.session.Librarian), nil
 }
 
 // RecordFinding creates a Tier 1 Finding and returns the law ID.
@@ -690,7 +690,12 @@ func (c *Client) GetLawGroup(ctx context.Context, groupName string) (*LawGroup, 
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get law group failed: %w", err)
 	}
-	return protoLawGroupToSDK(resp.GetGroup()), nil
+	return newLawGroup(
+		resp.GetGroup().GetName(),
+		GroupMode(resp.GetGroup().GetMode()),
+		resp.GetGroup().GetPasses(),
+		c.session.Librarian,
+	), nil
 }
 
 // ListLawGroups returns all stored law groups.
@@ -704,7 +709,12 @@ func (c *Client) ListLawGroups(ctx context.Context) ([]*LawGroup, error) {
 	groups := resp.GetGroups()
 	out := make([]*LawGroup, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, protoLawGroupToSDK(g))
+		out = append(out, newLawGroup(
+			g.GetName(),
+			GroupMode(g.GetMode()),
+			g.GetPasses(),
+			c.session.Librarian,
+		))
 	}
 	return out, nil
 }
