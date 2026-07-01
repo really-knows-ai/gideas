@@ -673,9 +673,6 @@ func TestWorkitem_GetTopology(t *testing.T) {
 	if flow == nil {
 		t.Fatal("expected non-nil Flow")
 	}
-	if flow.pb == nil {
-		t.Fatal("expected non-nil Flow.pb")
-	}
 
 	// Verify metadata injection.
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
@@ -683,9 +680,10 @@ func TestWorkitem_GetTopology(t *testing.T) {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
 	}
 
-	// Verify stub content (Phase 1 stub — full accessors in Phase 7).
-	if flow.pb.GetSelf().GetName() != testNodeName {
-		t.Fatalf("self.name = %q, want %q", flow.pb.GetSelf().GetName(), testNodeName)
+	// Verify topology accessors work.
+	nodes := flow.GetNodes()
+	if len(nodes) == 0 {
+		t.Fatal("expected at least one node")
 	}
 }
 

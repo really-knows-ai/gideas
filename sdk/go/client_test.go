@@ -1458,11 +1458,23 @@ func TestGetFlow(t *testing.T) {
 	if f == nil {
 		t.Fatal("expected non-nil Flow")
 	}
-	if f.pb == nil {
-		t.Fatal("expected non-nil Flow.pb")
+
+	// Verify topology accessors work.
+	nodes := f.GetNodes()
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(nodes))
 	}
-	if f.pb.GetSelf().GetName() != testNodeName {
-		t.Fatalf("expected self.name=test-node, got %q", f.pb.GetSelf().GetName())
+
+	ec := f.GetExitContract()
+	if ec == nil {
+		t.Fatal("expected non-nil exit contract")
+	}
+	stamps, ok := ec["doc"]
+	if !ok {
+		t.Fatal("missing doc in exit contract")
+	}
+	if len(stamps) != 2 || stamps[0] != "linter" {
+		t.Fatalf("unexpected doc stamps: %v", stamps)
 	}
 }
 
@@ -1476,11 +1488,11 @@ func TestGetNode(t *testing.T) {
 	if n == nil {
 		t.Fatal("expected non-nil Node")
 	}
-	if n.pb == nil {
-		t.Fatal("expected non-nil Node.pb")
+	if n.GetName() != testNodeName {
+		t.Fatalf("expected node name=%q, got %q", testNodeName, n.GetName())
 	}
-	if n.pb.GetName() != testNodeName {
-		t.Fatalf("expected node name=test-node, got %q", n.pb.GetName())
+	if !n.HasCapability("READ:flow") {
+		t.Error("expected READ:flow capability")
 	}
 }
 

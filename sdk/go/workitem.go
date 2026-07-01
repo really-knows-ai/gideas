@@ -353,7 +353,7 @@ func (w *Workitem) GetTopology() (*Flow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
 	}
-	return &Flow{session: w.session, pb: resp}, nil
+	return newFlow(resp, w.namespace), nil
 }
 
 // ---------------------------------------------------------------------------

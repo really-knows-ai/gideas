@@ -67,12 +67,12 @@ func (c *Client) FanOut(ctx context.Context, tasks []FanOutTask) ([]*ChildWorkit
 		children = append(children, child)
 
 		for j, art := range task.Artefacts {
-			if _, err := child.StoreArtefact(ctx, art.ID, art.GovernedArtefact, art.Content); err != nil {
+			if err := child.StoreArtefact(art.ID, art.GovernedArtefact, art.Content); err != nil {
 				return children, fmt.Errorf("flow sdk: fan-out task %d artefact %d (%s): %w", i, j, art.ID, err)
 			}
 		}
 
-		if _, err := child.RouteTo(ctx, task.TargetNode); err != nil {
+		if err := child.RouteTo(task.TargetNode); err != nil {
 			return children, fmt.Errorf("flow sdk: fan-out task %d: route to %s: %w", i, task.TargetNode, err)
 		}
 	}

@@ -180,7 +180,7 @@ func (c *Client) GetFlow() (*Flow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
 	}
-	return &Flow{session: c.session, pb: resp}, nil
+	return newFlow(resp, c.session.namespace), nil
 }
 
 // GetNode returns the calling node's identity and capabilities.
@@ -192,7 +192,7 @@ func (c *Client) GetNode() (*Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get node failed: %w", err)
 	}
-	return &Node{session: c.session, pb: resp.GetSelf()}, nil
+	return newNode(resp.GetSelf()), nil
 }
 
 // GetLaw returns a single law by ID from the Librarian. Returns the domain
@@ -867,10 +867,8 @@ func (c *Client) CreateChildWorkitem(ctx context.Context) (*ChildWorkitem, error
 		return nil, fmt.Errorf("flow sdk: create child workitem failed: %w", err)
 	}
 	return &ChildWorkitem{
-		id:        resp.GetChildWorkitemId(),
-		parent:    c,
-		archivist: c.session.Archivist,
-		operator:  c.session.Operator,
+		id:      resp.GetChildWorkitemId(),
+		session: c.session,
 	}, nil
 }
 
