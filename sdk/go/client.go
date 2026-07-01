@@ -7,17 +7,14 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -48,6 +45,8 @@ type ClientOption func(*clientConfig)
 type clientConfig struct {
 	sidecarAddr  string
 	eventBusAddr string
+	timeout      time.Duration
+	maxRetries   int
 }
 
 // WithSidecarAddress overrides the default Sidecar gRPC address.
@@ -66,21 +65,27 @@ func WithEventBusAddress(addr string) ClientOption {
 	}
 }
 
-// Client is the primary SDK entry point for Foundry Flow nodes.
-// It wraps the generated gRPC clients and provides convenience methods.
-type Client struct {
-	conn          *grpc.ClientConn
-	eventBusConn  *grpc.ClientConn
-	workitemID    string
-	flowNamespace string
+// WithTimeout sets the per-call timeout for gRPC requests made through
+// the session. If not set, calls use a default background context with no
+// timeout.
+func WithTimeout(d time.Duration) ClientOption {
+	return func(c *clientConfig) {
+		c.timeout = d
+	}
+}
 
-	// Raw gRPC service clients, exposed for advanced use.
-	Sidecar        flowv1.SidecarServiceClient
-	Operator       flowv1.OperatorServiceClient
-	Archivist      flowv1.ArchivistServiceClient
-	Librarian      flowv1.LibrarianServiceClient
-	FrictionLedger flowv1.FrictionLedgerServiceClient
-	EventBus       flowv1.FlowEventBusServiceClient
+// WithRetry sets the maximum number of retry attempts for transient gRPC
+// errors. If not set, no retries are performed.
+func WithRetry(maxAttempts int) ClientOption {
+	return func(c *clientConfig) {
+		c.maxRetries = maxAttempts
+	}
+}
+
+// Client is the primary SDK entry point for Foundry Flow nodes.
+// It wraps a session that manages gRPC connections and service clients.
+type Client struct {
+	session *session
 }
 
 // NewClient connects to the Sidecar and returns a configured Client.
@@ -102,119 +107,112 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		cfg.eventBusAddr = os.Getenv(EnvEventBusAddress)
 	}
 
-	workitemID := os.Getenv(EnvWorkitemID)
-	flowNamespace := os.Getenv(EnvFlowNamespace)
-
-	conn, err := grpc.NewClient(
-		cfg.sidecarAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(workitemContextInterceptor(workitemID)),
-	)
+	sess, err := newSession(cfg)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"flow sdk: failed to connect to sidecar at %s: %w (is the sidecar running?)",
-			cfg.sidecarAddr, err,
-		)
+		return nil, err
 	}
 
-	c := &Client{
-		conn:           conn,
-		workitemID:     workitemID,
-		flowNamespace:  flowNamespace,
-		Sidecar:        flowv1.NewSidecarServiceClient(conn),
-		Operator:       flowv1.NewOperatorServiceClient(conn),
-		Archivist:      flowv1.NewArchivistServiceClient(conn),
-		Librarian:      flowv1.NewLibrarianServiceClient(conn),
-		FrictionLedger: flowv1.NewFrictionLedgerServiceClient(conn),
-	}
-
-	// Optionally connect to Event Bus for streaming operations.
-	if cfg.eventBusAddr != "" {
-		ebConn, ebErr := grpc.NewClient(
-			cfg.eventBusAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if ebErr != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf(
-				"flow sdk: failed to connect to event bus at %s: %w",
-				cfg.eventBusAddr, ebErr,
-			)
-		}
-		c.eventBusConn = ebConn
-		c.EventBus = flowv1.NewFlowEventBusServiceClient(ebConn)
-	}
-
-	return c, nil
+	return &Client{session: sess}, nil
 }
 
 // Close releases the underlying gRPC connections.
 func (c *Client) Close() error {
-	var firstErr error
-	if c.eventBusConn != nil {
-		if err := c.eventBusConn.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	if c.session == nil {
+		return nil
 	}
-	if c.conn != nil {
-		if err := c.conn.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-// WorkitemID returns the workitem ID read from the environment at init time.
-func (c *Client) WorkitemID() string {
-	return c.workitemID
-}
-
-// FlowNamespace returns the flow namespace read from the environment at init time.
-func (c *Client) FlowNamespace() string {
-	return c.flowNamespace
+	return c.session.Close()
 }
 
 // ---------------------------------------------------------------------------
-// Convenience Methods
+// Entry-Point Methods
 // ---------------------------------------------------------------------------
 
-// Heartbeat sends an explicit heartbeat to the Sidecar, resetting the
-// inactivity timer. Returns the acknowledged flag.
-func (c *Client) Heartbeat(ctx context.Context) (bool, error) {
-	resp, err := c.Sidecar.Heartbeat(ctx, &flowv1.HeartbeatRequest{
-		WorkitemId: c.workitemID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("flow sdk: heartbeat failed: %w", err)
+// GetWorkitem returns a Workitem domain object. With no arguments, it
+// returns the current workitem (from the session's workitemID). With one
+// argument, it returns a Workitem wrapping that ID. Passing more than one
+// ID returns an error (multi-get not yet supported).
+func (c *Client) GetWorkitem(workitemID ...string) (*Workitem, error) {
+	switch len(workitemID) {
+	case 0:
+		if c.session == nil || c.session.workitemID == "" {
+			return nil, fmt.Errorf("flow sdk: no workitem ID available — FLOW_WORKITEM_ID not set")
+		}
+		return &Workitem{
+			session:   c.session,
+			id:        c.session.workitemID,
+			namespace: c.session.namespace,
+		}, nil
+	case 1:
+		return &Workitem{
+			session:   c.session,
+			id:        workitemID[0],
+			namespace: c.session.namespace,
+		}, nil
+	default:
+		return nil, fmt.Errorf("flow sdk: GetWorkitem accepts 0 or 1 workitem IDs, got %d", len(workitemID))
 	}
-	return resp.GetAcknowledged(), nil
 }
 
-// PauseTimer suspends the Sidecar's inactivity timer for the current
-// Workitem assignment. The timer remains suspended until ResumeTimer is
-// called or the handler returns. Used by HITL nodes to park Workitems
-// while awaiting human decisions without triggering timeout.
-func (c *Client) PauseTimer(ctx context.Context) error {
-	_, err := c.Sidecar.PauseTimer(ctx, &flowv1.PauseTimerRequest{
-		WorkitemId: c.workitemID,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: pause timer failed: %w", err)
+// GetFlow returns the Flow topology for the current namespace.
+func (c *Client) GetFlow() (*Flow, error) {
+	if c.session == nil {
+		return nil, fmt.Errorf("flow sdk: client not initialised")
 	}
-	return nil
+	resp, err := c.session.Operator.GetFlowTopology(context.Background(), &flowv1.GetFlowTopologyRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
+	}
+	return newFlow(resp, c.session.namespace), nil
 }
 
-// ResumeTimer resumes the Sidecar's inactivity timer after a PauseTimer call.
-// The timer resets to the full timeout window on resume.
-func (c *Client) ResumeTimer(ctx context.Context) error {
-	_, err := c.Sidecar.ResumeTimer(ctx, &flowv1.ResumeTimerRequest{
-		WorkitemId: c.workitemID,
+// GetNode returns the calling node's identity and capabilities.
+func (c *Client) GetNode() (*Node, error) {
+	if c.session == nil {
+		return nil, fmt.Errorf("flow sdk: client not initialised")
+	}
+	resp, err := c.session.Operator.GetFlowTopology(context.Background(), &flowv1.GetFlowTopologyRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get node failed: %w", err)
+	}
+	return newNode(resp.GetSelf()), nil
+}
+
+// GetLaw returns a single law by ID from the Librarian. Returns the domain
+// *Law wrapping the proto flowv1.Law.
+func (c *Client) GetLaw(lawID string) (*Law, error) {
+	if c.session == nil {
+		return nil, fmt.Errorf("flow sdk: client not initialised")
+	}
+	resp, err := c.session.Librarian.GetLaw(context.Background(), &flowv1.GetLawRequest{
+		LawId: lawID,
 	})
 	if err != nil {
-		return fmt.Errorf("flow sdk: resume timer failed: %w", err)
+		return nil, fmt.Errorf("flow sdk: get law failed: %w", err)
 	}
-	return nil
+	return newLaw(resp.GetLaw(), c.session.Librarian), nil
 }
+
+// RecordFinding creates a Tier 1 Finding and returns the law ID.
+func (c *Client) RecordFinding(
+	goal string, appliesTo []string, representations []*flowv1.Representation,
+) (string, error) {
+	if c.session == nil {
+		return "", fmt.Errorf("flow sdk: client not initialised")
+	}
+	resp, err := c.session.Librarian.RecordFinding(context.Background(), &flowv1.RecordFindingRequest{
+		Goal:            goal,
+		AppliesTo:       appliesTo,
+		Representations: representations,
+	})
+	if err != nil {
+		return "", fmt.Errorf("flow sdk: record finding failed: %w", err)
+	}
+	return resp.GetLawId(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Options (used by Workitem domain methods)
+// ---------------------------------------------------------------------------
 
 // CompleteOption configures a Complete() call.
 type CompleteOption func(*flowv1.CompleteAction)
@@ -238,684 +236,13 @@ func WithCondition(cel string) SuspendOption {
 	}
 }
 
-// WithTimeout sets the maximum duration the workitem may remain suspended.
+// WithSuspendTimeout sets the maximum duration the workitem may remain suspended.
 // Capped by the Flow CRD's maxSuspendTimeout. If the resume condition is
 // not met before the deadline, the workitem fails.
-func WithTimeout(d time.Duration) SuspendOption {
+func WithSuspendTimeout(d time.Duration) SuspendOption {
 	return func(a *flowv1.SuspendAction) {
 		a.Timeout = durationpb.New(d)
 	}
-}
-
-// Complete submits a completion action to the Operator via the Sidecar,
-// signalling that the node has finished processing.
-func (c *Client) Complete(ctx context.Context, opts ...CompleteOption) (bool, error) {
-	action := &flowv1.CompleteAction{}
-	for _, o := range opts {
-		o(action)
-	}
-	resp, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
-		WorkitemId: c.workitemID,
-		Action: &flowv1.SubmitResultRequest_Complete{
-			Complete: action,
-		},
-	})
-	if err != nil {
-		return false, fmt.Errorf("flow sdk: complete failed: %w", err)
-	}
-	return resp.GetAccepted(), nil
-}
-
-// RouteToOutput submits a routing action that routes the workitem through
-// the named output channel of the current node. The Operator resolves the
-// output name to the target node defined in the FoundryNode CRD.
-func (c *Client) RouteToOutput(ctx context.Context, outputName string) (bool, error) {
-	resp, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
-		WorkitemId: c.workitemID,
-		Action: &flowv1.SubmitResultRequest_Route{
-			Route: &flowv1.RouteAction{
-				Target: outputName,
-				Output: true,
-			},
-		},
-	})
-	if err != nil {
-		return false, fmt.Errorf("flow sdk: route to output failed: %w", err)
-	}
-	return resp.GetAccepted(), nil
-}
-
-// Suspend submits a suspend action to the Operator via the Sidecar,
-// transitioning the workitem to the Suspended phase. The handler should
-// return nil after calling this. On resume, the workitem is re-dispatched
-// to the same node type that suspended it.
-//
-// Use WithCondition to set a CEL expression for automatic resume and
-// WithTimeout to cap the suspension duration.
-func (c *Client) Suspend(ctx context.Context, opts ...SuspendOption) error {
-	action := &flowv1.SuspendAction{}
-	for _, o := range opts {
-		o(action)
-	}
-	_, err := c.Operator.SubmitResult(ctx, &flowv1.SubmitResultRequest{
-		WorkitemId: c.workitemID,
-		Action: &flowv1.SubmitResultRequest_Suspend{
-			Suspend: action,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: suspend failed: %w", err)
-	}
-	return nil
-}
-
-// Resume requests that a suspended workitem be resumed. Unlike Suspend
-// (which operates on the caller's own workitem), Resume targets another
-// workitem by ID — typically a child that the caller previously suspended.
-func (c *Client) Resume(ctx context.Context, workitemID string) error {
-	_, err := c.Operator.ResumeWorkitem(ctx, &flowv1.ResumeWorkitemRequest{
-		WorkitemId: workitemID,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: resume failed: %w", err)
-	}
-	return nil
-}
-
-// GetArtefact retrieves the latest version of the named artefact.
-func (c *Client) GetArtefact(ctx context.Context, artefactID string) (*flowv1.GetArtefactResponse, error) {
-	resp, err := c.Archivist.GetArtefact(ctx, &flowv1.GetArtefactRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get artefact failed: %w", err)
-	}
-	return resp, nil
-}
-
-// StoreArtefact stores content as a named artefact. The Sidecar will compute
-// the content hash — the SDK does not need to supply it. Returns the response
-// containing the version_hash and whether this was a new version.
-func (c *Client) StoreArtefact(
-	ctx context.Context, artefactID, governedArtefact string, content []byte,
-) (*flowv1.StoreArtefactResponse, error) {
-	resp, err := c.Archivist.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
-		WorkitemId:       c.workitemID,
-		ArtefactId:       artefactID,
-		GovernedArtefact: governedArtefact,
-		Content:          content,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: store artefact failed: %w", err)
-	}
-	return resp, nil
-}
-
-// ---------------------------------------------------------------------------
-// Stamp Convenience Methods
-// ---------------------------------------------------------------------------
-
-// StampArtefact applies a named governance stamp to the current (head)
-// version of the specified artefact. The Sidecar injects cryptographic
-// identity (signature, cert_chain) — the SDK does not supply these.
-func (c *Client) StampArtefact(
-	ctx context.Context, artefactID, stampName string,
-) (*flowv1.StampArtefactResponse, error) {
-	resp, err := c.Archivist.StampArtefact(ctx, &flowv1.StampArtefactRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-		StampName:  stampName,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: stamp artefact failed: %w", err)
-	}
-	return resp, nil
-}
-
-// GetStamps returns all stamps on the current version of the specified artefact.
-func (c *Client) GetStamps(ctx context.Context, artefactID string) ([]*flowv1.Stamp, error) {
-	resp, err := c.Archivist.GetStamps(ctx, &flowv1.GetStampsRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get stamps failed: %w", err)
-	}
-	return resp.GetStamps(), nil
-}
-
-// HasStamp checks whether the named stamp exists on the current version
-// of the specified artefact.
-func (c *Client) HasStamp(ctx context.Context, artefactID, stampName string) (bool, error) {
-	resp, err := c.Archivist.HasStamp(ctx, &flowv1.HasStampRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-		StampName:  stampName,
-	})
-	if err != nil {
-		return false, fmt.Errorf("flow sdk: has stamp failed: %w", err)
-	}
-	return resp.GetExists(), nil
-}
-
-// ---------------------------------------------------------------------------
-// Feedback Convenience Methods
-// ---------------------------------------------------------------------------
-
-// AddFeedback creates a new feedback item on the specified artefact.
-// The feedback starts in NEW state. The canWontFix parameter gates whether
-// the refiner may refuse this feedback with a justification (true = refusal
-// permitted, false = must action). Returns the generated feedback ID.
-func (c *Client) AddFeedback(
-	ctx context.Context, artefactID string, canWontFix bool, message string,
-) (string, error) {
-	resp, err := c.Archivist.AddFeedback(ctx, &flowv1.AddFeedbackRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-		CanWontFix: canWontFix,
-		Message:    message,
-	})
-	if err != nil {
-		return "", fmt.Errorf("flow sdk: add feedback failed: %w", err)
-	}
-	return resp.GetFeedbackId(), nil
-}
-
-// GetFeedback returns all feedback items for the specified artefact.
-func (c *Client) GetFeedback(ctx context.Context, artefactID string) ([]*flowv1.FeedbackItem, error) {
-	resp, err := c.Archivist.GetFeedback(ctx, &flowv1.GetFeedbackRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get feedback failed: %w", err)
-	}
-	return resp.GetFeedbackItems(), nil
-}
-
-// HasUnresolvedFeedback returns true if any feedback for the artefact
-// is not in RESOLVED state.
-func (c *Client) HasUnresolvedFeedback(ctx context.Context, artefactID string) (bool, error) {
-	resp, err := c.Archivist.HasUnresolvedFeedback(ctx, &flowv1.HasUnresolvedFeedbackRequest{
-		WorkitemId: c.workitemID,
-		ArtefactId: artefactID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("flow sdk: has unresolved feedback failed: %w", err)
-	}
-	return resp.GetHasUnresolved(), nil
-}
-
-// ResolveFeedback transitions feedback from NEW/REJECTED to ACTIONED,
-// indicating the fix has been applied.
-func (c *Client) ResolveFeedback(ctx context.Context, feedbackID, message string) error {
-	_, err := c.Archivist.ResolveFeedback(ctx, &flowv1.ResolveFeedbackRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-		Message:    message,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: resolve feedback failed: %w", err)
-	}
-	return nil
-}
-
-// RefuseFeedback transitions feedback from NEW/REJECTED to WONT_FIX,
-// indicating the refining node refuses to fix the issue. A structured
-// justification is required — either a Citation (referencing existing
-// laws) or a NovelArgument (new reasoning).
-func (c *Client) RefuseFeedback(ctx context.Context, feedbackID string, justification *flowv1.Justification) error {
-	_, err := c.Archivist.RefuseFeedback(ctx, &flowv1.RefuseFeedbackRequest{
-		WorkitemId:    c.workitemID,
-		FeedbackId:    feedbackID,
-		Justification: justification,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: refuse feedback failed: %w", err)
-	}
-	return nil
-}
-
-// AcceptFix transitions feedback from ACTIONED to RESOLVED, indicating
-// the reviewer accepts the applied fix.
-func (c *Client) AcceptFix(ctx context.Context, feedbackID string) error {
-	_, err := c.Archivist.AcceptFix(ctx, &flowv1.AcceptFixRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: accept fix failed: %w", err)
-	}
-	return nil
-}
-
-// RejectFix transitions feedback from ACTIONED to REJECTED, indicating
-// the reviewer finds the applied fix inadequate. The message explains why
-// the fix is insufficient so the refining node can try again.
-func (c *Client) RejectFix(ctx context.Context, feedbackID, message string) error {
-	_, err := c.Archivist.RejectFix(ctx, &flowv1.RejectFixRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-		Message:    message,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: reject fix failed: %w", err)
-	}
-	return nil
-}
-
-// AcceptRefusal transitions feedback from WONT_FIX to RESOLVED, indicating
-// the reviewer accepts the refiner's justification for refusing the feedback.
-func (c *Client) AcceptRefusal(ctx context.Context, feedbackID string) error {
-	_, err := c.Archivist.AcceptRefusal(ctx, &flowv1.AcceptRefusalRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: accept refusal failed: %w", err)
-	}
-	return nil
-}
-
-// RejectRefusal transitions feedback from WONT_FIX to REJECTED, indicating
-// the reviewer finds the refiner's justification unjustified. The message
-// explains why the refusal is not acceptable.
-func (c *Client) RejectRefusal(ctx context.Context, feedbackID, message string) error {
-	_, err := c.Archivist.RejectRefusal(ctx, &flowv1.RejectRefusalRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-		Message:    message,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: reject refusal failed: %w", err)
-	}
-	return nil
-}
-
-// GetFeedbackDepth returns the current history depth (number of transitions)
-// for the specified feedback item.
-func (c *Client) GetFeedbackDepth(ctx context.Context, feedbackID string) (int32, error) {
-	resp, err := c.Archivist.GetFeedbackDepth(ctx, &flowv1.GetFeedbackDepthRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("flow sdk: get feedback depth failed: %w", err)
-	}
-	return resp.GetDepth(), nil
-}
-
-// DeadlockFeedback transitions feedback from any non-resolved,
-// non-deadlocked state to DEADLOCKED. Called by the gate node when
-// feedback depth exceeds the configured threshold.
-func (c *Client) DeadlockFeedback(
-	ctx context.Context, feedbackID string,
-) (*flowv1.FeedbackItem, error) {
-	resp, err := c.Archivist.DeadlockFeedback(ctx, &flowv1.DeadlockFeedbackRequest{
-		WorkitemId: c.workitemID,
-		FeedbackId: feedbackID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: deadlock feedback failed: %w", err)
-	}
-	return resp.GetUpdatedItem(), nil
-}
-
-// ---------------------------------------------------------------------------
-// Topology Convenience Methods
-// ---------------------------------------------------------------------------
-
-// GetFlowTopology returns the Flow topology visible to the calling node.
-// Requires READ:flow capability. The Sidecar injects node identity; the
-// Operator resolves the calling node's outputs, all peer nodes with
-// capabilities, and the bound exit contract (if exit-bound).
-func (c *Client) GetFlowTopology(ctx context.Context) (*flowv1.GetFlowTopologyResponse, error) {
-	resp, err := c.Operator.GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
-	}
-	return resp, nil
-}
-
-// ---------------------------------------------------------------------------
-// Librarian Convenience Methods
-// ---------------------------------------------------------------------------
-
-// QueryLaws returns all laws matching the filter.
-// Pass empty strings for all laws. Pass governedArtefact for scoped+global.
-// Pass governedArtefact+repType for further filtering.
-func (c *Client) QueryLaws(ctx context.Context, governedArtefact, representationType string) ([]*flowv1.Law, error) {
-	var filter *flowv1.LawFilter
-	if governedArtefact != "" || representationType != "" {
-		filter = &flowv1.LawFilter{
-			GovernedArtefact:   governedArtefact,
-			RepresentationType: representationType,
-		}
-	}
-	resp, err := c.Librarian.QueryLaws(ctx, &flowv1.QueryLawsRequest{
-		Filter: filter,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: query laws failed: %w", err)
-	}
-	return resp.GetLaws(), nil
-}
-
-// Cite records usage of one or more laws.
-func (c *Client) Cite(ctx context.Context, lawIDs ...string) error {
-	_, err := c.Librarian.Cite(ctx, &flowv1.CiteRequest{
-		LawIds: lawIDs,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: cite failed: %w", err)
-	}
-	return nil
-}
-
-// RecordFinding creates a Tier 1 Finding.
-func (c *Client) RecordFinding(
-	ctx context.Context, goal string, appliesTo []string, representations []*flowv1.Representation,
-) (string, error) {
-	resp, err := c.Librarian.RecordFinding(ctx, &flowv1.RecordFindingRequest{
-		Goal:            goal,
-		AppliesTo:       appliesTo,
-		Representations: representations,
-	})
-	if err != nil {
-		return "", fmt.Errorf("flow sdk: record finding failed: %w", err)
-	}
-	return resp.GetLawId(), nil
-}
-
-// ---------------------------------------------------------------------------
-// LawGroup Convenience Methods
-// ---------------------------------------------------------------------------
-
-// GetLawGroup returns the evaluation contract for a named law group.
-// If the group has no stored entry, the Librarian returns a built-in
-// default {mode:"bundle", passes:1}.
-func (c *Client) GetLawGroup(ctx context.Context, groupName string) (*LawGroup, error) {
-	resp, err := c.Librarian.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: groupName})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get law group failed: %w", err)
-	}
-	return protoLawGroupToSDK(resp.GetGroup()), nil
-}
-
-// ListLawGroups returns all stored law groups.
-// Built-in defaults for groups without entries are NOT included.
-// Returns an empty slice if no groups are stored.
-func (c *Client) ListLawGroups(ctx context.Context) ([]*LawGroup, error) {
-	resp, err := c.Librarian.ListLawGroups(ctx, &flowv1.ListLawGroupsRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: list law groups failed: %w", err)
-	}
-	groups := resp.GetGroups()
-	out := make([]*LawGroup, 0, len(groups))
-	for _, g := range groups {
-		out = append(out, protoLawGroupToSDK(g))
-	}
-	return out, nil
-}
-
-// QueryLawsByGroup returns all laws matching the governed artefact and group.
-func (c *Client) QueryLawsByGroup(ctx context.Context, governedArtefact, groupName string) ([]*flowv1.Law, error) {
-	filter := &flowv1.LawFilter{
-		GovernedArtefact: governedArtefact,
-		Group:            groupName,
-	}
-	resp, err := c.Librarian.QueryLaws(ctx, &flowv1.QueryLawsRequest{Filter: filter})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: query laws by group failed: %w", err)
-	}
-	return resp.GetLaws(), nil
-}
-
-// PublishAuditEvent marshals the payload to JSON and publishes it to the
-// Event Bus on the "audit" channel. This is a best-effort operation:
-// callers should log the error but not fail work execution.
-// The workitemID and flowNamespace are set on the FlowEvent for standard
-// event labelling (spec R11). Pass empty strings if unavailable.
-func (c *Client) PublishAuditEvent(
-	ctx context.Context, eventType string, payload any, workitemID, flowNamespace string,
-) error {
-	if c.EventBus == nil {
-		return fmt.Errorf("flow sdk: publish audit event requires Event Bus connection (set EVENT_BUS_ADDRESS)")
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("flow sdk: marshal audit payload: %w", err)
-	}
-	// ponytail: using time-based ID instead of randid (not available in SDK module).
-	_, err = c.EventBus.Publish(ctx, &flowv1.PublishRequest{
-		Channel: "audit",
-		Event: &flowv1.FlowEvent{
-			EventId:       fmt.Sprintf("%x", time.Now().UnixNano()),
-			EventType:     eventType,
-			WorkitemId:    workitemID,
-			FlowNamespace: flowNamespace,
-			Timestamp:     timestamppb.Now(),
-			Payload:       raw,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: publish audit event failed: %w", err)
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Telemetry Convenience Methods
-// ---------------------------------------------------------------------------
-
-// RecordTelemetry emits a custom telemetry event through the Sidecar to the
-// Event Bus. The eventType identifies the event kind (use the "foundry."
-// namespace prefix). The payload must be JSON-serializable and at most 64 KB.
-// The Sidecar wraps the event in a standard envelope with identity context.
-//
-// Telemetry emission is non-blocking from the caller's perspective; however,
-// the gRPC call itself is synchronous. Delivery failures are returned as
-// errors but should not fail work execution.
-func (c *Client) RecordTelemetry(ctx context.Context, eventType string, payload []byte) error {
-	_, err := c.Sidecar.RecordTelemetry(ctx, &flowv1.RecordTelemetryRequest{
-		EventType: eventType,
-		Payload:   payload,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: record telemetry failed: %w", err)
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// LinkRuling Convenience Method
-// ---------------------------------------------------------------------------
-
-// LinkRuling atomically links a judiciary ruling to a deadlocked feedback
-// item, transitioning it to the specified terminal state and enabling the
-// contempt guard. The feedback must be in DEADLOCKED state and must not
-// already have a linked ruling. The targetState must be WONT_FIX or REJECTED.
-func (c *Client) LinkRuling(
-	ctx context.Context, feedbackID, lawID string, targetState flowv1.FeedbackState,
-) (*flowv1.FeedbackItem, error) {
-	resp, err := c.Archivist.LinkRuling(ctx, &flowv1.LinkRulingRequest{
-		WorkitemId:  c.workitemID,
-		FeedbackId:  feedbackID,
-		LawId:       lawID,
-		TargetState: targetState,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: link ruling failed: %w", err)
-	}
-	return resp.GetUpdatedItem(), nil
-}
-
-// ---------------------------------------------------------------------------
-// QueryFriction Convenience Method
-// ---------------------------------------------------------------------------
-
-// QueryFriction returns aggregated friction data from the Friction Ledger.
-// Used by judiciary nodes to gather evidence for hearings.
-func (c *Client) QueryFriction(
-	ctx context.Context, filter *flowv1.FrictionFilter,
-) ([]*flowv1.FrictionAggregate, error) {
-	resp, err := c.FrictionLedger.QueryFriction(ctx, &flowv1.QueryFrictionRequest{
-		Filter: filter,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: query friction failed: %w", err)
-	}
-	return resp.GetFrictionAggregates(), nil
-}
-
-// ---------------------------------------------------------------------------
-// GetLaw Convenience Method
-// ---------------------------------------------------------------------------
-
-// GetLaw returns the full law object by identifier from the Librarian.
-// Used by judiciary nodes for hearing evidence retrieval.
-func (c *Client) GetLaw(ctx context.Context, lawID string) (*flowv1.Law, error) {
-	resp, err := c.Librarian.GetLaw(ctx, &flowv1.GetLawRequest{
-		LawId: lawID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get law failed: %w", err)
-	}
-	return resp.GetLaw(), nil
-}
-
-// ---------------------------------------------------------------------------
-// Child Workitem Convenience Methods
-// ---------------------------------------------------------------------------
-
-// CreateChildWorkitem creates a new child Workitem under the caller's
-// current parent Workitem. The child starts in Pending state with no
-// assignee. Use the returned ChildWorkitem handle to store artefacts
-// and route the child to a target node.
-func (c *Client) CreateChildWorkitem(ctx context.Context) (*ChildWorkitem, error) {
-	resp, err := c.Operator.CreateChildWorkitem(ctx, &flowv1.CreateChildWorkitemRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: create child workitem failed: %w", err)
-	}
-	return &ChildWorkitem{
-		id:        resp.GetChildWorkitemId(),
-		parent:    c,
-		archivist: c.Archivist,
-		operator:  c.Operator,
-	}, nil
-}
-
-// GetChildren returns the status of all child Workitems created by the
-// caller's current Workitem.
-func (c *Client) GetChildren(ctx context.Context) ([]ChildWorkitemStatus, error) {
-	resp, err := c.Operator.GetChildren(ctx, &flowv1.GetChildrenRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get children failed: %w", err)
-	}
-	children := make([]ChildWorkitemStatus, 0, len(resp.GetChildren()))
-	for _, ch := range resp.GetChildren() {
-		children = append(children, ChildWorkitemStatus{
-			WorkitemID:      ch.GetWorkitemId(),
-			Phase:           ch.GetPhase(),
-			CurrentAssignee: ch.GetCurrentAssignee(),
-			Artefacts:       ch.GetArtefacts(),
-		})
-	}
-	return children, nil
-}
-
-// GetChildArtefact retrieves the latest version of the named artefact from
-// the specified child Workitem. The child must be in Completed state and
-// must belong to the caller's current Workitem (parent-child validated by
-// the Archivist and Sidecar).
-func (c *Client) GetChildArtefact(
-	ctx context.Context, childWorkitemID, artefactID string,
-) (*flowv1.GetArtefactResponse, error) {
-	resp, err := c.Archivist.GetArtefact(ctx, &flowv1.GetArtefactRequest{
-		WorkitemId:       c.workitemID,
-		ArtefactId:       artefactID,
-		TargetWorkitemId: childWorkitemID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get child artefact failed: %w", err)
-	}
-	return resp, nil
-}
-
-// ListChildArtefacts returns all artefact references from the specified
-// child Workitem. The child must be in Completed state and must belong
-// to the caller's current Workitem.
-func (c *Client) ListChildArtefacts(
-	ctx context.Context, childWorkitemID string,
-) ([]*flowv1.ArtefactRef, error) {
-	resp, err := c.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
-		WorkitemId:       c.workitemID,
-		TargetWorkitemId: childWorkitemID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: list child artefacts failed: %w", err)
-	}
-	return resp.GetArtefactRefs(), nil
-}
-
-// WatchChildren opens a streaming subscription to the Event Bus on the
-// "workitem" channel, filtered by parent_workitem_id matching the caller's
-// current Workitem. It returns a channel that receives ChildLifecycleEvent
-// values for each phase transition of any child Workitem.
-//
-// The returned channel is closed when the context is cancelled, the stream
-// ends, or an error occurs. Errors are not surfaced through the channel;
-// the caller should use context cancellation for lifecycle management.
-//
-// Requires a direct Event Bus connection (set EVENT_BUS_ADDRESS or use
-// WithEventBusAddress). Returns an error if the EventBus client is nil.
-func (c *Client) WatchChildren(ctx context.Context) (<-chan ChildLifecycleEvent, error) {
-	if c.EventBus == nil {
-		return nil, fmt.Errorf("flow sdk: watch children requires Event Bus connection (set EVENT_BUS_ADDRESS)")
-	}
-
-	stream, err := c.EventBus.Subscribe(ctx, &flowv1.SubscribeRequest{
-		Channel: "workitem",
-		Filter: &flowv1.SubscribeFilter{
-			EventType: "workitem.phase_changed",
-			MatchLabels: []*flowv1.Label{
-				{Key: "parent_workitem_id", Value: c.workitemID},
-			},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: watch children subscribe failed: %w", err)
-	}
-
-	ch := make(chan ChildLifecycleEvent, 16)
-	go func() {
-		defer close(ch)
-		for {
-			evt, recvErr := stream.Recv()
-			if recvErr != nil {
-				return
-			}
-			event := ChildLifecycleEvent{
-				WorkitemID: evt.GetWorkitemId(),
-			}
-			for _, lbl := range evt.GetLabels() {
-				switch lbl.GetKey() {
-				case "phase":
-					event.Phase = lbl.GetValue()
-				case "node_id":
-					event.NodeID = lbl.GetValue()
-				}
-			}
-			select {
-			case ch <- event:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return ch, nil
 }
 
 // ---------------------------------------------------------------------------

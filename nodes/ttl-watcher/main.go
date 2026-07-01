@@ -116,7 +116,7 @@ func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
 	tracker := internal.NewPendingTracker()
 
 	// Run the first scan immediately, then on a timer.
-	if err := scanAndCreate(ctx, entry, tierTTLs, tracker, time.Now); err != nil {
+	if err := scanAndCreate(entry, tierTTLs, tracker, time.Now); err != nil {
 		slog.Warn("ttl-watcher: initial scan failed", "error", err)
 	}
 
@@ -128,7 +128,7 @@ func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := scanAndCreate(ctx, entry, tierTTLs, tracker, time.Now); err != nil {
+			if err := scanAndCreate(entry, tierTTLs, tracker, time.Now); err != nil {
 				slog.Warn("ttl-watcher: scan failed", "error", err)
 			}
 		}
@@ -139,13 +139,12 @@ func watchTTL(ctx context.Context, entry *flow.EntryClient) error {
 // workitems for any whose age exceeds the configured tier TTL.
 // The nowFunc parameter exists for testability.
 func scanAndCreate(
-	ctx context.Context,
 	entry *flow.EntryClient,
 	tierTTLs map[flowv1.LawTier]time.Duration,
 	tracker *internal.PendingTracker,
 	nowFunc func() time.Time,
 ) error {
-	laws, err := entry.QueryLaws(ctx, "", "")
+	laws, err := entry.QueryLaws("", "")
 	if err != nil {
 		return fmt.Errorf("query laws: %w", err)
 	}
@@ -167,7 +166,7 @@ func scanAndCreate(
 		slog.Info("ttl-watcher: creating hearing workitem",
 			"law_id", lawID, "tier", law.GetTier())
 
-		if _, err := entry.CreateWorkitem(ctx, map[string]string{
+		if _, err := entry.CreateWorkitem(map[string]string{
 			"law_id": lawID,
 		}); err != nil {
 			tracker.ClearPending(lawID)
@@ -219,12 +218,17 @@ func handleHearing(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
-	return processHearing(ctx, client, wctx)
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("ttl-watcher: handler: get workitem: %w", err)
+	}
+
+	return processHearing(workitem, wctx)
 }
 
 // processHearing performs the core handler logic: validate metadata, heartbeat,
 // store law-reference artefact, and route to default output.
-func processHearing(ctx context.Context, client *flow.Client, wctx *flowv1.WorkitemContext) error {
+func processHearing(workitem *flow.Workitem, wctx *flowv1.WorkitemContext) error {
 	lawID := wctx.GetMetadata()["law_id"]
 	if lawID == "" {
 		return fmt.Errorf("ttl-watcher: handler: missing law_id in metadata")
@@ -235,17 +239,21 @@ func processHearing(ctx context.Context, client *flow.Client, wctx *flowv1.Worki
 		"law_id", lawID,
 	)
 
-	if _, err := client.Heartbeat(ctx); err != nil {
+	if err := workitem.Heartbeat(); err != nil {
 		return fmt.Errorf("ttl-watcher: handler: heartbeat: %w", err)
 	}
 
-	if _, err := client.StoreArtefact(ctx, "law-reference", "law-reference", []byte(lawID)); err != nil {
+	lawRef, err := workitem.GetArtefact("law-reference")
+	if err != nil {
+		return fmt.Errorf("ttl-watcher: handler: get law-reference: %w", err)
+	}
+	if err := lawRef.Store([]byte(lawID)); err != nil {
 		return fmt.Errorf("ttl-watcher: handler: store law-reference: %w", err)
 	}
 
 	slog.Info("ttl-watcher: stored law-reference artefact", "law_id", lawID)
 
-	if _, err := client.RouteToOutput(ctx, "default"); err != nil {
+	if err := workitem.RouteTo("default"); err != nil {
 		return fmt.Errorf("ttl-watcher: handler: route: %w", err)
 	}
 

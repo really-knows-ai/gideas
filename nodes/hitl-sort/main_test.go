@@ -34,7 +34,8 @@ func TestHITLSort_HappyPath_WithStamp(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleSort(ctx, client, qm, cfg, wctx)
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
+		errCh <- handleSort(ctx, client, wi, qm, cfg, wctx)
 	}()
 
 	// Simulate human: wait for item to appear, claim, then decide.
@@ -100,7 +101,8 @@ func TestHITLSort_HappyPath_NoStamp(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleSort(ctx, client, qm, cfg, wctx)
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
+		errCh <- handleSort(ctx, client, wi, qm, cfg, wctx)
 	}()
 
 	waitForEnqueue(t, qm, "wi-sort-nostamp")
@@ -160,7 +162,8 @@ func TestHITLSort_MultipleChoices_AllRoute(t *testing.T) {
 
 			errCh := make(chan error, 1)
 			go func() {
-				errCh <- handleSort(ctx, client, qm, cfg, wctx)
+				wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
+				errCh <- handleSort(ctx, client, wi, qm, cfg, wctx)
 			}()
 
 			waitForEnqueue(t, qm, "wi-multi-"+tc.output)
@@ -204,7 +207,8 @@ func TestHITLSort_InvalidChoice(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleSort(ctx, client, qm, cfg, wctx)
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
+		errCh <- handleSort(ctx, client, wi, qm, cfg, wctx)
 	}()
 
 	waitForEnqueue(t, qm, "wi-invalid-choice")
@@ -239,7 +243,8 @@ func TestHITLSort_ContextCancellation(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleSort(ctx, client, qm, cfg, wctx)
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
+		errCh <- handleSort(ctx, client, wi, qm, cfg, wctx)
 	}()
 
 	// Wait for enqueue, then cancel context while waiting for decision.
@@ -268,7 +273,8 @@ func TestHITLSort_NoStampCapabilityWithStampEnabled(t *testing.T) {
 	ctx := context.Background()
 	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-no-stamp-cap"}
 
-	err := handleSort(ctx, client, qm, cfg, wctx)
+	wi := newTestWorkitem(t, client, wctx.GetWorkitemId())
+	err := handleSort(ctx, client, wi, qm, cfg, wctx)
 	if err == nil {
 		t.Fatal("expected error when stamp=true but no STAMP capability in topology")
 	}
@@ -292,7 +298,8 @@ func TestHITLSort_ConfigChoiceNotInTopology(t *testing.T) {
 	ctx := context.Background()
 	wctx := &flowv1.WorkitemContext{WorkitemId: "wi-bad-config"}
 
-	err := handleSort(ctx, client, qm, cfg, wctx)
+	wi := newTestWorkitem(t, client, wctx.GetWorkitemId())
+	err := handleSort(ctx, client, wi, qm, cfg, wctx)
 	if err == nil {
 		t.Fatal("expected error when config output not in topology")
 	}

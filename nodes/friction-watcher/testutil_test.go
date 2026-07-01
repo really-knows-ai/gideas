@@ -108,6 +108,18 @@ func (s *handlerSpy) StoreArtefact(
 	}, nil
 }
 
+func (s *handlerSpy) GetArtefact(
+	_ context.Context, _ *flowv1.GetArtefactRequest,
+) (*flowv1.GetArtefactResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return &flowv1.GetArtefactResponse{
+		GovernedArtefact: "law-reference",
+		Content:          []byte("law-42"),
+		VersionHash:      "hash-test",
+	}, nil
+}
+
 func (s *handlerSpy) SubmitResult(
 	_ context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
@@ -166,6 +178,18 @@ func newHandlerTestClient(t *testing.T, spy *handlerSpy) *flow.Client {
 	t.Cleanup(func() { _ = client.Close() })
 
 	return client
+}
+
+// newHandlerTestWorkitem creates a Workitem from a handler test client.
+// Sets FLOW_WORKITEM_ID to the given workitemID before creating the client.
+func newHandlerTestWorkitem(t *testing.T, spy *handlerSpy, workitemID string) *flow.Workitem {
+	t.Helper()
+	client := newHandlerTestClient(t, spy)
+	wi, err := client.GetWorkitem(workitemID)
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+	return wi
 }
 
 // makeThresholdEvent creates a FlowEvent with the given event_id and law_id label.

@@ -157,6 +157,18 @@ func newHandlerTestClient(t *testing.T, spy *handlerSpy) *flow.Client {
 	return client
 }
 
+// newHandlerTestWorkitem creates a Workitem from a handler test client.
+func newHandlerTestWorkitem(t *testing.T, spy *handlerSpy, workitemID string) *flow.Workitem {
+	t.Helper()
+	t.Setenv(flow.EnvWorkitemID, workitemID)
+	client := newHandlerTestClient(t, spy)
+	wi, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+	return wi
+}
+
 // startFederationServer creates a gRPC server with the spy Federation and
 // returns the listener address.
 func startFederationServer(t *testing.T, spy *spyFederation) string {

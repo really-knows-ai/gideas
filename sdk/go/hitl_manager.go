@@ -401,7 +401,7 @@ func (qm *queueManagerImpl) emitTelemetry(ctx context.Context, event string, pay
 		slog.Warn("flow hitl: telemetry marshal failed", "event", event, "error", err)
 		return
 	}
-	if err := qm.client.RecordTelemetry(ctx, event, data); err != nil {
+	if err := qm.client.RecordTelemetry(event, data); err != nil {
 		slog.Warn("flow hitl: telemetry emission failed (non-blocking)", "event", event, "error", err)
 	}
 }

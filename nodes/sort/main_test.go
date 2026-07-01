@@ -25,7 +25,7 @@ func defaultConfig() *sortConfig {
 	}
 }
 
-func setupSortTest(t *testing.T, spy *sortSpy) *flow.Client {
+func setupSortTest(t *testing.T, spy *sortSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -47,6 +47,12 @@ func setupSortTest(t *testing.T, spy *sortSpy) *flow.Client {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	t.Setenv(flow.EnvWorkitemID, "test-workitem")
+	// Set the sidecar address env var so findActiveDisputeForFeedback (which
+	// creates a direct gRPC connection to DefaultSidecarAddress) connects to
+	// the spy instead of :50051. ponytail: Remove when findActiveDisputeForFeedback
+	// is replaced with a proper Workitem.GetActiveDisputes() method (Phase 10).
+	t.Setenv(flow.EnvSidecarAddress, lis.Addr().String())
+
 	client, err := flow.NewClient(
 		flow.WithSidecarAddress(lis.Addr().String()),
 	)
@@ -55,7 +61,12 @@ func setupSortTest(t *testing.T, spy *sortSpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("failed to get workitem: %v", err)
+	}
+
+	return client, workitem
 }
 
 // ---------------------------------------------------------------------------
@@ -65,9 +76,9 @@ func setupSortTest(t *testing.T, spy *sortSpy) *flow.Client {
 func TestSort_RoutesToQuench_MissingLinterStamp(t *testing.T) {
 	spy := newSortSpy()
 	// linter stamp absent (default false) — quench is first in nodeOrder.
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -83,9 +94,9 @@ func TestSort_RoutesToRefine_UnresolvedFeedbackFromProvider(t *testing.T) {
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-1", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -98,9 +109,9 @@ func TestSort_RoutesToAppraise_MissingReviewStamp(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	// review stamp absent (default false), no feedback from quench
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -114,9 +125,9 @@ func TestSort_StampsApprovalAndCompletes(t *testing.T) {
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
 	// No unresolved feedback from any provider.
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -142,9 +153,9 @@ func TestSort_RoutesToArbiter_DepthExceedsThreshold_WontFix(t *testing.T) {
 		{Id: "fb-1", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
 	}
 	spy.FeedbackDepths["fb-1"] = 4 // default threshold is 3
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -163,9 +174,9 @@ func TestSort_RoutesToArbiter_DepthExceedsThreshold_Rejected(t *testing.T) {
 		{Id: "fb-2", State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED},
 	}
 	spy.FeedbackDepths["fb-2"] = 3 // threshold = 3, depth >= threshold
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -184,9 +195,9 @@ func TestSort_RoutesToArbiter_DepthExceedsThreshold_New(t *testing.T) {
 		{Id: "fb-3", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
 	spy.FeedbackDepths["fb-3"] = 5
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -205,9 +216,9 @@ func TestSort_RoutesToArbiter_DepthExceedsThreshold_Actioned(t *testing.T) {
 		{Id: "fb-4", State: flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED},
 	}
 	spy.FeedbackDepths["fb-4"] = 10
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -226,9 +237,9 @@ func TestSort_RoutesToArbiter_AlreadyDeadlocked(t *testing.T) {
 		{Id: "fb-5", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 	}
 	// No depth needed — already deadlocked.
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -250,9 +261,9 @@ func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 	}
 	spy.FeedbackDepths["fb-ok"] = 1
 	spy.FeedbackDepths["fb-hot"] = 5
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -273,9 +284,9 @@ func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 		{Id: "fb-6", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
 	}
 	spy.FeedbackDepths["fb-6"] = 2 // below default threshold of 3
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -296,9 +307,9 @@ func TestSort_ResolvedItemsSkippedInDeadlockScan(t *testing.T) {
 		{Id: "fb-done", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
 	}
 	spy.FeedbackDepths["fb-done"] = 99 // would deadlock if not skipped
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -320,9 +331,9 @@ func TestSort_FirstDeadlockedItemWins(t *testing.T) {
 	}
 	spy.FeedbackDepths["fb-a"] = 5
 	spy.FeedbackDepths["fb-b"] = 10
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -349,9 +360,9 @@ func TestSort_CustomThreshold(t *testing.T) {
 		NodeOrder:         "quench,appraisal",
 		DeadlockThreshold: 5,
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, cfg); err != nil {
+	if err := handleSort(context.Background(), workitem, client, cfg); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -379,9 +390,9 @@ func TestSort_ZeroThresholdDefaultsTo3(t *testing.T) {
 		NodeOrder:         "quench,appraisal",
 		DeadlockThreshold: 0,
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, cfg); err != nil {
+	if err := handleSort(context.Background(), workitem, client, cfg); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -500,9 +511,9 @@ func TestSort_RoutesToRefine_FeedbackFromAppraise(t *testing.T) {
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-appraisal", Source: "appraisal", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -520,9 +531,9 @@ func TestSort_ResolvedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-resolved", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -544,10 +555,10 @@ func TestSort_DeadlockedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-dl", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
 	// This test will hit the deadlock check first and route to arbiter.
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -559,9 +570,9 @@ func TestSort_DeadlockedFeedbackIgnoredInSourceCheck(t *testing.T) {
 func TestSort_Error_GetFlowTopologyFails(t *testing.T) {
 	spy := newSortSpy()
 	spy.GetFlowTopologyErr = fmt.Errorf("topology unavailable")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from GetFlowTopology failure")
 	}
@@ -574,9 +585,9 @@ func TestSort_Error_GetFlowTopologyFails(t *testing.T) {
 func TestSort_Error_HasStampFails(t *testing.T) {
 	spy := newSortSpy()
 	spy.HasStampErr = fmt.Errorf("stamp service down")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from HasStamp failure")
 	}
@@ -585,9 +596,9 @@ func TestSort_Error_HasStampFails(t *testing.T) {
 func TestSort_Error_GetFeedbackFails(t *testing.T) {
 	spy := newSortSpy()
 	spy.GetFeedbackErr = fmt.Errorf("feedback list failed")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from GetFeedback failure")
 	}
@@ -600,9 +611,9 @@ func TestSort_Error_GetFeedbackDepthFails(t *testing.T) {
 		{Id: "fb-x", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
 	spy.GetFeedbackDepthErr = fmt.Errorf("depth lookup failed")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from GetFeedbackDepth failure")
 	}
@@ -616,9 +627,9 @@ func TestSort_Error_DeadlockFeedbackFails(t *testing.T) {
 	}
 	spy.FeedbackDepths["fb-y"] = 10
 	spy.DeadlockFeedbackErr = fmt.Errorf("deadlock transition failed")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from DeadlockFeedback failure")
 	}
@@ -628,9 +639,9 @@ func TestSort_Error_RouteToOutputFails(t *testing.T) {
 	spy := newSortSpy()
 	// Missing linter stamp → routes to quench → error.
 	spy.RouteToOutputErr = fmt.Errorf("routing failed")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from RouteToOutput failure")
 	}
@@ -641,9 +652,9 @@ func TestSort_Error_StampArtefactFails(t *testing.T) {
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
 	spy.StampArtefactErr = fmt.Errorf("stamp write failed")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from StampArtefact failure")
 	}
@@ -654,9 +665,9 @@ func TestSort_Error_CompleteFails(t *testing.T) {
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
 	spy.CompleteErr = fmt.Errorf("completion rejected")
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	err := handleSort(context.Background(), client, defaultConfig())
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
 	if err == nil {
 		t.Fatal("expected error from Complete failure")
 	}
@@ -687,9 +698,9 @@ func TestSort_DeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T) {
 	spy.DisputeRecords = []*flowv1.DisputeRecord{
 		{PetitionId: "pet-abc", CitedLawIds: []string{"law-42"}},
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -729,9 +740,9 @@ func TestSort_DeadlockedNoActiveDispute_RoutesToArbiter(t *testing.T) {
 	}
 	// No dispute records — empty list.
 	spy.DisputeRecords = nil
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -766,9 +777,9 @@ func TestSort_NewlyDeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T)
 	spy.DisputeRecords = []*flowv1.DisputeRecord{
 		{PetitionId: "pet-xyz", CitedLawIds: []string{"law-42"}},
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
@@ -802,9 +813,9 @@ func TestSort_DeadlockedNoCitation_RoutesToArbiter(t *testing.T) {
 	spy.DisputeRecords = []*flowv1.DisputeRecord{
 		{PetitionId: "pet-other", CitedLawIds: []string{"law-42"}},
 	}
-	client := setupSortTest(t, spy)
+	client, workitem := setupSortTest(t, spy)
 
-	if err := handleSort(context.Background(), client, defaultConfig()); err != nil {
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 

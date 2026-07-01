@@ -422,6 +422,11 @@ func handleExport(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("embassy: handler: get workitem: %w", err)
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		return fmt.Errorf("embassy: handler: load config: %w", err)
@@ -433,9 +438,22 @@ func handleExport(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = fedClient.Close() }()
 
-	// The archivist reader wraps the sidecar client via gRPC. We use
-	// a thin adapter so the archivistReader interface is satisfied.
-	ar := &sidecarArchivistAdapter{client: client}
+	// Build a direct archivist gRPC client from the Sidecar connection
+	// instead of accessing the unexported client.Archivist field.
+	sidecarAddr := os.Getenv(flow.EnvSidecarAddress)
+	if sidecarAddr == "" {
+		sidecarAddr = flow.DefaultSidecarAddress
+	}
+	sidecarConn, dialErr := grpc.NewClient(
+		sidecarAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if dialErr != nil {
+		return fmt.Errorf("embassy: handler: connect to sidecar: %w", dialErr)
+	}
+	ar := &sidecarArchivistAdapter{
+		archivist: flowv1.NewArchivistServiceClient(sidecarConn),
+	}
 
 	deps := &exportDeps{
 		cfg:       cfg,
@@ -446,32 +464,33 @@ func handleExport(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		},
 	}
 
-	return processExport(ctx, client, wctx, deps)
+	return processExport(ctx, workitem, wctx, deps)
 }
 
-// sidecarArchivistAdapter adapts the SDK Client's archivist methods to
-// the archivistReader interface so processExport can use the same code
-// path as tests.
+// sidecarArchivistAdapter adapts a raw ArchivistServiceClient to the
+// archivistReader interface so processExport can use the same code
+// path as tests. No longer wraps *flow.Client — uses a direct gRPC
+// client built from the Sidecar address.
 type sidecarArchivistAdapter struct {
-	client *flow.Client
+	archivist flowv1.ArchivistServiceClient
 }
 
 func (a *sidecarArchivistAdapter) ListArtefacts(
 	ctx context.Context, req *flowv1.ListArtefactsRequest,
 ) (*flowv1.ListArtefactsResponse, error) {
-	return a.client.Archivist.ListArtefacts(ctx, req)
+	return a.archivist.ListArtefacts(ctx, req)
 }
 
 func (a *sidecarArchivistAdapter) GetArtefact(
 	ctx context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
-	return a.client.Archivist.GetArtefact(ctx, req)
+	return a.archivist.GetArtefact(ctx, req)
 }
 
 func (a *sidecarArchivistAdapter) GetStamps(
 	ctx context.Context, req *flowv1.GetStampsRequest,
 ) (*flowv1.GetStampsResponse, error) {
-	return a.client.Archivist.GetStamps(ctx, req)
+	return a.archivist.GetStamps(ctx, req)
 }
 
 // processExport performs the core export handler logic.
@@ -486,7 +505,7 @@ func (a *sidecarArchivistAdapter) GetStamps(
 //  7. Complete the local workitem.
 func processExport(
 	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	wctx *flowv1.WorkitemContext,
 	deps *exportDeps,
 ) error {
@@ -500,7 +519,7 @@ func processExport(
 	scope := metadata["scope"]
 
 	// --- 1. Resolve target via Federation ---
-	target, err := resolveExportTarget(ctx, deps.fedClient, importType, scope)
+	target, err := resolveExportTarget(deps.fedClient, importType, scope)
 	if err != nil {
 		return fmt.Errorf("embassy export: %w", err)
 	}
@@ -534,7 +553,7 @@ func processExport(
 	}
 
 	// --- 4. Preflight ---
-	preflightResp, err := remoteClient.PreflightManifest(ctx, manifest, "")
+	preflightResp, err := remoteClient.PreflightManifest(manifest, "")
 	if err != nil {
 		return fmt.Errorf("embassy export: preflight manifest: %w", err)
 	}
@@ -545,13 +564,13 @@ func processExport(
 
 	// --- 5. Stream the package ---
 	chunks := buildPackageChunks(manifest, contentMap)
-	_, err = remoteClient.StreamPackage(ctx, chunks)
+	_, err = remoteClient.StreamPackage(chunks)
 	if err != nil {
 		return fmt.Errorf("embassy export: stream package: %w", err)
 	}
 
 	// --- 6. Complete the local workitem ---
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("embassy export: complete workitem: %w", err)
 	}
 

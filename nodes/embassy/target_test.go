@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 
 	flow "github.com/gideas/flow/sdk/go"
@@ -29,7 +28,6 @@ func TestResolveExportTarget_LawPetitionCallsGetPetitionTarget(t *testing.T) {
 	defer func() { _ = fedClient.Close() }()
 
 	target, err := resolveExportTarget(
-		context.Background(),
 		fedClient,
 		"law-petition",
 		"security",
@@ -70,7 +68,6 @@ func TestResolveExportTarget_ReturnsAuthorityEndpoint(t *testing.T) {
 	defer func() { _ = fedClient.Close() }()
 
 	target, err := resolveExportTarget(
-		context.Background(),
 		fedClient,
 		"law-petition",
 		"architecture",
@@ -102,7 +99,6 @@ func TestResolveExportTarget_FederationErrorFailsWithDescriptiveError(t *testing
 	defer func() { _ = fedClient.Close() }()
 
 	_, err = resolveExportTarget(
-		context.Background(),
 		fedClient,
 		"law-petition",
 		"unknown-scope",

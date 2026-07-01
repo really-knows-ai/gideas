@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -19,10 +18,11 @@ const (
 // Helpers
 // ---------------------------------------------------------------------------
 
-// newSpyClientWithSpy creates a flow.Client backed by the given quenchSpy.
+// newSpyClientWithSpy creates a flow.Client backed by the given quenchSpy
+// and returns the current workitem.
 func newSpyClientWithSpy(
 	t *testing.T, spy *quenchSpy,
-) (*flow.Client, func()) {
+) (*flow.Workitem, func()) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -33,17 +33,23 @@ func newSpyClientWithSpy(
 	srv := newSpyGRPCServer(spy)
 	go func() { _ = srv.Serve(lis) }()
 
+	t.Setenv(flow.EnvWorkitemID, "test-workitem")
 	client, err := flow.NewClient(
 		flow.WithSidecarAddress(lis.Addr().String()))
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+
 	cleanup := func() {
 		_ = client.Close()
 		srv.GracefulStop()
 	}
-	return client, cleanup
+	return workitem, cleanup
 }
 
 // validHaiku is a 5-7-5 haiku used by multiple tests. Syllable counts:
@@ -62,10 +68,10 @@ const invalidHaiku = "Hello world\nThis is not right\nAt all"
 
 func TestHandleQuench_ValidHaiku_NoFeedback(t *testing.T) {
 	spy := newQuenchSpy(validHaiku)
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -107,10 +113,10 @@ func TestHandleQuench_ValidHaiku_AcceptsActionedFeedback(t *testing.T) {
 			State: flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED,
 		},
 	}
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -158,10 +164,10 @@ func TestHandleQuench_ValidHaiku_SkipsNonActionedFeedback(t *testing.T) {
 			State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
 		},
 	}
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -183,10 +189,10 @@ func TestHandleQuench_ValidHaiku_SkipsNonActionedFeedback(t *testing.T) {
 
 func TestHandleQuench_InvalidHaiku_NoFeedback(t *testing.T) {
 	spy := newQuenchSpy(invalidHaiku)
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -236,10 +242,10 @@ func TestHandleQuench_InvalidHaiku_RejectsActionedFeedback(t *testing.T) {
 			State: flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED,
 		},
 	}
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -288,10 +294,10 @@ func TestHandleQuench_InvalidHaiku_SkipsNonActionedFeedback(
 			State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
 		},
 	}
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -335,10 +341,10 @@ func TestHandleQuench_InvalidHaiku_MixedFeedbackStates(
 			State: flowv1.FeedbackState_FEEDBACK_STATE_NEW,
 		},
 	}
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -367,10 +373,10 @@ func TestHandleQuench_ValidHaiku_MixedFeedbackStates(
 			State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED,
 		},
 	}
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -459,10 +465,10 @@ func TestHandleQuench_AlwaysStampsLinter(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			spy := newQuenchSpy(tc.haiku)
-			client, cleanup := newSpyClientWithSpy(t, spy)
+			workitem, cleanup := newSpyClientWithSpy(t, spy)
 			defer cleanup()
 
-			err := handleQuench(context.Background(), client)
+			err := handleQuench(workitem)
 			if err != nil {
 				t.Fatalf("handleQuench() error: %v", err)
 			}
@@ -491,10 +497,10 @@ func TestHandleQuench_AlwaysRoutesToDefault(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			spy := newQuenchSpy(tc.haiku)
-			client, cleanup := newSpyClientWithSpy(t, spy)
+			workitem, cleanup := newSpyClientWithSpy(t, spy)
 			defer cleanup()
 
-			err := handleQuench(context.Background(), client)
+			err := handleQuench(workitem)
 			if err != nil {
 				t.Fatalf("handleQuench() error: %v", err)
 			}
@@ -549,10 +555,10 @@ func TestHandleQuench_InvalidHaiku_RejectsMultipleActionedItems(
 			State: flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED,
 		},
 	}
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -581,10 +587,10 @@ func TestHandleQuench_InvalidHaiku_RejectsMultipleActionedItems(
 
 func TestHandleQuench_EmptyHaiku_RaisesFeedback(t *testing.T) {
 	spy := newQuenchSpy("")
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}
@@ -606,10 +612,10 @@ func TestHandleQuench_EmptyHaiku_RaisesFeedback(t *testing.T) {
 
 func TestHandleQuench_SingleLine_RaisesFeedback(t *testing.T) {
 	spy := newQuenchSpy("just one line here")
-	client, cleanup := newSpyClientWithSpy(t, spy)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
-	err := handleQuench(context.Background(), client)
+	err := handleQuench(workitem)
 	if err != nil {
 		t.Fatalf("handleQuench() error: %v", err)
 	}

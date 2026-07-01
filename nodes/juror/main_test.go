@@ -21,7 +21,7 @@ func TestJuror_HappyPath(t *testing.T) {
 	seedArtefacts(spy, "Should the feedback be upheld?", "Some evidence",
 		[]string{"favour_refiner", "favour_reviewer"}, "")
 
-	client := setupJurorTest(t, spy)
+	client, workitem := setupJurorTest(t, spy)
 
 	verdictJSON := `{"outcome":"favour_refiner","reasoning":"The refiner's argument is stronger."}`
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
@@ -51,7 +51,7 @@ func TestJuror_HappyPath(t *testing.T) {
 	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(
-		context.Background(), client, agent,
+		context.Background(), workitem, agent,
 		"Should the feedback be upheld?", "Some evidence",
 		[]string{"favour_refiner", "favour_reviewer"}, "",
 	)
@@ -88,7 +88,7 @@ func TestJuror_WithPriorRoundReasoning(t *testing.T) {
 	seedArtefacts(spy, "Should the feedback be upheld?", "Evidence",
 		[]string{"favour_refiner", "favour_reviewer"}, priorRound)
 
-	client := setupJurorTest(t, spy)
+	client, workitem := setupJurorTest(t, spy)
 
 	verdictJSON := `{"outcome":"favour_reviewer","reasoning":"Persuaded by prior arguments."}`
 	var capturedQuery []byte
@@ -119,7 +119,7 @@ func TestJuror_WithPriorRoundReasoning(t *testing.T) {
 	flow.OverrideModelForTest(agent, inferFn)
 
 	err = runJuror(
-		context.Background(), client, agent,
+		context.Background(), workitem, agent,
 		"Should the feedback be upheld?", "Evidence",
 		[]string{"favour_refiner", "favour_reviewer"}, priorRound,
 	)
@@ -150,10 +150,10 @@ func TestJuror_Error_QuestionArtefactMissing(t *testing.T) {
 	seedArtefacts(spy, "", "", []string{"a"}, "")
 	delete(spy.Artefacts, artefactQuestion)
 
-	client := setupJurorTest(t, spy)
+	client, workitem := setupJurorTest(t, spy)
 	cfg := &jurorConfig{Personality: "textualist"}
 
-	err := handleJuror(context.Background(), client, cfg)
+	err := handleJuror(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when question artefact missing")
 	}
@@ -167,10 +167,10 @@ func TestJuror_Error_EvidenceArtefactMissing(t *testing.T) {
 	spy.Artefacts[artefactQuestion] = []byte("question")
 	// No evidence artefact.
 
-	client := setupJurorTest(t, spy)
+	client, workitem := setupJurorTest(t, spy)
 	cfg := &jurorConfig{Personality: "textualist"}
 
-	err := handleJuror(context.Background(), client, cfg)
+	err := handleJuror(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when evidence artefact missing")
 	}
@@ -185,10 +185,10 @@ func TestJuror_Error_OutcomesArtefactMissing(t *testing.T) {
 	spy.Artefacts[artefactEvidence] = []byte("evidence")
 	// No outcomes artefact.
 
-	client := setupJurorTest(t, spy)
+	client, workitem := setupJurorTest(t, spy)
 	cfg := &jurorConfig{Personality: "textualist"}
 
-	err := handleJuror(context.Background(), client, cfg)
+	err := handleJuror(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when outcomes artefact missing")
 	}
@@ -201,7 +201,7 @@ func TestJuror_Error_AgentInferFails(t *testing.T) {
 	spy := newJurorSpy()
 	seedArtefacts(spy, "question", "evidence", []string{"a", "b"}, "")
 
-	client := setupJurorTest(t, spy)
+	client, workitem := setupJurorTest(t, spy)
 
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
 		return nil, fmt.Errorf("inference exploded")
@@ -226,7 +226,7 @@ func TestJuror_Error_AgentInferFails(t *testing.T) {
 	}
 	flow.OverrideModelForTest(agent, inferFn)
 
-	err = runJuror(context.Background(), client, agent, "question", "evidence", []string{"a", "b"}, "")
+	err = runJuror(context.Background(), workitem, agent, "question", "evidence", []string{"a", "b"}, "")
 	if err == nil {
 		t.Fatal("expected error when inference fails")
 	}
@@ -240,7 +240,7 @@ func TestJuror_Error_StoreVerdictFails(t *testing.T) {
 	seedArtefacts(spy, "question", "evidence", []string{"a", "b"}, "")
 	spy.StoreArtefactErr = status.Errorf(codes.Internal, "store broken")
 
-	client := setupJurorTest(t, spy)
+	client, workitem := setupJurorTest(t, spy)
 
 	verdictJSON := `{"outcome":"a","reasoning":"because"}`
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
@@ -266,7 +266,7 @@ func TestJuror_Error_StoreVerdictFails(t *testing.T) {
 	}
 	flow.OverrideModelForTest(agent, inferFn)
 
-	err = runJuror(context.Background(), client, agent, "question", "evidence", []string{"a", "b"}, "")
+	err = runJuror(context.Background(), workitem, agent, "question", "evidence", []string{"a", "b"}, "")
 	if err == nil {
 		t.Fatal("expected error when store verdict fails")
 	}

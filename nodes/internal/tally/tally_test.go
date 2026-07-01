@@ -454,7 +454,7 @@ func TestCollectVotes_HappyPath(t *testing.T) {
 		{WorkitemID: "child-2", Phase: flow.PhaseCompleted},
 	}
 
-	votes, err := tally.CollectVotes(context.Background(), client, children)
+	votes, err := tally.CollectVotes(context.Background(), client, "parent-wid", children)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestCollectVotes_MissingVerdict_Skipped(t *testing.T) {
 		{WorkitemID: "child-2", Phase: flow.PhaseCompleted},
 	}
 
-	votes, err := tally.CollectVotes(context.Background(), client, children)
+	votes, err := tally.CollectVotes(context.Background(), client, "parent-wid", children)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestCollectVotes_FailedChild_Error(t *testing.T) {
 		{WorkitemID: "child-2", Phase: flow.PhaseFailed},
 	}
 
-	_, err := tally.CollectVotes(context.Background(), client, children)
+	_, err := tally.CollectVotes(context.Background(), client, "parent-wid", children)
 	if err == nil {
 		t.Fatal("expected error for failed child")
 	}
@@ -520,7 +520,7 @@ func TestCollectVotes_InvalidJSON_Error(t *testing.T) {
 		{WorkitemID: "child-1", Phase: flow.PhaseCompleted},
 	}
 
-	_, err := tally.CollectVotes(context.Background(), client, children)
+	_, err := tally.CollectVotes(context.Background(), client, "parent-wid", children)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -533,7 +533,7 @@ func TestCollectVotes_EmptyChildren(t *testing.T) {
 	spy := newTallySpy()
 	client := setupTallyTest(t, spy)
 
-	votes, err := tally.CollectVotes(context.Background(), client, nil)
+	votes, err := tally.CollectVotes(context.Background(), client, "parent-wid", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestCollectVotes_PreservesOrder(t *testing.T) {
 		{WorkitemID: "child-c", Phase: flow.PhaseCompleted},
 	}
 
-	votes, err := tally.CollectVotes(context.Background(), client, children)
+	votes, err := tally.CollectVotes(context.Background(), client, "parent-wid", children)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

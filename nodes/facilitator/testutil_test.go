@@ -239,8 +239,8 @@ func defaultWorkitemContext() *flowv1.WorkitemContext {
 }
 
 // setupFacilitatorTest creates a flow.Client backed by the spy, suitable for
-// calling handleFacilitator directly.
-func setupFacilitatorTest(t *testing.T, spy *facilitatorSpy) *flow.Client {
+// calling handleFacilitator directly, and returns the current workitem.
+func setupFacilitatorTest(t *testing.T, spy *facilitatorSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -261,7 +261,12 @@ func setupFacilitatorTest(t *testing.T, spy *facilitatorSpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem: %v", err)
+	}
+
+	return client, workitem
 }
 
 // ---------------------------------------------------------------------------

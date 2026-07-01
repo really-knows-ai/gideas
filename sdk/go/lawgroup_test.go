@@ -28,7 +28,7 @@ func TestPartitionLawsByGroup_EmptyGroupFallsBack(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(got))
 	}
-	defLaws := got["default"]
+	defLaws := got[DefaultGroup]
 	if len(defLaws) != 2 {
 		t.Fatalf("expected 2 laws in default, got %d", len(defLaws))
 	}
@@ -99,8 +99,8 @@ func TestComputeUnits_BundleMode(t *testing.T) {
 		},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 1},
-		"style":    {Name: "style", Mode: GroupModeBundle, Passes: 2},
+		"security": {name: "security", mode: GroupModeBundle, passes: 1},
+		"style":    {name: "style", mode: GroupModeBundle, passes: 2},
 	}
 	got := ComputeUnits(lawsByGroup, groups)
 
@@ -139,7 +139,7 @@ func TestComputeUnits_LawByLawMode(t *testing.T) {
 		},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeLawByLaw, Passes: 2},
+		"security": {name: "security", mode: GroupModeLawByLaw, passes: 2},
 	}
 	got := ComputeUnits(lawsByGroup, groups)
 
@@ -191,7 +191,7 @@ func TestComputeUnits_EmptyGroup(t *testing.T) {
 		"style":    {{Id: lawL003}},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 1},
+		"security": {name: "security", mode: GroupModeBundle, passes: 1},
 	}
 	got := ComputeUnits(lawsByGroup, groups)
 
@@ -214,7 +214,7 @@ func TestComputeUnits_GroupAbsentFromMap(t *testing.T) {
 		},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 1},
+		"security": {name: "security", mode: GroupModeBundle, passes: 1},
 	}
 	got := ComputeUnits(lawsByGroup, groups)
 
@@ -256,8 +256,8 @@ func TestComputeDispatchMatrix_Count(t *testing.T) {
 		},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 3},
-		"style":    {Name: "style", Mode: GroupModeLawByLaw, Passes: 2},
+		"security": {name: "security", mode: GroupModeBundle, passes: 3},
+		"style":    {name: "style", mode: GroupModeLawByLaw, passes: 2},
 	}
 	appraiserIDs := []string{"skeptic", "auditor"}
 
@@ -278,7 +278,7 @@ func TestComputeDispatchMatrix_PassOneBased(t *testing.T) {
 		},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 3},
+		"security": {name: "security", mode: GroupModeBundle, passes: 3},
 	}
 	appraiserIDs := []string{"skeptic"}
 
@@ -305,7 +305,7 @@ func TestComputeDispatchMatrix_EmptyAppraisers(t *testing.T) {
 		},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 1},
+		"security": {name: "security", mode: GroupModeBundle, passes: 1},
 	}
 
 	got := ComputeDispatchMatrix(unitsByGroup, nil, groups)
@@ -321,7 +321,7 @@ func TestComputeDispatchMatrix_EmptyAppraisers(t *testing.T) {
 func TestComputeDispatchMatrix_EmptyUnits(t *testing.T) {
 	appraiserIDs := []string{"skeptic"}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 1},
+		"security": {name: "security", mode: GroupModeBundle, passes: 1},
 	}
 
 	got := ComputeDispatchMatrix(nil, appraiserIDs, groups)
@@ -342,8 +342,8 @@ func TestComputeDispatchMatrix_EmptyUnitSlice(t *testing.T) {
 		},
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeBundle, Passes: 1},
-		"style":    {Name: "style", Mode: GroupModeBundle, Passes: 1},
+		"security": {name: "security", mode: GroupModeBundle, passes: 1},
+		"style":    {name: "style", mode: GroupModeBundle, passes: 1},
 	}
 	appraiserIDs := []string{"skeptic"}
 
@@ -370,8 +370,8 @@ func TestBuildDispatchMatrix_Integration(t *testing.T) {
 		{Id: lawL004}, // empty group → "default"
 	}
 	groups := map[string]*LawGroup{
-		"security": {Name: "security", Mode: GroupModeLawByLaw, Passes: 2},
-		"style":    {Name: "style", Mode: GroupModeBundle, Passes: 1},
+		"security": {name: "security", mode: GroupModeLawByLaw, passes: 2},
+		"style":    {name: "style", mode: GroupModeBundle, passes: 1},
 	}
 	appraiserIDs := []string{"skeptic", "auditor"}
 
@@ -395,8 +395,8 @@ func TestBuildDispatchMatrix_Integration(t *testing.T) {
 	if groupsSeen["style"] != 2 {
 		t.Fatalf("expected 2 style entries, got %d", groupsSeen["style"])
 	}
-	if groupsSeen["default"] != 2 {
-		t.Fatalf("expected 2 default entries, got %d", groupsSeen["default"])
+	if groupsSeen[DefaultGroup] != 2 {
+		t.Fatalf("expected 2 default entries, got %d", groupsSeen[DefaultGroup])
 	}
 }
 

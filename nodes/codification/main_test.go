@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -22,10 +21,10 @@ func TestCodification_HappyPath_MixedChanges(t *testing.T) {
 	)
 	seedCodificationResult(spy, "child-1", "application/smt-lib", "(assert (= naming consistent))")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -89,12 +88,12 @@ func TestCodification_MultiChange_MultiCodifier(t *testing.T) {
 	seedCodificationResult(spy, "child-3", "application/smt-lib", "smt-rule-b")
 	seedCodificationResult(spy, "child-4", "application/rego", "rego-rule-b")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := &codificationConfig{
 		CodificationNodes: []string{"codify-smt", "codify-rego"},
 	}
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -153,10 +152,10 @@ func TestCodification_AllRetire_NoFanOut(t *testing.T) {
 		petitionChange{Action: "retire", LawID: "law-2"},
 	)
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -194,10 +193,10 @@ func TestCodification_SingleChange(t *testing.T) {
 	)
 	seedCodificationResult(spy, "child-1", "application/smt-lib", "(assert true)")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -228,10 +227,10 @@ func TestCodification_Error_PetitionMissing(t *testing.T) {
 	spy := newCodificationSpy()
 	// Deliberately don't seed the petition artefact.
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when petition artefact missing")
 	}
@@ -258,16 +257,20 @@ func TestCodification_Error_ChildFailure(t *testing.T) {
 		},
 	}
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
-	if err == nil {
-		t.Fatal("expected error when child fails")
+	// ponytail: Failed children are now handled gracefully (warn+skip)
+	// instead of failing the entire codification.
+	err := handleCodification(client, workitem, cfg)
+	if err != nil {
+		t.Fatalf("handleCodification: %v", err)
 	}
-	if !containsSubstring(err.Error(), "collect artefacts") {
-		t.Errorf("error should mention collect artefacts: %v", err)
+	pet := storedPetition(t, spy)
+	if len(pet.Petition.Changes[0].Representations) != 0 {
+		t.Errorf("representations = %d, want 0 (child failed)", len(pet.Petition.Changes[0].Representations))
 	}
+	assertRoutedTo(t, spy, "default")
 }
 
 // ---------------------------------------------------------------------------
@@ -280,10 +283,10 @@ func TestCodification_EmptyCodificationNodes(t *testing.T) {
 		petitionChange{Action: "create", Goal: "Rule A", AppliesTo: []string{"haiku"}, Tier: 1},
 	)
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := &codificationConfig{} // No codification nodes.
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -339,10 +342,10 @@ func TestCodification_RoundTripPreservation(t *testing.T) {
 	seedCodificationResult(spy, "child-1", "application/smt-lib", "smt-create")
 	seedCodificationResult(spy, "child-2", "application/smt-lib", "smt-demote")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -406,10 +409,10 @@ func TestCodification_Error_InvalidPetitionJSON(t *testing.T) {
 	spy := newCodificationSpy()
 	spy.Artefacts[defaultPetitionArtefact] = []byte("not-json{{{")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when petition is invalid JSON")
 	}
@@ -429,10 +432,10 @@ func TestCodification_Error_StorePetitionFails(t *testing.T) {
 	)
 	spy.StoreArtefactErr = status.Errorf(codes.Internal, "archivist down")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when store petition fails")
 	}
@@ -452,10 +455,10 @@ func TestCodification_Error_RouteToOutputFails(t *testing.T) {
 	)
 	spy.RouteToOutputErr = status.Errorf(codes.Internal, "operator down")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when route to output fails")
 	}
@@ -475,10 +478,10 @@ func TestCodification_Error_FanOutCreateChildFails(t *testing.T) {
 	)
 	spy.CreateChildErr = status.Errorf(codes.Internal, "operator down")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when create child fails")
 	}
@@ -498,10 +501,10 @@ func TestCodification_Error_AwaitChildrenFails(t *testing.T) {
 	)
 	spy.GetChildrenErr = status.Errorf(codes.Internal, "operator down")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error from AwaitChildren failure")
 	}
@@ -521,10 +524,10 @@ func TestCodification_ChildMissingResult_SkipsGracefully(t *testing.T) {
 	)
 	// Don't seed any child artefacts — child returned no codification-result.
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -663,10 +666,10 @@ func TestCodification_GoalArtefactStoredOnChildren(t *testing.T) {
 	)
 	seedCodificationResult(spy, "child-1", "application/smt-lib", "(assert true)")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -705,10 +708,10 @@ func TestCodification_DemoteChange_GetsCodification(t *testing.T) {
 	})
 	seedCodificationResult(spy, "child-1", "application/smt-lib", "smt-demote")
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}
@@ -741,13 +744,13 @@ func TestCodification_CustomPetitionArtefact(t *testing.T) {
 	data, _ := json.Marshal(pet)
 	spy.Artefacts["custom-petition"] = data
 
-	client := setupCodificationTest(t, spy)
+	client, workitem := setupCodificationTest(t, spy)
 	cfg := &codificationConfig{
 		PetitionArtefact: "custom-petition",
 		DefaultOutput:    "custom-output",
 	}
 
-	err := handleCodification(context.Background(), client, cfg)
+	err := handleCodification(client, workitem, cfg)
 	if err != nil {
 		t.Fatalf("handleCodification: %v", err)
 	}

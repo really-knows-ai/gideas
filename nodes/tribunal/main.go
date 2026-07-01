@@ -25,7 +25,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
@@ -126,32 +125,41 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("tribunal: get workitem: %w", err)
+	}
+
 	cfg, err := nodeconfig.Load[tribunalConfig](nodeconfig.Path())
 	if err != nil {
 		return fmt.Errorf("tribunal: load config: %w", err)
 	}
 
-	return handleTribunal(ctx, client, cfg)
+	return handleTribunal(ctx, client, workitem, cfg)
 }
 
-func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfig) error {
-	_, _ = client.Heartbeat(ctx)
+func handleTribunal(ctx context.Context, client *flow.Client, workitem *flow.Workitem, cfg *tribunalConfig) error {
+	_ = workitem.Heartbeat()
 
-	lawRef, err := client.GetArtefact(ctx, artefactLawReference)
+	lawRef, err := workitem.GetArtefact(artefactLawReference)
 	if err != nil {
 		return fmt.Errorf("tribunal: get law-reference artefact: %w", err)
 	}
-	lawID := strings.TrimSpace(string(lawRef.GetContent()))
+	lawRefContent, err := lawRef.GetContent()
+	if err != nil {
+		return fmt.Errorf("tribunal: get law-reference content: %w", err)
+	}
+	lawID := strings.TrimSpace(string(lawRefContent))
 	if lawID == "" {
 		return fmt.Errorf("tribunal: law-reference artefact is empty")
 	}
 
-	law, err := client.GetLaw(ctx, lawID)
+	law, err := client.GetLaw(lawID)
 	if err != nil {
 		return fmt.Errorf("tribunal: get law %s: %w", lawID, err)
 	}
 
-	friction, err := client.QueryFriction(ctx, &flowv1.FrictionFilter{LawId: lawID})
+	friction, err := workitem.QueryFriction(&flowv1.FrictionFilter{LawId: lawID})
 	if err != nil {
 		return fmt.Errorf("tribunal: query friction for %s: %w", lawID, err)
 	}
@@ -161,8 +169,8 @@ func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfi
 		return fmt.Errorf("tribunal: query related laws: %w", err)
 	}
 
-	evidence := assembleHearingEvidence(law, friction, relatedLaws)
-	question, allowedOutcomes := frameHearingQuestion(law.GetTier())
+	evidence := assembleHearingEvidence(law.PB(), friction, relatedLaws)
+	question, allowedOutcomes := frameHearingQuestion(flowv1.LawTier(law.GetTier()))
 
 	tallyCfg := tally.TallyConfig{
 		ConsensusStrategy: cfg.consensusStrategy(),
@@ -191,18 +199,18 @@ func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfi
 			return fmt.Errorf("tribunal: build fan-out tasks (round %d): %w", round, buildErr)
 		}
 
-		roundChildren, fanErr := client.FanOut(ctx, tasks)
+		roundChildren, fanErr := workitem.FanOut(tasks)
 		if fanErr != nil {
 			return fmt.Errorf("tribunal: fan-out (round %d): %w", round, fanErr)
 		}
 
-		allCompleted, awaitErr := client.AwaitChildren(ctx, flow.WithPollingInterval(time.Millisecond))
+		allCompleted, awaitErr := workitem.AwaitAll()
 		if awaitErr != nil {
 			return fmt.Errorf("tribunal: await children (round %d): %w", round, awaitErr)
 		}
 
 		roundCompleted := filterRoundChildren(allCompleted, roundChildren)
-		votes, collectErr := tally.CollectVotes(ctx, client, roundCompleted)
+		votes, collectErr := tally.CollectVotes(ctx, client, workitem.ID(), roundCompleted)
 		if collectErr != nil {
 			return fmt.Errorf("tribunal: collect votes (round %d): %w", round, collectErr)
 		}
@@ -232,24 +240,31 @@ func handleTribunal(ctx context.Context, client *flow.Client, cfg *tribunalConfi
 			"law_id", lawID,
 			"output", cfg.hungOutput(),
 		)
-		if _, err := client.RouteToOutput(ctx, cfg.hungOutput()); err != nil {
+		if err := workitem.RouteTo(cfg.hungOutput()); err != nil {
 			return fmt.Errorf("tribunal: route to hung output: %w", err)
 		}
 		return nil
 	}
 
-	return spawnClerkChild(ctx, client, cfg, law, question, lastResult)
+	return spawnClerkChild(workitem, cfg, law, question, lastResult)
 }
 
 func queryRelatedLaws(
 	ctx context.Context,
 	client *flow.Client,
-	law *flowv1.Law,
+	law *flow.Law,
 ) ([]*flowv1.Law, error) {
-	if len(law.GetAppliesTo()) == 0 {
+	appliesTo := law.PB().GetAppliesTo()
+	if len(appliesTo) == 0 {
 		return nil, nil
 	}
-	return client.QueryLaws(ctx, law.GetAppliesTo()[0], "")
+	resp, err := client.RawLibrarian().QueryLaws(ctx, &flowv1.QueryLawsRequest{
+		Filter: &flowv1.LawFilter{GovernedArtefact: appliesTo[0]},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tribunal: query related laws: %w", err)
+	}
+	return resp.GetLaws(), nil
 }
 
 func filterRoundChildren(
@@ -271,14 +286,13 @@ func filterRoundChildren(
 }
 
 func spawnClerkChild(
-	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	cfg *tribunalConfig,
-	law *flowv1.Law,
+	law *flow.Law,
 	question string,
 	result tally.TallyResult,
 ) error {
-	decision := synthesizeDecision(law, question, result)
+	decision := synthesizeDecision(law.PB(), question, result)
 	vctxJSON, err := json.Marshal(verdictContext{
 		Trigger:  "hearing",
 		Decision: decision,
@@ -287,15 +301,15 @@ func spawnClerkChild(
 		return fmt.Errorf("tribunal: marshal verdict-context: %w", err)
 	}
 
-	child, err := client.CreateChildWorkitem(ctx)
+	child, err := workitem.CreateChild()
 	if err != nil {
 		return fmt.Errorf("tribunal: create clerk child: %w", err)
 	}
 
-	if _, err := child.StoreArtefact(ctx, artefactVerdictContext, "", vctxJSON); err != nil {
+	if err := child.StoreArtefact(artefactVerdictContext, "", vctxJSON); err != nil {
 		return fmt.Errorf("tribunal: store verdict-context on child: %w", err)
 	}
-	if _, err := child.RouteTo(ctx, cfg.clerkNode()); err != nil {
+	if err := child.RouteTo(cfg.clerkNode()); err != nil {
 		return fmt.Errorf("tribunal: route child to clerk: %w", err)
 	}
 
@@ -305,7 +319,7 @@ func spawnClerkChild(
 		"outcome", result.Outcome,
 	)
 
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("tribunal: complete: %w", err)
 	}
 	return nil

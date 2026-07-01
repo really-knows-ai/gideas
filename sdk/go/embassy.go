@@ -40,6 +40,8 @@ type EmbassyClient struct {
 
 // EmbassyExportStream wraps the Embassy export stream.
 type EmbassyExportStream struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 	stream grpc.ServerStreamingClient[flowv1.PackageChunk]
 }
 
@@ -89,15 +91,17 @@ func (c *EmbassyClient) Close() error {
 
 // PreflightManifest validates a transfer manifest before package streaming.
 func (c *EmbassyClient) PreflightManifest(
-	ctx context.Context, manifest *flowv1.TransferManifest, treatyName string,
+	manifest *flowv1.TransferManifest, remoteFlowIdentity string,
 ) (*flowv1.PreflightManifestResponse, error) {
 	if c.embassy == nil {
 		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
 	}
 
+	// ponytail: uses context.Background() per call.
+	ctx := context.Background()
 	resp, err := c.embassy.PreflightManifest(ctx, &flowv1.PreflightManifestRequest{
 		Manifest:   manifest,
-		TreatyName: treatyName,
+		TreatyName: remoteFlowIdentity,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: embassy client: preflight manifest failed: %w", err)
@@ -107,18 +111,20 @@ func (c *EmbassyClient) PreflightManifest(
 
 // StreamPackage sends a package stream to the receiving Embassy.
 func (c *EmbassyClient) StreamPackage(
-	ctx context.Context, chunks []*flowv1.PackageChunk,
+	packageChunks []*flowv1.PackageChunk,
 ) (*flowv1.StreamPackageResponse, error) {
 	if c.embassy == nil {
 		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
 	}
 
+	// ponytail: uses context.Background() per call.
+	ctx := context.Background()
 	stream, err := c.embassy.StreamPackage(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: embassy client: open stream package failed: %w", err)
 	}
 
-	for _, chunk := range chunks {
+	for _, chunk := range packageChunks {
 		if err := stream.Send(chunk); err != nil {
 			return nil, fmt.Errorf("flow sdk: embassy client: send package chunk failed: %w", err)
 		}
@@ -133,23 +139,30 @@ func (c *EmbassyClient) StreamPackage(
 
 // ExportPackage starts a package export stream for the given Workitem and import type.
 func (c *EmbassyClient) ExportPackage(
-	ctx context.Context, workitemID, importType string,
+	workitemID, governedArtefact string,
 ) (*EmbassyExportStream, error) {
 	if c.embassy == nil {
 		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := c.embassy.ExportPackage(ctx, &flowv1.ExportPackageRequest{
 		WorkitemId: workitemID,
-		ImportType: importType,
+		ImportType: governedArtefact,
 	})
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("flow sdk: embassy client: export package failed: %w", err)
 	}
-	return &EmbassyExportStream{stream: stream}, nil
+	return &EmbassyExportStream{ctx: ctx, cancel: cancel, stream: stream}, nil
 }
 
 // Recv returns the next exported package chunk from the Embassy stream.
 func (s *EmbassyExportStream) Recv() (*flowv1.PackageChunk, error) {
 	return s.stream.Recv()
+}
+
+// Stop cancels the stream. Subsequent Recv calls return a context-cancelled error.
+func (s *EmbassyExportStream) Stop() {
+	s.cancel()
 }

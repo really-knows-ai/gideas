@@ -26,7 +26,8 @@ func TestHITLAppraise_HappyPath(t *testing.T) {
 	cfg := &hitlAppraiseConfig{InputArtefact: "petition"}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleAppraise(ctx, client, qm, cfg, wctx)
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
+		errCh <- handleAppraise(ctx, client, wi, qm, cfg, wctx)
 	}()
 
 	// Simulate human: wait for item to appear, then claim and decide.
@@ -53,8 +54,8 @@ func TestHITLAppraise_HappyPath(t *testing.T) {
 		t.Errorf("expected 1 GetFlowTopology call, got %d", spy.TopologyCalls)
 	}
 
-	if len(spy.ReadArtefacts) != 2 {
-		t.Fatalf("expected 2 GetArtefact calls, got %d", len(spy.ReadArtefacts))
+	if len(spy.ReadArtefacts) != 3 {
+		t.Fatalf("expected 3 GetArtefact calls (input + governed + stamp), got %d", len(spy.ReadArtefacts))
 	}
 	if spy.ReadArtefacts[0] != "petition" {
 		t.Errorf("expected first read=petition, got %s", spy.ReadArtefacts[0])
@@ -103,7 +104,8 @@ func TestHITLAppraise_NoStampCapability(t *testing.T) {
 		NodeId:        "hitl-appraise",
 	}
 
-	err := handleAppraise(ctx, client, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
+	wi := newTestWorkitem(t, client, wctx.GetWorkitemId())
+	err := handleAppraise(ctx, client, wi, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
 	if err == nil {
 		t.Fatal("expected error when no stamp capability")
 	}
@@ -126,7 +128,8 @@ func TestHITLAppraise_ContextCancellation(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleAppraise(ctx, client, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
+		errCh <- handleAppraise(ctx, client, wi, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
 	}()
 
 	// Cancel while waiting for decision.

@@ -58,7 +58,7 @@ func TestEmbassyHandler_PreflightManifest_NilConfigRejects(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 	}, "")
 	if err != nil {
@@ -82,7 +82,7 @@ func TestEmbassyHandler_StreamPackage_NoManifestRejectsWithInvalidArgument(t *te
 	}
 	defer func() { _ = embClient.Close() }()
 
-	_, err = embClient.StreamPackage(context.Background(), []*flowv1.PackageChunk{
+	_, err = embClient.StreamPackage([]*flowv1.PackageChunk{
 		{Chunk: &flowv1.PackageChunk_Content{Content: []byte("data")}},
 	})
 
@@ -108,7 +108,7 @@ func TestEmbassyHandler_ExportPackage_Unimplemented(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	stream, err := embClient.ExportPackage(context.Background(), "wi-1", "law-petition")
+	stream, err := embClient.ExportPackage("wi-1", "law-petition")
 	if err != nil {
 		// Error on opening the stream — check for Unimplemented.
 		st, ok := status.FromError(err)
@@ -153,7 +153,7 @@ func TestPreflightManifest_LawPetitionResolvesViaSystemImportTypes(t *testing.T)
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -185,7 +185,7 @@ func TestPreflightManifest_FlowAuthoredImportTypeResolves(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "external-submission",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -212,7 +212,7 @@ func TestPreflightManifest_UnknownImportTypeRejected(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "nonexistent-type",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -242,7 +242,7 @@ func TestPreflightManifest_GeneratesTransferID(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -255,7 +255,7 @@ func TestPreflightManifest_GeneratesTransferID(t *testing.T) {
 	}
 
 	// Verify a second call generates a different transfer_id.
-	resp2, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp2, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -291,7 +291,7 @@ func TestPreflightManifest_FederationTrustAcceptsMember(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		SourceFlow: "remote-federation-member",
 		TargetFlow: "local-flow",
@@ -326,7 +326,7 @@ func TestPreflightManifest_TreatyTrustAcceptsAllowedImportType(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		SourceFlow: "partner-flow",
 		TargetFlow: "local-flow",
@@ -363,7 +363,7 @@ func TestPreflightManifest_TreatyTrustRejectsDisallowedImportType(t *testing.T) 
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "external-submission",
 		SourceFlow: "partner-flow",
 		TargetFlow: "local-flow",
@@ -399,7 +399,7 @@ func TestPreflightManifest_TreatyTrustRejectsDisallowedSubject(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		SourceFlow: "rogue-flow",
 		TargetFlow: "local-flow",
@@ -434,7 +434,7 @@ func TestPreflightManifest_ExpiredManifestRejected(t *testing.T) {
 
 	// Set expires_at to the past.
 	pastTime := timestamppb.New(time.Now().Add(-1 * time.Hour))
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "law-petition",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -476,7 +476,7 @@ func TestPreflightManifest_AllRequiredForeignStampsPresent(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "external-submission",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -521,7 +521,7 @@ func TestPreflightManifest_MissingRequiredForeignStampRejected(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "external-submission",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -574,7 +574,7 @@ func TestPreflightManifest_ExtraUnrequiredStampsAccepted(t *testing.T) {
 	}
 	defer func() { _ = embClient.Close() }()
 
-	resp, err := embClient.PreflightManifest(context.Background(), &flowv1.TransferManifest{
+	resp, err := embClient.PreflightManifest(&flowv1.TransferManifest{
 		ImportType: "external-submission",
 		SourceFlow: "remote-flow",
 		TargetFlow: "local-flow",
@@ -620,7 +620,8 @@ func TestHandleExport_MissingImportTypeReturnsError(t *testing.T) {
 		cfg: &embassyConfig{FederationIdentity: "local-flow"},
 	}
 
-	err := processExport(context.Background(), client, wctx, deps)
+	wi := getExportTestWorkitem(t, client, wctx.GetWorkitemId())
+	err := processExport(context.Background(), wi, wctx, deps)
 	if err == nil {
 		t.Fatal("expected processExport to return error when import_type is missing")
 	}
@@ -925,7 +926,7 @@ func TestStreamPackage_ValidManifestContentTrailerReturnsSuccess(t *testing.T) {
 		}},
 	}
 
-	resp, err := embClient.StreamPackage(context.Background(), chunks)
+	resp, err := embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -973,7 +974,7 @@ func TestStreamPackage_FailedDigestVerificationReturnsError(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err == nil {
 		t.Fatal("expected error from StreamPackage with bad digest")
 	}
@@ -1007,7 +1008,7 @@ func TestStreamPackage_UnknownImportTypeReturnsError(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err == nil {
 		t.Fatal(
 			"expected error from StreamPackage with unknown import type",
@@ -1065,7 +1066,7 @@ func TestStreamPackage_MaterialiserCreatesWorkitem(t *testing.T) {
 		}},
 	}
 
-	resp, err := embClient.StreamPackage(context.Background(), chunks)
+	resp, err := embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1127,7 +1128,7 @@ func TestStreamPackage_MaterialiserStoresArtefacts(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1194,7 +1195,7 @@ func TestStreamPackage_WorkitemMetadataIncludesImportFields(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1280,7 +1281,7 @@ func TestStreamPackage_NaturalisationAppliesImportedStamps(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1371,7 +1372,7 @@ func TestStreamPackage_NaturalisationPreservesForeignStamps(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1439,7 +1440,7 @@ func TestStreamPackage_NaturalisationAppliesRequireLocalStamps(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1522,7 +1523,7 @@ func TestStreamPackage_NaturalisationAutoNaturaliseFalseSkipsImportedStamps(t *t
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1587,7 +1588,7 @@ func TestStreamPackage_LawPetitionRoutesToPetitionIntake(t *testing.T) {
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1660,7 +1661,7 @@ func TestStreamPackage_FlowAuthoredImportTypeRoutesToConfiguredNode(t *testing.T
 		}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err != nil {
 		t.Fatalf("StreamPackage() returned error: %v", err)
 	}
@@ -1711,7 +1712,7 @@ func TestStreamPackage_UnknownImportTypePostPreflightErrors(t *testing.T) {
 		{Chunk: &flowv1.PackageChunk_Content{Content: []byte("data")}},
 	}
 
-	_, err = embClient.StreamPackage(context.Background(), chunks)
+	_, err = embClient.StreamPackage(chunks)
 	if err == nil {
 		t.Fatal("expected error from StreamPackage with unknown import type")
 	}

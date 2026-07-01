@@ -35,7 +35,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
@@ -170,12 +169,17 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("arbiter: get workitem: %w", err)
+	}
+
 	cfg, err := nodeconfig.Load[arbiterConfig](nodeconfig.Path())
 	if err != nil {
 		return fmt.Errorf("arbiter: load config: %w", err)
 	}
 
-	return handleArbiter(ctx, client, cfg)
+	return handleArbiter(ctx, client, workitem, cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -187,31 +191,27 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 //
 // Phase detection: if GetChildren returns any completed children, this is a
 // post-resume invocation. Otherwise it is the first invocation.
-func handleArbiter(ctx context.Context, client *flow.Client, cfg *arbiterConfig) error {
+func handleArbiter(ctx context.Context, client *flow.Client, workitem *flow.Workitem, cfg *arbiterConfig) error {
 	// ── Heartbeat ────────────────────────────────────────────────────
-	_, _ = client.Heartbeat(ctx)
+	_ = workitem.Heartbeat()
 
 	// ── Phase detection ──────────────────────────────────────────────
-	// Use the raw Operator stub because the SDK's GetChildren() strips
-	// CompletionReason from the response.
-	resp, err := client.Operator.GetChildren(ctx, &flowv1.GetChildrenRequest{})
+	children, err := workitem.GetChildren()
 	if err != nil {
 		return fmt.Errorf("arbiter: get children: %w", err)
 	}
-
-	children := resp.GetChildren()
 	if hasCompletedChild(children) {
-		return handlePostResume(ctx, client, children)
+		return handlePostResume(workitem, children)
 	}
 
-	return handleFirstInvocation(ctx, client, cfg)
+	return handleFirstInvocation(ctx, client, workitem, cfg)
 }
 
 // hasCompletedChild returns true if at least one child is in the Completed
 // phase, indicating this is a post-resume invocation.
-func hasCompletedChild(children []*flowv1.ChildWorkitemStatus) bool {
+func hasCompletedChild(children []flow.ChildWorkitemStatus) bool {
 	for _, ch := range children {
-		if ch.GetPhase() == flow.PhaseCompleted {
+		if ch.Phase == flow.PhaseCompleted {
 			return true
 		}
 	}
@@ -222,13 +222,18 @@ func hasCompletedChild(children []*flowv1.ChildWorkitemStatus) bool {
 // First invocation — deliberation loop
 // ---------------------------------------------------------------------------
 
-func handleFirstInvocation(ctx context.Context, client *flow.Client, cfg *arbiterConfig) error {
+func handleFirstInvocation(ctx context.Context, client *flow.Client,
+	workitem *flow.Workitem, cfg *arbiterConfig) error {
 	// ── Step 1: Read evidence-bundle artefact ────────────────────────
-	evidenceResp, err := client.GetArtefact(ctx, artefactEvidenceBundle)
+	evidenceArt, err := workitem.GetArtefact(artefactEvidenceBundle)
 	if err != nil {
 		return fmt.Errorf("arbiter: read evidence-bundle: %w", err)
 	}
-	evidence := string(evidenceResp.GetContent())
+	evidenceContent, err := evidenceArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("arbiter: read evidence-bundle content: %w", err)
+	}
+	evidence := string(evidenceContent)
 
 	// ── Step 2: Frame question ──────────────────────────────────────
 	question := "Should the reviewer's feedback be upheld (requiring a law change), " +
@@ -265,13 +270,13 @@ func handleFirstInvocation(ctx context.Context, client *flow.Client, cfg *arbite
 		}
 
 		// Fan out to jurors.
-		roundChildren, fanErr := client.FanOut(ctx, tasks)
+		roundChildren, fanErr := workitem.FanOut(tasks)
 		if fanErr != nil {
 			return fmt.Errorf("arbiter: fan-out (round %d): %w", round, fanErr)
 		}
 
 		// Await all children (returns all children, including prior rounds).
-		allCompleted, awaitErr := client.AwaitChildren(ctx, flow.WithPollingInterval(time.Millisecond))
+		allCompleted, awaitErr := workitem.AwaitAll()
 		if awaitErr != nil {
 			return fmt.Errorf("arbiter: await children (round %d): %w", round, awaitErr)
 		}
@@ -289,7 +294,7 @@ func handleFirstInvocation(ctx context.Context, client *flow.Client, cfg *arbite
 		}
 
 		// Collect votes from this round's children only.
-		votes, collectErr := tally.CollectVotes(ctx, client, roundCompleted)
+		votes, collectErr := tally.CollectVotes(ctx, client, workitem.ID(), roundCompleted)
 		if collectErr != nil {
 			return fmt.Errorf("arbiter: collect votes (round %d): %w", round, collectErr)
 		}
@@ -317,20 +322,19 @@ func handleFirstInvocation(ctx context.Context, client *flow.Client, cfg *arbite
 	}
 
 	// ── Step 4: Post-loop outcomes ──────────────────────────────────
-	return handleDeliberationOutcome(ctx, client, cfg, lastResult)
+	return handleDeliberationOutcome(workitem, cfg, lastResult)
 }
 
 // handleDeliberationOutcome branches on the tally result.
 func handleDeliberationOutcome(
-	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	cfg *arbiterConfig,
 	result tally.TallyResult,
 ) error {
 	// Hung — max rounds exhausted with no consensus.
 	if result.IsHung {
 		slog.Info("arbiter: hung after max rounds, routing to hung output")
-		if _, err := client.RouteToOutput(ctx, cfg.hungOutput()); err != nil {
+		if err := workitem.RouteTo(cfg.hungOutput()); err != nil {
 			return fmt.Errorf("arbiter: route to hung: %w", err)
 		}
 		return nil
@@ -339,21 +343,20 @@ func handleDeliberationOutcome(
 	// Resolved — jury says no law change needed.
 	if result.Outcome == outcomeResolved {
 		slog.Info("arbiter: resolved, completing")
-		if _, err := client.Complete(ctx); err != nil {
+		if err := workitem.Complete(); err != nil {
 			return fmt.Errorf("arbiter: complete (resolved): %w", err)
 		}
 		return nil
 	}
 
 	// Consensus for law change — create Clerk child and suspend.
-	return spawnClerkAndSuspend(ctx, client, cfg, result)
+	return spawnClerkAndSuspend(workitem, cfg, result)
 }
 
 // spawnClerkAndSuspend synthesizes the prose verdict-context, creates a
 // Clerk child with the verdict-context artefact, and suspends.
 func spawnClerkAndSuspend(
-	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	cfg *arbiterConfig,
 	result tally.TallyResult,
 ) error {
@@ -370,18 +373,18 @@ func spawnClerkAndSuspend(
 	}
 
 	// Create Clerk child.
-	child, err := client.CreateChildWorkitem(ctx)
+	child, err := workitem.CreateChild()
 	if err != nil {
 		return fmt.Errorf("arbiter: create clerk child: %w", err)
 	}
 
 	// Store verdict-context on the child.
-	if _, err := child.StoreArtefact(ctx, artefactVerdictContext, "", vctxJSON); err != nil {
+	if err := child.StoreArtefact(artefactVerdictContext, "", vctxJSON); err != nil {
 		return fmt.Errorf("arbiter: store verdict-context on child: %w", err)
 	}
 
 	// Route child to clerk node.
-	if _, err := child.RouteTo(ctx, cfg.clerkNode()); err != nil {
+	if err := child.RouteTo(cfg.clerkNode()); err != nil {
 		return fmt.Errorf("arbiter: route child to clerk: %w", err)
 	}
 
@@ -391,7 +394,7 @@ func spawnClerkAndSuspend(
 	)
 
 	// Suspend until clerk child completes.
-	if err := client.Suspend(ctx,
+	if err := workitem.Suspend(
 		flow.WithCondition(`children.all(c, c.phase == "Completed")`),
 	); err != nil {
 		return fmt.Errorf("arbiter: suspend: %w", err)
@@ -437,15 +440,14 @@ func synthesizeDecision(result tally.TallyResult) string {
 // the suspend condition was met (clerk child completed). It checks the
 // child's CompletionReason and completes accordingly.
 func handlePostResume(
-	ctx context.Context,
-	client *flow.Client,
-	children []*flowv1.ChildWorkitemStatus,
+	workitem *flow.Workitem,
+	children []flow.ChildWorkitemStatus,
 ) error {
 	// Find the first completed child.
-	var completed *flowv1.ChildWorkitemStatus
-	for _, ch := range children {
-		if ch.GetPhase() == flow.PhaseCompleted {
-			completed = ch
+	var completed *flow.ChildWorkitemStatus
+	for i := range children {
+		if children[i].Phase == flow.PhaseCompleted {
+			completed = &children[i]
 			break
 		}
 	}
@@ -455,15 +457,13 @@ func handlePostResume(
 	}
 
 	slog.Info("arbiter: post-resume",
-		"child_id", completed.GetWorkitemId(),
-		"completion_reason", completed.GetCompletionReason().String(),
+		"child_id", completed.WorkitemID,
+		"completion_reason", completed.CompletionReason,
 	)
 
-	reason := completed.GetCompletionReason()
-
-	if reason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
+	if completed.CompletionReason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED.String() {
 		slog.Info("arbiter: clerk child cancelled, propagating cancellation")
-		if _, err := client.Complete(ctx, flow.WithReason(
+		if err := workitem.Complete(flow.WithReason(
 			flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
 		)); err != nil {
 			return fmt.Errorf("arbiter: complete with cancelled: %w", err)
@@ -473,7 +473,7 @@ func handlePostResume(
 
 	// Success — clerk completed normally.
 	slog.Info("arbiter: clerk child succeeded, completing")
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("arbiter: complete (post-resume): %w", err)
 	}
 	return nil

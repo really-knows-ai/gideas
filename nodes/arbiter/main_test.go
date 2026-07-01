@@ -9,6 +9,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/tally"
+	flow "github.com/gideas/flow/sdk/go"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,10 +25,10 @@ func TestArbiter_HappyPath_ConsensusRound1_ClerkChildAndSuspend(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "Law change needed")
 	seedJurorVerdict(spy, "child-3", outcomeResolved, "No change needed")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTestWorkitem(t, spy)
 	cfg := defaultTestConfig() // 3 jurors, 1 round, simple majority
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -77,10 +78,10 @@ func TestArbiter_Resolved_NoLawChange_Complete(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeResolved, "All fine")
 	seedJurorVerdict(spy, "child-3", outcomeResolved, "Resolved")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -117,10 +118,10 @@ func TestArbiter_HungAfterMaxRounds_RoutesToHung(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeResolved, "no change")
 	seedJurorVerdict(spy, "child-3", "abstain", "unsure")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{JurySize: 3, MaxRounds: 1}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -158,10 +159,10 @@ func TestArbiter_MultiRoundRetry_ConsensusRound2(t *testing.T) {
 	seedJurorVerdict(spy, "child-5", outcomeLawChange, "agree change needed")
 	seedJurorVerdict(spy, "child-6", outcomeResolved, "still disagree")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{JurySize: 3, MaxRounds: 2}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -214,10 +215,10 @@ func TestArbiter_PostResume_Success_Complete(t *testing.T) {
 		},
 	}
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -249,10 +250,10 @@ func TestArbiter_PostResume_Cancelled_PropagatesCancellation(t *testing.T) {
 		},
 	}
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -275,10 +276,10 @@ func TestArbiter_VerdictContextIsProse(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "Concur with change")
 	seedJurorVerdict(spy, "child-3", outcomeLawChange, "Absolutely needed")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -333,14 +334,14 @@ func TestArbiter_ConsensusStrategy_SimpleMajority(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "yes")
 	seedJurorVerdict(spy, "child-3", outcomeResolved, "no")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
 		JurySize:          3,
 		MaxRounds:         1,
 		ConsensusStrategy: "SIMPLE_MAJORITY",
 	}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -360,14 +361,14 @@ func TestArbiter_ConsensusStrategy_SuperMajority(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "yes")
 	seedJurorVerdict(spy, "child-3", outcomeResolved, "no")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
 		JurySize:          3,
 		MaxRounds:         1,
 		ConsensusStrategy: "SUPER_MAJORITY",
 	}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -389,14 +390,14 @@ func TestArbiter_ConsensusStrategy_SuperMajority_BelowThreshold(t *testing.T) {
 	seedJurorVerdict(spy, "child-4", outcomeResolved, "no")
 	seedJurorVerdict(spy, "child-5", outcomeResolved, "no")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
 		JurySize:          5,
 		MaxRounds:         1,
 		ConsensusStrategy: "SUPER_MAJORITY",
 	}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -416,14 +417,14 @@ func TestArbiter_ConsensusStrategy_Unanimity(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "yes")
 	seedJurorVerdict(spy, "child-3", outcomeLawChange, "yes")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
 		JurySize:          3,
 		MaxRounds:         1,
 		ConsensusStrategy: "UNANIMITY",
 	}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -442,14 +443,14 @@ func TestArbiter_ConsensusStrategy_Unanimity_NotMet(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "yes")
 	seedJurorVerdict(spy, "child-3", outcomeResolved, "no")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
 		JurySize:          3,
 		MaxRounds:         1,
 		ConsensusStrategy: "UNANIMITY",
 	}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -467,10 +468,10 @@ func TestArbiter_MissingEvidenceBundle_Error(t *testing.T) {
 	spy := newArbiterSpy()
 	// No evidence-bundle seeded.
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleArbiter(context.Background(), client, cfg)
+	err := handleArbiter(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error for missing evidence-bundle")
 	}
@@ -488,10 +489,10 @@ func TestArbiter_FanOutFailure_Error(t *testing.T) {
 	seedEvidence(spy, "evidence")
 	spy.CreateChildErr = fmt.Errorf("cannot create child")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleArbiter(context.Background(), client, cfg)
+	err := handleArbiter(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error from fan-out failure")
 	}
@@ -534,7 +535,7 @@ func TestArbiter_CustomConfig(t *testing.T) {
 	seedJurorVerdict(spy, "child-1", outcomeLawChange, "yes")
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "yes")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
 		JurySize:          2,
 		JurorNode:         "custom-juror",
@@ -544,7 +545,7 @@ func TestArbiter_CustomConfig(t *testing.T) {
 		ConsensusStrategy: "SIMPLE_MAJORITY",
 	}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -578,14 +579,14 @@ func TestArbiter_CustomHungOutput(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeResolved, "b")
 	seedJurorVerdict(spy, "child-3", "abstain", "c")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{
 		JurySize:   3,
 		MaxRounds:  1,
 		HungOutput: "my-hung-output",
 	}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -607,10 +608,10 @@ func TestArbiter_SuspendConditionIncludesChildrenAll(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "yes")
 	seedJurorVerdict(spy, "child-3", outcomeLawChange, "yes")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -633,10 +634,10 @@ func TestArbiter_JurorChildrenReceiveCorrectArtefacts(t *testing.T) {
 
 	seedJurorVerdict(spy, "child-1", outcomeLawChange, "yes")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{JurySize: 1, MaxRounds: 1}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -693,10 +694,10 @@ func TestArbiter_PauseResumeTimerDuringAwait(t *testing.T) {
 
 	seedJurorVerdict(spy, "child-1", outcomeResolved, "fine")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{JurySize: 1, MaxRounds: 1}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -747,10 +748,10 @@ func TestArbiter_GetChildrenError_FirstInvocation(t *testing.T) {
 	spy := newArbiterSpy()
 	spy.GetChildrenErr = fmt.Errorf("children unavailable")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	err := handleArbiter(context.Background(), client, cfg)
+	err := handleArbiter(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error from GetChildren failure")
 	}
@@ -791,8 +792,8 @@ func TestArbiter_AwaitChildrenError(t *testing.T) {
 	seedEvidence(spy2, "evidence")
 	spy2.GetArtefactErr = fmt.Errorf("artefact fetch failed")
 
-	client2 := setupArbiterTest(t, spy2)
-	err := handleArbiter(context.Background(), client2, defaultTestConfig())
+	client2, workitem2 := setupArbiterTest(t, spy2)
+	err := handleArbiter(context.Background(), client2, workitem2, defaultTestConfig())
 	if err == nil {
 		t.Fatal("expected error from GetArtefact failure")
 	}
@@ -801,7 +802,7 @@ func TestArbiter_AwaitChildrenError(t *testing.T) {
 func TestArbiter_HasCompletedChild_Detection(t *testing.T) {
 	tests := []struct {
 		name     string
-		children []*flowv1.ChildWorkitemStatus
+		children []flow.ChildWorkitemStatus
 		want     bool
 	}{
 		{
@@ -811,28 +812,28 @@ func TestArbiter_HasCompletedChild_Detection(t *testing.T) {
 		},
 		{
 			name:     "empty",
-			children: []*flowv1.ChildWorkitemStatus{},
+			children: []flow.ChildWorkitemStatus{},
 			want:     false,
 		},
 		{
 			name: "running only",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
 			},
 			want: false,
 		},
 		{
 			name: "one completed",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Completed"},
 			},
 			want: true,
 		},
 		{
 			name: "mixed with completed",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
-				{WorkitemId: "c2", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
+				{WorkitemID: "c2", Phase: "Completed"},
 			},
 			want: true,
 		},
@@ -859,12 +860,12 @@ func TestArbiter_PostResume_NoCompletedChild_Error(t *testing.T) {
 	// This triggers post-resume detection (hasCompletedChild returns
 	// false for Running), so it takes the first-invocation path.
 	// To test the defensive path in handlePostResume, call it directly.
-	children := []*flowv1.ChildWorkitemStatus{
-		{WorkitemId: "c1", Phase: "Running"},
+	children := []flow.ChildWorkitemStatus{
+		{WorkitemID: "c1", Phase: "Running"},
 	}
 
-	client := setupArbiterTest(t, spy)
-	err := handlePostResume(context.Background(), client, children)
+	_, workitem := setupArbiterTest(t, spy)
+	err := handlePostResume(workitem, children)
 	if err == nil {
 		t.Fatal("expected error when no completed child found")
 	}
@@ -881,10 +882,10 @@ func TestArbiter_ClerkChildReceivesVerdictContext(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeLawChange, "argument B")
 	seedJurorVerdict(spy, "child-3", outcomeResolved, "disagree")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -919,10 +920,10 @@ func TestArbiter_HungMultipleRounds(t *testing.T) {
 		seedJurorVerdict(spy, fmt.Sprintf("child-%d", i), outcome, fmt.Sprintf("reason-%d", i))
 	}
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{JurySize: 3, MaxRounds: 3}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 
@@ -943,10 +944,10 @@ func TestArbiter_SingleJuror_ConsensusAlways(t *testing.T) {
 
 	seedJurorVerdict(spy, "child-1", outcomeLawChange, "only juror")
 
-	client := setupArbiterTest(t, spy)
+	client, workitem := setupArbiterTest(t, spy)
 	cfg := &arbiterConfig{JurySize: 1, MaxRounds: 1}
 
-	if err := handleArbiter(context.Background(), client, cfg); err != nil {
+	if err := handleArbiter(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleArbiter: %v", err)
 	}
 

@@ -85,10 +85,12 @@ func newEntryClient(sidecarAddr, eventBusAddr string) (*EntryClient, error) {
 // The metadata map is stored on the Workitem CRD and passed through
 // to the handler via WorkitemContext.Metadata.
 // The Sidecar's identity fallback provides namespace and node_id.
-func (e *EntryClient) CreateWorkitem(ctx context.Context, metadata map[string]string) (string, error) {
+func (e *EntryClient) CreateWorkitem(metadata map[string]string) (string, error) {
 	if e.operator == nil {
 		return "", fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
 	}
+	// ponytail: uses context.Background() per call.
+	ctx := context.Background()
 	resp, err := e.operator.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{
 		Metadata: metadata,
 	})
@@ -101,10 +103,11 @@ func (e *EntryClient) CreateWorkitem(ctx context.Context, metadata map[string]st
 // Subscribe opens a streaming subscription to the Event Bus.
 // Returns an EventStream that yields events matching the channel
 // and event type filter.
-func (e *EntryClient) Subscribe(ctx context.Context, channel, eventType string) (*EventStream, error) {
+func (e *EntryClient) Subscribe(channel, eventType string) (*EventStream, error) {
 	if e.eventBus == nil {
 		return nil, fmt.Errorf("flow sdk: entry client: no event bus connection (set EVENT_BUS_ADDRESS)")
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := e.eventBus.Subscribe(ctx, &flowv1.SubscribeRequest{
 		Channel: channel,
 		Filter: &flowv1.SubscribeFilter{
@@ -112,19 +115,20 @@ func (e *EntryClient) Subscribe(ctx context.Context, channel, eventType string) 
 		},
 	})
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("flow sdk: entry client: subscribe failed: %w", err)
 	}
-	return &EventStream{stream: stream}, nil
+	return &EventStream{ctx: ctx, cancel: cancel, stream: stream}, nil
 }
 
 // QueryLaws returns all laws matching the filter via the Librarian (proxied
 // through the Sidecar). Pass empty strings for all laws.
-func (e *EntryClient) QueryLaws(
-	ctx context.Context, governedArtefact, representationType string,
-) ([]*flowv1.Law, error) {
+func (e *EntryClient) QueryLaws(governedArtefact, representationType string) ([]*flowv1.Law, error) {
 	if e.librarian == nil {
 		return nil, fmt.Errorf("flow sdk: entry client: no sidecar connection for librarian (set SIDECAR_ADDRESS)")
 	}
+	// ponytail: uses context.Background() per call.
+	ctx := context.Background()
 	var filter *flowv1.LawFilter
 	if governedArtefact != "" || representationType != "" {
 		filter = &flowv1.LawFilter{
@@ -142,10 +146,12 @@ func (e *EntryClient) QueryLaws(
 }
 
 // RetireDisputeRecord retires a dispute record by petition ID.
-func (e *EntryClient) RetireDisputeRecord(ctx context.Context, petitionID string) error {
+func (e *EntryClient) RetireDisputeRecord(petitionID string) error {
 	if e.librarian == nil {
 		return fmt.Errorf("flow sdk: entry client: no sidecar connection for librarian (set SIDECAR_ADDRESS)")
 	}
+	// ponytail: uses context.Background() per call.
+	ctx := context.Background()
 	_, err := e.librarian.RetireDisputeRecord(ctx, &flowv1.RetireDisputeRecordRequest{
 		PetitionId: petitionID,
 	})
@@ -156,10 +162,12 @@ func (e *EntryClient) RetireDisputeRecord(ctx context.Context, petitionID string
 }
 
 // ResumeWorkitem resumes a suspended workitem by ID.
-func (e *EntryClient) ResumeWorkitem(ctx context.Context, workitemID string) error {
+func (e *EntryClient) ResumeWorkitem(workitemID string) error {
 	if e.operator == nil {
 		return fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
 	}
+	// ponytail: uses context.Background() per call.
+	ctx := context.Background()
 	_, err := e.operator.ResumeWorkitem(ctx, &flowv1.ResumeWorkitemRequest{
 		WorkitemId: workitemID,
 	})
@@ -172,10 +180,12 @@ func (e *EntryClient) ResumeWorkitem(ctx context.Context, workitemID string) err
 // ListSuspendedWorkitems returns suspended workitem IDs whose resume condition
 // contains the given filter string. Used by watcher nodes to discover workitems
 // held on a specific condition (e.g. dispute_retired("petition-id")).
-func (e *EntryClient) ListSuspendedWorkitems(ctx context.Context, conditionContains string) ([]string, error) {
+func (e *EntryClient) ListSuspendedWorkitems(conditionContains string) ([]string, error) {
 	if e.operator == nil {
 		return nil, fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
 	}
+	// ponytail: uses context.Background() per call.
+	ctx := context.Background()
 	resp, err := e.operator.ListSuspendedWorkitems(ctx, &flowv1.ListSuspendedWorkitemsRequest{
 		ConditionContains: conditionContains,
 	})
@@ -207,6 +217,8 @@ func (e *EntryClient) Close() error {
 
 // EventStream wraps a server-streaming Event Bus subscription.
 type EventStream struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 	stream flowv1.FlowEventBusService_SubscribeClient
 }
 
@@ -216,10 +228,9 @@ func (s *EventStream) Recv() (*flowv1.FlowEvent, error) {
 	return s.stream.Recv()
 }
 
-// Close cancels the underlying stream by requesting context cancellation.
-// After Close, subsequent Recv calls will return an error.
-func (s *EventStream) Close() error {
-	return s.stream.CloseSend()
+// Stop cancels the stream. Subsequent Recv calls return a context-cancelled error.
+func (s *EventStream) Stop() {
+	s.cancel()
 }
 
 // StartEntry launches a node with both an entry loop and a handler server.

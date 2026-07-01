@@ -1,91 +1,109 @@
 # SDK Workitems
 
-The Workitem SDK surface provides read access to the assigned [Workitem's](../02-flow/02-workitem.md) state, local Workitem creation, and routing outcome submission. The [Operator](../02-flow/01-operator.md) owns Workitem lifecycle persistence — the SDK expresses intent through structured requests, and the Operator validates and applies state changes.
+The Workitem SDK surface provides a domain-object interface to the assigned [Workitem's](../02-flow/02-workitem.md) lifecycle, artefacts, feedback, laws, children, topology, and friction. The `Workitem` is the composition root for all workitem-scoped operations — it carries an internal session reference and all methods manage their own gRPC context. No `context.Context` is accepted by any method.
 
-## Workitem Read Surface
+## Workitem Domain Object
 
-The handler receives a `Workitem` object at invocation. This object is a snapshot of state at assignment time.
+The handler receives a `Workitem` object at invocation. Constructed by `Client.GetWorkitem()`.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Workitem identifier |
-| `phase` | string | Current lifecycle state: `Pending`, `Running`, `Completed`, `Failed` |
-| `currentAssignee` | string | Node currently assigned (this node, during handler execution) |
+### Workitem ID
 
-The snapshot does not update during handler execution.
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.ID()` | `string` | Workitem identifier. |
 
-Live artefact state — content, versions, stamps, feedback — is accessed through the [Artefact SDK](./02-sdk-artefacts.md) and [Feedback SDK](./04-sdk-feedback.md) operations, which query the Archivist on demand. The Archivist maintains artefact-to-Workitem associations; the Workitem CRD itself carries no artefact references.
+### Lifecycle
 
-Fields intentionally absent from the Workitem read surface:
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.Complete(opts ...)` | `error` | Submits completion. Returns error only — no bool (Operator returns gRPC error on rejection). |
+| `Workitem.RouteTo(outputName)` | `error` | Routes through the named output channel. |
+| `Workitem.Suspend(opts ...)` | `error` | Transitions to Suspended phase. Re-dispatched on resume. |
+| `Workitem.Resume()` | `error` | Resumes a suspended workitem. |
+| `Workitem.IsSuspended()` | `(bool, error)` | Returns locally cached suspension state (no RPC). |
+| `Workitem.Heartbeat()` | `error` | Resets the Sidecar's inactivity timer. |
+| `Workitem.PauseTimer()` | `error` | Suspends the Sidecar inactivity timer (used by HITL nodes). |
+| `Workitem.ResumeTimer()` | `error` | Resumes the Sidecar inactivity timer. |
 
-- No `type` or `WorkitemType` — Flow admission is not type-gated.
-- No `context` — there is no freeform context bag. All work context is represented by explicit Workitem state and governed artefacts.
-- No `feedback` — feedback lives in the [Archivist](../02-flow/04-system-services.md#archivist), accessed through the [Artefact object](./04-sdk-feedback.md#feedback-query-surfaces).
-- No thrash counters — [thrash guard](../02-flow/02-workitem.md#thrash-guard-and-feedback-deadlock) state is infrastructure-level and hidden from nodes.
+`Complete` and `RouteTo` drop the `bool` return the old flat `Client` methods carried. The bool was redundant — the Operator returns a gRPC error when it rejects the action, so the SDK treats a non-accepted result as an error.
 
-## Assignment-Scoped Action Model
+`CompleteOption` and `SuspendOption` use the existing functional option pattern (unchanged signature, just no `ctx`).
 
-All SDK Workitem operations apply to the currently assigned Workitem. The [Sidecar](../03-node/01-sidecar.md) injects the assignment's Workitem identity into every outgoing request. No parameter exists for targeting a different Workitem.
+### Artefacts
 
-A handler cannot:
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.GetArtefact(governedArtefact)` | `(*Artefact, error)` | Look up artefact by governed artefact kind (e.g. `"haiku"`). |
+| `Workitem.FindArtefact(artefactID)` | `(*Artefact, error)` | Look up artefact by unique artefact ID (e.g. `"art-abc-123"`). |
 
-- Query the Flow's Workitem queue or pending assignments.
-- Observe other nodes' active assignments.
+### Feedback
 
-By default, all SDK Workitem operations are scoped to the current assignment. Nodes granted the `READ:workitem` capability can read Workitem state beyond the current assignment — this is an opt-in capability configured on the [FoundryNode](../05-reference/crds.md#foundrynode) CRD, not a default behaviour.
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.AddFeedback(artefactID, canWontFix, message)` | `(string, error)` | Creates a new feedback item. Returns the feedback ID. |
+| `Workitem.GetFeedback(artefactID)` | `([]*Feedback, error)` | Returns all feedback items for the artefact as domain `*Feedback` objects. |
+| `Workitem.HasUnresolvedFeedback(artefactID)` | `(bool, error)` | True if any feedback is in a non-resolved state. |
+
+### Laws
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.GetLawGroups(repType)` | `([]*LawGroup, error)` | Returns law groups for the given representation type. |
+| `Workitem.VerifyLawAttestations(governedArtefact)` | `([]string, error)` | Returns missing stamp names required for full attestation. |
+| `Workitem.Cite(lawIDs ...)` | `error` | Records usage of one or more laws, emitting citation friction. |
+
+### Children
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.CreateChild()` | `(*ChildWorkitem, error)` | Creates a new child Workitem. |
+| `Workitem.GetChildren()` | `([]ChildWorkitemStatus, error)` | Returns status of all children. |
+| `Workitem.FanOut(tasks)` | `([]*ChildWorkitem, error)` | Creates children, attaches artefacts, routes each to its target. |
+| `Workitem.AwaitAll()` | `([]ChildWorkitemStatus, error)` | Blocks until every child reaches a terminal phase. |
+| `Workitem.WatchChildren()` | `(*ChildWatcher, error)` | Opens a streaming subscription to the Event Bus for child lifecycle events. |
+
+### Topology
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.GetTopology()` | `(*Flow, error)` | Returns the flow topology visible to the calling node. |
+
+### Friction
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Workitem.QueryFriction(filter)` | `([]*FrictionAggregate, error)` | Returns aggregated friction data from the Friction Ledger. |
 
 ## Local Workitem Creation
 
-Nodes can create new Workitems within the same Flow.
-
-| Operation | Parameters |
-|-----------|-----------|
-| `CreateWorkitem()` | No parameters. |
-
-The created Workitem enters `Pending` state and is subject to entry contract validation by the [Operator](../02-flow/01-operator.md). The creating node must be bound to an [entry contract](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) — nodes without an entry binding cannot create Workitems.
-
-Entry contract validation checks artefact state in the Archivist against the node's bound entry contract requirements. Validation failure rejects the creation and returns a structured error.
-
-Created Workitems are independent lifecycle objects. They are not child Workitems, sub-tasks, or continuations of the creating handler's assignment. The Operator schedules them through normal assignment logic.
+Local Workitem creation (for entry-bound nodes) is performed through the `EntryClient`, not the `Workitem` object. See [SDK Cross-Flow](./09-sdk-cross-flow.md).
 
 ## Child Workitem SDK Surface
 
-The child Workitem SDK surface provides parallel work decomposition within a single handler assignment. A node can create child Workitems, populate them with artefacts, route them for independent processing, and collect results when they complete. This enables fan-out/fan-in patterns without requiring intermediate nodes or custom orchestration.
+The child Workitem SDK surface provides parallel work decomposition within a single handler assignment. A node can create child Workitems, populate them with artefacts, route them for independent processing, and collect results when they complete.
 
-Child Workitem operations require the `CREATE:workitem/child` capability on the [FoundryNode](../05-reference/crds.md#foundrynode) CRD.
+Child Workitem operations require the `CREATE:workitem/child` capability.
 
 ### Creating Child Workitems
 
-| Operation | Parameters | Returns |
-|-----------|-----------|---------|
-| `CreateChildWorkitem()` | No parameters. | `(*ChildWorkitem, error)` |
-
-Creates a new child Workitem in `Pending` state with `parentWorkitemID` set to the caller's current Workitem. Returns a `ChildWorkitem` handle scoped to the new child.
+`Workitem.CreateChild()` creates a new child Workitem in `Pending` state with `parentWorkitemID` set to the caller's current Workitem. Returns a `ChildWorkitem` handle scoped to the new child.
 
 The child Workitem is an internal implementation detail of the parent's processing. It does not participate in Flow-level entry or exit contracts.
 
 ### ChildWorkitem Handle
 
-`CreateChildWorkitem()` returns a `ChildWorkitem` handle — a scoped client with methods that operate on the child Workitem's artefacts and lifecycle. The handle targets the child's Workitem ID for all operations.
+`CreateChild()` returns a `ChildWorkitem` handle. All methods return `error` only — no `(bool, error)` and no proto response.
 
-| Method | Parameters | Returns | Description |
-|--------|-----------|---------|-------------|
-| `ID()` | None | `string` | Returns the child Workitem identifier. |
-| `StoreArtefact(ctx, artefactID, governedArtefact, content)` | `context`, artefact ID, governed artefact name, content bytes | `error` | Stores artefact content on the child Workitem. Only valid before the child has been routed. |
-| `StampArtefact(ctx, artefactID, stampName)` | `context`, artefact ID, stamp name | `error` | Applies a stamp to a child artefact. Requires the appropriate `STAMP:artefact` capability. Only valid before the child has been routed. |
-| `RouteTo(ctx, targetNode)` | `context`, target node name | `(bool, error)` | Submits a `route_to` routing instruction for the child. The child transitions to normal assignment processing. Returns whether the routing was accepted. |
-| `RouteToOutput(ctx, outputName)` | `context`, output name | `(bool, error)` | Submits a `route_to_output` routing instruction for the child. Returns whether the routing was accepted. |
-| `Complete(ctx)` | `context` | `(bool, error)` | Simple completion — no exit contract validation. Returns whether completion was accepted. |
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `ChildWorkitem.ID()` | `string` | Returns the child Workitem identifier. |
+| `ChildWorkitem.StoreArtefact(artefactID, governedArtefact, content)` | `error` | Stores artefact content on the child. Only valid before the child is routed. |
+| `ChildWorkitem.StampArtefact(artefactID, stampName)` | `error` | Applies a stamp to a child artefact. Only valid before the child is routed. |
+| `ChildWorkitem.RouteTo(targetNode)` | `error` | Routes the child to a target node. |
+| `ChildWorkitem.RouteToOutput(outputName)` | `error` | Routes the child through a named output. |
+| `ChildWorkitem.Complete()` | `error` | Simple completion — no exit contract validation. |
 
 Once a child has been routed, the creating node can no longer write artefacts to it or re-route it. Attempts to do so return `CHILD_ALREADY_ROUTED`.
-
-### Querying Child State
-
-| Operation | Parameters | Returns | Description |
-|-----------|-----------|---------|-------------|
-| `GetChildren(ctx)` | `context` | `([]ChildWorkitemStatus, error)` | Returns the current state of all child Workitems for the caller's parent Workitem. |
-| `GetChildArtefact(ctx, childWorkitemID, artefactID)` | `context`, child Workitem ID, artefact ID | `(*GetArtefactResponse, error)` | Reads an artefact from a completed child Workitem. The target child must be in `Completed` state and must be a child of the caller's current Workitem. |
-| `ListChildArtefacts(ctx, childWorkitemID)` | `context`, child Workitem ID | `([]*ArtefactRef, error)` | Lists all artefacts associated with a child Workitem. Same parent-child and completion-state validation as `GetChildArtefact`. |
 
 ### ChildWorkitemStatus
 
@@ -96,12 +114,6 @@ Once a child has been routed, the creating node can no longer write artefacts to
 | `CurrentAssignee` | `string` | Node currently assigned to the child. Empty when `Pending`. |
 | `Artefacts` | `[]ArtefactRef` | Artefact references associated with the child in the Archivist. |
 
-### Watching Child Lifecycle Events
-
-| Operation | Parameters | Returns | Description |
-|-----------|-----------|---------|-------------|
-| `WatchChildren(ctx)` | `context` | `(<-chan ChildLifecycleEvent, error)` | Opens a streaming subscription to the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) `WORKITEM` channel, filtered by `parent_workitem_id` matching the caller's current Workitem. Returns a channel of lifecycle events as children transition through phases. |
-
 ### ChildLifecycleEvent
 
 | Field | Type | Description |
@@ -110,18 +122,63 @@ Once a child has been routed, the creating node can no longer write artefacts to
 | `Phase` | `string` | The phase the child transitioned to. |
 | `NodeID` | `string` | The node involved in the transition (assignee for `Running`, empty for terminal states). |
 
+### ChildWatcher (Streaming)
+
+`Workitem.WatchChildren()` returns a `*ChildWatcher` with explicit lifecycle.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `ChildWatcher.Recv()` | `(*ChildLifecycleEvent, error)` | Blocks until a lifecycle event arrives, stream ends (`io.EOF`), or `Stop()` is called. |
+| `ChildWatcher.Stop()` | | Cancels the internal context and closes the stream. Idempotent. |
+
+Usage:
+
+```go
+watcher, _ := workitem.WatchChildren()
+defer watcher.Stop()
+for {
+    evt, err := watcher.Recv()
+    if err == io.EOF {
+        break
+    }
+    // process evt
+}
+```
+
 ### Fan-Out/Fan-In Pattern
 
 The typical usage pattern for child Workitems:
 
-1. **Fan-out**: Create multiple children via `CreateChildWorkitem()`, populate each with input artefacts via the handle's `StoreArtefact()`, then route each for processing.
-2. **Wait**: Use `WatchChildren()` to stream lifecycle events, or poll with `GetChildren()`, until all children reach terminal state.
-3. **Fan-in**: Read artefacts from completed children via `GetChildArtefact()` and `ListChildArtefacts()`. Failed children are skipped or handled according to node business logic.
+1. **Fan-out**: Create multiple children via `Workitem.FanOut(tasks)` or `Workitem.CreateChild()`, populate each with input artefacts via `ChildWorkitem.StoreArtefact()`, then route each for processing.
+2. **Wait**: Use `Workitem.AwaitAll()` which attempts streaming via `WatchChildren()` and falls back to polling via `GetChildren()`.
+3. **Fan-in**: Inspect child statuses from `AwaitAll()` or `GetChildren()`. Failed children are skipped or handled according to node business logic.
 4. **Complete**: After collecting results, the parent node continues its own processing — storing aggregated artefacts, routing, or completing.
+
+`AwaitAll()` pauses the Sidecar inactivity timer while waiting and resumes it before returning (even on error).
+
+## FanOut Tasks
+
+```go
+type FanOutTask struct {
+    TargetNode string
+    Artefacts  []ChildArtefact
+}
+
+type ChildArtefact struct {
+    ID               string
+    GovernedArtefact string
+    Content          []byte
+}
+```
 
 ## Routing and Outcome Submission
 
-Routing is the handler's final action — the single [Result](./01-sdk-core.md#routing-instruction-model) returned to the platform. The three routing instructions (`RouteToOutput`, `RouteTo`, `Complete`) are defined in [SDK Core](./01-sdk-core.md#routing-instruction-model).
+Routing is the handler's final action — returning a `Result` from the handler function. The three routing instructions are:
+- `RouteToOutput(name)` — route through a named output channel
+- `RouteTo(node)` — route directly to a specific node
+- `Complete()` — signal exit completion
+
+These are expressed by calling `Workitem.RouteTo()` / `Workitem.Complete()` within the handler and then returning the `Result`.
 
 The Sidecar submits the routing instruction to the Operator. The Operator validates routing guards — output name resolution, target node existence, exit contract satisfaction — and applies the lifecycle transition or returns a structured error.
 
@@ -133,12 +190,11 @@ The SDK requests mutations; runtime services authorise and persist them.
 
 | Mutation | SDK Action | Authoritative Owner |
 |----------|-----------|-------------------|
-| Lifecycle transitions (`Pending` -> `Running` -> `Completed`/`Failed`) | Implicit (assignment, routing, completion) | [Operator](../02-flow/01-operator.md) |
-| Routing instruction | Handler returns `Result` | [Operator](../02-flow/01-operator.md) validates and applies |
-| Artefact content and versions | `StoreArtefact` | [Archivist](../02-flow/04-system-services.md#archivist) persists content and maintains artefact-to-Workitem association |
-| Stamps | `StampArtefact` | [Archivist](../02-flow/04-system-services.md#archivist) |
-| Feedback | `AddFeedback`, transitions | [Archivist](../02-flow/04-system-services.md#archivist) |
-| Laws | `RecordFinding` | [Librarian](../02-flow/04-system-services.md#librarian) |
+| Lifecycle transitions | `Workitem.Complete()`, `Workitem.Suspend()`, routing methods | [Operator](../02-flow/01-operator.md) |
+| Artefact content and versions | `Artefact.Store()` | [Archivist](../02-flow/04-system-services.md#archivist) |
+| Stamps | `Artefact.Stamp()`, `ChildWorkitem.StampArtefact()` | [Archivist](../02-flow/04-system-services.md#archivist) |
+| Feedback | `Workitem.AddFeedback()`, `Feedback.Resolve()`, etc. | [Archivist](../02-flow/04-system-services.md#archivist) |
+| Laws | `Client.RecordFinding()` | [Librarian](../02-flow/04-system-services.md#librarian) |
 | Thrash counter increments | Not exposed | [Operator](../02-flow/01-operator.md) (hidden from nodes) |
 
 The node cannot directly set lifecycle states, modify assignment fields, alter thrash counters, or bypass entry/exit contract validation. These are Operator-owned control-plane operations that the SDK has no surface for.
@@ -169,16 +225,14 @@ Export is triggered by explicit handoff to the [Embassy](../02-flow/06-cross-flo
 
 ## Workitem SDK Invariants
 
-1. All Workitem SDK operations are scoped to the current assignment by default. Nodes with `READ:workitem` capability can read beyond the current assignment.
-2. The `Workitem` object is a snapshot at assignment time and does not update during handler execution.
-3. No freeform context bag, `WorkitemType`, or type discriminator exists on the SDK surface.
-4. Feedback is not part of the Workitem read surface — it is accessed through [Artefact](./02-sdk-artefacts.md) and [Feedback](./04-sdk-feedback.md) operations.
-5. Local Workitem creation requires an entry contract binding on the creating node.
-6. The [Operator](../02-flow/01-operator.md) owns lifecycle transitions, routing validation, and contract enforcement.
-7. Thrash guard state is hidden from nodes.
-8. Cross-flow import is transparent to node handlers. Imported Workitems carry `imported-*` attestation stamps applied by the Embassy during naturalisation.
-9. Outbound cross-flow transfer is performed by the Embassy after an explicit node handoff; nodes do not call an export SDK method.
-10. Child Workitem creation requires `CREATE:workitem/child` capability.
-11. The `ChildWorkitem` handle is the sole interface for mutating a child before routing. Once routed, the child is immutable from the parent's perspective.
-12. Cross-Workitem artefact reads are read-only, parent-scoped, and completion-gated.
-13. `WatchChildren()` is a streaming subscription to the Flow Event Bus `WORKITEM` channel filtered by `parent_workitem_id`.
+1. All `Workitem` operations are scoped to the current assignment. No `context.Context` is accepted — the `Workitem` carries its own session.
+2. The `Workitem` object is a composition root for artefacts, feedback, laws, children, topology, and friction.
+3. `Complete()` and `RouteTo()` return `error` only — no bool (Operator returns gRPC error on rejection).
+4. No freeform context bag, `WorkitemType`, or type discriminator exists on the SDK surface.
+5. `ChildWorkitem` methods return `error` only — no `(bool, error)`, no proto responses.
+6. Streaming uses `ChildWatcher` with `Recv()/Stop()`. No channel-based patterns.
+7. `AwaitAll()` pauses the Sidecar timer while waiting and resumes on return (even on error).
+8. Child Workitem creation requires `CREATE:workitem/child` capability.
+9. The `ChildWorkitem` handle is the sole interface for mutating a child before routing. Once routed, the child is immutable from the parent's perspective.
+10. The [Operator](../02-flow/01-operator.md) owns lifecycle transitions, routing validation, and contract enforcement.
+11. Thrash guard state is hidden from nodes.

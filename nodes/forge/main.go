@@ -64,6 +64,11 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("forge: get workitem: %w", err)
+	}
+
 	// Load configuration from ConfigMap-mounted YAML.
 	cfg, err := nodeconfig.Load[forgeConfig](nodeconfig.Path())
 	if err != nil {
@@ -82,5 +87,5 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	return handlers.HandleForge(ctx, client, agent, handlerCfg)
+	return handlers.HandleForge(ctx, workitem, agent, handlerCfg)
 }

@@ -52,20 +52,31 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
-	return handleQuench(ctx, client)
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("quench: get workitem: %w", err)
+	}
+
+	return handleQuench(workitem)
 }
 
 // handleQuench contains the core quench logic. It is separated from
 // handler so that tests can inject a spy-backed client directly.
-func handleQuench(ctx context.Context, client *flow.Client) error {
-	_, _ = client.Heartbeat(ctx)
+func handleQuench(workitem *flow.Workitem) error {
+	if err := workitem.Heartbeat(); err != nil {
+		return fmt.Errorf("quench: heartbeat: %w", err)
+	}
 
 	// 1. Read the haiku artefact.
-	haikuResp, err := client.GetArtefact(ctx, "haiku")
+	haikuArt, err := workitem.GetArtefact("haiku")
 	if err != nil {
 		return fmt.Errorf("quench: read haiku: %w", err)
 	}
-	haiku := string(haikuResp.GetContent())
+	haikuContent, err := haikuArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("quench: get haiku content: %w", err)
+	}
+	haiku := string(haikuContent)
 	slog.Info("haiku-quench: read haiku", "haiku", haiku)
 
 	// 2. Validate syllable structure.
@@ -76,37 +87,35 @@ func handleQuench(ctx context.Context, client *flow.Client) error {
 	)
 
 	// 3. Get existing feedback.
-	existingFeedback, err := client.GetFeedback(ctx, "haiku")
+	existingFeedback, err := workitem.GetFeedback("haiku")
 	if err != nil {
 		return fmt.Errorf("quench: get feedback: %w", err)
 	}
 
 	// 4. Reconcile feedback based on validation result.
 	if valid {
-		acceptActionedFeedback(ctx, client, existingFeedback)
+		acceptActionedFeedback(existingFeedback)
 	} else {
-		rejectActionedFeedback(ctx, client, existingFeedback, counts)
+		rejectActionedFeedback(existingFeedback, counts)
 
 		fbMsg := buildFeedbackMessage(haiku, counts)
 		slog.Info("haiku-quench: haiku FAILED validation, raising feedback",
 			"expected", "5-7-5",
 			"got", fmt.Sprintf("%d-%d-%d", counts[0], counts[1], counts[2]),
 		)
-		if _, err := client.AddFeedback(
-			ctx, "haiku", false, fbMsg,
-		); err != nil {
+		if _, err := workitem.AddFeedback("haiku", false, fbMsg); err != nil {
 			return fmt.Errorf("quench: add feedback: %w", err)
 		}
 	}
 
 	// 5. Always stamp "linter" — records that Quench has inspected this version.
-	if _, err := client.StampArtefact(ctx, "haiku", "linter"); err != nil {
+	if err := haikuArt.Stamp("linter"); err != nil {
 		return fmt.Errorf("quench: stamp haiku: %w", err)
 	}
 	slog.Info("haiku-quench: linter stamp applied")
 
 	// 6. Always route to Sort — it decides what happens next.
-	if _, err := client.RouteToOutput(ctx, "default"); err != nil {
+	if err := workitem.RouteTo("default"); err != nil {
 		return fmt.Errorf("quench: route to sort: %w", err)
 	}
 	slog.Info("haiku-quench: done")
@@ -116,18 +125,16 @@ func handleQuench(ctx context.Context, client *flow.Client) error {
 // acceptActionedFeedback accepts fixes on all ACTIONED feedback items.
 // Called when the haiku passes validation — the fix worked.
 func acceptActionedFeedback(
-	ctx context.Context,
-	client *flow.Client,
-	feedback []*flowv1.FeedbackItem,
+	feedback []*flow.Feedback,
 ) {
 	slog.Info("haiku-quench: haiku PASSED validation")
 	for _, fb := range feedback {
-		if fb.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED {
+		if fb.GetState() == flow.FeedbackStateActioned {
 			slog.Info("haiku-quench: accepting fix",
-				"feedback_id", fb.GetId())
-			if err := client.AcceptFix(ctx, fb.GetId()); err != nil {
+				"feedback_id", fb.GetID())
+			if err := fb.AcceptFix(); err != nil {
 				slog.Warn("haiku-quench: failed to accept fix",
-					"feedback_id", fb.GetId(), "error", err)
+					"feedback_id", fb.GetID(), "error", err)
 			}
 		}
 	}
@@ -136,19 +143,17 @@ func acceptActionedFeedback(
 // rejectActionedFeedback rejects fixes on all ACTIONED feedback items.
 // Called when the haiku fails validation — the fix didn't work.
 func rejectActionedFeedback(
-	ctx context.Context,
-	client *flow.Client,
-	feedback []*flowv1.FeedbackItem,
+	feedback []*flow.Feedback,
 	counts [3]int,
 ) {
 	rejMsg := buildRejectionMessage(counts)
 	for _, fb := range feedback {
-		if fb.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED {
+		if fb.GetState() == flow.FeedbackStateActioned {
 			slog.Info("haiku-quench: rejecting fix",
-				"feedback_id", fb.GetId())
-			if err := client.RejectFix(ctx, fb.GetId(), rejMsg); err != nil {
+				"feedback_id", fb.GetID())
+			if err := fb.RejectFix(rejMsg); err != nil {
 				slog.Warn("haiku-quench: failed to reject fix",
-					"feedback_id", fb.GetId(), "error", err)
+					"feedback_id", fb.GetID(), "error", err)
 			}
 		}
 	}

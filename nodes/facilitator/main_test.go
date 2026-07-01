@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flow "github.com/gideas/flow/sdk/go"
 )
 
 // Test constants for frequently used string values.
@@ -54,10 +55,10 @@ func TestFacilitator_FirstInvocation_HappyPath(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{InputArtefacts: []string{"petition"}}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -107,10 +108,10 @@ func TestFacilitator_FirstInvocation_SixChildArtefacts(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{InputArtefacts: []string{"petition"}}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -151,10 +152,10 @@ func TestFacilitator_FirstInvocation_DisputedRef(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -206,10 +207,10 @@ func TestFacilitator_FirstInvocation_SelectsFirstDeadlocked(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -251,10 +252,10 @@ func TestFacilitator_DisputeWorkitem_Content(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -309,10 +310,10 @@ func TestFacilitator_DisputeDetails_Content(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -366,10 +367,10 @@ func TestFacilitator_DisputeDetails_DebateHistory(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -411,10 +412,10 @@ func TestFacilitator_DisputeDetails_NovelArgument(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -444,10 +445,10 @@ func TestFacilitator_DisputeArtefact_Content(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -474,10 +475,10 @@ func TestFacilitator_DisputeArtefact_LargeContent(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -506,10 +507,10 @@ func TestFacilitator_DisputeInputs_Content(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{InputArtefacts: []string{"petition", "style-guide"}}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -543,10 +544,10 @@ func TestFacilitator_DisputeInputs_NoConfig(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{} // No input artefacts configured.
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -583,10 +584,10 @@ func TestFacilitator_Appendix_Content(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -618,10 +619,10 @@ func TestFacilitator_Appendix_NoLaws(t *testing.T) {
 	// No laws configured.
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -647,10 +648,10 @@ func TestFacilitator_DisputeWorkitem_NoFriction(t *testing.T) {
 	// No friction data.
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -679,10 +680,10 @@ func TestFacilitator_SuspendConditionCorrect(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -718,10 +719,10 @@ func TestFacilitator_PostResume_Success_RoutesToResolved(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -758,10 +759,10 @@ func TestFacilitator_PostResume_Cancelled_CompletesWithCancelled(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -801,10 +802,10 @@ func TestFacilitator_PostResume_MultipleChildren_FirstCompletedWins(t *testing.T
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -833,10 +834,10 @@ func TestFacilitator_NoDeadlockedFeedback_RoutesToResolved(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -859,10 +860,10 @@ func TestFacilitator_NoFeedbackAtAll_RoutesToResolved(t *testing.T) {
 	spy := newFacilitatorSpy()
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -888,10 +889,10 @@ func TestFacilitator_CustomArbiterNode(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{ArbiterNode: "custom-arbiter"}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -935,7 +936,7 @@ func TestFacilitator_ValidateConfig(t *testing.T) {
 func TestHasCompletedChild(t *testing.T) {
 	tests := []struct {
 		name     string
-		children []*flowv1.ChildWorkitemStatus
+		children []flow.ChildWorkitemStatus
 		want     bool
 	}{
 		{
@@ -945,28 +946,28 @@ func TestHasCompletedChild(t *testing.T) {
 		},
 		{
 			name:     "empty children",
-			children: []*flowv1.ChildWorkitemStatus{},
+			children: []flow.ChildWorkitemStatus{},
 			want:     false,
 		},
 		{
 			name: "only running",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
 			},
 			want: false,
 		},
 		{
 			name: "one completed",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Completed"},
 			},
 			want: true,
 		},
 		{
 			name: "mixed phases",
-			children: []*flowv1.ChildWorkitemStatus{
-				{WorkitemId: "c1", Phase: "Running"},
-				{WorkitemId: "c2", Phase: "Completed"},
+			children: []flow.ChildWorkitemStatus{
+				{WorkitemID: "c1", Phase: "Running"},
+				{WorkitemID: "c2", Phase: "Completed"},
 			},
 			want: true,
 		},
@@ -1044,9 +1045,9 @@ func TestFacilitator_Error_GetChildrenFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.GetChildrenErr = fmt.Errorf("operator unavailable")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from GetChildren failure")
 	}
@@ -1059,9 +1060,9 @@ func TestFacilitator_Error_GetFlowTopologyFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.GetFlowTopologyErr = fmt.Errorf("topology unavailable")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from GetFlowTopology failure")
 	}
@@ -1074,9 +1075,9 @@ func TestFacilitator_Error_GetFeedbackFails(t *testing.T) {
 	spy := newFacilitatorSpy()
 	spy.GetFeedbackErr = fmt.Errorf("feedback unavailable")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from GetFeedback failure")
 	}
@@ -1094,9 +1095,9 @@ func TestFacilitator_Error_GetArtefactFails(t *testing.T) {
 	}
 	spy.GetArtefactErr = fmt.Errorf("artefact unavailable")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from GetArtefact failure")
 	}
@@ -1114,9 +1115,9 @@ func TestFacilitator_Error_QueryLawsFails(t *testing.T) {
 	}
 	spy.QueryLawsErr = fmt.Errorf("librarian unavailable")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from QueryLaws failure")
 	}
@@ -1134,9 +1135,9 @@ func TestFacilitator_Error_QueryFrictionFails(t *testing.T) {
 	}
 	spy.QueryFrictionErr = fmt.Errorf("friction ledger unavailable")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from QueryFriction failure")
 	}
@@ -1154,9 +1155,9 @@ func TestFacilitator_Error_CreateChildFails(t *testing.T) {
 	}
 	spy.CreateChildErr = fmt.Errorf("cannot create child")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from CreateChildWorkitem failure")
 	}
@@ -1174,9 +1175,9 @@ func TestFacilitator_Error_StoreArtefactFails(t *testing.T) {
 	}
 	spy.StoreArtefactErr = fmt.Errorf("archivist store failed")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from StoreArtefact failure")
 	}
@@ -1195,9 +1196,9 @@ func TestFacilitator_Error_RouteChildFails(t *testing.T) {
 	}
 	spy.RouteChildErr = fmt.Errorf("routing child failed")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from RouteChild failure")
 	}
@@ -1215,9 +1216,9 @@ func TestFacilitator_Error_SuspendFails(t *testing.T) {
 	}
 	spy.SuspendErr = fmt.Errorf("suspend rejected")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from Suspend failure")
 	}
@@ -1233,9 +1234,9 @@ func TestFacilitator_Error_RouteToOutputFails_NoDeadlock(t *testing.T) {
 	}
 	spy.RouteToOutputErr = fmt.Errorf("routing failed")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from RouteToOutput failure (no deadlock path)")
 	}
@@ -1252,9 +1253,9 @@ func TestFacilitator_Error_RouteToOutputFails_PostResume(t *testing.T) {
 	}
 	spy.RouteToOutputErr = fmt.Errorf("routing failed")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from RouteToOutput failure (post-resume path)")
 	}
@@ -1271,9 +1272,9 @@ func TestFacilitator_Error_CompleteFails_PostResume(t *testing.T) {
 	}
 	spy.CompleteErr = fmt.Errorf("complete rejected")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, &facilitatorConfig{}, wctx)
 	if err == nil {
 		t.Fatal("expected error from Complete failure (post-resume cancelled path)")
 	}
@@ -1299,9 +1300,10 @@ func TestFacilitator_Error_GetInputArtefactFails(t *testing.T) {
 	// the dispute-artefact fetch first.
 	spy.GetArtefactErr = fmt.Errorf("artefact unavailable")
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 
-	err := handleFacilitator(context.Background(), client, &facilitatorConfig{InputArtefacts: []string{"petition"}}, wctx)
+	err := handleFacilitator(context.Background(), client, workitem,
+		&facilitatorConfig{InputArtefacts: []string{"petition"}}, wctx)
 	if err == nil {
 		t.Fatal("expected error from GetArtefact failure")
 	}
@@ -1321,10 +1323,10 @@ func TestFacilitator_Telemetry_FirstInvocation(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -1393,10 +1395,10 @@ func TestFacilitator_Telemetry_PostResume_Resolved(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -1435,10 +1437,10 @@ func TestFacilitator_Telemetry_PostResume_Cancelled(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -1468,10 +1470,10 @@ func TestFacilitator_Telemetry_NoDeadlock(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -1510,10 +1512,10 @@ func TestFacilitator_MixedFeedbackStates_OnlyDeadlockedPicked(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -1542,10 +1544,10 @@ func TestFacilitator_EmptyExitContract(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -1583,10 +1585,10 @@ func TestFacilitator_GetLaw_CalledForCitedLaws(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}
@@ -1628,11 +1630,11 @@ func TestFacilitator_GetLaw_FailureIsNonFatal(t *testing.T) {
 	// LawsByID is nil — GetLaw will return NotFound.
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
 	// Should NOT fail — GetLaw failure is logged, not propagated.
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v (GetLaw failure should be non-fatal)", err)
 	}
@@ -1680,10 +1682,10 @@ func TestFacilitator_QueryFriction_FilteredByWorkitemAndLaw(t *testing.T) {
 	}
 
 	wctx := defaultWorkitemContext()
-	client := setupFacilitatorTest(t, spy)
+	client, workitem := setupFacilitatorTest(t, spy)
 	cfg := &facilitatorConfig{}
 
-	err := handleFacilitator(context.Background(), client, cfg, wctx)
+	err := handleFacilitator(context.Background(), client, workitem, cfg, wctx)
 	if err != nil {
 		t.Fatalf("handleFacilitator() error: %v", err)
 	}

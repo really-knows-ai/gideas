@@ -109,8 +109,9 @@ func (s *refineSpy) GetArtefact(
 		}
 	}
 	return &flowv1.GetArtefactResponse{
-		Content:     []byte(content),
-		VersionHash: "test-hash",
+		Content:          []byte(content),
+		VersionHash:      "test-hash",
+		GovernedArtefact: req.GetArtefactId(),
 	}, nil
 }
 
@@ -201,9 +202,9 @@ func (s *refineSpy) RecordTelemetry(
 // Test helpers
 // ---------------------------------------------------------------------------
 
-// newSpyClient creates a flow.Client backed by a local gRPC server with
-// the refineSpy registered for all five service interfaces.
-func newSpyClient(t *testing.T, spy *refineSpy) *flow.Client {
+// newSpyClient creates a flow.Client and *flow.Workitem backed by a local
+// gRPC server with the refineSpy registered for all five service interfaces.
+func newSpyClient(t *testing.T, spy *refineSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -215,13 +216,19 @@ func newSpyClient(t *testing.T, spy *refineSpy) *flow.Client {
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(func() { srv.GracefulStop() })
 
+	t.Setenv(flow.EnvWorkitemID, "test-workitem")
 	client, err := flow.NewClient(flow.WithSidecarAddress(lis.Addr().String()))
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+
+	return client, workitem
 }
 
 // defaultTestConfig returns a standard refineConfig for tests.

@@ -17,10 +17,10 @@ func TestTribunal_HappyPath_ConsensusRound1_ClerkChildAndComplete(t *testing.T) 
 	seedJurorVerdict(spy, "child-2", outcomePromote, "Friction suggests promotion")
 	seedJurorVerdict(spy, "child-3", outcomeRetire, "Retirement would simplify the system")
 
-	client := setupTribunalTest(t, spy)
+	client, workitem := setupTribunalTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
+	if err := handleTribunal(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleTribunal: %v", err)
 	}
 
@@ -65,10 +65,10 @@ func TestTribunal_HungAfterMaxRounds_RoutesToHung(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomeRetire, "retire")
 	seedJurorVerdict(spy, "child-3", "abstain", "unclear")
 
-	client := setupTribunalTest(t, spy)
+	client, workitem := setupTribunalTest(t, spy)
 	cfg := defaultTestConfig()
 
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
+	if err := handleTribunal(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleTribunal: %v", err)
 	}
 
@@ -93,10 +93,10 @@ func TestTribunal_MultiRoundRetry_ConsensusRound2(t *testing.T) {
 	seedJurorVerdict(spy, "child-5", outcomePromote, "promotion best fits the evidence")
 	seedJurorVerdict(spy, "child-6", outcomeRetire, "still prefer retirement")
 
-	client := setupTribunalTest(t, spy)
+	client, workitem := setupTribunalTest(t, spy)
 	cfg := &tribunalConfig{JurySize: 3, MaxRounds: 2}
 
-	if err := handleTribunal(context.Background(), client, cfg); err != nil {
+	if err := handleTribunal(context.Background(), client, workitem, cfg); err != nil {
 		t.Fatalf("handleTribunal: %v", err)
 	}
 
@@ -130,8 +130,8 @@ func TestTribunal_VerdictContextIsProseOnly(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomePromote, "The law has proven durable")
 	seedJurorVerdict(spy, "child-3", outcomeRetire, "Retirement would reduce noise")
 
-	client := setupTribunalTest(t, spy)
-	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+	client, workitem := setupTribunalTest(t, spy)
+	if err := handleTribunal(context.Background(), client, workitem, defaultTestConfig()); err != nil {
 		t.Fatalf("handleTribunal: %v", err)
 	}
 
@@ -170,8 +170,8 @@ func TestTribunal_FireAndForget_CompletesWithoutSuspending(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomePromote, "promote")
 	seedJurorVerdict(spy, "child-3", outcomeRetire, "retire")
 
-	client := setupTribunalTest(t, spy)
-	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+	client, workitem := setupTribunalTest(t, spy)
+	if err := handleTribunal(context.Background(), client, workitem, defaultTestConfig()); err != nil {
 		t.Fatalf("handleTribunal: %v", err)
 	}
 
@@ -238,8 +238,8 @@ func TestTribunal_EvidenceAssemblyContainsLawFrictionAndRelatedLaws(t *testing.T
 	seedJurorVerdict(spy, "child-2", outcomePromote, "promote")
 	seedJurorVerdict(spy, "child-3", outcomeRetire, "retire")
 
-	client := setupTribunalTest(t, spy)
-	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+	client, workitem := setupTribunalTest(t, spy)
+	if err := handleTribunal(context.Background(), client, workitem, defaultTestConfig()); err != nil {
 		t.Fatalf("handleTribunal: %v", err)
 	}
 
@@ -266,8 +266,8 @@ func TestTribunal_Error_MissingLawReferenceArtefact(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
 	delete(spy.Artefacts, artefactLawReference)
 
-	client := setupTribunalTest(t, spy)
-	err := handleTribunal(context.Background(), client, defaultTestConfig())
+	client, workitem := setupTribunalTest(t, spy)
+	err := handleTribunal(context.Background(), client, workitem, defaultTestConfig())
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -277,8 +277,8 @@ func TestTribunal_Error_GetLawFails(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
 	spy.GetLawErr = fmt.Errorf("librarian unavailable")
 
-	client := setupTribunalTest(t, spy)
-	err := handleTribunal(context.Background(), client, defaultTestConfig())
+	client, workitem := setupTribunalTest(t, spy)
+	err := handleTribunal(context.Background(), client, workitem, defaultTestConfig())
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -288,8 +288,8 @@ func TestTribunal_Error_FanOutFails(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
 	spy.CreateChildErr = fmt.Errorf("cannot create child")
 
-	client := setupTribunalTest(t, spy)
-	err := handleTribunal(context.Background(), client, &tribunalConfig{JurySize: 1})
+	client, workitem := setupTribunalTest(t, spy)
+	err := handleTribunal(context.Background(), client, workitem, &tribunalConfig{JurySize: 1})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -323,10 +323,10 @@ func TestTribunal_ConsensusStrategies(t *testing.T) {
 				seedJurorVerdict(spy, fmt.Sprintf("child-%d", i+1), vote, vote)
 			}
 
-			client := setupTribunalTest(t, spy)
+			client, workitem := setupTribunalTest(t, spy)
 			cfg := &tribunalConfig{JurySize: 3, MaxRounds: 1, ConsensusStrategy: tt.strategy}
 
-			if err := handleTribunal(context.Background(), client, cfg); err != nil {
+			if err := handleTribunal(context.Background(), client, workitem, cfg); err != nil {
 				t.Fatalf("handleTribunal: %v", err)
 			}
 
@@ -386,8 +386,8 @@ func TestTribunal_NoReviewMode_PetitionArtefactNotRead(t *testing.T) {
 	seedJurorVerdict(spy, "child-2", outcomePromote, "promote")
 	seedJurorVerdict(spy, "child-3", outcomeRetire, "retire")
 
-	client := setupTribunalTest(t, spy)
-	if err := handleTribunal(context.Background(), client, defaultTestConfig()); err != nil {
+	client, workitem := setupTribunalTest(t, spy)
+	if err := handleTribunal(context.Background(), client, workitem, defaultTestConfig()); err != nil {
 		t.Fatalf("handleTribunal: %v", err)
 	}
 

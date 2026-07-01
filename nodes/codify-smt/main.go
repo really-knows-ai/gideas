@@ -182,12 +182,17 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("codify-smt: get workitem: %w", err)
+	}
+
 	cfg, err := nodeconfig.Load[codifyConfig](nodeconfig.Path())
 	if err != nil {
 		return fmt.Errorf("codify-smt: load config: %w", err)
 	}
 
-	return handleCodify(ctx, client, cfg)
+	return handleCodify(ctx, client, workitem, cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -196,17 +201,21 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 
 // handleCodify contains the codify-smt node's core logic, separated from
 // handler boilerplate for testability.
-func handleCodify(ctx context.Context, client *flow.Client, cfg *codifyConfig) error {
-	_, _ = client.Heartbeat(ctx)
+func handleCodify(ctx context.Context, client *flow.Client, workitem *flow.Workitem, cfg *codifyConfig) error {
+	_ = workitem.Heartbeat()
 
 	// -- Step 1: Read the codification goal artefact --------------------
-	goalResp, err := client.GetArtefact(ctx, artefactCodificationGoal)
+	goalArt, err := workitem.GetArtefact(artefactCodificationGoal)
 	if err != nil {
 		return fmt.Errorf("codify-smt: get codification-goal artefact: %w", err)
 	}
+	goalContent, err := goalArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("codify-smt: get codification-goal content: %w", err)
+	}
 
 	var goal codificationGoal
-	if err := json.Unmarshal(goalResp.GetContent(), &goal); err != nil {
+	if err := json.Unmarshal(goalContent, &goal); err != nil {
 		return fmt.Errorf("codify-smt: parse codification-goal: %w", err)
 	}
 
@@ -235,7 +244,7 @@ func handleCodify(ctx context.Context, client *flow.Client, cfg *codifyConfig) e
 		return fmt.Errorf("codify-smt: create agent: %w", err)
 	}
 
-	return runCodify(ctx, client, agent, cfg, &goal)
+	return runCodify(ctx, workitem, agent, cfg, &goal)
 }
 
 // runCodify runs the agent and stores the result. Separated from
@@ -243,7 +252,7 @@ func handleCodify(ctx context.Context, client *flow.Client, cfg *codifyConfig) e
 // OverrideModelForTest before calling this function.
 func runCodify(
 	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	agent *flow.Agent,
 	cfg *codifyConfig,
 	goal *codificationGoal,
@@ -287,12 +296,16 @@ func runCodify(
 	)
 
 	// -- Step 5: Store codification result artefact ---------------------
-	if _, err := client.StoreArtefact(ctx, artefactCodificationResult, "", resultJSON); err != nil {
+	resultArt, err := workitem.GetArtefact(artefactCodificationResult)
+	if err != nil {
+		return fmt.Errorf("codify-smt: get codification-result artefact: %w", err)
+	}
+	if err := resultArt.Store(resultJSON); err != nil {
 		return fmt.Errorf("codify-smt: store codification-result: %w", err)
 	}
 
 	// -- Step 6: Complete -----------------------------------------------
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("codify-smt: complete: %w", err)
 	}
 

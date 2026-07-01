@@ -94,7 +94,12 @@ func handler(qm flow.QueueManager, cfg *hitlSortConfig) flow.Handler {
 		}
 		defer func() { _ = client.Close() }()
 
-		return handleSort(ctx, client, qm, cfg, wctx)
+		workitem, err := client.GetWorkitem()
+		if err != nil {
+			return fmt.Errorf("hitl-sort: get workitem: %w", err)
+		}
+
+		return handleSort(ctx, client, workitem, qm, cfg, wctx)
 	}
 }
 
@@ -102,6 +107,7 @@ func handler(qm flow.QueueManager, cfg *hitlSortConfig) flow.Handler {
 func handleSort(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	qm flow.QueueManager,
 	cfg *hitlSortConfig,
 	wctx *flowv1.WorkitemContext,
@@ -109,7 +115,9 @@ func handleSort(
 	workitemID := wctx.GetWorkitemId()
 
 	// Discover topology to build the valid output set and optionally find stamp.
-	topology, err := client.GetFlowTopology(ctx)
+	// ponytail: uses RawOperator escape hatch for raw proto access to outputs
+	// (not yet exposed on *flow.Flow).
+	topology, err := client.RawOperator().GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err != nil {
 		return fmt.Errorf("hitl-sort: get flow topology: %w", err)
 	}
@@ -156,7 +164,7 @@ func handleSort(
 	}
 
 	// Pause the Sidecar timer — we'll be waiting for a human.
-	if err := client.PauseTimer(ctx); err != nil {
+	if err := workitem.PauseTimer(); err != nil {
 		return fmt.Errorf("hitl-sort: pause timer: %w", err)
 	}
 
@@ -179,19 +187,23 @@ func handleSort(
 	slog.Info("hitl-sort: human decision received", "workitem_id", workitemID, "choice", choice)
 
 	// Resume the Sidecar timer.
-	if err := client.ResumeTimer(ctx); err != nil {
+	if err := workitem.ResumeTimer(); err != nil {
 		return fmt.Errorf("hitl-sort: resume timer: %w", err)
 	}
 
 	// Optionally stamp the governed artefact.
 	if cfg.Stamp {
-		if _, err := client.StampArtefact(ctx, governedArtefact, stampName); err != nil {
+		art, err := workitem.GetArtefact(governedArtefact)
+		if err != nil {
+			return fmt.Errorf("hitl-sort: get artefact %s: %w", governedArtefact, err)
+		}
+		if err := art.Stamp(stampName); err != nil {
 			return fmt.Errorf("hitl-sort: stamp %s/%s: %w", governedArtefact, stampName, err)
 		}
 	}
 
 	// Route to the chosen output.
-	if _, err := client.RouteToOutput(ctx, choice); err != nil {
+	if err := workitem.RouteTo(choice); err != nil {
 		return fmt.Errorf("hitl-sort: route to output %q: %w", choice, err)
 	}
 	return nil

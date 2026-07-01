@@ -91,7 +91,7 @@ func newSpyGRPCServer(spy *tribunalSpy) *grpc.Server {
 	return srv
 }
 
-func setupTribunalTest(t *testing.T, spy *tribunalSpy) *flow.Client {
+func setupTribunalTest(t *testing.T, spy *tribunalSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -110,7 +110,12 @@ func setupTribunalTest(t *testing.T, spy *tribunalSpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem: %v", err)
+	}
+
+	return client, workitem
 }
 
 func (s *tribunalSpy) Heartbeat(

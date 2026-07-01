@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -13,13 +14,58 @@ type GroupMode string
 const (
 	GroupModeBundle   GroupMode = "bundle"
 	GroupModeLawByLaw GroupMode = "law-by-law"
+	DefaultGroup                = "default"
 )
 
-// LawGroup defines the evaluation contract for a law group.
+// LawGroup defines the evaluation contract for a law group and provides
+// methods to query its laws and attest artefacts.
 type LawGroup struct {
-	Name   string
-	Mode   GroupMode
-	Passes int32
+	name      string
+	mode      GroupMode
+	passes    int32
+	librarian flowv1.LibrarianServiceClient
+}
+
+// Name returns the group name (no round-trip).
+func (g *LawGroup) Name() string { return g.name }
+
+// Mode returns the evaluation mode (no round-trip).
+func (g *LawGroup) Mode() GroupMode { return g.mode }
+
+// Passes returns the number of evaluation passes (no round-trip).
+func (g *LawGroup) Passes() int32 { return g.passes }
+
+// NewLawGroup creates a LawGroup domain object. The librarian parameter may
+// be nil when the LawGroup is used only for config access (Name/Mode/Passes).
+// When librarian is nil, calling GetLaws() or Attest() will panic.
+func NewLawGroup(name string, mode GroupMode, passes int32) *LawGroup {
+	return &LawGroup{name: name, mode: mode, passes: passes}
+}
+
+// newLawGroup creates a LawGroup domain object from its constituent parts.
+func newLawGroup(name string, mode GroupMode, passes int32, librarian flowv1.LibrarianServiceClient) *LawGroup {
+	return &LawGroup{name: name, mode: mode, passes: passes, librarian: librarian}
+}
+
+// GetLaws queries the Librarian for all laws belonging to this group.
+func (g *LawGroup) GetLaws() ([]*Law, error) {
+	resp, err := g.librarian.QueryLaws(context.Background(), &flowv1.QueryLawsRequest{
+		Filter: &flowv1.LawFilter{Group: g.name},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: get laws for group %q: %w", g.name, err)
+	}
+	laws := resp.GetLaws()
+	out := make([]*Law, 0, len(laws))
+	for _, pb := range laws {
+		out = append(out, newLaw(pb, g.librarian))
+	}
+	return out, nil
+}
+
+// Attest stamps "lawgrp-<group>" on the given artefact.
+func (g *LawGroup) Attest(artefact *Artefact) error {
+	return artefact.Stamp("lawgrp-" + g.name)
 }
 
 // Unit is a single evaluation scope: one bundle unit or one law-by-law unit.
@@ -38,16 +84,16 @@ type DispatchEntry struct {
 	Pass      int    // 1-based
 }
 
-// GetGroup returns the group name for a law, or "default" if empty.
+// GetGroup returns the group name for a law, or DefaultGroup if empty.
 func GetGroup(law *flowv1.Law) string {
 	if g := law.GetGroup(); g != "" {
 		return g
 	}
-	return "default"
+	return DefaultGroup
 }
 
 // PartitionLawsByGroup groups laws by their Group field.
-// Laws with an empty Group are placed under "default".
+// Laws with an empty Group are placed under DefaultGroup.
 func PartitionLawsByGroup(laws []*flowv1.Law) map[string][]*flowv1.Law {
 	if len(laws) == 0 {
 		return map[string][]*flowv1.Law{}
@@ -56,7 +102,7 @@ func PartitionLawsByGroup(laws []*flowv1.Law) map[string][]*flowv1.Law {
 	for _, law := range laws {
 		g := law.GetGroup()
 		if g == "" {
-			g = "default"
+			g = DefaultGroup
 		}
 		out[g] = append(out[g], law)
 	}
@@ -67,7 +113,7 @@ func PartitionLawsByGroup(laws []*flowv1.Law) map[string][]*flowv1.Law {
 // from the groups map.
 // ponytail: singleton map; if group-specific defaults become configurable
 // this should be a parameter.
-var builtinDefaults = &LawGroup{Mode: GroupModeBundle, Passes: 1}
+var builtinDefaults = &LawGroup{mode: GroupModeBundle, passes: 1}
 
 // getConfig returns the LawGroup config for a group name, falling back to
 // built-in defaults when the group is absent from the map.
@@ -93,13 +139,13 @@ func ComputeUnits(
 		laws := lawsByGroup[groupName]
 		cfg := getConfig(groups, groupName)
 		var units []Unit
-		switch cfg.Mode {
+		switch cfg.mode {
 		case GroupModeLawByLaw:
 			for i, law := range laws {
 				units = append(units, Unit{
-					UnitID: fmt.Sprintf("%s::%s::%d", groupName, cfg.Mode, i),
+					UnitID: fmt.Sprintf("%s::%s::%d", groupName, cfg.mode, i),
 					Group:  groupName,
-					Mode:   cfg.Mode,
+					Mode:   cfg.mode,
 					LawIDs: []string{law.GetId()},
 				})
 			}
@@ -110,9 +156,9 @@ func ComputeUnits(
 					ids = append(ids, law.GetId())
 				}
 				units = append(units, Unit{
-					UnitID: fmt.Sprintf("%s::%s::%d", groupName, cfg.Mode, 0),
+					UnitID: fmt.Sprintf("%s::%s::%d", groupName, cfg.mode, 0),
 					Group:  groupName,
-					Mode:   cfg.Mode,
+					Mode:   cfg.mode,
 					LawIDs: ids,
 				})
 			}
@@ -141,7 +187,7 @@ func ComputeDispatchMatrix(
 		cfg := getConfig(groups, groupName)
 		for _, unit := range units {
 			for _, appraiser := range appraiserIDs {
-				for pass := int32(1); pass <= cfg.Passes; pass++ {
+				for pass := int32(1); pass <= cfg.passes; pass++ {
 					entries = append(entries, DispatchEntry{
 						Group:     groupName,
 						Unit:      unit,
@@ -165,18 +211,6 @@ func BuildDispatchMatrix(
 	lawsByGroup := PartitionLawsByGroup(laws)
 	unitsByGroup := ComputeUnits(lawsByGroup, groups)
 	return ComputeDispatchMatrix(unitsByGroup, appraiserIDs, groups)
-}
-
-// protoLawGroupToSDK converts a protobuf LawGroup to the SDK LawGroup type.
-func protoLawGroupToSDK(g *flowv1.LawGroup) *LawGroup {
-	if g == nil {
-		return nil
-	}
-	return &LawGroup{
-		Name:   g.GetName(),
-		Mode:   GroupMode(g.GetMode()),
-		Passes: g.GetPasses(),
-	}
 }
 
 // sortedGroupNames returns the sorted keys of m for deterministic map iteration.

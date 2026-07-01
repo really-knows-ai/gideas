@@ -160,6 +160,16 @@ func (s *hitlSortSpy) StampArtefact(
 	return &flowv1.StampArtefactResponse{Stamp: &flowv1.Stamp{Name: req.GetStampName()}}, nil
 }
 
+func (s *hitlSortSpy) GetArtefact(
+	_ context.Context, _ *flowv1.GetArtefactRequest,
+) (*flowv1.GetArtefactResponse, error) {
+	// Return empty artefact so the new SDK pattern (GetArtefact before Store/Stamp) works.
+	return &flowv1.GetArtefactResponse{
+		GovernedArtefact: "haiku",
+		VersionHash:      "test-hash",
+	}, nil
+}
+
 // ---------------------------------------------------------------------------
 // FrictionLedger methods
 // ---------------------------------------------------------------------------
@@ -224,4 +234,14 @@ func waitForEnqueue(t *testing.T, qm flow.QueueManager, workitemID string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s to appear in queue", workitemID)
+}
+
+// newTestWorkitem creates a Workitem from a client by setting the workitem ID env var.
+func newTestWorkitem(t *testing.T, client *flow.Client, workitemID string) *flow.Workitem {
+	t.Helper()
+	wi, err := client.GetWorkitem(workitemID)
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+	return wi
 }

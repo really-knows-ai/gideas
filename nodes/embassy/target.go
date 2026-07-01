@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
 	flow "github.com/gideas/flow/sdk/go"
@@ -23,7 +22,6 @@ type exportTarget struct {
 // GetPetitionTarget with the given scope to discover which authority Flow
 // should receive the petition and its Embassy endpoint.
 func resolveExportTarget(
-	ctx context.Context,
 	fedClient *flow.FederationClient,
 	importType string,
 	scope string,
@@ -35,7 +33,7 @@ func resolveExportTarget(
 		)
 	}
 
-	pt, err := fedClient.GetPetitionTarget(ctx, scope)
+	pt, err := fedClient.GetPetitionTarget(scope)
 	if err != nil {
 		return nil, fmt.Errorf("embassy target: resolve petition target for scope %q: %w", scope, err)
 	}

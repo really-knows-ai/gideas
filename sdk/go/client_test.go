@@ -9,7 +9,6 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const bufSize = 1024 * 1024
@@ -17,6 +16,8 @@ const bufSize = 1024 * 1024
 // ---------------------------------------------------------------------------
 // Spy server — captures incoming metadata for assertions
 // ---------------------------------------------------------------------------
+
+const testNodeName = "test-node"
 
 // spyServer implements the gRPC services and records the metadata it
 // receives. This lets us assert that the SDK's interceptor injects the
@@ -37,15 +38,58 @@ type spyServer struct {
 	lastResumeReq *flowv1.ResumeWorkitemRequest
 	// lastAddFeedbackReq is the request captured from the most recent AddFeedback call.
 	lastAddFeedbackReq *flowv1.AddFeedbackRequest
+	// lastPauseTimerReq captures the most recent PauseTimer request.
+	lastPauseTimerReq *flowv1.PauseTimerRequest
+	// lastResumeTimerReq captures the most recent ResumeTimer request.
+	lastResumeTimerReq *flowv1.ResumeTimerRequest
+	// lastGetArtefactReq captures the most recent GetArtefact request.
+	lastGetArtefactReq *flowv1.GetArtefactRequest
+	// lastGetFeedbackReq captures the most recent GetFeedback request.
+	lastGetFeedbackReq *flowv1.GetFeedbackRequest
+	// lastHasUnresolvedReq captures the most recent HasUnresolvedFeedback request.
+	lastHasUnresolvedReq *flowv1.HasUnresolvedFeedbackRequest
 	// lastQueryLawsReq captures the most recent QueryLaws request.
 	lastQueryLawsReq *flowv1.QueryLawsRequest
 	// lastPublishReq captures the most recent Publish request.
 	lastPublishReq *flowv1.PublishRequest
+	// lastCiteReq captures the most recent Cite request.
+	lastCiteReq *flowv1.CiteRequest
+	// lastStampReq captures the most recent StampArtefact request.
+	lastStampReq *flowv1.StampArtefactRequest
+
+	// Feedback RPC request capture fields.
+	lastResolveFeedbackReq  *flowv1.ResolveFeedbackRequest
+	lastRefuseFeedbackReq   *flowv1.RefuseFeedbackRequest
+	lastAcceptFixReq        *flowv1.AcceptFixRequest
+	lastRejectFixReq        *flowv1.RejectFixRequest
+	lastAcceptRefusalReq    *flowv1.AcceptRefusalRequest
+	lastRejectRefusalReq    *flowv1.RejectRefusalRequest
+	lastDeadlockFeedbackReq *flowv1.DeadlockFeedbackRequest
+	lastLinkRulingReq       *flowv1.LinkRulingRequest
+	lastGetFeedbackDepthReq *flowv1.GetFeedbackDepthRequest
+	// feedbackErr, when non-nil, is returned by all feedback RPC handlers for error testing.
+	feedbackErr error
 }
 
 func (s *spyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatRequest) (*flowv1.HeartbeatResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
+}
+
+func (s *spyServer) PauseTimer(
+	ctx context.Context, req *flowv1.PauseTimerRequest,
+) (*flowv1.PauseTimerResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastPauseTimerReq = req
+	return &flowv1.PauseTimerResponse{}, nil
+}
+
+func (s *spyServer) ResumeTimer(
+	ctx context.Context, req *flowv1.ResumeTimerRequest,
+) (*flowv1.ResumeTimerResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastResumeTimerReq = req
+	return &flowv1.ResumeTimerResponse{}, nil
 }
 
 func (s *spyServer) SubmitResult(
@@ -70,16 +114,16 @@ func (s *spyServer) GetFlowTopology(
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.GetFlowTopologyResponse{
 		Self: &flowv1.FlowNode{
-			Name:         "test-node",
+			Name:         testNodeName,
 			Capabilities: []string{"READ:flow"},
 			Outputs:      []*flowv1.FlowOutput{{Name: "next", Target: "other"}},
 		},
 		Nodes: map[string]*flowv1.FlowNode{
-			"test-node": {Name: "test-node"},
-			"other":     {Name: "other"},
+			testNodeName: {Name: testNodeName},
+			"other":      {Name: "other"},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{
-			"doc": {Stamps: []string{"linter", "approval"}},
+			"doc": {Stamps: []string{stampLinter, "approval"}},
 		},
 	}, nil
 }
@@ -88,6 +132,7 @@ func (s *spyServer) GetArtefact(
 	ctx context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastGetArtefactReq = req
 	return &flowv1.GetArtefactResponse{
 		Content:          []byte("test-content"),
 		VersionHash:      "test-hash",
@@ -132,6 +177,7 @@ func (s *spyServer) Publish(ctx context.Context, req *flowv1.PublishRequest) (*f
 
 func (s *spyServer) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.CiteResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastCiteReq = req
 	return &flowv1.CiteResponse{Acknowledged: true}, nil
 }
 
@@ -156,12 +202,40 @@ func (s *spyServer) AddFriction(
 	return &flowv1.AddFrictionResponse{Acknowledged: true}, nil
 }
 
+func (s *spyServer) ResolveFeedback(
+	ctx context.Context, req *flowv1.ResolveFeedbackRequest,
+) (*flowv1.ResolveFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastResolveFeedbackReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
+	return &flowv1.ResolveFeedbackResponse{}, nil
+}
+
 func (s *spyServer) RefuseFeedback(
 	ctx context.Context, req *flowv1.RefuseFeedbackRequest,
 ) (*flowv1.RefuseFeedbackResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastRefuseFeedbackReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.RefuseFeedbackResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
+	}}, nil
+}
+
+func (s *spyServer) AcceptFix(
+	ctx context.Context, req *flowv1.AcceptFixRequest,
+) (*flowv1.AcceptFixResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastAcceptFixReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
+	return &flowv1.AcceptFixResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED,
 	}}, nil
 }
 
@@ -169,6 +243,10 @@ func (s *spyServer) RejectFix(
 	ctx context.Context, req *flowv1.RejectFixRequest,
 ) (*flowv1.RejectFixResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastRejectFixReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.RejectFixResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
 	}}, nil
@@ -178,6 +256,10 @@ func (s *spyServer) AcceptRefusal(
 	ctx context.Context, req *flowv1.AcceptRefusalRequest,
 ) (*flowv1.AcceptRefusalResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastAcceptRefusalReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.AcceptRefusalResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED,
 	}}, nil
@@ -187,6 +269,10 @@ func (s *spyServer) RejectRefusal(
 	ctx context.Context, req *flowv1.RejectRefusalRequest,
 ) (*flowv1.RejectRefusalResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastRejectRefusalReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.RejectRefusalResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
 	}}, nil
@@ -196,6 +282,10 @@ func (s *spyServer) GetFeedbackDepth(
 	ctx context.Context, req *flowv1.GetFeedbackDepthRequest,
 ) (*flowv1.GetFeedbackDepthResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastGetFeedbackDepthReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.GetFeedbackDepthResponse{Depth: 5}, nil
 }
 
@@ -203,6 +293,10 @@ func (s *spyServer) DeadlockFeedback(
 	ctx context.Context, req *flowv1.DeadlockFeedbackRequest,
 ) (*flowv1.DeadlockFeedbackResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastDeadlockFeedbackReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.DeadlockFeedbackResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id:    req.GetFeedbackId(),
 		State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
@@ -213,6 +307,10 @@ func (s *spyServer) LinkRuling(
 	ctx context.Context, req *flowv1.LinkRulingRequest,
 ) (*flowv1.LinkRulingResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastLinkRulingReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.LinkRulingResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id:           req.GetFeedbackId(),
 		State:        req.GetTargetState(),
@@ -299,6 +397,7 @@ func (s *spyServer) StampArtefact(
 	ctx context.Context, req *flowv1.StampArtefactRequest,
 ) (*flowv1.StampArtefactResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastStampReq = req
 	return &flowv1.StampArtefactResponse{
 		Stamp: &flowv1.Stamp{Name: req.GetStampName()},
 	}, nil
@@ -313,6 +412,46 @@ func (s *spyServer) ListArtefacts(
 			{Id: "output", GovernedArtefact: "codification-output"},
 		},
 	}, nil
+}
+
+func (s *spyServer) GetStamps(
+	ctx context.Context, req *flowv1.GetStampsRequest,
+) (*flowv1.GetStampsResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.GetStampsResponse{
+		Stamps: []*flowv1.Stamp{
+			{Name: stampLinter, ApplyingNode: "node-a", ContentHash: "ch-1"},
+			{Name: "approval", ApplyingNode: "node-b", ContentHash: "ch-1"},
+		},
+	}, nil
+}
+
+func (s *spyServer) HasStamp(
+	ctx context.Context, req *flowv1.HasStampRequest,
+) (*flowv1.HasStampResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.HasStampResponse{Exists: req.GetStampName() == stampLinter}, nil
+}
+
+func (s *spyServer) GetFeedback(
+	ctx context.Context, req *flowv1.GetFeedbackRequest,
+) (*flowv1.GetFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastGetFeedbackReq = req
+	return &flowv1.GetFeedbackResponse{
+		FeedbackItems: []*flowv1.FeedbackItem{
+			{Id: "fb-001", Message: "needs revision"},
+			{Id: "fb-002", Message: "looks good"},
+		},
+	}, nil
+}
+
+func (s *spyServer) HasUnresolvedFeedback(
+	ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest,
+) (*flowv1.HasUnresolvedFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastHasUnresolvedReq = req
+	return &flowv1.HasUnresolvedFeedbackResponse{HasUnresolved: true}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -370,142 +509,169 @@ func TestNewClient_CustomAddress(t *testing.T) {
 	}
 }
 
-func TestClient_WorkitemID(t *testing.T) {
-	env := setupTestEnv(t, "wid-123")
-	if env.client.WorkitemID() != "wid-123" {
-		t.Fatalf("expected WorkitemID wid-123, got %s", env.client.WorkitemID())
+// ---------------------------------------------------------------------------
+// Tests — New Client Options
+// ---------------------------------------------------------------------------
+
+func TestNewClient_WithTimeout(t *testing.T) {
+	cfg := &clientConfig{sidecarAddr: DefaultSidecarAddress}
+	WithTimeout(5 * time.Second)(cfg)
+	if cfg.timeout != 5*time.Second {
+		t.Fatalf("expected timeout=5s, got %v", cfg.timeout)
+	}
+}
+
+func TestNewClient_WithRetry(t *testing.T) {
+	cfg := &clientConfig{sidecarAddr: DefaultSidecarAddress}
+	WithRetry(3)(cfg)
+	if cfg.maxRetries != 3 {
+		t.Fatalf("expected maxRetries=3, got %d", cfg.maxRetries)
+	}
+}
+
+func TestClient_Close(t *testing.T) {
+	env := setupTestEnv(t, "workitem-close-001")
+	err := env.client.Close()
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Tests — Metadata Injection (The Critical Path)
+// Tests — New Entry Methods
 // ---------------------------------------------------------------------------
 
-func TestHeartbeat_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-abc-789"
+func TestGetWorkitem_NoArgs(t *testing.T) {
+	const wantID = "workitem-getwi-noargs-001"
 	env := setupTestEnv(t, wantID)
 
-	ack, err := env.client.Heartbeat(context.Background())
+	wi, err := env.client.GetWorkitem()
 	if err != nil {
-		t.Fatalf("Heartbeat() returned error: %v", err)
+		t.Fatalf("GetWorkitem() returned error: %v", err)
 	}
-	if !ack {
-		t.Fatal("Heartbeat() was not acknowledged")
-	}
-
-	// THE critical assertion: the interceptor must inject the workitem_id
-	// into the gRPC metadata that the server sees.
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 {
-		t.Fatal("metadata x-flow-workitem-id was NOT present in the server-side context — interceptor is broken")
-	}
-	if got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %q, want %q", got[0], wantID)
+	if wi.ID() != wantID {
+		t.Fatalf("expected Workitem.ID()=%q, got %q", wantID, wi.ID())
 	}
 }
 
-func TestComplete_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-complete-456"
-	env := setupTestEnv(t, wantID)
+func TestGetWorkitem_OneArg(t *testing.T) {
+	const sessionID = "workitem-session-001"
+	const otherID = "other-wid-001"
+	env := setupTestEnv(t, sessionID)
 
-	accepted, err := env.client.Complete(context.Background())
+	wi, err := env.client.GetWorkitem(otherID)
 	if err != nil {
-		t.Fatalf("Complete() returned error: %v", err)
+		t.Fatalf("GetWorkitem(%q) returned error: %v", otherID, err)
 	}
-	if !accepted {
-		t.Fatal("Complete() was not accepted")
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 {
-		t.Fatal("metadata x-flow-workitem-id was NOT present on SubmitResult call")
-	}
-	if got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %q, want %q", got[0], wantID)
+	if wi.ID() != otherID {
+		t.Fatalf("expected Workitem.ID()=%q, got %q", otherID, wi.ID())
 	}
 }
 
-func TestGetArtefact_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-artefact-001"
-	env := setupTestEnv(t, wantID)
+func TestGetWorkitem_MultiArgs(t *testing.T) {
+	env := setupTestEnv(t, "workitem-multi-001")
 
-	resp, err := env.client.GetArtefact(context.Background(), "doc-draft")
-	if err != nil {
-		t.Fatalf("GetArtefact() returned error: %v", err)
-	}
-	if string(resp.GetContent()) != "test-content" {
-		t.Fatalf("unexpected content: %s", resp.GetContent())
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 {
-		t.Fatal("metadata x-flow-workitem-id was NOT present on GetArtefact call")
-	}
-	if got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %q, want %q", got[0], wantID)
+	_, err := env.client.GetWorkitem("a", "b")
+	if err == nil {
+		t.Fatal("expected error for multi-arg GetWorkitem, got nil")
 	}
 }
 
-func TestHeartbeat_EmptyWorkitemID_NoMetadataInjected(t *testing.T) {
-	// When workitem ID is empty, the interceptor should NOT inject the header.
-	env := setupTestEnv(t, "")
+func TestGetWorkitem_NoArgs_ReadsEnv(t *testing.T) {
+	env := setupTestEnv(t, "workitem-env-001")
 
-	ack, err := env.client.Heartbeat(context.Background())
+	t.Setenv("FLOW_WORKITEM_ID", "env-wid-001")
+	// Re-create client session to pick up env var.
+	sess := &session{
+		workitemID:     "env-wid-001",
+		conn:           env.client.session.conn,
+		Sidecar:        env.client.session.Sidecar,
+		Operator:       env.client.session.Operator,
+		Archivist:      env.client.session.Archivist,
+		Librarian:      env.client.session.Librarian,
+		FrictionLedger: env.client.session.FrictionLedger,
+	}
+	env.client.session = sess
+
+	wi, err := env.client.GetWorkitem()
 	if err != nil {
-		t.Fatalf("Heartbeat() returned error: %v", err)
+		t.Fatalf("GetWorkitem() returned error: %v", err)
 	}
-	if !ack {
-		t.Fatal("Heartbeat() was not acknowledged")
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) != 0 {
-		t.Fatalf("expected no x-flow-workitem-id metadata when workitem ID is empty, got %v", got)
+	if wi.ID() != "env-wid-001" {
+		t.Fatalf("expected Workitem.ID()=%q from env, got %q", "env-wid-001", wi.ID())
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests — Librarian Convenience Methods
-// ---------------------------------------------------------------------------
+func TestGetFlow(t *testing.T) {
+	env := setupTestEnv(t, "workitem-getflow-001")
 
-func TestQueryLaws_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-laws-001"
-	env := setupTestEnv(t, wantID)
-
-	laws, err := env.client.QueryLaws(context.Background(), "", "")
+	f, err := env.client.GetFlow()
 	if err != nil {
-		t.Fatalf("QueryLaws() returned error: %v", err)
+		t.Fatalf("GetFlow() returned error: %v", err)
 	}
-	if len(laws) != 1 {
-		t.Fatalf("expected 1 law, got %d", len(laws))
+	if f == nil {
+		t.Fatal("expected non-nil Flow")
 	}
 
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	// Verify topology accessors work.
+	nodes := f.GetNodes()
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	}
+
+	ec := f.GetExitContract()
+	if ec == nil {
+		t.Fatal("expected non-nil exit contract")
+	}
+	stamps, ok := ec["doc"]
+	if !ok {
+		t.Fatal("missing doc in exit contract")
+	}
+	if len(stamps) != 2 || stamps[0] != stampLinter {
+		t.Fatalf("unexpected doc stamps: %v", stamps)
 	}
 }
 
-func TestCite_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-cite-001"
-	env := setupTestEnv(t, wantID)
+func TestGetNode(t *testing.T) {
+	env := setupTestEnv(t, "workitem-getnode-001")
 
-	err := env.client.Cite(context.Background(), "law-1", "law-2")
+	n, err := env.client.GetNode()
 	if err != nil {
-		t.Fatalf("Cite() returned error: %v", err)
+		t.Fatalf("GetNode() returned error: %v", err)
 	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
+	if n == nil {
+		t.Fatal("expected non-nil Node")
+	}
+	if n.GetName() != testNodeName {
+		t.Fatalf("expected node name=%q, got %q", testNodeName, n.GetName())
+	}
+	if !n.HasCapability("READ:flow") {
+		t.Error("expected READ:flow capability")
 	}
 }
 
-func TestRecordFinding_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-finding-001"
-	env := setupTestEnv(t, wantID)
+func TestGetLaw_NewEntryMethod(t *testing.T) {
+	env := setupTestEnv(t, "workitem-getlaw-entry-001")
 
-	lawID, err := env.client.RecordFinding(context.Background(), "test goal", []string{"docs"}, []*flowv1.Representation{
+	law, err := env.client.GetLaw("law-entry-001")
+	if err != nil {
+		t.Fatalf("GetLaw(%q) returned error: %v", "law-entry-001", err)
+	}
+	if law == nil {
+		t.Fatal("expected non-nil Law")
+	}
+	if law.ID() != "law-entry-001" {
+		t.Fatalf("expected law.ID()=law-entry-001, got %q", law.ID())
+	}
+	if law.GetGoal() != "test goal" {
+		t.Fatalf("expected law.GetGoal()=test goal, got %q", law.GetGoal())
+	}
+}
+
+func TestRecordFinding_NewEntryMethod(t *testing.T) {
+	env := setupTestEnv(t, "workitem-recordfinding-entry-001")
+
+	lawID, err := env.client.RecordFinding("test goal", []string{"docs"}, []*flowv1.Representation{
 		{Type: "text/plain", Content: "test"},
 	})
 	if err != nil {
@@ -514,349 +680,32 @@ func TestRecordFinding_InjectsWorkitemMetadata(t *testing.T) {
 	if lawID != "finding-001" {
 		t.Fatalf("expected law_id=finding-001, got %q", lawID)
 	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
 }
 
 // ---------------------------------------------------------------------------
-// Tests — Monitor Convenience Methods
+// Tests — Resume (no ctx)
 // ---------------------------------------------------------------------------
 
-func TestRecordTelemetry_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-telemetry-001"
-	env := setupTestEnv(t, wantID)
+func TestResume_SendsCorrectWorkitemID(t *testing.T) {
+	const targetID = "workitem-child-suspended-001"
+	env := setupTestEnv(t, "workitem-caller-001")
 
-	err := env.client.RecordTelemetry(context.Background(), "foundry.cost.llm", []byte(`{"model":"gpt-4"}`))
+	err := env.client.Resume(targetID)
 	if err != nil {
-		t.Fatalf("RecordTelemetry() returned error: %v", err)
+		t.Fatalf("Resume() returned error: %v", err)
 	}
 
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Feedback Reviewer Methods
-// ---------------------------------------------------------------------------
-
-func TestRejectFix_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-reject-fix-001"
-	env := setupTestEnv(t, wantID)
-
-	err := env.client.RejectFix(context.Background(), "fb-001", "fix is incomplete")
-	if err != nil {
-		t.Fatalf("RejectFix() returned error: %v", err)
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-func TestAcceptRefusal_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-accept-refusal-001"
-	env := setupTestEnv(t, wantID)
-
-	err := env.client.AcceptRefusal(context.Background(), "fb-002")
-	if err != nil {
-		t.Fatalf("AcceptRefusal() returned error: %v", err)
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-func TestRejectRefusal_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-reject-refusal-001"
-	env := setupTestEnv(t, wantID)
-
-	err := env.client.RejectRefusal(context.Background(), "fb-003", "justification is weak")
-	if err != nil {
-		t.Fatalf("RejectRefusal() returned error: %v", err)
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-func TestRefuseFeedback_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-refuse-fb-001"
-	env := setupTestEnv(t, wantID)
-
-	justification := &flowv1.Justification{
-		Kind: &flowv1.Justification_Citation{
-			Citation: &flowv1.Citation{CitationIds: []string{"law-42"}},
-		},
-	}
-	err := env.client.RefuseFeedback(context.Background(), "fb-004", justification)
-	if err != nil {
-		t.Fatalf("RefuseFeedback() returned error: %v", err)
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Feedback Deadlock Methods
-// ---------------------------------------------------------------------------
-
-func TestGetFeedbackDepth_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-depth-001"
-	env := setupTestEnv(t, wantID)
-
-	depth, err := env.client.GetFeedbackDepth(context.Background(), "fb-010")
-	if err != nil {
-		t.Fatalf("GetFeedbackDepth() returned error: %v", err)
-	}
-	if depth != 5 {
-		t.Fatalf("expected depth=5, got %d", depth)
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-func TestDeadlockFeedback_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-deadlock-001"
-	env := setupTestEnv(t, wantID)
-
-	item, err := env.client.DeadlockFeedback(context.Background(), "fb-011")
-	if err != nil {
-		t.Fatalf("DeadlockFeedback() returned error: %v", err)
-	}
-	if item.GetId() != "fb-011" {
-		t.Fatalf("expected feedback_id=fb-011, got %q", item.GetId())
-	}
-	wantState := flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED
-	if item.GetState() != wantState {
-		t.Fatalf("expected state=%v, got %v", wantState, item.GetState())
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Topology Convenience Methods
-// ---------------------------------------------------------------------------
-
-func TestGetFlowTopology_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-topology-001"
-	env := setupTestEnv(t, wantID)
-
-	resp, err := env.client.GetFlowTopology(context.Background())
-	if err != nil {
-		t.Fatalf("GetFlowTopology() returned error: %v", err)
-	}
-
-	// Verify response content.
-	if resp.GetSelf().GetName() != "test-node" {
-		t.Fatalf("expected self.name=test-node, got %s", resp.GetSelf().GetName())
-	}
-	if len(resp.GetNodes()) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(resp.GetNodes()))
-	}
-	if len(resp.GetExitContract()) != 1 {
-		t.Fatalf("expected 1 exit contract kind, got %d", len(resp.GetExitContract()))
-	}
-	docStamps := resp.GetExitContract()["doc"]
-	if docStamps == nil {
-		t.Fatal("expected doc in exit contract")
-	}
-	if len(docStamps.GetStamps()) != 2 {
-		t.Fatalf("expected 2 stamps in doc exit contract, got %d", len(docStamps.GetStamps()))
-	}
-
-	// Verify metadata injection.
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — LinkRuling Convenience Method
-// ---------------------------------------------------------------------------
-
-func TestLinkRuling_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-linkruling-001"
-	env := setupTestEnv(t, wantID)
-
-	item, err := env.client.LinkRuling(
-		context.Background(), "fb-dead-001", "law-ruling-001",
-		flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
-	)
-	if err != nil {
-		t.Fatalf("LinkRuling() returned error: %v", err)
-	}
-	if item.GetId() != "fb-dead-001" {
-		t.Fatalf("expected feedback_id=fb-dead-001, got %q", item.GetId())
-	}
-	if item.GetLinkedRuling() != "law-ruling-001" {
-		t.Fatalf("expected linked_ruling=law-ruling-001, got %q", item.GetLinkedRuling())
-	}
-	wantState := flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX
-	if item.GetState() != wantState {
-		t.Fatalf("expected state=%v, got %v", wantState, item.GetState())
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — QueryFriction Convenience Method
-// ---------------------------------------------------------------------------
-
-func TestQueryFriction_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-friction-001"
-	env := setupTestEnv(t, wantID)
-
-	aggregates, err := env.client.QueryFriction(
-		context.Background(), &flowv1.FrictionFilter{LawId: "law-friction-001"},
-	)
-	if err != nil {
-		t.Fatalf("QueryFriction() returned error: %v", err)
-	}
-	if len(aggregates) != 1 {
-		t.Fatalf("expected 1 aggregate, got %d", len(aggregates))
-	}
-	if aggregates[0].GetLawId() != "law-friction-001" {
-		t.Fatalf("expected law_id=law-friction-001, got %q", aggregates[0].GetLawId())
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — GetLaw Convenience Method
-// ---------------------------------------------------------------------------
-
-func TestGetLaw_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-getlaw-001"
-	env := setupTestEnv(t, wantID)
-
-	law, err := env.client.GetLaw(context.Background(), "law-getlaw-001")
-	if err != nil {
-		t.Fatalf("GetLaw() returned error: %v", err)
-	}
-	if law.GetId() != "law-getlaw-001" {
-		t.Fatalf("expected law_id=law-getlaw-001, got %q", law.GetId())
-	}
-	if law.GetGoal() != "test goal" {
-		t.Fatalf("expected goal=test goal, got %q", law.GetGoal())
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — LawGroup SDK Methods
-// ---------------------------------------------------------------------------
-
-func TestGetLawGroup_ReturnsGroup(t *testing.T) {
-	env := setupTestEnv(t, "workitem-lawgroup-001")
-
-	group, err := env.client.GetLawGroup(context.Background(), "my-group")
-	if err != nil {
-		t.Fatalf("GetLawGroup() returned error: %v", err)
-	}
-	if group.Name != "my-group" {
-		t.Fatalf("expected group name my-group, got %q", group.Name)
-	}
-	if group.Mode != "bundle" {
-		t.Fatalf("expected mode bundle, got %q", group.Mode)
-	}
-	if group.Passes != 1 {
-		t.Fatalf("expected passes 1, got %d", group.Passes)
-	}
-}
-
-func TestGetLawGroup_ServerError(t *testing.T) {
-	env := setupTestEnv(t, "workitem-lawgroup-002")
-
-	// Override server to return error by setting a nil handler is complex,
-	// so we test via the normal path. A server error would propagate as gRPC error.
-	_, err := env.client.GetLawGroup(context.Background(), "")
-	if err != nil {
-		// Empty name is valid — just testing the SDK returns a group.
-		t.Logf("GetLawGroup with empty name: %v", err)
-	}
-}
-
-func TestListLawGroups_ReturnsGroups(t *testing.T) {
-	env := setupTestEnv(t, "workitem-listlawgroups-001")
-
-	groups, err := env.client.ListLawGroups(context.Background())
-	if err != nil {
-		t.Fatalf("ListLawGroups() returned error: %v", err)
-	}
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 groups, got %d", len(groups))
-	}
-	names := map[string]bool{}
-	for _, g := range groups {
-		names[g.Name] = true
-	}
-	if !names["group-a"] || !names["group-b"] {
-		t.Fatalf("expected group-a and group-b, got %v", names)
-	}
-}
-
-func TestQueryLawsByGroup_SendsGroupFilter(t *testing.T) {
-	env := setupTestEnv(t, "workitem-querylawsbygroup-001")
-
-	laws, err := env.client.QueryLawsByGroup(context.Background(), "source-code", "security")
-	if err != nil {
-		t.Fatalf("QueryLawsByGroup() returned error: %v", err)
-	}
-	if len(laws) != 1 {
-		t.Fatalf("expected 1 law, got %d", len(laws))
-	}
-
-	req := env.spy.lastQueryLawsReq
+	req := env.spy.lastResumeReq
 	if req == nil {
-		t.Fatal("QueryLaws was not called")
+		t.Fatal("ResumeWorkitem was not called")
 	}
-	f := req.GetFilter()
-	if f == nil {
-		t.Fatal("expected non-nil filter")
-	}
-	if f.GetGovernedArtefact() != "source-code" {
-		t.Fatalf("expected governed_artefact=source-code, got %q", f.GetGovernedArtefact())
-	}
-	if f.GetGroup() != "security" {
-		t.Fatalf("expected group=security, got %q", f.GetGroup())
+	if req.GetWorkitemId() != targetID {
+		t.Fatalf("workitem_id = %q, want %q", req.GetWorkitemId(), targetID)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Tests — PublishAuditEvent SDK Method
+// Tests — PublishAuditEvent (no ctx)
 // ---------------------------------------------------------------------------
 
 func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
@@ -875,7 +724,7 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 	)
 	env := &testEnv{client: client, spy: spy}
 
-	err := env.client.PublishAuditEvent(context.Background(), "appraisal.coverage", map[string]string{
+	err := env.client.PublishAuditEvent("appraisal.coverage", map[string]string{
 		"stage": "appraisal",
 		"cycle": "test-cycle",
 	}, "workitem-publishaudit-001", "test-ns")
@@ -911,8 +760,8 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 }
 
 func TestPublishAuditEvent_NoEventBus_ReturnsError(t *testing.T) {
-	client := &Client{EventBus: nil}
-	err := client.PublishAuditEvent(context.Background(), "test.event", map[string]string{}, "", "")
+	client := &Client{session: &session{}}
+	err := client.PublishAuditEvent("test.event", map[string]string{}, "", "")
 	if err == nil {
 		t.Fatal("expected error when EventBus is nil, got nil")
 	}
@@ -922,263 +771,15 @@ func TestPublishAuditEvent_NoEventBus_ReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — Suspend Convenience Method
+// Tests — RecordTelemetry (no ctx)
 // ---------------------------------------------------------------------------
 
-func TestSuspend_NoOptions(t *testing.T) {
-	const wantID = "workitem-suspend-001"
+func TestRecordTelemetry_NoCtx(t *testing.T) {
+	const wantID = "workitem-telemetry-001"
 	env := setupTestEnv(t, wantID)
 
-	err := env.client.Suspend(context.Background())
+	err := env.client.RecordTelemetry("foundry.cost.llm", []byte(`{"model":"gpt-4"}`))
 	if err != nil {
-		t.Fatalf("Suspend() returned error: %v", err)
-	}
-
-	req := env.spy.lastSubmitReq
-	if req == nil {
-		t.Fatal("SubmitResult was not called")
-	}
-	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
-	if !ok {
-		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
-	}
-	if suspend.Suspend.GetCondition() != "" {
-		t.Fatalf("expected empty condition, got %q", suspend.Suspend.GetCondition())
-	}
-	if suspend.Suspend.GetTimeout() != nil {
-		t.Fatalf("expected nil timeout, got %v", suspend.Suspend.GetTimeout())
-	}
-}
-
-func TestSuspend_WithCondition(t *testing.T) {
-	const wantID = "workitem-suspend-002"
-	env := setupTestEnv(t, wantID)
-
-	cel := `children.all(c, c.phase == "Completed")`
-	err := env.client.Suspend(context.Background(), WithCondition(cel))
-	if err != nil {
-		t.Fatalf("Suspend() returned error: %v", err)
-	}
-
-	req := env.spy.lastSubmitReq
-	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
-	if !ok {
-		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
-	}
-	if suspend.Suspend.GetCondition() != cel {
-		t.Fatalf("condition = %q, want %q", suspend.Suspend.GetCondition(), cel)
-	}
-	if suspend.Suspend.GetTimeout() != nil {
-		t.Fatalf("expected nil timeout, got %v", suspend.Suspend.GetTimeout())
-	}
-}
-
-func TestSuspend_WithTimeout(t *testing.T) {
-	const wantID = "workitem-suspend-003"
-	env := setupTestEnv(t, wantID)
-
-	err := env.client.Suspend(context.Background(), WithTimeout(5*time.Minute))
-	if err != nil {
-		t.Fatalf("Suspend() returned error: %v", err)
-	}
-
-	req := env.spy.lastSubmitReq
-	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
-	if !ok {
-		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
-	}
-	if suspend.Suspend.GetCondition() != "" {
-		t.Fatalf("expected empty condition, got %q", suspend.Suspend.GetCondition())
-	}
-	wantTimeout := durationpb.New(5 * time.Minute)
-	if suspend.Suspend.GetTimeout().GetSeconds() != wantTimeout.GetSeconds() {
-		t.Fatalf("timeout = %v, want %v", suspend.Suspend.GetTimeout(), wantTimeout)
-	}
-}
-
-func TestSuspend_WithConditionAndTimeout(t *testing.T) {
-	const wantID = "workitem-suspend-004"
-	env := setupTestEnv(t, wantID)
-
-	cel := `children.all(c, c.phase == "Completed")`
-	err := env.client.Suspend(context.Background(),
-		WithCondition(cel),
-		WithTimeout(10*time.Minute),
-	)
-	if err != nil {
-		t.Fatalf("Suspend() returned error: %v", err)
-	}
-
-	req := env.spy.lastSubmitReq
-	suspend, ok := req.GetAction().(*flowv1.SubmitResultRequest_Suspend)
-	if !ok {
-		t.Fatalf("expected SuspendAction, got %T", req.GetAction())
-	}
-	if suspend.Suspend.GetCondition() != cel {
-		t.Fatalf("condition = %q, want %q", suspend.Suspend.GetCondition(), cel)
-	}
-	wantTimeout := durationpb.New(10 * time.Minute)
-	if suspend.Suspend.GetTimeout().GetSeconds() != wantTimeout.GetSeconds() {
-		t.Fatalf("timeout = %v, want %v", suspend.Suspend.GetTimeout(), wantTimeout)
-	}
-
-	// Also verify metadata injection.
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Resume Convenience Method
-// ---------------------------------------------------------------------------
-
-func TestResume_SendsCorrectWorkitemID(t *testing.T) {
-	const callerID = "workitem-caller-001"
-	const targetID = "workitem-child-suspended-001"
-	env := setupTestEnv(t, callerID)
-
-	err := env.client.Resume(context.Background(), targetID)
-	if err != nil {
-		t.Fatalf("Resume() returned error: %v", err)
-	}
-
-	req := env.spy.lastResumeReq
-	if req == nil {
-		t.Fatal("ResumeWorkitem was not called")
-	}
-	if req.GetWorkitemId() != targetID {
-		t.Fatalf("workitem_id = %q, want %q", req.GetWorkitemId(), targetID)
-	}
-}
-
-func TestResume_InjectsCallerMetadata(t *testing.T) {
-	const callerID = "workitem-caller-002"
-	env := setupTestEnv(t, callerID)
-
-	err := env.client.Resume(context.Background(), "workitem-target-002")
-	if err != nil {
-		t.Fatalf("Resume() returned error: %v", err)
-	}
-
-	// The interceptor injects the caller's workitem ID, not the target's.
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != callerID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, callerID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Complete with WithReason
-// ---------------------------------------------------------------------------
-
-func TestComplete_WithReason(t *testing.T) {
-	const wantID = "workitem-complete-reason-001"
-	env := setupTestEnv(t, wantID)
-
-	reason := flowv1.CompletionReason_COMPLETION_REASON_CANCELLED
-	accepted, err := env.client.Complete(context.Background(), WithReason(reason))
-	if err != nil {
-		t.Fatalf("Complete(WithReason) returned error: %v", err)
-	}
-	if !accepted {
-		t.Fatal("Complete(WithReason) was not accepted")
-	}
-
-	req := env.spy.lastSubmitReq
-	if req == nil {
-		t.Fatal("SubmitResult was not called")
-	}
-	complete, ok := req.GetAction().(*flowv1.SubmitResultRequest_Complete)
-	if !ok {
-		t.Fatalf("expected CompleteAction, got %T", req.GetAction())
-	}
-	if complete.Complete.GetReason() != flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
-		t.Fatalf("reason = %v, want COMPLETION_REASON_CANCELLED", complete.Complete.GetReason())
-	}
-}
-
-func TestComplete_WithoutReason(t *testing.T) {
-	const wantID = "workitem-complete-reason-002"
-	env := setupTestEnv(t, wantID)
-
-	accepted, err := env.client.Complete(context.Background())
-	if err != nil {
-		t.Fatalf("Complete() returned error: %v", err)
-	}
-	if !accepted {
-		t.Fatal("Complete() was not accepted")
-	}
-
-	req := env.spy.lastSubmitReq
-	if req == nil {
-		t.Fatal("SubmitResult was not called")
-	}
-	complete, ok := req.GetAction().(*flowv1.SubmitResultRequest_Complete)
-	if !ok {
-		t.Fatalf("expected CompleteAction, got %T", req.GetAction())
-	}
-	if complete.Complete.GetReason() != flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED {
-		t.Fatalf("reason = %v, want COMPLETION_REASON_UNSPECIFIED", complete.Complete.GetReason())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — AddFeedback Convenience Method
-// ---------------------------------------------------------------------------
-
-func TestAddFeedback_CanWontFixTrue(t *testing.T) {
-	const wantID = "workitem-addfb-true-001"
-	env := setupTestEnv(t, wantID)
-
-	fbID, err := env.client.AddFeedback(context.Background(), "artefact-001", true, "test message")
-	if err != nil {
-		t.Fatalf("AddFeedback() returned error: %v", err)
-	}
-	if fbID == "" {
-		t.Fatal("AddFeedback() returned empty feedback ID")
-	}
-	if env.spy.lastAddFeedbackReq == nil {
-		t.Fatal("AddFeedback was not called on the server")
-	}
-	if !env.spy.lastAddFeedbackReq.GetCanWontFix() {
-		t.Fatal("expected CanWontFix=true, got false")
-	}
-}
-
-func TestAddFeedback_CanWontFixFalse(t *testing.T) {
-	const wantID = "workitem-addfb-false-001"
-	env := setupTestEnv(t, wantID)
-
-	fbID, err := env.client.AddFeedback(context.Background(), "artefact-002", false, "another message")
-	if err != nil {
-		t.Fatalf("AddFeedback() returned error: %v", err)
-	}
-	if fbID == "" {
-		t.Fatal("AddFeedback() returned empty feedback ID")
-	}
-	if env.spy.lastAddFeedbackReq == nil {
-		t.Fatal("AddFeedback was not called on the server")
-	}
-	if env.spy.lastAddFeedbackReq.GetCanWontFix() {
-		t.Fatal("expected CanWontFix=false, got true")
-	}
-}
-
-func TestAddFeedback_InjectsWorkitemMetadata(t *testing.T) {
-	const wantID = "workitem-addfb-meta-001"
-	env := setupTestEnv(t, wantID)
-
-	_, err := env.client.AddFeedback(context.Background(), "artefact-003", true, "meta test")
-	if err != nil {
-		t.Fatalf("AddFeedback() returned error: %v", err)
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 {
-		t.Fatal("metadata x-flow-workitem-id was NOT present on AddFeedback call")
-	}
-	if got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %q, want %q", got[0], wantID)
+		t.Fatalf("RecordTelemetry() returned error: %v", err)
 	}
 }

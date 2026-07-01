@@ -254,12 +254,14 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := a.client.Heartbeat(ctx); err != nil {
-				// Log but do not fail — the heartbeat is a liveness signal,
-				// not a correctness requirement.
-				if ctx.Err() == nil {
+			// Use the workitem domain method for heartbeat.
+			wi, err := a.client.GetWorkitem()
+			if err == nil {
+				if err := wi.Heartbeat(); err != nil && ctx.Err() == nil {
 					slog.Warn("flow agent: heartbeat failed", "error", err)
 				}
+			} else if ctx.Err() == nil {
+				slog.Warn("flow agent: heartbeat failed (no workitem)", "error", err)
 			}
 		}
 	}
@@ -333,7 +335,7 @@ func formatValidationError(err error) error {
 // ---------------------------------------------------------------------------
 
 // emitCostTelemetry records a foundry.cost.llm event via RecordTelemetry.
-func (a *Agent) emitCostTelemetry(ctx context.Context, cost *CostMetadata) error {
+func (a *Agent) emitCostTelemetry(_ context.Context, cost *CostMetadata) error {
 	payload := map[string]any{
 		"model":         cost.Model,
 		"input_tokens":  cost.InputTokens,
@@ -349,7 +351,7 @@ func (a *Agent) emitCostTelemetry(ctx context.Context, cost *CostMetadata) error
 		return fmt.Errorf("failed to marshal cost payload: %w", err)
 	}
 
-	return a.client.RecordTelemetry(ctx, telemetryEventLLMCost, data)
+	return a.client.RecordTelemetry(telemetryEventLLMCost, data)
 }
 
 // OverrideModelForTest replaces the infer function on an Agent. Named to make

@@ -8,10 +8,16 @@ The SDK exposes a small set of first-class types. Node handlers program against 
 
 | Type | Role | Detail |
 |------|------|--------|
-| `Workitem` | Read surface for the assigned Workitem's state — identity, lifecycle state, and assignment tracking. | [SDK Workitems](./05-sdk-workitems.md) |
-| `Artefact` | Read/write surface for artefact content, versions, feedback, and stamps. One `Artefact` object per artefact associated with the Workitem in the Archivist. | [SDK Artefacts](./02-sdk-artefacts.md) |
-| `Context` | Handler execution context. Carries assignment identity and a cancellation signal. Cancelled on inactivity timeout or graceful termination. | [Sidecar lifecycle](../03-node/01-sidecar.md) |
-| `Result` | The handler's single return value: one of three [routing instructions](#routing-instruction-model). | Below |
+| `Workitem` | Composition root for all workitem-scoped operations — lifecycle, artefacts, feedback, laws, children, topology, friction. Carries an internal session reference for gRPC calls. | [SDK Workitems](./05-sdk-workitems.md) |
+| `Artefact` | Read/write surface for artefact content, versions, stamps, and feedback. One `Artefact` object per artefact associated with the Workitem in the Archivist. | [SDK Artefacts](./02-sdk-artefacts.md) |
+| `Feedback` | Domain object wrapping a feedback item with lifecycle methods (`Resolve`, `Refuse`, `AcceptFix`, etc.). Carries an internal session reference. | [SDK Feedback](./04-sdk-feedback.md) |
+| `LawGroup` / `Law` | Domain objects for law retrieval, citation, and attestation. `LawGroup` defines evaluation contracts; `Law` represents a single governance law. | [SDK Legal](./03-sdk-legal.md) |
+| `Flow` / `Node` | Topology and capability inspection objects. `Flow` provides node listing and exit contracts; `Node` provides capability checks. | [SDK Workitems](./05-sdk-workitems.md) |
+| `ChildWorkitem` | Scoped handle for operating on child Workitem artefacts and lifecycle before routing. | [SDK Workitems](./05-sdk-workitems.md) |
+
+**Note:** The SDK manages `context.Context` internally. No user-facing method
+accepts a context parameter. The only exception is `Infer(ctx, ...)` on the
+`Model` interface (see [SDK Agent](./07-sdk-agent.md#model-interface)).
 
 ## Handler Lifecycle Contract
 
@@ -25,8 +31,9 @@ sequenceDiagram
     participant SV as Services
 
     OP->>SC: Assign Workitem
-    SC->>HD: Invoke with Context + Workitem
-    HD->>SC: SDK calls (artefact, law, feedback, telemetry)
+    SC->>HD: Invoke with Workitem
+    HD->>HD: Create Client, get Workitem
+    HD->>SC: SDK calls via Workitem domain objects
     SC->>SV: Authenticated proxied requests
     SV-->>SC: Responses
     SC-->>HD: Results or structured errors
@@ -37,11 +44,11 @@ sequenceDiagram
 
 The handler contract:
 
-1. **Receive** — the handler receives a `Context` and a `Workitem`. The `Workitem` is a snapshot of state at assignment time.
-2. **Execute** — the handler uses SDK domain surfaces to read and write artefacts, query laws, create feedback, apply stamps, and emit telemetry. Every SDK call transits the Sidecar.
+1. **Receive** — the handler receives a `Workitem` object. The `Workitem` is a snapshot of state at assignment time and carries an internal session reference for all SDK operations.
+2. **Execute** — the handler uses SDK domain surfaces (`Workitem.Complete()`, `Workitem.GetArtefact()`, `Workitem.AddFeedback()`, etc.) to read and write artefacts, query laws, create feedback, apply stamps, and emit telemetry. Every SDK call transits the Sidecar. No `context.Context` is accepted by any method — the session manages gRPC metadata and cancellation internally.
 3. **Return** — the handler returns exactly one `Result` containing a routing instruction. This is the handler's sole output to the platform.
 
-A handler that returns without a `Result` (panic, unhandled error) leaves the Workitem in `Running` state. The Sidecar's inactivity timeout eventually fires, cancels the handler context, reports the failure to the Operator, and the Operator transitions the Workitem to `Failed` with a timeout reason. The pod remains alive for subsequent assignments.
+A handler that returns without a `Result` (panic, unhandled error) leaves the Workitem in `Running` state. The Sidecar's inactivity timeout eventually fires, cancels the internal handler context, reports the failure to the Operator, and the Operator transitions the Workitem to `Failed` with a timeout reason. The pod remains alive for subsequent assignments.
 
 ## Routing Instruction Model
 
@@ -69,22 +76,24 @@ When exit completion triggers [cross-flow export](../02-flow/06-cross-flow.md), 
 
 ## Heartbeat and Activity Tracking
 
-The Sidecar tracks handler liveness through an inactivity timer. Every SDK call that transits the Sidecar implicitly resets this timer. For handlers that perform long-running computation without SDK calls, the SDK exposes an explicit `Heartbeat()` method to reset the timer.
+The Sidecar tracks handler liveness through an inactivity timer. Every SDK call that transits the Sidecar implicitly resets this timer. For handlers that perform long-running computation without SDK calls, the SDK exposes an explicit `Heartbeat()` method on `Workitem` to reset the timer.
 
 Timeout enforcement is inactivity-based, not wall-clock-based. The timer resolves from the most specific configuration available: node-level timeout, Flow-level default, then system fallback.
 
 On timeout expiry:
 
-1. Sidecar cancels the handler `Context`.
+1. Sidecar cancels the internal handler context.
 2. Sidecar reports the timeout to the Operator.
 3. Operator transitions the Workitem to `Failed` with a timeout reason.
 4. The pod remains alive for subsequent assignments.
 
-For inference workloads that perform long-running LLM calls, the [FoundryAgent](./07-sdk-agent.md) wrapper automates heartbeat management entirely — the developer implements an `Infer` method and FoundryAgent maintains the heartbeat loop throughout inference execution. Nodes that do not use FoundryAgent must call `Heartbeat()` explicitly during extended computation.
+For inference workloads that perform long-running LLM calls, the [FoundryAgent](./07-sdk-agent.md) wrapper automates heartbeat management entirely — the developer implements an `Infer` method and FoundryAgent maintains the heartbeat loop throughout inference execution. Nodes that do not use FoundryAgent must call `Workitem.Heartbeat()` explicitly during extended computation.
 
 ## Error Taxonomy and Recovery
 
-SDK errors fall into categories based on where they originate.
+All errors originate from domain object or `Client` method calls. No `context.Context`
+is exposed — `context.Canceled` and `context.DeadlineExceeded` are handled internally
+by the SDK and never propagated to callers.
 
 **Sidecar-local rejections** — caught before the request reaches a service:
 
@@ -108,14 +117,14 @@ SDK errors fall into categories based on where they originate.
 
 Error classification utilities:
 
-- `IsRetryable(err)` — returns `true` for transient failures (service unavailable, deadline exceeded, resource exhausted). Transient errors can be retried with exponential backoff.
+- `IsRetryable(err)` — returns `true` for transient failures (service unavailable, resource exhausted). Transient errors can be retried with exponential backoff.
 - `IsError(err, code)` — checks whether the error matches a specific stable error code.
 
 The SDK does not implement built-in error routing. When an operation fails, the handler receives a structured error and decides what failure means in its business domain. A handler may retry, route to a different node, or let the assignment fail. The stable error code inventory is in the [Error Catalogue](../05-reference/error-catalogue.md).
 
 ## Concurrency and Idempotency
 
-When a node is configured with `concurrency > 1`, the Sidecar manages multiple assignment sessions simultaneously. Each session has its own `Context`, `Workitem` scope, activity timer, and handler invocation. SDK calls from concurrent handlers are routed to the correct session by Workitem identity.
+When a node is configured with `concurrency > 1`, the Sidecar manages multiple assignment sessions simultaneously. Each session has its own `Workitem` scope, activity timer, and handler invocation. SDK calls from concurrent handlers are routed to the correct session by Workitem identity. Each `Workitem` carries its own session reference, providing per-assignment isolation.
 
 Thread safety within handler code is the developer's responsibility. The SDK provides per-assignment isolation at the Sidecar boundary but does not coordinate shared in-process state between concurrent handlers.
 

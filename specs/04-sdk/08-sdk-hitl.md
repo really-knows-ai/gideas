@@ -6,7 +6,7 @@ HITL is a generic, config-driven pattern. Any node that declares `USE:queue/serv
 
 ## HITL Runtime Role
 
-An HITL node parks a Workitem in a persistent queue while awaiting a human decision. The Workitem remains assigned to the HITL node — it holds assignment ownership and [pauses the Sidecar's inactivity timer](../03-node/01-sidecar.md#heartbeat-and-activity-tracking) to prevent timeout while the item is queued. When a human provides a decision through the REST API, the item is removed from the queue, the node resumes the timer, records the decision on governed artefacts through [SDK operations](./02-sdk-artefacts.md), then returns a routing instruction based on the decision.
+An HITL node parks a Workitem in a persistent queue while awaiting a human decision. The Workitem remains assigned to the HITL node — it holds assignment ownership and [pauses the Sidecar's inactivity timer](../03-node/01-sidecar.md#heartbeat-and-activity-tracking) via `Workitem.PauseTimer()` to prevent timeout while the item is queued. When a human provides a decision through the REST API, the item is removed from the queue, the node resumes the timer via `Workitem.ResumeTimer()`, records the decision on governed artefacts through [SDK operations](./02-sdk-artefacts.md), then returns a routing instruction based on the decision.
 
 ```mermaid
 sequenceDiagram
@@ -19,14 +19,14 @@ sequenceDiagram
     OP->>SC: Assign Workitem
     SC->>ND: Invoke handler
     ND->>DB: Enqueue (status: waiting)
-    ND->>SC: PauseTimer
+    ND->>SC: Workitem.PauseTimer()
     HU->>ND: POST /queue/{id}/claim
     ND->>DB: Update status: claimed
     HU->>ND: POST /queue/{id}/decide
     ND->>DB: Delete item from queue
-    ND->>SC: ResumeTimer
+    ND->>SC: Workitem.ResumeTimer()
     ND->>SC: SDK operations (record decision on artefacts)
-    ND-->>SC: route_to_output (based on decision)
+    ND-->>SC: RouteToOutput (based on decision)
     SC-->>OP: Routing instruction
 ```
 
@@ -79,7 +79,9 @@ type QueueManager interface {
 }
 ```
 
-The QueueManager is available to the node handler when the `USE:queue/server` capability is declared. All queue operations are node-local — the [Sidecar](../03-node/01-sidecar.md) does not mediate the QueueManager or the human-facing REST API. The Sidecar mediates the SDK calls the node makes after receiving human input (artefact writes, feedback transitions, routing instructions).
+The QueueManager is available to the node handler when the `USE:queue/server` capability is declared. All queue operations are node-local — the [Sidecar](../03-node/01-sidecar.md) does not mediate the QueueManager or the human-facing REST API. The Sidecar mediates the SDK calls the node makes after receiving human input (artefact writes via `Artefact.Store()`, feedback transitions via `Feedback.Resolve()`, routing instructions via `Workitem.Complete()`).
+
+**Note on `context.Context` in QueueManager:** The `QueueManager` interface methods (e.g. `Enqueue`, `Claim`) accept `context.Context` for local I/O (SQLite, gRPC mesh), not for per-call Sidecar-mediated operations. This is a local queue concern, separate from the SDK's no-`ctx` surface for Sidecar-proxied calls. The callers of QueueManager methods (HITL handler code) manage queue context explicitly.
 
 The queue stores no domain-specific data. Artefact content, feedback, and decisions are managed through existing SDK surfaces (Archivist, Librarian). The queue tracks parking state only — which Workitems are waiting and whether someone has claimed one for review.
 
@@ -343,7 +345,7 @@ spec:
 
 ## Telemetry
 
-HITL nodes emit telemetry events through [`RecordTelemetry()`](./06-sdk-telemetry.md) via the Sidecar:
+HITL nodes emit telemetry events through [`Client.RecordTelemetry()`](./06-sdk-telemetry.md) via the Sidecar (no `context.Context` required):
 
 | Event | When | Payload |
 |---|---|---|
@@ -378,7 +380,7 @@ A single HITL container image serves all use cases. The Operator provisions dist
 1. `USE:queue/server` capability requires `spec.storage`. The Operator rejects nodes declaring the capability without storage.
 2. `USE:queue/server` triggers StatefulSet deployment and Headless Service creation.
 3. The HITL REST API is node-owned. The Sidecar does not mediate human-facing traffic.
-4. The Sidecar mediates SDK calls the node makes after receiving human input.
+4. The Sidecar mediates SDK calls the node makes after receiving human input. These SDK calls (`Workitem.PauseTimer()`, `Workitem.ResumeTimer()`, `Artefact.Store()`, `Workitem.Complete()`) accept no `context.Context`.
 5. The HITL node is a parking lot — it tracks which Workitems are waiting and whether someone has claimed one. Human identity, assignment mapping, and domain-specific decisions are external concerns.
 6. The queue stores no domain-specific data. Artefact content, feedback, and decisions flow through existing SDK surfaces.
 7. Persistence uses SDK-managed SQLite at `{storage.mountPath}/queue.db`. Decision = deletion from queue.

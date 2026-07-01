@@ -18,12 +18,29 @@ const (
 	EnvFederationAddress = "FEDERATION_ADDRESS"
 )
 
+// FederationOption configures the FederationClient.
+type FederationOption func(*federationConfig)
+
+type federationConfig struct {
+	address string
+}
+
+// WithFederationAddress overrides the default Federation gRPC address.
+func WithFederationAddress(addr string) FederationOption {
+	return func(c *federationConfig) {
+		c.address = addr
+	}
+}
+
 // PetitionTarget holds the authority Flow identity and Embassy endpoint
 // returned by GetPetitionTarget.
 type PetitionTarget struct {
 	AuthorityFlowIdentity string
 	EmbassyEndpoint       string
 }
+
+// FlowEndpoint represents a discovered federation endpoint.
+type FlowEndpoint = flowv1.FlowEndpoint
 
 // FederationClient provides SDK helpers for the Federation service RPCs.
 type FederationClient struct {
@@ -32,12 +49,15 @@ type FederationClient struct {
 }
 
 // NewFederationClient connects to the Federation service.
-func NewFederationClient() (*FederationClient, error) {
-	address := DefaultFederationAddress
-	if envAddr := os.Getenv(EnvFederationAddress); envAddr != "" {
-		address = envAddr
+func NewFederationClient(opts ...FederationOption) (*FederationClient, error) {
+	cfg := &federationConfig{address: DefaultFederationAddress}
+	for _, opt := range opts {
+		opt(cfg)
 	}
-	return newFederationClient(address)
+	if envAddr := os.Getenv(EnvFederationAddress); envAddr != "" {
+		cfg.address = envAddr
+	}
+	return newFederationClient(cfg.address)
 }
 
 // NewFederationClientForTest creates a FederationClient connected to the given address.
@@ -74,13 +94,14 @@ func (c *FederationClient) Close() error {
 
 // GetPetitionTarget returns the authority Flow identity and Embassy endpoint
 // for the given petition scope/domain.
-func (c *FederationClient) GetPetitionTarget(
-	ctx context.Context, scope string,
-) (*PetitionTarget, error) {
+func (c *FederationClient) GetPetitionTarget(scope string) (*PetitionTarget, error) {
 	if c.federation == nil {
 		return nil, fmt.Errorf("flow sdk: federation client: no federation connection (set FEDERATION_ADDRESS)")
 	}
 
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, FederationClient can store a base context.
+	ctx := context.Background()
 	resp, err := c.federation.GetPetitionTarget(ctx, &flowv1.GetPetitionTargetRequest{
 		Scope: scope,
 	})
@@ -95,13 +116,14 @@ func (c *FederationClient) GetPetitionTarget(
 
 // DiscoverEndpoints returns Flow endpoints within the federation, optionally
 // filtered by state. Pass an empty stateFilter to return all endpoints.
-func (c *FederationClient) DiscoverEndpoints(
-	ctx context.Context, stateFilter string,
-) ([]*flowv1.FlowEndpoint, error) {
+func (c *FederationClient) DiscoverEndpoints(stateFilter string) ([]*FlowEndpoint, error) {
 	if c.federation == nil {
 		return nil, fmt.Errorf("flow sdk: federation client: no federation connection (set FEDERATION_ADDRESS)")
 	}
 
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, FederationClient can store a base context.
+	ctx := context.Background()
 	resp, err := c.federation.DiscoverEndpoints(ctx, &flowv1.DiscoverEndpointsRequest{
 		StateFilter: stateFilter,
 	})
@@ -116,83 +138,102 @@ func (c *FederationClient) DiscoverEndpoints(
 // ---------------------------------------------------------------------------
 
 // SubmitPublication submits a local Tier 3 law for publication admission.
-// Returns the federation service response indicating acceptance or rejection.
-func (c *FederationClient) SubmitPublication(
-	ctx context.Context, law *flowv1.Law, sourceFlowIdentity string,
-) (*flowv1.SubmitPublicationResponse, error) {
+// Reports an error if the publication is rejected or the RPC fails.
+func (c *FederationClient) SubmitPublication(law *Law, sourceFlowIdentity string) error {
 	if c.federation == nil {
-		return nil, fmt.Errorf("flow sdk: federation client: no federation connection (set FEDERATION_ADDRESS)")
+		return fmt.Errorf("flow sdk: federation client: no federation connection (set FEDERATION_ADDRESS)")
 	}
 
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, FederationClient can store a base context.
+	ctx := context.Background()
 	resp, err := c.federation.SubmitPublication(ctx, &flowv1.SubmitPublicationRequest{
-		Law:                law,
+		Law:                law.PB(),
 		SourceFlowIdentity: sourceFlowIdentity,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("flow sdk: federation client: submit publication failed: %w", err)
+		return fmt.Errorf("flow sdk: federation client: submit publication failed: %w", err)
 	}
-	return resp, nil
+	if !resp.GetAccepted() {
+		return fmt.Errorf("flow sdk: federation client: submit publication rejected: %s",
+			resp.GetRejection().GetRemediationText())
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
 // Streaming Subscriptions
 // ---------------------------------------------------------------------------
 
-// LawUpdateStream wraps the server-streaming response for law updates.
-type LawUpdateStream struct {
+// LawUpdateWatcher wraps the server-streaming subscription for law updates.
+type LawUpdateWatcher struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 	stream grpc.ServerStreamingClient[flowv1.PublishedLawEvent]
 }
 
 // Recv returns the next published law event from the stream.
-func (s *LawUpdateStream) Recv() (*flowv1.PublishedLawEvent, error) {
-	return s.stream.Recv()
+func (w *LawUpdateWatcher) Recv() (*flowv1.PublishedLawEvent, error) {
+	return w.stream.Recv()
+}
+
+// Stop cancels the subscription. Subsequent Recv calls return a context-cancelled error.
+func (w *LawUpdateWatcher) Stop() {
+	w.cancel()
 }
 
 // SubscribeLawUpdates opens a server-streaming subscription for published
-// law distribution events. The caller should read from the returned stream
-// until io.EOF or context cancellation.
-func (c *FederationClient) SubscribeLawUpdates(
-	ctx context.Context, subscriberFlowIdentity string,
-) (*LawUpdateStream, error) {
+// law distribution events. The caller should read from the returned watcher
+// until io.EOF or Stop.
+func (c *FederationClient) SubscribeLawUpdates(subscriberFlowIdentity string) (*LawUpdateWatcher, error) {
 	if c.federation == nil {
 		return nil, fmt.Errorf("flow sdk: federation client: no federation connection (set FEDERATION_ADDRESS)")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := c.federation.SubscribeLawUpdates(ctx, &flowv1.SubscribeLawUpdatesRequest{
 		SubscriberFlowIdentity: subscriberFlowIdentity,
 	})
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("flow sdk: federation client: subscribe law updates failed: %w", err)
 	}
-	return &LawUpdateStream{stream: stream}, nil
+	return &LawUpdateWatcher{ctx: ctx, cancel: cancel, stream: stream}, nil
 }
 
-// PetitionOutcomeStream wraps the server-streaming response for petition
+// PetitionOutcomeWatcher wraps the server-streaming subscription for petition
 // outcome events.
-type PetitionOutcomeStream struct {
+type PetitionOutcomeWatcher struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 	stream grpc.ServerStreamingClient[flowv1.PetitionOutcomeEvent]
 }
 
 // Recv returns the next petition outcome event from the stream.
-func (s *PetitionOutcomeStream) Recv() (*flowv1.PetitionOutcomeEvent, error) {
-	return s.stream.Recv()
+func (w *PetitionOutcomeWatcher) Recv() (*flowv1.PetitionOutcomeEvent, error) {
+	return w.stream.Recv()
+}
+
+// Stop cancels the subscription. Subsequent Recv calls return a context-cancelled error.
+func (w *PetitionOutcomeWatcher) Stop() {
+	w.cancel()
 }
 
 // SubscribePetitionOutcomes opens a server-streaming subscription for
 // petition outcome events (accepted/rejected). The caller should read from
-// the returned stream until io.EOF or context cancellation.
-func (c *FederationClient) SubscribePetitionOutcomes(
-	ctx context.Context, subscriberFlowIdentity string,
-) (*PetitionOutcomeStream, error) {
+// the returned watcher until io.EOF or Stop.
+func (c *FederationClient) SubscribePetitionOutcomes(subscriberFlowIdentity string) (*PetitionOutcomeWatcher, error) {
 	if c.federation == nil {
 		return nil, fmt.Errorf("flow sdk: federation client: no federation connection (set FEDERATION_ADDRESS)")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := c.federation.SubscribePetitionOutcomes(ctx, &flowv1.SubscribePetitionOutcomesRequest{
 		SubscriberFlowIdentity: subscriberFlowIdentity,
 	})
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("flow sdk: federation client: subscribe petition outcomes failed: %w", err)
 	}
-	return &PetitionOutcomeStream{stream: stream}, nil
+	return &PetitionOutcomeWatcher{ctx: ctx, cancel: cancel, stream: stream}, nil
 }

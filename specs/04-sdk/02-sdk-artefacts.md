@@ -17,28 +17,44 @@ The [Archivist](../02-flow/04-system-services.md#archivist) is the single source
 
 ## Read and Query Operations
 
-Artefact reads are scoped to the current [assignment](./01-sdk-core.md#handler-lifecycle-contract). No parameter exists for targeting artefacts on a different Workitem.
+Artefact reads are scoped to the current [assignment](./01-sdk-core.md#handler-lifecycle-contract). No parameter exists for targeting artefacts on a different Workitem. All operations are accessed through the `Workitem` domain object, which returns `*Artefact` domain objects that carry their own session reference — no `context.Context` is needed.
 
-| Operation | Returns |
-|-----------|---------|
-| `GetArtefact(id)` | The latest version's content bytes for the specified artefact. |
-| `GetArtefactVersion(id, versionHash)` | Content bytes for a specific version, identified by content hash. |
-| `GetArtefactMetadata(id)` | Version history list and passport (stamps) without content bytes. |
-| `ListArtefacts()` | All artefacts (`id`, `governedArtefact`) associated with the current Workitem, queried from the Archivist. |
+### Workitem Entry Points
+
+| Operation | Returns | Description |
+|-----------|---------|-------------|
+| `Workitem.GetArtefact(governedArtefact)` | `(*Artefact, error)` | Look up artefact by governed artefact kind (e.g. `"haiku"`, `"petition"`). Returns the head version. |
+| `Workitem.FindArtefact(artefactID)` | `(*Artefact, error)` | Look up a specific artefact by its unique artefact ID (e.g. `"art-abc-123"`). |
+
+### Artefact Domain Object
+
+The returned `*Artefact` provides read, write, and stamp operations:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Artefact.ID()` | `string` | Artefact identifier (no round-trip). |
+| `Artefact.GovernedArtefact()` | `string` | Governed artefact name (no round-trip). |
+| `Artefact.VersionHash()` | `string` | Current version hash (no round-trip). |
+| `Artefact.IsNewVersion()` | `bool` | True if the artefact was created as a new version (no round-trip, set after `Store`). |
+| `Artefact.GetContent()` | `([]byte, error)` | Retrieves content from the Archivist. Cached for the handler invocation. |
+| `Artefact.GetStamps()` | `([]*Stamp, error)` | Returns all stamps on the current version. |
+| `Artefact.HasStamp(name)` | `(bool, error)` | Checks whether the named stamp exists on the current version. |
+| `Artefact.GetFeedback()` | `([]*Feedback, error)` | Returns all feedback items for the artefact. |
+| `Artefact.HasUnresolvedFeedback()` | `(bool, error)` | True if any feedback is in a non-resolved state. |
 
 The Sidecar verifies content integrity on fetch: `SHA256(content) == storedHash`. A hash mismatch produces an `ARTEFACT_CORRUPTED` error.
 
 The Sidecar caches artefact content for the duration of the handler invocation. Repeated reads of the same version within one handler do not generate additional Archivist requests. The cache is discarded when the assignment completes.
 
-The `Workitem` object returned at handler invocation is a snapshot of state at assignment time. Artefact content, versions, and stamps are fetched from the Archivist on demand through the operations above.
+The `Workitem` object returned at handler invocation is a snapshot of state at assignment time. Artefact content, versions, and stamps are fetched from the Archivist on demand through the `Artefact` domain object methods above.
 
 ## Write and Versioning Operations
 
-Artefact writes are content-addressed. Every version is identified by a SHA256 hash of its content.
+Artefact writes are content-addressed. Every version is identified by a SHA256 hash of its content. Writes are performed through the `Artefact.Store()` domain method.
 
 | Operation | Behaviour |
 |-----------|-----------|
-| `StoreArtefact(id, governedArtefact, content)` | Writes content to the Archivist. For a new `id`, the Archivist creates the artefact record associated with the current Workitem. |
+| `Artefact.Store(content)` | Writes content to the Archivist for the artefact's `id` and `governedArtefact`. Updates local `VersionHash()` and `IsNewVersion()` state. |
 
 Write outcomes depend on whether the `id` already exists on the Workitem:
 
@@ -60,11 +76,12 @@ sequenceDiagram
     participant SC as Sidecar
     participant AR as Archivist
 
-    HD->>SC: StoreArtefact(id, governedArtefact, content)
+    HD->>HD: wi.GetArtefact(governedArtefact)
+    HD->>SC: Artefact.Store(content)
     SC->>SC: Compute SHA256 hash
     SC->>AR: Persist content bytes + version record + Workitem association
     AR-->>SC: Version hash confirmed
-    SC-->>HD: Version hash
+    SC-->>HD: Version hash + isNewVersion
 ```
 
 ## Stamp Operations
@@ -75,8 +92,8 @@ sequenceDiagram
 
 | Operation | Returns |
 |-----------|---------|
-| `GetStamps(id)` | Full list of stamps on the artefact's current version. |
-| `HasStamp(id, name)` | `true` if the named stamp exists on the current version. |
+| `Artefact.GetStamps()` | Full list of stamps on the artefact's current version. |
+| `Artefact.HasStamp(name)` | `true` if the named stamp exists on the current version. |
 
 Stamp inspection methods are factual queries. The SDK exposes what stamps exist, not what they mean. Governance semantics — which stamps are required, whether an artefact is "approved" — belong to the [Operator](../02-flow/01-operator.md) and [exit contract](../02-flow/05-configuration.md#entry-and-exit-contract-semantics) configuration.
 
@@ -89,7 +106,7 @@ Methods that interpret stamp semantics are intentionally absent:
 
 | Operation | Behaviour |
 |-----------|-----------|
-| `StampArtefact(id, stampName)` | Apply a named stamp to the artefact's current version. |
+| `Artefact.Stamp(name)` | Apply a named stamp to the artefact's current version. |
 
 Stamp application is capability-gated. The node must hold `STAMP:artefact/<governed-artefact-name>/<stamp-name>` for the artefact's governed artefact name and the specific stamp name. The stamp name must also be declared in the artefact's [GovernedArtefact](../05-reference/crds.md#governedartefact) stamp vocabulary — stamp names not in the vocabulary are rejected at configuration admission. The [Archivist](../02-flow/04-system-services.md#archivist) validates the capability grant and records the stamp with the applying node's identity, the artefact's current content hash, and a cryptographic signature from the Sidecar's identity material.
 
@@ -103,10 +120,9 @@ Artefact operations map to capability requirements enforced by the backing servi
 
 | Operation | Required Capability | Enforcing Service |
 |-----------|-------------------|-------------------|
-| Read operations (`GetArtefact`, `GetArtefactVersion`, `GetArtefactMetadata`) | `READ:artefact` | Archivist |
-| `ListArtefacts` | Assignment scope (implicit) | Archivist |
-| `StoreArtefact` | `WRITE:artefact` or `WRITE:artefact/<governed-artefact-name>` | Archivist |
-| `StampArtefact` | `STAMP:artefact/<governed-artefact-name>/<stamp-name>` | Archivist |
+| `Workitem.GetArtefact`, `Artefact.GetContent`, `Artefact.GetStamps`, `Artefact.GetFeedback` | `READ:artefact` | Archivist |
+| `Artefact.Store` | `WRITE:artefact` or `WRITE:artefact/<governed-artefact-name>` | Archivist |
+| `Artefact.Stamp` | `STAMP:artefact/<governed-artefact-name>/<stamp-name>` | Archivist |
 | Feedback operations | See [SDK Feedback](./04-sdk-feedback.md#capability-and-error-semantics) | Archivist |
 
 Missing capabilities produce a `CAPABILITY_DENIED` error from the service. The Sidecar forwards the denial to the handler as a structured error with no state change.
@@ -120,7 +136,7 @@ Audit trails for artefact mutations — version creation, stamp application, fee
 ## Artefact Invariants
 
 1. `id` is unique and stable within a Workitem; `governedArtefact` is immutable for a given `id`.
-2. All artefact operations are scoped to the current Workitem assignment.
+2. All artefact operations are scoped to the current Workitem assignment. No `context.Context` is passed by the caller — the `Artefact` domain object carries its own session reference.
 3. Content is addressed by SHA256 hash. Identical content produces no new version.
 4. New versions start with an empty passport. Stamps do not carry over.
 5. Stamps are write-once per artefact version per stamp name.

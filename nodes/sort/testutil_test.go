@@ -189,6 +189,15 @@ func (s *sortSpy) GetFlowTopology(
 // Archivist methods
 // ---------------------------------------------------------------------------
 
+func (s *sortSpy) GetArtefact(
+	_ context.Context, req *flowv1.GetArtefactRequest,
+) (*flowv1.GetArtefactResponse, error) {
+	return &flowv1.GetArtefactResponse{
+		Content:          []byte("test-haiku-content"),
+		GovernedArtefact: req.GetArtefactId(),
+	}, nil
+}
+
 func (s *sortSpy) HasStamp(
 	_ context.Context, req *flowv1.HasStampRequest,
 ) (*flowv1.HasStampResponse, error) {

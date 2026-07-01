@@ -10,8 +10,6 @@ import (
 	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // ---------------------------------------------------------------------------
@@ -94,9 +92,19 @@ func (s *codifySpy) GetArtefact(
 		return nil, s.GetArtefactErr
 	}
 
+	// Check pre-seeded artefacts first, then stored artefacts.
 	content, ok := s.Artefacts[req.GetArtefactId()]
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "artefact %q not found", req.GetArtefactId())
+		content, ok = s.StoredArtefacts[req.GetArtefactId()]
+	}
+	if !ok {
+		// ponytail: return empty content for unknown artefacts, matching
+		// the new SDK pattern where GetArtefact is called before Store.
+		return &flowv1.GetArtefactResponse{
+			GovernedArtefact: req.GetArtefactId(),
+			Content:          nil,
+			VersionHash:      "",
+		}, nil
 	}
 	return &flowv1.GetArtefactResponse{Content: content}, nil
 }
@@ -130,7 +138,7 @@ func newSpyGRPCServer(spy *codifySpy) *grpc.Server {
 	return srv
 }
 
-func setupCodifyTest(t *testing.T, spy *codifySpy) *flow.Client {
+func setupCodifyTest(t *testing.T, spy *codifySpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -152,7 +160,12 @@ func setupCodifyTest(t *testing.T, spy *codifySpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem: %v", err)
+	}
+
+	return client, workitem
 }
 
 // seedGoal populates the spy with a codification-goal artefact.

@@ -147,7 +147,7 @@ func TestConsumeEvents_CreatesWorkitems(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
 	tracker := internal.NewPendingTracker()
 
-	stream, err := ec.Subscribe(context.Background(), channel, eventType)
+	stream, err := ec.Subscribe(channel, eventType)
 	if err != nil {
 		t.Fatalf("Subscribe() failed: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestConsumeEvents_DeduplicatesSameLawID(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
 	tracker := internal.NewPendingTracker()
 
-	stream, err := ec.Subscribe(context.Background(), channel, eventType)
+	stream, err := ec.Subscribe(channel, eventType)
 	if err != nil {
 		t.Fatalf("Subscribe() failed: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestConsumeEvents_SkipsMissingLawID(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
 	tracker := internal.NewPendingTracker()
 
-	stream, err := ec.Subscribe(context.Background(), channel, eventType)
+	stream, err := ec.Subscribe(channel, eventType)
 	if err != nil {
 		t.Fatalf("Subscribe() failed: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestConsumeEvents_CreateWorkitemError_ClearsPending(t *testing.T) {
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
 	tracker := internal.NewPendingTracker()
 
-	stream, err := ec.Subscribe(context.Background(), channel, eventType)
+	stream, err := ec.Subscribe(channel, eventType)
 	if err != nil {
 		t.Fatalf("Subscribe() failed: %v", err)
 	}
@@ -281,9 +281,8 @@ func TestConsumeEvents_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	stream, err := ec.Subscribe(ctx, channel, eventType)
+	stream, err := ec.Subscribe(channel, eventType)
 	if err != nil {
-		// Subscribe may fail immediately on cancelled context, that's fine.
 		return
 	}
 
@@ -299,16 +298,15 @@ func TestConsumeEvents_ContextCancelled(t *testing.T) {
 
 func TestProcessHearing_Success(t *testing.T) {
 	spy := &handlerSpy{}
-	client := newHandlerTestClient(t, spy)
-
 	wctx := &flowv1.WorkitemContext{
 		FlowNamespace: "test-ns",
 		WorkitemId:    "wi-hearing-001",
 		NodeId:        "friction-watcher",
 		Metadata:      map[string]string{"law_id": "law-42"},
 	}
+	workitem := newHandlerTestWorkitem(t, spy, wctx.GetWorkitemId())
 
-	err := processHearing(context.Background(), client, wctx)
+	err := processHearing(workitem, wctx)
 	if err != nil {
 		t.Fatalf("processHearing() returned error: %v", err)
 	}
@@ -347,16 +345,15 @@ func TestProcessHearing_Success(t *testing.T) {
 
 func TestProcessHearing_MissingLawID(t *testing.T) {
 	spy := &handlerSpy{}
-	client := newHandlerTestClient(t, spy)
-
 	wctx := &flowv1.WorkitemContext{
 		FlowNamespace: "test-ns",
 		WorkitemId:    "wi-hearing-002",
 		NodeId:        "friction-watcher",
 		Metadata:      map[string]string{}, // no law_id
 	}
+	workitem := newHandlerTestWorkitem(t, spy, wctx.GetWorkitemId())
 
-	err := processHearing(context.Background(), client, wctx)
+	err := processHearing(workitem, wctx)
 	if err == nil {
 		t.Fatal("expected error for missing law_id, got nil")
 	}
@@ -374,16 +371,15 @@ func TestProcessHearing_MissingLawID(t *testing.T) {
 
 func TestProcessHearing_NilMetadata(t *testing.T) {
 	spy := &handlerSpy{}
-	client := newHandlerTestClient(t, spy)
-
 	wctx := &flowv1.WorkitemContext{
 		FlowNamespace: "test-ns",
 		WorkitemId:    "wi-hearing-003",
 		NodeId:        "friction-watcher",
 		// No Metadata field set at all.
 	}
+	workitem := newHandlerTestWorkitem(t, spy, wctx.GetWorkitemId())
 
-	err := processHearing(context.Background(), client, wctx)
+	err := processHearing(workitem, wctx)
 	if err == nil {
 		t.Fatal("expected error for nil metadata, got nil")
 	}

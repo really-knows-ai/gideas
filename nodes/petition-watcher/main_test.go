@@ -76,7 +76,7 @@ func TestConsumeOutcomes_ProcessesEvents(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestConsumeOutcomes_DeduplicatesSamePetitionID(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestConsumeOutcomes_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	stream, err := fedClient.SubscribePetitionOutcomes(ctx, "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		// Subscribe may fail immediately on cancelled context, that's fine.
 		return
@@ -240,8 +240,6 @@ func TestWatchOutcomes_ReconnectsOnStreamError(t *testing.T) {
 
 func TestHandleOutcome_Stub(t *testing.T) {
 	spy := &handlerSpy{}
-	client := newHandlerTestClient(t, spy)
-
 	wctx := &flowv1.WorkitemContext{
 		FlowNamespace: "test-ns",
 		WorkitemId:    "wi-petition-001",
@@ -250,8 +248,9 @@ func TestHandleOutcome_Stub(t *testing.T) {
 			"petition_id": testPetitionID1,
 		},
 	}
+	workitem := newHandlerTestWorkitem(t, spy, wctx.GetWorkitemId())
 
-	err := processOutcome(context.Background(), client, wctx)
+	err := processOutcome(workitem, wctx)
 	if err != nil {
 		t.Fatalf("processOutcome() returned error: %v", err)
 	}
@@ -293,7 +292,7 @@ func TestConsumeOutcomes_Accepted_CallsRetireDisputeRecord(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -331,7 +330,7 @@ func TestConsumeOutcomes_Accepted_RetireNotFound_LogsAndContinues(t *testing.T) 
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -370,7 +369,7 @@ func TestConsumeOutcomes_Accepted_RetireOtherError_LogsAndContinues(t *testing.T
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -411,7 +410,7 @@ func TestConsumeOutcomes_Rejected_CallsRetireDisputeRecord(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -447,7 +446,7 @@ func TestConsumeOutcomes_Rejected_CreatesClerkCycleWorkitem(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -530,7 +529,7 @@ func TestConsumeOutcomes_Rejected_RetireNotFound_StillCreatesWorkitem(t *testing
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -578,7 +577,7 @@ func TestConsumeOutcomes_Rejected_CreateWorkitemError_LogsAndContinues(t *testin
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -632,7 +631,7 @@ func TestConsumeOutcomes_Accepted_ResumesHeldWorkitems(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -674,7 +673,7 @@ func TestConsumeOutcomes_Accepted_ZeroHeldWorkitems_NoError(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -715,7 +714,7 @@ func TestConsumeOutcomes_Accepted_ListSuspendedError_LogsAndContinues(t *testing
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -759,7 +758,7 @@ func TestConsumeOutcomes_Accepted_ResumeFailure_DoesNotBlockOthers(t *testing.T)
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}
@@ -801,7 +800,7 @@ func TestConsumeOutcomes_Rejected_ResumesHeldWorkitems(t *testing.T) {
 
 	tracker := internal.NewPendingTracker()
 
-	stream, err := fedClient.SubscribePetitionOutcomes(context.Background(), "test-flow")
+	stream, err := fedClient.SubscribePetitionOutcomes("test-flow")
 	if err != nil {
 		t.Fatalf("SubscribePetitionOutcomes() failed: %v", err)
 	}

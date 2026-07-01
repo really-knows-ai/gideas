@@ -112,7 +112,11 @@ func handleRuleRouter(
 	cfg *ruleRouterConfig,
 	metadata map[string]string,
 ) error {
-	_, _ = client.Heartbeat(ctx)
+	wi, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("rule-router: get workitem: %w", err)
+	}
+	_ = wi.Heartbeat()
 
 	// Validate configuration.
 	if err := validateConfig(cfg); err != nil {
@@ -127,13 +131,13 @@ func handleRuleRouter(
 
 	// Determine which variables are referenced by any rule expression and
 	// lazily load only the data that is actually needed.
-	activation, err := buildActivation(ctx, client, cfg.Rules, metadata)
+	activation, err := buildActivation(ctx, client, wi, cfg.Rules, metadata)
 	if err != nil {
 		return fmt.Errorf("rule-router: load variables: %w", err)
 	}
 
 	// Telemetry: started.
-	nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.started", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.rule_router.started", map[string]any{
 		"rule_count":  len(compiled),
 		"has_default": cfg.Default != "",
 	})
@@ -157,13 +161,13 @@ func handleRuleRouter(
 			"rule_name", cr.name,
 			"output", cr.output,
 		)
-		nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.matched", map[string]any{
+		nodeutil.EmitTelemetry(client, "foundry.rule_router.matched", map[string]any{
 			"rule_index": i,
 			"rule_name":  cr.name,
 			"output":     cr.output,
 		})
 
-		if _, err := client.RouteToOutput(ctx, cr.output); err != nil {
+		if err := wi.RouteTo(cr.output); err != nil {
 			return fmt.Errorf("rule-router: route to %q: %w", cr.output, err)
 		}
 		return nil
@@ -174,19 +178,19 @@ func handleRuleRouter(
 		slog.Info("rule-router: no rule matched, using default",
 			"output", cfg.Default,
 		)
-		nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
+		nodeutil.EmitTelemetry(client, "foundry.rule_router.no_match", map[string]any{
 			"output":  cfg.Default,
 			"default": true,
 		})
 
-		if _, err := client.RouteToOutput(ctx, cfg.Default); err != nil {
+		if err := wi.RouteTo(cfg.Default); err != nil {
 			return fmt.Errorf("rule-router: route to default %q: %w", cfg.Default, err)
 		}
 		return nil
 	}
 
 	// No rule matched and no default — error.
-	nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.rule_router.no_match", map[string]any{
 		"default": false,
 	})
 	return fmt.Errorf("rule-router: no rule matched and no default output configured")
@@ -295,6 +299,7 @@ func needsVar(rules []ruleEntry, varName string) bool {
 func buildActivation(
 	ctx context.Context,
 	client *flow.Client,
+	wi *flow.Workitem,
 	rules []ruleEntry,
 	metadata map[string]string,
 ) (map[string]any, error) {
@@ -309,10 +314,12 @@ func buildActivation(
 		"children":  []any{},
 	}
 
+	workitemID := wi.ID()
+
 	// Artefacts — needed by both "artefacts" and "feedback" variables.
 	var artefactIDs []string
 	if needsVar(rules, "artefacts") || needsVar(rules, "feedback") || needsVar(rules, "stamps") {
-		ids, err := loadArtefacts(ctx, client)
+		ids, err := loadArtefacts(ctx, client, workitemID)
 		if err != nil {
 			return nil, fmt.Errorf("load artefacts: %w", err)
 		}
@@ -327,7 +334,7 @@ func buildActivation(
 
 	// Feedback — aggregated across all artefacts.
 	if needsVar(rules, "feedback") {
-		fb, err := loadFeedback(ctx, client, artefactIDs)
+		fb, err := loadFeedback(ctx, client, workitemID, artefactIDs)
 		if err != nil {
 			return nil, fmt.Errorf("load feedback: %w", err)
 		}
@@ -336,16 +343,16 @@ func buildActivation(
 
 	// Stamps — per-artefact stamp names.
 	if needsVar(rules, "stamps") {
-		st, err := loadStamps(ctx, client, artefactIDs)
+		st, err := loadStamps(ctx, client, workitemID, artefactIDs)
 		if err != nil {
 			return nil, fmt.Errorf("load stamps: %w", err)
 		}
 		act["stamps"] = st
 	}
 
-	// Children — raw proto for completion_reason access.
+	// Children — SDK domain method now includes CompletionReason.
 	if needsVar(rules, "children") {
-		ch, err := loadChildren(ctx, client)
+		ch, err := loadChildren(wi)
 		if err != nil {
 			return nil, fmt.Errorf("load children: %w", err)
 		}
@@ -356,9 +363,9 @@ func buildActivation(
 }
 
 // loadArtefacts fetches the governed artefact names on the current workitem.
-func loadArtefacts(ctx context.Context, client *flow.Client) ([]string, error) {
-	resp, err := client.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
-		WorkitemId: client.WorkitemID(),
+func loadArtefacts(ctx context.Context, client *flow.Client, workitemID string) ([]string, error) {
+	resp, err := client.RawArchivist().ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+		WorkitemId: workitemID,
 	})
 	if err != nil {
 		return nil, err
@@ -372,15 +379,21 @@ func loadArtefacts(ctx context.Context, client *flow.Client) ([]string, error) {
 
 // loadFeedback aggregates feedback across all artefacts into the feedback
 // CEL variable shape: {unresolved_count, has_deadlocked, total_count}.
-func loadFeedback(ctx context.Context, client *flow.Client, artefactIDs []string) (map[string]any, error) {
+// ponytail: uses RawArchivist escape hatch for proto feedback access.
+func loadFeedback(ctx context.Context, client *flow.Client,
+	workitemID string, artefactIDs []string) (map[string]any, error) {
 	var totalCount, unresolvedCount int
 	var hasDeadlocked bool
 
 	for _, artID := range artefactIDs {
-		items, err := client.GetFeedback(ctx, artID)
+		resp, err := client.RawArchivist().GetFeedback(ctx, &flowv1.GetFeedbackRequest{
+			WorkitemId: workitemID,
+			ArtefactId: artID,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("artefact %s: %w", artID, err)
 		}
+		items := resp.GetFeedbackItems()
 		for _, item := range items {
 			totalCount++
 			switch item.GetState() {
@@ -402,10 +415,11 @@ func loadFeedback(ctx context.Context, client *flow.Client, artefactIDs []string
 
 // loadStamps fetches per-artefact stamp names via QueryArtefactState.
 // Returns map[artefactID] -> []stampName for the CEL stamps variable.
-func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) (map[string]any, error) {
+func loadStamps(ctx context.Context, client *flow.Client,
+	workitemID string, artefactIDs []string) (map[string]any, error) {
 	// Derive governed artefact names for the query.
-	resp, err := client.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
-		WorkitemId: client.WorkitemID(),
+	resp, err := client.RawArchivist().ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+		WorkitemId: workitemID,
 	})
 	if err != nil {
 		return nil, err
@@ -418,8 +432,8 @@ func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) 
 		idByGovName[ref.GetGovernedArtefact()] = ref.GetId()
 	}
 
-	stateResp, err := client.Archivist.QueryArtefactState(ctx, &flowv1.QueryArtefactStateRequest{
-		WorkitemId:        client.WorkitemID(),
+	stateResp, err := client.RawArchivist().QueryArtefactState(ctx, &flowv1.QueryArtefactStateRequest{
+		WorkitemId:        workitemID,
 		GovernedArtefacts: govNames,
 	})
 	if err != nil {
@@ -446,20 +460,19 @@ func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) 
 	return stamps, nil
 }
 
-// loadChildren fetches child workitem statuses using the raw Operator RPC
-// (not the SDK convenience method) to preserve CompletionReason.
-func loadChildren(ctx context.Context, client *flow.Client) ([]any, error) {
-	resp, err := client.Operator.GetChildren(ctx, &flowv1.GetChildrenRequest{})
+// loadChildren fetches child workitem statuses using the SDK domain method.
+func loadChildren(wi *flow.Workitem) ([]any, error) {
+	children, err := wi.GetChildren()
 	if err != nil {
 		return nil, err
 	}
-	children := make([]any, len(resp.GetChildren()))
-	for i, ch := range resp.GetChildren() {
-		children[i] = map[string]any{
-			"workitem_id":       ch.GetWorkitemId(),
-			"phase":             ch.GetPhase(),
-			"completion_reason": ch.GetCompletionReason().String(),
+	celChildren := make([]any, len(children))
+	for i, ch := range children {
+		celChildren[i] = map[string]any{
+			"workitem_id":       ch.WorkitemID,
+			"phase":             ch.Phase,
+			"completion_reason": ch.CompletionReason,
 		}
 	}
-	return children, nil
+	return celChildren, nil
 }

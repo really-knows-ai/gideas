@@ -226,27 +226,36 @@ func BuildFanOutTasks(cfg TallyConfig, input RoundInput) ([]flow.FanOutTask, err
 // If a child is in the Failed phase, CollectArtefacts returns an error
 // (propagated to the caller). If a child has no verdict artefact, it is
 // skipped with a warning — the vote count will be lower than expected.
+//
+// ponytail: Uses RawArchivist escape hatch for reading child artefacts.
 func CollectVotes(
 	ctx context.Context,
 	client *flow.Client,
+	parentWorkitemID string,
 	children []flow.ChildWorkitemStatus,
 ) ([]JurorVote, error) {
-	results, err := client.CollectArtefacts(ctx, children, ArtefactVerdict)
-	if err != nil {
-		return nil, fmt.Errorf("tally: collect verdict artefacts: %w", err)
+	// Check for failed children first.
+	for _, ch := range children {
+		if ch.Phase == flow.PhaseFailed {
+			return nil, fmt.Errorf("tally: child %s is in Failed phase", ch.WorkitemID)
+		}
 	}
 
-	votes := make([]JurorVote, 0, len(results))
-	for _, r := range results {
-		raw := r.Artefacts[ArtefactVerdict]
-		if raw == nil {
+	votes := make([]JurorVote, 0, len(children))
+	for _, ch := range children {
+		resp, err := client.RawArchivist().GetArtefact(ctx, &flowv1.GetArtefactRequest{
+			WorkitemId:       parentWorkitemID,
+			ArtefactId:       ArtefactVerdict,
+			TargetWorkitemId: ch.WorkitemID,
+		})
+		if err != nil {
 			// Child completed but produced no verdict — skip.
 			continue
 		}
 		var v JurorVote
-		if err := json.Unmarshal(raw, &v); err != nil {
+		if err := json.Unmarshal(resp.GetContent(), &v); err != nil {
 			return nil, fmt.Errorf("tally: unmarshal verdict from child %s: %w",
-				r.Status.WorkitemID, err)
+				ch.WorkitemID, err)
 		}
 		votes = append(votes, v)
 	}

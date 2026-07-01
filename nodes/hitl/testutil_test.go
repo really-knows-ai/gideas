@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -356,7 +357,12 @@ func runHandler(
 ) <-chan error {
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleHITL(ctx, client, qm, wctx)
+		wi, wiErr := client.GetWorkitem(wctx.GetWorkitemId())
+		if wiErr != nil {
+			errCh <- fmt.Errorf("runHandler: get workitem: %w", wiErr)
+			return
+		}
+		errCh <- handleHITL(ctx, client, wi, qm, wctx)
 	}()
 	return errCh
 }
@@ -372,6 +378,18 @@ func simulateDecision(t *testing.T, ctx context.Context, qm flow.QueueManager, w
 	if err := qm.Decide(ctx, workitemID, choice); err != nil {
 		t.Fatalf("Decide failed: %v", err)
 	}
+}
+
+// newFlowFromTopology creates a *flow.Flow from the spy's Topology response
+// by creating a client that reads from the spy's GetFlowTopology implementation.
+func newFlowFromTopology(t *testing.T, spy *hitlSpy) *flow.Flow {
+	t.Helper()
+	client := newSpyClient(t, spy)
+	f, err := client.GetFlow()
+	if err != nil {
+		t.Fatalf("GetFlow() failed: %v", err)
+	}
+	return f
 }
 
 // ---------------------------------------------------------------------------

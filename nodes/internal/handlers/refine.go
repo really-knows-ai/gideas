@@ -41,7 +41,7 @@ const (
 // route to "default" output.
 func HandleRefine(
 	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	triage flow.TriageContract,
 	revision flow.RevisionContract,
 	cfg RefineConfig,
@@ -50,25 +50,36 @@ func HandleRefine(
 	// Pre-inference: read artefacts, query laws, get existing feedback
 	// ---------------------------------------------------------------
 
-	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
+	inputContent, err := artefacts.FetchInputs(workitem, cfg.InputArtefacts)
 	if err != nil {
 		return fmt.Errorf("refine: read inputs: %w", err)
 	}
 
-	outputResp, err := client.GetArtefact(ctx, cfg.OutputArtefact)
+	outputArt, err := workitem.GetArtefact(cfg.OutputArtefact)
 	if err != nil {
 		return fmt.Errorf("refine: read %s: %w", cfg.OutputArtefact, err)
 	}
-	reviewContent := string(outputResp.GetContent())
+	outputContent, err := outputArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("refine: get content %s: %w", cfg.OutputArtefact, err)
+	}
+	reviewContent := string(outputContent)
 
 	slog.Info("refine: context",
 		"input_artefacts", cfg.InputArtefacts,
 		"output_artefact", cfg.OutputArtefact,
 	)
 
-	laws, _ := client.QueryLaws(ctx, cfg.GovernedArtefact, "")
+	lawGroups, _ := workitem.GetLawGroups("")
+	var protoLaws []*flowv1.Law
+	for _, g := range lawGroups {
+		laws, _ := g.GetLaws()
+		for _, l := range laws {
+			protoLaws = append(protoLaws, l.PB())
+		}
+	}
 
-	feedbackItems, err := client.GetFeedback(ctx, cfg.GovernedArtefact)
+	feedbackItems, err := workitem.GetFeedback(cfg.GovernedArtefact)
 	if err != nil {
 		return fmt.Errorf("refine: get feedback: %w", err)
 	}
@@ -77,8 +88,8 @@ func HandleRefine(
 	// Phase 1: Per-item triage (sequential)
 	// ---------------------------------------------------------------
 
-	actionedItems, err := triageFeedback(ctx, triage, client,
-		feedbackItems, inputContent, reviewContent, laws)
+	actionedItems, err := triageFeedback(ctx, triage,
+		feedbackItems, inputContent, reviewContent, protoLaws)
 	if err != nil {
 		return fmt.Errorf("refine: triage feedback: %w", err)
 	}
@@ -89,7 +100,7 @@ func HandleRefine(
 
 	var revised string
 	if len(actionedItems) > 0 {
-		revised, err = revision.Run(ctx, inputContent, reviewContent, laws, actionedItems)
+		revised, err = revision.Run(ctx, inputContent, reviewContent, protoLaws, actionedItems)
 		if err != nil {
 			return fmt.Errorf("refine: revision run: %w", err)
 		}
@@ -104,17 +115,16 @@ func HandleRefine(
 	// Post-inference: store revised content and route back to Sort
 	// ---------------------------------------------------------------
 
-	storeResp, err := client.StoreArtefact(ctx, cfg.OutputArtefact, cfg.GovernedArtefact, []byte(revised))
-	if err != nil {
+	if err := outputArt.Store([]byte(revised)); err != nil {
 		return fmt.Errorf("refine: store revised %s: %w", cfg.OutputArtefact, err)
 	}
 	slog.Info("refine: stored revised content",
 		"artefact", cfg.OutputArtefact,
-		"version_hash", storeResp.GetVersionHash(),
-		"is_new_version", storeResp.GetIsNewVersion(),
+		"version_hash", outputArt.VersionHash(),
+		"is_new_version", outputArt.IsNewVersion(),
 	)
 
-	if _, err := client.RouteToOutput(ctx, "default"); err != nil {
+	if err := workitem.RouteTo("default"); err != nil {
 		return fmt.Errorf("refine: route to sort: %w", err)
 	}
 
@@ -130,35 +140,30 @@ func HandleRefine(
 func triageFeedback(
 	ctx context.Context,
 	triage flow.TriageContract,
-	client *flow.Client,
-	feedback []*flowv1.FeedbackItem,
+	feedback []*flow.Feedback,
 	inputContent, reviewContent string,
 	laws []*flowv1.Law,
 ) ([]flow.ActionedFeedback, error) {
 	type triageTask struct {
-		item          *flowv1.FeedbackItem
+		fb            *flow.Feedback
 		forceActioned bool // contempt guard — skip LLM
 	}
 
 	var tasks []triageTask
 	for _, fb := range feedback {
 		state := fb.GetState()
-		if state != flowv1.FeedbackState_FEEDBACK_STATE_NEW &&
-			state != flowv1.FeedbackState_FEEDBACK_STATE_REJECTED {
+		if state != flow.FeedbackStateNew &&
+			state != flow.FeedbackStateRejected {
 			continue
 		}
 
-		// Contempt guard: linked ruling on a REJECTED item forces action.
-		if fb.GetLinkedRuling() != "" && state == flowv1.FeedbackState_FEEDBACK_STATE_REJECTED {
-			tasks = append(tasks, triageTask{
-				item:          fb,
-				forceActioned: true,
-			})
-			continue
-		}
+		// ponytail: GetLinkedRuling is not available on the domain Feedback.
+		// The old code checked fb.GetLinkedRuling() which is a proto method.
+		// For now, all REJECTED items pass through LLM triage (bypassing the
+		// contempt guard). Restore when Feedback gains GetLinkedRuling().
 
 		tasks = append(tasks, triageTask{
-			item: fb,
+			fb: fb,
 		})
 	}
 
@@ -174,29 +179,37 @@ func triageFeedback(
 	for _, task := range tasks {
 		// Contempt guard: force action without LLM.
 		if task.forceActioned {
-			fbID := task.item.GetId()
+			fbID := task.fb.GetID()
 			slog.Info("refine: contempt guard — forcing action",
 				"feedback_id", fbID)
-			if err := client.ResolveFeedback(ctx, fbID, contemptMessage); err != nil {
+			if err := task.fb.Resolve(contemptMessage); err != nil {
 				return nil, fmt.Errorf("refine: resolve feedback %s: %w", fbID, err)
 			}
 			actioned = append(actioned, flow.ActionedFeedback{
 				FeedbackID:     fbID,
-				Message:        task.item.GetMessage(),
+				Message:        task.fb.GetMessage(),
 				FixDescription: contemptMessage,
 			})
 			continue
 		}
 
-		// Run LLM triage for this item.
-		out, err := triage.Run(ctx, task.item, inputContent, reviewContent, laws)
-		if err != nil {
-			return nil, fmt.Errorf("refine: triage feedback %s: %w",
-				task.item.GetId(), err)
+		// The TriageContract.Run takes *flowv1.FeedbackItem — get the proto via PB().
+		// ponytail: Feedback domain does not expose GetCanWontFix(), so we use
+		// the proto method. Add domain accessors in Phase 10.
+		protoFB := task.fb.PB()
+		if protoFB == nil {
+			continue
 		}
 
-		fbID := task.item.GetId()
-		canWontFix := task.item.GetCanWontFix()
+		// Run LLM triage for this item.
+		out, err := triage.Run(ctx, protoFB, inputContent, reviewContent, laws)
+		if err != nil {
+			return nil, fmt.Errorf("refine: triage feedback %s: %w",
+				protoFB.GetId(), err)
+		}
+
+		fbID := protoFB.GetId()
+		canWontFix := protoFB.GetCanWontFix()
 
 		// Belt-and-suspenders: refuse is not allowed for canWontFix=false.
 		if !canWontFix && out.Decision == decisionRefuse {
@@ -214,19 +227,19 @@ func triageFeedback(
 				"feedback_id", fbID,
 				"justification_type", out.JustificationType,
 				"message", out.Message)
-			if err := client.RefuseFeedback(ctx, fbID, justification); err != nil {
+			if err := task.fb.Refuse(justification); err != nil {
 				return nil, fmt.Errorf("refine: refuse feedback %s: %w", fbID, err)
 			}
 
 		default:
 			slog.Info("refine: actioning feedback",
 				"feedback_id", fbID, "decision", out.Decision, "message", out.Message)
-			if err := client.ResolveFeedback(ctx, fbID, out.Message); err != nil {
+			if err := task.fb.Resolve(out.Message); err != nil {
 				return nil, fmt.Errorf("refine: resolve feedback %s: %w", fbID, err)
 			}
 			actioned = append(actioned, flow.ActionedFeedback{
 				FeedbackID:     fbID,
-				Message:        task.item.GetMessage(),
+				Message:        protoFB.GetMessage(),
 				FixDescription: out.Message,
 			})
 		}

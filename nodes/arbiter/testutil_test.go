@@ -308,7 +308,12 @@ func newSpyGRPCServer(spy *arbiterSpy) *grpc.Server {
 	return srv
 }
 
-func setupArbiterTest(t *testing.T, spy *arbiterSpy) *flow.Client {
+func setupArbiterTestWorkitem(t *testing.T, spy *arbiterSpy) (*flow.Client, *flow.Workitem) {
+	t.Helper()
+	return setupArbiterTest(t, spy)
+}
+
+func setupArbiterTest(t *testing.T, spy *arbiterSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -330,7 +335,12 @@ func setupArbiterTest(t *testing.T, spy *arbiterSpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem: %v", err)
+	}
+
+	return client, workitem
 }
 
 // ---------------------------------------------------------------------------
