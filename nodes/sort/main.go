@@ -123,10 +123,10 @@ func handleSort(ctx context.Context, workitem *flow.Workitem, client *flow.Clien
 	nodeOrder := parseNodeOrder(cfg.NodeOrder)
 
 	// ── Step 0: Discover topology ─────────────────────────────────────
-	// ponytail: Using client.GetFlowTopology for self/outputs because the
+	// ponytail: Using RawOperator escape hatch for self/outputs because the
 	// new Flow domain does not expose GetSelf() or node outputs. This can
-	// be cleaned up when the Flow domain gains these accessors (Phase 10).
-	topology, err := client.GetFlowTopology(ctx)
+	// be cleaned up when the Flow domain gains these accessors.
+	topology, err := client.RawOperator().GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err != nil {
 		return fmt.Errorf("sort: get flow topology: %w", err)
 	}
@@ -156,7 +156,7 @@ func handleSort(ctx context.Context, workitem *flow.Workitem, client *flow.Clien
 			// FeedbackItem for Justification access; the domain Feedback
 			// does not expose GetJustification(). Clean up in Phase 10
 			// when Feedback gains the missing accessors or Proto() escape hatch.
-			deadlockedProto := findDeadlockedProto(ctx, client, kind, deadlockedItem.GetID())
+			deadlockedProto := deadlockedItem.PB()
 			if deadlockedProto != nil {
 				if petitionID, ok := findActiveDisputeForFeedback(ctx, deadlockedProto); ok {
 					slog.Info("sort: suspending pending-hold (active dispute record)",
@@ -373,26 +373,6 @@ func hasAddressedFeedback(
 		}
 	}
 	return false, nil
-}
-
-// findDeadlockedProto fetches the proto FeedbackItem matching the given
-// feedback ID. This is a transitional helper — the domain Feedback does not
-// expose GetJustification(), which is needed by findActiveDisputeForFeedback.
-// ponytail: Remove when Feedback gains Proto() escape hatch or GetJustification()
-// accessor (Phase 10).
-func findDeadlockedProto(
-	ctx context.Context, client *flow.Client, artefactID, feedbackID string,
-) *flowv1.FeedbackItem {
-	items, err := client.GetFeedback(ctx, artefactID)
-	if err != nil {
-		return nil
-	}
-	for _, item := range items {
-		if item.GetId() == feedbackID {
-			return item
-		}
-	}
-	return nil
 }
 
 // findActiveDisputeForFeedback extracts law IDs from the deadlocked feedback

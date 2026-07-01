@@ -157,7 +157,8 @@ func handleAppraise(
 // discoverStamp queries the flow topology and extracts the node's stamp
 // capability. Returns the governed artefact kind and stamp name.
 func discoverStamp(ctx context.Context, client *flow.Client) (string, string, error) {
-	topology, err := client.GetFlowTopology(ctx)
+	// ponytail: uses RawOperator escape hatch for proto access to capabilities.
+	topology, err := client.RawOperator().GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err != nil {
 		return "", "", fmt.Errorf("get flow topology: %w", err)
 	}

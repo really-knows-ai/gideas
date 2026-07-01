@@ -115,9 +115,9 @@ func handleSort(
 	workitemID := wctx.GetWorkitemId()
 
 	// Discover topology to build the valid output set and optionally find stamp.
-	// ponytail: uses client.GetFlowTopology(ctx) for raw proto access to outputs
+	// ponytail: uses RawOperator escape hatch for raw proto access to outputs
 	// (not yet exposed on *flow.Flow).
-	topology, err := client.GetFlowTopology(ctx)
+	topology, err := client.RawOperator().GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if err != nil {
 		return fmt.Errorf("hitl-sort: get flow topology: %w", err)
 	}

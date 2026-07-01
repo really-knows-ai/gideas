@@ -2,9 +2,15 @@
 
 FoundryAgent is the SDK's managed wrapper for inference workloads. It automates heartbeat management, validates structured output against a declared schema, and emits cost telemetry atomically per inference step. FoundryAgent is the recommended pattern for all LLM-backed nodes, including [Juror nodes](../01-concepts/02-foundry-cycle.md#juror-judicial-agent) in the Judiciary's deliberation topology.
 
+**Note on `context.Context`:** The `Model.Infer(ctx, ...)` method is the sole exception
+to the SDK's no-`ctx` rule. Inference is a streaming-boundary operation where the caller
+needs cancellation control. All other SDK methods — `Workitem.Heartbeat()`,
+`Client.RecordTelemetry()`, and the rest — manage their own gRPC context internally
+and do not accept `context.Context`.
+
 ## FoundryAgent Runtime Role
 
-FoundryAgent sits between the [handler contract](./01-sdk-core.md#handler-lifecycle-contract) and the inference execution. Where a raw handler receives a `Context` and `Workitem` and must manually manage heartbeat signals, output validation, and telemetry emission, FoundryAgent wraps the inference call with automated lifecycle management.
+FoundryAgent sits between the [handler contract](./01-sdk-core.md#handler-lifecycle-contract) and the inference execution. Where a raw handler receives a `Workitem` (with implicit session) and must manually manage heartbeat signals, output validation, and telemetry emission, FoundryAgent wraps the inference call with automated lifecycle management.
 
 The developer implements an `Infer` method — the inference-specific business logic — and FoundryAgent handles the surrounding operational contract:
 
@@ -27,7 +33,7 @@ sequenceDiagram
     FA-->>SC: Return Result (routing instruction)
 ```
 
-FoundryAgent does not introduce new gRPC surface. It wraps existing SDK operations — [`Heartbeat()`](./01-sdk-core.md#heartbeat-and-activity-tracking) and [`RecordTelemetry()`](./06-sdk-telemetry.md) — into a managed lifecycle around the developer's inference logic.
+FoundryAgent does not introduce new gRPC surface. It wraps existing SDK operations — [`Workitem.Heartbeat()`](./01-sdk-core.md#heartbeat-and-activity-tracking) and [`Client.RecordTelemetry()`](./06-sdk-telemetry.md) — into a managed lifecycle around the developer's inference logic. These SDK calls manage their own gRPC context internally; no `context.Context` is passed to either method.
 
 ## Behavioural Guarantees
 
@@ -35,7 +41,7 @@ FoundryAgent provides three invariants that hold for every inference invocation:
 
 ### Managed Liveness
 
-FoundryAgent calls [`Heartbeat()`](./01-sdk-core.md#heartbeat-and-activity-tracking) at regular intervals during inference execution. The heartbeat loop starts before the `Infer` method is called and stops after it returns. The developer does not manage timers, background threads, or heartbeat scheduling.
+FoundryAgent calls [`Workitem.Heartbeat()`](./01-sdk-core.md#heartbeat-and-activity-tracking) at regular intervals during inference execution. The heartbeat loop starts before the `Infer` method is called and stops after it returns. The developer does not manage timers, background threads, or heartbeat scheduling.
 
 The heartbeat interval is configured to provide margin within the node's [inactivity timeout](../03-node/01-sidecar.md#heartbeat-and-activity-tracking). The wrapper ensures that even long-running inference steps — multi-minute LLM calls, iterative chain-of-thought loops — do not trigger timeout termination as long as the underlying process is alive.
 
@@ -49,7 +55,7 @@ Schema validation is output-side only. FoundryAgent does not validate the input 
 
 ### Atomic Cost Accounting
 
-Each inference step emits a `foundry.cost.llm` telemetry event immediately via [`RecordTelemetry()`](./06-sdk-telemetry.md). The event is emitted after each inference call returns, before any subsequent processing. If the handler is interrupted — by timeout, pod eviction, or cancellation — the accounting record reflects actual work performed up to the point of interruption, not batched totals emitted at handler exit.
+Each inference step emits a `foundry.cost.llm` telemetry event immediately via [`Client.RecordTelemetry()`](./06-sdk-telemetry.md). The event is emitted after each inference call returns, before any subsequent processing. If the handler is interrupted — by timeout, pod eviction, or cancellation — the accounting record reflects actual work performed up to the point of interruption, not batched totals emitted at handler exit.
 
 The `foundry.cost.llm` event carries structured cost data:
 
@@ -68,11 +74,11 @@ A FoundryAgent handler differs from a raw handler in a single structural way: th
 
 **Raw handler** — the developer:
 
-1. Receives `Context` and `Workitem`.
-2. Manages heartbeat manually for long-running computation.
+1. Receives a `Workitem` (with implicit session).
+2. Manages heartbeat manually for long-running computation via `Workitem.Heartbeat()`.
 3. Performs inference.
 4. Validates output manually.
-5. Emits cost telemetry manually.
+5. Emits cost telemetry manually via `Client.RecordTelemetry()`.
 6. Returns a `Result`.
 
 **FoundryAgent handler** — the developer:
@@ -168,7 +174,7 @@ flow.OverrideModelForTest(agent.agent, mockModel)
 - Simple routing nodes — nodes like [Sort](../01-concepts/02-foundry-cycle.md#sort-gate) that evaluate state and route without performing inference.
 - Nodes with no structured output — nodes that produce only unstructured artefact content gain nothing from schema validation.
 
-Nodes that perform inference without FoundryAgent must manage [`Heartbeat()`](./01-sdk-core.md#heartbeat-and-activity-tracking) calls manually, validate output explicitly, and emit cost telemetry through direct [`RecordTelemetry()`](./06-sdk-telemetry.md) calls. The [Long-Running and Agent Patterns](../03-node/03-patterns.md#long-running-and-agent-patterns) section describes the manual alternative.
+Nodes that perform inference without FoundryAgent must manage [`Workitem.Heartbeat()`](./01-sdk-core.md#heartbeat-and-activity-tracking) calls manually, validate output explicitly, and emit cost telemetry through direct [`Client.RecordTelemetry()`](./06-sdk-telemetry.md) calls. The [Long-Running and Agent Patterns](../03-node/03-patterns.md#long-running-and-agent-patterns) section describes the manual alternative.
 
 ## Relationship to Juror Nodes
 
@@ -189,11 +195,12 @@ Parallel Juror execution uses the standard [fan-out](../04-sdk/05-sdk-workitems.
 
 ## FoundryAgent Invariants
 
-1. Managed heartbeat runs continuously during `Infer` execution. The developer never manages heartbeat timers manually.
+1. Managed heartbeat runs continuously during `Infer` execution. The developer never manages heartbeat timers manually. `Workitem.Heartbeat()` is called by the wrapper — no `context.Context` needed.
 2. Output schema validation is mandatory. Inference output that does not conform to the declared schema is rejected before it can affect artefact state or routing.
-3. Cost telemetry is emitted atomically per inference step. Interrupted handlers reflect actual work performed.
-4. FoundryAgent introduces no new gRPC surface. It wraps existing `Heartbeat()` and `RecordTelemetry()` calls.
+3. Cost telemetry is emitted atomically per inference step via `Client.RecordTelemetry()`. Interrupted handlers reflect actual work performed.
+4. FoundryAgent introduces no new gRPC surface. It wraps existing `Workitem.Heartbeat()` and `Client.RecordTelemetry()` calls.
 5. The `Infer` method is the sole developer extension point. Heartbeat, validation, and cost accounting are wrapper-managed.
-6. Multiple inference steps within a single assignment are independently accounted and heartbeat-managed.
-7. Juror nodes are FoundryAgent instances. Per-Juror cost attribution is automatic through telemetry tags.
-8. Model selection is a code-time decision. Concrete agents create their model internally. The provider layer is unexported and invisible to consumers.
+6. `Infer(ctx context.Context, systemPrompt string, queryPrompt []byte) (*InferOutput, error)` retains `context.Context` — this is the documented exception to the SDK's no-`ctx` rule.
+7. Multiple inference steps within a single assignment are independently accounted and heartbeat-managed.
+8. Juror nodes are FoundryAgent instances. Per-Juror cost attribution is automatic through telemetry tags.
+9. Model selection is a code-time decision. Concrete agents create their model internally. The provider layer is unexported and invisible to consumers.

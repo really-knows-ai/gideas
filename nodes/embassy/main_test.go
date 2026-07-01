@@ -620,7 +620,8 @@ func TestHandleExport_MissingImportTypeReturnsError(t *testing.T) {
 		cfg: &embassyConfig{FederationIdentity: "local-flow"},
 	}
 
-	wi := getExportTestWorkitem(t, client, wctx.GetWorkitemId()); err := processExport(context.Background(), client, wi, wctx, deps)
+	wi := getExportTestWorkitem(t, client, wctx.GetWorkitemId())
+	err := processExport(context.Background(), client, wi, wctx, deps)
 	if err == nil {
 		t.Fatal("expected processExport to return error when import_type is missing")
 	}

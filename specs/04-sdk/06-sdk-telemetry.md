@@ -13,10 +13,20 @@ The SDK emits distinct signal classes:
 | Traces | Distributed trace spans for request-path analysis | Flow Event Bus (telemetry channel) |
 | Custom events | Structured domain-specific events emitted by handler code | Flow Event Bus (telemetry channel) |
 
-Custom telemetry events are emitted through `RecordTelemetry(eventType, payload)`:
+Custom telemetry events are emitted through the SDK's internal telemetry path. The
+SDK manages gRPC context internally — no `context.Context` is accepted.
+
+The `RecordTelemetry` method is available on `Client` for direct emission:
+
+```go
+// Client.RecordTelemetry emits a custom telemetry event to the Event Bus.
+func (c *Client) RecordTelemetry(eventType string, payload []byte) error
+```
 
 - `eventType` (string) — identifies the event kind. Use the `foundry.` namespace prefix with sub-namespaces: `foundry.node.*` for node-level events, `foundry.business.*` for domain-specific events, `foundry.debug.*` for diagnostic events.
-- `payload` (structured data) — JSON-serializable event data, maximum 64 KB.
+- `payload` ([]byte) — JSON-serializable event data, maximum 64 KB.
+
+The [FoundryAgent](./07-sdk-agent.md) also emits telemetry automatically for inference costs via the `foundry.cost.llm` event type.
 
 The Sidecar wraps every telemetry event in a standard envelope before publishing to the Flow Event Bus's telemetry channel:
 
@@ -34,15 +44,15 @@ Telemetry emission is non-blocking. The call returns immediately; delivery to th
 
 Friction is additive. Callers emit a magnitude and optional law attribution; the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) aggregates the raw events post-hoc across whatever axes operators need (per-node, per-law, per-tier, per-topology-path). There is no caller-side operation selection — every emission adds to the total.
 
-[`Cite(law_ids)`](./03-sdk-legal.md#citation) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) uses to evaluate hearing thresholds and publish threshold-crossing signals to the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node.
+`Workitem.Cite(lawIDs ...)` (and [`Law.Cite()`](./03-sdk-legal.md#citation)) is a convenience wrapper that calls `AddFriction` with a fixed citation magnitude and the specified law identifiers. It is the standard way for nodes to record law usage — the signal is frequency of citation, not caller-weighted importance. The accumulated friction on a law is what the [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) uses to evaluate hearing thresholds and publish threshold-crossing signals to the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node.
 
-[`AddFeedback`](./04-sdk-feedback.md#feedback-friction) transparently emits `AddFriction` with magnitude equal to the feedback depth for that item. The first feedback on an item emits 1, the second 2, the nth n. This escalating cost signal makes the adversarial loop's price visible before deadlock.
+`Workitem.AddFeedback` (see [Feedback Friction](./04-sdk-feedback.md#feedback-friction)) transparently emits `AddFriction` with magnitude equal to the feedback depth for that item. The first feedback on an item emits 1, the second 2, the nth n. This escalating cost signal makes the adversarial loop's price visible before deadlock.
 
 These wrappers are additive contributions to the same friction stream. `Cite` records law usage. `AddFeedback` records governance debate cost. Both flow through the same `AddFriction` pipeline and are aggregated by the Friction Ledger alongside any direct `AddFriction` calls nodes make.
 
 ### AddFriction: Node Context
 
-`AddFriction` requires the `WRITE:friction` [capability](../03-node/02-configuration.md#capability-model). The Sidecar enforces this before publishing to the Flow Event Bus. [`Cite`](./03-sdk-legal.md#citation) inherits this requirement — it is sugar over `AddFriction`.
+`AddFriction` requires the `WRITE:friction` [capability](../03-node/02-configuration.md#capability-model). The Sidecar enforces this before publishing to the Flow Event Bus. `Workitem.Cite` and `Law.Cite` (see [Citation](./03-sdk-legal.md#citation)) inherit this requirement — they are sugar over `AddFriction`.
 
 When called from a node handler, the Sidecar automatically injects identity context. The node SDK surface accepts only semantic data:
 
@@ -95,7 +105,7 @@ Friction is the primary governance cost signal. Nodes should use `AddFriction` f
 
 ### Inference Cost Accounting Convention
 
-The `foundry.cost.llm` event type is the standard convention for recording LLM inference costs. [FoundryAgent](./07-sdk-agent.md) emits this event atomically after each inference step. Nodes that perform inference without FoundryAgent should emit the same event type through `RecordTelemetry` for consistent cost aggregation.
+The `foundry.cost.llm` event type is the standard convention for recording LLM inference costs. [FoundryAgent](./07-sdk-agent.md) emits this event atomically after each inference step. Nodes that perform inference without FoundryAgent should emit the same event type through `Client.RecordTelemetry` for consistent cost aggregation.
 
 The expected payload includes `model` (model identifier), `input_tokens`, `output_tokens`, and `duration_ms`. Implementations may include additional fields (e.g. `provider`, `cached_tokens`). The payload follows standard custom event conventions: structured, JSON-serializable, subject to the 64 KB limit, and wrapped in the Sidecar's identity envelope.
 
@@ -119,8 +129,8 @@ Node telemetry supplements service audit with business context — why a routing
 
 Telemetry failures are non-blocking. If the [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) is degraded or unreachable:
 
-- `AddFriction`, `Cite`, and `RecordTelemetry` calls return without error. The SDK logs a warning internally.
-- Friction events from `AddFeedback` are still emitted by the SDK; if the Flow Event Bus cannot receive them, the Sidecar buffers them locally and retries. The feedback state transition itself (persisted by the Archivist) is unaffected.
+- `Workitem.Cite`, `Workitem.AddFeedback`, and `Client.RecordTelemetry` calls return without error. The SDK logs a warning internally.
+- Friction events from `Workitem.AddFeedback` are still emitted by the SDK; if the Flow Event Bus cannot receive them, the Sidecar buffers them locally and retries. The feedback state transition itself (persisted by the Archivist) is unaffected.
 - Work execution never fails because telemetry delivery failed.
 
 The Sidecar maintains a bounded internal buffer for outgoing telemetry. If the buffer fills due to sustained backpressure, the oldest events are dropped. The Sidecar emits a counter metric for dropped events so operators can detect telemetry loss.
@@ -140,10 +150,10 @@ Guidance:
 ## Telemetry SDK Invariants
 
 1. Friction is purely additive — callers emit a magnitude. The only operation is additive emission; multiply, log, and set are not available.
-2. Friction emission is mandatory for `Cite` and `AddFeedback`. These are not optional instrumentation — they are runtime outputs.
+2. Friction emission is mandatory for `Workitem.Cite` and `Workitem.AddFeedback`. These are not optional instrumentation — they are runtime outputs.
 3. The Sidecar injects identity context for node-originated telemetry. Nodes cannot spoof attribution.
 4. Telemetry failures do not block or fail work execution.
 5. Custom telemetry events are capped at 64 KB per payload.
 6. The Friction Ledger aggregates friction post-hoc via Flow Event Bus subscription. Callers do not control aggregation axes.
-7. Authoritative mutation audit is service-owned. Node telemetry supplements but does not replace service audit.
+7. Authoritative mutation audit is service-owned. Node telemetry supplements but does not replace service audit. The `PublishAuditEvent` method is removed — nodes do not emit supplementary audit telemetry for mutations.
 8. Friction events take priority over custom telemetry in buffer contention.

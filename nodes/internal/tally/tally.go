@@ -227,12 +227,11 @@ func BuildFanOutTasks(cfg TallyConfig, input RoundInput) ([]flow.FanOutTask, err
 // (propagated to the caller). If a child has no verdict artefact, it is
 // skipped with a warning — the vote count will be lower than expected.
 //
-// ponytail: Uses Client.GetChildArtefact directly because the Workitem domain
-// does not expose a child-artefact read method. Replace with a Workitem method
-// in Phase 10.
+// ponytail: Uses RawArchivist escape hatch for reading child artefacts.
 func CollectVotes(
 	ctx context.Context,
 	client *flow.Client,
+	parentWorkitemID string,
 	children []flow.ChildWorkitemStatus,
 ) ([]JurorVote, error) {
 	// Check for failed children first.
@@ -244,7 +243,11 @@ func CollectVotes(
 
 	votes := make([]JurorVote, 0, len(children))
 	for _, ch := range children {
-		resp, err := client.GetChildArtefact(ctx, ch.WorkitemID, ArtefactVerdict)
+		resp, err := client.RawArchivist().GetArtefact(ctx, &flowv1.GetArtefactRequest{
+			WorkitemId:       parentWorkitemID,
+			ArtefactId:       ArtefactVerdict,
+			TargetWorkitemId: ch.WorkitemID,
+		})
 		if err != nil {
 			// Child completed but produced no verdict — skip.
 			continue

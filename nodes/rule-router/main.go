@@ -112,7 +112,11 @@ func handleRuleRouter(
 	cfg *ruleRouterConfig,
 	metadata map[string]string,
 ) error {
-	_, _ = client.Heartbeat(ctx)
+	wi, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("rule-router: get workitem: %w", err)
+	}
+	_ = wi.Heartbeat()
 
 	// Validate configuration.
 	if err := validateConfig(cfg); err != nil {
@@ -127,13 +131,13 @@ func handleRuleRouter(
 
 	// Determine which variables are referenced by any rule expression and
 	// lazily load only the data that is actually needed.
-	activation, err := buildActivation(ctx, client, cfg.Rules, metadata)
+	activation, err := buildActivation(ctx, client, wi.ID(), cfg.Rules, metadata)
 	if err != nil {
 		return fmt.Errorf("rule-router: load variables: %w", err)
 	}
 
 	// Telemetry: started.
-	nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.started", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.rule_router.started", map[string]any{
 		"rule_count":  len(compiled),
 		"has_default": cfg.Default != "",
 	})
@@ -157,13 +161,13 @@ func handleRuleRouter(
 			"rule_name", cr.name,
 			"output", cr.output,
 		)
-		nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.matched", map[string]any{
+		nodeutil.EmitTelemetry(client, "foundry.rule_router.matched", map[string]any{
 			"rule_index": i,
 			"rule_name":  cr.name,
 			"output":     cr.output,
 		})
 
-		if _, err := client.RouteToOutput(ctx, cr.output); err != nil {
+		if err := wi.RouteTo(cr.output); err != nil {
 			return fmt.Errorf("rule-router: route to %q: %w", cr.output, err)
 		}
 		return nil
@@ -174,19 +178,19 @@ func handleRuleRouter(
 		slog.Info("rule-router: no rule matched, using default",
 			"output", cfg.Default,
 		)
-		nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
+		nodeutil.EmitTelemetry(client, "foundry.rule_router.no_match", map[string]any{
 			"output":  cfg.Default,
 			"default": true,
 		})
 
-		if _, err := client.RouteToOutput(ctx, cfg.Default); err != nil {
+		if err := wi.RouteTo(cfg.Default); err != nil {
 			return fmt.Errorf("rule-router: route to default %q: %w", cfg.Default, err)
 		}
 		return nil
 	}
 
 	// No rule matched and no default — error.
-	nodeutil.EmitTelemetry(ctx, client, "foundry.rule_router.no_match", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.rule_router.no_match", map[string]any{
 		"default": false,
 	})
 	return fmt.Errorf("rule-router: no rule matched and no default output configured")
@@ -295,6 +299,7 @@ func needsVar(rules []ruleEntry, varName string) bool {
 func buildActivation(
 	ctx context.Context,
 	client *flow.Client,
+	workitemID string,
 	rules []ruleEntry,
 	metadata map[string]string,
 ) (map[string]any, error) {
@@ -312,7 +317,7 @@ func buildActivation(
 	// Artefacts — needed by both "artefacts" and "feedback" variables.
 	var artefactIDs []string
 	if needsVar(rules, "artefacts") || needsVar(rules, "feedback") || needsVar(rules, "stamps") {
-		ids, err := loadArtefacts(ctx, client)
+		ids, err := loadArtefacts(ctx, client, workitemID)
 		if err != nil {
 			return nil, fmt.Errorf("load artefacts: %w", err)
 		}
@@ -327,7 +332,7 @@ func buildActivation(
 
 	// Feedback — aggregated across all artefacts.
 	if needsVar(rules, "feedback") {
-		fb, err := loadFeedback(ctx, client, artefactIDs)
+		fb, err := loadFeedback(ctx, client, workitemID, artefactIDs)
 		if err != nil {
 			return nil, fmt.Errorf("load feedback: %w", err)
 		}
@@ -336,7 +341,7 @@ func buildActivation(
 
 	// Stamps — per-artefact stamp names.
 	if needsVar(rules, "stamps") {
-		st, err := loadStamps(ctx, client, artefactIDs)
+		st, err := loadStamps(ctx, client, workitemID, artefactIDs)
 		if err != nil {
 			return nil, fmt.Errorf("load stamps: %w", err)
 		}
@@ -356,9 +361,9 @@ func buildActivation(
 }
 
 // loadArtefacts fetches the governed artefact names on the current workitem.
-func loadArtefacts(ctx context.Context, client *flow.Client) ([]string, error) {
+func loadArtefacts(ctx context.Context, client *flow.Client, workitemID string) ([]string, error) {
 	resp, err := client.RawArchivist().ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
-		WorkitemId: client.WorkitemID(),
+		WorkitemId: workitemID,
 	})
 	if err != nil {
 		return nil, err
@@ -372,15 +377,20 @@ func loadArtefacts(ctx context.Context, client *flow.Client) ([]string, error) {
 
 // loadFeedback aggregates feedback across all artefacts into the feedback
 // CEL variable shape: {unresolved_count, has_deadlocked, total_count}.
-func loadFeedback(ctx context.Context, client *flow.Client, artefactIDs []string) (map[string]any, error) {
+// ponytail: uses RawArchivist escape hatch for proto feedback access.
+func loadFeedback(ctx context.Context, client *flow.Client, workitemID string, artefactIDs []string) (map[string]any, error) {
 	var totalCount, unresolvedCount int
 	var hasDeadlocked bool
 
 	for _, artID := range artefactIDs {
-		items, err := client.GetFeedback(ctx, artID)
+		resp, err := client.RawArchivist().GetFeedback(ctx, &flowv1.GetFeedbackRequest{
+			WorkitemId: workitemID,
+			ArtefactId: artID,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("artefact %s: %w", artID, err)
 		}
+		items := resp.GetFeedbackItems()
 		for _, item := range items {
 			totalCount++
 			switch item.GetState() {
@@ -402,10 +412,10 @@ func loadFeedback(ctx context.Context, client *flow.Client, artefactIDs []string
 
 // loadStamps fetches per-artefact stamp names via QueryArtefactState.
 // Returns map[artefactID] -> []stampName for the CEL stamps variable.
-func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) (map[string]any, error) {
+func loadStamps(ctx context.Context, client *flow.Client, workitemID string, artefactIDs []string) (map[string]any, error) {
 	// Derive governed artefact names for the query.
 	resp, err := client.RawArchivist().ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
-		WorkitemId: client.WorkitemID(),
+		WorkitemId: workitemID,
 	})
 	if err != nil {
 		return nil, err
@@ -419,7 +429,7 @@ func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) 
 	}
 
 	stateResp, err := client.RawArchivist().QueryArtefactState(ctx, &flowv1.QueryArtefactStateRequest{
-		WorkitemId:        client.WorkitemID(),
+		WorkitemId:        workitemID,
 		GovernedArtefacts: govNames,
 	})
 	if err != nil {

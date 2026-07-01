@@ -25,13 +25,20 @@ The SDK abstracts transport, identity injection, and service topology from node 
 
 Every handler invocation is scoped to a single [Workitem](../02-flow/02-workitem.md) assignment. The Sidecar establishes an assignment session when the [Operator](../02-flow/01-operator.md) assigns a Workitem to the node, and all SDK calls within that session are automatically scoped to the assigned Workitem.
 
+Domain objects (`Workitem`, `Artefact`, `Feedback`, `LawGroup`, `Law`, `Flow`, `Node`)
+carry an internal session reference created by the `Client`. No `context.Context` is
+accepted by any user-facing method — the SDK manages gRPC metadata, cancellation,
+and retries internally. The only exception is `Infer(ctx, ...)` on the
+[Agent](07-sdk-agent.md#model-interface) abstraction, where the caller needs
+cancellation control over streaming inference.
+
 Assignment scoping is enforced at every layer:
 
-- **SDK surface** — no parameter exists for targeting a foreign Workitem. Operations are implicitly scoped to the current assignment.
+- **SDK surface** — domain objects carry an internal session reference. Operations are implicitly scoped to the current assignment. No `context.Context` parameter exists.
 - **Sidecar** — injects `node_id`, `workitem_id`, and `namespace` into every outgoing request. Requests referencing artefacts or state outside the current assignment are rejected before they reach a service.
 - **Runtime services** — validate that incoming requests match the declared assignment context.
 
-When a node is configured for concurrent processing (`concurrency > 1`), each assignment runs an independent session with its own Workitem scope, activity timer, and handler context. Thread safety within node code is the developer's responsibility.
+When a node is configured for concurrent processing (`concurrency > 1`), each assignment runs an independent session with its own `Workitem` scope, activity timer, and handler context. Thread safety within node code is the developer's responsibility.
 
 ## Trust and Authority Boundaries
 
@@ -53,19 +60,22 @@ Node containers hold no Flow runtime credentials. The Sidecar holds identity mat
 
 ## SDK Surface Map
 
-The SDK is organised into domain-specific surfaces, each backed by a runtime service:
+The SDK is organised into domain-object surfaces, each backed by a runtime service.
+The `Client` is a thin entry point with exactly five methods: `NewClient`, `Close`,
+`GetWorkitem`, `GetFlow`, `GetNode`, `GetLaw`, and `RecordFinding`. All other
+operations are accessed through domain objects that carry their own internal session.
 
-| Surface | Scope | Backing Service | Detail |
-|---------|-------|-----------------|--------|
-| [Core](./01-sdk-core.md) | Handler lifecycle, routing, completion | Operator (via Sidecar) | Handler contract, routing instructions, heartbeat |
-| [Artefacts](./02-sdk-artefacts.md) | Read, write, version, stamp, inspect | Archivist (via Sidecar) | Content addressing, passport, stamp application |
-| [Legal](./03-sdk-legal.md) | Law retrieval, citation, finding creation | Librarian (via Sidecar) | Query modes, citation friction, Tier 1 writes |
-| [Feedback](./04-sdk-feedback.md) | Create, transition, query, resolve | Archivist (via Sidecar) | State machine, justification, contempt guard |
-| [Workitems](./05-sdk-workitems.md) | Read state, create locally, child Workitems, inspect | Operator (via Sidecar) | Assignment-scoped access, child fan-out/fan-in, snapshot semantics |
-| [Telemetry](./06-sdk-telemetry.md) | Friction, metrics, traces, custom events | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
-| [Agent](./07-sdk-agent.md) | Managed inference wrapper | Operator + Flow Monitor (via Sidecar) | Automatic heartbeat, schema validation, atomic cost accounting |
-| [HITL](./08-sdk-hitl.md) | Queue management, REST API, Federated Queue Mesh | Node-local (queue) + Operator (via Sidecar) | `USE:queue/server` capability, persistent queue, escalation |
-| [Cross-Flow](./09-sdk-cross-flow.md) | Embassy manifest/package, import type resolution, naturalisation | Embassy + Operator (via Sidecar) | built-in + flow-authored import type registry, `imported-*` attestation stamps |
+| Surface | Entry Point | Backing Service | Detail |
+|---------|-------------|-----------------|--------|
+| [Core](./01-sdk-core.md) | `Workitem` (lifecycle) | Operator (via Sidecar) | Handler contract, routing instructions, heartbeat |
+| [Artefacts](./02-sdk-artefacts.md) | `Workitem.GetArtefact()` / `Artefact` | Archivist (via Sidecar) | Content addressing, passport, stamp application |
+| [Legal](./03-sdk-legal.md) | `Workitem.GetLawGroups()` / `LawGroup.Law` / `Client.GetLaw()` / `Client.RecordFinding()` | Librarian (via Sidecar) | Query modes, citation friction, Tier 1 writes |
+| [Feedback](./04-sdk-feedback.md) | `Workitem.AddFeedback()` / `Feedback` | Archivist (via Sidecar) | State machine, justification, contempt guard |
+| [Workitems](./05-sdk-workitems.md) | `Workitem` / `ChildWorkitem` | Operator (via Sidecar) | Assignment-scoped access, child fan-out/fan-in, snapshot semantics |
+| [Telemetry](./06-sdk-telemetry.md) | `Workitem.QueryFriction()` + Agent | Flow Monitor (via Sidecar) | Additive friction, identity-injected signals |
+| [Agent](./07-sdk-agent.md) | `FoundryAgent` / `Model.Infer(ctx, ...)` | Operator + Flow Monitor (via Sidecar) | Automatic heartbeat, schema validation, atomic cost accounting |
+| [HITL](./08-sdk-hitl.md) | `QueueManager` + `Workitem.PauseTimer()` / `Workitem.ResumeTimer()` | Node-local (queue) + Operator (via Sidecar) | `USE:queue/server` capability, persistent queue, escalation |
+| [Cross-Flow](./09-sdk-cross-flow.md) | `EntryClient` / `FederationClient` / `EmbassyClient` | Embassy + Operator (via Sidecar) | built-in + flow-authored import type registry, `imported-*` attestation stamps |
 
 All surfaces share the same trust model: SDK calls transit the Sidecar, which authenticates and proxies to the authoritative service.
 
@@ -102,6 +112,14 @@ SDK operations produce structured errors with stable error codes. Errors origina
 - Write-once stamp violation (same stamp name on same artefact version).
 - Contempt violation (attempt to override a judicially-linked ruling).
 - Invalid routing instruction (unresolvable output or target).
+
+The SDK manages `context.Context` internally — domain objects carry a session
+reference and use `context.Background()` for gRPC calls. Timeout and retry are
+configured at the `Client` level via `WithTimeout` and `WithRetry` options.
+`context.Canceled` and `context.DeadlineExceeded` are never exposed to callers;
+they are handled internally by the session. The only exception is
+`Infer(ctx, ...)` on the [Agent](07-sdk-agent.md#model-interface) abstraction,
+which retains `context.Context` for streaming-boundary cancellation.
 
 The SDK does not implement built-in error routing. When an SDK call fails, the handler receives a structured error and decides what failure means in its domain — retry, route elsewhere, or fail the assignment. Error classification utilities (`IsRetryable`, `IsError`) help handlers distinguish transient failures from permanent rejections.
 

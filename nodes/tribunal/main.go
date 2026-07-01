@@ -210,7 +210,7 @@ func handleTribunal(ctx context.Context, client *flow.Client, workitem *flow.Wor
 		}
 
 		roundCompleted := filterRoundChildren(allCompleted, roundChildren)
-		votes, collectErr := tally.CollectVotes(ctx, client, roundCompleted)
+		votes, collectErr := tally.CollectVotes(ctx, client, workitem.ID(), roundCompleted)
 		if collectErr != nil {
 			return fmt.Errorf("tribunal: collect votes (round %d): %w", round, collectErr)
 		}
@@ -258,7 +258,13 @@ func queryRelatedLaws(
 	if len(appliesTo) == 0 {
 		return nil, nil
 	}
-	return client.QueryLaws(ctx, appliesTo[0], "")
+	resp, err := client.RawLibrarian().QueryLaws(ctx, &flowv1.QueryLawsRequest{
+		Filter: &flowv1.LawFilter{GovernedArtefact: appliesTo[0]},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tribunal: query related laws: %w", err)
+	}
+	return resp.GetLaws(), nil
 }
 
 func filterRoundChildren(

@@ -192,13 +192,13 @@ func handleFacilitator(
 
 	children := resp.GetChildren()
 	if hasCompletedChild(children) {
-		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
+		nodeutil.EmitTelemetry(client, "foundry.facilitator.started", map[string]any{
 			"phase": "resume",
 		})
 		return handlePostResume(ctx, client, workitem, children)
 	}
 
-	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.facilitator.started", map[string]any{
 		"phase": "first",
 	})
 	return handleFirstInvocation(ctx, client, workitem, cfg, wctx)
@@ -244,7 +244,7 @@ func handleFirstInvocation(
 	// No deadlocked feedback — route to resolved with a warning.
 	if disputed == nil {
 		slog.Warn("facilitator: no deadlocked feedback found, routing to resolved")
-		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.no_deadlock", map[string]any{
+		nodeutil.EmitTelemetry(client, "foundry.facilitator.no_deadlock", map[string]any{
 			"output": outputResolved,
 		})
 		if err := workitem.RouteTo(outputResolved); err != nil {
@@ -282,7 +282,7 @@ func handleFirstInvocation(
 		return err
 	}
 
-	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.evidence_assembled", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.facilitator.evidence_assembled", map[string]any{
 		"artefact_kind": artefactKind,
 		"feedback_id":   disputed.GetID(),
 	})
@@ -341,7 +341,7 @@ func handleFirstInvocation(
 		return fmt.Errorf("facilitator: suspend: %w", err)
 	}
 
-	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.suspended", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.facilitator.suspended", map[string]any{
 		"child_id":      child.ID(),
 		"arbiter_node":  cfg.arbiterNode(),
 		"artefact_kind": artefactKind,
@@ -595,7 +595,14 @@ func buildAppendix(
 	var b strings.Builder
 
 	b.WriteString("# Appendix: All Laws\n\n")
-	laws, err := client.QueryLaws(ctx, artefactKind, "")
+	// ponytail: uses RawLibrarian escape hatch for proto access to law fields.
+	lawsResp, err := client.RawLibrarian().QueryLaws(ctx, &flowv1.QueryLawsRequest{
+		Filter: &flowv1.LawFilter{GovernedArtefact: artefactKind},
+	})
+	if err != nil {
+		return "", fmt.Errorf("facilitator: query laws for %s: %w", artefactKind, err)
+	}
+	laws := lawsResp.GetLaws()
 	if err != nil {
 		return "", fmt.Errorf("facilitator: query laws for %s: %w", artefactKind, err)
 	}
@@ -656,7 +663,7 @@ func handlePostResume(
 
 	if reason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
 		slog.Info("facilitator: child cancelled, propagating cancellation")
-		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.cancelled", map[string]any{
+		nodeutil.EmitTelemetry(client, "foundry.facilitator.cancelled", map[string]any{
 			"child_id": completed.GetWorkitemId(),
 		})
 		if err := workitem.Complete(flow.WithReason(
@@ -669,7 +676,7 @@ func handlePostResume(
 
 	// Success (UNSPECIFIED = normal completion).
 	slog.Info("facilitator: child succeeded, routing to resolved")
-	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.resolved", map[string]any{
+	nodeutil.EmitTelemetry(client, "foundry.facilitator.resolved", map[string]any{
 		"child_id": completed.GetWorkitemId(),
 		"output":   outputResolved,
 	})

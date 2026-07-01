@@ -10,125 +10,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Tests — CreateChildWorkitem
-// ---------------------------------------------------------------------------
-
-func TestCreateChildWorkitem_ReturnsHandle(t *testing.T) {
-	const wantID = "workitem-parent-001"
-	env := setupTestEnv(t, wantID)
-
-	child, err := env.client.CreateChildWorkitem(context.Background())
-	if err != nil {
-		t.Fatalf("CreateChildWorkitem() returned error: %v", err)
-	}
-	if child.ID() != "child-001" {
-		t.Fatalf("expected child ID=child-001, got %q", child.ID())
-	}
-	if child.session != env.client.session {
-		t.Fatal("child.session does not point to the expected session")
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — GetChildren
-// ---------------------------------------------------------------------------
-
-func TestGetChildren_ReturnsStatuses(t *testing.T) {
-	const wantID = "workitem-parent-002"
-	env := setupTestEnv(t, wantID)
-
-	children, err := env.client.GetChildren(context.Background())
-	if err != nil {
-		t.Fatalf("GetChildren() returned error: %v", err)
-	}
-	if len(children) != 2 {
-		t.Fatalf("expected 2 children, got %d", len(children))
-	}
-
-	c1 := children[0]
-	if c1.WorkitemID != "child-001" {
-		t.Fatalf("expected child-001, got %q", c1.WorkitemID)
-	}
-	if c1.Phase != PhaseRunning {
-		t.Fatalf("expected phase Running, got %q", c1.Phase)
-	}
-	if c1.CurrentAssignee != "codify-smt" {
-		t.Fatalf("expected assignee codify-smt, got %q", c1.CurrentAssignee)
-	}
-	if len(c1.Artefacts) != 1 {
-		t.Fatalf("expected 1 artefact, got %d", len(c1.Artefacts))
-	}
-
-	c2 := children[1]
-	if c2.WorkitemID != "child-002" {
-		t.Fatalf("expected child-002, got %q", c2.WorkitemID)
-	}
-	if c2.Phase != PhaseCompleted {
-		t.Fatalf("expected phase Completed, got %q", c2.Phase)
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — GetChildArtefact
-// ---------------------------------------------------------------------------
-
-func TestGetChildArtefact_InjectsTargetWorkitemID(t *testing.T) {
-	const wantID = "workitem-parent-003"
-	env := setupTestEnv(t, wantID)
-
-	resp, err := env.client.GetChildArtefact(context.Background(), "child-002", "output")
-	if err != nil {
-		t.Fatalf("GetChildArtefact() returned error: %v", err)
-	}
-	if string(resp.GetContent()) != "test-content" {
-		t.Fatalf("unexpected content: %s", resp.GetContent())
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — ListChildArtefacts
-// ---------------------------------------------------------------------------
-
-func TestListChildArtefacts_ReturnsRefs(t *testing.T) {
-	const wantID = "workitem-parent-004"
-	env := setupTestEnv(t, wantID)
-
-	refs, err := env.client.ListChildArtefacts(context.Background(), "child-002")
-	if err != nil {
-		t.Fatalf("ListChildArtefacts() returned error: %v", err)
-	}
-	if len(refs) != 1 {
-		t.Fatalf("expected 1 artefact ref, got %d", len(refs))
-	}
-	if refs[0].GetId() != "output" {
-		t.Fatalf("expected artefact id=output, got %q", refs[0].GetId())
-	}
-	if refs[0].GetGovernedArtefact() != "codification-output" {
-		t.Fatalf("expected governed_artefact=codification-output, got %q", refs[0].GetGovernedArtefact())
-	}
-
-	got := env.spy.lastMD.Get("x-flow-workitem-id")
-	if len(got) == 0 || got[0] != wantID {
-		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Tests — ChildWorkitem Handle Methods (new: no ctx, error-only returns)
 // ---------------------------------------------------------------------------
 
@@ -240,12 +121,6 @@ func TestChildWorkitem_StoreArtefact_Error_Propagates(t *testing.T) {
 		session: env.client.session,
 	}
 
-	// Remove the Archivist registration so calls will fail.
-	// Instead use the spyServer's StoreArtefact which always succeeds.
-	// We test error propagation by expecting success; for actual error
-	// testing we'd need a spy that returns errors on child's methods.
-	// The child uses session.Archivist, so the spyServer's StoreArtefact
-	// is called even with context.Background().
 	err := child.StoreArtefact("input", "ga", []byte("data"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -253,17 +128,22 @@ func TestChildWorkitem_StoreArtefact_Error_Propagates(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — CreateChildWorkitem returns handle with working methods
+// Tests — Workitem.CreateChild returns handle with working methods
 // ---------------------------------------------------------------------------
 
 func TestCreateChildWorkitem_HandleIntegration(t *testing.T) {
 	const wantID = "workitem-parent-integration"
 	env := setupTestEnv(t, wantID)
 
-	// Create a child via the convenience method.
-	child, err := env.client.CreateChildWorkitem(context.Background())
+	wi, err := env.client.GetWorkitem()
 	if err != nil {
-		t.Fatalf("CreateChildWorkitem() returned error: %v", err)
+		t.Fatalf("GetWorkitem() returned error: %v", err)
+	}
+
+	// Create a child via the workitem domain method.
+	child, err := wi.CreateChild()
+	if err != nil {
+		t.Fatalf("wi.CreateChild() returned error: %v", err)
 	}
 
 	// Verify the handle's session is correctly wired.
@@ -388,7 +268,7 @@ func TestChildWorkitem_Complete_SendsCorrectRequest(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// spyEventBusServer — used by fanout_test.go and childwatcher_test.go
+// spyEventBusServer — used by childwatcher_test.go
 // ---------------------------------------------------------------------------
 
 // spyEventBusServer implements FlowEventBusServiceServer for testing

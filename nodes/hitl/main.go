@@ -167,10 +167,10 @@ func handleHITL(
 
 	// ponytail: GetTopology returns *flow.Flow which wraps the proto.
 	// The Flow type does not expose GetSelf() outputs directly.
-	// For now we call Client.GetFlowTopology once to access the raw
+	// For now we use RawOperator escape hatch to access the raw
 	// proto for output discovery. This ceiling should be removed when
 	// Flow exposes output methods.
-	rawTopology, rawErr := client.GetFlowTopology(ctx)
+	rawTopology, rawErr := client.RawOperator().GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
 	if rawErr != nil {
 		return fmt.Errorf("hitl: get raw topology: %w", err)
 	}
@@ -382,7 +382,7 @@ func handleChoices(cfg *hitlConfig) http.HandlerFunc {
 			http.Error(w, "hitl: get topology failed", http.StatusServiceUnavailable)
 			return
 		}
-		rawTopology, err := client.GetFlowTopology(r.Context())
+		rawTopology, err := client.RawOperator().GetFlowTopology(r.Context(), &flowv1.GetFlowTopologyRequest{})
 		if err != nil {
 			http.Error(w, "hitl: get topology failed", http.StatusServiceUnavailable)
 			return

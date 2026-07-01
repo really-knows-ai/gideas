@@ -2,6 +2,11 @@
 
 The Cross-Flow SDK surface describes how node implementers interact with cross-flow transfer from the SDK perspective. The full protocol — Embassy architecture, trust topologies, Treaty CRDs, and wire-level transfer semantics — is defined in [Cross-Flow Collaboration](../02-flow/06-cross-flow.md). This document covers the node-facing surface only.
 
+All Cross-Flow clients (`EntryClient`, `FederationClient`, `EmbassyClient`) follow
+the same no-`ctx` pattern as the core SDK: no `context.Context` appears in any
+user-facing method signature. Streaming operations return watcher objects with
+`Recv()/Stop()` lifecycle, not channels.
+
 ## Embassy Overview
 
 The [Embassy](../02-flow/06-cross-flow.md#embassy) is the standard cross-flow boundary node, present in every Flow. It handles outbound export and inbound import. Node handlers do not call Embassy methods directly — outbound transfer happens by routing a Workitem to Embassy, and inbound transfer is materialised before any node sees the resulting Workitem.
@@ -64,6 +69,74 @@ For `law-petition` imports specifically:
 4. The Workitem routes according to the platform-owned `law-petition` intake policy for the receiving Flow.
 5. The receiving node sees a normal Workitem with `imported-approval` and `imported-judiciary-consensus` stamps on the petition artefact. It processes based on artefact content and stamp state.
 
+## EntryClient
+
+`EntryClient` provides operations for entry-bound node logic, available through
+`StartEntry` which provides an `EntryFunc(ctx context.Context, client *EntryClient) error`.
+The entry function receives a `context.Context` for shutdown signalling — this is
+separate from the per-call context that was removed from SDK method signatures.
+
+All `EntryClient` methods accept no `context.Context`:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `EntryClient.CreateWorkitem(metadata)` | `(string, error)` | Creates a new Workitem with optional metadata. |
+| `EntryClient.Subscribe(channel, eventType)` | `(*EventStream, error)` | Opens a streaming subscription to the Event Bus. |
+| `EntryClient.QueryLaws(governedArtefact, representationType)` | `([]*flowv1.Law, error)` | Returns laws matching the filter. |
+| `EntryClient.RetireDisputeRecord(petitionID)` | `error` | Retires a dispute record by petition ID. |
+| `EntryClient.ResumeWorkitem(workitemID)` | `error` | Resumes a suspended workitem by ID. |
+| `EntryClient.ListSuspendedWorkitems(conditionContains)` | `([]string, error)` | Returns suspended workitem IDs matching the condition filter. |
+
+`EventStream` supports `Recv()/Stop()` lifecycle:
+
+```go
+func (s *EventStream) Recv() (*flowv1.FlowEvent, error)
+func (s *EventStream) Stop()
+```
+
+## FederationClient
+
+`FederationClient` provides SDK helpers for the Federation service RPCs. All methods
+accept no `context.Context`:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `FederationClient.GetPetitionTarget(scope)` | `(*PetitionTarget, error)` | Returns the authority Flow identity and Embassy endpoint for a petition scope. |
+| `FederationClient.DiscoverEndpoints(stateFilter)` | `([]*FlowEndpoint, error)` | Returns Flow endpoints within the federation. |
+| `FederationClient.SubmitPublication(law, sourceFlowIdentity)` | `error` | Submits a local Tier 3 law for publication admission. |
+| `FederationClient.SubscribeLawUpdates(subscriberFlowIdentity)` | `(*LawUpdateWatcher, error)` | Opens a streaming subscription for published law distribution events. |
+| `FederationClient.SubscribePetitionOutcomes(subscriberFlowIdentity)` | `(*PetitionOutcomeWatcher, error)` | Opens a streaming subscription for petition outcome events. |
+
+Watcher types support `Recv()/Stop()`:
+
+```go
+type LawUpdateWatcher struct { /* unexported */ }
+func (w *LawUpdateWatcher) Recv() (*flowv1.PublishedLawEvent, error)
+func (w *LawUpdateWatcher) Stop()
+
+type PetitionOutcomeWatcher struct { /* unexported */ }
+func (w *PetitionOutcomeWatcher) Recv() (*flowv1.PetitionOutcomeEvent, error)
+func (w *PetitionOutcomeWatcher) Stop()
+```
+
+## EmbassyClient
+
+`EmbassyClient` provides SDK helpers for the Embassy transfer protocol. All methods
+accept no `context.Context`:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `EmbassyClient.PreflightManifest(manifest, remoteFlowIdentity)` | `(*PreflightManifestResponse, error)` | Validates a transfer manifest before package streaming. |
+| `EmbassyClient.StreamPackage(packageChunks)` | `(*StreamPackageResponse, error)` | Sends a package stream to the receiving Embassy. |
+| `EmbassyClient.ExportPackage(workitemID, importType)` | `(*EmbassyExportStream, error)` | Starts a package export stream. |
+
+`EmbassyExportStream` supports `Recv()/Stop()` for reading exported package chunks:
+
+```go
+func (s *EmbassyExportStream) Recv() (*flowv1.PackageChunk, error)
+func (s *EmbassyExportStream) Stop()
+```
+
 ## SDK Surface Boundaries
 
 The Cross-Flow SDK surface is deliberately thin:
@@ -84,3 +157,5 @@ The node implementer's responsibility is limited to: handing export work to Emba
 5. Naturalisation applies `imported-<stamp>` attestation stamps for each verified foreign stamp. Foreign stamps remain for provenance.
 6. Local contracts evaluate `imported-*` stamps at the Operator level, not in node code.
 7. Node handlers do not specify destination Flows, target Embassies, or import types.
+8. All `EntryClient`, `FederationClient`, and `EmbassyClient` methods accept no `context.Context`. Streaming returns watcher objects with `Recv()/Stop()` — no channel-based patterns.
+9. The `EntryFunc` signature `func(ctx context.Context, client *EntryClient) error` receives a `context.Context` for shutdown signalling, not per-call gRPC context. This is distinct from the removed per-method `context.Context` parameters.

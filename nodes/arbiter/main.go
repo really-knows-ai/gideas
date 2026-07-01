@@ -297,7 +297,7 @@ func handleFirstInvocation(ctx context.Context, client *flow.Client, workitem *f
 		}
 
 		// Collect votes from this round's children only.
-		votes, collectErr := tally.CollectVotes(ctx, client, roundCompleted)
+		votes, collectErr := tally.CollectVotes(ctx, client, workitem.ID(), roundCompleted)
 		if collectErr != nil {
 			return fmt.Errorf("arbiter: collect votes (round %d): %w", round, collectErr)
 		}

@@ -733,7 +733,7 @@ func buildCoverageMap(
 
 // emitCoverageEvent publishes an appraisal.coverage audit event.
 // Errors are logged but do not fail the stage.
-func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
+func emitCoverageEvent(_ context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
 	units := make([]coverageEntry, 0, len(coverage))
 	for _, u := range coverage {
 		units = append(units, u)
@@ -743,9 +743,8 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 		"cycle_id": cycleID,
 		"units":    units,
 	}
-	if err := client.PublishAuditEvent(ctx,
-		EventAppraisalCoverage, payload,
-		client.WorkitemID(), client.FlowNamespace(),
+	if err := client.PublishAuditEvent(EventAppraisalCoverage, payload,
+		os.Getenv(flow.EnvWorkitemID), os.Getenv(flow.EnvFlowNamespace),
 	); err != nil {
 		slog.Error("appraisal: publish coverage event failed", "error", err)
 	} else {
@@ -755,7 +754,7 @@ func emitCoverageEvent(ctx context.Context, client *flow.Client, coverage map[st
 
 // emitAttestationEvent publishes an appraisal.attestation audit event.
 // Errors are logged but do not fail the stage.
-func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
+func emitAttestationEvent(_ context.Context, client *flow.Client, coverage map[string]coverageEntry, cycleID string) {
 	totalViolations := 0
 	totalEvals := 0
 	completedEvals := 0
@@ -799,9 +798,8 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 		"violations_total":   totalViolations,
 		"appraiser_verdicts": appraiserVerdicts,
 	}
-	if err := client.PublishAuditEvent(ctx,
-		EventAppraisalAttestation, payload,
-		client.WorkitemID(), client.FlowNamespace(),
+	if err := client.PublishAuditEvent(EventAppraisalAttestation, payload,
+		os.Getenv(flow.EnvWorkitemID), os.Getenv(flow.EnvFlowNamespace),
 	); err != nil {
 		slog.Error("appraisal: publish attestation event failed", "error", err)
 	} else {

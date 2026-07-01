@@ -25,7 +25,8 @@ func TestHITLAppraise_HappyPath(t *testing.T) {
 	// Run handler in a goroutine — it will block on WaitForDecision.
 	cfg := &hitlAppraiseConfig{InputArtefact: "petition"}
 	errCh := make(chan error, 1)
-	go func() { wi, _ := client.GetWorkitem(wctx.GetWorkitemId()); 
+	go func() {
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
 		errCh <- handleAppraise(ctx, client, wi, qm, cfg, wctx)
 	}()
 
@@ -126,7 +127,8 @@ func TestHITLAppraise_ContextCancellation(t *testing.T) {
 	}
 
 	errCh := make(chan error, 1)
-	go func() { wi, _ := client.GetWorkitem(wctx.GetWorkitemId()); 
+	go func() {
+		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
 		errCh <- handleAppraise(ctx, client, wi, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
 	}()
 
