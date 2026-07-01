@@ -152,6 +152,14 @@ func (w *Workitem) GetArtefact(governedArtefact string) (*Artefact, error) {
 	), nil
 }
 
+// NewArtefact creates an Artefact handle for a governed artefact that does
+// not yet exist in the Archivist. Use this for first-write scenarios where
+// GetArtefact would return NotFound. The handle can be used with Store to
+// persist the first version.
+func (w *Workitem) NewArtefact(governedArtefact string) *Artefact {
+	return newArtefact(w.session, governedArtefact, governedArtefact, nil, "")
+}
+
 // FindArtefact looks up a specific artefact by its unique artefact ID
 // (e.g. "art-abc-123"). Returns a domain *Artefact wired with the session.
 func (w *Workitem) FindArtefact(artefactID string) (*Artefact, error) {

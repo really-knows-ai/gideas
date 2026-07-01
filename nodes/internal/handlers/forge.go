@@ -65,11 +65,9 @@ func HandleForge(ctx context.Context, workitem *flow.Workitem, agent flow.ForgeC
 	}
 	slog.Info("forge: generated content", "length", len(result))
 
-	// Store the output artefact.
-	artefact, err := workitem.GetArtefact(cfg.OutputArtefact)
-	if err != nil {
-		return fmt.Errorf("forge: get %s: %w", cfg.OutputArtefact, err)
-	}
+	// Create a fresh artefact handle for the output. The output artefact does
+	// not yet exist in the Archivist (first write); Store will create it.
+	artefact := workitem.NewArtefact(cfg.OutputArtefact)
 	if err := artefact.Store([]byte(result)); err != nil {
 		return fmt.Errorf("forge: store %s: %w", cfg.OutputArtefact, err)
 	}
