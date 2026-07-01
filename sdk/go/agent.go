@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 	"text/template"
 	"time"
 
@@ -213,6 +214,7 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	// 3. Execute the provider's inference logic, retrying only invalid content.
 	queryPrompt := queryBuf.Bytes()
 	var result *InferOutput
+	var cleaned []byte
 	var validationErr error
 	for attempt := 0; attempt <= a.cfg.validationRetries; attempt++ {
 		var err error
@@ -226,7 +228,8 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 			return nil, fmt.Errorf("flow agent: provider returned nil result")
 		}
 
-		if validationErr = a.validateOutput(result.Output); validationErr == nil {
+		cleaned, validationErr = a.validateOutput(result.Output)
+		if validationErr == nil {
 			break
 		}
 		if attempt < a.cfg.validationRetries {
@@ -259,7 +262,7 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 	// Hook point: after template rendering, after provider call, before return.
 
 	// 8. Return validated output.
-	return result.Output, nil
+	return cleaned, nil
 }
 
 func retryValidationPrompt(queryPrompt []byte, validationErr error) []byte {
@@ -323,17 +326,46 @@ func compileSchema(schema []byte) (*jsonschema.Schema, error) {
 }
 
 // validateOutput validates JSON output bytes against the compiled schema.
-func (a *Agent) validateOutput(output []byte) error {
+// If the raw output is not valid JSON, it attempts to strip markdown code
+// fences (``` ... ```) as a compatibility fallback for providers that wrap
+// valid JSON in fences despite format instructions.
+// Returns the cleaned (potentially fence-stripped) output.
+func (a *Agent) validateOutput(output []byte) ([]byte, error) {
 	var outputDoc any
 	if err := json.Unmarshal(output, &outputDoc); err != nil {
-		return fmt.Errorf("output is not valid JSON: %w", err)
+		cleaned := stripCodeFences(output)
+		if err2 := json.Unmarshal(cleaned, &outputDoc); err2 != nil {
+			return nil, fmt.Errorf("output is not valid JSON: %w", err)
+		}
+		return cleaned, nil
 	}
 
 	err := a.schema.Validate(outputDoc)
 	if err != nil {
-		return formatValidationError(err)
+		return nil, formatValidationError(err)
 	}
-	return nil
+	return output, nil
+}
+
+// stripCodeFences removes markdown JSON code fences (``` ... ```) from
+// output, including optional language tags. This is a compatibility path
+// for providers like Gemma that wrap valid JSON in fences regardless of
+// format instructions. The approach is conservative: only strip fences,
+// never attempt JSON repair.
+func stripCodeFences(in []byte) []byte {
+	s := string(in)
+
+	if after, ok := strings.CutPrefix(s, "```"); ok {
+		s = after
+		s = strings.TrimSpace(s)
+		s = strings.TrimPrefix(s, "json")
+		s = strings.TrimSpace(s)
+	}
+	if before, ok := strings.CutSuffix(s, "```"); ok {
+		s = strings.TrimSpace(before)
+	}
+
+	return []byte(s)
 }
 
 // formatValidationError converts jsonschema validation errors into a

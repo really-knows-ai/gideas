@@ -429,6 +429,41 @@ func TestAgent_Run_OutputNotJSON(t *testing.T) {
 	}
 }
 
+func TestAgent_Run_StripsCodeFences(t *testing.T) {
+	env := setupAgentTestEnv(t, "wid-val-fences")
+
+	tests := []struct {
+		name   string
+		output []byte
+	}{
+		{
+			name:   "fenced with language tag",
+			output: []byte("```json\n{\"haiku\": \"test haiku\"}\n```"),
+		},
+		{
+			name:   "fenced without language tag",
+			output: []byte("```\n{\"haiku\": \"test haiku\"}\n```"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inferFn := func(_ context.Context, _, _ string, _ []byte) (*InferOutput, error) {
+				return &InferOutput{Output: tt.output}, nil
+			}
+
+			agent := newTestAgent(t, env, inferFn)
+			got, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
+			if err != nil {
+				t.Fatalf("Run() returned error: %v", err)
+			}
+			if string(got) != `{"haiku": "test haiku"}` {
+				t.Fatalf("Run() output = %s", got)
+			}
+		})
+	}
+}
+
 func TestAgent_Run_OutputValidation_RetrySuccess(t *testing.T) {
 	env := setupAgentTestEnv(t, "wid-val-retry-success")
 
