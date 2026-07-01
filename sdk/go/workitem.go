@@ -24,18 +24,6 @@ type Workitem struct {
 // ID returns the workitem identifier.
 func (w *Workitem) ID() string { return w.id }
 
-// Ctx returns a context that the SDK's session uses internally for gRPC calls.
-// This is an escape hatch for advanced callers that need to bypass the domain
-// surface and call raw gRPC stubs directly (e.g. arbiter reading CompletionReason
-// via Operator.GetChildren). Do not use for regular SDK operations.
-//
-// ponytail: uses context.Background() because the session does not carry a
-// user-supplied context. If WithTimeout is configured, a derived context with
-// the timeout may be returned instead.
-func (w *Workitem) Ctx() context.Context {
-	return context.Background()
-}
-
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
