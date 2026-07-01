@@ -41,15 +41,17 @@ func setupGRPCTestEnv(
 		t.Fatalf("failed to dial bufconn: %v", err)
 	}
 
-	client := &Client{
-		conn:           conn,
+	sess := &session{
 		workitemID:     workitemID,
+		conn:           conn,
 		Sidecar:        flowv1.NewSidecarServiceClient(conn),
 		Operator:       flowv1.NewOperatorServiceClient(conn),
 		Archivist:      flowv1.NewArchivistServiceClient(conn),
 		Librarian:      flowv1.NewLibrarianServiceClient(conn),
 		FrictionLedger: flowv1.NewFrictionLedgerServiceClient(conn),
 	}
+
+	client := &Client{session: sess}
 
 	t.Cleanup(func() {
 		_ = client.Close()
@@ -129,8 +131,8 @@ func setupGRPCTestEnvWithEventBus(
 		t.Fatalf("failed to dial eventbus bufconn: %v", err)
 	}
 
-	client.eventBusConn = ebConn
-	client.EventBus = flowv1.NewFlowEventBusServiceClient(ebConn)
+	client.session.eventBusConn = ebConn
+	client.session.EventBus = flowv1.NewFlowEventBusServiceClient(ebConn)
 
 	t.Cleanup(func() {
 		_ = ebConn.Close()

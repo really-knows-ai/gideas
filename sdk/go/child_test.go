@@ -137,8 +137,8 @@ func TestChildWorkitem_StoreArtefact(t *testing.T) {
 	child := &ChildWorkitem{
 		id:        "child-store-001",
 		parent:    env.client,
-		archivist: env.client.Archivist,
-		operator:  env.client.Operator,
+		archivist: env.client.session.Archivist,
+		operator:  env.client.session.Operator,
 	}
 
 	resp, err := child.StoreArtefact(context.Background(), "input", "codification-input", []byte("goal text"))
@@ -160,8 +160,8 @@ func TestChildWorkitem_StampArtefact(t *testing.T) {
 	child := &ChildWorkitem{
 		id:        "child-stamp-001",
 		parent:    env.client,
-		archivist: env.client.Archivist,
-		operator:  env.client.Operator,
+		archivist: env.client.session.Archivist,
+		operator:  env.client.session.Operator,
 	}
 
 	resp, err := child.StampArtefact(context.Background(), "input", "validated")
@@ -180,8 +180,8 @@ func TestChildWorkitem_RouteTo(t *testing.T) {
 	child := &ChildWorkitem{
 		id:        "child-route-001",
 		parent:    env.client,
-		archivist: env.client.Archivist,
-		operator:  env.client.Operator,
+		archivist: env.client.session.Archivist,
+		operator:  env.client.session.Operator,
 	}
 
 	accepted, err := child.RouteTo(context.Background(), "codify-smt")
@@ -205,8 +205,8 @@ func TestChildWorkitem_RouteToOutput(t *testing.T) {
 	child := &ChildWorkitem{
 		id:        "child-output-001",
 		parent:    env.client,
-		archivist: env.client.Archivist,
-		operator:  env.client.Operator,
+		archivist: env.client.session.Archivist,
+		operator:  env.client.session.Operator,
 	}
 
 	accepted, err := child.RouteToOutput(context.Background(), "codification")
@@ -225,8 +225,8 @@ func TestChildWorkitem_Complete(t *testing.T) {
 	child := &ChildWorkitem{
 		id:        "child-complete-001",
 		parent:    env.client,
-		archivist: env.client.Archivist,
-		operator:  env.client.Operator,
+		archivist: env.client.session.Archivist,
+		operator:  env.client.session.Operator,
 	}
 
 	accepted, err := child.Complete(context.Background())
@@ -463,8 +463,8 @@ func TestChildWorkitem_RouteTo_SendsCorrectRequest(t *testing.T) {
 	child := &ChildWorkitem{
 		id:        "child-verify-001",
 		parent:    client,
-		archivist: client.Archivist,
-		operator:  client.Operator,
+		archivist: client.session.Archivist,
+		operator:  client.session.Operator,
 	}
 
 	_, err := child.RouteTo(context.Background(), "target-node")
@@ -507,7 +507,7 @@ func TestChildWorkitem_Complete_SendsCorrectRequest(t *testing.T) {
 	child := &ChildWorkitem{
 		id:       "child-complete-verify",
 		parent:   client,
-		operator: client.Operator,
+		operator: client.session.Operator,
 	}
 
 	_, err := child.Complete(context.Background())

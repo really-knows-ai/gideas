@@ -18,6 +18,8 @@ const bufSize = 1024 * 1024
 // Spy server — captures incoming metadata for assertions
 // ---------------------------------------------------------------------------
 
+const testNodeName = "test-node"
+
 // spyServer implements the gRPC services and records the metadata it
 // receives. This lets us assert that the SDK's interceptor injects the
 // correct workitem_id header.
@@ -70,13 +72,13 @@ func (s *spyServer) GetFlowTopology(
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	return &flowv1.GetFlowTopologyResponse{
 		Self: &flowv1.FlowNode{
-			Name:         "test-node",
+			Name:         testNodeName,
 			Capabilities: []string{"READ:flow"},
 			Outputs:      []*flowv1.FlowOutput{{Name: "next", Target: "other"}},
 		},
 		Nodes: map[string]*flowv1.FlowNode{
-			"test-node": {Name: "test-node"},
-			"other":     {Name: "other"},
+			testNodeName: {Name: testNodeName},
+			"other":      {Name: "other"},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{
 			"doc": {Stamps: []string{"linter", "approval"}},
@@ -505,11 +507,12 @@ func TestRecordFinding_InjectsWorkitemMetadata(t *testing.T) {
 	const wantID = "workitem-finding-001"
 	env := setupTestEnv(t, wantID)
 
-	lawID, err := env.client.RecordFinding(context.Background(), "test goal", []string{"docs"}, []*flowv1.Representation{
-		{Type: "text/plain", Content: "test"},
-	})
+	lawID, err := env.client.RecordFindingProto(
+		context.Background(), "test goal", []string{"docs"},
+		[]*flowv1.Representation{{Type: "text/plain", Content: "test"}},
+	)
 	if err != nil {
-		t.Fatalf("RecordFinding() returned error: %v", err)
+		t.Fatalf("RecordFindingProto() returned error: %v", err)
 	}
 	if lawID != "finding-001" {
 		t.Fatalf("expected law_id=finding-001, got %q", lawID)
@@ -667,7 +670,7 @@ func TestGetFlowTopology_InjectsWorkitemMetadata(t *testing.T) {
 	}
 
 	// Verify response content.
-	if resp.GetSelf().GetName() != "test-node" {
+	if resp.GetSelf().GetName() != testNodeName {
 		t.Fatalf("expected self.name=test-node, got %s", resp.GetSelf().GetName())
 	}
 	if len(resp.GetNodes()) != 2 {
@@ -758,9 +761,9 @@ func TestGetLaw_InjectsWorkitemMetadata(t *testing.T) {
 	const wantID = "workitem-getlaw-001"
 	env := setupTestEnv(t, wantID)
 
-	law, err := env.client.GetLaw(context.Background(), "law-getlaw-001")
+	law, err := env.client.GetLawProto(context.Background(), "law-getlaw-001")
 	if err != nil {
-		t.Fatalf("GetLaw() returned error: %v", err)
+		t.Fatalf("GetLawProto() returned error: %v", err)
 	}
 	if law.GetId() != "law-getlaw-001" {
 		t.Fatalf("expected law_id=law-getlaw-001, got %q", law.GetId())
@@ -911,7 +914,7 @@ func TestPublishAuditEvent_PublishesToAuditChannel(t *testing.T) {
 }
 
 func TestPublishAuditEvent_NoEventBus_ReturnsError(t *testing.T) {
-	client := &Client{EventBus: nil}
+	client := &Client{session: &session{}}
 	err := client.PublishAuditEvent(context.Background(), "test.event", map[string]string{}, "", "")
 	if err == nil {
 		t.Fatal("expected error when EventBus is nil, got nil")
@@ -977,7 +980,7 @@ func TestSuspend_WithTimeout(t *testing.T) {
 	const wantID = "workitem-suspend-003"
 	env := setupTestEnv(t, wantID)
 
-	err := env.client.Suspend(context.Background(), WithTimeout(5*time.Minute))
+	err := env.client.Suspend(context.Background(), WithSuspendTimeout(5*time.Minute))
 	if err != nil {
 		t.Fatalf("Suspend() returned error: %v", err)
 	}
@@ -1003,7 +1006,7 @@ func TestSuspend_WithConditionAndTimeout(t *testing.T) {
 	cel := `children.all(c, c.phase == "Completed")`
 	err := env.client.Suspend(context.Background(),
 		WithCondition(cel),
-		WithTimeout(10*time.Minute),
+		WithSuspendTimeout(10*time.Minute),
 	)
 	if err != nil {
 		t.Fatalf("Suspend() returned error: %v", err)
@@ -1180,5 +1183,166 @@ func TestAddFeedback_InjectsWorkitemMetadata(t *testing.T) {
 	}
 	if got[0] != wantID {
 		t.Fatalf("metadata x-flow-workitem-id = %q, want %q", got[0], wantID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — New Client Options (Phase 1)
+// ---------------------------------------------------------------------------
+
+func TestNewClient_WithTimeout(t *testing.T) {
+	cfg := &clientConfig{sidecarAddr: DefaultSidecarAddress}
+	WithTimeout(5 * time.Second)(cfg)
+	if cfg.timeout != 5*time.Second {
+		t.Fatalf("expected timeout=5s, got %v", cfg.timeout)
+	}
+}
+
+func TestNewClient_WithRetry(t *testing.T) {
+	cfg := &clientConfig{sidecarAddr: DefaultSidecarAddress}
+	WithRetry(3)(cfg)
+	if cfg.maxRetries != 3 {
+		t.Fatalf("expected maxRetries=3, got %d", cfg.maxRetries)
+	}
+}
+
+func TestClient_Close(t *testing.T) {
+	env := setupTestEnv(t, "workitem-close-001")
+	err := env.client.Close()
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — New Entry Methods (Phase 1)
+// ---------------------------------------------------------------------------
+
+func TestGetWorkitem_NoArgs(t *testing.T) {
+	const wantID = "workitem-getwi-noargs-001"
+	env := setupTestEnv(t, wantID)
+
+	wi, err := env.client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() returned error: %v", err)
+	}
+	if wi.ID() != wantID {
+		t.Fatalf("expected Workitem.ID()=%q, got %q", wantID, wi.ID())
+	}
+}
+
+func TestGetWorkitem_OneArg(t *testing.T) {
+	const sessionID = "workitem-session-001"
+	const otherID = "other-wid-001"
+	env := setupTestEnv(t, sessionID)
+
+	wi, err := env.client.GetWorkitem(otherID)
+	if err != nil {
+		t.Fatalf("GetWorkitem(%q) returned error: %v", otherID, err)
+	}
+	if wi.ID() != otherID {
+		t.Fatalf("expected Workitem.ID()=%q, got %q", otherID, wi.ID())
+	}
+}
+
+func TestGetWorkitem_MultiArgs(t *testing.T) {
+	env := setupTestEnv(t, "workitem-multi-001")
+
+	_, err := env.client.GetWorkitem("a", "b")
+	if err == nil {
+		t.Fatal("expected error for multi-arg GetWorkitem, got nil")
+	}
+}
+
+func TestGetWorkitem_NoArgs_ReadsEnv(t *testing.T) {
+	env := setupTestEnv(t, "workitem-env-001")
+
+	t.Setenv("FLOW_WORKITEM_ID", "env-wid-001")
+	// Re-create client session to pick up env var.
+	sess := &session{
+		workitemID:     "env-wid-001",
+		conn:           env.client.session.conn,
+		Sidecar:        env.client.session.Sidecar,
+		Operator:       env.client.session.Operator,
+		Archivist:      env.client.session.Archivist,
+		Librarian:      env.client.session.Librarian,
+		FrictionLedger: env.client.session.FrictionLedger,
+	}
+	env.client.session = sess
+
+	wi, err := env.client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() returned error: %v", err)
+	}
+	if wi.ID() != "env-wid-001" {
+		t.Fatalf("expected Workitem.ID()=%q from env, got %q", "env-wid-001", wi.ID())
+	}
+}
+
+func TestGetFlow(t *testing.T) {
+	env := setupTestEnv(t, "workitem-getflow-001")
+
+	f, err := env.client.GetFlow()
+	if err != nil {
+		t.Fatalf("GetFlow() returned error: %v", err)
+	}
+	if f == nil {
+		t.Fatal("expected non-nil Flow")
+	}
+	if f.pb == nil {
+		t.Fatal("expected non-nil Flow.pb")
+	}
+	if f.pb.GetSelf().GetName() != testNodeName {
+		t.Fatalf("expected self.name=test-node, got %q", f.pb.GetSelf().GetName())
+	}
+}
+
+func TestGetNode(t *testing.T) {
+	env := setupTestEnv(t, "workitem-getnode-001")
+
+	n, err := env.client.GetNode()
+	if err != nil {
+		t.Fatalf("GetNode() returned error: %v", err)
+	}
+	if n == nil {
+		t.Fatal("expected non-nil Node")
+	}
+	if n.pb == nil {
+		t.Fatal("expected non-nil Node.pb")
+	}
+	if n.pb.GetName() != testNodeName {
+		t.Fatalf("expected node name=test-node, got %q", n.pb.GetName())
+	}
+}
+
+func TestGetLaw_NewEntryMethod(t *testing.T) {
+	env := setupTestEnv(t, "workitem-getlaw-entry-001")
+
+	law, err := env.client.GetLaw("law-entry-001")
+	if err != nil {
+		t.Fatalf("GetLaw(%q) returned error: %v", "law-entry-001", err)
+	}
+	if law == nil {
+		t.Fatal("expected non-nil Law")
+	}
+	if law.ID() != "law-entry-001" {
+		t.Fatalf("expected law.ID()=law-entry-001, got %q", law.ID())
+	}
+	if law.GetGoal() != "test goal" {
+		t.Fatalf("expected law.GetGoal()=test goal, got %q", law.GetGoal())
+	}
+}
+
+func TestRecordFinding_NewEntryMethod(t *testing.T) {
+	env := setupTestEnv(t, "workitem-recordfinding-entry-001")
+
+	lawID, err := env.client.RecordFinding("test goal", []string{"docs"}, []*flowv1.Representation{
+		{Type: "text/plain", Content: "test"},
+	})
+	if err != nil {
+		t.Fatalf("RecordFinding() returned error: %v", err)
+	}
+	if lawID != "finding-001" {
+		t.Fatalf("expected law_id=finding-001, got %q", lawID)
 	}
 }
