@@ -40,14 +40,16 @@ func TestHITL_HitlAppraise_Approved(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Topology was queried.
-	if spy.TopologyCalls != 1 {
-		t.Errorf("expected 1 GetFlowTopology call, got %d", spy.TopologyCalls)
+	// Topology was queried (once via workitem.GetTopology and once via raw fallback).
+	// ponytail: two calls because the new Flow type does not expose GetSelf().GetOutputs().
+	if spy.TopologyCalls != 2 {
+		t.Errorf("expected 2 GetFlowTopology calls, got %d", spy.TopologyCalls)
 	}
 
 	// Petition artefact was read (from READ:artefact/petition).
-	if len(spy.ReadArtefacts) != 1 {
-		t.Fatalf("expected 1 GetArtefact call, got %d", len(spy.ReadArtefacts))
+	// An additional GetArtefact call occurs in stampAndRoute for the stamp target.
+	if len(spy.ReadArtefacts) != 2 {
+		t.Fatalf("expected 2 GetArtefact calls, got %d", len(spy.ReadArtefacts))
 	}
 	if spy.ReadArtefacts[0] != artefactPetition {
 		t.Errorf("expected read=petition, got %s", spy.ReadArtefacts[0])
@@ -222,7 +224,7 @@ func TestHITL_Minimal_Route(t *testing.T) {
 
 func TestDeriveBehaviour_HITLAppraise(t *testing.T) {
 	spy := newHITLAppraiseSpy()
-	b := deriveBehaviour(spy.Topology)
+	flowObj := newFlowFromTopology(t, spy); b := deriveBehaviour(flowObj, spy.Topology)
 
 	if len(b.readArtefacts) != 1 || b.readArtefacts[0] != artefactPetition {
 		t.Errorf("readArtefacts=%v, want [petition]", b.readArtefacts)
@@ -256,7 +258,7 @@ func TestDeriveBehaviour_HITLAppraise(t *testing.T) {
 
 func TestDeriveBehaviour_ArbiterResolve(t *testing.T) {
 	spy := newArbiterHITLResolveSpy()
-	b := deriveBehaviour(spy.Topology)
+	flowObj := newFlowFromTopology(t, spy); b := deriveBehaviour(flowObj, spy.Topology)
 
 	if len(b.readArtefacts) != 1 || b.readArtefacts[0] != artefactEvidenceBundle {
 		t.Errorf("readArtefacts=%v, want [evidence-bundle]", b.readArtefacts)
@@ -277,7 +279,7 @@ func TestDeriveBehaviour_ArbiterResolve(t *testing.T) {
 
 func TestDeriveBehaviour_Minimal(t *testing.T) {
 	spy := newMinimalSpy()
-	b := deriveBehaviour(spy.Topology)
+	flowObj := newFlowFromTopology(t, spy); b := deriveBehaviour(flowObj, spy.Topology)
 
 	if len(b.readArtefacts) != 0 {
 		t.Errorf("readArtefacts=%v, want []", b.readArtefacts)
@@ -311,7 +313,7 @@ func TestBuildChoicesResponse_HITLAppraise_WithLabels(t *testing.T) {
 		"cancel":   "Reject & Cancel",
 	})
 
-	resp := buildChoicesResponse(spy.Topology, cfg)
+	flowObj := newFlowFromTopology(t, spy); resp := buildChoicesResponse(flowObj, spy.Topology, cfg)
 
 	if !resp.HasFeedback {
 		t.Error("expected HasFeedback=true")
@@ -353,7 +355,7 @@ func TestBuildChoicesResponse_ArbiterResolve_DefaultLabels(t *testing.T) {
 	spy := newArbiterHITLResolveSpy()
 	cfg := defaultConfig()
 
-	resp := buildChoicesResponse(spy.Topology, cfg)
+	flowObj := newFlowFromTopology(t, spy); resp := buildChoicesResponse(flowObj, spy.Topology, cfg)
 
 	if resp.HasFeedback {
 		t.Error("expected HasFeedback=false")
@@ -380,7 +382,7 @@ func TestBuildChoicesResponse_Minimal_NoCancel(t *testing.T) {
 	spy := newMinimalSpy()
 	cfg := defaultConfig()
 
-	resp := buildChoicesResponse(spy.Topology, cfg)
+	flowObj := newFlowFromTopology(t, spy); resp := buildChoicesResponse(flowObj, spy.Topology, cfg)
 
 	if resp.HasFeedback {
 		t.Error("expected HasFeedback=false")
@@ -418,7 +420,7 @@ func TestBuildChoicesResponse_MultipleOutputs(t *testing.T) {
 		"escalate": "Escalate to Manager",
 	})
 
-	resp := buildChoicesResponse(topology, cfg)
+	spy := &hitlSpy{Topology: topology}; flowObj := newFlowFromTopology(t, spy); resp := buildChoicesResponse(flowObj, topology, cfg)
 
 	if len(resp.Choices) != 3 {
 		t.Fatalf("expected 3 choices, got %d", len(resp.Choices))

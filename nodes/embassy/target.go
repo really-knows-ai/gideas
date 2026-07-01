@@ -35,7 +35,7 @@ func resolveExportTarget(
 		)
 	}
 
-	pt, err := fedClient.GetPetitionTarget(ctx, scope)
+	pt, err := fedClient.GetPetitionTarget(scope)
 	if err != nil {
 		return nil, fmt.Errorf("embassy target: resolve petition target for scope %q: %w", scope, err)
 	}

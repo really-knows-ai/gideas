@@ -140,6 +140,11 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("refine: get workitem: %w", err)
+	}
+
 	// Load configuration from ConfigMap-mounted YAML.
 	cfg, err := nodeconfig.Load[refineConfig](nodeconfig.Path())
 	if err != nil {
@@ -163,5 +168,5 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	return handlers.HandleRefine(ctx, client, triageAgent, revisionAgent, handlerCfg)
+	return handlers.HandleRefine(ctx, workitem, triageAgent, revisionAgent, handlerCfg)
 }

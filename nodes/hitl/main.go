@@ -140,7 +140,12 @@ func handler(qm flow.QueueManager) flow.Handler {
 		}
 		defer func() { _ = client.Close() }()
 
-		return handleHITL(ctx, client, qm, wctx)
+		workitem, err := client.GetWorkitem()
+		if err != nil {
+			return fmt.Errorf("hitl: get workitem: %w", err)
+		}
+
+		return handleHITL(ctx, client, workitem, qm, wctx)
 	}
 }
 
@@ -148,18 +153,29 @@ func handler(qm flow.QueueManager) flow.Handler {
 func handleHITL(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	qm flow.QueueManager,
 	wctx *flowv1.WorkitemContext,
 ) error {
 	workitemID := wctx.GetWorkitemId()
 
 	// ── Step 1: Discover behaviour from topology ────────────────────
-	topology, err := client.GetFlowTopology(ctx)
+	topology, err := workitem.GetTopology()
 	if err != nil {
 		return fmt.Errorf("hitl: get flow topology: %w", err)
 	}
 
-	behaviour := deriveBehaviour(topology)
+	// ponytail: GetTopology returns *flow.Flow which wraps the proto.
+	// The Flow type does not expose GetSelf() outputs directly.
+	// For now we call Client.GetFlowTopology once to access the raw
+	// proto for output discovery. This ceiling should be removed when
+	// Flow exposes output methods.
+	rawTopology, rawErr := client.GetFlowTopology(ctx)
+	if rawErr != nil {
+		return fmt.Errorf("hitl: get raw topology: %w", err)
+	}
+
+	behaviour := deriveBehaviour(topology, rawTopology)
 
 	slog.Info("hitl: handling workitem",
 		"workitem_id", workitemID,
@@ -172,7 +188,7 @@ func handleHITL(
 
 	// ── Step 2: Read artefacts for context ──────────────────────────
 	for _, artefactKind := range behaviour.readArtefacts {
-		if _, err := client.GetArtefact(ctx, artefactKind); err != nil {
+		if _, err := workitem.GetArtefact(artefactKind); err != nil {
 			return fmt.Errorf("hitl: read artefact %s: %w", artefactKind, err)
 		}
 	}
@@ -182,7 +198,7 @@ func handleHITL(
 		return fmt.Errorf("hitl: enqueue: %w", err)
 	}
 
-	if err := client.PauseTimer(ctx); err != nil {
+	if err := workitem.PauseTimer(); err != nil {
 		return fmt.Errorf("hitl: pause timer: %w", err)
 	}
 
@@ -206,21 +222,21 @@ func handleHITL(
 	slog.Info("hitl: human decision received", "workitem_id", workitemID, "choice", choice)
 
 	// ── Step 6: Resume timer ────────────────────────────────────────
-	if err := client.ResumeTimer(ctx); err != nil {
+	if err := workitem.ResumeTimer(); err != nil {
 		return fmt.Errorf("hitl: resume timer: %w", err)
 	}
 
 	// ── Step 7: Dispatch ────────────────────────────────────────────
 	if choice == choiceCancel {
-		return completeWithCancelled(ctx, client)
+		return completeWithCancelled(workitem)
 	}
 
-	return stampAndRoute(ctx, client, behaviour, choice)
+	return stampAndRoute(workitem, behaviour, choice)
 }
 
 // completeWithCancelled calls Complete with COMPLETION_REASON_CANCELLED.
-func completeWithCancelled(ctx context.Context, client *flow.Client) error {
-	if _, err := client.Complete(ctx, flow.WithReason(flowv1.CompletionReason_COMPLETION_REASON_CANCELLED)); err != nil {
+func completeWithCancelled(workitem *flow.Workitem) error {
+	if err := workitem.Complete(flow.WithReason(flowv1.CompletionReason_COMPLETION_REASON_CANCELLED)); err != nil {
 		return fmt.Errorf("hitl: complete (cancelled): %w", err)
 	}
 	return nil
@@ -228,20 +244,23 @@ func completeWithCancelled(ctx context.Context, client *flow.Client) error {
 
 // stampAndRoute applies any stamp capabilities and routes to the chosen output.
 func stampAndRoute(
-	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	behaviour *derivedBehaviour,
 	choice string,
 ) error {
 	// Stamp all governed artefacts.
 	for _, sc := range behaviour.stamps {
-		if _, err := client.StampArtefact(ctx, sc.GovernedArtefact, sc.StampName); err != nil {
+		art, err := workitem.GetArtefact(sc.GovernedArtefact)
+		if err != nil {
+			return fmt.Errorf("hitl: get artefact %s: %w", sc.GovernedArtefact, err)
+		}
+		if err := art.Stamp(sc.StampName); err != nil {
 			return fmt.Errorf("hitl: stamp %s/%s: %w", sc.GovernedArtefact, sc.StampName, err)
 		}
 	}
 
 	// Route to the chosen output.
-	if _, err := client.RouteToOutput(ctx, choice); err != nil {
+	if err := workitem.RouteTo(choice); err != nil {
 		return fmt.Errorf("hitl: route to output %q: %w", choice, err)
 	}
 	return nil
@@ -253,10 +272,15 @@ func stampAndRoute(
 
 // deriveBehaviour computes the complete runtime behaviour from the flow
 // topology and node config. This is a pure function with no side effects.
+//
+// ponytail: Accepts both *flow.Flow (new domain) and the raw proto response
+// for output discovery (not yet exposed on *flow.Flow). Remove the rawTopology
+// parameter when Flow exposes GetSelf().GetOutputs().
 func deriveBehaviour(
-	topology *flowv1.GetFlowTopologyResponse,
+	topology *flow.Flow,
+	rawTopology *flowv1.GetFlowTopologyResponse,
 ) *derivedBehaviour {
-	self := topology.GetSelf()
+	self := rawTopology.GetSelf()
 	capabilities := self.GetCapabilities()
 
 	b := &derivedBehaviour{
@@ -286,10 +310,11 @@ func deriveBehaviour(
 // buildChoicesResponse constructs the GET /choices JSON response from derived
 // behaviour and config labels.
 func buildChoicesResponse(
-	topology *flowv1.GetFlowTopologyResponse,
+	topology *flow.Flow,
+	rawTopology *flowv1.GetFlowTopologyResponse,
 	cfg *hitlConfig,
 ) *choicesResponse {
-	behaviour := deriveBehaviour(topology)
+	behaviour := deriveBehaviour(topology, rawTopology)
 	labels := cfg.ChoiceLabels
 	if labels == nil {
 		labels = map[string]string{}
@@ -349,13 +374,21 @@ func handleChoices(cfg *hitlConfig) http.HandlerFunc {
 		}
 		defer func() { _ = client.Close() }()
 
-		topology, err := client.GetFlowTopology(r.Context())
+		// ponytail: GetFlowTopology still takes ctx — the new domain objects
+		// do not yet expose output lists. This HTTP handler uses the request
+		// context (not the workitem handler context), which is appropriate.
+		topology, err := client.GetFlow()
+		if err != nil {
+			http.Error(w, "hitl: get topology failed", http.StatusServiceUnavailable)
+			return
+		}
+		rawTopology, err := client.GetFlowTopology(r.Context())
 		if err != nil {
 			http.Error(w, "hitl: get topology failed", http.StatusServiceUnavailable)
 			return
 		}
 
-		resp := buildChoicesResponse(topology, cfg)
+		resp := buildChoicesResponse(topology, rawTopology, cfg)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

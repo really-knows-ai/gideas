@@ -264,7 +264,7 @@ func TestAppraiserAgent_HappyPath(t *testing.T) {
 		}, nil
 	}
 
-	client := newSpyClient(t, spy)
+	client, _ := newSpyClient(t, spy)
 
 	// Create agent with appraiser suffix and override model.
 	agent, err := NewAppraiserAgent(client, cfg, "Focus on security risks.", nil)
@@ -655,7 +655,7 @@ func TestReviewOutput_ContainsAppraiserAndPass(t *testing.T) {
 	spy.ArtefactContents["input"] = []byte("test petition")
 	spy.ArtefactContents["review"] = []byte("test content")
 
-	client := newSpyClient(t, spy)
+	_, workitem := newSpyClient(t, spy)
 	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "You are strict.", nil)
 
 	handlerCfg := handlers.ReviewConfig{
@@ -663,7 +663,7 @@ func TestReviewOutput_ContainsAppraiserAndPass(t *testing.T) {
 		ReviewArtefact: cfg.ReviewArtefact,
 	}
 
-	err := handlers.HandleReview(context.Background(), client, agent, handlerCfg)
+	err := handlers.HandleReview(context.Background(), workitem, agent, handlerCfg)
 	if err != nil {
 		t.Fatalf("HandleReview() returned error: %v", err)
 	}
@@ -707,7 +707,7 @@ func TestReviewOutput_OmitsPassWhenAbsent(t *testing.T) {
 	spy.ArtefactContents["input"] = []byte("test petition")
 	spy.ArtefactContents["review"] = []byte("test content")
 
-	client := newSpyClient(t, spy)
+	_, workitem := newSpyClient(t, spy)
 	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "", nil)
 
 	handlerCfg := handlers.ReviewConfig{
@@ -715,7 +715,7 @@ func TestReviewOutput_OmitsPassWhenAbsent(t *testing.T) {
 		ReviewArtefact: cfg.ReviewArtefact,
 	}
 
-	err := handlers.HandleReview(context.Background(), client, agent, handlerCfg)
+	err := handlers.HandleReview(context.Background(), workitem, agent, handlerCfg)
 	if err != nil {
 		t.Fatalf("HandleReview() returned error: %v", err)
 	}
@@ -764,7 +764,7 @@ func TestReviewFlow_WithoutAppraiserArtefact(t *testing.T) {
 	spy.ArtefactContents["input"] = []byte("test petition")
 	spy.ArtefactContents["review"] = []byte("test content")
 
-	client := newSpyClient(t, spy)
+	_, workitem := newSpyClient(t, spy)
 	agent := newTestAppraiserAgent(t, inferFn, spy, cfg, "You are strict.", nil)
 
 	handlerCfg := handlers.ReviewConfig{
@@ -773,7 +773,7 @@ func TestReviewFlow_WithoutAppraiserArtefact(t *testing.T) {
 	}
 
 	// Should succeed without appraiser artefact.
-	err := handlers.HandleReview(context.Background(), client, agent, handlerCfg)
+	err := handlers.HandleReview(context.Background(), workitem, agent, handlerCfg)
 	if err != nil {
 		t.Fatalf("HandleReview() failed without appraiser artefact: %v", err)
 	}

@@ -195,14 +195,18 @@ func (s *codificationSpy) GetArtefact(
 		return nil, s.GetArtefactErr
 	}
 
-	// Child artefact request (has TargetWorkitemId).
-	if target := req.GetTargetWorkitemId(); target != "" {
-		key := target + ":" + req.GetArtefactId()
+	// Child artefact request — WorkitemId differs from the parent test ID.
+	if wid := req.GetWorkitemId(); wid != "" && wid != "test-workitem" {
+		key := wid + ":" + req.GetArtefactId()
 		content, ok := s.ChildArtefacts[key]
 		if !ok {
 			return nil, status.Errorf(codes.NotFound, "child artefact %q not found", key)
 		}
-		return &flowv1.GetArtefactResponse{Content: content}, nil
+		return &flowv1.GetArtefactResponse{
+			GovernedArtefact: req.GetArtefactId(),
+			Content:          content,
+			VersionHash:      "child-hash",
+		}, nil
 	}
 
 	// Parent artefact request.
@@ -210,7 +214,11 @@ func (s *codificationSpy) GetArtefact(
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "artefact %q not found", req.GetArtefactId())
 	}
-	return &flowv1.GetArtefactResponse{Content: content}, nil
+	return &flowv1.GetArtefactResponse{
+		GovernedArtefact: req.GetArtefactId(),
+		Content:          content,
+		VersionHash:      "parent-hash",
+	}, nil
 }
 
 func (s *codificationSpy) StoreArtefact(
@@ -248,7 +256,7 @@ func newSpyGRPCServer(spy *codificationSpy) *grpc.Server {
 	return srv
 }
 
-func setupCodificationTest(t *testing.T, spy *codificationSpy) *flow.Client {
+func setupCodificationTest(t *testing.T, spy *codificationSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -270,7 +278,12 @@ func setupCodificationTest(t *testing.T, spy *codificationSpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem: %v", err)
+	}
+
+	return client, workitem
 }
 
 // ---------------------------------------------------------------------------

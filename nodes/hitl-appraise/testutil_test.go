@@ -219,3 +219,13 @@ func newTestQueueManager(t *testing.T) flow.QueueManager {
 	t.Cleanup(func() { _ = qm.Stop() })
 	return qm
 }
+
+// newTestWorkitem creates a Workitem from a client by setting the workitem ID env var.
+func newTestWorkitem(t *testing.T, client *flow.Client, workitemID string) *flow.Workitem {
+	t.Helper()
+	wi, err := client.GetWorkitem(workitemID)
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+	return wi
+}

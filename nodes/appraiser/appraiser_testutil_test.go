@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/handlers"
 	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
@@ -46,8 +47,10 @@ type appraiserSpy struct {
 
 func newAppraiserSpy() *appraiserSpy {
 	return &appraiserSpy{
-		StoredArtefacts:  make(map[string][]byte),
-		ArtefactContents: make(map[string][]byte),
+		StoredArtefacts: make(map[string][]byte),
+		ArtefactContents: map[string][]byte{
+			handlers.ArtefactReviewOutput: []byte(`{}`),
+		},
 	}
 }
 
@@ -83,6 +86,15 @@ func (s *appraiserSpy) GetArtefact(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Check runtime-stored artefacts first.
+	if content, ok := s.StoredArtefacts[req.GetArtefactId()]; ok {
+		return &flowv1.GetArtefactResponse{
+			Content:     content,
+			VersionHash: "test-hash",
+		}, nil
+	}
+
+	// Fall back to pre-configured content.
 	content, ok := s.ArtefactContents[req.GetArtefactId()]
 	if !ok {
 		return nil, fmt.Errorf("artefact %q not found", req.GetArtefactId())
@@ -120,8 +132,9 @@ func (s *appraiserSpy) RecordTelemetry(
 // ---------------------------------------------------------------------------
 
 // newSpyClient creates a flow.Client backed by a local gRPC server with
-// the appraiserSpy registered for all service interfaces.
-func newSpyClient(t *testing.T, spy *appraiserSpy) *flow.Client {
+// the appraiserSpy registered for all service interfaces, and returns the
+// current workitem.
+func newSpyClient(t *testing.T, spy *appraiserSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -133,13 +146,19 @@ func newSpyClient(t *testing.T, spy *appraiserSpy) *flow.Client {
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(func() { srv.GracefulStop() })
 
+	t.Setenv(flow.EnvWorkitemID, "test-workitem")
 	client, err := flow.NewClient(flow.WithSidecarAddress(lis.Addr().String()))
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+
+	return client, workitem
 }
 
 // defaultTestConfig returns a standard appraiserNodeConfig for tests.
@@ -168,7 +187,7 @@ func newTestAppraiserAgent(
 	cfg *appraiserNodeConfig, personality string, opts *AppraiserAgentOpts,
 ) *AppraiserAgent {
 	t.Helper()
-	client := newSpyClient(t, spy)
+	client, _ := newSpyClient(t, spy)
 	agent, err := NewAppraiserAgent(client, cfg, personality, opts)
 	if err != nil {
 		t.Fatalf("NewAppraiserAgent() failed: %v", err)

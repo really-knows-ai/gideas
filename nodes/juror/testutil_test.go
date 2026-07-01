@@ -130,7 +130,7 @@ func newSpyGRPCServer(spy *jurorSpy) *grpc.Server {
 	return srv
 }
 
-func setupJurorTest(t *testing.T, spy *jurorSpy) *flow.Client {
+func setupJurorTest(t *testing.T, spy *jurorSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -152,7 +152,12 @@ func setupJurorTest(t *testing.T, spy *jurorSpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem: %v", err)
+	}
+
+	return client, workitem
 }
 
 // seedArtefacts populates the spy with standard juror input artefacts.
@@ -161,6 +166,7 @@ func seedArtefacts(spy *jurorSpy, question, evidence string, outcomes []string, 
 	spy.Artefacts[artefactEvidence] = []byte(evidence)
 	outcomesJSON, _ := json.Marshal(outcomes)
 	spy.Artefacts[artefactOutcomes] = outcomesJSON
+	spy.Artefacts[artefactVerdict] = []byte{} // pre-seed so runJuror can GetArtefact+Store
 	if priorRound != "" {
 		spy.Artefacts[artefactPriorRound] = []byte(priorRound)
 	}

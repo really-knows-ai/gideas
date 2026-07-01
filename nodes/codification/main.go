@@ -191,12 +191,17 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("codification: get workitem: %w", err)
+	}
+
 	cfg, err := nodeconfig.Load[codificationConfig](nodeconfig.Path())
 	if err != nil {
 		return fmt.Errorf("codification: load config: %w", err)
 	}
 
-	return handleCodification(ctx, client, cfg)
+	return handleCodification(client, workitem, cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -204,17 +209,21 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 // ---------------------------------------------------------------------------
 
 //nolint:cyclop // Orchestration function — sequential phases are inherently complex.
-func handleCodification(ctx context.Context, client *flow.Client, cfg *codificationConfig) error {
-	_, _ = client.Heartbeat(ctx)
+func handleCodification(client *flow.Client, workitem *flow.Workitem, cfg *codificationConfig) error {
+	_ = workitem.Heartbeat()
 
 	// -- Step 1: Read petition artefact ----------------------------------
-	petResp, err := client.GetArtefact(ctx, cfg.petitionArtefact())
+	petArt, err := workitem.GetArtefact(cfg.petitionArtefact())
 	if err != nil {
 		return fmt.Errorf("codification: get petition: %w", err)
 	}
+	petContent, err := petArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("codification: get petition content: %w", err)
+	}
 
 	var pet petition
-	if err := json.Unmarshal(petResp.GetContent(), &pet); err != nil {
+	if err := json.Unmarshal(petContent, &pet); err != nil {
 		return fmt.Errorf("codification: parse petition: %w", err)
 	}
 
@@ -241,7 +250,7 @@ func handleCodification(ctx context.Context, client *flow.Client, cfg *codificat
 	// -- Step 3: If no changes need codification, skip fan-out -----------
 	if len(qualifying) == 0 || len(cfg.CodificationNodes) == 0 {
 		slog.Info("codification: no fan-out needed, storing petition as-is")
-		return storePetitionAndRoute(ctx, client, cfg, &pet)
+		return storePetitionAndRoute(workitem, cfg, &pet)
 	}
 
 	// -- Step 4: Build FanOutTasks (change x codifier) -------------------
@@ -257,40 +266,47 @@ func handleCodification(ctx context.Context, client *flow.Client, cfg *codificat
 	)
 
 	// -- Step 5: FanOut --------------------------------------------------
-	_, err = client.FanOut(ctx, tasks)
+	_, err = workitem.FanOut(tasks)
 	if err != nil {
 		return fmt.Errorf("codification: fan-out: %w", err)
 	}
 
-	// -- Step 6: AwaitChildren -------------------------------------------
-	statuses, err := client.AwaitChildren(ctx)
+	// -- Step 6: AwaitAll ------------------------------------------------
+	statuses, err := workitem.AwaitAll()
 	if err != nil {
 		return fmt.Errorf("codification: await children: %w", err)
 	}
 
-	// -- Step 7: CollectArtefacts ----------------------------------------
-	results, err := client.CollectArtefacts(ctx, statuses, artefactCodificationResult)
-	if err != nil {
-		return fmt.Errorf("codification: collect artefacts: %w", err)
-	}
-
-	// -- Step 8: Map results back to originating changes -----------------
+	// -- Step 7: Read codification-result from each child ---------------
 	numCodifiers := len(cfg.CodificationNodes)
-	for i, result := range results {
-		raw := result.Artefacts[artefactCodificationResult]
-		if raw == nil {
-			slog.Warn("codification: child returned no codification-result",
-				"child_index", i,
-				"workitem_id", result.Status.WorkitemID,
-			)
+	for i, ch := range statuses {
+		// ponytail: reads child artefact via scoped Workitem handle.
+		// If the Archivist requires parent-authenticated cross-workitem reads,
+		// this pattern may need updating to use a TargetWorkitemId approach.
+		childWI, wiErr := client.GetWorkitem(ch.WorkitemID)
+		if wiErr != nil {
+			slog.Warn("codification: child workitem handle failed",
+				"child_index", i, "workitem_id", ch.WorkitemID, "error", wiErr)
 			continue
+		}
+
+		childArt, artErr := childWI.GetArtefact(artefactCodificationResult)
+		if artErr != nil {
+			slog.Warn("codification: child returned no codification-result",
+				"child_index", i, "workitem_id", ch.WorkitemID)
+			continue
+		}
+
+		raw, getErr := childArt.GetContent()
+		if getErr != nil {
+			return fmt.Errorf("codification: get content from child %s: %w", ch.WorkitemID, getErr)
 		}
 
 		var cr codificationResult
 		if jsonErr := json.Unmarshal(raw, &cr); jsonErr != nil {
 			return fmt.Errorf(
 				"codification: parse codification-result from child %s: %w",
-				result.Status.WorkitemID, jsonErr)
+				ch.WorkitemID, jsonErr)
 		}
 
 		// Map task index back to qualifying change index.
@@ -309,8 +325,8 @@ func handleCodification(ctx context.Context, client *flow.Client, cfg *codificat
 
 	slog.Info("codification: representations attached")
 
-	// -- Step 9: Store updated petition and route ------------------------
-	return storePetitionAndRoute(ctx, client, cfg, &pet)
+	// -- Step 8: Store updated petition and route ------------------------
+	return storePetitionAndRoute(workitem, cfg, &pet)
 }
 
 // ---------------------------------------------------------------------------
@@ -365,8 +381,7 @@ func buildFanOutTasks(
 // storePetitionAndRoute marshals the petition, stores it, and routes to the
 // default output.
 func storePetitionAndRoute(
-	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	cfg *codificationConfig,
 	pet *petition,
 ) error {
@@ -375,11 +390,15 @@ func storePetitionAndRoute(
 		return fmt.Errorf("codification: marshal petition: %w", err)
 	}
 
-	if _, err := client.StoreArtefact(ctx, cfg.petitionArtefact(), "", petJSON); err != nil {
+	petArt, err := workitem.GetArtefact(cfg.petitionArtefact())
+	if err != nil {
+		return fmt.Errorf("codification: get petition artefact: %w", err)
+	}
+	if err := petArt.Store(petJSON); err != nil {
 		return fmt.Errorf("codification: store petition: %w", err)
 	}
 
-	if _, err := client.RouteToOutput(ctx, cfg.defaultOutputName()); err != nil {
+	if err := workitem.RouteTo(cfg.defaultOutputName()); err != nil {
 		return fmt.Errorf("codification: route to output: %w", err)
 	}
 

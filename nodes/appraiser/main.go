@@ -79,15 +79,23 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("appraiser: load config: %w", err)
 	}
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("appraiser: get workitem: %w", err)
+	}
+
 	// Read the appraiser personality artefact before constructing the agent so the
 	// personality prompt suffix is baked into the system prompt.
 	// When the artefact is absent, personality stays "" — backward compat.
 	var personality string
-	apprResp, err := client.GetArtefact(ctx, handlers.ArtefactAppraiserPersonality)
+	apprArt, err := workitem.GetArtefact(handlers.ArtefactAppraiserPersonality)
 	if err == nil {
-		var apprData handlers.AppraiserPersonalityData
-		if uErr := json.Unmarshal(apprResp.GetContent(), &apprData); uErr == nil {
-			personality = apprData.Personality
+		content, getErr := apprArt.GetContent()
+		if getErr == nil {
+			var apprData handlers.AppraiserPersonalityData
+			if uErr := json.Unmarshal(content, &apprData); uErr == nil {
+				personality = apprData.Personality
+			}
 		}
 	}
 
@@ -106,5 +114,5 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		ReviewArtefact: cfg.ReviewArtefact,
 	}
 
-	return handlers.HandleReview(ctx, client, agent, handlerCfg)
+	return handlers.HandleReview(ctx, workitem, agent, handlerCfg)
 }

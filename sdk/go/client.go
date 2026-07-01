@@ -117,6 +117,48 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	return &Client{session: sess}, nil
 }
 
+// ---------------------------------------------------------------------------
+// Raw gRPC client accessors (escape hatch for advanced callers)
+// ---------------------------------------------------------------------------
+
+// RawOperator returns the raw OperatorServiceClient for advanced use cases
+// where the domain surface does not provide the needed operation (e.g. arbiter
+// reading CompletionReason via GetChildren). Prefer Workitem domain methods
+// when available.
+func (c *Client) RawOperator() flowv1.OperatorServiceClient {
+	if c.session == nil {
+		return nil
+	}
+	return c.session.Operator
+}
+
+// RawArchivist returns the raw ArchivistServiceClient for advanced use cases.
+// Prefer Workitem domain methods when available.
+func (c *Client) RawArchivist() flowv1.ArchivistServiceClient {
+	if c.session == nil {
+		return nil
+	}
+	return c.session.Archivist
+}
+
+// RawLibrarian returns the raw LibrarianServiceClient for advanced use cases.
+// Prefer Client.GetLaw() or Workitem domain methods when available.
+func (c *Client) RawLibrarian() flowv1.LibrarianServiceClient {
+	if c.session == nil {
+		return nil
+	}
+	return c.session.Librarian
+}
+
+// RawFrictionLedger returns the raw FrictionLedgerServiceClient for advanced
+// use cases. Prefer Workitem.QueryFriction() when available.
+func (c *Client) RawFrictionLedger() flowv1.FrictionLedgerServiceClient {
+	if c.session == nil {
+		return nil
+	}
+	return c.session.FrictionLedger
+}
+
 // Close releases the underlying gRPC connections.
 func (c *Client) Close() error {
 	if c.session == nil {

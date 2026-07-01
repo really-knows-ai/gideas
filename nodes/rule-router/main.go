@@ -357,7 +357,7 @@ func buildActivation(
 
 // loadArtefacts fetches the governed artefact names on the current workitem.
 func loadArtefacts(ctx context.Context, client *flow.Client) ([]string, error) {
-	resp, err := client.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+	resp, err := client.RawArchivist().ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
 		WorkitemId: client.WorkitemID(),
 	})
 	if err != nil {
@@ -404,7 +404,7 @@ func loadFeedback(ctx context.Context, client *flow.Client, artefactIDs []string
 // Returns map[artefactID] -> []stampName for the CEL stamps variable.
 func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) (map[string]any, error) {
 	// Derive governed artefact names for the query.
-	resp, err := client.Archivist.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
+	resp, err := client.RawArchivist().ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
 		WorkitemId: client.WorkitemID(),
 	})
 	if err != nil {
@@ -418,7 +418,7 @@ func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) 
 		idByGovName[ref.GetGovernedArtefact()] = ref.GetId()
 	}
 
-	stateResp, err := client.Archivist.QueryArtefactState(ctx, &flowv1.QueryArtefactStateRequest{
+	stateResp, err := client.RawArchivist().QueryArtefactState(ctx, &flowv1.QueryArtefactStateRequest{
 		WorkitemId:        client.WorkitemID(),
 		GovernedArtefacts: govNames,
 	})
@@ -449,7 +449,7 @@ func loadStamps(ctx context.Context, client *flow.Client, artefactIDs []string) 
 // loadChildren fetches child workitem statuses using the raw Operator RPC
 // (not the SDK convenience method) to preserve CompletionReason.
 func loadChildren(ctx context.Context, client *flow.Client) ([]any, error) {
-	resp, err := client.Operator.GetChildren(ctx, &flowv1.GetChildrenRequest{})
+	resp, err := client.RawOperator().GetChildren(ctx, &flowv1.GetChildrenRequest{})
 	if err != nil {
 		return nil, err
 	}

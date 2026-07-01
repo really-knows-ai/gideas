@@ -33,6 +33,8 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
 	flow "github.com/gideas/flow/sdk/go"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -97,23 +99,33 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("sort: get workitem: %w", err)
+	}
+
 	cfg, err := nodeconfig.Load[sortConfig](nodeconfig.Path())
 	if err != nil {
 		return fmt.Errorf("sort: load config: %w", err)
 	}
 
-	return handleSort(ctx, client, cfg)
+	return handleSort(ctx, workitem, client, cfg)
 }
 
 // handleSort contains the Sort gate logic, separated from the handler
 // boilerplate for testability.
-func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error {
-	_, _ = client.Heartbeat(ctx)
+func handleSort(ctx context.Context, workitem *flow.Workitem, client *flow.Client, cfg *sortConfig) error {
+	if err := workitem.Heartbeat(); err != nil {
+		return fmt.Errorf("sort: heartbeat: %w", err)
+	}
 
 	threshold := cfg.threshold()
 	nodeOrder := parseNodeOrder(cfg.NodeOrder)
 
 	// ── Step 0: Discover topology ─────────────────────────────────────
+	// ponytail: Using client.GetFlowTopology for self/outputs because the
+	// new Flow domain does not expose GetSelf() or node outputs. This can
+	// be cleaned up when the Flow domain gains these accessors (Phase 10).
 	topology, err := client.GetFlowTopology(ctx)
 	if err != nil {
 		return fmt.Errorf("sort: get flow topology: %w", err)
@@ -133,30 +145,36 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 		requiredStamps := requirements.GetStamps()
 
 		// ── Step 1: Check deadlock FIRST ──────────────────────────────
-		deadlockedItem, err := checkDeadlock(ctx, client, kind, threshold)
+		deadlockedItem, err := checkDeadlock(workitem, kind, threshold)
 		if err != nil {
 			return err
 		}
 		if deadlockedItem != nil {
 			// Check if any cited laws have active dispute records.
 			// If so, suspend (pending-hold) instead of routing to arbiter.
-			if petitionID, ok := findActiveDisputeForFeedback(ctx, client, deadlockedItem); ok {
-				slog.Info("sort: suspending pending-hold (active dispute record)",
-					"artefact_kind", kind,
-					"petition_id", petitionID)
-				condition := fmt.Sprintf("dispute_retired(%q)", petitionID)
-				if err := client.Suspend(ctx,
-					flow.WithCondition(condition),
-					flow.WithTimeout(pendingHoldTimeout),
-				); err != nil {
-					return fmt.Errorf("sort: suspend pending-hold: %w", err)
+			// ponytail: findActiveDisputeForFeedback needs the proto
+			// FeedbackItem for Justification access; the domain Feedback
+			// does not expose GetJustification(). Clean up in Phase 10
+			// when Feedback gains the missing accessors or Proto() escape hatch.
+			deadlockedProto := findDeadlockedProto(ctx, client, kind, deadlockedItem.GetID())
+			if deadlockedProto != nil {
+				if petitionID, ok := findActiveDisputeForFeedback(ctx, deadlockedProto); ok {
+					slog.Info("sort: suspending pending-hold (active dispute record)",
+						"artefact_kind", kind,
+						"petition_id", petitionID)
+					condition := fmt.Sprintf("dispute_retired(%q)", petitionID)
+					if err := workitem.Suspend(
+						flow.WithCondition(condition),
+						flow.WithSuspendTimeout(pendingHoldTimeout),
+					); err != nil {
+						return fmt.Errorf("sort: suspend pending-hold: %w", err)
+					}
+					return nil
 				}
-				return nil
 			}
 			slog.Info("sort: routing to arbiter (deadlocked feedback)",
 				"artefact_kind", kind)
-			_, err = client.RouteToOutput(ctx, outputArbiter)
-			if err != nil {
+			if err := workitem.RouteTo(outputArbiter); err != nil {
 				return fmt.Errorf("sort: route to arbiter: %w", err)
 			}
 			return nil
@@ -166,13 +184,17 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 		for _, nodeName := range nodeOrder {
 			stamps := stampsProvidedBy(nodeName, kind, stampProviders)
 			for _, stamp := range stamps {
-				hasStamp, err := client.HasStamp(ctx, kind, stamp)
-				if err != nil {
-					return fmt.Errorf("sort: check stamp %s: %w", stamp, err)
+				art, artErr := workitem.GetArtefact(kind)
+				if artErr != nil {
+					return fmt.Errorf("sort: get artefact %s: %w", kind, artErr)
+				}
+				hasStamp, hsErr := art.HasStamp(stamp)
+				if hsErr != nil {
+					return fmt.Errorf("sort: check stamp %s: %w", stamp, hsErr)
 				}
 				if hasStamp {
 					// Stamp present — check for unaddressed feedback (NEW/REJECTED) from this provider.
-					unaddressedFromProvider, err := hasUnaddressedFeedbackFrom(ctx, client, kind, nodeName)
+					unaddressedFromProvider, err := hasUnaddressedFeedbackFrom(workitem, kind, nodeName)
 					if err != nil {
 						return err
 					}
@@ -181,8 +203,7 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 							"artefact_kind", kind,
 							"provider", nodeName,
 							"stamp", stamp)
-						_, err = client.RouteToOutput(ctx, outputRefine)
-						if err != nil {
+						if err := workitem.RouteTo(outputRefine); err != nil {
 							return fmt.Errorf("sort: route to refine: %w", err)
 						}
 						return nil
@@ -198,8 +219,7 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 						"provider", nodeName,
 						"stamp", stamp,
 						"output", outputName)
-					_, err = client.RouteToOutput(ctx, outputName)
-					if err != nil {
+					if err := workitem.RouteTo(outputName); err != nil {
 						return fmt.Errorf("sort: route to %s: %w", outputName, err)
 					}
 					return nil
@@ -209,15 +229,14 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 
 		// ── Step 3: All stamps from nodeOrder present ─────────────────
 		// Check for addressed feedback (ACTIONED/WONT_FIX) needing adjudication.
-		hasAddressed, err := hasAddressedFeedback(ctx, client, kind)
+		hasAddressed, err := hasAddressedFeedback(workitem, kind)
 		if err != nil {
 			return err
 		}
 		if hasAddressed {
 			slog.Info("sort: routing to appraisal (addressed feedback needs adjudication)",
 				"artefact_kind", kind)
-			_, err = client.RouteToOutput(ctx, outputAppraisal)
-			if err != nil {
+			if err := workitem.RouteTo(outputAppraisal); err != nil {
 				return fmt.Errorf("sort: route to appraisal: %w", err)
 			}
 			return nil
@@ -225,13 +244,19 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 
 		// Apply any stamps Sort itself can provide.
 		myStamps := stampsProvidedBy(selfNode.GetName(), kind, stampProviders)
-		for _, stamp := range myStamps {
-			if slices.Contains(requiredStamps, stamp) {
-				slog.Info("sort: stamping artefact",
-					"artefact_kind", kind,
-					"stamp", stamp)
-				if _, err := client.StampArtefact(ctx, kind, stamp); err != nil {
-					return fmt.Errorf("sort: stamp %s: %w", stamp, err)
+		if len(myStamps) > 0 {
+			art, artErr := workitem.GetArtefact(kind)
+			if artErr != nil {
+				return fmt.Errorf("sort: get artefact %s: %w", kind, artErr)
+			}
+			for _, stamp := range myStamps {
+				if slices.Contains(requiredStamps, stamp) {
+					slog.Info("sort: stamping artefact",
+						"artefact_kind", kind,
+						"stamp", stamp)
+					if err := art.Stamp(stamp); err != nil {
+						return fmt.Errorf("sort: stamp %s: %w", stamp, err)
+					}
 				}
 			}
 		}
@@ -239,7 +264,7 @@ func handleSort(ctx context.Context, client *flow.Client, cfg *sortConfig) error
 
 	// ── Step 4: All governance satisfied → complete ───────────────────
 	slog.Info("sort: all governance requirements met, completing workitem")
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("sort: complete: %w", err)
 	}
 
@@ -312,9 +337,9 @@ func stampsProvidedBy(nodeName, kind string, providers map[string]map[string]str
 // hasUnaddressedFeedbackFrom checks whether there is NEW or REJECTED feedback
 // from the specified source node on the given artefact kind.
 func hasUnaddressedFeedbackFrom(
-	ctx context.Context, client *flow.Client, artefactID, sourceNode string,
+	workitem *flow.Workitem, artefactID, sourceNode string,
 ) (bool, error) {
-	items, err := client.GetFeedback(ctx, artefactID)
+	items, err := workitem.GetFeedback(artefactID)
 	if err != nil {
 		return false, fmt.Errorf("sort: get feedback for %s: %w", artefactID, err)
 	}
@@ -323,8 +348,8 @@ func hasUnaddressedFeedbackFrom(
 			continue
 		}
 		state := item.GetState()
-		if state == flowv1.FeedbackState_FEEDBACK_STATE_NEW ||
-			state == flowv1.FeedbackState_FEEDBACK_STATE_REJECTED {
+		if state == flow.FeedbackStateNew ||
+			state == flow.FeedbackStateRejected {
 			return true, nil
 		}
 	}
@@ -334,20 +359,40 @@ func hasUnaddressedFeedbackFrom(
 // hasAddressedFeedback checks whether any ACTIONED or WONT_FIX feedback
 // exists on the given artefact kind (any source).
 func hasAddressedFeedback(
-	ctx context.Context, client *flow.Client, artefactID string,
+	workitem *flow.Workitem, artefactID string,
 ) (bool, error) {
-	items, err := client.GetFeedback(ctx, artefactID)
+	items, err := workitem.GetFeedback(artefactID)
 	if err != nil {
 		return false, fmt.Errorf("sort: get feedback for %s: %w", artefactID, err)
 	}
 	for _, item := range items {
 		state := item.GetState()
-		if state == flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED ||
-			state == flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX {
+		if state == flow.FeedbackStateActioned ||
+			state == flow.FeedbackStateWontFix {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// findDeadlockedProto fetches the proto FeedbackItem matching the given
+// feedback ID. This is a transitional helper — the domain Feedback does not
+// expose GetJustification(), which is needed by findActiveDisputeForFeedback.
+// ponytail: Remove when Feedback gains Proto() escape hatch or GetJustification()
+// accessor (Phase 10).
+func findDeadlockedProto(
+	ctx context.Context, client *flow.Client, artefactID, feedbackID string,
+) *flowv1.FeedbackItem {
+	items, err := client.GetFeedback(ctx, artefactID)
+	if err != nil {
+		return nil
+	}
+	for _, item := range items {
+		if item.GetId() == feedbackID {
+			return item
+		}
+	}
+	return nil
 }
 
 // findActiveDisputeForFeedback extracts law IDs from the deadlocked feedback
@@ -359,8 +404,12 @@ func hasAddressedFeedback(
 // active dispute records matching any cited law. Errors from GetActiveDisputes
 // are logged and treated as "no dispute found" to keep the arbiter path as
 // the safe fallback.
+//
+// ponytail: This function creates a direct gRPC connection because the new
+// SDK surface no longer exposes Client.Librarian. In Phase 10, replace this
+// with a proper Workitem.GetActiveDisputes() method that reuses the session.
 func findActiveDisputeForFeedback(
-	ctx context.Context, client *flow.Client, item *flowv1.FeedbackItem,
+	ctx context.Context, item *flowv1.FeedbackItem,
 ) (string, bool) {
 	citation := item.GetJustification().GetCitation()
 	if citation == nil {
@@ -371,9 +420,25 @@ func findActiveDisputeForFeedback(
 		return "", false
 	}
 
+	// Create a direct gRPC connection to the Sidecar for the Librarian call.
+	sidecarAddr := os.Getenv(flow.EnvSidecarAddress)
+	if sidecarAddr == "" {
+		sidecarAddr = flow.DefaultSidecarAddress
+	}
+	conn, err := grpc.NewClient(
+		sidecarAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		slog.Warn("sort: failed to connect for dispute check, falling back to arbiter", "error", err)
+		return "", false
+	}
+	defer func() { _ = conn.Close() }()
+	librarian := flowv1.NewLibrarianServiceClient(conn)
+
 	// Query each cited law for an active dispute record.
 	for _, lawID := range lawIDs {
-		resp, err := client.Librarian.GetActiveDisputes(ctx,
+		resp, err := librarian.GetActiveDisputes(ctx,
 			&flowv1.GetActiveDisputesRequest{LawId: lawID})
 		if err != nil {
 			slog.Warn("sort: GetActiveDisputes failed, falling back to arbiter",
@@ -397,39 +462,39 @@ func findActiveDisputeForFeedback(
 // First match wins — one routing decision per Sort invocation. Returns nil
 // when no feedback item is deadlocked.
 func checkDeadlock(
-	ctx context.Context, client *flow.Client, artefactID string, threshold int32,
-) (*flowv1.FeedbackItem, error) {
-	items, err := client.GetFeedback(ctx, artefactID)
+	workitem *flow.Workitem, artefactID string, threshold int32,
+) (*flow.Feedback, error) {
+	items, err := workitem.GetFeedback(artefactID)
 	if err != nil {
 		return nil, fmt.Errorf("sort: get feedback: %w", err)
 	}
 
 	for _, item := range items {
-		if item.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED {
+		if item.GetState() == flow.FeedbackStateResolved {
 			continue
 		}
 
 		// Already deadlocked from a prior cycle — route to Arbiter.
-		if item.GetState() == flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
+		if item.GetState() == flow.FeedbackStateDeadlocked {
 			slog.Info("sort: found deadlocked feedback item",
-				"feedback_id", item.GetId())
+				"feedback_id", item.GetID())
 			return item, nil
 		}
 
-		depth, err := client.GetFeedbackDepth(ctx, item.GetId())
+		depth, err := item.GetDepth()
 		if err != nil {
 			return nil, fmt.Errorf(
-				"sort: get feedback depth for %s: %w", item.GetId(), err)
+				"sort: get feedback depth for %s: %w", item.GetID(), err)
 		}
 
 		if depth >= threshold {
 			slog.Info("sort: deadlocking feedback item",
-				"feedback_id", item.GetId(),
+				"feedback_id", item.GetID(),
 				"depth", depth,
 				"threshold", threshold)
-			if _, err := client.DeadlockFeedback(ctx, item.GetId()); err != nil {
+			if err := item.Deadlock(); err != nil {
 				return nil, fmt.Errorf(
-					"sort: deadlock feedback %s: %w", item.GetId(), err)
+					"sort: deadlock feedback %s: %w", item.GetID(), err)
 			}
 			return item, nil
 		}

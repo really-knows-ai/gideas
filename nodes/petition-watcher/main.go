@@ -97,7 +97,7 @@ func watchOutcomesWithClient(
 			return err
 		}
 
-		stream, err := fedClient.SubscribePetitionOutcomes(ctx, flowIdentity)
+		stream, err := fedClient.SubscribePetitionOutcomes(flowIdentity)
 		if err != nil {
 			slog.Warn("petition-watcher: subscribe failed, retrying",
 				"error", err, "delay", delay)
@@ -128,7 +128,7 @@ func watchOutcomesWithClient(
 // failure.
 func consumeOutcomes(
 	ctx context.Context,
-	stream *flow.PetitionOutcomeStream,
+	stream *flow.PetitionOutcomeWatcher,
 	tracker *internal.PendingTracker,
 	entry *flow.EntryClient,
 ) error {
@@ -185,7 +185,7 @@ func handleAccepted(ctx context.Context, entry *flow.EntryClient, petitionID str
 		return
 	}
 
-	if err := entry.RetireDisputeRecord(ctx, petitionID); err != nil {
+	if err := entry.RetireDisputeRecord(petitionID); err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			slog.Warn("petition-watcher: dispute record already retired",
 				"petition_id", petitionID)
@@ -224,7 +224,7 @@ func handleRejected(ctx context.Context, entry *flow.EntryClient, petitionID str
 	}
 
 	// Step 1: Retire dispute record (best-effort, same as acceptance path).
-	if err := entry.RetireDisputeRecord(ctx, petitionID); err != nil {
+	if err := entry.RetireDisputeRecord(petitionID); err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			slog.Warn("petition-watcher: dispute record already retired",
 				"petition_id", petitionID)
@@ -263,7 +263,7 @@ func handleRejected(ctx context.Context, entry *flow.EntryClient, petitionID str
 		"rejection_report": string(reportBytes),
 	}
 
-	wiID, err := entry.CreateWorkitem(ctx, metadata)
+	wiID, err := entry.CreateWorkitem(metadata)
 	if err != nil {
 		slog.Warn("petition-watcher: create clerk cycle workitem failed",
 			"petition_id", petitionID, "error", err)
@@ -291,25 +291,30 @@ func handleOutcome(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
-	return processOutcome(ctx, client, wctx)
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("petition-watcher: handler: get workitem: %w", err)
+	}
+
+	return processOutcome(workitem, wctx)
 }
 
 // processOutcome performs the stub handler logic: heartbeat and complete.
 // Later slices will add: retire dispute record, resume held workitems,
 // create Clerk cycle on rejection.
-func processOutcome(ctx context.Context, client *flow.Client, wctx *flowv1.WorkitemContext) error {
+func processOutcome(workitem *flow.Workitem, wctx *flowv1.WorkitemContext) error {
 	slog.Info("petition-watcher: handling outcome (stub)",
 		"workitem_id", wctx.GetWorkitemId(),
 		"metadata", wctx.GetMetadata(),
 	)
 
 	// Send a heartbeat to signal liveness.
-	if _, err := client.Heartbeat(ctx); err != nil {
+	if err := workitem.Heartbeat(); err != nil {
 		return fmt.Errorf("petition-watcher: handler: heartbeat: %w", err)
 	}
 
 	// Stub: complete the workitem (no routing needed yet).
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("petition-watcher: handler: complete: %w", err)
 	}
 
@@ -328,7 +333,7 @@ func processOutcome(ctx context.Context, client *flow.Client, wctx *flowv1.Worki
 // stop processing (best-effort). A failure to resume one workitem does not
 // prevent resuming others.
 func resumeHeldWorkitems(ctx context.Context, entry *flow.EntryClient, petitionID string) {
-	workitemIDs, err := entry.ListSuspendedWorkitems(ctx, petitionID)
+	workitemIDs, err := entry.ListSuspendedWorkitems(petitionID)
 	if err != nil {
 		slog.Warn("petition-watcher: list suspended workitems failed",
 			"petition_id", petitionID, "error", err)
@@ -342,7 +347,7 @@ func resumeHeldWorkitems(ctx context.Context, entry *flow.EntryClient, petitionI
 	}
 
 	for _, wiID := range workitemIDs {
-		if err := entry.ResumeWorkitem(ctx, wiID); err != nil {
+		if err := entry.ResumeWorkitem(wiID); err != nil {
 			slog.Warn("petition-watcher: resume workitem failed",
 				"workitem_id", wiID, "petition_id", petitionID, "error", err)
 		} else {

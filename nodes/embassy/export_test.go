@@ -97,7 +97,8 @@ func TestProcessExport_ConnectsToRemoteEmbassyAndTransfers(t *testing.T) {
 		},
 	}
 
-	err := processExport(context.Background(), env.client, wctx, env.deps)
+	wi := getExportTestWorkitem(t, env.client, wctx.GetWorkitemId())
+	err := processExport(context.Background(), env.client, wi, wctx, env.deps)
 	if err != nil {
 		t.Fatalf("processExport() returned error: %v", err)
 	}
@@ -165,7 +166,8 @@ func TestProcessExport_PreflightRejectedFailsWithRejectionReason(t *testing.T) {
 		},
 	}
 
-	err = processExport(context.Background(), client, wctx, deps)
+	wi := getExportTestWorkitem(t, client, wctx.GetWorkitemId())
+	err = processExport(context.Background(), client, wi, wctx, deps)
 	if err == nil {
 		t.Fatal("expected error when preflight is rejected")
 	}
@@ -195,7 +197,8 @@ func TestProcessExport_SuccessfulTransferCallsComplete(t *testing.T) {
 		},
 	}
 
-	err := processExport(context.Background(), env.client, wctx, env.deps)
+	wi := getExportTestWorkitem(t, env.client, wctx.GetWorkitemId())
+	err := processExport(context.Background(), env.client, wi, wctx, env.deps)
 	if err != nil {
 		t.Fatalf("processExport() returned error: %v", err)
 	}
@@ -251,7 +254,8 @@ func TestProcessExport_TransferFailureReturnsError(t *testing.T) {
 		},
 	}
 
-	err = processExport(context.Background(), client, wctx, deps)
+	exportWI := getExportTestWorkitem(t, client, wctx.GetWorkitemId())
+	err = processExport(context.Background(), client, exportWI, wctx, deps)
 	if err == nil {
 		t.Fatal("expected error when federation returns error")
 	}
@@ -270,4 +274,14 @@ func staticEmbassyDialer(c *flow.EmbassyClient) embassyDialerFunc {
 	return func(_ string) (*flow.EmbassyClient, error) {
 		return c, nil
 	}
+}
+
+// getExportTestWorkitem creates a Workitem for the export test client.
+func getExportTestWorkitem(t *testing.T, client *flow.Client, workitemID string) *flow.Workitem {
+	t.Helper()
+	wi, err := client.GetWorkitem(workitemID)
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+	return wi
 }

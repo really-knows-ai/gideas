@@ -3,7 +3,6 @@
 package artefacts
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -17,23 +16,27 @@ import (
 // If ids is empty, FetchInputs returns an empty string and nil error —
 // callers that require at least one input should validate their config
 // before calling.
-func FetchInputs(ctx context.Context, client *flow.Client, ids []string) (string, error) {
+func FetchInputs(workitem *flow.Workitem, ids []string) (string, error) {
 	if len(ids) == 0 {
 		return "", nil
 	}
 
 	var b strings.Builder
 	for i, id := range ids {
-		resp, err := client.GetArtefact(ctx, id)
+		artefact, err := workitem.GetArtefact(id)
 		if err != nil {
 			return "", fmt.Errorf("fetch input artefact %s: %w", id, err)
+		}
+		content, err := artefact.GetContent()
+		if err != nil {
+			return "", fmt.Errorf("get content for artefact %s: %w", id, err)
 		}
 
 		if i > 0 {
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "## %s\n\n", id)
-		b.WriteString(string(resp.GetContent()))
+		b.WriteString(string(content))
 		b.WriteString("\n")
 	}
 

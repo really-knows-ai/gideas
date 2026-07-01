@@ -82,7 +82,7 @@ type outputFeedbackItem struct {
 // review-output artefact → Complete().
 func HandleReview(
 	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	agent flow.ReviewContract,
 	cfg ReviewConfig,
 ) error {
@@ -90,55 +90,73 @@ func HandleReview(
 	// Read artefacts from parent
 	// ---------------------------------------------------------------
 
-	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
+	inputContent, err := artefacts.FetchInputs(workitem, cfg.InputArtefacts)
 	if err != nil {
 		return fmt.Errorf("appraiser: read inputs: %w", err)
 	}
 
-	reviewResp, err := client.GetArtefact(ctx, cfg.ReviewArtefact)
+	reviewArt, err := workitem.GetArtefact(cfg.ReviewArtefact)
 	if err != nil {
 		return fmt.Errorf("appraiser: read %s: %w", cfg.ReviewArtefact, err)
 	}
-	reviewContent := string(reviewResp.GetContent())
+	reviewContentBytes, err := reviewArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("appraiser: get content %s: %w", cfg.ReviewArtefact, err)
+	}
+	reviewContent := string(reviewContentBytes)
 
 	// Read and deserialize laws.
-	lawsResp, err := client.GetArtefact(ctx, ArtefactLaws)
+	lawsArt, err := workitem.GetArtefact(ArtefactLaws)
 	if err != nil {
 		return fmt.Errorf("appraiser: read %s: %w", ArtefactLaws, err)
 	}
+	lawsContent, err := lawsArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("appraiser: get content %s: %w", ArtefactLaws, err)
+	}
 
 	var lawItems []LawData
-	if err := json.Unmarshal(lawsResp.GetContent(), &lawItems); err != nil {
+	if err := json.Unmarshal(lawsContent, &lawItems); err != nil {
 		return fmt.Errorf("appraiser: unmarshal laws: %w", err)
 	}
 
 	// Read and deserialize history.
-	historyResp, err := client.GetArtefact(ctx, ArtefactHistory)
+	historyArt, err := workitem.GetArtefact(ArtefactHistory)
 	if err != nil {
 		return fmt.Errorf("appraiser: read %s: %w", ArtefactHistory, err)
 	}
+	historyContent, err := historyArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("appraiser: get content %s: %w", ArtefactHistory, err)
+	}
 
 	var historyItems []HistoryData
-	if err := json.Unmarshal(historyResp.GetContent(), &historyItems); err != nil {
+	if err := json.Unmarshal(historyContent, &historyItems); err != nil {
 		return fmt.Errorf("appraiser: unmarshal history: %w", err)
 	}
 
 	// Read and deserialize appraiserPersonality (optional, backward compat).
 	var appraiserData AppraiserPersonalityData
-	appraiserResp, appraiserErr := client.GetArtefact(ctx, ArtefactAppraiserPersonality)
+	appraiserArt, appraiserErr := workitem.GetArtefact(ArtefactAppraiserPersonality)
 	if appraiserErr == nil {
-		if err := json.Unmarshal(appraiserResp.GetContent(), &appraiserData); err != nil {
-			return fmt.Errorf("appraiser: unmarshal appraiserPersonality: %w", err)
+		appraiserContent, aErr := appraiserArt.GetContent()
+		if aErr == nil {
+			if err := json.Unmarshal(appraiserContent, &appraiserData); err != nil {
+				return fmt.Errorf("appraiser: unmarshal appraiserPersonality: %w", err)
+			}
 		}
 	}
 	// If artefact is absent, appraiserData stays zero-valued — fine.
 
 	// Read and deserialize pass (optional, backward compat).
 	var passData PassData
-	passResp, passErr := client.GetArtefact(ctx, ArtefactPass)
+	passArt, passErr := workitem.GetArtefact(ArtefactPass)
 	if passErr == nil {
-		if err := json.Unmarshal(passResp.GetContent(), &passData); err != nil {
-			return fmt.Errorf("appraiser: unmarshal pass: %w", err)
+		passContent, pErr := passArt.GetContent()
+		if pErr == nil {
+			if err := json.Unmarshal(passContent, &passData); err != nil {
+				return fmt.Errorf("appraiser: unmarshal pass: %w", err)
+			}
 		}
 	}
 
@@ -204,7 +222,11 @@ func HandleReview(
 
 	// The governed artefact for child data transfer is "review-data" —
 	// internal plumbing, not a governed work product.
-	if _, err := client.StoreArtefact(ctx, ArtefactReviewOutput, "review-data", outJSON); err != nil {
+	reviewOutArt, err := workitem.GetArtefact(ArtefactReviewOutput)
+	if err != nil {
+		return fmt.Errorf("appraiser: get %s: %w", ArtefactReviewOutput, err)
+	}
+	if err := reviewOutArt.Store(outJSON); err != nil {
 		return fmt.Errorf("appraiser: store %s: %w", ArtefactReviewOutput, err)
 	}
 
@@ -212,7 +234,7 @@ func HandleReview(
 	// Signal completion
 	// ---------------------------------------------------------------
 
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("appraiser: complete: %w", err)
 	}
 

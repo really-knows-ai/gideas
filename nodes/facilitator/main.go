@@ -147,6 +147,11 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("facilitator: get workitem: %w", err)
+	}
+
 	cfg, err := nodeconfig.Load[facilitatorConfig](nodeconfig.Path())
 	if err != nil {
 		return fmt.Errorf("facilitator: load config: %w", err)
@@ -156,7 +161,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("facilitator: invalid config: %w", err)
 	}
 
-	return handleFacilitator(ctx, client, cfg, wctx)
+	return handleFacilitator(ctx, client, workitem, cfg, wctx)
 }
 
 // ── Core logic (layer 3 — testable) ─────────────────────────────────────
@@ -169,17 +174,18 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 func handleFacilitator(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	cfg *facilitatorConfig,
 	wctx *flowv1.WorkitemContext,
 ) error {
 	// ── Heartbeat ────────────────────────────────────────────────────
-	_, _ = client.Heartbeat(ctx)
+	_ = workitem.Heartbeat()
 
 	// ── Phase detection ──────────────────────────────────────────────
 	// Use the raw Operator stub because the SDK's GetChildren() strips
 	// CompletionReason from the response. We need CompletionReason for
 	// the post-resume path.
-	resp, err := client.Operator.GetChildren(ctx, &flowv1.GetChildrenRequest{})
+	resp, err := client.RawOperator().GetChildren(workitem.Ctx(), &flowv1.GetChildrenRequest{})
 	if err != nil {
 		return fmt.Errorf("facilitator: get children: %w", err)
 	}
@@ -189,13 +195,13 @@ func handleFacilitator(
 		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
 			"phase": "resume",
 		})
-		return handlePostResume(ctx, client, children)
+		return handlePostResume(ctx, client, workitem, children)
 	}
 
 	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.started", map[string]any{
 		"phase": "first",
 	})
-	return handleFirstInvocation(ctx, client, cfg, wctx)
+	return handleFirstInvocation(ctx, client, workitem, cfg, wctx)
 }
 
 // hasCompletedChild returns true if at least one child is in the Completed
@@ -217,11 +223,12 @@ func hasCompletedChild(children []*flowv1.ChildWorkitemStatus) bool {
 func handleFirstInvocation(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	cfg *facilitatorConfig,
 	wctx *flowv1.WorkitemContext,
 ) error {
 	// ── Step 1: Discover topology ────────────────────────────────────
-	topology, err := client.GetFlowTopology(ctx)
+	topology, err := workitem.GetTopology()
 	if err != nil {
 		return fmt.Errorf("facilitator: get flow topology: %w", err)
 	}
@@ -229,7 +236,7 @@ func handleFirstInvocation(
 	exitContract := topology.GetExitContract()
 
 	// ── Step 2: Find deadlocked feedback ─────────────────────────────
-	artefactKind, disputed, err := selectDisputedFeedback(ctx, client, exitContract)
+	artefactKind, disputed, err := selectDisputedFeedback(ctx, client, workitem, exitContract)
 	if err != nil {
 		return err
 	}
@@ -240,7 +247,7 @@ func handleFirstInvocation(
 		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.no_deadlock", map[string]any{
 			"output": outputResolved,
 		})
-		if _, err := client.RouteToOutput(ctx, outputResolved); err != nil {
+		if err := workitem.RouteTo(outputResolved); err != nil {
 			return fmt.Errorf("facilitator: route to resolved (no deadlock): %w", err)
 		}
 		return nil
@@ -248,24 +255,24 @@ func handleFirstInvocation(
 
 	slog.Info("facilitator: disputed feedback selected",
 		"artefact_kind", artefactKind,
-		"feedback_id", disputed.GetId(),
+		"feedback_id", disputed.GetID(),
 	)
 
 	// ── Step 3: Assemble evidence artefacts ──────────────────────────
 
-	disputeWorkitem, err := buildDisputeWorkitem(ctx, client, wctx)
+	disputeWorkitem, err := buildDisputeWorkitem(ctx, client, workitem, wctx)
 	if err != nil {
 		return err
 	}
 
-	disputeDetails := buildDisputeDetails(ctx, client, disputed)
+	disputeDetails := buildDisputeDetails(ctx, client, workitem, disputed)
 
-	disputeArtefactContent, err := buildDisputeArtefact(ctx, client, artefactKind)
+	disputeArtefactContent, err := buildDisputeArtefact(ctx, client, workitem, artefactKind)
 	if err != nil {
 		return err
 	}
 
-	disputeInputs, err := buildDisputeInputs(ctx, client, cfg.InputArtefacts)
+	disputeInputs, err := buildDisputeInputs(ctx, client, workitem, cfg.InputArtefacts)
 	if err != nil {
 		return err
 	}
@@ -277,14 +284,14 @@ func handleFirstInvocation(
 
 	nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.evidence_assembled", map[string]any{
 		"artefact_kind": artefactKind,
-		"feedback_id":   disputed.GetId(),
+		"feedback_id":   disputed.GetID(),
 	})
 
 	// ── Step 4: Build disputed-artefact reference ────────────────────
 	disputedRef := disputedArtefactRef{
 		ArtefactKind: artefactKind,
-		WorkitemID:   client.WorkitemID(),
-		FeedbackID:   disputed.GetId(),
+		WorkitemID:   workitem.ID(),
+		FeedbackID:   disputed.GetID(),
 	}
 	disputedRefJSON, err := json.Marshal(disputedRef)
 	if err != nil {
@@ -292,7 +299,7 @@ func handleFirstInvocation(
 	}
 
 	// ── Step 5: Create child, store artefacts, route to Arbiter ──────
-	child, err := client.CreateChildWorkitem(ctx)
+	child, err := workitem.CreateChild()
 	if err != nil {
 		return fmt.Errorf("facilitator: create child workitem: %w", err)
 	}
@@ -316,12 +323,12 @@ func handleFirstInvocation(
 	}
 
 	for _, ca := range childArtefacts {
-		if _, err := child.StoreArtefact(ctx, ca.id, "", ca.content); err != nil {
+		if err := child.StoreArtefact(ca.id, "", ca.content); err != nil {
 			return fmt.Errorf("facilitator: store %s on child: %w", ca.id, err)
 		}
 	}
 
-	if _, err := child.RouteTo(ctx, cfg.arbiterNode()); err != nil {
+	if err := child.RouteTo(cfg.arbiterNode()); err != nil {
 		return fmt.Errorf("facilitator: route child to arbiter: %w", err)
 	}
 
@@ -330,7 +337,7 @@ func handleFirstInvocation(
 		"condition", suspendCondition,
 		"child_id", child.ID(),
 	)
-	if err := client.Suspend(ctx, flow.WithCondition(suspendCondition)); err != nil {
+	if err := workitem.Suspend(flow.WithCondition(suspendCondition)); err != nil {
 		return fmt.Errorf("facilitator: suspend: %w", err)
 	}
 
@@ -338,7 +345,7 @@ func handleFirstInvocation(
 		"child_id":      child.ID(),
 		"arbiter_node":  cfg.arbiterNode(),
 		"artefact_kind": artefactKind,
-		"feedback_id":   disputed.GetId(),
+		"feedback_id":   disputed.GetID(),
 		"condition":     suspendCondition,
 	})
 
@@ -366,21 +373,22 @@ type disputedArtefactRef struct {
 func selectDisputedFeedback(
 	ctx context.Context,
 	client *flow.Client,
-	exitContract map[string]*flowv1.StampRequirements,
-) (string, *flowv1.FeedbackItem, error) {
+	workitem *flow.Workitem,
+	exitContract map[string][]string,
+) (string, *flow.Feedback, error) {
 	var (
 		bestKind string
-		bestItem *flowv1.FeedbackItem
+		bestItem *flow.Feedback
 	)
 
 	for kind := range exitContract {
-		items, err := client.GetFeedback(ctx, kind)
+		items, err := workitem.GetFeedback(kind)
 		if err != nil {
 			return "", nil, fmt.Errorf("facilitator: get feedback for %s: %w", kind, err)
 		}
 
 		for _, item := range items {
-			if item.GetState() != flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED {
+			if item.GetState() != flow.FeedbackStateDeadlocked {
 				continue
 			}
 			if bestItem == nil {
@@ -401,6 +409,7 @@ func selectDisputedFeedback(
 func buildDisputeWorkitem(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	wctx *flowv1.WorkitemContext,
 ) (string, error) {
 	var b strings.Builder
@@ -425,8 +434,8 @@ func buildDisputeWorkitem(
 	}
 
 	b.WriteString("\n## Friction Summary\n\n")
-	friction, err := client.QueryFriction(ctx, &flowv1.FrictionFilter{
-		WorkitemId: client.WorkitemID(),
+	friction, err := workitem.QueryFriction(&flowv1.FrictionFilter{
+		WorkitemId: workitem.ID(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("facilitator: query workitem friction: %w", err)
@@ -451,18 +460,20 @@ func buildDisputeWorkitem(
 func buildDisputeDetails(
 	ctx context.Context,
 	client *flow.Client,
-	item *flowv1.FeedbackItem,
+	workitem *flow.Workitem,
+	fb *flow.Feedback,
 ) string {
 	var b strings.Builder
 
 	b.WriteString("# Dispute Details\n\n")
 
-	// ── Feedback item ────────────────────────────────────────────────
+	// ── Feedback item (use PB() for proto fields not exposed as domain methods) ──
+	item := fb.PB()
 	b.WriteString("## Disputed Feedback\n\n")
-	fmt.Fprintf(&b, "- **ID**: %s\n", item.GetId())
-	fmt.Fprintf(&b, "- **Source**: %s\n", item.GetSource())
-	fmt.Fprintf(&b, "- **State**: %s\n", item.GetState().String())
-	fmt.Fprintf(&b, "- **Message**: %s\n", item.GetMessage())
+	fmt.Fprintf(&b, "- **ID**: %s\n", fb.GetID())
+	fmt.Fprintf(&b, "- **Source**: %s\n", fb.GetSource())
+	fmt.Fprintf(&b, "- **State**: %s\n", fb.GetState().String())
+	fmt.Fprintf(&b, "- **Message**: %s\n", fb.GetMessage())
 
 	if j := item.GetJustification(); j != nil {
 		b.WriteString("\n### Justification\n\n")
@@ -490,7 +501,7 @@ func buildDisputeDetails(
 	if len(citedIDs) > 0 {
 		b.WriteString("\n## Cited Laws\n\n")
 		for _, lawID := range citedIDs {
-			law, err := client.GetLaw(ctx, lawID)
+			law, err := client.GetLaw(lawID)
 			if err != nil {
 				slog.Warn("facilitator: get cited law failed, skipping",
 					"law_id", lawID, "error", err)
@@ -498,16 +509,16 @@ func buildDisputeDetails(
 				continue
 			}
 
-			fmt.Fprintf(&b, "### %s (Tier %d)\n\n", law.GetId(), int32(law.GetTier()))
+			fmt.Fprintf(&b, "### %s (Tier %d)\n\n", law.ID(), law.GetTier())
 			fmt.Fprintf(&b, "- **Goal**: %s\n", law.GetGoal())
 			for _, rep := range law.GetRepresentations() {
 				fmt.Fprintf(&b, "- **%s**: %s\n", rep.GetType(), rep.GetContent())
 			}
 
 			// Per-law friction for this workitem.
-			friction, err := client.QueryFriction(ctx, &flowv1.FrictionFilter{
+			friction, err := workitem.QueryFriction(&flowv1.FrictionFilter{
 				LawId:      lawID,
-				WorkitemId: client.WorkitemID(),
+				WorkitemId: workitem.ID(),
 			})
 			if err != nil {
 				slog.Warn("facilitator: query friction for cited law failed",
@@ -545,13 +556,14 @@ func extractCitedLawIDs(item *flowv1.FeedbackItem) []string {
 func buildDisputeArtefact(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	artefactKind string,
 ) ([]byte, error) {
-	resp, err := client.GetArtefact(ctx, artefactKind)
+	art, err := workitem.GetArtefact(artefactKind)
 	if err != nil {
 		return nil, fmt.Errorf("facilitator: get artefact %s: %w", artefactKind, err)
 	}
-	return resp.GetContent(), nil
+	return art.GetContent()
 }
 
 // buildDisputeInputs fetches each configured input artefact and
@@ -559,13 +571,14 @@ func buildDisputeArtefact(
 func buildDisputeInputs(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	inputArtefacts []string,
 ) (string, error) {
 	if len(inputArtefacts) == 0 {
 		return "# Dispute Inputs\n\nNo input artefacts configured.\n", nil
 	}
 
-	content, err := artefacts.FetchInputs(ctx, client, inputArtefacts)
+	content, err := artefacts.FetchInputs(workitem, inputArtefacts)
 	if err != nil {
 		return "", fmt.Errorf("facilitator: %w", err)
 	}
@@ -616,6 +629,7 @@ func buildAppendix(
 func handlePostResume(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	children []*flowv1.ChildWorkitemStatus,
 ) error {
 	// Find the first completed child.
@@ -645,7 +659,7 @@ func handlePostResume(
 		nodeutil.EmitTelemetry(ctx, client, "foundry.facilitator.cancelled", map[string]any{
 			"child_id": completed.GetWorkitemId(),
 		})
-		if _, err := client.Complete(ctx, flow.WithReason(
+		if err := workitem.Complete(flow.WithReason(
 			flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
 		)); err != nil {
 			return fmt.Errorf("facilitator: complete with cancelled: %w", err)
@@ -659,7 +673,7 @@ func handlePostResume(
 		"child_id": completed.GetWorkitemId(),
 		"output":   outputResolved,
 	})
-	if _, err := client.RouteToOutput(ctx, outputResolved); err != nil {
+	if err := workitem.RouteTo(outputResolved); err != nil {
 		return fmt.Errorf("facilitator: route to resolved: %w", err)
 	}
 	return nil

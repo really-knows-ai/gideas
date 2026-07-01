@@ -59,43 +59,51 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
-	// Send a Heartbeat.
-	ack, err := client.Heartbeat(ctx)
+	workitem, err := client.GetWorkitem()
 	if err != nil {
+		slog.Error("null-node: failed to get workitem", "error", err)
+		return err
+	}
+
+	// Send a Heartbeat.
+	if err := workitem.Heartbeat(); err != nil {
 		slog.Error("null-node: heartbeat failed", "error", err)
 		return err
 	}
-	slog.Info("null-node: heartbeat acknowledged", "ack", ack)
+	slog.Info("null-node: heartbeat acknowledged")
 
 	// --- Step 1 (Write): Store an artefact to prove persistence ---
-	storeResp, err := client.StoreArtefact(ctx, "greeting", "txt", []byte("Hello from Step 1"))
-	if err != nil {
-		slog.Error("null-node: StoreArtefact failed", "error", err)
-		return err
-	}
-	slog.Info("null-node: artefact stored",
-		"version_hash", storeResp.GetVersionHash(),
-		"is_new_version", storeResp.GetIsNewVersion(),
-	)
-
-	// --- Step 2 (Read): Retrieve the artefact to prove the round-trip ---
-	getResp, err := client.GetArtefact(ctx, "greeting")
+	greeting, err := workitem.GetArtefact("greeting")
 	if err != nil {
 		slog.Error("null-node: GetArtefact failed", "error", err)
 		return err
 	}
-	slog.Info("null-node: Fetched content: "+string(getResp.GetContent()),
-		"version_hash", getResp.GetVersionHash(),
-		"governed_artefact", getResp.GetGovernedArtefact(),
+	if err := greeting.Store([]byte("Hello from Step 1")); err != nil {
+		slog.Error("null-node: StoreArtefact failed", "error", err)
+		return err
+	}
+	slog.Info("null-node: artefact stored",
+		"version_hash", greeting.VersionHash(),
+		"is_new_version", greeting.IsNewVersion(),
+	)
+
+	// --- Step 2 (Read): Retrieve the artefact to prove the round-trip ---
+	content, err := greeting.GetContent()
+	if err != nil {
+		slog.Error("null-node: GetArtefact failed", "error", err)
+		return err
+	}
+	slog.Info("null-node: Fetched content: "+string(content),
+		"version_hash", greeting.VersionHash(),
+		"governed_artefact", greeting.GovernedArtefact(),
 	)
 
 	// Complete — submit routing instruction back through Sidecar -> Operator.
-	accepted, err := client.Complete(ctx)
-	if err != nil {
+	if err := workitem.Complete(); err != nil {
 		slog.Error("null-node: completion failed", "error", err)
 		return err
 	}
-	slog.Info("null-node: completion accepted", "accepted", accepted)
+	slog.Info("null-node: completion accepted")
 
 	slog.Info("null-node: done processing",
 		"workitem_id", wctx.GetWorkitemId(),

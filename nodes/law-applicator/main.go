@@ -243,7 +243,7 @@ func applyCreate(ctx context.Context, client *flow.Client, change *petitionChang
 		AppliesTo:       change.AppliesTo,
 	}
 
-	resp, err := client.Librarian.WriteLaw(ctx, &flowv1.WriteLawRequest{Law: law})
+	resp, err := client.RawLibrarian().WriteLaw(ctx, &flowv1.WriteLawRequest{Law: law})
 	if err != nil {
 		return nil, fmt.Errorf("law-applicator: write law: %w", err)
 	}
@@ -257,7 +257,7 @@ func applyCreate(ctx context.Context, client *flow.Client, change *petitionChang
 
 // applyRetire retires an existing law via the Librarian.
 func applyRetire(ctx context.Context, client *flow.Client, change *petitionChange) (*lawApplyResult, error) {
-	_, err := client.Librarian.RetireLaw(ctx, &flowv1.RetireLawRequest{LawId: change.LawID})
+	_, err := client.RawLibrarian().RetireLaw(ctx, &flowv1.RetireLawRequest{LawId: change.LawID})
 	if err != nil {
 		return nil, fmt.Errorf("law-applicator: retire law %q: %w", change.LawID, err)
 	}
@@ -270,14 +270,15 @@ func applyRetire(ctx context.Context, client *flow.Client, change *petitionChang
 
 // applyDemote fetches the existing law, updates its tier, and writes it back.
 func applyDemote(ctx context.Context, client *flow.Client, change *petitionChange) (*lawApplyResult, error) {
-	existing, err := client.GetLaw(ctx, change.LawID)
+	existing, err := client.GetLaw(change.LawID)
 	if err != nil {
 		return nil, fmt.Errorf("law-applicator: get law %q for demote: %w", change.LawID, err)
 	}
 
-	existing.Tier = flowv1.LawTier(change.Tier)
+	existingPB := existing.PB()
+	existingPB.Tier = flowv1.LawTier(change.Tier)
 
-	resp, err := client.Librarian.WriteLaw(ctx, &flowv1.WriteLawRequest{Law: existing})
+	resp, err := client.RawLibrarian().WriteLaw(ctx, &flowv1.WriteLawRequest{Law: existingPB})
 	if err != nil {
 		return nil, fmt.Errorf("law-applicator: demote law %q: %w", change.LawID, err)
 	}
@@ -338,7 +339,7 @@ func collectCitedLawIDs(changes []petitionChange, stamp *approvalStamp) []string
 // error is treated as idempotent (logged and ignored); all other errors are
 // returned to the caller.
 func createDisputeRecord(ctx context.Context, client *flow.Client, petitionID string, citedLawIDs []string) error {
-	_, err := client.Librarian.CreateDisputeRecord(ctx, &flowv1.CreateDisputeRecordRequest{
+	_, err := client.RawLibrarian().CreateDisputeRecord(ctx, &flowv1.CreateDisputeRecordRequest{
 		PetitionId:  petitionID,
 		CitedLawIds: citedLawIDs,
 	})

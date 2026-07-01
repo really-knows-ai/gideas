@@ -156,6 +156,11 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("appraisal: get workitem: %w", err)
+	}
+
 	// Load configuration from ConfigMap-mounted YAML.
 	cfg, err := nodeconfig.Load[appraisalConfig](nodeconfig.Path())
 	if err != nil {
@@ -191,5 +196,5 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		Appraisers:       appraisers,
 	}
 
-	return handlers.HandleAppraisal(ctx, client, evalAgent, findingAgent, handlerCfg)
+	return handlers.HandleAppraisal(ctx, workitem, client, evalAgent, findingAgent, handlerCfg)
 }

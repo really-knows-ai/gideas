@@ -17,7 +17,7 @@ const testFeedbackID = "fb-1"
 
 func newTestEvalAgent(t *testing.T, inferFn flow.InferFunc, spy *appraisalSpy, cfg *appraisalConfig) *EvalAgent {
 	t.Helper()
-	client := newSpyClient(t, spy)
+	client, _ := newSpyClient(t, spy)
 	agent, err := NewEvalAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewEvalAgent() failed: %v", err)
@@ -28,7 +28,7 @@ func newTestEvalAgent(t *testing.T, inferFn flow.InferFunc, spy *appraisalSpy, c
 
 func newTestFindingAgent(t *testing.T, inferFn flow.InferFunc, spy *appraisalSpy, cfg *appraisalConfig) *FindingAgent {
 	t.Helper()
-	client := newSpyClient(t, spy)
+	client, _ := newSpyClient(t, spy)
 	agent, err := NewFindingAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewFindingAgent() failed: %v", err)

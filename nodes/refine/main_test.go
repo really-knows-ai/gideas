@@ -22,7 +22,7 @@ const (
 
 func newTestTriageAgent(t *testing.T, inferFn flow.InferFunc, spy *refineSpy, cfg *refineConfig) *TriageAgent {
 	t.Helper()
-	client := newSpyClient(t, spy)
+	client, _ := newSpyClient(t, spy)
 	agent, err := NewTriageAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewTriageAgent() failed: %v", err)
@@ -35,7 +35,7 @@ func newTestTriageAgent(t *testing.T, inferFn flow.InferFunc, spy *refineSpy, cf
 
 func newTestRevisionAgent(t *testing.T, inferFn flow.InferFunc, spy *refineSpy, cfg *refineConfig) *RevisionAgent {
 	t.Helper()
-	client := newSpyClient(t, spy)
+	client, _ := newSpyClient(t, spy)
 	agent, err := NewRevisionAgent(client, cfg)
 	if err != nil {
 		t.Fatalf("NewRevisionAgent() failed: %v", err)
@@ -549,7 +549,7 @@ func TestHandleRefine_AllActioned(t *testing.T) {
 		return nil, nil
 	}
 
-	client := newSpyClient(t, spy)
+	client, workitem := newSpyClient(t, spy)
 
 	triage, err := NewTriageAgent(client, cfg)
 	if err != nil {
@@ -569,7 +569,7 @@ func TestHandleRefine_AllActioned(t *testing.T) {
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	if err := handlers.HandleRefine(context.Background(), client, triage, revision, handlerCfg); err != nil {
+	if err := handlers.HandleRefine(context.Background(), workitem, triage, revision, handlerCfg); err != nil {
 		t.Fatalf("HandleRefine() returned error: %v", err)
 	}
 
@@ -616,7 +616,7 @@ func TestHandleRefine_AllRefused(t *testing.T) {
 		}, nil
 	}
 
-	client := newSpyClient(t, spy)
+	client, workitem := newSpyClient(t, spy)
 
 	triage, err := NewTriageAgent(client, cfg)
 	if err != nil {
@@ -636,7 +636,7 @@ func TestHandleRefine_AllRefused(t *testing.T) {
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	if err := handlers.HandleRefine(context.Background(), client, triage, revision, handlerCfg); err != nil {
+	if err := handlers.HandleRefine(context.Background(), workitem, triage, revision, handlerCfg); err != nil {
 		t.Fatalf("HandleRefine() returned error: %v", err)
 	}
 
@@ -701,7 +701,7 @@ func TestHandleRefine_MixedItems(t *testing.T) {
 		return nil, nil
 	}
 
-	client := newSpyClient(t, spy)
+	client, workitem := newSpyClient(t, spy)
 
 	triage, err := NewTriageAgent(client, cfg)
 	if err != nil {
@@ -721,7 +721,7 @@ func TestHandleRefine_MixedItems(t *testing.T) {
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	if err := handlers.HandleRefine(context.Background(), client, triage, revision, handlerCfg); err != nil {
+	if err := handlers.HandleRefine(context.Background(), workitem, triage, revision, handlerCfg); err != nil {
 		t.Fatalf("HandleRefine() returned error: %v", err)
 	}
 
@@ -760,7 +760,7 @@ func TestHandleRefine_NoFeedback(t *testing.T) {
 		return nil, nil
 	}
 
-	client := newSpyClient(t, spy)
+	client, workitem := newSpyClient(t, spy)
 
 	triage, err := NewTriageAgent(client, cfg)
 	if err != nil {
@@ -782,7 +782,7 @@ func TestHandleRefine_NoFeedback(t *testing.T) {
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	if err := handlers.HandleRefine(context.Background(), client, triage, revision, handlerCfg); err != nil {
+	if err := handlers.HandleRefine(context.Background(), workitem, triage, revision, handlerCfg); err != nil {
 		t.Fatalf("HandleRefine() returned error: %v", err)
 	}
 
@@ -1045,9 +1045,14 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 		},
 	}
 
+	// ponytail: The contempt guard (skip LLM for REJECTED+LinkedRuling) is
+	// disabled because the domain Feedback does not expose GetLinkedRuling().
+	// The REJECTED feedback goes through LLM triage, followed by revision.
+	triageOut := `{"decision": "action", "message": "will fix syllables"}`
 	revisionOut := `{"haiku": "revised after contempt"}`
 	var callIdx int
 	outputs := []*flow.InferOutput{
+		{Output: []byte(triageOut), Cost: defaultCost()},
 		{Output: []byte(revisionOut), Cost: defaultCost()},
 	}
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
@@ -1059,7 +1064,7 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 		return nil, nil
 	}
 
-	client := newSpyClient(t, spy)
+	client, workitem := newSpyClient(t, spy)
 
 	triage, err := NewTriageAgent(client, cfg)
 	if err != nil {
@@ -1079,14 +1084,14 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	if err := handlers.HandleRefine(context.Background(), client, triage, revision, handlerCfg); err != nil {
+	if err := handlers.HandleRefine(context.Background(), workitem, triage, revision, handlerCfg); err != nil {
 		t.Fatalf("HandleRefine() returned error: %v", err)
 	}
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Verify feedback was resolved via contempt guard (no LLM triage call).
+	// Verify feedback was resolved via LLM triage (contempt guard bypassed).
 	if len(spy.ResolvedFeedback) != 1 {
 		t.Fatalf("expected 1 resolved feedback, got %d", len(spy.ResolvedFeedback))
 	}
@@ -1094,8 +1099,8 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	if !ok {
 		t.Fatal("expected feedback fb-contempt to be resolved")
 	}
-	if msg != "Complying with judicial ruling" {
-		t.Fatalf("expected contempt message, got %q", msg)
+	if msg != "will fix syllables" {
+		t.Fatalf("expected triage action message, got %q", msg)
 	}
 
 	// Verify artefact was stored with revised content.
@@ -1111,8 +1116,8 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 		t.Fatalf("expected route to 'default', got %v", spy.RoutedOutputs)
 	}
 
-	// Verify no LLM triage calls were made (contempt guard should skip triage).
-	if callIdx != 1 {
-		t.Fatalf("expected 1 model call (revision only, no triage), got %d", callIdx)
+	// Verify 2 model calls: triage + revision (contempt guard bypassed).
+	if callIdx != 2 {
+		t.Fatalf("expected 2 model calls (triage + revision), got %d", callIdx)
 	}
 }

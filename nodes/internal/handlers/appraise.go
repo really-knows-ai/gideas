@@ -65,6 +65,7 @@ func hasNovelArgument(fb *flowv1.FeedbackItem) bool {
 //nolint:cyclop // Orchestration function — sequential phases are inherently complex.
 func HandleAppraisal(
 	ctx context.Context,
+	workitem *flow.Workitem,
 	client *flow.Client,
 	eval flow.EvalContract,
 	finding flow.FindingContract,
@@ -74,23 +75,27 @@ func HandleAppraisal(
 	// Pre-inference: read artefacts, query laws, get existing feedback
 	// ---------------------------------------------------------------
 
-	inputContent, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
+	inputContent, err := artefacts.FetchInputs(workitem, cfg.InputArtefacts)
 	if err != nil {
 		return fmt.Errorf("appraisal: read inputs: %w", err)
 	}
 
-	reviewResp, err := client.GetArtefact(ctx, cfg.ReviewArtefact)
+	reviewArt, err := workitem.GetArtefact(cfg.ReviewArtefact)
 	if err != nil {
 		return fmt.Errorf("appraisal: read %s: %w", cfg.ReviewArtefact, err)
 	}
-	reviewContent := string(reviewResp.GetContent())
+	reviewContentBytes, err := reviewArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("appraisal: get content %s: %w", cfg.ReviewArtefact, err)
+	}
+	reviewContent := string(reviewContentBytes)
 
 	slog.Info("appraisal: reviewing",
 		"input_artefacts", cfg.InputArtefacts,
 		"review_artefact", cfg.ReviewArtefact,
 	)
 
-	existingFeedback, err := client.GetFeedback(ctx, cfg.GovernedArtefact)
+	existingFeedback, err := workitem.GetFeedback(cfg.GovernedArtefact)
 	if err != nil {
 		return fmt.Errorf("appraisal: get feedback: %w", err)
 	}
@@ -100,7 +105,7 @@ func HandleAppraisal(
 	// ---------------------------------------------------------------
 
 	novelResolved, err := evaluateFeedback(
-		ctx, eval, client,
+		ctx, eval, workitem,
 		existingFeedback, inputContent, reviewContent)
 	if err != nil {
 		return fmt.Errorf("appraisal: evaluate feedback: %w", err)
@@ -111,7 +116,7 @@ func HandleAppraisal(
 	// ---------------------------------------------------------------
 
 	result, err := fanOutAppraisal(
-		ctx, client, cfg, existingFeedback,
+		ctx, workitem, cfg, existingFeedback,
 		inputContent, reviewContent)
 	if err != nil {
 		return fmt.Errorf("appraisal: fan-out review: %w", err)
@@ -123,7 +128,7 @@ func HandleAppraisal(
 
 	// Post-fan-out: stamping, coverage, events (only if dispatches exist).
 	if len(result.dispatchMatrix) > 0 {
-		applyAppraisalStamps(ctx, client, cfg.GovernedArtefact,
+		applyAppraisalStamps(ctx, workitem, cfg.GovernedArtefact,
 			result.dispatchMatrix, result.childStatuses,
 			result.childByDispatchIdx, result.unitsByGroup, result.groups,
 			result.skippedIndices)
@@ -137,7 +142,11 @@ func HandleAppraisal(
 		// No dispatches but appraisers exist — pass-through: stamp appraise-security
 		// so sort can complete the exit contract.
 		slog.Info("appraisal: no dispatches — applying pass-through stamp")
-		if _, err := client.StampArtefact(ctx, cfg.GovernedArtefact, stampAppraiseSecurity); err != nil {
+		art, artErr := workitem.GetArtefact(cfg.GovernedArtefact)
+		if artErr != nil {
+			return fmt.Errorf("appraisal: get artefact: %w", artErr)
+		}
+		if err := art.Stamp(stampAppraiseSecurity); err != nil {
 			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraiseSecurity, err)
 		}
 	} else {
@@ -153,8 +162,8 @@ func HandleAppraisal(
 			continue
 		}
 
-		feedbackID, err := client.AddFeedback(
-			ctx, cfg.GovernedArtefact, true, item.Message)
+		feedbackID, err := workitem.AddFeedback(
+			cfg.GovernedArtefact, true, item.Message)
 		if err != nil {
 			return fmt.Errorf("appraisal: add feedback[%d]: %w", i, err)
 		}
@@ -166,7 +175,7 @@ func HandleAppraisal(
 		)
 
 		if len(item.CitedLaws) > 0 {
-			if err := client.Cite(ctx, item.CitedLaws...); err != nil {
+			if err := workitem.Cite(item.CitedLaws...); err != nil {
 				slog.Error("appraisal: failed to cite laws",
 					"error", err, "law_ids", item.CitedLaws)
 			} else {
@@ -197,7 +206,7 @@ func HandleAppraisal(
 	// Route onward
 	// ---------------------------------------------------------------
 
-	if _, err := client.RouteToOutput(ctx, "default"); err != nil {
+	if err := workitem.RouteTo("default"); err != nil {
 		return fmt.Errorf("appraisal: route to output: %w", err)
 	}
 
@@ -243,24 +252,34 @@ type fanOutResult struct {
 //nolint:cyclop,funlen,gocyclo // Orchestration — sequential steps are inherently complex.
 func fanOutAppraisal(
 	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	cfg AppraisalConfig,
-	existingFeedback []*flowv1.FeedbackItem,
+	existingFeedback []*flow.Feedback,
 	inputContent, reviewContent string,
 ) (*fanOutResult, error) {
-	// Step 1: Query laws with text/markdown representations only.
+	// Step 1: Get law groups with text/markdown representations only.
 	// Appraisers receive subjective law content, not code.
-	laws, err := client.QueryLaws(ctx, cfg.GovernedArtefact, "text/markdown")
+	lawGroupList, err := workitem.GetLawGroups("text/markdown")
 	if err != nil {
 		return nil, fmt.Errorf("appraisal: query laws: %w", err)
 	}
 
-	// Step 2: Partition by group.
-	lawsByGroup := flow.PartitionLawsByGroup(laws)
+	// Step 2: Convert law groups to proto laws and partition by group.
+	var allLaws []*flowv1.Law
+	for _, lg := range lawGroupList {
+		laws, lErr := lg.GetLaws()
+		if lErr != nil {
+			return nil, fmt.Errorf("appraisal: get laws for group %s: %w", lg.Name(), lErr)
+		}
+		for _, l := range laws {
+			allLaws = append(allLaws, l.PB())
+		}
+	}
+	lawsByGroup := flow.PartitionLawsByGroup(allLaws)
 
 	slog.Info("appraisal: fan-out review",
-		"group_count", len(lawsByGroup),
-		"total_laws", len(laws),
+		"group_count", len(lawGroupList),
+		"total_laws", len(allLaws),
 	)
 
 	// If no laws, return empty — nothing to review against.
@@ -272,28 +291,10 @@ func fanOutAppraisal(
 		return &fanOutResult{}, nil
 	}
 
-	// Step 3: Resolve group configs.
-	groups := make(map[string]*flow.LawGroup, len(lawsByGroup))
-	groupNames := make([]string, 0, len(lawsByGroup))
-	for k := range lawsByGroup {
-		groupNames = append(groupNames, k)
-	}
-	sort.Strings(groupNames)
-	for _, groupName := range groupNames {
-		group, getErr := client.GetLawGroup(ctx, groupName)
-		if getErr != nil {
-			slog.Warn("appraisal: get law group failed, using defaults",
-				"group", groupName, "error", getErr)
-			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
-		} else if group == nil {
-			slog.Warn("appraisal: get law group returned nil, using defaults",
-				"group", groupName)
-			groups[groupName] = &flow.LawGroup{Name: groupName, Mode: flow.GroupModeBundle, Passes: 1}
-		} else {
-			slog.Info("appraisal: law group resolved from Librarian (possibly from defaults)",
-				"group", groupName)
-			groups[groupName] = group
-		}
+	// Step 3: Resolve group configs from GetLawGroups response.
+	groups := make(map[string]*flow.LawGroup, len(lawGroupList))
+	for _, lg := range lawGroupList {
+		groups[lg.Name()] = lg
 	}
 
 	// Step 4: Extract appraiser IDs and compute units + dispatch matrix.
@@ -375,10 +376,10 @@ func fanOutAppraisal(
 		}
 
 		// Build pass artefact.
-		passes := groups[de.Group].Passes
+		passes := int(groups[de.Group].Passes())
 		passJSON, jErr := json.Marshal(map[string]int{
 			"pass": de.Pass,
-			"of":   int(passes),
+			"of":   passes,
 		})
 		if jErr != nil {
 			return nil, fmt.Errorf("marshal pass: %w", jErr)
@@ -404,7 +405,7 @@ func fanOutAppraisal(
 	slog.Info("appraisal: fan-out tasks built", "task_count", len(tasks))
 
 	// Step 7: FanOut — create children.
-	children, err := client.FanOut(ctx, tasks)
+	children, err := workitem.FanOut(tasks)
 	if err != nil {
 		return nil, fmt.Errorf("fan-out: %w", err)
 	}
@@ -422,8 +423,8 @@ func fanOutAppraisal(
 		}
 	}
 
-	// Step 8: AwaitChildren — wait for all children to reach terminal state.
-	statuses, err := client.AwaitChildren(ctx)
+	// Step 8: AwaitAll — wait for all children to reach terminal state.
+	statuses, err := workitem.AwaitAll()
 	if err != nil {
 		return nil, fmt.Errorf("await children: %w", err)
 	}
@@ -444,22 +445,35 @@ func fanOutAppraisal(
 		if !completedIDs[s.WorkitemID] {
 			continue
 		}
-		resp, getErr := client.GetChildArtefact(ctx, s.WorkitemID, ArtefactReviewOutput)
-		if getErr != nil {
+		// Use FindArtefact to read child artefact by constructing its scoped ID.
+		// ponytail: FindArtefact with scoped artefact ID replaces
+		// GetChildArtefact. Verify the Archivist supports the
+		// "childWID/artefactID" pattern (Phase 10).
+		childArt, findErr := workitem.FindArtefact(s.WorkitemID + "/" + ArtefactReviewOutput)
+		if findErr != nil {
 			slog.Warn("appraisal: child completed but no review-output",
-				"workitem_id", s.WorkitemID, "error", getErr)
+				"workitem_id", s.WorkitemID, "error", findErr)
+			childResults = append(childResults, flow.ChildResult{
+				Status: s, Artefacts: map[string][]byte{ArtefactReviewOutput: nil},
+			})
+			continue
+		}
+		childContent, cErr := childArt.GetContent()
+		if cErr != nil {
+			slog.Warn("appraisal: child completed but no review-output content",
+				"workitem_id", s.WorkitemID, "error", cErr)
 			childResults = append(childResults, flow.ChildResult{
 				Status: s, Artefacts: map[string][]byte{ArtefactReviewOutput: nil},
 			})
 			continue
 		}
 		var out reviewOutput
-		if uErr := json.Unmarshal(resp.GetContent(), &out); uErr != nil {
+		if uErr := json.Unmarshal(childContent, &out); uErr != nil {
 			return nil, fmt.Errorf("unmarshal review-output from child %s: %w", s.WorkitemID, uErr)
 		}
 		merged = append(merged, out.Feedback...)
 		childResults = append(childResults, flow.ChildResult{
-			Status: s, Artefacts: map[string][]byte{ArtefactReviewOutput: resp.GetContent()},
+			Status: s, Artefacts: map[string][]byte{ArtefactReviewOutput: childContent},
 		})
 	}
 
@@ -507,7 +521,7 @@ func lawToData(l *flowv1.Law) LawData {
 // completed successfully. Stamping failures are logged but do not fail.
 func applyAppraisalStamps(
 	ctx context.Context,
-	client *flow.Client,
+	workitem *flow.Workitem,
 	governedArtefact string,
 	dispatchMatrix []flow.DispatchEntry,
 	childStatuses []flow.ChildWorkitemStatus,
@@ -546,6 +560,14 @@ func applyAppraisalStamps(
 		}
 	}
 
+	// Fetch the artefact once for stamping.
+	art, artErr := workitem.GetArtefact(governedArtefact)
+	if artErr != nil {
+		slog.Error("appraisal: failed to get artefact for stamping",
+			"error", artErr)
+		return
+	}
+
 	// Apply stamps per group.
 	groupOrder := make([]string, 0, len(unitsByGroup))
 	for k := range unitsByGroup {
@@ -555,18 +577,17 @@ func applyAppraisalStamps(
 	for _, groupName := range groupOrder {
 		unitList := unitsByGroup[groupName]
 		if len(unitList) == 0 {
-			// Info log already emitted in fanOutAppraisal for zero-unit groups.
 			continue
 		}
 		groupCfg := groups[groupName]
 		if groupCfg == nil {
-			groupCfg = &flow.LawGroup{Mode: flow.GroupModeBundle}
+			groupCfg = flow.NewLawGroup("", flow.GroupModeBundle, 1)
 		}
 
 		// Group stamp: only if ALL dispatches for this group completed.
 		if !groupFailed[groupName] {
 			stampName := fmt.Sprintf("appraise-%s", groupName)
-			if _, err := client.StampArtefact(ctx, governedArtefact, stampName); err != nil {
+			if err := art.Stamp(stampName); err != nil {
 				slog.Warn("appraisal: failed to stamp group",
 					"group", groupName, "stamp", stampName, "error", err)
 			} else {
@@ -579,14 +600,14 @@ func applyAppraisalStamps(
 
 		// Per-law stamps (law-by-law mode only) — evaluated independently
 		// per law, not gated on the group stamp.
-		if groupCfg.Mode == flow.GroupModeLawByLaw {
+		if groupCfg.Mode() == flow.GroupModeLawByLaw {
 			for _, unit := range unitList {
 				if unitFailed[unit.UnitID] {
 					continue
 				}
 				for _, lawID := range unit.LawIDs {
 					lawStamp := fmt.Sprintf("appraise-%s-%s", groupName, lawID)
-					if _, err := client.StampArtefact(ctx, governedArtefact, lawStamp); err != nil {
+					if err := art.Stamp(lawStamp); err != nil {
 						slog.Warn("appraisal: failed to stamp law",
 							"group", groupName, "law", lawID, "stamp", lawStamp, "error", err)
 					} else {
@@ -802,22 +823,22 @@ func emitAttestationEvent(ctx context.Context, client *flow.Client, coverage map
 func evaluateFeedback(
 	ctx context.Context,
 	eval flow.EvalContract,
-	client *flow.Client,
-	feedback []*flowv1.FeedbackItem,
+	workitem *flow.Workitem,
+	feedback []*flow.Feedback,
 	inputContent, reviewContent string,
-) ([]*flowv1.FeedbackItem, error) {
+) ([]*flow.Feedback, error) {
 	type evalTask struct {
-		item *flowv1.FeedbackItem
+		fb   *flow.Feedback
 		kind string
 	}
 
 	var tasks []evalTask
 	for _, fb := range feedback {
 		switch fb.GetState() {
-		case flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED:
-			tasks = append(tasks, evalTask{item: fb, kind: "actioned"})
-		case flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX:
-			tasks = append(tasks, evalTask{item: fb, kind: "wont_fix"})
+		case flow.FeedbackStateActioned:
+			tasks = append(tasks, evalTask{fb: fb, kind: "actioned"})
+		case flow.FeedbackStateWontFix:
+			tasks = append(tasks, evalTask{fb: fb, kind: "wont_fix"})
 		}
 	}
 
@@ -840,7 +861,8 @@ func evaluateFeedback(
 		wg.Add(1)
 		go func(idx int, t evalTask) {
 			defer wg.Done()
-			out, err := eval.Run(ctx, t.item, inputContent, reviewContent, t.kind)
+			// EvalContract.Run takes *flowv1.FeedbackItem — use PB() escape hatch.
+			out, err := eval.Run(ctx, t.fb.PB(), inputContent, reviewContent, t.kind)
 			results[idx] = evalResultItem{task: t, out: out, err: err}
 		}(i, task)
 	}
@@ -848,55 +870,56 @@ func evaluateFeedback(
 
 	// Apply verdicts sequentially (gRPC calls to Archivist).
 	// Collect resolved items that carry a novel argument justification.
-	var novelResolved []*flowv1.FeedbackItem
+	var novelResolved []*flow.Feedback
 
 	for _, r := range results {
 		if r.err != nil {
 			return nil, fmt.Errorf(
 				"appraisal: eval feedback %s: %w",
-				r.task.item.GetId(), r.err)
+				r.task.fb.GetID(), r.err)
 		}
 
-		fbID := r.task.item.GetId()
-		state := r.task.item.GetState()
+		fbID := r.task.fb.GetID()
+		state := r.task.fb.GetState()
+		protoFB := r.task.fb.PB()
 
 		switch {
-		case state == flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED &&
+		case state == flow.FeedbackStateActioned &&
 			r.out.Verdict == verdictAccept:
 			slog.Info("appraisal: accepting fix",
 				"feedback_id", fbID, "reason", r.out.Reason)
-			if err := client.AcceptFix(ctx, fbID); err != nil {
+			if err := r.task.fb.AcceptFix(); err != nil {
 				return nil, fmt.Errorf("appraisal: accept fix %s: %w", fbID, err)
 			}
-			if hasNovelArgument(r.task.item) {
-				novelResolved = append(novelResolved, r.task.item)
+			if hasNovelArgument(protoFB) {
+				novelResolved = append(novelResolved, r.task.fb)
 			}
 
-		case state == flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED &&
+		case state == flow.FeedbackStateActioned &&
 			r.out.Verdict == verdictReject:
 			slog.Info("appraisal: rejecting fix",
 				"feedback_id", fbID, "reason", r.out.Reason)
-			if err := client.RejectFix(ctx, fbID, r.out.Reason); err != nil {
+			if err := r.task.fb.RejectFix(r.out.Reason); err != nil {
 				return nil, fmt.Errorf("appraisal: reject fix %s: %w", fbID, err)
 			}
 
-		case state == flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX &&
+		case state == flow.FeedbackStateWontFix &&
 			r.out.Verdict == verdictAccept:
 			slog.Info("appraisal: accepting refusal",
 				"feedback_id", fbID, "reason", r.out.Reason)
-			if err := client.AcceptRefusal(ctx, fbID); err != nil {
+			if err := r.task.fb.AcceptRefusal(); err != nil {
 				return nil, fmt.Errorf(
 					"appraisal: accept refusal %s: %w", fbID, err)
 			}
-			if hasNovelArgument(r.task.item) {
-				novelResolved = append(novelResolved, r.task.item)
+			if hasNovelArgument(protoFB) {
+				novelResolved = append(novelResolved, r.task.fb)
 			}
 
-		case state == flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX &&
+		case state == flow.FeedbackStateWontFix &&
 			r.out.Verdict == verdictReject:
 			slog.Info("appraisal: rejecting refusal",
 				"feedback_id", fbID, "reason", r.out.Reason)
-			if err := client.RejectRefusal(ctx, fbID, r.out.Reason); err != nil {
+			if err := r.task.fb.RejectRefusal(r.out.Reason); err != nil {
 				return nil, fmt.Errorf(
 					"appraisal: reject refusal %s: %w", fbID, err)
 			}
@@ -917,12 +940,18 @@ func mintFindings(
 	ctx context.Context,
 	finding flow.FindingContract,
 	client *flow.Client,
-	novelItems []*flowv1.FeedbackItem,
+	novelItems []*flow.Feedback,
 ) error {
 	slog.Info("appraisal: capturing learnings from resolved "+
 		"novel arguments", "count", len(novelItems))
 
-	out, err := finding.Run(ctx, novelItems)
+	// Convert domain feedback items to proto for the FindingContract.
+	protoItems := make([]*flowv1.FeedbackItem, len(novelItems))
+	for i, fb := range novelItems {
+		protoItems[i] = fb.PB()
+	}
+
+	out, err := finding.Run(ctx, protoItems)
 	if err != nil {
 		return fmt.Errorf("finding inference: %w", err)
 	}
@@ -935,7 +964,7 @@ func mintFindings(
 
 	for i, f := range out.Findings {
 		lawID, err := client.RecordFinding(
-			ctx, f.Goal, f.AppliesTo,
+			f.Goal, f.AppliesTo,
 			[]*flowv1.Representation{
 				{Type: "text/markdown", Content: f.Rationale},
 			},

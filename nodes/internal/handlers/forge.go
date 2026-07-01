@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/artefacts"
 	flow "github.com/gideas/flow/sdk/go"
 )
@@ -35,36 +36,51 @@ type ForgeConfig struct {
 //
 // Steps: heartbeat → fetch inputs → query laws → call agent → store output
 // artefact → route to "default" output.
-func HandleForge(ctx context.Context, client *flow.Client, agent flow.ForgeContract, cfg ForgeConfig) error {
+func HandleForge(ctx context.Context, workitem *flow.Workitem, agent flow.ForgeContract, cfg ForgeConfig) error {
 	// Read the input artefacts.
-	input, err := artefacts.FetchInputs(ctx, client, cfg.InputArtefacts)
+	input, err := artefacts.FetchInputs(workitem, cfg.InputArtefacts)
 	if err != nil {
 		return fmt.Errorf("forge: read inputs: %w", err)
 	}
 	slog.Info("forge: read inputs", "artefacts", cfg.InputArtefacts)
 
-	laws, _ := client.QueryLaws(ctx, cfg.GovernedArtefact, "")
-	slog.Info("forge: laws retrieved", "count", len(laws))
+	lawGroups, _ := workitem.GetLawGroups("")
+	slog.Info("forge: laws retrieved", "group_count", len(lawGroups))
 
-	result, err := agent.Run(ctx, input, laws)
+	// Flatten law groups into proto laws for the agent contract interface.
+	// ponytail: GetLawGroups does not filter by governed artefact — the
+	// Contract interface still takes []*flowv1.Law. When the contract is
+	// updated to use domain types, this conversion can be removed.
+	var protoLaws []*flowv1.Law
+	for _, g := range lawGroups {
+		laws, _ := g.GetLaws()
+		for _, l := range laws {
+			protoLaws = append(protoLaws, l.PB())
+		}
+	}
+
+	result, err := agent.Run(ctx, input, protoLaws)
 	if err != nil {
 		return fmt.Errorf("forge: agent run: %w", err)
 	}
 	slog.Info("forge: generated content", "length", len(result))
 
 	// Store the output artefact.
-	storeResp, err := client.StoreArtefact(ctx, cfg.OutputArtefact, cfg.GovernedArtefact, []byte(result))
+	artefact, err := workitem.GetArtefact(cfg.OutputArtefact)
 	if err != nil {
+		return fmt.Errorf("forge: get %s: %w", cfg.OutputArtefact, err)
+	}
+	if err := artefact.Store([]byte(result)); err != nil {
 		return fmt.Errorf("forge: store %s: %w", cfg.OutputArtefact, err)
 	}
 	slog.Info("forge: stored artefact",
 		"artefact", cfg.OutputArtefact,
-		"version_hash", storeResp.GetVersionHash(),
-		"is_new_version", storeResp.GetIsNewVersion(),
+		"version_hash", artefact.VersionHash(),
+		"is_new_version", artefact.IsNewVersion(),
 	)
 
 	// Route onward.
-	if _, err := client.RouteToOutput(ctx, "default"); err != nil {
+	if err := workitem.RouteTo("default"); err != nil {
 		return fmt.Errorf("forge: route to output: %w", err)
 	}
 

@@ -66,12 +66,17 @@ func handler(qm flow.QueueManager) flow.Handler {
 		}
 		defer func() { _ = client.Close() }()
 
+		workitem, err := client.GetWorkitem()
+		if err != nil {
+			return fmt.Errorf("hitl-appraise: get workitem: %w", err)
+		}
+
 		cfg, err := nodeconfig.Load[hitlAppraiseConfig](nodeconfig.Path())
 		if err != nil {
 			return fmt.Errorf("hitl-appraise: load config: %w", err)
 		}
 
-		return handleAppraise(ctx, client, qm, cfg, wctx)
+		return handleAppraise(ctx, client, workitem, qm, cfg, wctx)
 	}
 }
 
@@ -81,6 +86,7 @@ func handler(qm flow.QueueManager) flow.Handler {
 func handleAppraise(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	qm flow.QueueManager,
 	cfg *hitlAppraiseConfig,
 	wctx *flowv1.WorkitemContext,
@@ -88,6 +94,8 @@ func handleAppraise(
 	workitemID := wctx.GetWorkitemId()
 
 	// Discover stamp capability from topology.
+	// ponytail: uses client.GetFlowTopology(ctx) for raw proto access to capabilities
+	// (not yet exposed on *flow.Flow or *flow.Node for discoverStamp).
 	governedArtefact, stampName, err := discoverStamp(ctx, client)
 	if err != nil {
 		return fmt.Errorf("hitl-appraise: %w", err)
@@ -101,10 +109,10 @@ func handleAppraise(
 	)
 
 	// Read artefacts to establish context (makes them visible in logs).
-	if _, err := client.GetArtefact(ctx, cfg.InputArtefact); err != nil {
+	if _, err := workitem.GetArtefact(cfg.InputArtefact); err != nil {
 		return fmt.Errorf("hitl-appraise: read %s: %w", cfg.InputArtefact, err)
 	}
-	if _, err := client.GetArtefact(ctx, governedArtefact); err != nil {
+	if _, err := workitem.GetArtefact(governedArtefact); err != nil {
 		return fmt.Errorf("hitl-appraise: read %s: %w", governedArtefact, err)
 	}
 
@@ -114,7 +122,7 @@ func handleAppraise(
 	}
 
 	// Pause the Sidecar timer — we'll be waiting for a human.
-	if err := client.PauseTimer(ctx); err != nil {
+	if err := workitem.PauseTimer(); err != nil {
 		return fmt.Errorf("hitl-appraise: pause timer: %w", err)
 	}
 
@@ -126,17 +134,21 @@ func handleAppraise(
 	slog.Info("hitl-appraise: human decision received", "workitem_id", workitemID)
 
 	// Resume the Sidecar timer.
-	if err := client.ResumeTimer(ctx); err != nil {
+	if err := workitem.ResumeTimer(); err != nil {
 		return fmt.Errorf("hitl-appraise: resume timer: %w", err)
 	}
 
 	// Stamp the governed artefact.
-	if _, err := client.StampArtefact(ctx, governedArtefact, stampName); err != nil {
+	art, err := workitem.GetArtefact(governedArtefact)
+	if err != nil {
+		return fmt.Errorf("hitl-appraise: get artefact %s: %w", governedArtefact, err)
+	}
+	if err := art.Stamp(stampName); err != nil {
 		return fmt.Errorf("hitl-appraise: stamp %s/%s: %w", governedArtefact, stampName, err)
 	}
 
 	// Route to default output (back to Sort).
-	if _, err := client.RouteToOutput(ctx, "default"); err != nil {
+	if err := workitem.RouteTo("default"); err != nil {
 		return fmt.Errorf("hitl-appraise: route to output: %w", err)
 	}
 	return nil

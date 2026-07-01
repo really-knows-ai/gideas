@@ -20,7 +20,7 @@ func TestCodifySMT_HappyPath(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "Enforce consistent naming conventions", []string{"haiku"}, 2, "create")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 
 	smtContent := `; Goal: Enforce consistent naming conventions
 (declare-sort Artefact 0)
@@ -42,7 +42,7 @@ func TestCodifySMT_HappyPath(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
+	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestCodifySMT_CustomOutputFormat(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "Check quality", []string{"haiku"}, 1, "demote")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
@@ -91,7 +91,7 @@ func TestCodifySMT_CustomOutputFormat(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
+	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestCodifySMT_QueryIncludesGoalContext(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "Enforce naming", []string{"haiku", "sonnet"}, 3, "create")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
 	var capturedQuery []byte
@@ -129,7 +129,7 @@ func TestCodifySMT_QueryIncludesGoalContext(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
+	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestCodifySMT_SystemPromptUsesDefault(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
 	var capturedSystem string
@@ -169,7 +169,7 @@ func TestCodifySMT_SystemPromptUsesDefault(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
+	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestCodifySMT_CustomSystemPrompt(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
 	var capturedSystem string
@@ -203,7 +203,7 @@ func TestCodifySMT_CustomSystemPrompt(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
+	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 	if err != nil {
 		t.Fatalf("runCodify: %v", err)
 	}
@@ -217,10 +217,10 @@ func TestCodifySMT_Error_GoalArtefactMissing(t *testing.T) {
 	spy := newCodifySpy()
 	// Deliberately don't seed the goal artefact.
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 	cfg := &codifyConfig{}
 
-	err := handleCodify(context.Background(), client, cfg)
+	err := handleCodify(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when goal artefact missing")
 	}
@@ -233,10 +233,10 @@ func TestCodifySMT_Error_GoalArtefactInvalidJSON(t *testing.T) {
 	spy := newCodifySpy()
 	spy.Artefacts[artefactCodificationGoal] = []byte("not-json")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 	cfg := &codifyConfig{}
 
-	err := handleCodify(context.Background(), client, cfg)
+	err := handleCodify(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when goal artefact is invalid JSON")
 	}
@@ -249,10 +249,10 @@ func TestCodifySMT_Error_GoalFieldEmpty(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "", []string{"haiku"}, 1, "create")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 	cfg := &codifyConfig{}
 
-	err := handleCodify(context.Background(), client, cfg)
+	err := handleCodify(context.Background(), client, workitem, cfg)
 	if err == nil {
 		t.Fatal("expected error when goal field is empty")
 	}
@@ -265,7 +265,7 @@ func TestCodifySMT_Error_AgentInferFails(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
 		return nil, fmt.Errorf("inference exploded")
@@ -281,7 +281,7 @@ func TestCodifySMT_Error_AgentInferFails(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
+	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 	if err == nil {
 		t.Fatal("expected error when inference fails")
 	}
@@ -294,7 +294,7 @@ func TestCodifySMT_Error_AgentOutputEmpty(t *testing.T) {
 	spy := newCodifySpy()
 	seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
 
-	client := setupCodifyTest(t, spy)
+	client, workitem := setupCodifyTest(t, spy)
 
 	// Agent returns valid JSON but with empty smt_content.
 	agentJSON := mustMarshal(t, agentOutput{SMTContent: ""})
@@ -314,7 +314,7 @@ func TestCodifySMT_Error_AgentOutputEmpty(t *testing.T) {
 		Action:    "create",
 	}
 
-	err := runCodify(context.Background(), client, agent, cfg, goal)
+	err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 	if err == nil {
 		t.Fatal("expected error when smt_content is empty")
 	}
@@ -338,7 +338,7 @@ func TestCodifySMT_Error_StoreOrCompleteFails(t *testing.T) {
 			seedGoal(spy, "Some goal", []string{"haiku"}, 1, "create")
 			tt.setupSpy(spy)
 
-			client := setupCodifyTest(t, spy)
+			client, workitem := setupCodifyTest(t, spy)
 
 			agentJSON := mustMarshal(t, agentOutput{SMTContent: "(assert true)"})
 			inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
@@ -355,7 +355,7 @@ func TestCodifySMT_Error_StoreOrCompleteFails(t *testing.T) {
 				Action:    "create",
 			}
 
-			err := runCodify(context.Background(), client, agent, cfg, goal)
+			err := runCodify(context.Background(), client, workitem, agent, cfg, goal)
 			if err == nil {
 				t.Fatal(tt.errMsg)
 			}

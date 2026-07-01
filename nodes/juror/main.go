@@ -213,12 +213,17 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		return fmt.Errorf("juror: get workitem: %w", err)
+	}
+
 	cfg, err := nodeconfig.Load[jurorConfig](nodeconfig.Path())
 	if err != nil {
 		return fmt.Errorf("juror: load config: %w", err)
 	}
 
-	return handleJuror(ctx, client, cfg)
+	return handleJuror(ctx, client, workitem, cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -227,36 +232,51 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 
 // handleJuror contains the Juror's core logic, separated from handler
 // boilerplate for testability.
-func handleJuror(ctx context.Context, client *flow.Client, cfg *jurorConfig) error {
-	_, _ = client.Heartbeat(ctx)
+func handleJuror(ctx context.Context, client *flow.Client, workitem *flow.Workitem, cfg *jurorConfig) error {
+	_ = workitem.Heartbeat()
 
 	// ── Step 1: Read input artefacts from the child Workitem ─────────
-	questionResp, err := client.GetArtefact(ctx, artefactQuestion)
+	questionArt, err := workitem.GetArtefact(artefactQuestion)
 	if err != nil {
 		return fmt.Errorf("juror: get question artefact: %w", err)
 	}
-	question := string(questionResp.GetContent())
+	questionContent, err := questionArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("juror: get question content: %w", err)
+	}
+	question := string(questionContent)
 
-	evidenceResp, err := client.GetArtefact(ctx, artefactEvidence)
+	evidenceArt, err := workitem.GetArtefact(artefactEvidence)
 	if err != nil {
 		return fmt.Errorf("juror: get evidence artefact: %w", err)
 	}
-	evidence := string(evidenceResp.GetContent())
+	evidenceContent, err := evidenceArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("juror: get evidence content: %w", err)
+	}
+	evidence := string(evidenceContent)
 
-	outcomesResp, err := client.GetArtefact(ctx, artefactOutcomes)
+	outcomesArt, err := workitem.GetArtefact(artefactOutcomes)
 	if err != nil {
 		return fmt.Errorf("juror: get allowed-outcomes artefact: %w", err)
 	}
+	outcomesContent, err := outcomesArt.GetContent()
+	if err != nil {
+		return fmt.Errorf("juror: get allowed-outcomes content: %w", err)
+	}
 	var allowedOutcomes []string
-	if err := json.Unmarshal(outcomesResp.GetContent(), &allowedOutcomes); err != nil {
+	if err := json.Unmarshal(outcomesContent, &allowedOutcomes); err != nil {
 		return fmt.Errorf("juror: parse allowed-outcomes: %w", err)
 	}
 
 	// Prior-round reasoning is optional (only present on retry rounds).
 	priorRound := ""
-	priorResp, err := client.GetArtefact(ctx, artefactPriorRound)
+	priorArt, err := workitem.GetArtefact(artefactPriorRound)
 	if err == nil {
-		priorRound = string(priorResp.GetContent())
+		priorContent, getErr := priorArt.GetContent()
+		if getErr == nil {
+			priorRound = string(priorContent)
+		}
 	}
 
 	// ── Step 2: Build dynamic output schema ─────────────────────────
@@ -281,7 +301,7 @@ func handleJuror(ctx context.Context, client *flow.Client, cfg *jurorConfig) err
 		return fmt.Errorf("juror: create agent: %w", err)
 	}
 
-	return runJuror(ctx, client, agent, question, evidence, allowedOutcomes, priorRound)
+	return runJuror(ctx, client, workitem, agent, question, evidence, allowedOutcomes, priorRound)
 }
 
 // runJuror runs the agent and stores the verdict. Separated from handleJuror
@@ -290,6 +310,7 @@ func handleJuror(ctx context.Context, client *flow.Client, cfg *jurorConfig) err
 func runJuror(
 	ctx context.Context,
 	client *flow.Client,
+	workitem *flow.Workitem,
 	agent *flow.Agent,
 	question, evidence string,
 	allowedOutcomes []string,
@@ -311,12 +332,16 @@ func runJuror(
 	slog.Info("juror: verdict produced", "output", string(output))
 
 	// ── Step 5: Store verdict artefact ───────────────────────────────
-	if _, err := client.StoreArtefact(ctx, artefactVerdict, "", output); err != nil {
+	verdictArt, err := workitem.GetArtefact(artefactVerdict)
+	if err != nil {
+		return fmt.Errorf("juror: get verdict artefact: %w", err)
+	}
+	if err := verdictArt.Store(output); err != nil {
 		return fmt.Errorf("juror: store verdict artefact: %w", err)
 	}
 
 	// ── Step 6: Complete ─────────────────────────────────────────────
-	if _, err := client.Complete(ctx); err != nil {
+	if err := workitem.Complete(); err != nil {
 		return fmt.Errorf("juror: complete: %w", err)
 	}
 

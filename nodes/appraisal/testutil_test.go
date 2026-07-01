@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -163,10 +164,17 @@ func (s *appraisalSpy) RouteChild(
 func (s *appraisalSpy) GetArtefact(
 	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
-	// Parent artefact read.
+	artID := req.GetArtefactId()
+
+	// Support scoped artefact IDs like "childWID/review-output": extract
+	// the artefact name after the "/" for lookup in ArtefactContents.
+	if idx := strings.Index(artID, "/"); idx >= 0 {
+		artID = artID[idx+1:]
+	}
+
 	content := "test-content"
 	if s.ArtefactContents != nil {
-		if c, ok := s.ArtefactContents[req.GetArtefactId()]; ok {
+		if c, ok := s.ArtefactContents[artID]; ok {
 			content = c
 		}
 	}
@@ -269,6 +277,18 @@ func (s *appraisalSpy) QueryLaws(
 	return &flowv1.QueryLawsResponse{Laws: s.Laws}, nil
 }
 
+func (s *appraisalSpy) ListLawGroups(
+	_ context.Context, _ *flowv1.ListLawGroupsRequest,
+) (*flowv1.ListLawGroupsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	groups := make([]*flowv1.LawGroup, 0, len(s.LawGroups))
+	for _, g := range s.LawGroups {
+		groups = append(groups, g)
+	}
+	return &flowv1.ListLawGroupsResponse{Groups: groups}, nil
+}
+
 func (s *appraisalSpy) GetLawGroup(
 	_ context.Context, req *flowv1.GetLawGroupRequest,
 ) (*flowv1.GetLawGroupResponse, error) {
@@ -336,8 +356,9 @@ func (s *appraisalSpy) Publish(
 // ---------------------------------------------------------------------------
 
 // newSpyClient creates a flow.Client backed by a local gRPC server with
-// the appraisalSpy registered for all service interfaces.
-func newSpyClient(t *testing.T, spy *appraisalSpy) *flow.Client {
+// the appraisalSpy registered for all service interfaces, and returns the
+// current workitem.
+func newSpyClient(t *testing.T, spy *appraisalSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -349,18 +370,25 @@ func newSpyClient(t *testing.T, spy *appraisalSpy) *flow.Client {
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(func() { srv.GracefulStop() })
 
+	t.Setenv(flow.EnvWorkitemID, "test-workitem")
 	client, err := flow.NewClient(flow.WithSidecarAddress(lis.Addr().String()))
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+
+	return client, workitem
 }
 
 // newSpyClientWithEventBus creates a flow.Client backed by a local gRPC server
-// with the appraisalSpy registered, including the EventBus service.
-func newSpyClientWithEventBus(t *testing.T, spy *appraisalSpy) *flow.Client {
+// with the appraisalSpy registered, including the EventBus service, and returns
+// the current workitem.
+func newSpyClientWithEventBus(t *testing.T, spy *appraisalSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
 	lis, err := nodeutil.NewLocalListener()
@@ -372,6 +400,7 @@ func newSpyClientWithEventBus(t *testing.T, spy *appraisalSpy) *flow.Client {
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(func() { srv.GracefulStop() })
 
+	t.Setenv(flow.EnvWorkitemID, "test-workitem")
 	client, err := flow.NewClient(
 		flow.WithSidecarAddress(lis.Addr().String()),
 		flow.WithEventBusAddress(lis.Addr().String()),
@@ -381,7 +410,12 @@ func newSpyClientWithEventBus(t *testing.T, spy *appraisalSpy) *flow.Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return client
+	workitem, err := client.GetWorkitem()
+	if err != nil {
+		t.Fatalf("GetWorkitem() failed: %v", err)
+	}
+
+	return client, workitem
 }
 
 // defaultTestConfig returns a standard appraisalConfig for tests.

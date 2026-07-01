@@ -60,6 +60,13 @@ func (f *Feedback) GetSource() string {
 	return f.item.GetSource()
 }
 
+// PB returns the underlying proto FeedbackItem pointer. Used by callers that
+// need to access proto-specific fields not yet exposed on the domain object
+// (e.g. GetCanWontFix, GetLinkedRuling, GetJustification).
+func (f *Feedback) PB() *flowv1.FeedbackItem {
+	return f.item
+}
+
 // ---------------------------------------------------------------------------
 // Round-trip getter
 // ---------------------------------------------------------------------------

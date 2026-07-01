@@ -31,6 +31,16 @@ func (g *LawGroup) Name() string { return g.name }
 // Mode returns the evaluation mode (no round-trip).
 func (g *LawGroup) Mode() GroupMode { return g.mode }
 
+// Passes returns the number of evaluation passes (no round-trip).
+func (g *LawGroup) Passes() int32 { return g.passes }
+
+// NewLawGroup creates a LawGroup domain object. The librarian parameter may
+// be nil when the LawGroup is used only for config access (Name/Mode/Passes).
+// When librarian is nil, calling GetLaws() or Attest() will panic.
+func NewLawGroup(name string, mode GroupMode, passes int32) *LawGroup {
+	return &LawGroup{name: name, mode: mode, passes: passes}
+}
+
 // newLawGroup creates a LawGroup domain object from its constituent parts.
 func newLawGroup(name string, mode GroupMode, passes int32, librarian flowv1.LibrarianServiceClient) *LawGroup {
 	return &LawGroup{name: name, mode: mode, passes: passes, librarian: librarian}

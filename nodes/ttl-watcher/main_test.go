@@ -432,16 +432,15 @@ func TestWatchTTL_LoadsConfig(t *testing.T) {
 
 func TestProcessHearing_Success(t *testing.T) {
 	spy := &handlerSpy{}
-	client := newHandlerTestClient(t, spy)
-
 	wctx := &flowv1.WorkitemContext{
 		FlowNamespace: "test-ns",
 		WorkitemId:    "wi-hearing-001",
 		NodeId:        "ttl-watcher",
 		Metadata:      map[string]string{"law_id": "law-42"},
 	}
+	workitem := newHandlerTestWorkitem(t, spy, wctx.GetWorkitemId())
 
-	err := processHearing(context.Background(), client, wctx)
+	err := processHearing(workitem, wctx)
 	if err != nil {
 		t.Fatalf("processHearing() returned error: %v", err)
 	}
@@ -477,16 +476,15 @@ func TestProcessHearing_Success(t *testing.T) {
 
 func TestProcessHearing_MissingLawID(t *testing.T) {
 	spy := &handlerSpy{}
-	client := newHandlerTestClient(t, spy)
-
 	wctx := &flowv1.WorkitemContext{
 		FlowNamespace: "test-ns",
 		WorkitemId:    "wi-hearing-002",
 		NodeId:        "ttl-watcher",
 		Metadata:      map[string]string{},
 	}
+	workitem := newHandlerTestWorkitem(t, spy, wctx.GetWorkitemId())
 
-	err := processHearing(context.Background(), client, wctx)
+	err := processHearing(workitem, wctx)
 	if err == nil {
 		t.Fatal("expected error for missing law_id, got nil")
 	}
@@ -503,15 +501,14 @@ func TestProcessHearing_MissingLawID(t *testing.T) {
 
 func TestProcessHearing_NilMetadata(t *testing.T) {
 	spy := &handlerSpy{}
-	client := newHandlerTestClient(t, spy)
-
 	wctx := &flowv1.WorkitemContext{
 		FlowNamespace: "test-ns",
 		WorkitemId:    "wi-hearing-003",
 		NodeId:        "ttl-watcher",
 	}
+	workitem := newHandlerTestWorkitem(t, spy, wctx.GetWorkitemId())
 
-	err := processHearing(context.Background(), client, wctx)
+	err := processHearing(workitem, wctx)
 	if err == nil {
 		t.Fatal("expected error for nil metadata, got nil")
 	}
