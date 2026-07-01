@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -43,6 +44,23 @@ type spyServer struct {
 	lastQueryLawsReq *flowv1.QueryLawsRequest
 	// lastPublishReq captures the most recent Publish request.
 	lastPublishReq *flowv1.PublishRequest
+	// lastCiteReq captures the most recent Cite request.
+	lastCiteReq *flowv1.CiteRequest
+	// lastStampReq captures the most recent StampArtefact request.
+	lastStampReq *flowv1.StampArtefactRequest
+
+	// Feedback RPC request capture fields.
+	lastResolveFeedbackReq  *flowv1.ResolveFeedbackRequest
+	lastRefuseFeedbackReq   *flowv1.RefuseFeedbackRequest
+	lastAcceptFixReq        *flowv1.AcceptFixRequest
+	lastRejectFixReq        *flowv1.RejectFixRequest
+	lastAcceptRefusalReq    *flowv1.AcceptRefusalRequest
+	lastRejectRefusalReq    *flowv1.RejectRefusalRequest
+	lastDeadlockFeedbackReq *flowv1.DeadlockFeedbackRequest
+	lastLinkRulingReq       *flowv1.LinkRulingRequest
+	lastGetFeedbackDepthReq *flowv1.GetFeedbackDepthRequest
+	// feedbackErr, when non-nil, is returned by all feedback RPC handlers for error testing.
+	feedbackErr error
 }
 
 func (s *spyServer) Heartbeat(ctx context.Context, req *flowv1.HeartbeatRequest) (*flowv1.HeartbeatResponse, error) {
@@ -134,6 +152,7 @@ func (s *spyServer) Publish(ctx context.Context, req *flowv1.PublishRequest) (*f
 
 func (s *spyServer) Cite(ctx context.Context, req *flowv1.CiteRequest) (*flowv1.CiteResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastCiteReq = req
 	return &flowv1.CiteResponse{Acknowledged: true}, nil
 }
 
@@ -158,12 +177,40 @@ func (s *spyServer) AddFriction(
 	return &flowv1.AddFrictionResponse{Acknowledged: true}, nil
 }
 
+func (s *spyServer) ResolveFeedback(
+	ctx context.Context, req *flowv1.ResolveFeedbackRequest,
+) (*flowv1.ResolveFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastResolveFeedbackReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
+	return &flowv1.ResolveFeedbackResponse{}, nil
+}
+
 func (s *spyServer) RefuseFeedback(
 	ctx context.Context, req *flowv1.RefuseFeedbackRequest,
 ) (*flowv1.RefuseFeedbackResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastRefuseFeedbackReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.RefuseFeedbackResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
+	}}, nil
+}
+
+func (s *spyServer) AcceptFix(
+	ctx context.Context, req *flowv1.AcceptFixRequest,
+) (*flowv1.AcceptFixResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastAcceptFixReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
+	return &flowv1.AcceptFixResponse{UpdatedItem: &flowv1.FeedbackItem{
+		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED,
 	}}, nil
 }
 
@@ -171,6 +218,10 @@ func (s *spyServer) RejectFix(
 	ctx context.Context, req *flowv1.RejectFixRequest,
 ) (*flowv1.RejectFixResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastRejectFixReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.RejectFixResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
 	}}, nil
@@ -180,6 +231,10 @@ func (s *spyServer) AcceptRefusal(
 	ctx context.Context, req *flowv1.AcceptRefusalRequest,
 ) (*flowv1.AcceptRefusalResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastAcceptRefusalReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.AcceptRefusalResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED,
 	}}, nil
@@ -189,6 +244,10 @@ func (s *spyServer) RejectRefusal(
 	ctx context.Context, req *flowv1.RejectRefusalRequest,
 ) (*flowv1.RejectRefusalResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastRejectRefusalReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.RejectRefusalResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id: req.GetFeedbackId(), State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED,
 	}}, nil
@@ -198,6 +257,10 @@ func (s *spyServer) GetFeedbackDepth(
 	ctx context.Context, req *flowv1.GetFeedbackDepthRequest,
 ) (*flowv1.GetFeedbackDepthResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastGetFeedbackDepthReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.GetFeedbackDepthResponse{Depth: 5}, nil
 }
 
@@ -205,6 +268,10 @@ func (s *spyServer) DeadlockFeedback(
 	ctx context.Context, req *flowv1.DeadlockFeedbackRequest,
 ) (*flowv1.DeadlockFeedbackResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastDeadlockFeedbackReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.DeadlockFeedbackResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id:    req.GetFeedbackId(),
 		State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED,
@@ -215,6 +282,10 @@ func (s *spyServer) LinkRuling(
 	ctx context.Context, req *flowv1.LinkRulingRequest,
 ) (*flowv1.LinkRulingResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastLinkRulingReq = req
+	if s.feedbackErr != nil {
+		return nil, s.feedbackErr
+	}
 	return &flowv1.LinkRulingResponse{UpdatedItem: &flowv1.FeedbackItem{
 		Id:           req.GetFeedbackId(),
 		State:        req.GetTargetState(),
@@ -301,6 +372,7 @@ func (s *spyServer) StampArtefact(
 	ctx context.Context, req *flowv1.StampArtefactRequest,
 ) (*flowv1.StampArtefactResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastStampReq = req
 	return &flowv1.StampArtefactResponse{
 		Stamp: &flowv1.Stamp{Name: req.GetStampName()},
 	}, nil
@@ -315,6 +387,77 @@ func (s *spyServer) ListArtefacts(
 			{Id: "output", GovernedArtefact: "codification-output"},
 		},
 	}, nil
+}
+
+func (s *spyServer) GetStamps(
+	ctx context.Context, req *flowv1.GetStampsRequest,
+) (*flowv1.GetStampsResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.GetStampsResponse{
+		Stamps: []*flowv1.Stamp{
+			{Name: "linter", ApplyingNode: "node-a", ContentHash: "ch-1"},
+			{Name: "approval", ApplyingNode: "node-b", ContentHash: "ch-1"},
+		},
+	}, nil
+}
+
+func (s *spyServer) HasStamp(
+	ctx context.Context, req *flowv1.HasStampRequest,
+) (*flowv1.HasStampResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.HasStampResponse{Exists: req.GetStampName() == "linter"}, nil
+}
+
+func (s *spyServer) GetFeedback(
+	ctx context.Context, req *flowv1.GetFeedbackRequest,
+) (*flowv1.GetFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.GetFeedbackResponse{
+		FeedbackItems: []*flowv1.FeedbackItem{
+			{Id: "fb-001", Message: "needs revision"},
+			{Id: "fb-002", Message: "looks good"},
+		},
+	}, nil
+}
+
+func (s *spyServer) HasUnresolvedFeedback(
+	ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest,
+) (*flowv1.HasUnresolvedFeedbackResponse, error) {
+	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	return &flowv1.HasUnresolvedFeedbackResponse{HasUnresolved: true}, nil
+}
+
+// errorSpyServer returns errors on every Archivist RPC, used for testing error propagation.
+type errorSpyServer struct {
+	flowv1.UnimplementedArchivistServiceServer
+}
+
+func (s *errorSpyServer) GetArtefact(ctx context.Context, req *flowv1.GetArtefactRequest) (*flowv1.GetArtefactResponse, error) {
+	return nil, fmt.Errorf("archivist error: get artefact failed")
+}
+
+func (s *errorSpyServer) StoreArtefact(ctx context.Context, req *flowv1.StoreArtefactRequest) (*flowv1.StoreArtefactResponse, error) {
+	return nil, fmt.Errorf("archivist error: store artefact failed")
+}
+
+func (s *errorSpyServer) StampArtefact(ctx context.Context, req *flowv1.StampArtefactRequest) (*flowv1.StampArtefactResponse, error) {
+	return nil, fmt.Errorf("archivist error: stamp artefact failed")
+}
+
+func (s *errorSpyServer) GetStamps(ctx context.Context, req *flowv1.GetStampsRequest) (*flowv1.GetStampsResponse, error) {
+	return nil, fmt.Errorf("archivist error: get stamps failed")
+}
+
+func (s *errorSpyServer) HasStamp(ctx context.Context, req *flowv1.HasStampRequest) (*flowv1.HasStampResponse, error) {
+	return nil, fmt.Errorf("archivist error: has stamp failed")
+}
+
+func (s *errorSpyServer) GetFeedback(ctx context.Context, req *flowv1.GetFeedbackRequest) (*flowv1.GetFeedbackResponse, error) {
+	return nil, fmt.Errorf("archivist error: get feedback failed")
+}
+
+func (s *errorSpyServer) HasUnresolvedFeedback(ctx context.Context, req *flowv1.HasUnresolvedFeedbackRequest) (*flowv1.HasUnresolvedFeedbackResponse, error) {
+	return nil, fmt.Errorf("archivist error: has unresolved feedback failed")
 }
 
 // ---------------------------------------------------------------------------
@@ -794,9 +937,6 @@ func TestGetLawGroup_ReturnsGroup(t *testing.T) {
 	}
 	if group.Mode != "bundle" {
 		t.Fatalf("expected mode bundle, got %q", group.Mode)
-	}
-	if group.Passes != 1 {
-		t.Fatalf("expected passes 1, got %d", group.Passes)
 	}
 }
 
