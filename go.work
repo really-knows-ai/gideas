@@ -12,6 +12,7 @@ use (
 	./platform/operator
 	./platform/pkg/eventbus
 	./platform/pkg/randid
+	./platform/queue
 	./platform/sidecar
 	./sdk/go
 )

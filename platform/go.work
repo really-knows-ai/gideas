@@ -9,6 +9,7 @@ use (
 	./monitor
 	./librarian
 	./archivist
+	./queue
 	./pkg/eventbus
 	../gen
 )
