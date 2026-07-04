@@ -86,13 +86,13 @@ func TestManifest_CrossCuttingConsistency(t *testing.T) {
 	})
 
 	t.Run("foundrynode_count", func(t *testing.T) {
-		if len(nodes) != 6 {
+		if len(nodes) != 8 {
 			names := make([]string, 0, len(nodes))
 			for n := range nodes {
 				names = append(names, n)
 			}
 			sort.Strings(names)
-			t.Errorf("expected 6 FoundryNode documents, got %d: %v", len(nodes), names)
+			t.Errorf("expected 8 FoundryNode documents, got %d: %v", len(nodes), names)
 		}
 	})
 
@@ -102,13 +102,13 @@ func TestManifest_CrossCuttingConsistency(t *testing.T) {
 				t.Errorf("FoundryNode %q has no matching Deployment (by FLOW_NODE_ID)", name)
 			}
 		}
-		if len(deps) != 25 {
+		if len(deps) != 27 {
 			ids := make([]string, 0, len(deps))
 			for id := range deps {
 				ids = append(ids, id)
 			}
 			sort.Strings(ids)
-			t.Errorf("expected 25 Deployments, got %d: %v", len(deps), ids)
+			t.Errorf("expected 27 Deployments, got %d: %v", len(deps), ids)
 		}
 	})
 }

@@ -33,7 +33,7 @@ metadata:
     app.kubernetes.io/name: sort
 data:
   node-config.yaml: |
-    nodeOrder: "quench,appraisal"
+    nodeOrder: "quench,appraisal,human-approval"
     deadlockThreshold: 3
 ---
 apiVersion: v1

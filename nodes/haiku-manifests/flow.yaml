@@ -83,6 +83,8 @@ spec:
         - appraisal
         - appraiser
         - refine
+        - human-arbiter
+        - human-approval
   governancePolicy:
     maxVisits: 20
     defaultTimeout: "10m"
@@ -125,13 +127,17 @@ spec:
       target: "appraisal"
     - name: "refine"
       target: "refine"
+    - name: "human-arbiter"
+      target: "human-arbiter"
+    - name: "human-approval"
+      target: "human-approval"
   capabilities:
     - "READ:artefact"
     - "READ:artefact/haiku"
     - "READ:feedback"
     - "READ:flow"
-    - "STAMP:artefact/haiku/approval"
 ---
+
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
@@ -212,3 +218,43 @@ spec:
     - "WRITE:feedback/actioned"
     - "WRITE:feedback/wont_fix"
     - "READ:law"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: human-arbiter
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: human-arbiter:latest
+  exit: "standard-exit"
+  outputs:
+    - name: "accept"
+      target: "sort"
+    - name: "reject"
+      target: "sort"
+  capabilities:
+    - "READ:artefact/haiku"
+    - "READ:artefact/petition"
+    - "READ:feedback"
+    - "WRITE:feedback/link-ruling"
+    - "STAMP:artefact/haiku/arbitrated"
+---
+apiVersion: flow.gideas.io/v1
+kind: FoundryNode
+metadata:
+  name: human-approval
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  image: human-approval:latest
+  exit: "standard-exit"
+  outputs:
+    - name: "approve"
+      target: "sort"
+  capabilities:
+    - "READ:artefact/haiku"
+    - "READ:artefact/petition"
+    - "STAMP:artefact/haiku/approval"
