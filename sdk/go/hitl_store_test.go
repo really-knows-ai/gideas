@@ -13,7 +13,7 @@ import (
 
 func newTestStore(t *testing.T) *queueStore {
 	t.Helper()
-	s, err := newQueueStore(":memory:", "test-shard-0")
+	s, err := newQueueStore(":memory:", "test-shard-0", "")
 	if err != nil {
 		t.Fatalf("newQueueStore failed: %v", err)
 	}

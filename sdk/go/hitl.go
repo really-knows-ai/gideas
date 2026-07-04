@@ -22,6 +22,7 @@ const (
 type QueueItem struct {
 	WorkitemID string      `json:"workitem_id"`
 	ShardID    string      `json:"shard_id"`
+	QueueName  string      `json:"queue_name"`
 	Status     QueueStatus `json:"status"`
 	EnqueuedAt time.Time   `json:"enqueued_at"`
 	ClaimedAt  *time.Time  `json:"claimed_at,omitempty"`

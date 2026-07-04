@@ -502,6 +502,7 @@ func protoToQueueItem(pi *flowv1.QueueItem) QueueItem {
 	item := QueueItem{
 		WorkitemID: pi.GetWorkitemId(),
 		ShardID:    pi.GetShardId(),
+		QueueName:  pi.GetQueueName(),
 		Status:     QueueStatus(pi.GetStatus()),
 	}
 	if pi.GetEnqueuedAt() != "" {
@@ -518,6 +519,7 @@ func queueItemToProto(item QueueItem) *flowv1.QueueItem {
 	pi := &flowv1.QueueItem{
 		WorkitemId: item.WorkitemID,
 		ShardId:    item.ShardID,
+		QueueName:  item.QueueName,
 		Status:     string(item.Status),
 		EnqueuedAt: item.EnqueuedAt.Format(time.RFC3339),
 	}

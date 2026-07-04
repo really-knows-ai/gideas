@@ -16,13 +16,14 @@ const sqliteTimeFormat = "2006-01-02 15:04:05"
 // queueStore is the SQLite-backed persistence layer for the HITL queue.
 // Each pod has its own queue.db file with items owned by that shard.
 type queueStore struct {
-	db      *sql.DB
-	shardID string
+	db        *sql.DB
+	shardID   string
+	queueName string
 }
 
 // newQueueStore opens (or creates) a SQLite database at the given path and
 // initialises the queue schema. Use ":memory:" for testing.
-func newQueueStore(dbPath, shardID string) (*queueStore, error) {
+func newQueueStore(dbPath, shardID, queueName string) (*queueStore, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -40,7 +41,7 @@ func newQueueStore(dbPath, shardID string) (*queueStore, error) {
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
-	s := &queueStore{db: db, shardID: shardID}
+	s := &queueStore{db: db, shardID: shardID, queueName: queueName}
 	if err := s.initSchema(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
@@ -59,6 +60,7 @@ func (s *queueStore) initSchema() error {
 CREATE TABLE IF NOT EXISTS hitl_queue (
     workitem_id TEXT PRIMARY KEY,
     shard_id    TEXT NOT NULL,
+    queue_name  TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'waiting',
     enqueued_at DATETIME NOT NULL DEFAULT (datetime('now')),
     claimed_at  DATETIME
@@ -76,8 +78,8 @@ CREATE INDEX IF NOT EXISTS idx_shard ON hitl_queue(shard_id);
 // enqueue inserts a new item into the queue with status "waiting".
 func (s *queueStore) enqueue(ctx context.Context, workitemID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO hitl_queue (workitem_id, shard_id, status) VALUES (?, ?, 'waiting')`,
-		workitemID, s.shardID,
+		`INSERT INTO hitl_queue (workitem_id, shard_id, queue_name, status) VALUES (?, ?, ?, 'waiting')`,
+		workitemID, s.shardID, s.queueName,
 	)
 	if err != nil {
 		return fmt.Errorf("enqueue: %w", err)
@@ -109,7 +111,7 @@ func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueI
 	}
 	offset := max(filter.Offset, 0)
 
-	query := "SELECT workitem_id, shard_id, status, enqueued_at, claimed_at FROM hitl_queue " +
+	query := "SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at FROM hitl_queue " +
 		where + " ORDER BY enqueued_at ASC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
@@ -136,7 +138,7 @@ func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueI
 // getByID retrieves a single queue item by Workitem ID.
 func (s *queueStore) getByID(ctx context.Context, workitemID string) (*QueueItem, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT workitem_id, shard_id, status, enqueued_at, claimed_at
+		`SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at
 		 FROM hitl_queue WHERE workitem_id = ?`, workitemID,
 	)
 	item, err := scanQueueItemRow(row)
@@ -268,7 +270,10 @@ func scanQueueItem(rows *sql.Rows) (QueueItem, error) {
 	var statusStr, enqueuedStr string
 	var claimedStr sql.NullString
 
-	if err := rows.Scan(&item.WorkitemID, &item.ShardID, &statusStr, &enqueuedStr, &claimedStr); err != nil {
+	if err := rows.Scan(
+		&item.WorkitemID, &item.ShardID, &item.QueueName,
+		&statusStr, &enqueuedStr, &claimedStr,
+	); err != nil {
 		return QueueItem{}, fmt.Errorf("scan queue item: %w", err)
 	}
 
@@ -287,7 +292,10 @@ func scanQueueItemRow(row *sql.Row) (QueueItem, error) {
 	var statusStr, enqueuedStr string
 	var claimedStr sql.NullString
 
-	if err := row.Scan(&item.WorkitemID, &item.ShardID, &statusStr, &enqueuedStr, &claimedStr); err != nil {
+	if err := row.Scan(
+		&item.WorkitemID, &item.ShardID, &item.QueueName,
+		&statusStr, &enqueuedStr, &claimedStr,
+	); err != nil {
 		return QueueItem{}, err
 	}
 

@@ -27,6 +27,7 @@ type QueueManagerOption func(*queueManagerConfig)
 type queueManagerConfig struct {
 	storagePath  string
 	shardID      string
+	queueName    string
 	serviceName  string
 	namespace    string
 	client       *Client
@@ -45,6 +46,12 @@ func WithStoragePath(path string) QueueManagerOption {
 // WithShardID sets the shard identity. Defaults to HOSTNAME env.
 func WithShardID(id string) QueueManagerOption {
 	return func(c *queueManagerConfig) { c.shardID = id }
+}
+
+// WithQueueName sets the queue name for scoping queue items.
+// Defaults to FLOW_NODE_ID environment variable, then "default".
+func WithQueueName(name string) QueueManagerOption {
+	return func(c *queueManagerConfig) { c.queueName = name }
 }
 
 // WithServiceName sets the headless service name for DNS peer discovery.
@@ -94,6 +101,7 @@ type queueManagerImpl struct {
 	mesh      *queueMesh
 	client    *Client
 	shardID   string
+	queueName string
 	apiPort   string
 	httpSrv   *http.Server
 	peer      *queuePeerServer
@@ -131,11 +139,18 @@ func NewQueueManager(opts ...QueueManagerOption) (*queueManagerImpl, error) {
 	if cfg.shardID == "" {
 		cfg.shardID = "shard-0"
 	}
+	if cfg.queueName == "" {
+		cfg.queueName = os.Getenv("FLOW_NODE_ID")
+	}
+	if cfg.queueName == "" {
+		cfg.queueName = "default"
+	}
 
 	return &queueManagerImpl{
-		client:  cfg.client,
-		shardID: cfg.shardID,
-		apiPort: cfg.apiPort,
+		client:    cfg.client,
+		shardID:   cfg.shardID,
+		queueName: cfg.queueName,
+		apiPort:   cfg.apiPort,
 	}, nil
 }
 
@@ -167,7 +182,7 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 		dbPath = "queue.db"
 	}
 
-	store, err := newQueueStore(dbPath, qm.shardID)
+	store, err := newQueueStore(dbPath, qm.shardID, qm.queueName)
 	if err != nil {
 		return fmt.Errorf("open queue store: %w", err)
 	}

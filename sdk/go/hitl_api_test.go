@@ -18,7 +18,7 @@ const testWorkitemID = "wi-1" //nolint:goconst // test constant
 // newTestQueueManager creates an in-memory QueueManager for API tests.
 func newTestQueueManager(t *testing.T) *queueManagerImpl {
 	t.Helper()
-	store, err := newQueueStore(":memory:", "api-test-shard")
+	store, err := newQueueStore(":memory:", "api-test-shard", "")
 	if err != nil {
 		t.Fatalf("newQueueStore failed: %v", err)
 	}

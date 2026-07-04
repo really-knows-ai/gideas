@@ -19,7 +19,7 @@ import (
 
 func newTestManager(t *testing.T) *queueManagerImpl {
 	t.Helper()
-	store, err := newQueueStore(":memory:", "mgr-shard-0")
+	store, err := newQueueStore(":memory:", "mgr-shard-0", "")
 	if err != nil {
 		t.Fatalf("newQueueStore failed: %v", err)
 	}
@@ -106,13 +106,13 @@ func TestQueueManager_GlobalQueue_MultiShard(t *testing.T) {
 	ctx := context.Background()
 
 	// Create two managers with separate stores.
-	store0, err := newQueueStore(":memory:", "mgr-0")
+	store0, err := newQueueStore(":memory:", "mgr-0", "")
 	if err != nil {
 		t.Fatalf("store0 failed: %v", err)
 	}
 	t.Cleanup(func() { _ = store0.close() })
 
-	store1, err := newQueueStore(":memory:", "mgr-1")
+	store1, err := newQueueStore(":memory:", "mgr-1", "")
 	if err != nil {
 		t.Fatalf("store1 failed: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestQueueManager_GlobalQueue_MultiShard(t *testing.T) {
 }
 
 func TestQueueManager_Telemetry_Enqueue(t *testing.T) {
-	store, err := newQueueStore(":memory:", "tel-shard")
+	store, err := newQueueStore(":memory:", "tel-shard", "")
 	if err != nil {
 		t.Fatalf("store failed: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestQueueManager_Telemetry_Decided(t *testing.T) {
 }
 
 func TestQueueManager_GetPeers(t *testing.T) {
-	store, err := newQueueStore(":memory:", "peer-shard")
+	store, err := newQueueStore(":memory:", "peer-shard", "")
 	if err != nil {
 		t.Fatalf("store failed: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
 	ctx := context.Background()
 
 	// --- Pod A: the owning shard that enqueues and waits. ---
-	storeA, err := newQueueStore(":memory:", "shard-A")
+	storeA, err := newQueueStore(":memory:", "shard-A", "")
 	if err != nil {
 		t.Fatalf("storeA failed: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
 	qmA.mesh = meshA
 
 	// --- Pod B: the remote shard that receives the decide request. ---
-	storeB, err := newQueueStore(":memory:", "shard-B")
+	storeB, err := newQueueStore(":memory:", "shard-B", "")
 	if err != nil {
 		t.Fatalf("storeB failed: %v", err)
 	}
@@ -469,6 +469,123 @@ func TestQueueManager_WaitForDecision_ReturnsChoice(t *testing.T) {
 	}
 	if r.choice != "approve" {
 		t.Fatalf("expected choice=approve, got %q", r.choice)
+	}
+}
+
+func TestQueueManager_WithQueueName_Stored(t *testing.T) {
+	qm, err := NewQueueManager(
+		WithShardID("qn-shard"),
+		WithQueueName("my-queue"),
+		WithPeerResolver(&staticResolver{}),
+	)
+	if err != nil {
+		t.Fatalf("NewQueueManager failed: %v", err)
+	}
+	if err := qm.Start(context.Background(), WithStoragePath(":memory:"), WithAPIPort("0")); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = qm.Stop() })
+
+	ctx := context.Background()
+	if err := qm.Enqueue(ctx, "wi-qn-1"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	items, err := qm.GetLocalQueue(ctx, QueueFilter{})
+	if err != nil {
+		t.Fatalf("GetLocalQueue failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].QueueName != "my-queue" {
+		t.Fatalf("expected QueueName=my-queue, got %q", items[0].QueueName)
+	}
+}
+
+func TestQueueManager_QueueName_DefaultsToFLOW_NODE_ID(t *testing.T) {
+	t.Setenv("FLOW_NODE_ID", "test-node-id")
+
+	qm, err := NewQueueManager(
+		WithShardID("qn-shard"),
+		WithPeerResolver(&staticResolver{}),
+	)
+	if err != nil {
+		t.Fatalf("NewQueueManager failed: %v", err)
+	}
+	if qm.queueName != "test-node-id" {
+		t.Fatalf("expected queueName=test-node-id, got %q", qm.queueName)
+	}
+
+	if err := qm.Start(context.Background(), WithStoragePath(":memory:"), WithAPIPort("0")); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = qm.Stop() })
+
+	ctx := context.Background()
+	if err := qm.Enqueue(ctx, "wi-default"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	items, err := qm.GetLocalQueue(ctx, QueueFilter{})
+	if err != nil {
+		t.Fatalf("GetLocalQueue failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].QueueName != "test-node-id" {
+		t.Fatalf("expected QueueName=test-node-id, got %q", items[0].QueueName)
+	}
+}
+
+func TestQueueManager_QueueName_EnqueueDecideWaitCycle(t *testing.T) {
+	qm, err := NewQueueManager(
+		WithShardID("qn-shard-cycle"),
+		WithQueueName("test-queue"),
+		WithPeerResolver(&staticResolver{}),
+	)
+	if err != nil {
+		t.Fatalf("NewQueueManager failed: %v", err)
+	}
+	if err := qm.Start(context.Background(), WithStoragePath(":memory:"), WithAPIPort("0")); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = qm.Stop() })
+
+	ctx := context.Background()
+
+	if err := qm.Enqueue(ctx, "wi-cycle-qn"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	if _, err := qm.Claim(ctx, "wi-cycle-qn"); err != nil {
+		t.Fatalf("Claim failed: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := qm.WaitForDecision(ctx, "wi-cycle-qn")
+		done <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if err := qm.Decide(ctx, "wi-cycle-qn", ""); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("WaitForDecision returned error: %v", err)
+	}
+
+	items, err := qm.GetLocalQueue(ctx, QueueFilter{})
+	if err != nil {
+		t.Fatalf("GetLocalQueue failed: %v", err)
+	}
+	for _, item := range items {
+		if item.QueueName != "test-queue" {
+			t.Errorf("expected QueueName=test-queue on item %s, got %q", item.WorkitemID, item.QueueName)
+		}
 	}
 }
 

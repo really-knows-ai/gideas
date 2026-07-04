@@ -164,6 +164,8 @@ type QueueItem struct {
 	WorkitemId string `protobuf:"bytes,1,opt,name=workitem_id,json=workitemId,proto3" json:"workitem_id,omitempty"`
 	// Owning pod identity (e.g., "review-queue-0").
 	ShardId string `protobuf:"bytes,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	// Queue name scoping (e.g., "human-arbiter"). Defaults to FLOW_NODE_ID.
+	QueueName string `protobuf:"bytes,6,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	// Queue status: "waiting" or "claimed".
 	Status string `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
 	// RFC3339 timestamp when the item was enqueued.
@@ -214,6 +216,13 @@ func (x *QueueItem) GetWorkitemId() string {
 func (x *QueueItem) GetShardId() string {
 	if x != nil {
 		return x.ShardId
+	}
+	return ""
+}
+
+func (x *QueueItem) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
 	}
 	return ""
 }
@@ -526,11 +535,13 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"\x05items\x18\x01 \x03(\v2\x12.flow.v1.QueueItemR\x05items\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x05R\x05total\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n" +
-	"\x06offset\x18\x04 \x01(\x05R\x06offset\"\x9f\x01\n" +
+	"\x06offset\x18\x04 \x01(\x05R\x06offset\"\xbe\x01\n" +
 	"\tQueueItem\x12\x1f\n" +
 	"\vworkitem_id\x18\x01 \x01(\tR\n" +
 	"workitemId\x12\x19\n" +
-	"\bshard_id\x18\x02 \x01(\tR\ashardId\x12\x16\n" +
+	"\bshard_id\x18\x02 \x01(\tR\ashardId\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x06 \x01(\tR\tqueueName\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x12\x1f\n" +
 	"\venqueued_at\x18\x04 \x01(\tR\n" +
 	"enqueuedAt\x12\x1d\n" +

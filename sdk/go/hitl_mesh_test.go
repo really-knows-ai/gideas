@@ -75,7 +75,7 @@ type meshTestShard struct {
 func newMeshTestShard(t *testing.T, shardID string) *meshTestShard {
 	t.Helper()
 
-	store, err := newQueueStore(":memory:", shardID)
+	store, err := newQueueStore(":memory:", shardID, "")
 	if err != nil {
 		t.Fatalf("newQueueStore(%s) failed: %v", shardID, err)
 	}
