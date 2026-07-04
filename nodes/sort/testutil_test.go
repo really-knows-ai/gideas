@@ -94,7 +94,7 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 				{Name: "quench", Target: "quench"},
 				{Name: "appraisal", Target: "appraisal"},
 				{Name: "refine", Target: "refine"},
-				{Name: "arbiter", Target: "arbiter"},
+				{Name: "human-arbiter", Target: "human-arbiter"},
 			},
 		},
 		Nodes: map[string]*flowv1.FlowNode{
@@ -116,8 +116,8 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 			"refine": {
 				Name: "refine",
 			},
-			"arbiter": {
-				Name: "arbiter",
+			"human-arbiter": {
+				Name: "human-arbiter",
 			},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{

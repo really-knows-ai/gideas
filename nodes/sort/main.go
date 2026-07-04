@@ -42,9 +42,9 @@ const (
 	// unset or invalid in the config file.
 	defaultDeadlockThreshold int32 = 3
 
-	// outputArbiter is the well-known output name for escalation to the Arbiter.
-	// This is the one convention Sort retains — the arbiter output name.
-	outputArbiter = "arbiter"
+	// outputArbiter is the well-known output name for escalation to the
+	// human-arbiter node when deadlock is detected.
+	outputArbiter = "human-arbiter"
 
 	// outputRefine is the well-known output name for routing to refinement.
 	outputRefine = "refine"
