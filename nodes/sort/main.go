@@ -268,6 +268,10 @@ func buildStampProviders(nodes map[string]*flowv1.FlowNode) map[string]map[strin
 			if !ok {
 				continue
 			}
+			// Skip law attestation stamps; these are handled by routeAttestation.
+			if strings.HasPrefix(stamp, "law-") || strings.HasPrefix(stamp, "lawgrp-") {
+				continue
+			}
 			if providers[kind] == nil {
 				providers[kind] = make(map[string]string)
 			}
