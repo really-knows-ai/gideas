@@ -255,8 +255,11 @@ func handleSort(ctx context.Context, workitem *flow.Workitem, client *flow.Clien
 }
 
 // buildStampProviders builds a map of artefact kind → stamp name → provider node name
-// from node capabilities. It looks for capabilities matching STAMP:artefact/<kind>/<stamp>.
-// ATTEST:artefact/ capabilities are handled separately by routeAttestation.
+// from node capabilities. It looks for capabilities matching
+// STAMP:artefact/<kind>/<stamp> or ATTEST:artefact/<kind>/<stamp>.
+// Law-related ATTEST capabilities (*law-*/lawgrp-*) are also resolved by
+// routeAttestation at attestation-check time; this map handles static stamps
+// (appraisal, approval) whether they are declared as STAMP: or ATTEST:.
 func buildStampProviders(nodes map[string]*flowv1.FlowNode) map[string]map[string]string {
 	providers := make(map[string]map[string]string)
 	for _, node := range nodes {
@@ -275,14 +278,21 @@ func buildStampProviders(nodes map[string]*flowv1.FlowNode) map[string]map[strin
 }
 
 // parseStampCapability parses a capability string of the form
-// "STAMP:artefact/<kind>/<stamp>" and returns the kind and stamp name.
-// ATTEST:artefact/ capabilities are NOT handled here — they are resolved
-// by routeAttestation → findAttestationProvider → hasAttestCapability.
+// "STAMP:artefact/<kind>/<stamp>" or "ATTEST:artefact/<kind>/<stamp>"
+// and returns the kind and stamp name. Law-related ATTEST capabilities
+// are also resolved by routeAttestation for attestation-check routing;
+// this function handles static-stamp discovery for buildStampProviders.
 func parseStampCapability(cap string) (kind, stamp string, ok bool) {
-	if !strings.HasPrefix(cap, "STAMP:artefact/") {
+	var prefix string
+	switch {
+	case strings.HasPrefix(cap, "STAMP:artefact/"):
+		prefix = "STAMP:artefact/"
+	case strings.HasPrefix(cap, "ATTEST:artefact/"):
+		prefix = "ATTEST:artefact/"
+	default:
 		return "", "", false
 	}
-	rest := cap[len("STAMP:artefact/"):]
+	rest := cap[len(prefix):]
 	parts := strings.SplitN(rest, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false
