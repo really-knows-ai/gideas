@@ -39,6 +39,10 @@ type quenchSpy struct {
 	// Configurable state returned by GetFeedback.
 	FeedbackItems []*flowv1.FeedbackItem
 
+	// Law/group state returned by Librarian methods.
+	LawGroups []*flowv1.LawGroup
+	Laws      []*flowv1.Law
+
 	// Feedback operation records.
 	AcceptedFixes []string          // feedback IDs accepted
 	RejectedFixes map[string]string // feedback ID → rejection message
@@ -166,4 +170,50 @@ func (s *quenchSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Librarian methods
+// ---------------------------------------------------------------------------
+
+func (s *quenchSpy) ListLawGroups(
+	_ context.Context, _ *flowv1.ListLawGroupsRequest,
+) (*flowv1.ListLawGroupsResponse, error) {
+	return &flowv1.ListLawGroupsResponse{Groups: s.LawGroups}, nil
+}
+
+func (s *quenchSpy) QueryLaws(
+	_ context.Context, req *flowv1.QueryLawsRequest,
+) (*flowv1.QueryLawsResponse, error) {
+	// If filtering by group, return only matching laws.
+	if req.GetFilter() != nil && req.GetFilter().GetGroup() != "" {
+		filtered := make([]*flowv1.Law, 0, len(s.Laws))
+		for _, law := range s.Laws {
+			if law.GetGroup() == req.GetFilter().GetGroup() {
+				filtered = append(filtered, law)
+			}
+		}
+		return &flowv1.QueryLawsResponse{Laws: filtered}, nil
+	}
+	return &flowv1.QueryLawsResponse{Laws: s.Laws}, nil
+}
+
+// newQuenchSpyWithSyllableLaw creates a spy with the syllable law and
+// content group pre-configured for "text/plain" attestation tests.
+func newQuenchSpyWithSyllableLaw(haiku string) *quenchSpy {
+	spy := newQuenchSpy(haiku)
+	spy.LawGroups = []*flowv1.LawGroup{
+		{Name: "content", Mode: "law-by-law", Passes: 1},
+	}
+	spy.Laws = []*flowv1.Law{
+		{
+			Id:    "haiku-syllable",
+			Group: "content",
+			Representations: []*flowv1.Representation{
+				{Type: "text/markdown"},
+				{Type: "text/plain"},
+			},
+		},
+	}
+	return spy
 }

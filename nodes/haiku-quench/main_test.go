@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	stampLinter  = "linter"
-	routeDefault = "default"
+	stampSyllableAttest = "law-haiku-syllable-text-plain"
+	routeDefault        = "default"
 )
 
 // ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ const invalidHaiku = "Hello world\nThis is not right\nAt all"
 // ---------------------------------------------------------------------------
 
 func TestHandleQuench_ValidHaiku_NoFeedback(t *testing.T) {
-	spy := newQuenchSpy(validHaiku)
+	spy := newQuenchSpyWithSyllableLaw(validHaiku)
 	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
@@ -82,10 +82,10 @@ func TestHandleQuench_ValidHaiku_NoFeedback(t *testing.T) {
 			len(spy.AddedFeedback))
 	}
 
-	// Should stamp "linter".
+	// Should attest the syllable law.
 	if len(spy.StampedNames) != 1 ||
-		spy.StampedNames[0] != stampLinter {
-		t.Errorf("expected stamp [linter], got %v",
+		spy.StampedNames[0] != stampSyllableAttest {
+		t.Errorf("expected stamp [law-haiku-syllable-text-plain], got %v",
 			spy.StampedNames)
 	}
 
@@ -102,7 +102,7 @@ func TestHandleQuench_ValidHaiku_NoFeedback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleQuench_ValidHaiku_AcceptsActionedFeedback(t *testing.T) {
-	spy := newQuenchSpy(validHaiku)
+	spy := newQuenchSpyWithSyllableLaw(validHaiku)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-prior-1",
@@ -149,7 +149,7 @@ func TestHandleQuench_ValidHaiku_AcceptsActionedFeedback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleQuench_ValidHaiku_SkipsNonActionedFeedback(t *testing.T) {
-	spy := newQuenchSpy(validHaiku)
+	spy := newQuenchSpyWithSyllableLaw(validHaiku)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-resolved",
@@ -188,7 +188,7 @@ func TestHandleQuench_ValidHaiku_SkipsNonActionedFeedback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleQuench_InvalidHaiku_NoFeedback(t *testing.T) {
-	spy := newQuenchSpy(invalidHaiku)
+	spy := newQuenchSpyWithSyllableLaw(invalidHaiku)
 	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
@@ -215,10 +215,10 @@ func TestHandleQuench_InvalidHaiku_NoFeedback(t *testing.T) {
 			fb.Message)
 	}
 
-	// Should still stamp "linter".
+	// Should still attest the syllable law.
 	if len(spy.StampedNames) != 1 ||
-		spy.StampedNames[0] != stampLinter {
-		t.Errorf("expected stamp [linter], got %v",
+		spy.StampedNames[0] != stampSyllableAttest {
+		t.Errorf("expected stamp [law-haiku-syllable-text-plain], got %v",
 			spy.StampedNames)
 	}
 
@@ -235,7 +235,7 @@ func TestHandleQuench_InvalidHaiku_NoFeedback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleQuench_InvalidHaiku_RejectsActionedFeedback(t *testing.T) {
-	spy := newQuenchSpy(invalidHaiku)
+	spy := newQuenchSpyWithSyllableLaw(invalidHaiku)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-prior",
@@ -283,7 +283,7 @@ func TestHandleQuench_InvalidHaiku_RejectsActionedFeedback(t *testing.T) {
 func TestHandleQuench_InvalidHaiku_SkipsNonActionedFeedback(
 	t *testing.T,
 ) {
-	spy := newQuenchSpy(invalidHaiku)
+	spy := newQuenchSpyWithSyllableLaw(invalidHaiku)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-resolved",
@@ -326,7 +326,7 @@ func TestHandleQuench_InvalidHaiku_SkipsNonActionedFeedback(
 func TestHandleQuench_InvalidHaiku_MixedFeedbackStates(
 	t *testing.T,
 ) {
-	spy := newQuenchSpy(invalidHaiku)
+	spy := newQuenchSpyWithSyllableLaw(invalidHaiku)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-actioned",
@@ -362,7 +362,7 @@ func TestHandleQuench_InvalidHaiku_MixedFeedbackStates(
 func TestHandleQuench_ValidHaiku_MixedFeedbackStates(
 	t *testing.T,
 ) {
-	spy := newQuenchSpy(validHaiku)
+	spy := newQuenchSpyWithSyllableLaw(validHaiku)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-actioned",
@@ -451,10 +451,10 @@ func TestBuildRejectionMessage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: always stamps linter regardless of validity
+// Tests: always attests syllable law regardless of validity
 // ---------------------------------------------------------------------------
 
-func TestHandleQuench_AlwaysStampsLinter(t *testing.T) {
+func TestHandleQuench_AlwaysAttestsSyllableLaw(t *testing.T) {
 	cases := []struct {
 		name  string
 		haiku string
@@ -464,7 +464,7 @@ func TestHandleQuench_AlwaysStampsLinter(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			spy := newQuenchSpy(tc.haiku)
+			spy := newQuenchSpyWithSyllableLaw(tc.haiku)
 			workitem, cleanup := newSpyClientWithSpy(t, spy)
 			defer cleanup()
 
@@ -474,11 +474,88 @@ func TestHandleQuench_AlwaysStampsLinter(t *testing.T) {
 			}
 
 			if len(spy.StampedNames) != 1 ||
-				spy.StampedNames[0] != stampLinter {
-				t.Errorf("expected stamp [linter], got %v",
+				spy.StampedNames[0] != stampSyllableAttest {
+				t.Errorf("expected stamp [law-haiku-syllable-text-plain], got %v",
 					spy.StampedNames)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: attestSyllableLaw — correct stamp name
+// ---------------------------------------------------------------------------
+
+func TestAttestSyllableLaw_StampsCorrectName(t *testing.T) {
+	spy := newQuenchSpyWithSyllableLaw(validHaiku)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
+	defer cleanup()
+
+	haikuArt, err := workitem.GetArtefact("haiku")
+	if err != nil {
+		t.Fatalf("GetArtefact() error: %v", err)
+	}
+
+	if err := attestSyllableLaw(workitem, haikuArt); err != nil {
+		t.Fatalf("attestSyllableLaw() error: %v", err)
+	}
+
+	if len(spy.StampedNames) != 1 ||
+		spy.StampedNames[0] != stampSyllableAttest {
+		t.Errorf("expected stamp [law-haiku-syllable-text-plain], got %v",
+			spy.StampedNames)
+	}
+}
+
+func TestAttestSyllableLaw_NoContentGroup_ReturnsError(t *testing.T) {
+	// Spy has no Laws at all, so GetLawGroups("text/plain") returns nil.
+	spy := newQuenchSpy(validHaiku)
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
+	defer cleanup()
+
+	haikuArt, err := workitem.GetArtefact("haiku")
+	if err != nil {
+		t.Fatalf("GetArtefact() error: %v", err)
+	}
+
+	err = attestSyllableLaw(workitem, haikuArt)
+	if err == nil {
+		t.Fatal("expected error for missing content law group, got nil")
+	}
+	if !strings.Contains(err.Error(), "content law group not found") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestAttestSyllableLaw_LawNotFoundInGroup_ReturnsError(t *testing.T) {
+	// Content group exists but syllable law is not present.
+	spy := newQuenchSpy(validHaiku)
+	spy.Laws = []*flowv1.Law{
+		{
+			Id:    "some-other-law",
+			Group: "content",
+			Representations: []*flowv1.Representation{
+				{Type: "text/plain"},
+			},
+		},
+	}
+	spy.LawGroups = []*flowv1.LawGroup{
+		{Name: "content", Mode: "law-by-law", Passes: 1},
+	}
+	workitem, cleanup := newSpyClientWithSpy(t, spy)
+	defer cleanup()
+
+	haikuArt, err := workitem.GetArtefact("haiku")
+	if err != nil {
+		t.Fatalf("GetArtefact() error: %v", err)
+	}
+
+	err = attestSyllableLaw(workitem, haikuArt)
+	if err == nil {
+		t.Fatal("expected error for missing syllable law, got nil")
+	}
+	if !strings.Contains(err.Error(), "haiku-syllable") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
 
@@ -496,7 +573,7 @@ func TestHandleQuench_AlwaysRoutesToDefault(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			spy := newQuenchSpy(tc.haiku)
+			spy := newQuenchSpyWithSyllableLaw(tc.haiku)
 			workitem, cleanup := newSpyClientWithSpy(t, spy)
 			defer cleanup()
 
@@ -540,7 +617,7 @@ func TestBuildFeedbackMessage_IncludesPerWordCounts(t *testing.T) {
 func TestHandleQuench_InvalidHaiku_RejectsMultipleActionedItems(
 	t *testing.T,
 ) {
-	spy := newQuenchSpy(invalidHaiku)
+	spy := newQuenchSpyWithSyllableLaw(invalidHaiku)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-1",
@@ -586,7 +663,7 @@ func TestHandleQuench_InvalidHaiku_RejectsMultipleActionedItems(
 // ---------------------------------------------------------------------------
 
 func TestHandleQuench_EmptyHaiku_RaisesFeedback(t *testing.T) {
-	spy := newQuenchSpy("")
+	spy := newQuenchSpyWithSyllableLaw("")
 	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
@@ -611,7 +688,7 @@ func TestHandleQuench_EmptyHaiku_RaisesFeedback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleQuench_SingleLine_RaisesFeedback(t *testing.T) {
-	spy := newQuenchSpy("just one line here")
+	spy := newQuenchSpyWithSyllableLaw("just one line here")
 	workitem, cleanup := newSpyClientWithSpy(t, spy)
 	defer cleanup()
 
