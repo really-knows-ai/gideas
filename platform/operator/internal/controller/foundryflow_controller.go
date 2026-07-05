@@ -214,7 +214,7 @@ func (r *FoundryFlowReconciler) validateContractStamps(
 }
 
 // vocabMatch returns true if any vocab pattern matches stamp using filepath.Match.
-// Vocab patterns may contain * as a single-segment wildcard (e.g., "appraise-*").
+// Vocab patterns may contain * as a single-segment wildcard (e.g., "law-*").
 // Patterns with no wildcard must match exactly.
 func vocabMatch(vocab map[string]bool, stamp string) bool {
 	for pattern := range vocab {
