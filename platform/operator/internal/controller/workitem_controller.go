@@ -63,6 +63,52 @@ const (
 // Tests can override this to produce deterministic timestamps.
 var nowFunc = metav1.Now
 
+// lawQuerier is a production implementation of scheduler.LawQuerier
+// that wraps a Librarian gRPC client.
+type lawQuerier struct {
+	client flowv1gen.LibrarianServiceClient
+}
+
+func (q *lawQuerier) QueryLaws(ctx context.Context, governedArtefact string) ([]scheduler.LawInfo, error) {
+	resp, err := q.client.QueryLaws(ctx, &flowv1gen.QueryLawsRequest{
+		Filter: &flowv1gen.LawFilter{GovernedArtefact: governedArtefact},
+	})
+	if err != nil {
+		return nil, err
+	}
+	laws := resp.GetLaws()
+	infos := make([]scheduler.LawInfo, len(laws))
+	for i, l := range laws {
+		reps := l.GetRepresentations()
+		repTypes := make([]string, len(reps))
+		for j, r := range reps {
+			repTypes[j] = r.GetType()
+		}
+		infos[i] = scheduler.LawInfo{
+			ID:              l.GetId(),
+			Group:           l.GetGroup(),
+			Representations: repTypes,
+		}
+	}
+	return infos, nil
+}
+
+func (q *lawQuerier) ListLawGroups(ctx context.Context) ([]scheduler.LawGroupInfo, error) {
+	resp, err := q.client.ListLawGroups(ctx, &flowv1gen.ListLawGroupsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	groups := resp.GetGroups()
+	infos := make([]scheduler.LawGroupInfo, len(groups))
+	for i, g := range groups {
+		infos[i] = scheduler.LawGroupInfo{
+			Name: g.GetName(),
+			Mode: g.GetMode(),
+		}
+	}
+	return infos, nil
+}
+
 // WorkitemReconciler reconciles a Workitem object.
 //
 // It enforces the spec-defined guard evaluation order for routing transitions:
@@ -78,6 +124,10 @@ type WorkitemReconciler struct {
 	// against artefact state in the Archivist. May be nil in tests or when
 	// the Archivist is not yet available (contract validation is skipped).
 	ArtefactQuerier func(ctx context.Context, workitemID string, governedArtefacts []string) ([]scheduler.ArtefactState, error)
+
+	// Librarian is a gRPC client for querying laws and law groups.
+	// May be nil when the Librarian is not available (law attestation is skipped).
+	Librarian flowv1gen.LibrarianServiceClient
 
 	// Auditor publishes lifecycle events to the Event Bus via async submit.
 	// nil-safe: audit publishing degrades gracefully.
@@ -464,6 +514,9 @@ func (r *WorkitemReconciler) reconcileRouting(ctx context.Context, req ctrl.Requ
 	// Execute the scheduling decision with full guard pipeline.
 	sched := scheduler.New(r.Client, req.Namespace)
 	sched.Querier = r.ArtefactQuerier
+	if r.Librarian != nil {
+		sched.LawQuerier = &lawQuerier{client: r.Librarian}
+	}
 
 	result, err := sched.CalculateNextStep(
 		ctx,

@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
+	"strings"
 	"time"
 
 	flowv1 "github.com/gideas/flow/operator/api/v1"
@@ -72,6 +74,30 @@ type Scheduler struct {
 	// Querier, if set, queries artefact state for contract validation.
 	// Signature: (ctx, workitemID, governedNames) -> (states, error).
 	Querier func(ctx context.Context, workitemID string, governedArtefacts []string) ([]ArtefactState, error)
+	// LawQuerier, if set, queries the Librarian for law attestation enforcement.
+	LawQuerier LawQuerier
+}
+
+// LawQuerier queries the Librarian for laws and law groups relevant to
+// attestation enforcement.
+type LawQuerier interface {
+	// QueryLaws returns all laws that apply to the given governed artefact.
+	QueryLaws(ctx context.Context, governedArtefact string) ([]LawInfo, error)
+	// ListLawGroups returns all known law group configurations (modes).
+	ListLawGroups(ctx context.Context) ([]LawGroupInfo, error)
+}
+
+// LawInfo is a minimal law representation for attestation computation.
+type LawInfo struct {
+	ID              string
+	Group           string
+	Representations []string // MIME types, e.g. ["text/markdown", "text/plain"]
+}
+
+// LawGroupInfo is a minimal law group representation.
+type LawGroupInfo struct {
+	Name string
+	Mode string // "bundle" or "law-by-law"
 }
 
 // New returns a Scheduler wired to the given Kubernetes client and namespace.
@@ -184,6 +210,16 @@ func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode
 		}
 
 		if err := s.validateContract(ctx, workitem.Name, contract); err != nil {
+			return nil, err
+		}
+
+		// Law attestation enforcement: run after exit contract validation.
+		governedNames := slices.Collect(maps.Keys(contract))
+		states, err := s.Querier(ctx, workitem.Name, governedNames)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query artefact state for attestation check: %w", err)
+		}
+		if err := s.validateLawAttestations(ctx, states); err != nil {
 			return nil, err
 		}
 	}
@@ -372,6 +408,105 @@ func (s *Scheduler) validateContract(ctx context.Context, workitemID string, con
 	}
 
 	return nil
+}
+
+// validateLawAttestations checks that all attestation stamps implied by laws
+// with appliesTo matching the governed artefact are present on each artefact.
+// Returns a GuardError with Code CONTRACT_VIOLATION if any are missing.
+func (s *Scheduler) validateLawAttestations(ctx context.Context, states []ArtefactState) error {
+	if s.LawQuerier == nil {
+		return nil
+	}
+
+	artefactKinds := make(map[string]bool)
+	for _, st := range states {
+		artefactKinds[st.GovernedArtefact] = true
+	}
+
+	groups, err := s.LawQuerier.ListLawGroups(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list law groups for attestation check: %w", err)
+	}
+	groupConfigs := make(map[string]string, len(groups))
+	for _, g := range groups {
+		groupConfigs[g.Name] = g.Mode
+	}
+
+	for kind := range artefactKinds {
+		laws, err := s.LawQuerier.QueryLaws(ctx, kind)
+		if err != nil {
+			return fmt.Errorf("failed to query laws for %q: %w", kind, err)
+		}
+		if len(laws) == 0 {
+			continue
+		}
+
+		required := computeRequiredStamps(laws, groupConfigs)
+		if len(required) == 0 {
+			continue
+		}
+
+		var kindStates []ArtefactState
+		for _, st := range states {
+			if st.GovernedArtefact == kind {
+				kindStates = append(kindStates, st)
+			}
+		}
+
+		for _, st := range kindStates {
+			stampSet := make(map[string]bool, len(st.StampNames))
+			for _, s := range st.StampNames {
+				stampSet[s] = true
+			}
+			for _, name := range required {
+				if !stampSet[name] {
+					return &GuardError{
+						Code:    "CONTRACT_VIOLATION",
+						Message: fmt.Sprintf("artefact %q (type %q) missing required attestation stamp %q", st.ArtefactID, kind, name),
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// computeRequiredStamps is the canonical stamp-set computation.
+// It is a pure function of the laws and group configs and MUST produce
+// the same output as the SDK's VerifyLawAttestations.
+func computeRequiredStamps(laws []LawInfo, groupConfigs map[string]string) []string {
+	groups := make(map[string][]LawInfo)
+	for _, law := range laws {
+		gn := law.Group
+		if gn == "" {
+			gn = "default"
+		}
+		groups[gn] = append(groups[gn], law)
+	}
+
+	var required []string
+	groupNames := make([]string, 0, len(groups))
+	for n := range groups {
+		groupNames = append(groupNames, n)
+	}
+	sort.Strings(groupNames)
+
+	for _, gn := range groupNames {
+		mode := groupConfigs[gn]
+		switch mode {
+		case "bundle", "":
+			required = append(required, "lawgrp-"+gn)
+		default:
+			for _, law := range groups[gn] {
+				for _, rep := range law.Representations {
+					stampName := "law-" + law.ID + "-" + strings.ReplaceAll(rep, "/", "-")
+					required = append(required, stampName)
+				}
+			}
+			required = append(required, "lawgrp-"+gn)
+		}
+	}
+	return required
 }
 
 // outputNames extracts the names from a slice of outputs for error messages.
