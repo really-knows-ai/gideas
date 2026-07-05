@@ -998,11 +998,10 @@ func applyAttestationStamps(
 	return nil
 }
 
-// hasBundleCoverage verifies that in bundle mode, every law in the group had
-// every representation (of the types Appraisal evaluates) covered by at least
-// one completed dispatch. This is a fail-closed check per R3 ponytail
-// enforcement: if any representation was not dispatched or the child did not
-// complete, the group is not attested.
+// hasBundleCoverage verifies that in bundle mode, every representation of
+// every law was covered by at least one completed dispatch. This is a
+// fail-closed check per R3 ponytail enforcement: if any representation was
+// not dispatched or the child did not complete, the group is not attested.
 //
 // ponytail: Bundle mode assumes all laws in a group are dispatched as a single
 // unit (one Unit with all LawIDs). Coverage is verified against that unit.
@@ -1026,13 +1025,13 @@ func hasBundleCoverage(
 	}
 
 	// Verify that every representation of every law was covered by at
-	// least one completed dispatch entry.
+	// least one completed dispatch entry. Fail-closed: if a law has a
+	// representation type that Appraisal does not evaluate (e.g. text/plain
+	// in a bundle group), no dispatch entry will match and the check fails,
+	// correctly blocking attestation. Bundle groups must be homogeneous in
+	// representation type — heterogeneous groups must use law-by-law mode.
 	for _, law := range laws {
-		for _, rep := range law.GetRepresentations() {
-			// Only check representations Appraisal evaluates.
-			if rep.GetType() != "text/markdown" {
-				continue
-			}
+		for range law.GetRepresentations() {
 			covered := false
 			for i, d := range result.dispatchMatrix {
 				if d.Unit.UnitID != bundleUnit.UnitID {
