@@ -217,7 +217,10 @@ func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode
 		governedNames := slices.Collect(maps.Keys(contract))
 		states, err := s.Querier(ctx, workitem.Name, governedNames)
 		if err != nil {
-			return nil, fmt.Errorf("failed to query artefact state for attestation check: %w", err)
+			return nil, &GuardError{
+				Code:    "GUARD_FAILED",
+				Message: fmt.Sprintf("failed to query artefact state for attestation check: %v", err),
+			}
 		}
 		if err := s.validateLawAttestations(ctx, states); err != nil {
 			return nil, err
@@ -425,7 +428,10 @@ func (s *Scheduler) validateLawAttestations(ctx context.Context, states []Artefa
 
 	groups, err := s.LawQuerier.ListLawGroups(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list law groups for attestation check: %w", err)
+		return &GuardError{
+			Code:    "GUARD_FAILED",
+			Message: fmt.Sprintf("failed to list law groups for attestation check: %v", err),
+		}
 	}
 	groupConfigs := make(map[string]string, len(groups))
 	for _, g := range groups {
@@ -435,7 +441,10 @@ func (s *Scheduler) validateLawAttestations(ctx context.Context, states []Artefa
 	for kind := range artefactKinds {
 		laws, err := s.LawQuerier.QueryLaws(ctx, kind)
 		if err != nil {
-			return fmt.Errorf("failed to query laws for %q: %w", kind, err)
+			return &GuardError{
+				Code:    "GUARD_FAILED",
+				Message: fmt.Sprintf("failed to query laws for %q: %v", kind, err),
+			}
 		}
 		if len(laws) == 0 {
 			continue
