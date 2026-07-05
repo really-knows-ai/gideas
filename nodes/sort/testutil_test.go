@@ -88,13 +88,13 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 				"READ:artefact",
 				"READ:feedback",
 				"WRITE:feedback/deadlocked",
-				"STAMP:artefact/haiku/approval",
 			},
 			Outputs: []*flowv1.FlowOutput{
 				{Name: "quench", Target: "quench"},
 				{Name: "appraisal", Target: "appraisal"},
 				{Name: "refine", Target: "refine"},
 				{Name: "human-arbiter", Target: "human-arbiter"},
+				{Name: "human-approval", Target: "human-approval"},
 			},
 		},
 		Nodes: map[string]*flowv1.FlowNode{
@@ -102,7 +102,6 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 				Name: "sort",
 				Capabilities: []string{
 					"READ:flow",
-					"STAMP:artefact/haiku/approval",
 				},
 			},
 			"quench": {
@@ -118,6 +117,10 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 			},
 			"human-arbiter": {
 				Name: "human-arbiter",
+			},
+			"human-approval": {
+				Name:         "human-approval",
+				Capabilities: []string{"STAMP:artefact/haiku/approval"},
 			},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{

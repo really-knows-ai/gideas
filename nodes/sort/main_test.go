@@ -20,7 +20,7 @@ import (
 // defaultConfig returns a sortConfig matching the reference arrangement.
 func defaultConfig() *sortConfig {
 	return &sortConfig{
-		NodeOrder:         "quench,appraisal",
+		NodeOrder:         "quench,appraisal,human-approval",
 		DeadlockThreshold: 3,
 	}
 }
@@ -120,25 +120,25 @@ func TestSort_RoutesToAppraise_MissingReviewStamp(t *testing.T) {
 	}
 }
 
-func TestSort_StampsApprovalAndCompletes(t *testing.T) {
+func TestSort_RoutesToHumanApproval_MissingApprovalStamp(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
-	// No unresolved feedback from any provider.
+	// Approval stamp is missing — Sort should route to human-approval.
 	client, workitem := setupSortTest(t, spy)
 
 	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	if len(spy.StampedNames) != 1 || spy.StampedNames[0] != "approval" {
-		t.Fatalf("expected approval stamp, got %v", spy.StampedNames)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "human-approval" {
+		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
 	}
-	if !spy.Completed {
-		t.Fatal("expected Complete() to be called")
+	if len(spy.StampedNames) != 0 {
+		t.Fatalf("expected no stamping, got %v", spy.StampedNames)
 	}
-	if len(spy.RoutedOutputs) != 0 {
-		t.Fatalf("expected no routing, got %v", spy.RoutedOutputs)
+	if spy.Completed {
+		t.Fatal("expected no Complete() call — approval still missing")
 	}
 }
 
@@ -308,6 +308,7 @@ func TestSort_ResolvedItemsSkippedInDeadlockScan(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
+	spy.StampState["approval"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-done", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
 	}
@@ -532,6 +533,7 @@ func TestSort_ResolvedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
+	spy.StampState["approval"] = true
 	// Quench left feedback but it's already resolved — should not block.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-resolved", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
@@ -542,7 +544,7 @@ func TestSort_ResolvedFeedbackIgnoredInSourceCheck(t *testing.T) {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	// All stamps present, resolved feedback → stamps approval + completes.
+	// All stamps present (linter, review, approval), resolved feedback → complete.
 	if !spy.Completed {
 		t.Fatal("expected completion")
 	}
@@ -652,23 +654,11 @@ func TestSort_Error_RouteToOutputFails(t *testing.T) {
 	}
 }
 
-func TestSort_Error_StampArtefactFails(t *testing.T) {
-	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
-	spy.StampArtefactErr = fmt.Errorf("stamp write failed")
-	client, workitem := setupSortTest(t, spy)
-
-	err := handleSort(context.Background(), workitem, client, defaultConfig())
-	if err == nil {
-		t.Fatal("expected error from StampArtefact failure")
-	}
-}
-
 func TestSort_Error_CompleteFails(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.StampState["review"] = true
+	spy.StampState["approval"] = true
 	spy.CompleteErr = fmt.Errorf("completion rejected")
 	client, workitem := setupSortTest(t, spy)
 
