@@ -48,6 +48,12 @@ type sortSpy struct {
 	// Configurable dispute records returned by GetActiveDisputes.
 	DisputeRecords []*flowv1.DisputeRecord
 
+	// Configurable law data returned by QueryLaws (for VerifyLawAttestations).
+	QueryLawsLaws []*flowv1.Law
+
+	// Configurable stamps returned by GetStamps (for VerifyLawAttestations).
+	GetStampsStamps []*flowv1.Stamp
+
 	// Configurable error returns for specific operations.
 	GetFlowTopologyErr  error
 	HasStampErr         error
@@ -59,6 +65,8 @@ type sortSpy struct {
 	CompleteErr         error
 	GetActiveDisputeErr error
 	SuspendErr          error
+	QueryLawsErr        error
+	GetStampsErr        error
 
 	// Recorded operations for assertions.
 	DeadlockedIDs           []string // feedback IDs that were deadlocked
@@ -300,4 +308,34 @@ func (s *sortSpy) GetActiveDisputes(
 		}
 	}
 	return &flowv1.GetActiveDisputesResponse{Records: matched}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Librarian methods (for VerifyLawAttestations)
+// ---------------------------------------------------------------------------
+
+func (s *sortSpy) QueryLaws(
+	_ context.Context, _ *flowv1.QueryLawsRequest,
+) (*flowv1.QueryLawsResponse, error) {
+	if s.QueryLawsErr != nil {
+		return nil, s.QueryLawsErr
+	}
+	return &flowv1.QueryLawsResponse{
+		Laws: s.QueryLawsLaws,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Archivist methods (for VerifyLawAttestations)
+// ---------------------------------------------------------------------------
+
+func (s *sortSpy) GetStamps(
+	_ context.Context, _ *flowv1.GetStampsRequest,
+) (*flowv1.GetStampsResponse, error) {
+	if s.GetStampsErr != nil {
+		return nil, s.GetStampsErr
+	}
+	return &flowv1.GetStampsResponse{
+		Stamps: s.GetStampsStamps,
+	}, nil
 }
