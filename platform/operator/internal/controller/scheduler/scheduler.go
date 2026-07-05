@@ -209,14 +209,8 @@ func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode
 			}
 		}
 
-		if err := s.validateContract(ctx, workitem.Name, contract); err != nil {
-			return nil, err
-		}
-
-		// Law attestation enforcement: run after exit contract validation.
-		// Fail-closed (R6): if the Archivist or Librarian is unreachable,
-		// deny completion. Flows with no governed artefacts (empty contract)
-		// have nothing to check.
+		// Query the Archivist once and reuse the result for both contract
+		// validation and law attestation enforcement (R6).
 		governedNames := slices.Collect(maps.Keys(contract))
 		if len(governedNames) > 0 {
 			if s.Querier == nil {
@@ -231,6 +225,9 @@ func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode
 					Code:    "GUARD_FAILED",
 					Message: fmt.Sprintf("failed to query artefact state for attestation check: %v", err),
 				}
+			}
+			if err := s.validateContract(ctx, workitem.Name, contract, states); err != nil {
+				return nil, err
 			}
 			if err := s.validateLawAttestations(ctx, states); err != nil {
 				return nil, err
@@ -374,18 +371,11 @@ func (s *Scheduler) checkThrashGuard(workitem *flowv1.Workitem, flow *flowv1.Fou
 }
 
 // validateContract checks that all artefact requirements in a contract are
-// satisfied by the current artefact state from the Archivist.
-func (s *Scheduler) validateContract(ctx context.Context, workitemID string, contract flowv1.Contract) error {
+// satisfied by the given artefact states (pre-queried by handleComplete to
+// avoid a duplicate Archivist query).
+func (s *Scheduler) validateContract(_ context.Context, _ string, contract flowv1.Contract, states []ArtefactState) error {
 	if len(contract) == 0 {
 		return nil // Empty contract means no requirements.
-	}
-
-	governedNames := slices.Collect(maps.Keys(contract))
-
-	// Query the Archivist for artefact state.
-	states, err := s.Querier(ctx, workitemID, governedNames)
-	if err != nil {
-		return fmt.Errorf("failed to query artefact state: %w", err)
 	}
 
 	// Group artefacts by governed artefact name.
