@@ -30,9 +30,12 @@ func (m *mockFinding) Run(_ context.Context, _ []*flowv1.FeedbackItem) (*flow.Fi
 
 const (
 	eventTypeAttestation = handlers.EventAppraisalAttestation
-	stampSecurity        = "appraise-security"
-	stampSecurityL001    = "appraise-security-L001"
-	stampSecurityL002    = "appraise-security-L002"
+	groupStampDefault    = "lawgrp-default"
+	groupStampSecurity   = "lawgrp-security"
+	groupStampStyle      = "lawgrp-style"
+	lawStampL001         = "law-L001-text-markdown"
+	lawStampL002         = "law-L002-text-markdown"
+	completionStamp      = "appraisal"
 )
 
 // ---------------------------------------------------------------------------
@@ -216,10 +219,13 @@ func TestAppraisalHandler_AllCompleteStampsAndEvents(t *testing.T) {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
-	// Should have at least one appraise stamp.
-	found := slices.Contains(spy.StampedArtefacts, "appraise-default")
-	if !found {
-		t.Fatalf("expected stamp 'appraise-default', got stamps: %v", spy.StampedArtefacts)
+	// Should have the group attestation stamp.
+	if !slices.Contains(spy.StampedArtefacts, groupStampDefault) {
+		t.Fatalf("expected stamp %q, got stamps: %v", groupStampDefault, spy.StampedArtefacts)
+	}
+	// Should have the completion stamp.
+	if !slices.Contains(spy.StampedArtefacts, completionStamp) {
+		t.Fatalf("expected stamp %q, got stamps: %v", completionStamp, spy.StampedArtefacts)
 	}
 
 	// Should have two events: coverage and attestation.
@@ -335,9 +341,9 @@ func TestAppraisalHandler_PartialFailure(t *testing.T) {
 	hasStyleStamp := false
 	for _, s := range spy.StampedArtefacts {
 		switch s {
-		case stampSecurity:
+		case groupStampSecurity:
 			hasSecurityStamp = true
-		case "appraise-style":
+		case groupStampStyle:
 			hasStyleStamp = true
 		}
 	}
@@ -396,8 +402,11 @@ func TestAppraisal_PublishAuditEventFailure(t *testing.T) {
 	}
 
 	// Stamps must still be applied despite Publish failure.
-	if !slices.Contains(spy.StampedArtefacts, "appraise-default") {
-		t.Fatalf("expected stamp 'appraise-default', got stamps: %v", spy.StampedArtefacts)
+	if !slices.Contains(spy.StampedArtefacts, groupStampDefault) {
+		t.Fatalf("expected stamp %q, got stamps: %v", groupStampDefault, spy.StampedArtefacts)
+	}
+	if !slices.Contains(spy.StampedArtefacts, completionStamp) {
+		t.Fatalf("expected stamp %q, got stamps: %v", completionStamp, spy.StampedArtefacts)
 	}
 }
 
@@ -536,11 +545,11 @@ func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
 	hasL002Stamp := false
 	for _, s := range spy.StampedArtefacts {
 		switch s {
-		case stampSecurity:
+		case groupStampSecurity:
 			hasGroupStamp = true
-		case stampSecurityL001:
+		case lawStampL001:
 			hasL001Stamp = true
-		case stampSecurityL002:
+		case lawStampL002:
 			hasL002Stamp = true
 		}
 	}
@@ -584,22 +593,92 @@ func TestAppraisalHandler_LawByLawAllSuccess(t *testing.T) {
 	hasL002Stamp := false
 	for _, s := range spy.StampedArtefacts {
 		switch s {
-		case stampSecurity:
+		case groupStampSecurity:
 			hasGroupStamp = true
-		case stampSecurityL001:
+		case lawStampL001:
 			hasL001Stamp = true
-		case stampSecurityL002:
+		case lawStampL002:
 			hasL002Stamp = true
 		}
 	}
 	if !hasGroupStamp {
-		t.Error("expected group stamp 'appraise-security'")
+		t.Errorf("expected group stamp %q", groupStampSecurity)
 	}
 	if !hasL001Stamp {
-		t.Error("expected law stamp 'appraise-security-L001'")
+		t.Errorf("expected law stamp %q", lawStampL001)
 	}
 	if !hasL002Stamp {
-		t.Error("expected law stamp 'appraise-security-L002'")
+		t.Errorf("expected law stamp %q", lawStampL002)
+	}
+}
+
+// No laws but appraisers exist → pass-through: dispatchMatrix is empty, but the
+// handler still stamps the completion signal.
+func TestAppraisalHandler_PassThroughNoDispatchesAppraisersExist(t *testing.T) {
+	spy := newAppraisalSpy()
+	spy.Laws = []*flowv1.Law{} // no laws, so fanOutAppraisal returns empty result
+	// 1 appraiser configured (defaultHandlerConfig has 1).
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
+	client, workitem := spyForHandler(t, spy)
+
+	cfg := defaultHandlerConfig()
+
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
+	}
+
+	if len(spy.CreatedChildren) != 0 {
+		t.Fatalf("expected 0 children, got %d", len(spy.CreatedChildren))
+	}
+
+	if !slices.Contains(spy.StampedArtefacts, completionStamp) {
+		t.Fatalf("expected pass-through stamp %q, got stamps: %v", completionStamp, spy.StampedArtefacts)
+	}
+
+	for _, s := range spy.StampedArtefacts {
+		if len(s) >= 7 && s[:7] == "lawgrp-" {
+			t.Fatalf("unexpected group stamp %q in pass-through path", s)
+		}
+		if len(s) >= 4 && s[:4] == "law-" {
+			t.Fatalf("unexpected law stamp %q in pass-through path", s)
+		}
+	}
+}
+
+// Children return feedback → feedback is raised before stamps are applied.
+// Both feedback and stamps must be present in the spy record.
+func TestAppraisalHandler_StampsAfterFeedback(t *testing.T) {
+	spy := newAppraisalSpy()
+	spy.Laws = defaultLaws()
+	spy.LawGroups["default"] = groupDefaultBundle()
+	spy.ChildStatuses = childStatusesCompleted(1) // 1 appraiser × 1 pass × 1 unit
+	client, workitem := spyForHandler(t, spy)
+	// Set review-output AFTER spyForHandler (which resets it to empty feedback).
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON("some feedback")
+
+	cfg := defaultHandlerConfig()
+	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
+		{ID: "skeptic", Personality: "Strict"},
+	}
+
+	if err := handlers.HandleAppraisal(
+		context.Background(), workitem, client, &mockEval{}, &mockFinding{}, cfg,
+	); err != nil {
+		t.Fatalf("HandleAppraisal() error: %v", err)
+	}
+
+	if len(spy.AddedFeedback) == 0 {
+		t.Fatal("expected feedback to be raised")
+	}
+
+	if !slices.Contains(spy.StampedArtefacts, completionStamp) {
+		t.Fatalf("expected completion stamp %q, got stamps: %v", completionStamp, spy.StampedArtefacts)
+	}
+
+	if !slices.Contains(spy.StampedArtefacts, groupStampDefault) {
+		t.Fatalf("expected group stamp %q, got stamps: %v", groupStampDefault, spy.StampedArtefacts)
 	}
 }
 

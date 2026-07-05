@@ -42,7 +42,7 @@ const (
 	ArtefactPass                 = "pass"
 	EventAppraisalCoverage       = "appraisal.coverage"
 	EventAppraisalAttestation    = "appraisal.attestation"
-	stampAppraised               = "appraised"
+	stampAppraisal               = "appraisal"
 )
 
 // hasNovelArgument returns true if the feedback item carries a
@@ -127,12 +127,8 @@ func HandleAppraisal(
 		"feedback_count", len(result.feedback),
 		"dispatch_count", len(result.dispatchMatrix))
 
-	// Post-fan-out: stamping, coverage, events (only if dispatches exist).
+	// Post-fan-out: coverage and events (only if dispatches exist).
 	if len(result.dispatchMatrix) > 0 {
-		applyAppraisalStamps(workitem, cfg.GovernedArtefact,
-			result.dispatchMatrix, result.childStatuses,
-			result.childByDispatchIdx, result.unitsByGroup, result.groups,
-			result.skippedIndices)
 		coverage := buildCoverageMap(
 			result.dispatchMatrix, result.childStatuses,
 			result.childResults, result.childByDispatchIdx,
@@ -140,16 +136,7 @@ func HandleAppraisal(
 		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 	} else if len(cfg.Appraisers) > 0 {
-		// No dispatches but appraisers exist — pass-through: stamp the
-		// completion signal so sort can complete the exit contract.
-		slog.Info("appraisal: no dispatches — applying pass-through stamp")
-		art, artErr := workitem.GetArtefact(cfg.GovernedArtefact)
-		if artErr != nil {
-			return fmt.Errorf("appraisal: get artefact: %w", artErr)
-		}
-		if err := art.Stamp(stampAppraised); err != nil {
-			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraised, err)
-		}
+		slog.Info("appraisal: no dispatches — pass-through stamp follows after feedback")
 	} else {
 		slog.Info("appraisal: no appraisers — skipping stamps and events")
 	}
@@ -187,6 +174,30 @@ func HandleAppraisal(
 
 	if len(result.feedback) == 0 {
 		slog.Info("appraisal: no feedback — content looks good")
+	}
+
+	// ---------------------------------------------------------------
+	// Post-feedback: attestation stamps — applied only after feedback
+	// is raised (R5 requirement).
+	// ---------------------------------------------------------------
+
+	if len(result.dispatchMatrix) > 0 {
+		if err := applyAttestationStamps(workitem, cfg.GovernedArtefact, result); err != nil {
+			return fmt.Errorf("appraisal: attestation stamps: %w", err)
+		}
+	} else if len(cfg.Appraisers) > 0 {
+		// No dispatches but appraisers exist — pass-through: stamp the
+		// completion signal so sort can complete the exit contract.
+		slog.Info("appraisal: no dispatches — applying pass-through stamp")
+		art, artErr := workitem.GetArtefact(cfg.GovernedArtefact)
+		if artErr != nil {
+			return fmt.Errorf("appraisal: get artefact: %w", artErr)
+		}
+		if err := art.Stamp(stampAppraisal); err != nil {
+			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraisal, err)
+		}
+	} else {
+		slog.Info("appraisal: no appraisers — skipping stamps")
 	}
 
 	// ---------------------------------------------------------------
@@ -571,130 +582,6 @@ func lawToData(l *flowv1.Law) LawData {
 	}
 }
 
-// applyAppraisalStamps applies per-group and per-law stamps based on dispatch
-// completion, plus the overall "appraised" completion stamp. A group/law is
-// stamped only if ALL dispatches for that scope completed successfully; the
-// completion stamp is applied whenever no dispatch failed outright, giving
-// Sort a stable "Appraisal ran" signal independent of which LawGroups happen
-// to be active. Stamping failures are logged but do not fail the stage.
-func applyAppraisalStamps(
-	workitem *flow.Workitem,
-	governedArtefact string,
-	dispatchMatrix []flow.DispatchEntry,
-	childStatuses []flow.ChildWorkitemStatus,
-	childByDispatchIdx map[int]string,
-	unitsByGroup map[string][]flow.Unit,
-	groups map[string]*flow.LawGroup,
-	skippedIndices map[int]bool,
-) {
-	// Build a set of failed child workitem IDs.
-	failedIDs := make(map[string]bool)
-	for _, s := range childStatuses {
-		if s.Phase == flow.PhaseFailed {
-			failedIDs[s.WorkitemID] = true
-		}
-	}
-
-	// Map each dispatch entry to its child's workitem ID by index.
-	// Entries that were skipped (unknown appraiser) are treated as failed
-	// so they don't get stamps.
-	entryFailed := make([]bool, len(dispatchMatrix))
-	anyFailed := false
-	for i := range dispatchMatrix {
-		if skippedIndices[i] {
-			entryFailed[i] = true
-			anyFailed = true
-		} else if wid := childByDispatchIdx[i]; wid != "" && failedIDs[wid] {
-			entryFailed[i] = true
-			anyFailed = true
-		}
-	}
-
-	// Per-group and per-unit failure tracking.
-	groupFailed := make(map[string]bool)
-	unitFailed := make(map[string]bool) // unitID → failed
-	for i, d := range dispatchMatrix {
-		if entryFailed[i] {
-			groupFailed[d.Group] = true
-			unitFailed[d.Unit.UnitID] = true
-		}
-	}
-
-	// Fetch the artefact once for stamping.
-	art, artErr := workitem.GetArtefact(governedArtefact)
-	if artErr != nil {
-		slog.Error("appraisal: failed to get artefact for stamping",
-			"error", artErr)
-		return
-	}
-
-	// Apply stamps per group.
-	groupOrder := make([]string, 0, len(unitsByGroup))
-	for k := range unitsByGroup {
-		groupOrder = append(groupOrder, k)
-	}
-	sort.Strings(groupOrder)
-	for _, groupName := range groupOrder {
-		unitList := unitsByGroup[groupName]
-		if len(unitList) == 0 {
-			continue
-		}
-		groupCfg := groups[groupName]
-		if groupCfg == nil {
-			groupCfg = flow.NewLawGroup("", flow.GroupModeBundle, 1)
-		}
-
-		// Group stamp: only if ALL dispatches for this group completed.
-		if !groupFailed[groupName] {
-			stampName := fmt.Sprintf("appraise-%s", groupName)
-			if err := art.Stamp(stampName); err != nil {
-				slog.Warn("appraisal: failed to stamp group",
-					"group", groupName, "stamp", stampName, "error", err)
-			} else {
-				slog.Info("appraisal: group stamp applied", "stamp", stampName)
-			}
-		} else {
-			slog.Warn("appraisal: group has failed dispatches, skipping group stamp",
-				"group", groupName)
-		}
-
-		// Per-law stamps (law-by-law mode only) — evaluated independently
-		// per law, not gated on the group stamp.
-		if groupCfg.Mode() == flow.GroupModeLawByLaw {
-			for _, unit := range unitList {
-				if unitFailed[unit.UnitID] {
-					continue
-				}
-				for _, lawID := range unit.LawIDs {
-					lawStamp := fmt.Sprintf("appraise-%s-%s", groupName, lawID)
-					if err := art.Stamp(lawStamp); err != nil {
-						slog.Warn("appraisal: failed to stamp law",
-							"group", groupName, "law", lawID, "stamp", lawStamp, "error", err)
-					} else {
-						slog.Info("appraisal: law stamp applied", "stamp", lawStamp)
-					}
-				}
-			}
-		}
-	}
-
-	// Overall completion stamp: applied whenever fan-out ran without any
-	// dispatch failing outright, regardless of which LawGroups are active
-	// or whether violations were found (violations are tracked via
-	// feedback items, not withheld via this stamp — Sort separately routes
-	// to refine when unaddressed feedback exists).
-	if !anyFailed {
-		if err := art.Stamp(stampAppraised); err != nil {
-			slog.Warn("appraisal: failed to stamp completion",
-				"stamp", stampAppraised, "error", err)
-		} else {
-			slog.Info("appraisal: completion stamp applied", "stamp", stampAppraised)
-		}
-	} else {
-		slog.Warn("appraisal: dispatch failures present, skipping completion stamp")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Post-fan-out: coverage map
 // ---------------------------------------------------------------------------
@@ -881,6 +768,174 @@ func emitAttestationEvent(_ context.Context, client *flow.Client, coverage map[s
 	} else {
 		slog.Info("appraisal: attestation event published", "status", status)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Post-feedback: attestation stamps
+// ---------------------------------------------------------------------------
+
+// applyAttestationStamps applies per-law and per-group attestation stamps
+// using SDK law.Attest() / group.Attest() methods. Stamps are applied only
+// after feedback is raised (R5 requirement). The pass/fail determination
+// comes from the dispatch matrix and child statuses.
+//
+//nolint:gocyclo // Inherent branching: two modes × error paths × law iteration.
+func applyAttestationStamps(
+	workitem *flow.Workitem,
+	governedArtefact string,
+	result *fanOutResult,
+) error {
+	// Build a set of failed child workitem IDs.
+	failedIDs := make(map[string]bool)
+	for _, s := range result.childStatuses {
+		if s.Phase == flow.PhaseFailed {
+			failedIDs[s.WorkitemID] = true
+		}
+	}
+
+	// Map each dispatch entry to its child's workitem ID by index.
+	entryFailed := make([]bool, len(result.dispatchMatrix))
+	anyFailed := false
+	for i := range result.dispatchMatrix {
+		if result.skippedIndices[i] {
+			entryFailed[i] = true
+			anyFailed = true
+		} else if wid := result.childByDispatchIdx[i]; wid != "" && failedIDs[wid] {
+			entryFailed[i] = true
+			anyFailed = true
+		}
+	}
+
+	// Per-group and per-unit failure tracking.
+	groupFailed := make(map[string]bool)
+	unitFailed := make(map[string]bool) // unitID → failed
+	for i, d := range result.dispatchMatrix {
+		if entryFailed[i] {
+			groupFailed[d.Group] = true
+			unitFailed[d.Unit.UnitID] = true
+		}
+	}
+
+	// Fetch the artefact once for stamping.
+	art, artErr := workitem.GetArtefact(governedArtefact)
+	if artErr != nil {
+		return fmt.Errorf("appraisal: get artefact for stamping: %w", artErr)
+	}
+
+	// Query law groups for the artefact's representation type.
+	groups, err := workitem.GetLawGroups("text/markdown")
+	if err != nil {
+		return fmt.Errorf("appraisal: get law groups: %w", err)
+	}
+
+	// Build group lookup by name.
+	groupMap := make(map[string]*flow.LawGroup, len(groups))
+	for _, g := range groups {
+		groupMap[g.Name()] = g
+	}
+
+	// Apply attestation stamps per group.
+	groupOrder := make([]string, 0, len(result.unitsByGroup))
+	for k := range result.unitsByGroup {
+		groupOrder = append(groupOrder, k)
+	}
+	sort.Strings(groupOrder)
+	for _, groupName := range groupOrder {
+		unitList := result.unitsByGroup[groupName]
+		if len(unitList) == 0 {
+			continue
+		}
+		groupCfg := groupMap[groupName]
+		if groupCfg == nil {
+			// ponytail: group not found in GetLawGroups response — skip
+			// attestation. Missing stamps will surface via
+			// VerifyLawAttestations at completion time.
+			slog.Warn("appraisal: group config not found, skipping attestation",
+				"group", groupName)
+			continue
+		}
+
+		switch groupCfg.Mode() {
+		case flow.GroupModeLawByLaw:
+			// Law-by-law: process each law independently. Passing laws
+			// get individual attestation stamps even when other laws in
+			// the same group fail.
+			laws, lErr := groupCfg.GetLaws()
+			if lErr != nil {
+				slog.Warn("appraisal: get laws for group",
+					"group", groupName, "error", lErr)
+				continue
+			}
+			lawMap := make(map[string]*flow.Law, len(laws))
+			for _, law := range laws {
+				lawMap[law.ID()] = law
+			}
+
+			allPassed := true
+			for _, unit := range unitList {
+				if unitFailed[unit.UnitID] {
+					allPassed = false
+					continue
+				}
+				for _, lawID := range unit.LawIDs {
+					law, ok := lawMap[lawID]
+					if !ok {
+						slog.Warn("appraisal: law not found in group",
+							"law", lawID, "group", groupName)
+						allPassed = false
+						continue
+					}
+					// Attest each representation type.
+					for _, rep := range law.GetRepresentations() {
+						if aErr := law.Attest(art, rep.GetType()); aErr != nil {
+							slog.Warn("appraisal: law attest failed",
+								"law", lawID, "rep", rep.GetType(), "error", aErr)
+						} else {
+							slog.Info("appraisal: law attestation applied",
+								"law", lawID, "rep", rep.GetType())
+						}
+					}
+				}
+			}
+			// Group attest stamp only when all laws passed and no
+			// dispatch in this group failed outright.
+			if allPassed && !groupFailed[groupName] {
+				if gErr := groupCfg.Attest(art); gErr != nil {
+					slog.Warn("appraisal: group attest failed",
+						"group", groupName, "error", gErr)
+				} else {
+					slog.Info("appraisal: group attestation applied", "group", groupName)
+				}
+			}
+
+		case flow.GroupModeBundle:
+			// Bundle mode: group attest covers all laws. If any
+			// dispatch in this group failed, skip entirely.
+			if groupFailed[groupName] {
+				slog.Warn("appraisal: group has failed dispatches, skipping group attest",
+					"group", groupName)
+				continue
+			}
+			if gErr := groupCfg.Attest(art); gErr != nil {
+				slog.Warn("appraisal: group attest failed",
+					"group", groupName, "error", gErr)
+			} else {
+				slog.Info("appraisal: group attestation applied", "group", groupName)
+			}
+		}
+	}
+
+	// Overall completion stamp: applied when no dispatch failed outright.
+	if !anyFailed {
+		if err := art.Stamp(stampAppraisal); err != nil {
+			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraisal, err)
+		}
+		slog.Info("appraisal: completion stamp applied", "stamp", stampAppraisal)
+	} else {
+		slog.Warn("appraisal: dispatch failures present, skipping completion stamp")
+	}
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------
