@@ -514,13 +514,15 @@ func computeRequiredStamps(laws []LawInfo, groupConfigs map[string]string) []str
 		switch mode {
 		case "bundle", "":
 			required = append(required, "lawgrp-"+gn)
-		default:
+		case "law-by-law":
 			for _, law := range groups[gn] {
 				for _, rep := range law.Representations {
 					stampName := "law-" + law.ID + "-" + strings.ReplaceAll(rep, "/", "-")
 					required = append(required, stampName)
 				}
 			}
+			required = append(required, "lawgrp-"+gn)
+		default:
 			required = append(required, "lawgrp-"+gn)
 		}
 	}
