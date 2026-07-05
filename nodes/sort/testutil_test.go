@@ -114,11 +114,10 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 			},
 			"quench": {
 				Name:         "quench",
-				Capabilities: []string{"STAMP:artefact/haiku/linter"},
+				Capabilities: []string{"STAMP:artefact/haiku/appraisal"},
 			},
 			"appraisal": {
-				Name:         "appraisal",
-				Capabilities: []string{"STAMP:artefact/haiku/review"},
+				Name: "appraisal",
 			},
 			"refine": {
 				Name: "refine",
@@ -132,7 +131,7 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 			},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{
-			"haiku": {Stamps: []string{"linter", "review", "approval"}},
+			"haiku": {Stamps: []string{"appraisal", "approval"}},
 		},
 	}
 }

@@ -14,6 +14,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// Well-known output name for routing to the human-approval node.
+const outputHumanApproval = "human-approval"
+
 // ---------------------------------------------------------------------------
 // Test helper — spins up a real ephemeral TCP server with the sortSpy
 // ---------------------------------------------------------------------------
@@ -90,7 +93,7 @@ func TestSort_RoutesToQuench_MissingLinterStamp(t *testing.T) {
 
 func TestSort_RoutesToRefine_UnresolvedFeedbackFromProvider(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// Quench stamped linter but also left unresolved feedback.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-1", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
@@ -106,25 +109,24 @@ func TestSort_RoutesToRefine_UnresolvedFeedbackFromProvider(t *testing.T) {
 	}
 }
 
-func TestSort_RoutesToAppraise_MissingReviewStamp(t *testing.T) {
+func TestSort_RoutesToAppraise_MissingApprovalStamp(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	// review stamp absent (default false), no feedback from quench
+	spy.StampState["appraisal"] = true
+	// Appraisal stamp present, approval stamp absent (default false).
 	client, workitem := setupSortTest(t, spy)
 
 	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
-		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
+		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
 func TestSort_RoutesToHumanApproval_MissingApprovalStamp(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	// Approval stamp is missing — Sort should route to human-approval.
 	client, workitem := setupSortTest(t, spy)
 
@@ -149,7 +151,7 @@ func TestSort_RoutesToHumanApproval_MissingApprovalStamp(t *testing.T) {
 
 func TestSort_RoutesToArbiter_DepthExceedsThreshold_New(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-1", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
@@ -170,7 +172,7 @@ func TestSort_RoutesToArbiter_DepthExceedsThreshold_New(t *testing.T) {
 
 func TestSort_RoutesToArbiter_DepthExceedsThreshold_Actioned(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-4", State: flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED},
 	}
@@ -191,7 +193,7 @@ func TestSort_RoutesToArbiter_DepthExceedsThreshold_Actioned(t *testing.T) {
 
 func TestSort_RoutesToArbiter_AlreadyDeadlocked(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-5", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
 	}
@@ -213,7 +215,7 @@ func TestSort_RoutesToArbiter_AlreadyDeadlocked(t *testing.T) {
 
 func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-ok", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 		{Id: "fb-hot", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
@@ -237,7 +239,7 @@ func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 
 func TestSort_DoesNotRedeadlockWontFixFeedback(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// WONT_FIX feedback from arbitration should NOT be re-deadlocked
 	// even when depth exceeds threshold.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -253,15 +255,15 @@ func TestSort_DoesNotRedeadlockWontFixFeedback(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking for arbitrated WONT_FIX, got %v", spy.DeadlockedIDs)
 	}
-	// Should route to appraisal (missing review stamp) instead of re-deadlocking.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
-		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
+	// Should route to human-approval (missing approval stamp) instead of re-deadlocking.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
+		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
 func TestSort_DoesNotRedeadlockRejectedFeedback(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// REJECTED feedback from arbitration should NOT be re-deadlocked.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-rejected", State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED},
@@ -276,15 +278,15 @@ func TestSort_DoesNotRedeadlockRejectedFeedback(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking for arbitrated REJECTED, got %v", spy.DeadlockedIDs)
 	}
-	// Should route to appraisal (missing review stamp) instead of re-deadlocking.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
-		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
+	// Should route to human-approval (missing approval stamp) instead of re-deadlocking.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
+		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
 func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// Quench left addressed (WONT_FIX) feedback below deadlock threshold.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-6", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
@@ -299,16 +301,15 @@ func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking, got %v", spy.DeadlockedIDs)
 	}
-	// Linter stamp present + WONT_FIX from quench → appraisal (adjudication).
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
-		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
+	// Appraisal stamp present + WONT_FIX from quench → human-approval (missing approval).
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
+		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
 func TestSort_ResolvedItemsSkippedInDeadlockScan(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	spy.StampState["approval"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-done", State: flowv1.FeedbackState_FEEDBACK_STATE_RESOLVED},
@@ -331,7 +332,7 @@ func TestSort_ResolvedItemsSkippedInDeadlockScan(t *testing.T) {
 
 func TestSort_FirstDeadlockedItemWins(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-a", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 		{Id: "fb-b", State: flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED},
@@ -356,7 +357,7 @@ func TestSort_FirstDeadlockedItemWins(t *testing.T) {
 
 func TestSort_CustomThreshold(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-7", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
 	}
@@ -385,7 +386,7 @@ func TestSort_CustomThreshold(t *testing.T) {
 
 func TestSort_ZeroThresholdDefaultsTo3(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// Quench left unresolved feedback below threshold.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-9", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
@@ -517,11 +518,10 @@ func TestParseStampCapability(t *testing.T) {
 
 func TestSort_RoutesToRefine_FeedbackFromAppraise(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
-	// Appraisal left unresolved feedback.
+	spy.StampState["appraisal"] = true
+	// Quench left unresolved feedback.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-appraisal", Source: "appraisal", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
+		{Id: "fb-quench", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
 	client, workitem := setupSortTest(t, spy)
 
@@ -537,8 +537,7 @@ func TestSort_RoutesToRefine_FeedbackFromAppraise(t *testing.T) {
 
 func TestSort_ResolvedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	spy.StampState["approval"] = true
 	// Quench left feedback but it's already resolved — should not block.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -562,8 +561,7 @@ func TestSort_DeadlockedFeedbackIgnoredInSourceCheck(t *testing.T) {
 	// check (impossible in practice), deadlocked items should be ignored
 	// in the source check.
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	// Only resolved + deadlocked feedback from quench — neither should block source check.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-dl", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_DEADLOCKED},
@@ -619,7 +617,7 @@ func TestSort_Error_GetFeedbackFails(t *testing.T) {
 
 func TestSort_Error_GetFeedbackDepthFails(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-x", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
@@ -634,7 +632,7 @@ func TestSort_Error_GetFeedbackDepthFails(t *testing.T) {
 
 func TestSort_Error_DeadlockFeedbackFails(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-y", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
@@ -662,8 +660,7 @@ func TestSort_Error_RouteToOutputFails(t *testing.T) {
 
 func TestSort_Error_CompleteFails(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	spy.StampState["approval"] = true
 	spy.CompleteErr = fmt.Errorf("completion rejected")
 	client, workitem := setupSortTest(t, spy)
@@ -680,7 +677,7 @@ func TestSort_Error_CompleteFails(t *testing.T) {
 
 func TestSort_DeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// Feedback is deadlocked with a citation referencing law-42.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
@@ -724,7 +721,7 @@ func TestSort_DeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T) {
 
 func TestSort_DeadlockedNoActiveDispute_RoutesToArbiter(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// Feedback is deadlocked with a citation referencing law-99.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
@@ -758,7 +755,7 @@ func TestSort_DeadlockedNoActiveDispute_RoutesToArbiter(t *testing.T) {
 
 func TestSort_NewlyDeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// Feedback is NEW (not yet deadlocked) but depth exceeds threshold.
 	// The citation references law-42 which has an active dispute.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
@@ -802,7 +799,7 @@ func TestSort_NewlyDeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T)
 
 func TestSort_DeadlockedNoCitation_RoutesToArbiter(t *testing.T) {
 	spy := newSortSpy()
-	spy.StampState["linter"] = true
+	spy.StampState["appraisal"] = true
 	// Feedback is deadlocked but has no citation (no law IDs to check).
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
@@ -1064,11 +1061,10 @@ func attestTopology() *flowv1.GetFlowTopologyResponse {
 			},
 			"quench": {
 				Name:         "quench",
-				Capabilities: []string{"STAMP:artefact/haiku/linter"},
+				Capabilities: []string{"STAMP:artefact/haiku/appraisal"},
 			},
 			"appraisal": {
-				Name:         "appraisal",
-				Capabilities: []string{"STAMP:artefact/haiku/review"},
+				Name: "appraisal",
 			},
 			"refine": {
 				Name: "refine",
@@ -1089,7 +1085,7 @@ func attestTopology() *flowv1.GetFlowTopologyResponse {
 			},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{
-			"haiku": {Stamps: []string{"linter", "review", "approval"}},
+			"haiku": {Stamps: []string{"appraisal", "approval"}},
 		},
 	}
 }
@@ -1098,8 +1094,7 @@ func TestSort_RoutesToAttestProvider_MissingLawStamp(t *testing.T) {
 	spy := newSortSpy()
 	spy.TopologyResponse = attestTopology()
 	// All static stamps present so the nodeOrder loop passes through.
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	spy.StampState["approval"] = true
 	// Return a law that produces a missing attestation stamp "law-no-weather-text-markdown".
 	spy.QueryLawsLaws = []*flowv1.Law{
@@ -1132,8 +1127,7 @@ func TestSort_RoutesToAttestProvider_MissingLawStamp(t *testing.T) {
 func TestSort_NoAttestationProvider_ReturnsGuardError(t *testing.T) {
 	spy := newSortSpy()
 	// Use default topology which has NO ATTEST capabilities.
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	spy.StampState["approval"] = true
 	// Return a law that produces a missing attestation stamp.
 	spy.QueryLawsLaws = []*flowv1.Law{
@@ -1168,8 +1162,7 @@ func TestSort_NoAttestationProvider_ReturnsGuardError(t *testing.T) {
 func TestSort_AttestationRouting_SkipsNonLawStamps(t *testing.T) {
 	spy := newSortSpy()
 	// Use default topology with NO ATTEST capabilities.
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	spy.StampState["approval"] = true
 	// Return a law with group that produces stamp "lawgrp-content".
 	// Sends back a law in the default group → bundle mode → lawgrp-default.
@@ -1209,8 +1202,7 @@ func TestSort_AttestationRouting_SkipsNonLawStamps(t *testing.T) {
 func TestSort_AttestAllPresent_ContinuesToComplete(t *testing.T) {
 	spy := newSortSpy()
 	spy.TopologyResponse = attestTopology()
-	spy.StampState["linter"] = true
-	spy.StampState["review"] = true
+	spy.StampState["appraisal"] = true
 	spy.StampState["approval"] = true
 	// Return a law whose stamp IS already present on the artefact.
 	// Law has no group → default group → bundle mode (per built-in defaults).
