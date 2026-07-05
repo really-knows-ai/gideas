@@ -776,8 +776,9 @@ func emitAttestationEvent(_ context.Context, client *flow.Client, coverage map[s
 
 // applyAttestationStamps applies per-law and per-group attestation stamps
 // using SDK law.Attest() / group.Attest() methods. Stamps are applied only
-// after feedback is raised (R5 requirement). The pass/fail determination
-// comes from the dispatch matrix and child statuses.
+// after feedback is raised (R5 requirement) and only when there is no
+// unresolved feedback — pass/fail is based on review outcome (content
+// issues), not infrastructure failure (child workitem phase).
 //
 //nolint:gocyclo // Inherent branching: two modes × error paths × law iteration.
 func applyAttestationStamps(
@@ -822,84 +823,111 @@ func applyAttestationStamps(
 		return fmt.Errorf("appraisal: get artefact for stamping: %w", artErr)
 	}
 
-	// Query law groups for the artefact's representation type.
-	groups, err := workitem.GetLawGroups("text/markdown")
-	if err != nil {
-		return fmt.Errorf("appraisal: get law groups: %w", err)
+	// Check for unresolved feedback before applying attestation stamps.
+	// Pass/fail is based on review outcome (content issues), not
+	// infrastructure failure (child workitem phase). If any feedback
+	// is unresolved, skip all attestation stamps — the content has
+	// issues and must not be attested.
+	unresolved, fbErr := workitem.HasUnresolvedFeedback(governedArtefact)
+	if fbErr != nil {
+		return fmt.Errorf("appraisal: check unresolved feedback: %w", fbErr)
 	}
 
-	// Build group lookup by name.
-	groupMap := make(map[string]*flow.LawGroup, len(groups))
-	for _, g := range groups {
-		groupMap[g.Name()] = g
-	}
-
-	// Apply attestation stamps per group.
-	groupOrder := make([]string, 0, len(result.unitsByGroup))
-	for k := range result.unitsByGroup {
-		groupOrder = append(groupOrder, k)
-	}
-	sort.Strings(groupOrder)
-	for _, groupName := range groupOrder {
-		unitList := result.unitsByGroup[groupName]
-		if len(unitList) == 0 {
-			continue
-		}
-		groupCfg := groupMap[groupName]
-		if groupCfg == nil {
-			// ponytail: group not found in GetLawGroups response — skip
-			// attestation. Missing stamps will surface via
-			// VerifyLawAttestations at completion time.
-			slog.Warn("appraisal: group config not found, skipping attestation",
-				"group", groupName)
-			continue
+	if !unresolved {
+		// Query law groups for the artefact's representation type.
+		groups, err := workitem.GetLawGroups("text/markdown")
+		if err != nil {
+			return fmt.Errorf("appraisal: get law groups: %w", err)
 		}
 
-		switch groupCfg.Mode() {
-		case flow.GroupModeLawByLaw:
-			// Law-by-law: process each law independently. Passing laws
-			// get individual attestation stamps even when other laws in
-			// the same group fail.
-			laws, lErr := groupCfg.GetLaws()
-			if lErr != nil {
-				slog.Warn("appraisal: get laws for group",
-					"group", groupName, "error", lErr)
+		// Build group lookup by name.
+		groupMap := make(map[string]*flow.LawGroup, len(groups))
+		for _, g := range groups {
+			groupMap[g.Name()] = g
+		}
+
+		// Apply attestation stamps per group.
+		groupOrder := make([]string, 0, len(result.unitsByGroup))
+		for k := range result.unitsByGroup {
+			groupOrder = append(groupOrder, k)
+		}
+		sort.Strings(groupOrder)
+		for _, groupName := range groupOrder {
+			unitList := result.unitsByGroup[groupName]
+			if len(unitList) == 0 {
 				continue
 			}
-			lawMap := make(map[string]*flow.Law, len(laws))
-			for _, law := range laws {
-				lawMap[law.ID()] = law
+			groupCfg := groupMap[groupName]
+			if groupCfg == nil {
+				// ponytail: group not found in GetLawGroups response — skip
+				// attestation. Missing stamps will surface via
+				// VerifyLawAttestations at completion time.
+				slog.Warn("appraisal: group config not found, skipping attestation",
+					"group", groupName)
+				continue
 			}
 
-			allPassed := true
-			for _, unit := range unitList {
-				if unitFailed[unit.UnitID] {
-					allPassed = false
+			switch groupCfg.Mode() {
+			case flow.GroupModeLawByLaw:
+				// Law-by-law: process each law independently. Passing laws
+				// get individual attestation stamps even when other laws in
+				// the same group fail.
+				laws, lErr := groupCfg.GetLaws()
+				if lErr != nil {
+					slog.Warn("appraisal: get laws for group",
+						"group", groupName, "error", lErr)
 					continue
 				}
-				for _, lawID := range unit.LawIDs {
-					law, ok := lawMap[lawID]
-					if !ok {
-						slog.Warn("appraisal: law not found in group",
-							"law", lawID, "group", groupName)
+				lawMap := make(map[string]*flow.Law, len(laws))
+				for _, law := range laws {
+					lawMap[law.ID()] = law
+				}
+
+				allPassed := true
+				for _, unit := range unitList {
+					if unitFailed[unit.UnitID] {
 						allPassed = false
 						continue
 					}
-					// Attest each representation type.
-					for _, rep := range law.GetRepresentations() {
-						if aErr := law.Attest(art, rep.GetType()); aErr != nil {
-							slog.Warn("appraisal: law attest failed",
-								"law", lawID, "rep", rep.GetType(), "error", aErr)
-						} else {
-							slog.Info("appraisal: law attestation applied",
-								"law", lawID, "rep", rep.GetType())
+					for _, lawID := range unit.LawIDs {
+						law, ok := lawMap[lawID]
+						if !ok {
+							slog.Warn("appraisal: law not found in group",
+								"law", lawID, "group", groupName)
+							allPassed = false
+							continue
+						}
+						// Attest each representation type.
+						for _, rep := range law.GetRepresentations() {
+							if aErr := law.Attest(art, rep.GetType()); aErr != nil {
+								slog.Warn("appraisal: law attest failed",
+									"law", lawID, "rep", rep.GetType(), "error", aErr)
+							} else {
+								slog.Info("appraisal: law attestation applied",
+									"law", lawID, "rep", rep.GetType())
+							}
 						}
 					}
 				}
-			}
-			// Group attest stamp only when all laws passed and no
-			// dispatch in this group failed outright.
-			if allPassed && !groupFailed[groupName] {
+				// Group attest stamp only when all laws passed and no
+				// dispatch in this group failed outright.
+				if allPassed && !groupFailed[groupName] {
+					if gErr := groupCfg.Attest(art); gErr != nil {
+						slog.Warn("appraisal: group attest failed",
+							"group", groupName, "error", gErr)
+					} else {
+						slog.Info("appraisal: group attestation applied", "group", groupName)
+					}
+				}
+
+			case flow.GroupModeBundle:
+				// Bundle mode: group attest covers all laws. If any
+				// dispatch in this group failed, skip entirely.
+				if groupFailed[groupName] {
+					slog.Warn("appraisal: group has failed dispatches, skipping group attest",
+						"group", groupName)
+					continue
+				}
 				if gErr := groupCfg.Attest(art); gErr != nil {
 					slog.Warn("appraisal: group attest failed",
 						"group", groupName, "error", gErr)
@@ -907,22 +935,10 @@ func applyAttestationStamps(
 					slog.Info("appraisal: group attestation applied", "group", groupName)
 				}
 			}
-
-		case flow.GroupModeBundle:
-			// Bundle mode: group attest covers all laws. If any
-			// dispatch in this group failed, skip entirely.
-			if groupFailed[groupName] {
-				slog.Warn("appraisal: group has failed dispatches, skipping group attest",
-					"group", groupName)
-				continue
-			}
-			if gErr := groupCfg.Attest(art); gErr != nil {
-				slog.Warn("appraisal: group attest failed",
-					"group", groupName, "error", gErr)
-			} else {
-				slog.Info("appraisal: group attestation applied", "group", groupName)
-			}
 		}
+	} else {
+		slog.Info("appraisal: unresolved feedback present, skipping all attestation stamps",
+			"artefact", governedArtefact)
 	}
 
 	// Overall completion stamp: applied when no dispatch failed outright.

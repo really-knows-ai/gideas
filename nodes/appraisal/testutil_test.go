@@ -208,6 +208,12 @@ func (s *appraisalSpy) GetFeedback(
 	return &flowv1.GetFeedbackResponse{FeedbackItems: s.FeedbackItems}, nil
 }
 
+func (s *appraisalSpy) HasUnresolvedFeedback(
+	_ context.Context, _ *flowv1.HasUnresolvedFeedbackRequest,
+) (*flowv1.HasUnresolvedFeedbackResponse, error) {
+	return &flowv1.HasUnresolvedFeedbackResponse{HasUnresolved: false}, nil
+}
+
 func (s *appraisalSpy) AddFeedback(
 	_ context.Context, req *flowv1.AddFeedbackRequest,
 ) (*flowv1.AddFeedbackResponse, error) {
