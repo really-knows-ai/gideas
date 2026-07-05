@@ -53,7 +53,7 @@ var _ = Describe("GovernedArtefact Controller", func() {
 						Namespace: "default",
 					},
 					Spec: flowv1.GovernedArtefactSpec{
-						Stamps: []string{"linter", "security-review", "approval"},
+						Stamps: []string{"review", "security-review", "approval"},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -113,7 +113,7 @@ var _ = Describe("GovernedArtefact Controller", func() {
 						Namespace: "default",
 					},
 					Spec: flowv1.GovernedArtefactSpec{
-						Stamps: []string{"linter", "linter"},
+						Stamps: []string{"review", "review"},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())

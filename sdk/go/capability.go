@@ -62,10 +62,10 @@ func ParseStampCapabilities(capabilities []string) []StampCapability {
 //
 // Examples:
 //
-//	MatchCapability("STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security") → true
-//	MatchCapability("STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security") → true
+//	MatchCapability("STAMP:artefact/*/review", "STAMP:artefact/haiku/review") → true
+//	MatchCapability("STAMP:artefact/*/review", "STAMP:artefact/code/review") → true
 //	MatchCapability("STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review") → true  (exact)
-//	MatchCapability("STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security") → false
+//	MatchCapability("STAMP:artefact/*/review", "STAMP:artefact/haiku/extra/review") → false
 //	MatchCapability("STAMP:artefact/haiku/review", "STAMP:artefact/haiku/approval") → false
 func MatchCapability(capability, required string) bool {
 	// Fast path: no wildcard at all — exact match.

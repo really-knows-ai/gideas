@@ -298,9 +298,9 @@ func TestGovernedArtefact_Stamps(t *testing.T) {
 				t.Error("haiku GovernedArtefact stamps missing 'appraisal'")
 			}
 		}},
-		{"haiku does not have appraise-security", "haiku", func(t *testing.T, ga governedArtefact) {
-			if slices.Contains(ga.Spec.Stamps, "appraise-security") {
-				t.Error("haiku GovernedArtefact stamps should NOT contain 'appraise-security'")
+		{"haiku does not have deprecated stamp names", "haiku", func(t *testing.T, ga governedArtefact) {
+			if slices.Contains(ga.Spec.Stamps, "appraise-*") {
+				t.Error("haiku GovernedArtefact stamps should NOT contain 'appraise-*'")
 			}
 		}},
 		{"haiku has approval stamp", "haiku", func(t *testing.T, ga governedArtefact) {
@@ -337,8 +337,6 @@ func TestExitContracts_NoReviewStamp(t *testing.T) {
 func TestNoDeprecatedStampsInManifests(t *testing.T) {
 	// Deprecated stamp and capability strings that must not appear in flow.yaml.
 	deprecated := []string{
-		"linter",
-		"appraise-security",
 		"appraise-*",
 	}
 

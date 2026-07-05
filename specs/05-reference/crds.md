@@ -277,7 +277,7 @@ The GovernedArtefact CRD registers a governed artefact and declares its stamp vo
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `stamps` | `[]string` | no | Stamp vocabulary — the set of stamp names meaningful for this governed artefact (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. |
+| `stamps` | `[]string` | no | Stamp vocabulary — the set of stamp names meaningful for this governed artefact (e.g. `["review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. |
 
 ---
 
@@ -395,8 +395,7 @@ Entry and exit contracts share the same shape. A contract is a map of governed a
 # Example: exit contract requiring governed artefacts with specific stamps
 approved:
   petition-draft:
-    - linter
-    - security-review
+    - review
     - approval
   audit-log: []
 ```

@@ -58,13 +58,14 @@ func TestParseStampCapability_Invalid(t *testing.T) {
 func TestParseStampCapabilities_MixedList(t *testing.T) {
 	const kindHaiku = "haiku"
 	const kindDoc = "doc"
+	const stampReview = "review"
 
 	caps := []string{
 		"READ:flow",
 		"STAMP:artefact/haiku/review",
 		"WRITE:feedback/new",
 		"STAMP:artefact/doc/linter",
-		"ATTEST:artefact/haiku/appraise-security",
+		"ATTEST:artefact/haiku/review",
 		"READ:artefact",
 	}
 
@@ -72,14 +73,14 @@ func TestParseStampCapabilities_MixedList(t *testing.T) {
 	if len(stamps) != 3 {
 		t.Fatalf("expected 3 stamp capabilities, got %d", len(stamps))
 	}
-	if stamps[0].GovernedArtefact != kindHaiku || stamps[0].StampName != "review" {
+	if stamps[0].GovernedArtefact != kindHaiku || stamps[0].StampName != stampReview {
 		t.Errorf("stamps[0] = %+v, want haiku/review", stamps[0])
 	}
 	if stamps[1].GovernedArtefact != kindDoc || stamps[1].StampName != stampLinter {
 		t.Errorf("stamps[1] = %+v, want doc/linter", stamps[1])
 	}
-	if stamps[2].GovernedArtefact != kindHaiku || stamps[2].StampName != "appraise-security" {
-		t.Errorf("stamps[2] = %+v, want haiku/appraise-security", stamps[2])
+	if stamps[2].GovernedArtefact != kindHaiku || stamps[2].StampName != stampReview {
+		t.Errorf("stamps[2] = %+v, want haiku/review", stamps[2])
 	}
 }
 
@@ -115,17 +116,16 @@ func TestMatchCapability(t *testing.T) {
 		{"exact mismatch", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/approval", false},
 
 		// Single * in artefact-kind position.
-		{"wildcard kind match", "STAMP:artefact/*/appraise-security", "STAMP:artefact/haiku/appraise-security", true},
-		{"wildcard artefact kind other", "STAMP:artefact/*/appraise-security", "STAMP:artefact/code/appraise-security", true},
+		{"wildcard kind match", "STAMP:artefact/*/review", "STAMP:artefact/haiku/review", true},
+		{"wildcard artefact kind other", "STAMP:artefact/*/review", "STAMP:artefact/code/review", true},
 
-		// appraise-* prefix match in stamp-name position.
-		{"prefix wildcard stamp", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
-		{"prefix wildcard long", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/appraise-security-L001", true},
-		{"prefix wildcard stamp no match", "STAMP:artefact/haiku/appraise-*", "STAMP:artefact/haiku/approval", false},
+		// review prefix match in stamp-name position.
+		{"prefix wildcard stamp", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
+		{"prefix wildcard stamp no match", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/approval", false},
 
 		// * does NOT match across /.
-		{"wildcard no cross slash", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security", false},
-		{"wildcard no cross slash 2", "STAMP:artefact/*/appraise-*", "STAMP:artefact/code/nested/appraise-review", false},
+		{"wildcard no cross slash", "STAMP:artefact/*/review", "STAMP:artefact/haiku/extra/review", false},
+		{"wildcard no cross slash 2", "STAMP:artefact/*/review", "STAMP:artefact/code/nested/review", false},
 
 		// Multiple wildcards in different segments (covered by detailed Phase 08 tests below).
 
@@ -135,14 +135,13 @@ func TestMatchCapability(t *testing.T) {
 		// (bare * tests covered by Phase 08 cases below)
 
 		// Phase 08 wildcard edge cases.
-		{"*/appraise-* mtch haiku", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security", true},
-		{"*/appraise-* mtch L001", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-security-L001", true},
-		{"*/appraise-* mtch code", "STAMP:artefact/*/appraise-*", "STAMP:artefact/code/appraise-default", true},
-		{"*/appraise-* empty sfx", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/appraise-", true},
-		{"*/appraise-* no appr.", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/approval", false},
-		{"*/appraise-* cross /", "STAMP:artefact/*/appraise-*", "STAMP:artefact/haiku/extra/appraise-security", false},
+		{"*/review mtch haiku", "STAMP:artefact/*/review", "STAMP:artefact/haiku/review", true},
+		{"*/review mtch code", "STAMP:artefact/*/review", "STAMP:artefact/code/review", true},
+		{"*/review empty sfx", "STAMP:artefact/*/review", "STAMP:artefact/haiku/review", true},
+		{"*/review no appr.", "STAMP:artefact/*/review", "STAMP:artefact/haiku/approval", false},
+		{"*/review cross /", "STAMP:artefact/*/review", "STAMP:artefact/haiku/extra/review", false},
 		{"exact review match", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
-		{"exact review no match appraise", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/appraise-security", false},
+		{"exact review no match approval", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/approval", false},
 
 		// Bare star in different positions.
 		{"top level star only", "*", "*", true},
@@ -156,8 +155,8 @@ func TestMatchCapability(t *testing.T) {
 
 		// ATTEST: prefix matching.
 		{"ATTEST exact match", "ATTEST:artefact/haiku/review", "ATTEST:artefact/haiku/review", true},
-		{"ATTEST wildcard kind", "ATTEST:artefact/*/appraise-security", "ATTEST:artefact/haiku/appraise-security", true},
-		{"ATTEST prefix wildcard", "ATTEST:artefact/haiku/appraise-*", "ATTEST:artefact/haiku/appraise-security", true},
+		{"ATTEST wildcard kind", "ATTEST:artefact/*/review", "ATTEST:artefact/haiku/review", true},
+		{"ATTEST prefix wildcard", "ATTEST:artefact/haiku/review", "ATTEST:artefact/haiku/review", true},
 		{"ATTEST mismatch verb", "ATTEST:artefact/haiku/review", "STAMP:artefact/haiku/review", false},
 		{"STAMP exact match (unchanged)", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
 	}

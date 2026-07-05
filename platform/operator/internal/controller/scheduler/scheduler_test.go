@@ -432,12 +432,12 @@ func TestExitContract_Satisfied(t *testing.T) {
 	sched := newTestScheduler(node)
 	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
 		return []ArtefactState{
-			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"linter", "review", "approval"}},
+			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"review", "approval"}},
 		}, nil
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
-		"standard-exit": {"haiku": {"linter", "review", "approval"}},
+		"standard-exit": {"haiku": {"review", "approval"}},
 	})
 
 	result, err := sched.CalculateNextStep(
@@ -465,12 +465,12 @@ func TestExitContract_MissingStamp(t *testing.T) {
 	sched := newTestScheduler(node)
 	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
 		return []ArtefactState{
-			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"linter"}},
+			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"review"}},
 		}, nil
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
-		"standard-exit": {"haiku": {"linter", "review", "approval"}},
+		"standard-exit": {"haiku": {"review", "approval"}},
 	})
 
 	_, err := sched.CalculateNextStep(
@@ -499,7 +499,7 @@ func TestExitContract_MissingArtefact(t *testing.T) {
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
-		"standard-exit": {"haiku": {"linter"}},
+		"standard-exit": {"haiku": {"review"}},
 	})
 
 	_, err := sched.CalculateNextStep(
@@ -525,13 +525,13 @@ func TestExitContract_MultipleArtefacts_AllMustSatisfy(t *testing.T) {
 	sched := newTestScheduler(node)
 	sched.Querier = func(_ context.Context, _ string, _ []string) ([]ArtefactState, error) {
 		return []ArtefactState{
-			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"linter", "review"}},
-			{ArtefactID: "art-2", GovernedArtefact: "haiku", StampNames: []string{"linter"}}, // Missing "review".
+			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"review"}},
+			{ArtefactID: "art-2", GovernedArtefact: "haiku", StampNames: []string{}}, // Missing "review".
 		}, nil
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
-		"standard-exit": {"haiku": {"linter", "review"}},
+		"standard-exit": {"haiku": {"review"}},
 	})
 
 	_, err := sched.CalculateNextStep(
@@ -591,7 +591,7 @@ func TestExitContract_ContractNotFoundOnFlow(t *testing.T) {
 	}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
-		"standard-exit": {"haiku": {"linter"}}, // "missing-contract" not present.
+		"standard-exit": {"haiku": {"review"}}, // "missing-contract" not present.
 	})
 
 	_, err := sched.CalculateNextStep(

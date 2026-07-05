@@ -112,7 +112,7 @@ Stamp application is capability-gated. The node must hold `STAMP:artefact/<gover
 
 Stamps are write-once per artefact version. Applying the same stamp name to the same content hash a second time — whether from the same node or a different one — produces an error. If two different nodes need to independently sign off on the same artefact, define two different stamp names.
 
-The platform attaches no special semantics to any stamp name. "approval", "linter", "security-review" are naming conventions. The [reference arrangement](../01-concepts/02-foundry-cycle.md) uses an "approval" stamp applied by Sort as the final gate, but this is convention, not system behaviour.
+The platform attaches no special semantics to any stamp name. "approval" is a naming convention. The [reference arrangement](../01-concepts/02-foundry-cycle.md) uses an "approval" stamp applied by Sort as the final gate, but this is convention, not system behaviour.
 
 ## Capability-Gated Actions
 
@@ -123,9 +123,14 @@ Artefact operations map to capability requirements enforced by the backing servi
 | `Workitem.GetArtefact`, `Artefact.GetContent`, `Artefact.GetStamps`, `Artefact.GetFeedback` | `READ:artefact` | Archivist |
 | `Artefact.Store` | `WRITE:artefact` or `WRITE:artefact/<governed-artefact-name>` | Archivist |
 | `Artefact.Stamp` | `STAMP:artefact/<governed-artefact-name>/<stamp-name>` | Archivist |
+| `Law.Attest`, `LawGroup.Attest` | `ATTEST:artefact/<governed-artefact-name>/<stamp-name>` or `ATTEST:artefact/<governed-artefact-name>/law-*` | Archivist |
 | Feedback operations | See [SDK Feedback](./04-sdk-feedback.md#capability-and-error-semantics) | Archivist |
 
 Missing capabilities produce a `CAPABILITY_DENIED` error from the service. The Sidecar forwards the denial to the handler as a structured error with no state change.
+
+### Implicit Attestation Model
+
+Law attestation stamps (`law-<lawID>-<repType>`, `lawgrp-<group>`) are not listed in the exit contract. They are computed dynamically from applicable laws at completion time by the operator's `VerifyLawAttestations` check. The `ATTEST:` capability prefix on a node declares what the node can attest to, using the same wildcard matching rules as `STAMP:` capabilities. A node declaring `ATTEST:artefact/haiku/law-*` can attest any law stamp for haiku artefacts. See [Law Attestation Semantics](../02-flow/09-law-attestation.md) for details.
 
 ## Provenance and Audit
 

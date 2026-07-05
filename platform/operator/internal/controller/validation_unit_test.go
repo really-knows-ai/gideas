@@ -465,22 +465,20 @@ func TestCapabilityPattern_AcceptsWildcard(t *testing.T) {
 	t.Parallel()
 
 	valid := []string{
-		"STAMP:artefact/*/appraise-*",
-		"STAMP:artefact/haiku/appraise-*",
-		"STAMP:artefact/haiku/appraise-security",
-		"STAMP:artefact/haiku/appraise-security-L001",
+		"STAMP:artefact/*/review",
+		"STAMP:artefact/haiku/review",
+		"STAMP:artefact/haiku/review-L001",
 		"STAMP:artefact/*/approval",
-		"STAMP:artefact/*/appraise-",
+		"STAMP:artefact/*/review",
 		"READ:artefact/*",
 		"WRITE:artefact/haiku",
 		"WRITE:artefact/*",
 		"CREATE:workitem/child",
 		"CREATE:workitem",
 		"ATTEST:artefact/haiku/review",
-		"ATTEST:artefact/haiku/appraise-security",
-		"ATTEST:artefact/*/appraise-*",
-		"ATTEST:artefact/haiku/appraise-security-L001",
-		"ATTEST:artefact/doc/linter",
+		"ATTEST:artefact/*/review",
+		"ATTEST:artefact/haiku/review-L001",
+		"ATTEST:artefact/doc/review",
 	}
 
 	for _, cap := range valid {

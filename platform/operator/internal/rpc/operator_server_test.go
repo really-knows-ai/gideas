@@ -242,7 +242,7 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 		Spec: apiv1.FoundryFlowSpec{
 			EntryContracts: map[string]apiv1.Contract{"main": {"haiku": nil}},
 			ExitContracts: map[string]apiv1.Contract{
-				"governed": {"haiku": {"linter", "review", "approval"}},
+				"governed": {"haiku": {"review", "approval"}},
 			},
 			GovernancePolicy: apiv1.GovernancePolicy{MaxVisits: 100},
 		},
@@ -273,7 +273,7 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "quench", Namespace: "default"},
 		Spec: apiv1.FoundryNodeSpec{
 			Image:        "quench:latest",
-			Capabilities: []string{"READ:artefact", "STAMP:artefact/haiku/linter", "WRITE:feedback/new"},
+			Capabilities: []string{"READ:artefact", "STAMP:artefact/haiku/review", "WRITE:feedback/new"},
 		},
 	}
 
@@ -325,8 +325,8 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 	if haikuStamps == nil {
 		t.Fatal("Expected haiku in exit contract")
 	}
-	if len(haikuStamps.GetStamps()) != 3 {
-		t.Fatalf("Expected 3 stamps in haiku exit contract, got %d", len(haikuStamps.GetStamps()))
+	if len(haikuStamps.GetStamps()) != 2 {
+		t.Fatalf("Expected 2 stamps in haiku exit contract, got %d", len(haikuStamps.GetStamps()))
 	}
 }
 
@@ -451,7 +451,7 @@ func TestGetFlowTopology_NodeCapabilities(t *testing.T) {
 			Image: "validator:latest",
 			Capabilities: []string{
 				"READ:flow",
-				"STAMP:artefact/doc/linter",
+				"STAMP:artefact/doc/review",
 				"STAMP:artefact/doc/security",
 			},
 		},
