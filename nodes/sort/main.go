@@ -450,7 +450,9 @@ func checkDeadlock(
 	}
 
 	for _, item := range items {
-		if item.GetState() == flow.FeedbackStateResolved {
+		if item.GetState() == flow.FeedbackStateResolved ||
+			item.GetState() == flow.FeedbackStateWontFix ||
+			item.GetState() == flow.FeedbackStateRejected {
 			continue
 		}
 

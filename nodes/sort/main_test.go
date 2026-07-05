@@ -146,11 +146,11 @@ func TestSort_StampsApprovalAndCompletes(t *testing.T) {
 // Deadlock detection tests
 // ---------------------------------------------------------------------------
 
-func TestSort_RoutesToArbiter_DepthExceedsThreshold_WontFix(t *testing.T) {
+func TestSort_RoutesToArbiter_DepthExceedsThreshold_New(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-1", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
+		{Id: "fb-1", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
 	spy.FeedbackDepths["fb-1"] = 4 // default threshold is 3
 	client, workitem := setupSortTest(t, spy)
@@ -161,48 +161,6 @@ func TestSort_RoutesToArbiter_DepthExceedsThreshold_WontFix(t *testing.T) {
 
 	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-1" {
 		t.Fatalf("expected fb-1 deadlocked, got %v", spy.DeadlockedIDs)
-	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
-		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
-	}
-}
-
-func TestSort_RoutesToArbiter_DepthExceedsThreshold_Rejected(t *testing.T) {
-	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-2", State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED},
-	}
-	spy.FeedbackDepths["fb-2"] = 3 // threshold = 3, depth >= threshold
-	client, workitem := setupSortTest(t, spy)
-
-	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
-		t.Fatalf("handleSort() error: %v", err)
-	}
-
-	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-2" {
-		t.Fatalf("expected fb-2 deadlocked, got %v", spy.DeadlockedIDs)
-	}
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
-		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
-	}
-}
-
-func TestSort_RoutesToArbiter_DepthExceedsThreshold_New(t *testing.T) {
-	spy := newSortSpy()
-	spy.StampState["linter"] = true
-	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-3", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
-	}
-	spy.FeedbackDepths["fb-3"] = 5
-	client, workitem := setupSortTest(t, spy)
-
-	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
-		t.Fatalf("handleSort() error: %v", err)
-	}
-
-	if len(spy.DeadlockedIDs) != 1 || spy.DeadlockedIDs[0] != "fb-3" {
-		t.Fatalf("expected fb-3 deadlocked, got %v", spy.DeadlockedIDs)
 	}
 	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
 		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
@@ -257,7 +215,7 @@ func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-ok", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
-		{Id: "fb-hot", State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED},
+		{Id: "fb-hot", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
 	spy.FeedbackDepths["fb-ok"] = 1
 	spy.FeedbackDepths["fb-hot"] = 5
@@ -273,6 +231,53 @@ func TestSort_DeadlockPriorityOverRefine(t *testing.T) {
 	}
 	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputArbiter {
 		t.Fatalf("expected route to arbiter, got %v", spy.RoutedOutputs)
+	}
+}
+
+func TestSort_DoesNotRedeadlockWontFixFeedback(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["linter"] = true
+	// WONT_FIX feedback from arbitration should NOT be re-deadlocked
+	// even when depth exceeds threshold.
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{Id: "fb-arbitrated", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
+	}
+	spy.FeedbackDepths["fb-arbitrated"] = 4
+	client, workitem := setupSortTest(t, spy)
+
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
+		t.Fatalf("handleSort() error: %v", err)
+	}
+
+	if len(spy.DeadlockedIDs) != 0 {
+		t.Fatalf("expected no deadlocking for arbitrated WONT_FIX, got %v", spy.DeadlockedIDs)
+	}
+	// Should route to appraisal (missing review stamp) instead of re-deadlocking.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
+		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
+	}
+}
+
+func TestSort_DoesNotRedeadlockRejectedFeedback(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["linter"] = true
+	// REJECTED feedback from arbitration should NOT be re-deadlocked.
+	spy.FeedbackItems = []*flowv1.FeedbackItem{
+		{Id: "fb-rejected", State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED},
+	}
+	spy.FeedbackDepths["fb-rejected"] = 3
+	client, workitem := setupSortTest(t, spy)
+
+	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
+		t.Fatalf("handleSort() error: %v", err)
+	}
+
+	if len(spy.DeadlockedIDs) != 0 {
+		t.Fatalf("expected no deadlocking for arbitrated REJECTED, got %v", spy.DeadlockedIDs)
+	}
+	// Should route to appraisal (missing review stamp) instead of re-deadlocking.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputAppraisal {
+		t.Fatalf("expected route to appraisal, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -326,8 +331,8 @@ func TestSort_FirstDeadlockedItemWins(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-a", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
-		{Id: "fb-b", State: flowv1.FeedbackState_FEEDBACK_STATE_REJECTED},
+		{Id: "fb-a", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
+		{Id: "fb-b", State: flowv1.FeedbackState_FEEDBACK_STATE_ACTIONED},
 	}
 	spy.FeedbackDepths["fb-a"] = 5
 	spy.FeedbackDepths["fb-b"] = 10
@@ -623,7 +628,7 @@ func TestSort_Error_DeadlockFeedbackFails(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["linter"] = true
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
-		{Id: "fb-y", State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX},
+		{Id: "fb-y", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
 	spy.FeedbackDepths["fb-y"] = 10
 	spy.DeadlockFeedbackErr = fmt.Errorf("deadlock transition failed")
@@ -763,7 +768,7 @@ func TestSort_NewlyDeadlockedWithActiveDispute_SuspendsPendingHold(t *testing.T)
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-new",
-			State: flowv1.FeedbackState_FEEDBACK_STATE_WONT_FIX,
+			State: flowv1.FeedbackState_FEEDBACK_STATE_NEW,
 			Justification: &flowv1.Justification{
 				Kind: &flowv1.Justification_Citation{
 					Citation: &flowv1.Citation{
