@@ -8,6 +8,7 @@ import (
 
 	flowv1gen "github.com/gideas/flow/gen/flow/v1"
 	flowv1 "github.com/gideas/flow/operator/api/v1"
+	"github.com/gideas/flow/operator/internal/controller/scheduler"
 	"github.com/gideas/flow/pkg/eventbus"
 	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -199,6 +200,12 @@ func TestLifecycle_RoutingCompleted(t *testing.T) {
 	}
 
 	r, spy, stop := testReconcilerWithAuditor(flow, exitNode, wi)
+	r.ArtefactQuerier = func(_ context.Context, _ string, _ []string) ([]scheduler.ArtefactState, error) {
+		return []scheduler.ArtefactState{
+			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"review"}},
+		}, nil
+	}
+	r.Librarian = &noopLibrarianClient{}
 
 	_, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
 	if err != nil {
@@ -378,6 +385,12 @@ func TestLifecycle_FlowIDAttribute(t *testing.T) {
 	}
 
 	r, spy, stop := testReconcilerWithAuditor(flow, exitNode, wi)
+	r.ArtefactQuerier = func(_ context.Context, _ string, _ []string) ([]scheduler.ArtefactState, error) {
+		return []scheduler.ArtefactState{
+			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"review"}},
+		}, nil
+	}
+	r.Librarian = &noopLibrarianClient{}
 
 	_, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
 	if err != nil {

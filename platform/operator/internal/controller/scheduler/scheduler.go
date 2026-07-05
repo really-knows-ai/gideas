@@ -199,8 +199,8 @@ func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode
 		}
 	}
 
-	// Validate exit contract against artefact state if flow and querier are available.
-	if flow != nil && s.Querier != nil && workitem != nil {
+	// Validate exit contract against artefact state.
+	if flow != nil && workitem != nil {
 		contract, ok := flow.Spec.ExitContracts[node.Spec.Exit]
 		if !ok {
 			return nil, &GuardError{
@@ -214,16 +214,27 @@ func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode
 		}
 
 		// Law attestation enforcement: run after exit contract validation.
+		// Fail-closed (R6): if the Archivist or Librarian is unreachable,
+		// deny completion. Flows with no governed artefacts (empty contract)
+		// have nothing to check.
 		governedNames := slices.Collect(maps.Keys(contract))
-		states, err := s.Querier(ctx, workitem.Name, governedNames)
-		if err != nil {
-			return nil, &GuardError{
-				Code:    "GUARD_FAILED",
-				Message: fmt.Sprintf("failed to query artefact state for attestation check: %v", err),
+		if len(governedNames) > 0 {
+			if s.Querier == nil {
+				return nil, &GuardError{
+					Code:    "GUARD_FAILED",
+					Message: "archivist querier not configured — cannot verify attestation stamps",
+				}
 			}
-		}
-		if err := s.validateLawAttestations(ctx, states); err != nil {
-			return nil, err
+			states, err := s.Querier(ctx, workitem.Name, governedNames)
+			if err != nil {
+				return nil, &GuardError{
+					Code:    "GUARD_FAILED",
+					Message: fmt.Sprintf("failed to query artefact state for attestation check: %v", err),
+				}
+			}
+			if err := s.validateLawAttestations(ctx, states); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -416,9 +427,17 @@ func (s *Scheduler) validateContract(ctx context.Context, workitemID string, con
 // validateLawAttestations checks that all attestation stamps implied by laws
 // with appliesTo matching the governed artefact are present on each artefact.
 // Returns a GuardError with Code CONTRACT_VIOLATION if any are missing.
+// Fail-closed (R6): if the Librarian (LawQuerier) is not configured, deny
+// completion. Flows with no governed artefacts have nothing to check.
 func (s *Scheduler) validateLawAttestations(ctx context.Context, states []ArtefactState) error {
-	if s.LawQuerier == nil {
+	if len(states) == 0 {
 		return nil
+	}
+	if s.LawQuerier == nil {
+		return &GuardError{
+			Code:    "GUARD_FAILED",
+			Message: "librarian querier not configured — cannot verify law attestations",
+		}
 	}
 
 	artefactKinds := make(map[string]bool)

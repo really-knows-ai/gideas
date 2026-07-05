@@ -2,16 +2,21 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	flowv1gen "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/gideas/flow/operator/api/v1"
+	"github.com/gideas/flow/operator/internal/controller/scheduler"
 )
 
 const (
@@ -28,6 +33,62 @@ const (
 	testFlowName     = "test-flow"
 	testAssignee     = "worker"
 )
+
+// noopLibrarianClient returns empty results for law queries. Used by tests
+// that exercise the complete path without testing law attestation.
+type noopLibrarianClient struct{}
+
+func (n *noopLibrarianClient) QueryLaws(_ context.Context, _ *flowv1gen.QueryLawsRequest, _ ...grpc.CallOption) (*flowv1gen.QueryLawsResponse, error) {
+	return &flowv1gen.QueryLawsResponse{}, nil
+}
+
+func (n *noopLibrarianClient) ListLawGroups(_ context.Context, _ *flowv1gen.ListLawGroupsRequest, _ ...grpc.CallOption) (*flowv1gen.ListLawGroupsResponse, error) {
+	return &flowv1gen.ListLawGroupsResponse{}, nil
+}
+
+// Satisfy the rest of the LibrarianServiceClient interface (unused).
+func (n *noopLibrarianClient) SyncLawGroup(_ context.Context, _ *flowv1gen.SyncLawGroupRequest, _ ...grpc.CallOption) (*flowv1gen.SyncLawGroupResponse, error) {
+	return nil, fmt.Errorf("unexpected call: SyncLawGroup")
+}
+func (n *noopLibrarianClient) DeleteLawGroup(_ context.Context, _ *flowv1gen.DeleteLawGroupRequest, _ ...grpc.CallOption) (*flowv1gen.DeleteLawGroupResponse, error) {
+	return nil, fmt.Errorf("unexpected call: DeleteLawGroup")
+}
+func (n *noopLibrarianClient) Cite(_ context.Context, _ *flowv1gen.CiteRequest, _ ...grpc.CallOption) (*flowv1gen.CiteResponse, error) {
+	return nil, fmt.Errorf("unexpected call: Cite")
+}
+func (n *noopLibrarianClient) RecordFinding(_ context.Context, _ *flowv1gen.RecordFindingRequest, _ ...grpc.CallOption) (*flowv1gen.RecordFindingResponse, error) {
+	return nil, fmt.Errorf("unexpected call: RecordFinding")
+}
+func (n *noopLibrarianClient) GetLaw(_ context.Context, _ *flowv1gen.GetLawRequest, _ ...grpc.CallOption) (*flowv1gen.GetLawResponse, error) {
+	return nil, fmt.Errorf("unexpected call: GetLaw")
+}
+func (n *noopLibrarianClient) WriteLaw(_ context.Context, _ *flowv1gen.WriteLawRequest, _ ...grpc.CallOption) (*flowv1gen.WriteLawResponse, error) {
+	return nil, fmt.Errorf("unexpected call: WriteLaw")
+}
+func (n *noopLibrarianClient) RetireLaw(_ context.Context, _ *flowv1gen.RetireLawRequest, _ ...grpc.CallOption) (*flowv1gen.RetireLawResponse, error) {
+	return nil, fmt.Errorf("unexpected call: RetireLaw")
+}
+func (n *noopLibrarianClient) ReplicateLaws(_ context.Context, _ *flowv1gen.ReplicateLawsRequest, _ ...grpc.CallOption) (*flowv1gen.ReplicateLawsResponse, error) {
+	return nil, fmt.Errorf("unexpected call: ReplicateLaws")
+}
+func (n *noopLibrarianClient) ApplyLifecycleAction(_ context.Context, _ *flowv1gen.ApplyLifecycleActionRequest, _ ...grpc.CallOption) (*flowv1gen.ApplyLifecycleActionResponse, error) {
+	return nil, fmt.Errorf("unexpected call: ApplyLifecycleAction")
+}
+func (n *noopLibrarianClient) CreateDisputeRecord(_ context.Context, _ *flowv1gen.CreateDisputeRecordRequest, _ ...grpc.CallOption) (*flowv1gen.CreateDisputeRecordResponse, error) {
+	return nil, fmt.Errorf("unexpected call: CreateDisputeRecord")
+}
+func (n *noopLibrarianClient) RetireDisputeRecord(_ context.Context, _ *flowv1gen.RetireDisputeRecordRequest, _ ...grpc.CallOption) (*flowv1gen.RetireDisputeRecordResponse, error) {
+	return nil, fmt.Errorf("unexpected call: RetireDisputeRecord")
+}
+func (n *noopLibrarianClient) GetActiveDisputes(_ context.Context, _ *flowv1gen.GetActiveDisputesRequest, _ ...grpc.CallOption) (*flowv1gen.GetActiveDisputesResponse, error) {
+	return nil, fmt.Errorf("unexpected call: GetActiveDisputes")
+}
+func (n *noopLibrarianClient) SearchSimilarLaws(_ context.Context, _ *flowv1gen.SearchSimilarLawsRequest, _ ...grpc.CallOption) (*flowv1gen.SearchSimilarLawsResponse, error) {
+	return nil, fmt.Errorf("unexpected call: SearchSimilarLaws")
+}
+func (n *noopLibrarianClient) GetLawGroup(_ context.Context, _ *flowv1gen.GetLawGroupRequest, _ ...grpc.CallOption) (*flowv1gen.GetLawGroupResponse, error) {
+	return nil, fmt.Errorf("unexpected call: GetLawGroup")
+}
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -387,6 +448,12 @@ func TestRouting_Complete_HappyPath(t *testing.T) {
 	}
 
 	r := testReconciler(flow, exitNode, wi)
+	r.ArtefactQuerier = func(_ context.Context, _ string, _ []string) ([]scheduler.ArtefactState, error) {
+		return []scheduler.ArtefactState{
+			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"review"}},
+		}, nil
+	}
+	r.Librarian = &noopLibrarianClient{}
 
 	_, err := r.Reconcile(context.Background(), testReq(testWorkitemName))
 	if err != nil {
