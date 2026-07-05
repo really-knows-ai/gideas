@@ -66,6 +66,7 @@ type sortSpy struct {
 	GetActiveDisputeErr error
 	SuspendErr          error
 	QueryLawsErr        error
+	ListLawGroupsErr    error
 	GetStampsErr        error
 
 	// Recorded operations for assertions.
@@ -327,6 +328,9 @@ func (s *sortSpy) QueryLaws(
 func (s *sortSpy) ListLawGroups(
 	_ context.Context, _ *flowv1.ListLawGroupsRequest,
 ) (*flowv1.ListLawGroupsResponse, error) {
+	if s.ListLawGroupsErr != nil {
+		return nil, s.ListLawGroupsErr
+	}
 	return &flowv1.ListLawGroupsResponse{}, nil
 }
 
