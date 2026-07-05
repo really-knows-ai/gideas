@@ -16,7 +16,7 @@
 // Configuration (YAML via NODE_CONFIG_PATH, default /etc/foundry/node-config.yaml):
 //
 //	nodeOrder:          comma-separated node names defining stamp-checking
-//	                    order. e.g. "quench,appraise". Required.
+//	                    order. e.g. "quench,appraisal". Required.
 //	deadlockThreshold:  feedback depth at which items are escalated to the Arbiter.
 //	                    Default: 3.
 package main
@@ -62,7 +62,7 @@ const (
 // sortConfig holds Sort's runtime configuration, loaded from a YAML file.
 type sortConfig struct {
 	// NodeOrder is a comma-separated list of node names defining the order
-	// in which stamps are checked. e.g. "quench,appraise".
+	// in which stamps are checked. e.g. "quench,appraisal".
 	NodeOrder string `yaml:"nodeOrder"`
 
 	// DeadlockThreshold is the feedback depth at which items are escalated
