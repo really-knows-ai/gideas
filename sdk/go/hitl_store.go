@@ -57,7 +57,7 @@ func (s *queueStore) close() error {
 // initSchema creates the queue table and indexes if they do not already exist.
 func (s *queueStore) initSchema() error {
 	const schema = `
-CREATE TABLE IF NOT EXISTS hitl_queue (
+CREATE TABLE IF NOT EXISTS queue_items (
     workitem_id TEXT PRIMARY KEY,
     shard_id    TEXT NOT NULL,
     queue_name  TEXT NOT NULL DEFAULT '',
@@ -66,8 +66,8 @@ CREATE TABLE IF NOT EXISTS hitl_queue (
     claimed_at  DATETIME
 );
 
-CREATE INDEX IF NOT EXISTS idx_status ON hitl_queue(status);
-CREATE INDEX IF NOT EXISTS idx_shard ON hitl_queue(shard_id);
+CREATE INDEX IF NOT EXISTS idx_status ON queue_items(status);
+CREATE INDEX IF NOT EXISTS idx_shard ON queue_items(shard_id);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("exec schema: %w", err)
@@ -78,7 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_shard ON hitl_queue(shard_id);
 // enqueue inserts a new item into the queue with status "waiting".
 func (s *queueStore) enqueue(ctx context.Context, workitemID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO hitl_queue (workitem_id, shard_id, queue_name, status) VALUES (?, ?, ?, 'waiting')`,
+		`INSERT INTO queue_items (workitem_id, shard_id, queue_name, status) VALUES (?, ?, ?, 'waiting')`,
 		workitemID, s.shardID, s.queueName,
 	)
 	if err != nil {
@@ -99,7 +99,7 @@ func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueI
 
 	// Count total matching rows.
 	var total int
-	countQuery := "SELECT COUNT(*) FROM hitl_queue " + where
+	countQuery := "SELECT COUNT(*) FROM queue_items " + where
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count queue items: %w", err)
 	}
@@ -111,7 +111,7 @@ func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueI
 	}
 	offset := max(filter.Offset, 0)
 
-	query := "SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at FROM hitl_queue " +
+	query := "SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at FROM queue_items " +
 		where + " ORDER BY enqueued_at ASC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
@@ -139,7 +139,7 @@ func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueI
 func (s *queueStore) getByID(ctx context.Context, workitemID string) (*QueueItem, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at
-		 FROM hitl_queue WHERE workitem_id = ?`, workitemID,
+		 FROM queue_items WHERE workitem_id = ?`, workitemID,
 	)
 	item, err := scanQueueItemRow(row)
 	if err == sql.ErrNoRows {
@@ -155,7 +155,7 @@ func (s *queueStore) getByID(ctx context.Context, workitemID string) (*QueueItem
 func (s *queueStore) claim(ctx context.Context, workitemID string) (*QueueItem, error) {
 	now := time.Now().UTC().Format(sqliteTimeFormat)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE hitl_queue SET status = 'claimed', claimed_at = ?
+		`UPDATE queue_items SET status = 'claimed', claimed_at = ?
 		 WHERE workitem_id = ? AND status = 'waiting'`,
 		now, workitemID,
 	)
@@ -177,7 +177,7 @@ func (s *queueStore) claim(ctx context.Context, workitemID string) (*QueueItem, 
 // release transitions a "claimed" item back to "waiting".
 func (s *queueStore) release(ctx context.Context, workitemID string) (*QueueItem, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE hitl_queue SET status = 'waiting', claimed_at = NULL
+		`UPDATE queue_items SET status = 'waiting', claimed_at = NULL
 		 WHERE workitem_id = ? AND status = 'claimed'`,
 		workitemID,
 	)
@@ -199,7 +199,7 @@ func (s *queueStore) release(ctx context.Context, workitemID string) (*QueueItem
 // decide deletes a "claimed" item from the queue (decision made).
 func (s *queueStore) decide(ctx context.Context, workitemID string) error {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM hitl_queue WHERE workitem_id = ? AND status = 'claimed'`,
+		`DELETE FROM queue_items WHERE workitem_id = ? AND status = 'claimed'`,
 		workitemID,
 	)
 	if err != nil {
@@ -218,7 +218,7 @@ func (s *queueStore) decide(ctx context.Context, workitemID string) error {
 
 // countByStatus returns the count of items on this shard, optionally filtered.
 func (s *queueStore) countByStatus(ctx context.Context, status *QueueStatus) (int, error) {
-	query := "SELECT COUNT(*) FROM hitl_queue WHERE shard_id = ?"
+	query := "SELECT COUNT(*) FROM queue_items WHERE shard_id = ?"
 	args := []any{s.shardID}
 	if status != nil {
 		query += " AND status = ?"
@@ -236,7 +236,7 @@ func (s *queueStore) countByStatus(ctx context.Context, status *QueueStatus) (in
 func (s *queueStore) diagnoseClaimFailure(ctx context.Context, workitemID string) error {
 	var status string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT status FROM hitl_queue WHERE workitem_id = ?`, workitemID,
+		`SELECT status FROM queue_items WHERE workitem_id = ?`, workitemID,
 	).Scan(&status)
 	if err == sql.ErrNoRows {
 		return ErrQueueItemNotFound
@@ -252,7 +252,7 @@ func (s *queueStore) diagnoseClaimFailure(ctx context.Context, workitemID string
 func (s *queueStore) diagnoseStateFailure(ctx context.Context, workitemID, op string) error {
 	var status string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT status FROM hitl_queue WHERE workitem_id = ?`, workitemID,
+		`SELECT status FROM queue_items WHERE workitem_id = ?`, workitemID,
 	).Scan(&status)
 	if err == sql.ErrNoRows {
 		return ErrQueueItemNotFound

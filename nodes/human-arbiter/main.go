@@ -170,32 +170,34 @@ func handleArbiter(
 		return fmt.Errorf("human-arbiter: received empty choice (queue manager shut down before decision)")
 	}
 
-	// ── Step 6: Dispatch based on choice ───────────────────────────────
+	// Validate choice before resuming timer — invalid choices leave
+	// the timer paused so the operator can retry.
+	if choice != choiceAccept && choice != choiceReject && choice != choiceCancel {
+		return fmt.Errorf("human-arbiter: invalid choice %q", choice)
+	}
+
+	// ── Step 6: Resume timer ─────────────────────────────────────────────
+	if err := workitem.ResumeTimer(); err != nil {
+		return fmt.Errorf("human-arbiter: resume timer: %w", err)
+	}
+
+	// ── Step 7: Dispatch based on choice ───────────────────────────────
 	switch choice {
 	case choiceAccept:
-		if err := workitem.ResumeTimer(); err != nil {
-			return fmt.Errorf("human-arbiter: resume timer: %w", err)
-		}
 		return linkRulingsAndRoute(workitem, haikuArt, deadlocked, flow.FeedbackStateWontFix, choice)
 
 	case choiceReject:
-		if err := workitem.ResumeTimer(); err != nil {
-			return fmt.Errorf("human-arbiter: resume timer: %w", err)
-		}
 		return linkRulingsAndRoute(workitem, haikuArt, deadlocked, flow.FeedbackStateRejected, choice)
 
 	case choiceCancel:
-		if err := workitem.ResumeTimer(); err != nil {
-			return fmt.Errorf("human-arbiter: resume timer: %w", err)
-		}
 		slog.Info("human-arbiter: cancel requested", "workitem_id", workitemID)
 		if err := workitem.Complete(flow.WithReason(flowv1.CompletionReason_COMPLETION_REASON_CANCELLED)); err != nil {
 			return fmt.Errorf("human-arbiter: complete cancelled: %w", err)
 		}
 		return nil
-
 	default:
-		return fmt.Errorf("human-arbiter: invalid choice %q", choice)
+		// Unreachable after validation, but guard against logic drift.
+		return fmt.Errorf("human-arbiter: unreachable choice %q", choice)
 	}
 }
 

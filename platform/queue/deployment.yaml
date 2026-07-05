@@ -5,37 +5,40 @@
 # operation via gRPC QueuePeerService, and stores no queue state locally.
 #
 # Prerequisites:
-#   - Build queue-service image: docker build -t flow-queue-service:latest -f platform/queue/Dockerfile .
+#   - Build queue-service image: docker build -t queue-service:latest -f platform/queue/Dockerfile .
 #
 # For Kind cluster:
-#   kind load docker-image flow-queue-service:latest --name <cluster>
+#   kind load docker-image queue-service:latest --name <cluster>
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: flow-queue-service
+  name: queue-service
   namespace: default
   labels:
-    app.kubernetes.io/name: flow-queue-service
+    app.kubernetes.io/name: queue-service
     app.kubernetes.io/part-of: foundry-flow
     app.kubernetes.io/component: data-plane
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: flow-queue-service
+      app.kubernetes.io/name: queue-service
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: flow-queue-service
+        app.kubernetes.io/name: queue-service
     spec:
       containers:
         - name: queue-service
-          image: flow-queue-service:latest
+          image: queue-service:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 50053
               protocol: TCP
           env:
             - name: QUEUE_NAMES
@@ -47,20 +50,41 @@ spec:
             - name: QUEUE_PEER_PORT
               value: "50053"
 ---
+# External REST API — LoadBalancer for Dashboard / external callers.
 apiVersion: v1
 kind: Service
 metadata:
-  name: flow-queue-service
+  name: queue-service
   namespace: default
   labels:
-    app.kubernetes.io/name: flow-queue-service
+    app.kubernetes.io/name: queue-service
     app.kubernetes.io/part-of: foundry-flow
 spec:
   selector:
-    app.kubernetes.io/name: flow-queue-service
+    app.kubernetes.io/name: queue-service
   ports:
     - name: http
       port: 8080
       targetPort: 8080
+      protocol: TCP
+  type: LoadBalancer
+---
+# Internal gRPC — ClusterIP for mesh + queue-service communication.
+apiVersion: v1
+kind: Service
+metadata:
+  name: queue-service-grpc
+  namespace: default
+  labels:
+    app.kubernetes.io/name: queue-service
+    app.kubernetes.io/part-of: foundry-flow
+    app.kubernetes.io/component: data-plane
+spec:
+  selector:
+    app.kubernetes.io/name: queue-service
+  ports:
+    - name: grpc
+      port: 50053
+      targetPort: 50053
       protocol: TCP
   type: ClusterIP

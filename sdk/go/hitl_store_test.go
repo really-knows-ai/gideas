@@ -25,7 +25,7 @@ func TestQueueStore_InitSchema(t *testing.T) {
 	s := newTestStore(t)
 	// Verify the table exists by querying it.
 	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM hitl_queue").Scan(&count)
+	err := s.db.QueryRow("SELECT COUNT(*) FROM queue_items").Scan(&count)
 	if err != nil {
 		t.Fatalf("schema not initialised: %v", err)
 	}

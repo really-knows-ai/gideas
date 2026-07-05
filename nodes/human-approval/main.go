@@ -81,6 +81,10 @@ func handleApproval(
 ) error {
 	workitemID := wctx.GetWorkitemId()
 
+	if err := workitem.Heartbeat(); err != nil {
+		return fmt.Errorf("human-approval: heartbeat: %w", err)
+	}
+
 	slog.Info("human-approval: handling workitem",
 		"workitem_id", workitemID,
 	)
