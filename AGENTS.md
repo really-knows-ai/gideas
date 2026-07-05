@@ -63,14 +63,19 @@ The "Walking Skeleton" and reference components.
 3. **The Contract** (`proto/`) — The wire protocol that binds the components.
 4. **Implementation** — The code in `platform/operator`, `platform/sidecar`, and `sdk`.
 
-## Quality Gates
+## Hard Rule: The Repo Is Always Green
+
+`make verify` (tests → lint → build) **must pass with zero failures** before any commit. This is the only acceptable state of the repository. There is no such thing as a "pre-existing" or "unrelated" failure — if `make verify` fails, the work is incomplete, period.
+
+If you encounter a failure that you did not introduce, you still fix it. The failure is real. The repo was not green when you started, and it must be green when you finish. This is non-negotiable.
 
 All changes to this repository **must** pass the following before being committed:
 
-1. **Tests** — Run `go test ./...` (or the relevant subset) and ensure all tests pass. New functionality requires new or updated tests.
-2. **Lint** — Run `make check-fix` and resolve every issue it reports. Do not commit with lint failures.
+1. **Tests** — `go test ./...` (or the relevant subset) passes. New functionality requires new or updated tests.
+2. **Lint** — `make check-fix` resolves every issue. Do not commit with lint failures.
+3. **Build** — `make build` compiles every binary without errors.
 
-These two steps are non-negotiable. A change without tests or with lint violations is incomplete.
+For convenience, `make verify` runs all three in sequence. If it fails, you stop everything and fix the root cause — you do not proceed, you do not rationalise, you do not defer.
 
 ## Foundational Axioms
 

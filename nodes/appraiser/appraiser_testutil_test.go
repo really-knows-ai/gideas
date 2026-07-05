@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal/handlers"
 	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
@@ -47,10 +46,8 @@ type appraiserSpy struct {
 
 func newAppraiserSpy() *appraiserSpy {
 	return &appraiserSpy{
-		StoredArtefacts: make(map[string][]byte),
-		ArtefactContents: map[string][]byte{
-			handlers.ArtefactReviewOutput: []byte(`{}`),
-		},
+		StoredArtefacts:  make(map[string][]byte),
+		ArtefactContents: make(map[string][]byte),
 	}
 }
 

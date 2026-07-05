@@ -51,10 +51,17 @@ func defaultHandlerConfig() handlers.AppraisalConfig {
 	}
 }
 
+func lawWithMarkdown(id, group, goal string, tier flowv1.LawTier) *flowv1.Law {
+	return &flowv1.Law{
+		Id: id, Group: group, Goal: goal, Tier: tier,
+		Representations: []*flowv1.Representation{{Type: "text/markdown", Content: goal}},
+	}
+}
+
 func defaultLaws() []*flowv1.Law {
 	return []*flowv1.Law{
-		{Id: "L001", Group: "default", Goal: "Be concise", Tier: 1},
-		{Id: "L002", Group: "default", Goal: "Be accurate", Tier: 2},
+		lawWithMarkdown("L001", "default", "Be concise", 1),
+		lawWithMarkdown("L002", "default", "Be accurate", 2),
 	}
 }
 
@@ -88,7 +95,7 @@ func reviewOutputJSON(items ...string) string {
 func spyForHandler(t *testing.T, spy *appraisalSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 	// Override artefact contents for review-output retrieval.
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 	return newSpyClientWithEventBus(t, spy)
 }
 
@@ -101,7 +108,7 @@ func TestAppraisalHandler_BundleModeChildCount(t *testing.T) {
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(2)
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 	client, workitem := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
@@ -128,13 +135,13 @@ func TestAppraisalHandler_BundleModeChildCount(t *testing.T) {
 func TestAppraisalHandler_LawByLawChildCount(t *testing.T) {
 	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
-		{Id: "L001", Group: "security", Goal: "No secrets in code", Tier: 3},
-		{Id: "L002", Group: "security", Goal: "No hardcoded passwords", Tier: 3},
-		{Id: "L003", Group: "security", Goal: "Use env vars", Tier: 2},
+		lawWithMarkdown("L001", "security", "No secrets in code", 3),
+		lawWithMarkdown("L002", "security", "No hardcoded passwords", 3),
+		lawWithMarkdown("L003", "security", "Use env vars", 2),
 	}
 	spy.LawGroups["security"] = groupSecurityLawByLaw()
 	spy.ChildStatuses = childStatusesCompleted(6)
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 	client, workitem := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
@@ -163,13 +170,13 @@ func TestAppraisalHandler_LawByLawChildCount(t *testing.T) {
 func TestAppraisalHandler_MultiGroupChildCount(t *testing.T) {
 	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
-		{Id: "L001", Group: "security", Goal: "Be secure", Tier: 1},
-		{Id: "L002", Group: "style", Goal: "Be clean", Tier: 1},
+		lawWithMarkdown("L001", "security", "Be secure", 1),
+		lawWithMarkdown("L002", "style", "Be clean", 1),
 	}
 	spy.LawGroups["security"] = groupSecurityBundle()
 	spy.LawGroups["style"] = &flowv1.LawGroup{Name: "style", Mode: "bundle", Passes: 1}
 	spy.ChildStatuses = childStatusesCompleted(2)
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 	client, workitem := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
@@ -195,7 +202,7 @@ func TestAppraisalHandler_AllCompleteStampsAndEvents(t *testing.T) {
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(1) // 1 appraiser × 1 pass × 1 unit
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 	client, workitem := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
@@ -255,7 +262,7 @@ func TestAppraisalHandler_AllChildrenFail(t *testing.T) {
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesFailed(1)
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 	client, workitem := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
@@ -297,8 +304,8 @@ func TestAppraisalHandler_AllChildrenFail(t *testing.T) {
 func TestAppraisalHandler_PartialFailure(t *testing.T) {
 	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
-		{Id: "L001", Group: "security", Goal: "Be secure", Tier: 1},
-		{Id: "L002", Group: "style", Goal: "Be clean", Tier: 1},
+		lawWithMarkdown("L001", "security", "Be secure", 1),
+		lawWithMarkdown("L002", "style", "Be clean", 1),
 	}
 	spy.LawGroups["security"] = groupSecurityBundle()
 	spy.LawGroups["style"] = &flowv1.LawGroup{Name: "style", Mode: "bundle", Passes: 1}
@@ -309,7 +316,7 @@ func TestAppraisalHandler_PartialFailure(t *testing.T) {
 		{WorkitemId: "child-1", Phase: "Completed"},
 	}
 	// Only child-1 has review-output.
-	spy.ArtefactContents["review-output"] = reviewOutputJSON("some feedback")
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON("some feedback")
 	client, workitem := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
@@ -374,7 +381,7 @@ func TestAppraisal_PublishAuditEventFailure(t *testing.T) {
 	spy.Laws = defaultLaws()
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(1)
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 	client, workitem := spyForHandler(t, spy)
 
 	cfg := defaultHandlerConfig()
@@ -402,7 +409,7 @@ func TestAppraisalHandler_CoveragePayload(t *testing.T) {
 	spy.ChildStatuses = childStatusesCompleted(1)
 	client, workitem := spyForHandler(t, spy)
 	// Set review-output AFTER spyForHandler (which resets it).
-	spy.ArtefactContents["review-output"] = reviewOutputJSON("issue 1", "issue 2")
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON("issue 1", "issue 2")
 
 	cfg := defaultHandlerConfig()
 	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
@@ -455,7 +462,7 @@ func TestAppraisalHandler_AttestationWithViolations(t *testing.T) {
 	spy.LawGroups["default"] = groupDefaultBundle()
 	spy.ChildStatuses = childStatusesCompleted(1)
 	client, workitem := spyForHandler(t, spy)
-	spy.ArtefactContents["review-output"] = reviewOutputJSON("violation 1", "violation 2", "violation 3")
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON("violation 1", "violation 2", "violation 3")
 
 	cfg := defaultHandlerConfig()
 	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
@@ -498,8 +505,8 @@ func TestAppraisalHandler_AttestationWithViolations(t *testing.T) {
 func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
 	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
-		{Id: "L001", Group: "security", Goal: "No secrets", Tier: 3},
-		{Id: "L002", Group: "security", Goal: "No passwords", Tier: 3},
+		lawWithMarkdown("L001", "security", "No secrets", 3),
+		lawWithMarkdown("L002", "security", "No passwords", 3),
 	}
 	spy.LawGroups["security"] = groupSecurityLawByLaw()
 	// 2 dispatches: [0]=L001 unit, [1]=L002 unit
@@ -509,7 +516,7 @@ func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
 		{WorkitemId: "child-1", Phase: "Completed"},
 	}
 	client, workitem := spyForHandler(t, spy)
-	spy.ArtefactContents["review-output"] = reviewOutputJSON()
+	spy.ArtefactContents[handlers.ArtefactReviewOutput] = reviewOutputJSON()
 
 	cfg := defaultHandlerConfig()
 	cfg.Appraisers = []handlers.AppraiserPersonalityConfig{
@@ -552,8 +559,8 @@ func TestAppraisalHandler_LawByLawPartialFailure(t *testing.T) {
 func TestAppraisalHandler_LawByLawAllSuccess(t *testing.T) {
 	spy := newAppraisalSpy()
 	spy.Laws = []*flowv1.Law{
-		{Id: "L001", Group: "security", Goal: "No secrets", Tier: 3},
-		{Id: "L002", Group: "security", Goal: "No passwords", Tier: 3},
+		lawWithMarkdown("L001", "security", "No secrets", 3),
+		lawWithMarkdown("L002", "security", "No passwords", 3),
 	}
 	spy.LawGroups["security"] = groupSecurityLawByLaw()
 	// 2 dispatches (2 laws × 1 appraiser × 1 pass), all complete.

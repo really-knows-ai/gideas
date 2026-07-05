@@ -51,7 +51,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 # CGO-enabled node binaries (built from ./nodes/<name>/).
-CGO_NODE_BINS = forge sort appraise reviewer refine arbiter juror codify-smt codification friction-watcher ttl-watcher rule-router facilitator hitl law-applicator tribunal
+CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise hitl-sort human-approval human-arbiter juror law-applicator null-node petition-watcher refine rule-router sort tribunal ttl-watcher
 
 # CGO-enabled platform service binaries (built from ./platform/<name>/cmd/).
 CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian
@@ -129,6 +129,9 @@ check-fix: tidy lint-fix ## Run tidy, fmt (via goimports), and lint with auto-fi
 .PHONY: check-fix-all
 check-fix-all: check-fix ## Run check-fix across every module including the operator.
 	$(MAKE) -C platform/operator lint-fix
+
+.PHONY: verify
+verify: test check-fix build ## Run tests, lint, and build in sequence (quality gate).
 
 # ---------------------------------------------------------------------------
 ##@ Code Generation

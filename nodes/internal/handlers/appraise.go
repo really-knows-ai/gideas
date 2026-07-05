@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
@@ -41,7 +42,7 @@ const (
 	ArtefactPass                 = "pass"
 	EventAppraisalCoverage       = "appraisal.coverage"
 	EventAppraisalAttestation    = "appraisal.attestation"
-	stampAppraiseSecurity        = "appraise-security"
+	stampAppraised               = "appraised"
 )
 
 // hasNovelArgument returns true if the feedback item carries a
@@ -116,7 +117,7 @@ func HandleAppraisal(
 	// ---------------------------------------------------------------
 
 	result, err := fanOutAppraisal(
-		workitem, cfg, existingFeedback,
+		ctx, workitem, client, cfg, existingFeedback,
 		inputContent, reviewContent)
 	if err != nil {
 		return fmt.Errorf("appraisal: fan-out review: %w", err)
@@ -139,15 +140,15 @@ func HandleAppraisal(
 		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
 	} else if len(cfg.Appraisers) > 0 {
-		// No dispatches but appraisers exist — pass-through: stamp appraise-security
-		// so sort can complete the exit contract.
+		// No dispatches but appraisers exist — pass-through: stamp the
+		// completion signal so sort can complete the exit contract.
 		slog.Info("appraisal: no dispatches — applying pass-through stamp")
 		art, artErr := workitem.GetArtefact(cfg.GovernedArtefact)
 		if artErr != nil {
 			return fmt.Errorf("appraisal: get artefact: %w", artErr)
 		}
-		if err := art.Stamp(stampAppraiseSecurity); err != nil {
-			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraiseSecurity, err)
+		if err := art.Stamp(stampAppraised); err != nil {
+			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraised, err)
 		}
 	} else {
 		slog.Info("appraisal: no appraisers — skipping stamps and events")
@@ -251,7 +252,9 @@ type fanOutResult struct {
 //
 //nolint:cyclop,funlen,gocyclo // Orchestration — sequential steps are inherently complex.
 func fanOutAppraisal(
+	ctx context.Context,
 	workitem *flow.Workitem,
+	client *flow.Client,
 	cfg AppraisalConfig,
 	existingFeedback []*flow.Feedback,
 	inputContent, reviewContent string,
@@ -444,11 +447,18 @@ func fanOutAppraisal(
 		if !completedIDs[s.WorkitemID] {
 			continue
 		}
-		// Use FindArtefact to read child artefact by constructing its scoped ID.
-		// ponytail: FindArtefact with scoped artefact ID replaces
-		// GetChildArtefact. Verify the Archivist supports the
-		// "childWID/artefactID" pattern (Phase 10).
-		childArt, findErr := workitem.FindArtefact(s.WorkitemID + "/" + ArtefactReviewOutput)
+		// Cross-Workitem read: the child stores its own review-output under
+		// its own workitem ID (bare artefact ID "review-data"), not under a
+		// "parentID/childID/review-data" composite key. FindArtefact's
+		// string-concatenation convention never matches the Archivist's
+		// strict (workitem_id, artefact_id) lookup — TargetWorkitemId is
+		// the real cross-Workitem read mechanism (see nodes/internal/tally
+		// for the same, working pattern).
+		getResp, findErr := client.RawArchivist().GetArtefact(ctx, &flowv1.GetArtefactRequest{
+			WorkitemId:       workitem.ID(),
+			ArtefactId:       ArtefactReviewOutput,
+			TargetWorkitemId: s.WorkitemID,
+		})
 		if findErr != nil {
 			slog.Warn("appraisal: child completed but no review-output",
 				"workitem_id", s.WorkitemID, "error", findErr)
@@ -457,15 +467,7 @@ func fanOutAppraisal(
 			})
 			continue
 		}
-		childContent, cErr := childArt.GetContent()
-		if cErr != nil {
-			slog.Warn("appraisal: child completed but no review-output content",
-				"workitem_id", s.WorkitemID, "error", cErr)
-			childResults = append(childResults, flow.ChildResult{
-				Status: s, Artefacts: map[string][]byte{ArtefactReviewOutput: nil},
-			})
-			continue
-		}
+		childContent := getResp.GetContent()
 		var out reviewOutput
 		if uErr := json.Unmarshal(childContent, &out); uErr != nil {
 			return nil, fmt.Errorf("unmarshal review-output from child %s: %w", s.WorkitemID, uErr)
@@ -476,13 +478,20 @@ func fanOutAppraisal(
 		})
 	}
 
+	// Step 10: Consolidate — multiple reviewers often raise
+	// near-identical complaints. Group by cited-laws set and keep
+	// one representative per group to avoid swamping refinement
+	// with duplicates.
+	consolidated := consolidateFeedback(merged)
+
 	slog.Info("appraisal: fan-out complete",
 		"children_total", len(statuses),
 		"children_completed", len(completedIDs),
-		"feedback_items", len(merged))
+		"feedback_items", len(merged),
+		"consolidated", len(consolidated))
 
 	return &fanOutResult{
-		feedback:           merged,
+		feedback:           consolidated,
 		dispatchMatrix:     dispatchEntries,
 		unitsByGroup:       unitsByGroup,
 		childStatuses:      statuses,
@@ -491,6 +500,53 @@ func fanOutAppraisal(
 		childByDispatchIdx: childByDispatchIdx,
 		skippedIndices:     skippedIndices,
 	}, nil
+}
+
+// consolidateFeedback groups feedback items by their cited-laws set and keeps
+// one representative per group, deduplicating near-identical complaints from
+// different reviewers before they reach refinement.
+func consolidateFeedback(items []reviewItem) []reviewItem {
+	if len(items) <= 1 {
+		return items
+	}
+
+	type groupKey struct {
+		hasLaws bool
+		lawsKey string
+	}
+	groups := make(map[groupKey][]reviewItem, len(items))
+	order := make([]groupKey, 0, len(items))
+
+	for _, item := range items {
+		lawIDs := item.CitedLaws
+		hasLaws := len(lawIDs) > 0
+		var lawsKey string
+		if hasLaws {
+			sorted := make([]string, len(lawIDs))
+			copy(sorted, lawIDs)
+			sort.Strings(sorted)
+			lawsKey = strings.Join(sorted, ",")
+		}
+		key := groupKey{hasLaws: hasLaws, lawsKey: lawsKey}
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], item)
+	}
+
+	result := make([]reviewItem, 0, len(groups))
+	for _, key := range order {
+		bucket := groups[key]
+		best := bucket[0]
+		for _, item := range bucket[1:] {
+			if len(item.Message) < len(best.Message) {
+				best = item
+			}
+		}
+		result = append(result, best)
+	}
+
+	return result
 }
 
 // ---------------------------------------------------------------------------
@@ -516,8 +572,11 @@ func lawToData(l *flowv1.Law) LawData {
 }
 
 // applyAppraisalStamps applies per-group and per-law stamps based on dispatch
-// completion. A group/law is stamped only if ALL dispatches for that scope
-// completed successfully. Stamping failures are logged but do not fail.
+// completion, plus the overall "appraised" completion stamp. A group/law is
+// stamped only if ALL dispatches for that scope completed successfully; the
+// completion stamp is applied whenever no dispatch failed outright, giving
+// Sort a stable "Appraisal ran" signal independent of which LawGroups happen
+// to be active. Stamping failures are logged but do not fail the stage.
 func applyAppraisalStamps(
 	workitem *flow.Workitem,
 	governedArtefact string,
@@ -540,11 +599,14 @@ func applyAppraisalStamps(
 	// Entries that were skipped (unknown appraiser) are treated as failed
 	// so they don't get stamps.
 	entryFailed := make([]bool, len(dispatchMatrix))
+	anyFailed := false
 	for i := range dispatchMatrix {
 		if skippedIndices[i] {
 			entryFailed[i] = true
+			anyFailed = true
 		} else if wid := childByDispatchIdx[i]; wid != "" && failedIDs[wid] {
 			entryFailed[i] = true
+			anyFailed = true
 		}
 	}
 
@@ -614,6 +676,22 @@ func applyAppraisalStamps(
 				}
 			}
 		}
+	}
+
+	// Overall completion stamp: applied whenever fan-out ran without any
+	// dispatch failing outright, regardless of which LawGroups are active
+	// or whether violations were found (violations are tracked via
+	// feedback items, not withheld via this stamp — Sort separately routes
+	// to refine when unaddressed feedback exists).
+	if !anyFailed {
+		if err := art.Stamp(stampAppraised); err != nil {
+			slog.Warn("appraisal: failed to stamp completion",
+				"stamp", stampAppraised, "error", err)
+		} else {
+			slog.Info("appraisal: completion stamp applied", "stamp", stampAppraised)
+		}
+	} else {
+		slog.Warn("appraisal: dispatch failures present, skipping completion stamp")
 	}
 }
 

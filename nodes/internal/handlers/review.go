@@ -25,7 +25,7 @@ const (
 	ArtefactLaws         = "laws"
 	ArtefactHistory      = "history"
 	ArtefactReview       = "review"
-	ArtefactReviewOutput = "review-output"
+	ArtefactReviewOutput = "review-data"
 )
 
 // AppraiserPersonalityData is the JSON structure passed via the "appraiserPersonality" artefact.
@@ -222,10 +222,7 @@ func HandleReview(
 
 	// The governed artefact for child data transfer is "review-data" —
 	// internal plumbing, not a governed work product.
-	reviewOutArt, err := workitem.GetArtefact(ArtefactReviewOutput)
-	if err != nil {
-		return fmt.Errorf("appraiser: get %s: %w", ArtefactReviewOutput, err)
-	}
+	reviewOutArt := workitem.NewArtefact(ArtefactReviewOutput)
 	if err := reviewOutArt.Store(outJSON); err != nil {
 		return fmt.Errorf("appraiser: store %s: %w", ArtefactReviewOutput, err)
 	}
