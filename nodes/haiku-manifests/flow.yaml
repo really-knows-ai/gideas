@@ -12,15 +12,40 @@
 #                         └──Complete() (exit)
 #
 # Sort's decision tree:
-#   1. Missing "linter" stamp?        → route to Quench
-#   2. Missing "appraise-*" stamp?    → route to Appraisal
-#   3. Unresolved feedback?           → route to Refine
-#   4. Missing "approval" stamp?      → route to human-approval
-#   5. All clear?                     → Complete()
+#   1. Missing "appraisal" stamp?         → route to Appraisal
+#   2. Missing attestation stamps (law-*)?→ match ATTEST: capability (see matching algo in spec)
+#      - lawgrp-<group> stamps need a node with ATTEST:.../law-group
+#      - law-<lawID>-<type> stamps need a node with ATTEST:.../law-id
+#      - Both are satisfied by ATTEST:.../law-* (catch-all)
+#      - First node in nodeOrder whose ATTEST: capability matches wins
+#   3. Unresolved feedback?               → route to Refine
+#   4. Missing "approval" stamp?          → route to human-approval
+#   5. All clear?                         → Complete()
+#
+# Stamp vocabulary vs exit contract:
+#   - The GovernedArtefact stamp vocabulary is an ARCHIVIST WRITE GATE — it
+#     controls what stamps the Archivist will accept when a node writes a
+#     stamp via StampArtefact(). The wildcard "law-*" in the vocabulary tells
+#     the Archivist "accept any stamp matching law-*", but it does NOT create
+#     a completion requirement.
+#   - The FoundryFlow exit contract is a SORT COMPLETION GATE — it lists stamps
+#     that must be present before the artefact can exit the Flow. Only non-law
+#     stamps are listed here (e.g., "appraisal", "approval").
+#   - Laws with `appliesTo: ["haiku"]` AUTOMATICALLY become implicit completion
+#     requirements via the platform's VerifyLawAttestations check. The platform
+#     queries the Librarian for applicable laws, computes the required
+#     attestation stamps (law-<lawID>-<type> or lawgrp-<group>), and verifies
+#     they are present before allowing Complete(). No exit contract changes
+#     are needed when adding a new law — it is automatic.
+#   - Group mode (bundle vs law-by-law) determines stamp granularity:
+#     - Bundle mode: one lawgrp-<group> stamp covers the entire group.
+#     - Law-by-law mode: each passing law's representation type produces a
+#       law-<lawID>-<type> stamp; once all laws pass, group.Attest() stamps
+#       lawgrp-<group> as an aggregate.
 #
 # Artefacts:
 #   - petition: The creative brief, pre-populated at workitem creation.
-#   - haiku: The governed output, must carry [linter, appraise-security, approval].
+#   - haiku: The governed output, must carry [appraisal, law-*, approval].
 #   - review-data: Internal data transfer between Appraisal and Appraiser children.
 #
 # Apply order:
@@ -35,9 +60,8 @@ metadata:
   namespace: default
 spec:
   stamps:
-    - linter
-    - appraise-security
-    - appraise-*
+    - appraisal
+    - law-*
     - approval
 ---
 apiVersion: flow.gideas.io/v1
@@ -47,7 +71,6 @@ metadata:
   namespace: default
 spec:
   stamps:
-    - appraise-security
     - approval
 ---
 apiVersion: flow.gideas.io/v1
@@ -69,11 +92,12 @@ spec:
     standard-entry:
       "petition": []
   exitContracts:
-    # The haiku must carry linter, appraise-security, and approval stamps to exit.
+    # The haiku must carry appraisal and approval stamps to exit.
+    # Law attestation stamps are implicit from laws with appliesTo: ["haiku"]
+    # and are enforced by the platform's VerifyLawAttestations check.
     standard-exit:
       "haiku":
-        - linter
-        - appraise-security
+        - appraisal
         - approval
   nodeGroups:
     main-cycle:
@@ -157,7 +181,7 @@ spec:
     - "READ:artefact/haiku"
     - "READ:feedback"
     - "WRITE:feedback/new"
-    - "STAMP:artefact/haiku/linter"
+    - "ATTEST:artefact/haiku/law-id"
 ---
 apiVersion: flow.gideas.io/v1
 kind: FoundryNode
@@ -181,7 +205,8 @@ spec:
     - "WRITE:feedback/new"
     - "WRITE:feedback/resolved"
     - "WRITE:feedback/rejected"
-    - "STAMP:artefact/haiku/appraise-security"
+    - "ATTEST:artefact/haiku/appraisal"
+    - "ATTEST:artefact/haiku/law-*"
     - "CREATE:workitem/child"
 ---
 apiVersion: flow.gideas.io/v1
