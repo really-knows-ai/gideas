@@ -127,23 +127,9 @@ func HandleAppraisal(
 		"feedback_count", len(result.feedback),
 		"dispatch_count", len(result.dispatchMatrix))
 
-	// Post-fan-out: coverage and events (only if dispatches exist).
-	if len(result.dispatchMatrix) > 0 {
-		coverage := buildCoverageMap(
-			result.dispatchMatrix, result.childStatuses,
-			result.childResults, result.childByDispatchIdx,
-		)
-		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
-		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
-	} else if len(cfg.Appraisers) > 0 {
-		slog.Info("appraisal: no dispatches — pass-through stamp follows after feedback")
-	} else {
-		slog.Info("appraisal: no appraisers — skipping stamps and events")
-	}
-
 	// ---------------------------------------------------------------
 	// Post-inference: raise feedback, cite laws
-	// ---------------------------------------------------------------
+	// --------------------------------------------------------------
 
 	for i, item := range result.feedback {
 		if item.Message == "" {
@@ -174,6 +160,22 @@ func HandleAppraisal(
 
 	if len(result.feedback) == 0 {
 		slog.Info("appraisal: no feedback — content looks good")
+	}
+
+	// Post-fan-out: coverage and attestation events. Emitted after
+	// feedback is raised so the audit trail reflects the complete
+	// review state (R5 ordering).
+	if len(result.dispatchMatrix) > 0 {
+		coverage := buildCoverageMap(
+			result.dispatchMatrix, result.childStatuses,
+			result.childResults, result.childByDispatchIdx,
+		)
+		emitCoverageEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
+		emitAttestationEvent(ctx, client, coverage, os.Getenv(flow.EnvWorkitemID))
+	} else if len(cfg.Appraisers) > 0 {
+		slog.Info("appraisal: no dispatches — pass-through stamp follows after feedback")
+	} else {
+		slog.Info("appraisal: no appraisers — skipping stamps and events")
 	}
 
 	// ---------------------------------------------------------------
