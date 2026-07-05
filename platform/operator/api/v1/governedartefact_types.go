@@ -25,7 +25,7 @@ import (
 // The governed artefact type is identified solely by metadata.name.
 type GovernedArtefactSpec struct {
 	// stamps are the stamp vocabulary — the set of stamp names meaningful for this governed artefact
-	// (e.g. ["linter", "security-review", "approval"]).
+	// (e.g. ["review", "approval"]).
 	// Entry and exit contracts select required stamps from this vocabulary.
 	// +optional
 	Stamps []string `json:"stamps,omitempty"`

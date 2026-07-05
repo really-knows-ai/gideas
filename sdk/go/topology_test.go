@@ -21,7 +21,7 @@ func testTopology() *flowv1.GetFlowTopologyResponse {
 				Name: "forge",
 				Capabilities: []string{
 					"WRITE:artefact",
-					"STAMP:artefact/haiku/appraise-*",
+					"STAMP:artefact/haiku/review",
 					"STAMP:artefact/law/law-*",
 				},
 			},
@@ -34,7 +34,7 @@ func testTopology() *flowv1.GetFlowTopologyResponse {
 			},
 		},
 		ExitContract: map[string]*flowv1.StampRequirements{
-			"haiku": {Stamps: []string{"review", "appraise-security"}},
+			"haiku": {Stamps: []string{"review", "review"}},
 			"law":   {Stamps: []string{"law-group-content", "law-abc-def"}},
 		},
 	}
@@ -66,8 +66,8 @@ func TestFlow_GetExitContract(t *testing.T) {
 	if haikuStamps[0] != "review" {
 		t.Errorf("haiku stamps[0] = %q, want %q", haikuStamps[0], "review")
 	}
-	if haikuStamps[1] != "appraise-security" {
-		t.Errorf("haiku stamps[1] = %q, want %q", haikuStamps[1], "appraise-security")
+	if haikuStamps[1] != "review" {
+		t.Errorf("haiku stamps[1] = %q, want %q", haikuStamps[1], "review")
 	}
 
 	// Check law entry.
@@ -236,10 +236,12 @@ func TestNode_HasStampCapability(t *testing.T) {
 	n := newNode(&flowv1.FlowNode{
 		Name: "test",
 		Capabilities: []string{
-			"STAMP:artefact/haiku/review",     // exact match
-			"STAMP:artefact/haiku/appraise-*", // wildcard stamp segment
-			"STAMP:artefact/*/review",         // wildcard kind segment
-			"STAMP:artefact/law/law-*",        // law-* prefix
+			"STAMP:artefact/haiku/review",  // exact match
+			"STAMP:artefact/haiku/review",  // exact stamp match
+			"STAMP:artefact/*/review",      // wildcard kind segment
+			"STAMP:artefact/law/law-*",     // law-* prefix
+			"ATTEST:artefact/*/review",     // ATTEST wildcard kind segment
+			"ATTEST:artefact/haiku/review", // ATTEST exact match
 		},
 	})
 	tests := []struct {
@@ -249,13 +251,18 @@ func TestNode_HasStampCapability(t *testing.T) {
 		want  bool
 	}{
 		{"exact match haiku/review", "haiku", "review", true},
-		{"wildcard stamp segment appraise-*", "haiku", "appraise-security", true},
+		{"wildcard stamp segment review", "haiku", "review", true},
 		{"wildcard kind segment */review haiku", "haiku", "review", true},
 		{"wildcard kind segment */review law", "law", "review", true},
 		{"law-* prefix match law-group-content", "law", "law-group-content", true},
 		{"law-* prefix match law-abc-def", "law", "law-abc-def", true},
 		{"no match wrong stamp", "haiku", "approval", false},
 		{"no match wrong kind and stamp", "doc", "nonesuch", false},
+
+		// ATTEST: capability matching (capabilities added to node above).
+		{"ATTEST wildcard kind match doc/review", "doc", "review", true},
+		{"ATTEST wildcard stamp review", "haiku", "review", true},
+		{"ATTEST no match wrong kind", "doc", "nonesuch", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -276,7 +283,7 @@ func TestNode_HasStampCapability_nonstamp_node(t *testing.T) {
 			"WRITE:artefact",
 		},
 	})
-	if n.HasStampCapability("haiku", "appraise-security") {
+	if n.HasStampCapability("haiku", "review") {
 		t.Error("HasStampCapability should return false for node with only non-stamp capabilities")
 	}
 }

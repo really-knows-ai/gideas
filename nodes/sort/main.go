@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,34 +151,7 @@ func handleSort(ctx context.Context, workitem *flow.Workitem, client *flow.Clien
 			return err
 		}
 		if deadlockedItem != nil {
-			// Check if any cited laws have active dispute records.
-			// If so, suspend (pending-hold) instead of routing to arbiter.
-			// ponytail: findActiveDisputeForFeedback needs the proto
-			// FeedbackItem for Justification access; the domain Feedback
-			// does not expose GetJustification(). Clean up in Phase 10
-			// when Feedback gains the missing accessors or Proto() escape hatch.
-			deadlockedProto := deadlockedItem.PB()
-			if deadlockedProto != nil {
-				if petitionID, ok := findActiveDisputeForFeedback(ctx, deadlockedProto); ok {
-					slog.Info("sort: suspending pending-hold (active dispute record)",
-						"artefact_kind", kind,
-						"petition_id", petitionID)
-					condition := fmt.Sprintf("dispute_retired(%q)", petitionID)
-					if err := workitem.Suspend(
-						flow.WithCondition(condition),
-						flow.WithSuspendTimeout(pendingHoldTimeout),
-					); err != nil {
-						return fmt.Errorf("sort: suspend pending-hold: %w", err)
-					}
-					return nil
-				}
-			}
-			slog.Info("sort: routing to arbiter (deadlocked feedback)",
-				"artefact_kind", kind)
-			if err := workitem.RouteTo(outputArbiter); err != nil {
-				return fmt.Errorf("sort: route to arbiter: %w", err)
-			}
-			return nil
+			return handleDeadlockedItem(ctx, workitem, deadlockedItem, kind)
 		}
 
 		// ── Step 2: Check stamps in nodeOrder ─────────────────────────
@@ -227,6 +201,15 @@ func handleSort(ctx context.Context, workitem *flow.Workitem, client *flow.Clien
 			}
 		}
 
+		// ── Step 2b: Check attestation stamps ────────────────────────────────
+		routed, err := routeAttestation(workitem, kind, nodeOrder, topology.GetNodes(), outputRoutes)
+		if err != nil {
+			return err
+		}
+		if routed {
+			return nil
+		}
+
 		// ── Step 3: All stamps from nodeOrder present ─────────────────
 		// Check for addressed feedback (ACTIONED/WONT_FIX) needing adjudication.
 		hasAddressed, err := hasAddressedFeedback(workitem, kind)
@@ -272,7 +255,8 @@ func handleSort(ctx context.Context, workitem *flow.Workitem, client *flow.Clien
 }
 
 // buildStampProviders builds a map of artefact kind → stamp name → provider node name
-// from node capabilities. It looks for capabilities matching STAMP:artefact/<kind>/<stamp>.
+// from node capabilities. It looks for capabilities matching STAMP:artefact/<kind>/<stamp>
+// or ATTEST:artefact/<kind>/<stamp>.
 func buildStampProviders(nodes map[string]*flowv1.FlowNode) map[string]map[string]string {
 	providers := make(map[string]map[string]string)
 	for _, node := range nodes {
@@ -291,13 +275,18 @@ func buildStampProviders(nodes map[string]*flowv1.FlowNode) map[string]map[strin
 }
 
 // parseStampCapability parses a capability string of the form
-// "STAMP:artefact/<kind>/<stamp>" and returns the kind and stamp name.
+// "STAMP:artefact/<kind>/<stamp>" or "ATTEST:artefact/<kind>/<stamp>"
+// and returns the kind and stamp name.
 func parseStampCapability(cap string) (kind, stamp string, ok bool) {
-	const prefix = "STAMP:artefact/"
-	if !strings.HasPrefix(cap, prefix) {
+	var rest string
+	switch {
+	case strings.HasPrefix(cap, "STAMP:artefact/"):
+		rest = cap[len("STAMP:artefact/"):]
+	case strings.HasPrefix(cap, "ATTEST:artefact/"):
+		rest = cap[len("ATTEST:artefact/"):]
+	default:
 		return "", "", false
 	}
-	rest := cap[len(prefix):]
 	parts := strings.SplitN(rest, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false
@@ -500,4 +489,186 @@ func parseNodeOrder(raw string) []string {
 		}
 	}
 	return result
+}
+
+// handleDeadlockedItem handles a deadlocked feedback item. If any cited laws
+// have active dispute records, the workitem is suspended (pending-hold) instead
+// of being routed to the arbiter.
+func handleDeadlockedItem(
+	ctx context.Context,
+	workitem *flow.Workitem,
+	deadlockedItem *flow.Feedback,
+	kind string,
+) error {
+	// ponytail: findActiveDisputeForFeedback needs the proto FeedbackItem for
+	// Justification access; the domain Feedback does not expose GetJustification().
+	// Clean up in Phase 10 when Feedback gains the missing accessors or Proto()
+	// escape hatch.
+	deadlockedProto := deadlockedItem.PB()
+	if deadlockedProto != nil {
+		if petitionID, ok := findActiveDisputeForFeedback(ctx, deadlockedProto); ok {
+			slog.Info("sort: suspending pending-hold (active dispute record)",
+				"artefact_kind", kind,
+				"petition_id", petitionID)
+			condition := fmt.Sprintf("dispute_retired(%q)", petitionID)
+			if err := workitem.Suspend(
+				flow.WithCondition(condition),
+				flow.WithSuspendTimeout(pendingHoldTimeout),
+			); err != nil {
+				return fmt.Errorf("sort: suspend pending-hold: %w", err)
+			}
+			return nil
+		}
+	}
+	slog.Info("sort: routing to arbiter (deadlocked feedback)",
+		"artefact_kind", kind)
+	if err := workitem.RouteTo(outputArbiter); err != nil {
+		return fmt.Errorf("sort: route to arbiter: %w", err)
+	}
+	return nil
+}
+
+// GuardError is a structured error that prevents completion when a routing
+// precondition cannot be satisfied.
+type GuardError struct {
+	Code  string // e.g. "NO_ATTESTATION_PROVIDER"
+	Stamp string // the missing stamp that could not be routed
+}
+
+func (e *GuardError) Error() string {
+	return fmt.Sprintf("sort: guard error [%s]: no provider for attestation stamp %q", e.Code, e.Stamp)
+}
+
+// neededAttestCapability returns the ATTEST sub-capability needed for a
+// given stamp name. Returns "" for stamps that are not law attestation
+// stamps (handled by static buildStampProviders instead).
+func neededAttestCapability(stampName string) string {
+	if strings.HasPrefix(stampName, "lawgrp-") {
+		return "law-group"
+	}
+	if strings.HasPrefix(stampName, "law-") {
+		return "law-id"
+	}
+	return ""
+}
+
+// hasAttestCapability checks whether a node's capabilities include an
+// ATTEST:artefact/<kind>/<sub> capability matching the required sub-capability.
+func hasAttestCapability(capabilities []string, kind, sub string) bool {
+	required := "ATTEST:artefact/" + kind + "/" + sub
+	for _, cap := range capabilities {
+		if flow.MatchCapability(cap, required) {
+			return true
+		}
+	}
+	return false
+}
+
+// findAttestationProvider resolves a missing attestation stamp to a provider
+// node. Walks nodeOrder first, then falls back to specificity-based selection
+// across all nodes.
+func findAttestationProvider(
+	stampName, kind string,
+	nodeOrder []string,
+	nodes map[string]*flowv1.FlowNode,
+) string {
+	needed := neededAttestCapability(stampName)
+	if needed == "" {
+		return ""
+	}
+
+	// 1. Walk nodeOrder in order — first match wins.
+	for _, nodeName := range nodeOrder {
+		node := nodes[nodeName]
+		if node == nil {
+			continue
+		}
+		if hasAttestCapability(node.GetCapabilities(), kind, needed) {
+			return nodeName
+		}
+	}
+
+	// 2. Fallback: scan all nodes, most specific match wins.
+	var bestNode string
+	bestSpec := 0
+	var names []string
+	for name := range nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, nodeName := range names {
+		node := nodes[nodeName]
+		if node == nil {
+			continue
+		}
+		spec := attestSpecificity(node.GetCapabilities(), kind, needed)
+		if spec > bestSpec {
+			bestSpec = spec
+			bestNode = nodeName
+		}
+	}
+	return bestNode
+}
+
+// attestSpecificity returns the match specificity of a node's capabilities
+// for the required sub-capability: 2 (exact), 1 (wildcard), or 0 (none).
+func attestSpecificity(capabilities []string, kind, needed string) int {
+	required := "ATTEST:artefact/" + kind + "/" + needed
+	for _, cap := range capabilities {
+		if cap == required {
+			return 2
+		}
+		if strings.Contains(cap, "*") && flow.MatchCapability(cap, required) {
+			return 1
+		}
+	}
+	return 0
+}
+
+// routeAttestation checks for missing law attestation stamps and routes to
+// an attestation provider if any are found. Returns (true, nil) when a
+// routing decision was made (caller should return early). Returns (false, nil)
+// when no attestation routing is needed (all stamps present or no law stamps).
+func routeAttestation(
+	workitem *flow.Workitem,
+	kind string,
+	nodeOrder []string,
+	nodes map[string]*flowv1.FlowNode,
+	outputRoutes map[string]string,
+) (bool, error) {
+	missingAttestations, err := workitem.VerifyLawAttestations(kind)
+	if err != nil {
+		return false, fmt.Errorf("sort: verify law attestations for %s: %w", kind, err)
+	}
+	if len(missingAttestations) == 0 {
+		return false, nil
+	}
+	for _, stamp := range missingAttestations {
+		if neededAttestCapability(stamp) == "" {
+			continue
+		}
+		provider := findAttestationProvider(stamp, kind, nodeOrder, nodes)
+		if provider == "" {
+			return false, &GuardError{
+				Code:  "NO_ATTESTATION_PROVIDER",
+				Stamp: stamp,
+			}
+		}
+		outputName, ok := outputRoutes[provider]
+		if !ok {
+			return false, fmt.Errorf(
+				"sort: no output route to attestation provider %q for stamp %q",
+				provider, stamp)
+		}
+		slog.Info("sort: routing to attestation provider (missing law stamp)",
+			"artefact_kind", kind,
+			"provider", provider,
+			"stamp", stamp,
+			"output", outputName)
+		if err := workitem.RouteTo(outputName); err != nil {
+			return false, fmt.Errorf("sort: route to %s: %w", outputName, err)
+		}
+		return true, nil
+	}
+	return false, nil
 }

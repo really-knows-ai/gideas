@@ -1,9 +1,9 @@
 // Quench is the deterministic validator node of the Haiku Foundry Cycle.
 //
 // It reads the "haiku" artefact, validates the 5-7-5 syllable structure using
-// a Go heuristic syllable counter. Quench ALWAYS stamps "linter" on the
-// artefact to record that this version has been inspected. The stamp means
-// "I have seen this", not "it is valid".
+// a Go heuristic syllable counter. Quench ALWAYS attests the syllable law on
+// the artefact to record that this version has been evaluated. The attestation
+// means "I have evaluated this law", not "the artefact is valid".
 //
 // Validation happens BEFORE feedback reconciliation:
 //
@@ -12,7 +12,7 @@
 //  3. If VALID — accept fixes on any ACTIONED feedback (the fix worked).
 //  4. If INVALID — reject fixes on any ACTIONED feedback (the fix didn't
 //     resolve the structural issue) and raise new feedback (canWontFix=false).
-//  5. Always stamp "linter" and route to Sort.
+//  5. Always attest the syllable law and route to Sort.
 //
 // This ordering preserves the feedback history chain: a failed fix is
 // rejected (ACTIONED → REJECTED) rather than resolved and re-raised,
@@ -108,11 +108,11 @@ func handleQuench(workitem *flow.Workitem) error {
 		}
 	}
 
-	// 5. Always stamp "linter" — records that Quench has inspected this version.
-	if err := haikuArt.Stamp("linter"); err != nil {
-		return fmt.Errorf("quench: stamp haiku: %w", err)
+	// 5. Attest the syllable law — records that Quench has evaluated the
+	//    text/plain representation of the syllable law.
+	if err := attestSyllableLaw(workitem, haikuArt); err != nil {
+		return fmt.Errorf("quench: attest syllable law: %w", err)
 	}
-	slog.Info("haiku-quench: linter stamp applied")
 
 	// 6. Always route to Sort — it decides what happens next.
 	if err := workitem.RouteTo("default"); err != nil {
@@ -120,6 +120,50 @@ func handleQuench(workitem *flow.Workitem) error {
 	}
 	slog.Info("haiku-quench: done")
 	return nil
+}
+
+// attestSyllableLaw looks up the syllable law via GetLawGroups and attests
+// it on the given artefact. Quench always attests — the stamp means "I have
+// evaluated this law", not "the artefact is valid".
+//
+// ponytail: Linear scan over groups and laws is fine for a single known law.
+// If Quench ever needs to attest multiple laws, pre-index by law ID.
+func attestSyllableLaw(workitem *flow.Workitem, artefact *flow.Artefact) error {
+	groups, err := workitem.GetLawGroups("text/plain")
+	if err != nil {
+		return fmt.Errorf("get law groups: %w", err)
+	}
+
+	// Find the content group (the syllable law lives here).
+	var contentGroup *flow.LawGroup
+	for _, g := range groups {
+		if g.Name() == "content" {
+			contentGroup = g
+			break
+		}
+	}
+	if contentGroup == nil {
+		return fmt.Errorf("content law group not found")
+	}
+
+	laws, err := contentGroup.GetLaws()
+	if err != nil {
+		return fmt.Errorf("get laws for content group: %w", err)
+	}
+
+	// Find the syllable law by ID.
+	const syllableLawID = "haiku-syllable"
+	for _, law := range laws {
+		if law.ID() == syllableLawID {
+			if err := law.Attest(artefact, "text/plain"); err != nil {
+				return fmt.Errorf("attest syllable law: %w", err)
+			}
+			slog.Info("haiku-quench: syllable law attested",
+				"stamp", "law-"+syllableLawID+"-text-plain")
+			return nil
+		}
+	}
+	return fmt.Errorf("syllable law %q not found in content group", syllableLawID)
 }
 
 // acceptActionedFeedback accepts fixes on all ACTIONED feedback items.

@@ -123,6 +123,10 @@ Missing capabilities produce a `CAPABILITY_DENIED` error from the Librarian, for
 
 `Workitem.GetLawGroups` failures prevent the node from loading its governance context. Whether this is blocking depends on the node's design — a deterministic validator cannot proceed without laws to check against, while a generator may be able to proceed with degraded governance context and emit appropriate friction to signal the gap.
 
+### Canonical Computation Invariant
+
+Both `Workitem.VerifyLawAttestations` and the operator's `validateLawAttestations` compute the required attestation stamp set from the same two Librarian RPCs (`QueryLaws` filtered by `governed_artefact`, and `ListLawGroups`). The stamp set is a pure function of these inputs — for each applicable law, for each representation type, emit `law-<lawID>-<type>`; for each group in bundle mode, emit `lawgrp-<group>`; for each group in law-by-law mode with all laws passing, emit `lawgrp-<group>`. Both callers compose these RPCs identically so they cannot diverge. See [Law Attestation Semantics](../02-flow/09-law-attestation.md).
+
 ## Legal SDK Invariants
 
 1. All legal operations are accessed through domain objects (`Workitem`, `LawGroup`, `Law`, `Client`). No `context.Context` is accepted.

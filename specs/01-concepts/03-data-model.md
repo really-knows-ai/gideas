@@ -148,7 +148,7 @@ When nodes need shared reference material (templates, schemas, boilerplate), the
 
 ### Governed Artefacts
 
-A GovernedArtefact CRD declares the stamp vocabulary for an artefact type — the set of stamp names that are meaningful for that governed artefact. The type is identified solely by `metadata.name` (e.g. `petition-draft`). For example, a `petition-draft` governed artefact might declare stamps like "linter", "security-review", "legal-review", and "approval". The CRD structure is defined in the [CRD Reference](../05-reference/crds.md).
+A GovernedArtefact CRD declares the stamp vocabulary for an artefact type — the set of stamp names that are meaningful for that governed artefact. The type is identified solely by `metadata.name` (e.g. `petition-draft`). For example, a `petition-draft` governed artefact might declare stamps like "review", "security-review", "legal-review", and "approval". The CRD structure is defined in the [CRD Reference](../05-reference/crds.md).
 
 The `stamps` field defines which stamp names exist for this governed artefact — not which stamps are required at any particular boundary. [Entry and exit contracts](#entry-and-exit-contracts) define which of these stamps are required at each lifecycle boundary. An artefact is **present** if it exists in the Archivist, regardless of stamps.
 
@@ -194,7 +194,7 @@ A stamp is uniquely keyed by its **name** — the governance checkpoint it repre
 
 A stamp records:
 
-- The **name** of the governance checkpoint being satisfied (e.g. "linter", "security-review", "approval")
+- The **name** of the governance checkpoint being satisfied (e.g. "review", "security-review", "approval")
 - The **node** that applied it (for audit)
 - The **content hash** of the artefact at stamp time
 - A **cryptographic signature** and **certificate chain** binding the stamp to the content

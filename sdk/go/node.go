@@ -35,15 +35,17 @@ func (n *Node) HasCapability(name string) bool {
 }
 
 // HasStampCapability returns true if the node has a
-// STAMP:artefact/<kind>/<stamp> capability matching the given kind and stamp.
+// STAMP:artefact/<kind>/<stamp> or ATTEST:artefact/<kind>/<stamp> capability
+// matching the given kind and stamp.
 // The node's capabilities are treated as patterns (may contain *), while the
-// constructed "STAMP:artefact/<kind>/<stamp>" is the concrete value to match.
+// constructed concrete values (with both prefixes) are checked against each.
 // Wildcard matching follows MatchCapability semantics (segment-by-segment
 // filepath.Match; * does not cross /).
 func (n *Node) HasStampCapability(kind, stamp string) bool {
-	required := "STAMP:artefact/" + kind + "/" + stamp
+	requiredSTAMP := "STAMP:artefact/" + kind + "/" + stamp
+	requiredATTEST := "ATTEST:artefact/" + kind + "/" + stamp
 	for _, cap := range n.capabilities {
-		if MatchCapability(cap, required) {
+		if MatchCapability(cap, requiredSTAMP) || MatchCapability(cap, requiredATTEST) {
 			return true
 		}
 	}

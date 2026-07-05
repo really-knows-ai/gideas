@@ -247,7 +247,7 @@ flowchart TD
 
 **Hardcoded stamp-provider routing.** Gate logic that routes to a specific node name for a specific stamp instead of discovering the provider from Flow configuration. This couples the gate implementation to a specific topology and breaks when the Flow Architect reassigns stamp authority.
 
-**Treating stamp names as platform keywords.** Node logic that assigns special semantics to stamp names like "approval" or "linter." The platform treats all stamp names identically — they are [naming conventions](../02-flow/05-configuration.md#stamp-grant-and-capability-semantics) chosen by the Flow Architect, not system-privileged identifiers.
+**Treating stamp names as platform keywords.** Node logic that assigns special semantics to stamp names like "approval" or "review." The platform treats all stamp names identically — they are [naming conventions](../02-flow/05-configuration.md#stamp-grant-and-capability-semantics) chosen by the Flow Architect, not system-privileged identifiers.
 
 **Optimistic governance assumptions.** Handlers that assume a stamp or feedback state will be in a particular condition without checking. Current state must be read from the Archivist through the SDK at the start of each assignment.
 

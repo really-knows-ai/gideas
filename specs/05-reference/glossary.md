@@ -224,7 +224,7 @@ A named governance checkpoint on an artefact's passport. Records the stamp name,
 
 ### stamp vocabulary
 
-The set of stamp names declared by a GovernedArtefact CRD as meaningful for that governed artefact (e.g. `["linter", "security-review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. The platform attaches no built-in semantics to any stamp name.
+The set of stamp names declared by a GovernedArtefact CRD as meaningful for that governed artefact (e.g. `["review", "approval"]`). Entry and exit contracts select required stamps from this vocabulary. The platform attaches no built-in semantics to any stamp name.
 
 ### version
 
@@ -380,7 +380,7 @@ A permission granted to a node through the FoundryNode CRD's `capabilities` fiel
 
 ### capability syntax
 
-The structured grammar for capability grants: `VERB:RESOURCE[/QUALIFIER]`. Verbs: `READ`, `WRITE`, `STAMP`, `USE`. Examples: `READ:law`, `WRITE:artefact`, `WRITE:feedback/deadlocked`, `STAMP:artefact/haiku/linter`, `USE:support/codify-smt/encode`. Detail: [Configuration](../02-flow/05-configuration.md), [Node Configuration](../03-node/02-configuration.md).
+The structured grammar for capability grants: `VERB:RESOURCE[/QUALIFIER]`. Verbs: `READ`, `WRITE`, `STAMP`, `ATTEST`, `USE`. Examples: `READ:law`, `WRITE:artefact`, `WRITE:feedback/deadlocked`, `STAMP:artefact/haiku/review`, `ATTEST:artefact/haiku/law-*`, `USE:support/codify-smt/encode`. Detail: [Configuration](../02-flow/05-configuration.md), [Node Configuration](../03-node/02-configuration.md).
 
 ### entry binding
 

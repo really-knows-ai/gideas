@@ -157,7 +157,7 @@ Deadlock-escalated governed-work Workitems remain separate from hearing Workitem
 
 Entry and exit contracts are defined per governed artefact name. Each name maps to a required list of stamp names.
 
-- `{"petition-draft": ["linter", "security-review"]}` means artefacts with governed artefact name `petition-draft` must exist and carry both named stamps.
+- `{"petition-draft": ["review", "security-review"]}` means artefacts with governed artefact name `petition-draft` must exist and carry both named stamps.
 - `{"audit-log": []}` means artefacts with governed artefact name `audit-log` must exist, with no stamp requirement.
 - `{}` means no artefact requirements.
 

@@ -1,0 +1,49 @@
+# Haiku Foundry Cycle — Syllable Law
+#
+# This Law replaces hardcoded deterministic validation with governed law attestation.
+# It defines the 5-7-5 syllable pattern requirement as a first-class Law CRD.
+#
+# Two representations:
+#   - text/markdown: Prose description of the 5-7-5 rule (reviewed by Appraisal's appraisers).
+#   - text/plain: Deterministic syllable-count validator reference (executed by Quench).
+#
+# Apply:
+#   kubectl apply -f law-haiku-syllable.yaml
+#   kubectl apply -f laws.yaml  (existing weather/atmosphere laws, if not already applied)
+---
+apiVersion: flow.gideas.io/v1
+kind: Law
+metadata:
+  name: haiku-syllable
+  namespace: default
+  labels:
+    flow.gideas.io/flow-name: haiku-flow
+spec:
+  goal: "Haiku must follow the 5-7-5 syllable pattern"
+  tier: 3
+  group: "content"
+  appliesTo:
+    - haiku
+  representations:
+    - type: text/markdown
+      content: |
+        Haiku must follow the 5-7-5 syllable pattern.
+
+        Line 1: 5 syllables
+        Line 2: 7 syllables
+        Line 3: 5 syllables
+
+        Example — valid:
+          "an old silent pond" (5)
+          "a frog jumps into the pond" (7)
+          "splash! silence again" (5)
+
+        Example — invalid:
+          "this is a haiku right here" (7 — should be 5)
+    - type: text/plain
+      content: |
+        # Deterministic syllable-count validator reference for Quench.
+        # Line 1 must have exactly 5 syllables.
+        # Line 2 must have exactly 7 syllables.
+        # Line 3 must have exactly 5 syllables.
+        # See nodes/haiku-quench/main.go for the implementation.

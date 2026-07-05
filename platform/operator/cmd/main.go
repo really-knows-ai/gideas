@@ -243,9 +243,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.WorkitemReconciler{
-		Client:  mgr.GetClient(),
-		Scheme:  mgr.GetScheme(),
-		Auditor: auditor,
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Auditor:   auditor,
+		Librarian: librarianClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Workitem")
 		os.Exit(1)

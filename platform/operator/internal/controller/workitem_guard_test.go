@@ -67,7 +67,7 @@ func testFlow(maxVisits int32) *flowv1.FoundryFlow {
 		Spec: flowv1.FoundryFlowSpec{
 			EntryContracts: map[string]flowv1.Contract{"main": {}},
 			ExitContracts: map[string]flowv1.Contract{
-				"standard-exit": {"haiku": {"linter", "review"}},
+				"standard-exit": {"haiku": {"review"}},
 			},
 			GovernancePolicy: flowv1.GovernancePolicy{
 				MaxVisits:      maxVisits,

@@ -54,7 +54,7 @@ The capability grammar follows a `VERB:RESOURCE[/QUALIFIER]` pattern:
 - `USE:support/<service>/<capability>` — access to a specific [Flow Support Service](../02-flow/04-system-services.md#flow-support-services) capability.
 - `USE:queue/server` — enables [HITL queue features](../04-sdk/08-sdk-hitl.md): persistent queue, REST API, Federated Queue Mesh. Requires `spec.storage`. Triggers StatefulSet deployment and Headless Service creation.
 
-Enforcement is exact. A node granted `STAMP:artefact/petition-draft/linter` can stamp `linter` on `petition-draft` artefacts. It cannot stamp `security-review` on `petition-draft` artefacts, and it cannot stamp `linter` on `audit-log` artefacts. Missing grants produce deterministic denial with structured errors — the node receives a permission error, not a silent no-op.
+Enforcement is exact. A node granted `STAMP:artefact/petition-draft/review` can stamp `review` on `petition-draft` artefacts. It cannot stamp `security-review` on `petition-draft` artefacts, and it cannot stamp `review` on `audit-log` artefacts. Missing grants produce deterministic denial with structured errors — the node receives a permission error, not a silent no-op.
 
 Some operations do not require explicit capability grants. For example, `ListArtefacts` (listing artefacts associated with the assigned Workitem, queried from the Archivist) is implicitly available to all nodes by virtue of the assignment scope.
 

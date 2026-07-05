@@ -3,6 +3,7 @@ package manifests_test
 import (
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -37,7 +38,7 @@ func TestFoundryFlow_ExitContracts(t *testing.T) {
 		name  string
 		check func(*testing.T, foundryFlow)
 	}{
-		{"standard-exit/haiku has linter appraise-security approval", func(t *testing.T, ff foundryFlow) {
+		{"standard-exit/haiku has appraisal approval", func(t *testing.T, ff foundryFlow) {
 			exit, ok := ff.Spec.ExitContracts["standard-exit"]
 			if !ok {
 				t.Fatal("exitContracts missing 'standard-exit'")
@@ -46,7 +47,7 @@ func TestFoundryFlow_ExitContracts(t *testing.T) {
 			if !ok {
 				t.Fatal("standard-exit missing 'haiku' artefact")
 			}
-			expected := []string{"linter", "appraise-security", "approval"}
+			expected := []string{"appraisal", "approval"}
 			if len(stamps) != len(expected) {
 				t.Fatalf("standard-exit/haiku stamps: want %v, got %v", expected, stamps)
 			}
@@ -215,13 +216,13 @@ func TestFoundryNode_Capabilities(t *testing.T) {
 			"STAMP:artefact/haiku/approval",
 		}},
 		{name: "quench", nodeID: "quench", has: []string{
-			"READ:artefact", "READ:artefact/haiku", "READ:feedback", "WRITE:feedback/new", "STAMP:artefact/haiku/linter",
+			"READ:artefact", "READ:artefact/haiku", "READ:feedback", "WRITE:feedback/new", "ATTEST:artefact/haiku/law-id",
 		}},
 		{name: "appraisal", nodeID: "appraisal", has: []string{
 			"READ:artefact", "READ:artefact/petition", "READ:artefact/haiku",
 			"WRITE:artefact/review-data", "READ:feedback", "READ:law",
 			"WRITE:feedback/new", "WRITE:feedback/resolved", "WRITE:feedback/rejected",
-			"STAMP:artefact/haiku/appraise-security", "CREATE:workitem/child",
+			"ATTEST:artefact/haiku/appraisal", "ATTEST:artefact/haiku/law-*", "CREATE:workitem/child",
 		}},
 		{name: "appraiser", nodeID: "appraiser", has: []string{
 			"READ:artefact", "READ:artefact/review-data", "WRITE:artefact/review-data",
@@ -287,9 +288,24 @@ func TestGovernedArtefact_Stamps(t *testing.T) {
 		artefactID string
 		check      func(*testing.T, governedArtefact)
 	}{
-		{"haiku has appraise-* wildcard", "haiku", func(t *testing.T, ga governedArtefact) {
-			if !slices.Contains(ga.Spec.Stamps, "appraise-*") {
-				t.Error("haiku GovernedArtefact stamps missing 'appraise-*'")
+		{"haiku has law-* wildcard", "haiku", func(t *testing.T, ga governedArtefact) {
+			if !slices.Contains(ga.Spec.Stamps, "law-*") {
+				t.Error("haiku GovernedArtefact stamps missing 'law-*'")
+			}
+		}},
+		{"haiku has appraisal stamp", "haiku", func(t *testing.T, ga governedArtefact) {
+			if !slices.Contains(ga.Spec.Stamps, "appraisal") {
+				t.Error("haiku GovernedArtefact stamps missing 'appraisal'")
+			}
+		}},
+		{"haiku does not have deprecated stamp names", "haiku", func(t *testing.T, ga governedArtefact) {
+			if slices.Contains(ga.Spec.Stamps, "appraise-*") {
+				t.Error("haiku GovernedArtefact stamps should NOT contain 'appraise-*'")
+			}
+		}},
+		{"haiku has approval stamp", "haiku", func(t *testing.T, ga governedArtefact) {
+			if !slices.Contains(ga.Spec.Stamps, "approval") {
+				t.Error("haiku GovernedArtefact stamps missing 'approval'")
 			}
 		}},
 	}
@@ -311,7 +327,52 @@ func TestExitContracts_NoReviewStamp(t *testing.T) {
 		for artefact, stamps := range exit {
 			for _, s := range stamps {
 				if s == "review" {
-					t.Errorf("standard-exit/%q still contains 'review' stamp (should be appraise-security)", artefact)
+					t.Errorf("standard-exit/%q still contains 'review' stamp (should be appraisal)", artefact)
+				}
+			}
+		}
+	}
+}
+
+func TestNoDeprecatedStampsInManifests(t *testing.T) {
+	// Deprecated stamp and capability strings that must not appear in flow.yaml.
+	deprecated := []string{
+		"appraise-*",
+	}
+
+	// Check FoundryNode capabilities.
+	nodes := findFoundryNodes(t)
+	for _, fn := range nodes {
+		for _, cap := range fn.Spec.Capabilities {
+			for _, d := range deprecated {
+				if cap == d || strings.Contains(cap, d) {
+					t.Errorf("FoundryNode %q capability %q contains deprecated string %q", fn.Metadata.Name, cap, d)
+				}
+			}
+		}
+	}
+
+	// Check exit contract stamps.
+	ff := findFoundryFlow(t)
+	for contractName, artefacts := range ff.Spec.ExitContracts {
+		for artefact, stamps := range artefacts {
+			for _, s := range stamps {
+				for _, d := range deprecated {
+					if s == d || strings.Contains(s, d) {
+						t.Errorf("exit contract %q/%q stamp %q contains deprecated string %q", contractName, artefact, s, d)
+					}
+				}
+			}
+		}
+	}
+
+	// Check GovernedArtefact stamp vocabularies.
+	gas := findGovernedArtefacts(t)
+	for _, ga := range gas {
+		for _, s := range ga.Spec.Stamps {
+			for _, d := range deprecated {
+				if s == d || strings.Contains(s, d) {
+					t.Errorf("GovernedArtefact %q stamp %q contains deprecated string %q", ga.Metadata.Name, s, d)
 				}
 			}
 		}

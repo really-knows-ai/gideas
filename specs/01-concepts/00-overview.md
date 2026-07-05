@@ -96,7 +96,7 @@ As a Workitem moves through the cycle, nodes apply [stamps](#stamps) to the arte
 
 ### Exit Contracts
 
-Exit contracts are defined per governed artefact name. For each name, a contract specifies a list of required stamp names; an empty list means artefacts of that governed artefact name must be present but carry no specific stamps. A code artefact might require stamps named "linter", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required governed artefact name, all of them must satisfy that name's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the exit-bound node calls `complete()`, and the Operator checks the bound exit contract against each required governed artefact name. If any requirement is unsatisfied, the Workitem cannot exit. When a Workitem is handed to the Embassy for cross-flow transfer, only artefacts whose governed artefact names are listed in the Embassy's bound exit contract are exported.
+Exit contracts are defined per governed artefact name. For each name, a contract specifies a list of required stamp names; an empty list means artefacts of that governed artefact name must be present but carry no specific stamps. A code artefact might require stamps named "review", "security-review", and "approval". A log artefact might only need to exist. If a Workitem carries multiple artefacts of a required governed artefact name, all of them must satisfy that name's requirement. The Flow grants nodes permission to apply specific named stamps via the FoundryNode CRD's capabilities. At the border, the exit-bound node calls `complete()`, and the Operator checks the bound exit contract against each required governed artefact name. If any requirement is unsatisfied, the Workitem cannot exit. When a Workitem is handed to the Embassy for cross-flow transfer, only artefacts whose governed artefact names are listed in the Embassy's bound exit contract are exported.
 
 ```mermaid
 sequenceDiagram
@@ -110,11 +110,11 @@ sequenceDiagram
     W->>F: assigned
     F->>W: artefact created
     W->>Q: assigned
-    Q->>W: stamp (linter)
+    Q->>W: stamp (review)
     W->>S: assigned
     S->>S: missing stamps
     S->>A: route to Appraise
-    A->>W: stamp (security-review)
+    A->>W: stamp (review)
     W->>S: assigned
     S->>S: all stamps present, no unresolved feedback
     S->>W: stamp (approval)
