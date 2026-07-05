@@ -157,13 +157,13 @@ func triageFeedback(
 			continue
 		}
 
-		// ponytail: GetLinkedRuling is not available on the domain Feedback.
-		// The old code checked fb.GetLinkedRuling() which is a proto method.
-		// For now, all REJECTED items pass through LLM triage (bypassing the
-		// contempt guard). Restore when Feedback gains GetLinkedRuling().
+		// Contempt guard: feedback with a linked ruling from the judiciary
+		// bypasses LLM triage and is force-actioned.
+		forceActioned := fb.PB().GetLinkedRuling() != ""
 
 		tasks = append(tasks, triageTask{
-			fb: fb,
+			fb:            fb,
+			forceActioned: forceActioned,
 		})
 	}
 

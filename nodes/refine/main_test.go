@@ -1046,14 +1046,9 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 		},
 	}
 
-	// ponytail: The contempt guard (skip LLM for REJECTED+LinkedRuling) is
-	// disabled because the domain Feedback does not expose GetLinkedRuling().
-	// The REJECTED feedback goes through LLM triage, followed by revision.
-	triageOut := testTriageActionJSON
 	revisionOut := `{"haiku": "revised after contempt"}`
 	var callIdx int
 	outputs := []*flow.InferOutput{
-		{Output: []byte(triageOut), Cost: defaultCost()},
 		{Output: []byte(revisionOut), Cost: defaultCost()},
 	}
 	inferFn := func(_ context.Context, _, _ string, _ []byte) (*flow.InferOutput, error) {
@@ -1092,7 +1087,7 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	// Verify feedback was resolved via LLM triage (contempt guard bypassed).
+	// Verify feedback was force-resolved via contempt guard (no LLM triage).
 	if len(spy.ResolvedFeedback) != 1 {
 		t.Fatalf("expected 1 resolved feedback, got %d", len(spy.ResolvedFeedback))
 	}
@@ -1100,8 +1095,8 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 	if !ok {
 		t.Fatal("expected feedback fb-contempt to be resolved")
 	}
-	if msg != "will fix syllables" {
-		t.Fatalf("expected triage action message, got %q", msg)
+	if msg != "Complying with judicial ruling" {
+		t.Fatalf("expected contempt message \"Complying with judicial ruling\", got %q", msg)
 	}
 
 	// Verify artefact was stored with revised content.
@@ -1117,8 +1112,8 @@ func TestHandleRefine_ContemptGuard(t *testing.T) {
 		t.Fatalf("expected route to 'default', got %v", spy.RoutedOutputs)
 	}
 
-	// Verify 2 model calls: triage + revision (contempt guard bypassed).
-	if callIdx != 2 {
-		t.Fatalf("expected 2 model calls (triage + revision), got %d", callIdx)
+	// Verify 1 model call: revision only (triage skipped by contempt guard).
+	if callIdx != 1 {
+		t.Fatalf("expected 1 model call (revision only), got %d", callIdx)
 	}
 }
