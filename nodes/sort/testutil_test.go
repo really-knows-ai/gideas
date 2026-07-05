@@ -325,6 +325,12 @@ func (s *sortSpy) QueryLaws(
 	}, nil
 }
 
+func (s *sortSpy) ListLawGroups(
+	_ context.Context, _ *flowv1.ListLawGroupsRequest,
+) (*flowv1.ListLawGroupsResponse, error) {
+	return &flowv1.ListLawGroupsResponse{}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Archivist methods (for VerifyLawAttestations)
 // ---------------------------------------------------------------------------

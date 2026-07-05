@@ -202,6 +202,7 @@ func (r *FoundryFlowReconciler) archivistEnvVars(flow *flowv1.FoundryFlow) []cor
 	return []corev1.EnvVar{
 		{Name: "ARCHIVIST_PORT", Value: fmt.Sprintf("%d", archivistPort)},
 		{Name: "ARCHIVIST_DB_PATH", Value: "/data/archivist.db"},
+		{Name: "OPERATOR_ADDRESS", Value: fmt.Sprintf("%s:%d", operatorSvcName, operatorPort)},
 	}
 }
 

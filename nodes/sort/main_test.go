@@ -1172,13 +1172,8 @@ func TestSort_AttestationRouting_SkipsNonLawStamps(t *testing.T) {
 	spy.StampState["review"] = true
 	spy.StampState["approval"] = true
 	// Return a law with group that produces stamp "lawgrp-content".
-	// In this test we use the neededAttestCapability logic to verify that
-	// non-law stamps are skipped. We send back a law with id "content" and
-	// a representation type that would generate stamp "lawgrp-content"...
-	// Actually, VerifyLawAttestations generates stamps as "law-<id>-<type>",
-	// not "lawgrp-*". To produce "lawgrp-content" we need a different setup.
-	// For this test, let's just verify the guard error is returned for
-	// a law stamp that has no provider.
+	// Sends back a law in the default group → bundle mode → lawgrp-default.
+	// No ATTEST capabilities in default topology, so guard error expected.
 	spy.QueryLawsLaws = []*flowv1.Law{
 		{
 			Id:   "some-law",
@@ -1203,9 +1198,9 @@ func TestSort_AttestationRouting_SkipsNonLawStamps(t *testing.T) {
 	if guardErr.Code != "NO_ATTESTATION_PROVIDER" {
 		t.Fatalf("expected Code NO_ATTESTATION_PROVIDER, got %q", guardErr.Code)
 	}
-	// The stamp should be "law-some-law-text-plain" since that's how
-	// VerifyLawAttestations generates stamp names.
-	expectedStamp := "law-some-law-text-plain"
+	// The stamp should be "lawgrp-default" since the law has no group
+	// and defaults to bundle mode.
+	expectedStamp := "lawgrp-default"
 	if guardErr.Stamp != expectedStamp {
 		t.Fatalf("expected Stamp %q, got %q", expectedStamp, guardErr.Stamp)
 	}
@@ -1218,6 +1213,7 @@ func TestSort_AttestAllPresent_ContinuesToComplete(t *testing.T) {
 	spy.StampState["review"] = true
 	spy.StampState["approval"] = true
 	// Return a law whose stamp IS already present on the artefact.
+	// Law has no group → default group → bundle mode (per built-in defaults).
 	spy.QueryLawsLaws = []*flowv1.Law{
 		{
 			Id:   "weather",
@@ -1227,9 +1223,9 @@ func TestSort_AttestAllPresent_ContinuesToComplete(t *testing.T) {
 			},
 		},
 	}
-	// The expected stamp "law-weather-text-markdown" is already present.
+	// The expected stamp "lawgrp-default" (bundle-mode group stamp) is present.
 	spy.GetStampsStamps = []*flowv1.Stamp{
-		{Name: "law-weather-text-markdown"},
+		{Name: "lawgrp-default"},
 	}
 
 	client, workitem := setupSortTest(t, spy)

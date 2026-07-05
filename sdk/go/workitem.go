@@ -291,12 +291,15 @@ func (w *Workitem) GetLawGroups(repType string) ([]*LawGroup, error) {
 // VerifyLawAttestations returns the list of stamp names that would need
 // to be present on the current artefact for full attestation.
 //
-// Canonical computation:
-//  1. QueryLaws(governedArtefact, "") — get all laws for this artefact kind
-//  2. For each law, for each representation type, compute the expected
-//     attestation stamp name: "law-<lawID>-<repType>"
-//  3. Get the current artefact's stamps via GetArtefact.GetStamps()
-//  4. Return the expected stamp names that are NOT present on the artefact
+// Canonical computation (per spec R6):
+//  1. QueryLaws(governedArtefact) — get all laws for this artefact kind
+//  2. ListLawGroups — get group modes (bundle vs law-by-law)
+//  3. For each group:
+//     a. Bundle mode: emit "lawgrp-<group>" instead of per-law stamps
+//     b. Law-by-law mode: emit per-law per-rep stamps plus "lawgrp-<group>"
+//     c. Groups absent from ListLawGroups default to bundle mode
+//  4. Get the current artefact's stamps via GetArtefact.GetStamps()
+//  5. Return expected stamp names that are NOT present on the artefact
 func (w *Workitem) VerifyLawAttestations(governedArtefact string) ([]string, error) {
 	// 1. Query laws for this artefact kind.
 	lawsResp, err := w.session.Librarian.QueryLaws(context.Background(), &flowv1.QueryLawsRequest{
@@ -305,20 +308,43 @@ func (w *Workitem) VerifyLawAttestations(governedArtefact string) ([]string, err
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: query laws failed: %w", err)
 	}
-
-	// 2. Compute expected stamp names from law representations.
-	var expected []string
-	for _, law := range lawsResp.GetLaws() {
-		for _, rep := range law.GetRepresentations() {
-			stampName := "law-" + law.GetId() + "-" + strings.ReplaceAll(rep.GetType(), "/", "-")
-			expected = append(expected, stampName)
-		}
-	}
-	if len(expected) == 0 {
+	laws := lawsResp.GetLaws()
+	if len(laws) == 0 {
 		return nil, nil
 	}
 
-	// 3. Get current artefact's stamps.
+	// 2. Get group modes from ListLawGroups.
+	groupsResp, err := w.session.Librarian.ListLawGroups(context.Background(), &flowv1.ListLawGroupsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("flow sdk: list law groups failed: %w", err)
+	}
+	groupConfigs := make(map[string]*LawGroup, len(groupsResp.GetGroups()))
+	for _, g := range groupsResp.GetGroups() {
+		groupConfigs[g.GetName()] = newLawGroup(g.GetName(), GroupMode(g.GetMode()), g.GetPasses(), w.session.Librarian)
+	}
+
+	// 3. Group laws and compute expected stamps per group mode.
+	lawsByGroup := PartitionLawsByGroup(laws)
+	var expected []string
+	for _, groupName := range sortedGroupNames(lawsByGroup) {
+		cfg := getConfig(groupConfigs, groupName)
+		switch cfg.mode {
+		case GroupModeLawByLaw:
+			// Per-law per-rep stamps plus the group aggregate.
+			for _, law := range lawsByGroup[groupName] {
+				for _, rep := range law.GetRepresentations() {
+					stampName := "law-" + law.GetId() + "-" + strings.ReplaceAll(rep.GetType(), "/", "-")
+					expected = append(expected, stampName)
+				}
+			}
+			expected = append(expected, "lawgrp-"+groupName)
+		default: // bundle or unknown mode
+			// Group-level stamp replaces per-law stamps.
+			expected = append(expected, "lawgrp-"+groupName)
+		}
+	}
+
+	// 4. Get current artefact's stamps.
 	art, err := w.GetArtefact(governedArtefact)
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get artefact for attestation check: %w", err)
@@ -332,7 +358,7 @@ func (w *Workitem) VerifyLawAttestations(governedArtefact string) ([]string, err
 		stampSet[s.Name] = true
 	}
 
-	// 4. Return expected stamps that are missing.
+	// 5. Return expected stamps that are missing.
 	var missing []string
 	for _, name := range expected {
 		if !stampSet[name] {

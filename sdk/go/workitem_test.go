@@ -610,14 +610,16 @@ func TestWorkitem_VerifyLawAttestations(t *testing.T) {
 	const wantID = "wi-verifyattest-001"
 	wi, env := setupWorkitemTestEnv(t, wantID)
 
-	// The spy QueryLaws returns [{Id: "law-1"}] with text/markdown rep.
-	// So expected stamp is law-law-1-text-markdown.
+	// spy QueryLaws returns [{Id: "law-1"}] with text/markdown rep, no group.
+	// spy ListLawGroups returns [group-a (bundle), group-b (law-by-law)].
+	// "default" group (from law with no group) is absent → built-in defaults → bundle.
+	// Bundle mode → lawgrp-default replaces per-law stamps.
 	missing, err := wi.VerifyLawAttestations(testPetitionID)
 	if err != nil {
 		t.Fatalf("VerifyLawAttestations() returned error: %v", err)
 	}
-	if len(missing) != 1 || missing[0] != "law-law-1-text-markdown" {
-		t.Fatalf("expected [law-law-1-text-markdown], got %v", missing)
+	if len(missing) != 1 || missing[0] != "lawgrp-default" {
+		t.Fatalf("expected [lawgrp-default], got %v", missing)
 	}
 
 	// Verify QueryLaws was called with the correct governed artefact.
@@ -630,6 +632,51 @@ func TestWorkitem_VerifyLawAttestations(t *testing.T) {
 	}
 	if f.GetGovernedArtefact() != testPetitionID {
 		t.Fatalf("governed_artefact = %q, want %q", f.GetGovernedArtefact(), "petition")
+	}
+
+	// Verify ListLawGroups was called for group mode resolution.
+	if env.spy.lastListLawGroupsReq == nil {
+		t.Fatal("ListLawGroups was not called")
+	}
+}
+
+func TestWorkitem_VerifyLawAttestations_Groups(t *testing.T) {
+	const wantID = "wi-verifyattest-groups-001"
+	wi, env := setupWorkitemTestEnv(t, wantID)
+
+	// Configure spy to return laws in both group-a (bundle) and group-b (law-by-law).
+	env.spy.queryLawsResp = &flowv1.QueryLawsResponse{
+		Laws: []*flowv1.Law{
+			{Id: "law-bundle-1", Group: "group-a", Representations: []*flowv1.Representation{{Type: "text/markdown"}}},
+			{Id: "law-lbl-1", Group: "group-b", Representations: []*flowv1.Representation{{Type: "text/plain"}}},
+			{Id: "law-lbl-2", Group: "group-b", Representations: []*flowv1.Representation{{Type: "text/markdown"}}},
+		},
+	}
+
+	// group-a bundle → lawgrp-group-a (no per-law stamps)
+	// group-b law-by-law → law-law-lbl-1-text-plain, law-law-lbl-2-text-markdown + lawgrp-group-b
+	missing, err := wi.VerifyLawAttestations(testPetitionID)
+	if err != nil {
+		t.Fatalf("VerifyLawAttestations() returned error: %v", err)
+	}
+
+	expected := []string{
+		"lawgrp-group-a",
+		"law-law-lbl-1-text-plain",
+		"law-law-lbl-2-text-markdown",
+		"lawgrp-group-b",
+	}
+	if len(missing) != len(expected) {
+		t.Fatalf("expected %d missing stamps, got %d: %v", len(expected), len(missing), missing)
+	}
+	got := make(map[string]bool, len(missing))
+	for _, s := range missing {
+		got[s] = true
+	}
+	for _, s := range expected {
+		if !got[s] {
+			t.Errorf("missing stamp %q not found in output", s)
+		}
 	}
 }
 

@@ -56,6 +56,11 @@ type spyServer struct {
 	lastCiteReq *flowv1.CiteRequest
 	// lastStampReq captures the most recent StampArtefact request.
 	lastStampReq *flowv1.StampArtefactRequest
+	// lastListLawGroupsReq captures the most recent ListLawGroups request.
+	lastListLawGroupsReq *flowv1.ListLawGroupsRequest
+
+	// queryLawsResp, when non-nil, overrides the default QueryLaws response.
+	queryLawsResp *flowv1.QueryLawsResponse
 
 	// Feedback RPC request capture fields.
 	lastResolveFeedbackReq  *flowv1.ResolveFeedbackRequest
@@ -143,6 +148,9 @@ func (s *spyServer) GetArtefact(
 func (s *spyServer) QueryLaws(ctx context.Context, req *flowv1.QueryLawsRequest) (*flowv1.QueryLawsResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
 	s.lastQueryLawsReq = req
+	if s.queryLawsResp != nil {
+		return s.queryLawsResp, nil
+	}
 	return &flowv1.QueryLawsResponse{Laws: []*flowv1.Law{{
 		Id:              "law-1",
 		Representations: []*flowv1.Representation{{Type: "text/markdown"}},
@@ -161,9 +169,10 @@ func (s *spyServer) GetLawGroup(
 }
 
 func (s *spyServer) ListLawGroups(
-	ctx context.Context, _ *flowv1.ListLawGroupsRequest,
+	ctx context.Context, req *flowv1.ListLawGroupsRequest,
 ) (*flowv1.ListLawGroupsResponse, error) {
 	s.lastMD, _ = metadata.FromIncomingContext(ctx)
+	s.lastListLawGroupsReq = req
 	return &flowv1.ListLawGroupsResponse{
 		Groups: []*flowv1.LawGroup{
 			{Name: "group-a", Mode: "bundle", Passes: 1},
