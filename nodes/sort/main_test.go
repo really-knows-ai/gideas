@@ -77,9 +77,9 @@ func setupSortTest(t *testing.T, spy *sortSpy) (*flow.Client, *flow.Workitem) {
 // Routing tests — the core decision tree (dynamic topology)
 // ---------------------------------------------------------------------------
 
-func TestSort_RoutesToQuench_MissingLinterStamp(t *testing.T) {
+func TestSort_RoutesToQuench_MissingAppraisalStamp(t *testing.T) {
 	spy := newSortSpy()
-	// linter stamp absent (default false) — quench is first in nodeOrder.
+	// appraisal stamp absent (default false) — quench is first in nodeOrder.
 	client, workitem := setupSortTest(t, spy)
 
 	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
