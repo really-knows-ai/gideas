@@ -610,9 +610,12 @@ func (s *ArchivistServer) StampArtefact(
 			"artefact %q not found for workitem %q", artefactID, workitemID)
 	}
 
-	// Capability gate: STAMP:artefact/<governed_artefact>/<stamp_name>.
-	// Enforcement is exact per spec (specs/03-node/02-configuration.md).
-	if err := checkCapability(ctx, "STAMP:artefact/"+head.GovernedArtefact+"/"+stampName); err != nil {
+	// Capability gate: STAMP:artefact/<governed_artefact>/<stamp_name> or
+	// ATTEST:artefact/<governed_artefact>/<stamp_name> (migrated nodes).
+	if err := checkCapabilityAny(ctx,
+		"STAMP:artefact/"+head.GovernedArtefact+"/"+stampName,
+		"ATTEST:artefact/"+head.GovernedArtefact+"/"+stampName,
+	); err != nil {
 		return nil, err
 	}
 
