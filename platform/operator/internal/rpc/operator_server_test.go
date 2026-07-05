@@ -273,7 +273,7 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "quench", Namespace: "default"},
 		Spec: apiv1.FoundryNodeSpec{
 			Image:        "quench:latest",
-			Capabilities: []string{"READ:artefact", "STAMP:artefact/haiku/review", "WRITE:feedback/new"},
+			Capabilities: []string{"READ:artefact", "ATTEST:artefact/haiku/appraisal", "WRITE:feedback/new"},
 		},
 	}
 
@@ -281,7 +281,7 @@ func TestGetFlowTopology_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "appraisal", Namespace: "default"},
 		Spec: apiv1.FoundryNodeSpec{
 			Image:        "appraisal:latest",
-			Capabilities: []string{"READ:artefact", "STAMP:artefact/haiku/review", "WRITE:feedback/new"},
+			Capabilities: []string{"READ:artefact", "ATTEST:artefact/haiku/appraisal", "WRITE:feedback/new"},
 		},
 	}
 

@@ -102,7 +102,7 @@ Librarian, so appraisal sees zero enforceable laws.
 
 ### 4. Deploy the Haiku demo
 
-The Haiku demo runs a full Foundry Cycle — Forge, Sort, Quench, Appraisal, Appraiser, Refine — producing a syllable-validated, security-reviewed, and governance-stamped haiku.
+The Haiku demo runs a full Foundry Cycle — Forge, Sort, Quench, Appraisal, Appraiser, Refine — producing a syllable-validated, law-attested, and governance-stamped haiku.
 
 ```bash
 kubectl apply -f nodes/haiku-manifests/flow.yaml
@@ -125,7 +125,7 @@ Watch it run:
 bash ./tools/haiku-watch/watch.sh haiku-<id>
 ```
 
-The cycle completes when all stamps (`linter`, `appraise-security`, `approval`) are on the haiku.
+The cycle completes when all stamps (`appraisal`, law attestation stamps, and `approval`) are on the haiku.
 
 #### Phase 2 — Add content laws, pick a fight
 
@@ -151,7 +151,7 @@ forge          # Generate haiku (LLM: gemma4:31b-cloud)
   │
 sort           # Check stamps and feedback
   │
-quench         # Validate syllable count (5-7-5), stamp linter, raise feedback
+quench         # Validate syllable count (5-7-5), attest syllable law, raise feedback
   │
 sort           # Detect unaddressed feedback → route to refine
   │
@@ -159,18 +159,18 @@ refine         # Triage feedback (LLM: deepseek-v4-flash:cloud), action fix, rev
   │
 sort           # Re-check, route to quench for re-validation
   │
-quench         # Re-validate, stamp linter if valid
+quench         # Re-validate, attest syllable law if valid
   │
-sort           # Missing appraise-security stamp → route to appraisal
+sort           # Missing attestation stamps → route to appraisal
   │
-appraisal      # Evaluate actioned feedback, accept/reject fix, stamp appraise-security
+appraisal      # Evaluate actioned feedback, accept/reject fix, attest laws and stamp appraisal
   │
 sort           # All stamps present, no unaddressed feedback → stamp approval
   │
 COMPLETE       # Exit contract satisfied
 ```
 
-Each `sort` visit checks the exit contract (`linter`, `appraise-security`, `approval`). Stamps and feedback determine the next node. The sort node stamps `approval` when all governance conditions are met.
+Each `sort` visit checks the exit contract (`appraisal`, `approval`) and all required law attestations. Stamps and feedback determine the next node. The sort node stamps `approval` when all governance conditions are met.
 
 ## Troubleshooting
 
