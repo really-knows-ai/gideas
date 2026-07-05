@@ -5,7 +5,8 @@ import (
 	"strings"
 )
 
-// StampCapability represents a parsed STAMP:artefact/<kind>/<stamp> capability.
+// StampCapability represents a parsed STAMP:artefact/<kind>/<stamp> or
+// ATTEST:artefact/<kind>/<stamp> capability.
 type StampCapability struct {
 	// GovernedArtefact is the governed artefact kind (e.g., "haiku").
 	GovernedArtefact string
@@ -13,15 +14,24 @@ type StampCapability struct {
 	StampName string
 }
 
-const stampCapabilityPrefix = "STAMP:artefact/"
+const (
+	stampCapabilityPrefix  = "STAMP:artefact/"
+	attestCapabilityPrefix = "ATTEST:artefact/"
+)
 
-// ParseStampCapability parses a single STAMP:artefact/<kind>/<stamp> capability
-// string. Returns ok=false if the string does not match the expected pattern.
+// ParseStampCapability parses a single STAMP:artefact/<kind>/<stamp> or
+// ATTEST:artefact/<kind>/<stamp> capability string. Returns ok=false if the
+// string does not match the expected pattern.
 func ParseStampCapability(cap string) (StampCapability, bool) {
-	if !strings.HasPrefix(cap, stampCapabilityPrefix) {
+	var rest string
+	switch {
+	case strings.HasPrefix(cap, stampCapabilityPrefix):
+		rest = cap[len(stampCapabilityPrefix):]
+	case strings.HasPrefix(cap, attestCapabilityPrefix):
+		rest = cap[len(attestCapabilityPrefix):]
+	default:
 		return StampCapability{}, false
 	}
-	rest := cap[len(stampCapabilityPrefix):]
 	parts := strings.SplitN(rest, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return StampCapability{}, false

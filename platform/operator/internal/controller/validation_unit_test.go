@@ -476,6 +476,11 @@ func TestCapabilityPattern_AcceptsWildcard(t *testing.T) {
 		"WRITE:artefact/*",
 		"CREATE:workitem/child",
 		"CREATE:workitem",
+		"ATTEST:artefact/haiku/review",
+		"ATTEST:artefact/haiku/appraise-security",
+		"ATTEST:artefact/*/appraise-*",
+		"ATTEST:artefact/haiku/appraise-security-L001",
+		"ATTEST:artefact/doc/linter",
 	}
 
 	for _, cap := range valid {
@@ -498,6 +503,11 @@ func TestCapabilityPattern_RejectsInvalid(t *testing.T) {
 		"STAMP:artefact/*/",
 		"STAMP:artefact/*//appraise",
 		"STAMP:artefact/ /stamp",
+		"ATTEST:artefact/",
+		"ATTEST:artefact/haiku/",
+		"ATTEST:artefact//review",
+		"ATTEST:",
+		"ATTEST:artefact/*/",
 	}
 
 	for _, cap := range invalid {

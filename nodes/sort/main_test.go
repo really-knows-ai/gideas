@@ -488,6 +488,11 @@ func TestParseStampCapability(t *testing.T) {
 		{"STAMP:artefact/haiku/", "", "", false},
 		{"STAMP:artefact//linter", "", "", false},
 		{"WRITE:feedback/new", "", "", false},
+		{"ATTEST:artefact/haiku/linter", "haiku", "linter", true},
+		{"ATTEST:artefact/doc/security-review", "doc", "security-review", true},
+		{"ATTEST:artefact/", "", "", false},
+		{"ATTEST:artefact/haiku/", "", "", false},
+		{"ATTEST:artefact//linter", "", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

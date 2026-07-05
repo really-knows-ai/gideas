@@ -11,6 +11,9 @@ func TestParseStampCapability_Valid(t *testing.T) {
 		{"STAMP:artefact/haiku/review", "haiku", "review"},
 		{"STAMP:artefact/doc/security-review", "doc", "security-review"},
 		{"STAMP:artefact/petition-draft/linter", "petition-draft", stampLinter},
+		{"ATTEST:artefact/haiku/review", "haiku", "review"},
+		{"ATTEST:artefact/doc/security-review", "doc", "security-review"},
+		{"ATTEST:artefact/petition-draft/linter", "petition-draft", stampLinter},
 	}
 	for _, tt := range tests {
 		sc, ok := ParseStampCapability(tt.input)
@@ -38,6 +41,12 @@ func TestParseStampCapability_Invalid(t *testing.T) {
 		"",
 		"STAMP:",
 		"READ:artefact",
+		"ATTEST:artefact/",
+		"ATTEST:artefact/haiku/",
+		"ATTEST:artefact//review",
+		"ATTEST:artefact",
+		"ATTEST:",
+		"ATTEST:artefact/*/",
 	}
 	for _, input := range tests {
 		if _, ok := ParseStampCapability(input); ok {
@@ -47,23 +56,30 @@ func TestParseStampCapability_Invalid(t *testing.T) {
 }
 
 func TestParseStampCapabilities_MixedList(t *testing.T) {
+	const kindHaiku = "haiku"
+	const kindDoc = "doc"
+
 	caps := []string{
 		"READ:flow",
 		"STAMP:artefact/haiku/review",
 		"WRITE:feedback/new",
 		"STAMP:artefact/doc/linter",
+		"ATTEST:artefact/haiku/appraise-security",
 		"READ:artefact",
 	}
 
 	stamps := ParseStampCapabilities(caps)
-	if len(stamps) != 2 {
-		t.Fatalf("expected 2 stamp capabilities, got %d", len(stamps))
+	if len(stamps) != 3 {
+		t.Fatalf("expected 3 stamp capabilities, got %d", len(stamps))
 	}
-	if stamps[0].GovernedArtefact != "haiku" || stamps[0].StampName != "review" {
+	if stamps[0].GovernedArtefact != kindHaiku || stamps[0].StampName != "review" {
 		t.Errorf("stamps[0] = %+v, want haiku/review", stamps[0])
 	}
-	if stamps[1].GovernedArtefact != "doc" || stamps[1].StampName != stampLinter {
+	if stamps[1].GovernedArtefact != kindDoc || stamps[1].StampName != stampLinter {
 		t.Errorf("stamps[1] = %+v, want doc/linter", stamps[1])
+	}
+	if stamps[2].GovernedArtefact != kindHaiku || stamps[2].StampName != "appraise-security" {
+		t.Errorf("stamps[2] = %+v, want haiku/appraise-security", stamps[2])
 	}
 }
 
@@ -137,6 +153,13 @@ func TestMatchCapability(t *testing.T) {
 		{"read flow mismatch", "READ:flow", "WRITE:flow", false},
 		{"write artefact wildcard", "WRITE:artefact/*", "WRITE:artefact/haiku", true},
 		{"write artefact wildcard no cross", "WRITE:artefact/*", "WRITE:artefact/haiku/extra", false},
+
+		// ATTEST: prefix matching.
+		{"ATTEST exact match", "ATTEST:artefact/haiku/review", "ATTEST:artefact/haiku/review", true},
+		{"ATTEST wildcard kind", "ATTEST:artefact/*/appraise-security", "ATTEST:artefact/haiku/appraise-security", true},
+		{"ATTEST prefix wildcard", "ATTEST:artefact/haiku/appraise-*", "ATTEST:artefact/haiku/appraise-security", true},
+		{"ATTEST mismatch verb", "ATTEST:artefact/haiku/review", "STAMP:artefact/haiku/review", false},
+		{"STAMP exact match (unchanged)", "STAMP:artefact/haiku/review", "STAMP:artefact/haiku/review", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

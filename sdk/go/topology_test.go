@@ -236,10 +236,12 @@ func TestNode_HasStampCapability(t *testing.T) {
 	n := newNode(&flowv1.FlowNode{
 		Name: "test",
 		Capabilities: []string{
-			"STAMP:artefact/haiku/review",     // exact match
-			"STAMP:artefact/haiku/appraise-*", // wildcard stamp segment
-			"STAMP:artefact/*/review",         // wildcard kind segment
-			"STAMP:artefact/law/law-*",        // law-* prefix
+			"STAMP:artefact/haiku/review",      // exact match
+			"STAMP:artefact/haiku/appraise-*",  // wildcard stamp segment
+			"STAMP:artefact/*/review",          // wildcard kind segment
+			"STAMP:artefact/law/law-*",         // law-* prefix
+			"ATTEST:artefact/*/review",         // ATTEST wildcard kind segment
+			"ATTEST:artefact/haiku/appraise-*", // ATTEST wildcard stamp segment
 		},
 	})
 	tests := []struct {
@@ -256,6 +258,11 @@ func TestNode_HasStampCapability(t *testing.T) {
 		{"law-* prefix match law-abc-def", "law", "law-abc-def", true},
 		{"no match wrong stamp", "haiku", "approval", false},
 		{"no match wrong kind and stamp", "doc", "nonesuch", false},
+
+		// ATTEST: capability matching (capabilities added to node above).
+		{"ATTEST wildcard kind match doc/review", "doc", "review", true},
+		{"ATTEST wildcard stamp appraise-security", "haiku", "appraise-security", true},
+		{"ATTEST no match wrong kind", "doc", "nonesuch", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
