@@ -94,7 +94,7 @@ func TestSort_RoutesToQuench_MissingAppraisalStamp(t *testing.T) {
 func TestSort_RoutesToRefine_UnresolvedFeedbackFromProvider(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["appraisal"] = true
-	// Quench stamped linter but also left unresolved feedback.
+	// Quench stamped appraisal but also left unresolved feedback.
 	spy.FeedbackItems = []*flowv1.FeedbackItem{
 		{Id: "fb-1", Source: "quench", State: flowv1.FeedbackState_FEEDBACK_STATE_NEW},
 	}
@@ -549,7 +549,7 @@ func TestSort_ResolvedFeedbackIgnoredInSourceCheck(t *testing.T) {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	// All stamps present (linter, review, approval), resolved feedback → complete.
+	// All stamps present (appraisal, review, approval), resolved feedback → complete.
 	if !spy.Completed {
 		t.Fatal("expected completion")
 	}
@@ -648,7 +648,7 @@ func TestSort_Error_DeadlockFeedbackFails(t *testing.T) {
 
 func TestSort_Error_RouteToOutputFails(t *testing.T) {
 	spy := newSortSpy()
-	// Missing linter stamp → routes to quench → error.
+	// Missing appraisal stamp → routes to quench → error.
 	spy.RouteToOutputErr = fmt.Errorf("routing failed")
 	client, workitem := setupSortTest(t, spy)
 
