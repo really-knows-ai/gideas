@@ -1231,3 +1231,49 @@ func TestSort_AttestAllPresent_ContinuesToComplete(t *testing.T) {
 		t.Fatal("expected workitem to be completed")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Error propagation from VerifyLawAttestations (QueryLaws / ListLawGroups)
+// ---------------------------------------------------------------------------
+
+func TestSort_Error_QueryLawsFails(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["appraisal"] = true
+	spy.StampState["approval"] = true
+	spy.QueryLawsErr = errors.New("librarian unavailable")
+	client, workitem := setupSortTest(t, spy)
+
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from QueryLaws failure")
+	}
+	if !strings.Contains(err.Error(), "librarian unavailable") {
+		t.Fatalf("expected error to contain 'librarian unavailable', got: %v", err)
+	}
+}
+
+func TestSort_Error_ListLawGroupsFails(t *testing.T) {
+	spy := newSortSpy()
+	spy.StampState["appraisal"] = true
+	spy.StampState["approval"] = true
+	// Return a law so VerifyLawAttestations proceeds past QueryLaws to ListLawGroups.
+	spy.QueryLawsLaws = []*flowv1.Law{
+		{
+			Id:   "test-law",
+			Goal: "Test requirement",
+			Representations: []*flowv1.Representation{
+				{Type: "text/plain", Content: "requirement"},
+			},
+		},
+	}
+	spy.ListLawGroupsErr = errors.New("librarian unavailable")
+	client, workitem := setupSortTest(t, spy)
+
+	err := handleSort(context.Background(), workitem, client, defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from ListLawGroups failure")
+	}
+	if !strings.Contains(err.Error(), "librarian unavailable") {
+		t.Fatalf("expected error to contain 'librarian unavailable', got: %v", err)
+	}
+}
