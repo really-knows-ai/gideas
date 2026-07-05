@@ -198,6 +198,7 @@ func TestFoundryNode_Capabilities(t *testing.T) {
 		}},
 		{name: "sort", nodeID: "sort", has: []string{
 			"READ:artefact", "READ:artefact/haiku", "READ:feedback", "READ:flow",
+			"WRITE:feedback/deadlocked",
 		}, hasNot: []string{
 			"STAMP:artefact/haiku/approval",
 		}},

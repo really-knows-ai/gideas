@@ -15,7 +15,8 @@
 #   1. Missing "linter" stamp?        → route to Quench
 #   2. Missing "appraise-*" stamp?    → route to Appraisal
 #   3. Unresolved feedback?           → route to Refine
-#   4. All clear?                     → stamp "approval", Complete()
+#   4. Missing "approval" stamp?      → route to human-approval
+#   5. All clear?                     → Complete()
 #
 # Artefacts:
 #   - petition: The creative brief, pre-populated at workitem creation.
@@ -136,6 +137,7 @@ spec:
     - "READ:artefact/haiku"
     - "READ:feedback"
     - "READ:flow"
+    - "WRITE:feedback/deadlocked"
 ---
 
 apiVersion: flow.gideas.io/v1
