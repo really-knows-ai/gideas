@@ -796,14 +796,11 @@ func applyAttestationStamps(
 
 	// Map each dispatch entry to its child's workitem ID by index.
 	entryFailed := make([]bool, len(result.dispatchMatrix))
-	anyFailed := false
 	for i := range result.dispatchMatrix {
 		if result.skippedIndices[i] {
 			entryFailed[i] = true
-			anyFailed = true
 		} else if wid := result.childByDispatchIdx[i]; wid != "" && failedIDs[wid] {
 			entryFailed[i] = true
-			anyFailed = true
 		}
 	}
 
@@ -897,8 +894,13 @@ func applyAttestationStamps(
 							allPassed = false
 							continue
 						}
-						// Attest each representation type.
+						// Only attest text/markdown — the only representation type
+						// Appraisal evaluates. Other rep types (e.g. text/plain)
+						// are attested by the node that evaluates them (e.g. Quench).
 						for _, rep := range law.GetRepresentations() {
+							if rep.GetType() != "text/markdown" {
+								continue
+							}
 							if aErr := law.Attest(art, rep.GetType()); aErr != nil {
 								slog.Warn("appraisal: law attest failed",
 									"law", lawID, "rep", rep.GetType(), "error", aErr)
@@ -941,15 +943,12 @@ func applyAttestationStamps(
 			"artefact", governedArtefact)
 	}
 
-	// Overall completion stamp: applied when no dispatch failed outright.
-	if !anyFailed {
-		if err := art.Stamp(stampAppraisal); err != nil {
-			return fmt.Errorf("appraisal: stamp %s: %w", stampAppraisal, err)
-		}
-		slog.Info("appraisal: completion stamp applied", "stamp", stampAppraisal)
-	} else {
-		slog.Warn("appraisal: dispatch failures present, skipping completion stamp")
+	// Overall completion stamp: always applied as a record that Appraisal
+	// ran its orchestration, regardless of dispatch outcomes.
+	if err := art.Stamp(stampAppraisal); err != nil {
+		return fmt.Errorf("appraisal: stamp %s: %w", stampAppraisal, err)
 	}
+	slog.Info("appraisal: completion stamp applied", "stamp", stampAppraisal)
 
 	return nil
 }

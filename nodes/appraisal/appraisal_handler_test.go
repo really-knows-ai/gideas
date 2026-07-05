@@ -282,9 +282,10 @@ func TestAppraisalHandler_AllChildrenFail(t *testing.T) {
 		t.Fatalf("HandleAppraisal() error: %v", err)
 	}
 
-	// No stamps should be applied when all children fail.
-	if len(spy.StampedArtefacts) > 0 {
-		t.Fatalf("expected no stamps, got %v", spy.StampedArtefacts)
+	// Only the appraisal completion stamp should be applied (per spec R5 step 5),
+	// recording that Appraisal ran — even when all children fail.
+	if len(spy.StampedArtefacts) != 1 || spy.StampedArtefacts[0] != completionStamp {
+		t.Fatalf("expected only [%s], got %v", completionStamp, spy.StampedArtefacts)
 	}
 
 	// Attestation should have status "incomplete".
