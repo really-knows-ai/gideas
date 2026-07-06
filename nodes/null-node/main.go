@@ -28,6 +28,7 @@ import (
 	"os"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -43,27 +44,11 @@ func main() {
 // handler is the user-provided work processing function.
 // It is called by the SDK server when the Sidecar forwards an AssignWork request.
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("null-node: Processing...",
-		"namespace", wctx.GetFlowNamespace(),
-		"workitem_id", wctx.GetWorkitemId(),
-		"node_id", wctx.GetNodeId(),
-	)
-
-	// Initialize the SDK client to interact with the Sidecar.
-	// Set the workitem ID from the pushed context.
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "null-node")
 	if err != nil {
-		slog.Error("null-node: failed to create SDK client", "error", err)
 		return err
 	}
 	defer func() { _ = client.Close() }()
-
-	workitem, err := client.GetWorkitem()
-	if err != nil {
-		slog.Error("null-node: failed to get workitem", "error", err)
-		return err
-	}
 
 	// Send a Heartbeat.
 	if err := workitem.Heartbeat(); err != nil {

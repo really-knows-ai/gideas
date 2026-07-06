@@ -36,6 +36,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -86,18 +87,11 @@ func main() {
 // waits for a human routing decision, and routes accordingly.
 func handler(qm flow.QueueManager, cfg *hitlSortConfig) flow.Handler {
 	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-		_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-
-		client, err := flow.NewClient()
+		client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "hitl-sort")
 		if err != nil {
-			return fmt.Errorf("hitl-sort: create client: %w", err)
+			return err
 		}
 		defer func() { _ = client.Close() }()
-
-		workitem, err := client.GetWorkitem()
-		if err != nil {
-			return fmt.Errorf("hitl-sort: get workitem: %w", err)
-		}
 
 		return handleSort(ctx, client, workitem, qm, cfg, wctx)
 	}

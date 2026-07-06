@@ -135,22 +135,11 @@ func main() {
 // ── Handler (layer 2) ────────────────────────────────────────────────────
 
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("facilitator: received assignment",
-		"workitem_id", wctx.GetWorkitemId(),
-		"node_id", wctx.GetNodeId(),
-	)
-
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "facilitator")
 	if err != nil {
-		return fmt.Errorf("facilitator: create client: %w", err)
+		return err
 	}
 	defer func() { _ = client.Close() }()
-
-	workitem, err := client.GetWorkitem()
-	if err != nil {
-		return fmt.Errorf("facilitator: get workitem: %w", err)
-	}
 
 	cfg, err := nodeconfig.Load[facilitatorConfig](nodeconfig.Path())
 	if err != nil {

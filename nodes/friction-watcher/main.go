@@ -163,18 +163,11 @@ func extractLawID(evt *flowv1.FlowEvent) string {
 // handleHearing is the SDK handler entry point for hearing workitems.
 // It creates an SDK client and delegates to processHearing.
 func handleHearing(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	// Initialize SDK client for Sidecar operations.
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "friction-watcher: handler")
 	if err != nil {
-		return fmt.Errorf("friction-watcher: handler: create client: %w", err)
+		return err
 	}
 	defer func() { _ = client.Close() }()
-
-	workitem, err := client.GetWorkitem()
-	if err != nil {
-		return fmt.Errorf("friction-watcher: handler: get workitem: %w", err)
-	}
 
 	return processHearing(workitem, wctx)
 }

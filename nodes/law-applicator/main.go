@@ -27,6 +27,7 @@ import (
 	"os"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -107,15 +108,9 @@ func main() {
 }
 
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("law-applicator: received assignment",
-		"workitem_id", wctx.GetWorkitemId(),
-		"node_id", wctx.GetNodeId(),
-	)
-
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, _, err := nodeutil.SetupHandler(ctx, wctx, "law-applicator")
 	if err != nil {
-		return fmt.Errorf("law-applicator: create client: %w", err)
+		return err
 	}
 	defer func() { _ = client.Close() }()
 

@@ -33,6 +33,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -88,22 +89,11 @@ func main() {
 }
 
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("sort: received assignment",
-		"workitem_id", wctx.GetWorkitemId(),
-		"node_id", wctx.GetNodeId(),
-	)
-
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "sort")
 	if err != nil {
-		return fmt.Errorf("sort: create client: %w", err)
+		return err
 	}
 	defer func() { _ = client.Close() }()
-
-	workitem, err := client.GetWorkitem()
-	if err != nil {
-		return fmt.Errorf("sort: get workitem: %w", err)
-	}
 
 	cfg, err := nodeconfig.Load[sortConfig](nodeconfig.Path())
 	if err != nil {

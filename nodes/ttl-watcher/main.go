@@ -25,6 +25,7 @@ import (
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -211,17 +212,11 @@ func lawTimestamp(law *flowv1.Law) *timestamppb.Timestamp {
 
 // handleHearing is the SDK handler entry point for hearing workitems.
 func handleHearing(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "ttl-watcher: handler")
 	if err != nil {
-		return fmt.Errorf("ttl-watcher: handler: create client: %w", err)
+		return err
 	}
 	defer func() { _ = client.Close() }()
-
-	workitem, err := client.GetWorkitem()
-	if err != nil {
-		return fmt.Errorf("ttl-watcher: handler: get workitem: %w", err)
-	}
 
 	return processHearing(workitem, wctx)
 }

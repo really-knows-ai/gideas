@@ -82,15 +82,9 @@ func main() {
 }
 
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("rule-router: received assignment",
-		"workitem_id", wctx.GetWorkitemId(),
-		"node_id", wctx.GetNodeId(),
-	)
-
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, _, err := nodeutil.SetupHandler(ctx, wctx, "rule-router")
 	if err != nil {
-		return fmt.Errorf("rule-router: create client: %w", err)
+		return err
 	}
 	defer func() { _ = client.Close() }()
 

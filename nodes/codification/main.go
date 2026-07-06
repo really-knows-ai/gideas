@@ -37,6 +37,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -179,22 +180,11 @@ func main() {
 }
 
 func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	slog.Info("codification: received assignment",
-		"workitem_id", wctx.GetWorkitemId(),
-		"node_id", wctx.GetNodeId(),
-	)
-
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "codification")
 	if err != nil {
-		return fmt.Errorf("codification: create client: %w", err)
+		return err
 	}
 	defer func() { _ = client.Close() }()
-
-	workitem, err := client.GetWorkitem()
-	if err != nil {
-		return fmt.Errorf("codification: get workitem: %w", err)
-	}
 
 	cfg, err := nodeconfig.Load[codificationConfig](nodeconfig.Path())
 	if err != nil {

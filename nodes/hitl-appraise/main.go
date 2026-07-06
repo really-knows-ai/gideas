@@ -28,6 +28,7 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/nodes/internal/nodeconfig"
+	"github.com/gideas/flow/nodes/internal/nodeutil"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
@@ -58,18 +59,11 @@ func main() {
 // and waits for a human decision.
 func handler(qm flow.QueueManager) flow.Handler {
 	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-		_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-
-		client, err := flow.NewClient()
+		client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "hitl-appraise")
 		if err != nil {
-			return fmt.Errorf("hitl-appraise: create client: %w", err)
+			return err
 		}
 		defer func() { _ = client.Close() }()
-
-		workitem, err := client.GetWorkitem()
-		if err != nil {
-			return fmt.Errorf("hitl-appraise: get workitem: %w", err)
-		}
 
 		cfg, err := nodeconfig.Load[hitlAppraiseConfig](nodeconfig.Path())
 		if err != nil {
