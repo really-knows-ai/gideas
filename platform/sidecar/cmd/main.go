@@ -24,7 +24,6 @@ import (
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/sidecar/internal/buffer"
-	"github.com/gideas/flow/sidecar/internal/mock"
 	"github.com/gideas/flow/sidecar/internal/proxy"
 	"github.com/gideas/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
@@ -138,7 +137,7 @@ func main() {
 	// (node-facing) and AssignWork (operator-facing).
 	flowv1.RegisterSidecarServiceServer(srv, sidecarSrv)
 
-	// ArchivistService: proxy to real Archivist if address is set, otherwise mock.
+	// ArchivistService: proxy to real Archivist if address is set.
 	var archivistCloser func() error
 	if archivistAddr != "" {
 		archivistProxy, err := proxy.NewArchivistProxy(archivistAddr, sidecarSrv)
@@ -150,9 +149,8 @@ func main() {
 		archivistCloser = archivistProxy.Close
 		slog.Info("Archivist proxy enabled", "address", archivistAddr)
 	} else {
-		flowv1.RegisterArchivistServiceServer(srv, &mock.ArchivistHandler{})
 		archivistCloser = func() error { return nil }
-		slog.Info("Archivist mock enabled (no ARCHIVIST_ADDRESS set)")
+		slog.Info("Archivist proxy disabled (no ARCHIVIST_ADDRESS set)")
 	}
 
 	// OperatorService is proxied to the real Operator.
