@@ -139,7 +139,9 @@ plans/<project-name>/
 └── REVIEW.md        # Spec-compliance audit checklist (produced by implementation-review)
 ```
 
-The `specs/` directory remains the authoritative system-level source of truth. The `plans/` directory contains per-feature execution plans and reviews. Both live on `main` regardless of where implementation happens.
+The `specs/` directory remains the authoritative system-level source of truth. The `plans/` directory contains per-feature execution plans and reviews.
+
+**Important:** `plans/` is gitignored by design — its contents are never committed. Because the Glob tool relies on the git index, it will not find files under `plans/`. You **must** use `ls` (via Bash) to list directory contents under `plans/`.
 
 ### Worktree Convention
 
