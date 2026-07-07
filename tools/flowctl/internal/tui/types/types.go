@@ -1,17 +1,7 @@
 // Package types provides shared data types used by TUI components and messages.
-// These are Phase 02 provisional types with string Age; Phase 03 replaces
-// WorkitemSummary with api.WorkitemSummary which uses time.Duration for Age.
+// Phase 02 provisional types replaced by api.* in Phase 03.
+// Phase 04+ replaces remaining types with api.* equivalents.
 package types
-
-// WorkitemSummary represents a Workitem in the list view.
-// Provisional — Phase 03 replaces with api.WorkitemSummary.
-type WorkitemSummary struct {
-	Name          string
-	State         string // status.phase
-	Node          string // status.currentAssignee; "-" if terminal
-	ChildrenCount int
-	Age           string // human-readable age
-}
 
 // ArtefactNode represents an artefact in the tree view.
 // Phase 04 receives api.ArtefactInfo and maps it to this type.

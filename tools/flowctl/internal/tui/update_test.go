@@ -3,9 +3,11 @@ package tui
 import (
 	"errors"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gideas/flow/tools/flowctl/internal/api"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
 )
 
@@ -22,45 +24,25 @@ func TestUpdateNamespaceSelectedTransitionsToWorkitemList(t *testing.T) {
 	if m2.workitemList.Namespace != "test-ns" {
 		t.Errorf("expected namespace test-ns, got %q", m2.workitemList.Namespace)
 	}
-	if len(m2.workitemList.Items) == 0 {
-		t.Error("expected non-empty workitem list")
-	}
-	if cmd != nil {
-		t.Error("expected nil command")
+	if cmd == nil {
+		t.Error("expected non-nil command (loadWorkitems)")
 	}
 }
 
-func TestUpdateNamespaceLoadErrorStaysOnSelector(t *testing.T) {
+func TestUpdateNamespaceFallbackTransitionsToList(t *testing.T) {
 	m := initialModel()
 
-	model, cmd := m.Update(NamespaceLoadErrorMsg{Err: errors.New("permission denied")})
+	model, cmd := m.Update(NamespaceFallbackMsg{Namespace: "default", Error: errors.New("permission denied")})
 	m2 := model.(*Model)
 
-	if m2.screen != ScreenNamespaceSelect {
-		t.Errorf("expected screen NamespaceSelect, got %d", m2.screen)
+	if m2.screen != ScreenWorkitemList {
+		t.Errorf("expected screen WorkitemList, got %d", m2.screen)
 	}
 	if m2.namespaceSelector.Error != "permission denied" {
 		t.Errorf("expected error 'permission denied', got %q", m2.namespaceSelector.Error)
 	}
-	if cmd != nil {
-		t.Error("expected nil command")
-	}
-}
-
-func TestUpdateNamespaceLoadErrorEmptyListFallback(t *testing.T) {
-	m := initialModel()
-
-	model, cmd := m.Update(NamespaceLoadErrorMsg{Err: errors.New("empty list")})
-	m2 := model.(*Model)
-
-	if m2.screen != ScreenNamespaceSelect {
-		t.Errorf("expected screen NamespaceSelect, got %d", m2.screen)
-	}
-	if m2.namespaceSelector.Error != "empty list" {
-		t.Errorf("expected error 'empty list', got %q", m2.namespaceSelector.Error)
-	}
-	if cmd != nil {
-		t.Error("expected nil command")
+	if cmd == nil {
+		t.Error("expected non-nil command (loadWorkitems)")
 	}
 }
 
@@ -68,9 +50,9 @@ func TestUpdateWorkitemSelectedTransitionsToDetail(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
-		{Name: "wi-002", State: "Completed", Node: "-", ChildrenCount: 0, Age: "12m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
+		{Name: "wi-002", State: "Completed", Node: "-", ChildrenCount: 0, Age: 12 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
@@ -83,9 +65,6 @@ func TestUpdateWorkitemSelectedTransitionsToDetail(t *testing.T) {
 	if m2.workitemDetail.workitemName != "wi-001" {
 		t.Errorf("expected workitemName wi-001, got %q", m2.workitemDetail.workitemName)
 	}
-	if m2.workitemDetail.topology.Loading {
-		t.Error("expected topology loading=false (fake data populated)")
-	}
 	if cmd != nil {
 		t.Error("expected nil command")
 	}
@@ -95,13 +74,14 @@ func TestUpdateWorkitemUpdateModifiesItemInPlace(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
 	model, cmd := m.Update(WorkitemUpdateMsg{
-		Item: types.WorkitemSummary{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 0, Age: "12m"},
+		Event: "MODIFIED",
+		Item:  api.WorkitemSummary{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 0, Age: 12 * time.Minute},
 	})
 	m2 := model.(*Model)
 
@@ -111,8 +91,8 @@ func TestUpdateWorkitemUpdateModifiesItemInPlace(t *testing.T) {
 	if m2.workitemList.Items[0].State != "Completed" {
 		t.Errorf("expected state Completed, got %q", m2.workitemList.Items[0].State)
 	}
-	if cmd != nil {
-		t.Error("expected nil command")
+	if cmd == nil {
+		t.Error("expected non-nil command (debounced child count refresh)")
 	}
 }
 
@@ -120,12 +100,12 @@ func TestUpdateWatchDisconnectedShowsBanner(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
-	model, cmd := m.Update(WatchDisconnectedMsg{Error: errors.New("connection lost")})
+	model, cmd := m.Update(WatchDisconnectedMsg{})
 	m2 := model.(*Model)
 
 	if !m2.workitemList.Disconnected {
@@ -141,8 +121,8 @@ func TestUpdateWatchReconnectedHidesBanner(t *testing.T) {
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
 	m.workitemList.Disconnected = true
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
@@ -157,12 +137,62 @@ func TestUpdateWatchReconnectedHidesBanner(t *testing.T) {
 	}
 }
 
+func TestUpdateWorkitemDeletedRemovesItem(t *testing.T) {
+	m := initialModel()
+	m.screen = ScreenWorkitemList
+	m.workitemList.Loading = false
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
+		{Name: "wi-002", State: "Completed", Node: "-", ChildrenCount: 0, Age: 12 * time.Minute},
+	}
+	m.workitemList.Namespace = "test-ns"
+
+	model, cmd := m.Update(WorkitemDeletedMsg{Name: "wi-001"})
+	m2 := model.(*Model)
+
+	if len(m2.workitemList.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(m2.workitemList.Items))
+	}
+	if m2.workitemList.Items[0].Name != "wi-002" {
+		t.Errorf("expected wi-002, got %s", m2.workitemList.Items[0].Name)
+	}
+	if cmd != nil {
+		t.Error("expected nil command")
+	}
+}
+
+func TestUpdateWorkitemAddedAppendsToList(t *testing.T) {
+	m := initialModel()
+	m.screen = ScreenWorkitemList
+	m.workitemList.Loading = false
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
+	}
+	m.workitemList.Namespace = "test-ns"
+
+	model, cmd := m.Update(WorkitemUpdateMsg{
+		Event: "ADDED",
+		Item:  api.WorkitemSummary{Name: "wi-003", State: "Pending", Node: "forge", ChildrenCount: 0, Age: 5 * time.Second},
+	})
+	m2 := model.(*Model)
+
+	if len(m2.workitemList.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(m2.workitemList.Items))
+	}
+	if m2.workitemList.Items[1].Name != "wi-003" {
+		t.Errorf("expected wi-003, got %s", m2.workitemList.Items[1].Name)
+	}
+	if cmd == nil {
+		t.Error("expected non-nil command (debounced child count refresh)")
+	}
+}
+
 func TestUpdateCreateStartTransitionsToWizard(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
@@ -217,8 +247,8 @@ func TestUpdateDeleteNonTerminalBlocked(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
@@ -240,8 +270,8 @@ func TestUpdateDeleteTerminalAllowed(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 0, Age: "12m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 0, Age: 12 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
@@ -264,8 +294,8 @@ func TestUpdateDetailEscReturnsToList(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.workitemDetail.workitemName = "wi-001"
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
@@ -466,8 +496,8 @@ func TestUpdateDeleteResultPartialFailure(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 2, Age: "12m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 2, Age: 12 * time.Minute},
 	}
 
 	model, cmd := m.Update(DeleteResultMsg{

@@ -3,17 +3,32 @@ package components
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gideas/flow/tools/flowctl/internal/api"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/styles"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
 )
+
+// ageString converts time.Duration to a human-readable string like "5m", "2h", "3d".
+func ageString(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
 
 // WorkitemListModel is the model for the Workitem list screen.
 type WorkitemListModel struct {
-	Items        []types.WorkitemSummary
+	Items        []api.WorkitemSummary
 	Cursor       int
 	Loading      bool
 	Watching     bool // true when watch is active
@@ -84,16 +99,13 @@ func (m WorkitemListModel) View() string {
 
 		stateStyle := styles.StyleStateColumn(item.State)
 		nodeStr := item.Node
-		if item.State == "Completed" || item.State == "Failed" {
-			nodeStr = "-"
-		}
 		nodeStyle := styles.StyleNodeColumn(nodeStr)
 
 		name := item.Name
 		state := stateStyle.Render(item.State)
 		node := nodeStyle.Render(nodeStr)
 		children := fmt.Sprintf("%d", item.ChildrenCount)
-		age := item.Age
+		age := ageString(item.Age)
 
 		line := fmt.Sprintf("%s%-*s  %-*s  %-*s  %-*s  %s",
 			cursor,

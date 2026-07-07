@@ -4,8 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"github.com/gideas/flow/tools/flowctl/internal/api"
 )
 
 func TestViewNamespaceSelectScreen(t *testing.T) {
@@ -21,8 +22,8 @@ func TestViewWorkitemListScreen(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 2, Age: "2m"},
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 2, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 	v := m.View()
@@ -37,24 +38,13 @@ func TestViewWorkitemDetailScreen(t *testing.T) {
 	m.workitemDetail.workitemName = "wi-001"
 	m.workitemDetail.statusBar.ScreenName = "Workitem Detail"
 	m.workitemDetail.statusBar.WorkitemName = "wi-001"
-	m.workitemDetail.topology.Loading = false
-	m.workitemDetail.topology.Nodes = []types.TopologyNode{
-		{Name: "forge", Color: types.TopologyVisited},
-	}
-	m.workitemDetail.artefacts.Loading = false
-	m.workitemDetail.artefacts.Artefacts = []types.ArtefactNode{
-		{ArtefactID: "haiku", GovernedBy: "haiku"},
-	}
-	m.workitemDetail.hitl.Visible = false
+	m.workitemDetail.loaded = true
 	v := m.View()
 	if !strings.Contains(v, "wi-001") {
 		t.Error("expected workitem name in detail view, got:", v)
 	}
-	if !strings.Contains(v, "forge") {
-		t.Error("expected topology content in detail view, got:", v)
-	}
-	if !strings.Contains(v, "haiku") {
-		t.Error("expected artefact content in detail view, got:", v)
+	if !strings.Contains(v, "Detail for wi-001") {
+		t.Error("expected 'Detail for wi-001' in view, got:", v)
 	}
 }
 
@@ -80,35 +70,15 @@ func TestViewErrorState(t *testing.T) {
 	}
 }
 
-func TestViewDetailShowsArtefacts(t *testing.T) {
-	m := initialModel()
-	m.screen = ScreenWorkitemDetail
-	m.workitemDetail.workitemName = "wi-001"
-	m.workitemDetail.statusBar.ScreenName = "Workitem Detail"
-	m.workitemDetail.statusBar.WorkitemName = "wi-001"
-	m.workitemDetail.topology.Loading = false
-	m.workitemDetail.artefacts.Loading = false
-	m.workitemDetail.artefacts.Artefacts = []types.ArtefactNode{
-		{ArtefactID: "petition", GovernedBy: "petition", Expanded: true, Content: "content text"},
-	}
-	m.workitemDetail.hitl.Visible = false
-	v := m.View()
-	if !strings.Contains(v, "petition") || !strings.Contains(v, "content text") {
-		t.Error("expected artefact content visible in detail view, got:", v)
-	}
-}
-
 func TestViewDetailLayout(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.workitemDetail.workitemName = "wi-001"
 	m.workitemDetail.statusBar.ScreenName = "Workitem Detail"
 	m.workitemDetail.statusBar.WorkitemName = "wi-001"
-	m.workitemDetail.topology.Loading = false
-	m.workitemDetail.artefacts.Loading = false
-	m.workitemDetail.hitl.Visible = false
+	m.workitemDetail.loaded = true
 	v := m.View()
-	// Detail layout renders status bar, topology, and artefacts
+	// Detail layout renders status bar and placeholder text
 	if !strings.Contains(v, "wi-001") {
 		t.Error("expected workitem name in detail layout, got:", v)
 	}

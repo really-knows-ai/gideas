@@ -43,6 +43,7 @@ func (m NamespaceSelectorModel) View() string {
 
 	if m.Error != "" {
 		b.WriteString(fmt.Sprintf("\n  Error loading namespaces: %s", m.Error))
+		b.WriteString("\n  Falling back to current context namespace...")
 		return b.String()
 	}
 
@@ -87,9 +88,6 @@ func (m NamespaceSelectorModel) Update(msg tea.Msg) (NamespaceSelectorModel, tea
 				m.Cursor++
 			}
 		}
-	case NamespaceLoadErrorMsg:
-		m.Loading = false
-		m.Error = msg.Err.Error()
 	}
 	return m, nil
 }
@@ -111,10 +109,4 @@ func (m NamespaceSelectorModel) SetNamespaces(namespaces []string, current strin
 		}
 	}
 	return m
-}
-
-// NamespaceLoadErrorMsg is the message type for namespace loading errors.
-// Defined here to avoid circular imports — it's re-exported by tui/messages.go.
-type NamespaceLoadErrorMsg struct {
-	Err error
 }

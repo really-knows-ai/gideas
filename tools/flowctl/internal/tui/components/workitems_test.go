@@ -3,10 +3,11 @@ package components
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"github.com/gideas/flow/tools/flowctl/internal/api"
 )
 
 func TestWorkitemLoadingState(t *testing.T) {
@@ -20,8 +21,8 @@ func TestWorkitemLoadingState(t *testing.T) {
 func TestWorkitemLoadedState(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 2, Age: "2m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 2, Age: 2 * time.Minute},
 	}
 	m.Namespace = "test-ns"
 	v := m.View()
@@ -33,11 +34,11 @@ func TestWorkitemLoadedState(t *testing.T) {
 func TestWorkitemStateColumn(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-pending", State: "Pending", Node: "forge", ChildrenCount: 0, Age: "30s"},
-		{Name: "wi-running", State: "Running", Node: "sort", ChildrenCount: 2, Age: "2m"},
-		{Name: "wi-complete", State: "Completed", Node: "refine", ChildrenCount: 1, Age: "12m"},
-		{Name: "wi-failed", State: "Failed", Node: "refine", ChildrenCount: 0, Age: "15m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-pending", State: "Pending", Node: "forge", ChildrenCount: 0, Age: 30 * time.Second},
+		{Name: "wi-running", State: "Running", Node: "sort", ChildrenCount: 2, Age: 2 * time.Minute},
+		{Name: "wi-complete", State: "Completed", Node: "refine", ChildrenCount: 1, Age: 12 * time.Minute},
+		{Name: "wi-failed", State: "Failed", Node: "refine", ChildrenCount: 0, Age: 15 * time.Minute},
 	}
 	m.Namespace = "test-ns"
 	v := m.View()
@@ -49,9 +50,9 @@ func TestWorkitemStateColumn(t *testing.T) {
 func TestWorkitemNodeColumnTerminalDash(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-complete", State: "Completed", Node: "refine", ChildrenCount: 0, Age: "12m"},
-		{Name: "wi-failed", State: "Failed", Node: "refine", ChildrenCount: 0, Age: "15m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-complete", State: "Completed", Node: "refine", ChildrenCount: 0, Age: 12 * time.Minute},
+		{Name: "wi-failed", State: "Failed", Node: "refine", ChildrenCount: 0, Age: 15 * time.Minute},
 	}
 	m.Namespace = "test-ns"
 	v := m.View()
@@ -64,11 +65,11 @@ func TestWorkitemNodeColumnTerminalDash(t *testing.T) {
 func TestWorkitemNodeColumnActive(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-running", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
-		{Name: "wi-pending", State: "Pending", Node: "forge", ChildrenCount: 0, Age: "30s"},
-		{Name: "wi-routing", State: "Routing", Node: "router", ChildrenCount: 0, Age: "1m"},
-		{Name: "wi-suspended", State: "Suspended", Node: "human-approval", ChildrenCount: 0, Age: "8m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-running", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
+		{Name: "wi-pending", State: "Pending", Node: "forge", ChildrenCount: 0, Age: 30 * time.Second},
+		{Name: "wi-routing", State: "Routing", Node: "router", ChildrenCount: 0, Age: time.Minute},
+		{Name: "wi-suspended", State: "Suspended", Node: "human-approval", ChildrenCount: 0, Age: 8 * time.Minute},
 	}
 	m.Namespace = "test-ns"
 	v := m.View()
@@ -80,8 +81,8 @@ func TestWorkitemNodeColumnActive(t *testing.T) {
 func TestWorkitemChildrenCount(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-parent", State: "Running", Node: "sort", ChildrenCount: 3, Age: "2m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-parent", State: "Running", Node: "sort", ChildrenCount: 3, Age: 2 * time.Minute},
 	}
 	m.Namespace = "test-ns"
 	v := m.View()
@@ -104,8 +105,8 @@ func TestWorkitemEmptyState(t *testing.T) {
 func TestWorkitemDisconnectedBanner(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.Disconnected = true
 	m.Namespace = "test-ns"
@@ -128,9 +129,9 @@ func TestWorkitemErrorState(t *testing.T) {
 func TestWorkitemCursorMovement(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
-		{Name: "wi-002", State: "Completed", Node: "-", ChildrenCount: 0, Age: "12m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
+		{Name: "wi-002", State: "Completed", Node: "-", ChildrenCount: 0, Age: 12 * time.Minute},
 	}
 	if m.Cursor != 0 {
 		t.Fatalf("expected cursor at 0, got %d", m.Cursor)
@@ -148,10 +149,10 @@ func TestWorkitemCursorMovement(t *testing.T) {
 func TestWorkitemStateColumnColorsApplied(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 0, Age: "12m"},
-		{Name: "wi-002", State: "Suspended", Node: "human-approval", ChildrenCount: 0, Age: "8m"},
-		{Name: "wi-003", State: "Pending", Node: "forge", ChildrenCount: 0, Age: "30s"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 0, Age: 12 * time.Minute},
+		{Name: "wi-002", State: "Suspended", Node: "human-approval", ChildrenCount: 0, Age: 8 * time.Minute},
+		{Name: "wi-003", State: "Pending", Node: "forge", ChildrenCount: 0, Age: 30 * time.Second},
 	}
 	m.Namespace = "test-ns"
 	v := m.View()
@@ -167,8 +168,8 @@ func TestWorkitemStateColumnColorsApplied(t *testing.T) {
 func TestWorkitemCursorClamped(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false
-	m.Items = []types.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: "2m"},
+	m.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.Cursor = 0
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})

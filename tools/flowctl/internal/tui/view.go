@@ -29,15 +29,12 @@ func (m *Model) View() string {
 	return "Unknown screen"
 }
 
-// renderDetail renders the Workitem detail screen layout:
-// StatusBar (top), then Topology + Artefacts side by side, then HITL prompt.
+// renderDetail renders the Workitem detail screen.
+// Phase 03: placeholder — shows only the workitem name.
+// Phase 04 replaces this with full status bar, topology, artefacts, and HITL.
 func (m *Model) renderDetail() string {
 	return lipgloss.JoinVertical(lipgloss.Top,
 		m.workitemDetail.statusBar.View(),
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			m.workitemDetail.topology.View(),
-			m.workitemDetail.artefacts.View(),
-		),
-		m.workitemDetail.hitl.View(),
+		fmt.Sprintf("\n  Detail for %s\n\n  Full detail rendering coming in Phase 04.", m.workitemDetail.workitemName),
 	)
 }

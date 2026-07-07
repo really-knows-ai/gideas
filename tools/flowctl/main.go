@@ -7,8 +7,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gideas/flow/tools/flowctl/internal/config"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+
+	"github.com/gideas/flow/tools/flowctl/internal/api"
+	"github.com/gideas/flow/tools/flowctl/internal/config"
+	"github.com/gideas/flow/tools/flowctl/internal/tui"
 )
 
 var rootCmd = &cobra.Command{
@@ -24,8 +28,26 @@ var watchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		_ = cfg // Phase 2+ uses this
-		fmt.Println("flowctl watch — not yet implemented")
+
+		k8s, err := api.NewK8sClient("")
+		if err != nil {
+			return fmt.Errorf("failed to connect to Kubernetes: %w\n"+
+				"Verify KUBECONFIG or ~/.kube/config points to a Foundry Flow cluster.", err)
+		}
+
+		ctx := cmd.Context()
+		model := tui.NewModel(k8s, cfg, ctx)
+		program := tea.NewProgram(&model, tea.WithAltScreen())
+		model.Program = program
+
+		go func() {
+			<-ctx.Done()
+			program.Quit()
+		}()
+
+		if _, err := program.Run(); err != nil {
+			return fmt.Errorf("TUI error: %w", err)
+		}
 		return nil
 	},
 }
@@ -44,7 +66,6 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		fmt.Println("\nShutting down...")
-		// closeAll() placeholder — populated in later phases
 		os.Exit(0)
 	}()
 

@@ -1,16 +1,22 @@
 package tui
 
 import (
+	"github.com/gideas/flow/tools/flowctl/internal/api"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"k8s.io/apimachinery/pkg/watch"
 )
 
 // ─── Namespace messages ───────────────────────────────────────────────────
 
-// NamespacesLoadedMsg is sent when the namespace list is loaded.
-// Stub (plural naming): replaced by Phase 03's NamespaceListLoadedMsg (singular).
-type NamespacesLoadedMsg struct {
+// NamespaceListLoadedMsg is sent when the namespace list is loaded.
+type NamespaceListLoadedMsg struct {
 	Namespaces []string
-	Current    string // current kube context namespace, "" if none
+}
+
+// NamespaceFallbackMsg is sent when namespace loading fails.
+type NamespaceFallbackMsg struct {
+	Namespace string
+	Error     error
 }
 
 // NamespaceSelectedMsg is sent when a namespace is selected.
@@ -18,17 +24,16 @@ type NamespaceSelectedMsg struct {
 	Namespace string
 }
 
-// NamespaceLoadErrorMsg is sent when namespace loading fails.
-// Stub (LoadError): replaced by Phase 03's NamespaceFallbackMsg.
-type NamespaceLoadErrorMsg struct {
-	Err error
-}
-
 // ─── Workitem list messages ───────────────────────────────────────────────
 
 // WorkitemsLoadedMsg is sent when the Workitem list is loaded.
 type WorkitemsLoadedMsg struct {
-	Items []types.WorkitemSummary
+	Items []api.WorkitemSummary
+}
+
+// WorkitemLoadErrorMsg is sent when Workitem loading fails.
+type WorkitemLoadErrorMsg struct {
+	Error error
 }
 
 // WorkitemSelectedMsg is sent when a Workitem is selected.
@@ -38,7 +43,18 @@ type WorkitemSelectedMsg struct {
 
 // WorkitemUpdateMsg is sent when a single Workitem changes via watch.
 type WorkitemUpdateMsg struct {
-	Item types.WorkitemSummary
+	Event watch.EventType
+	Item  api.WorkitemSummary
+}
+
+// WorkitemDeletedMsg is sent when a Workitem is deleted via watch.
+type WorkitemDeletedMsg struct {
+	Name string
+}
+
+// ChildCountsUpdatedMsg is sent when child counts are refreshed.
+type ChildCountsUpdatedMsg struct {
+	Counts map[string]int // workitem name -> child count
 }
 
 // WatchDisconnectedMsg is sent when the Kubernetes watch disconnects.
