@@ -72,9 +72,10 @@ func (m *Model) renderDetail() string {
 	// Workitem info line
 	infoLine := ""
 	if detail.detail != nil {
-		infoLine = fmt.Sprintf("  State: %s  |  Node: %s",
+		infoLine = fmt.Sprintf("  State: %s  |  Node: %s  |  Age: %s",
 			detail.detail.State,
 			detail.detail.Node,
+			detail.detail.Age,
 		)
 		if detail.detail.FailureReason != "" {
 			infoLine += fmt.Sprintf("  |  Failure: %s", detail.detail.FailureReason)
