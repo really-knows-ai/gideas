@@ -572,9 +572,11 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case CreateStartMsg:
-		// Transition to create wizard
+		// Transition to create wizard and load data
 		m.createWizard = components.NewCreateWizard()
+		m.createWizard.Loading = true
 		m.screen = ScreenCreateWizard
+		return m, m.loadWizardData()
 
 	case DeleteConfirmMsg:
 		// Delete blocked if not Completed/Failed
@@ -985,9 +987,11 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case CreateStartMsg:
-		// Open create wizard from detail screen
+		// Open create wizard from detail screen and load data
 		m.createWizard = components.NewCreateWizard()
+		m.createWizard.Loading = true
 		m.screen = ScreenCreateWizard
+		return m, m.loadWizardData()
 
 	case ErrorMsg:
 		// Show as error banner at top of detail screen
@@ -1075,10 +1079,15 @@ func (m *Model) fetchArtefactContent(workitemID, artefactID string) tea.Cmd {
 // updateCreateWizard handles semantic messages for the create wizard.
 func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case CreateStartMsg:
-		// Initialise wizard
-		m.createWizard = components.NewCreateWizard()
-		m.createWizard.Step = 0
+	case WizardDataLoadedMsg:
+		m.createWizard.Loading = false
+		if msg.Blocked != "" {
+			m.createWizard.Blocked = msg.Blocked
+			m.createWizard.Error = msg.BlockedErr
+		} else {
+			m.createWizard.EntryNodes = msg.EntryNodes
+			m.createWizard.Artefacts = msg.Artefacts
+		}
 
 	case CreateFieldUpdatedMsg:
 		switch msg.Field {
@@ -1438,6 +1447,59 @@ func sanitizeName(s string) string {
 func (m *Model) logIfEnabled(level, component, message string) {
 	if m.logWriter != nil {
 		m.logWriter.Log(level, component, message)
+	}
+}
+
+// loadWizardData fetches entry nodes, governed artefacts, and validates the
+// FoundryFlow for the create wizard. Runs as a command, sends WizardDataLoadedMsg.
+func (m *Model) loadWizardData() tea.Cmd {
+	return func() tea.Msg {
+		if m.k8s == nil {
+			return WizardDataLoadedMsg{
+				Blocked:    "no_flow",
+				BlockedErr: "no K8s client",
+			}
+		}
+
+		// 1. Check FoundryFlow (blocked state detection)
+		flow, err := m.k8s.GetFoundryFlow(m.ctx, m.namespace)
+		if err != nil {
+			return WizardDataLoadedMsg{
+				Blocked:    "multiple_flows",
+				BlockedErr: err.Error(),
+			}
+		}
+		if flow == nil {
+			return WizardDataLoadedMsg{
+				Blocked:    "no_flow",
+				BlockedErr: "no FoundryFlow in namespace",
+			}
+		}
+
+		// 2. Load entry nodes (filter by Entry != "")
+		nodes, err := m.k8s.ListFoundryNodes(m.ctx, m.namespace)
+		var entryNodes []string
+		if err == nil {
+			for _, n := range nodes {
+				if n.Entry != "" {
+					entryNodes = append(entryNodes, n.Name)
+				}
+			}
+		}
+
+		// 3. Load governed artefacts (for step 3 selection)
+		var artefacts []string
+		gas, err := m.k8s.ListGovernedArtefacts(m.ctx, m.namespace)
+		if err == nil {
+			for _, ga := range gas {
+				artefacts = append(artefacts, ga.Name)
+			}
+		}
+
+		return WizardDataLoadedMsg{
+			EntryNodes: entryNodes,
+			Artefacts:  artefacts,
+		}
 	}
 }
 

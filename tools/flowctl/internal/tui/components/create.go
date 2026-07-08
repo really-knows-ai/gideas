@@ -29,9 +29,9 @@ const (
 type CreateWizardModel struct {
 	Step         int    // 0=prompt, 1=entryNode, 2=artefactID, 3=governedArtefact, 4=confirm, 5=success/error
 	Fields       CreateFields
-	FoundryFlows []string // fake: ["main-flow"]
-	EntryNodes   []string // fake: ["forge", "human-entry"]
-	Artefacts    []string // fake: ["petition", "haiku"]
+	FoundryFlows []string
+	EntryNodes   []string
+	Artefacts    []string
 	Loading      bool
 	Error        string
 	SuccessName  string // set on successful creation
@@ -60,9 +60,6 @@ func NewCreateWizard() CreateWizardModel {
 		Fields: CreateFields{
 			ArtefactID: "petition",
 		},
-		FoundryFlows: []string{"main-flow"},
-		EntryNodes:   []string{"forge", "human-entry"},
-		Artefacts:    []string{"petition", "haiku"},
 	}
 }
 
@@ -77,6 +74,11 @@ func (m CreateWizardModel) View() string {
 	}
 	if m.Blocked == "multiple_flows" {
 		b.WriteString("Cannot seed — multiple FoundryFlows detected. Use a namespace with exactly one FoundryFlow.\n\nPress esc to return")
+		return b.String()
+	}
+
+	if m.Loading {
+		b.WriteString("Loading wizard data...")
 		return b.String()
 	}
 

@@ -203,11 +203,11 @@ func TestUpdateCreateStartTransitionsToWizard(t *testing.T) {
 	if m2.screen != ScreenCreateWizard {
 		t.Errorf("expected screen CreateWizard, got %d", m2.screen)
 	}
-	if len(m2.createWizard.FoundryFlows) == 0 {
-		t.Error("expected wizard to be initialised with fake data")
+	if !m2.createWizard.Loading {
+		t.Error("expected wizard to be loading data from API")
 	}
-	if cmd != nil {
-		t.Error("expected nil command")
+	if cmd == nil {
+		t.Error("expected non-nil command (loadWizardData)")
 	}
 }
 

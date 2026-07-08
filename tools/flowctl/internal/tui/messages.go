@@ -164,6 +164,14 @@ type CreateErrorMsg struct {
 // CreateCancelMsg signals the user cancelled the wizard.
 type CreateCancelMsg struct{}
 
+// WizardDataLoadedMsg is sent when initial wizard data is loaded from the API.
+type WizardDataLoadedMsg struct {
+	EntryNodes []string
+	Artefacts  []string
+	Blocked    string // "" if ok, "no_flow" or "multiple_flows"
+	BlockedErr string
+}
+
 // ─── Delete messages ──────────────────────────────────────────────────────
 
 // DeleteConfirmMsg is sent when the user confirms deletion.

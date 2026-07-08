@@ -15,23 +15,34 @@ func TestFullCreateIntegration(t *testing.T) {
 	m.workitemList.Items = nil // empty list
 
 	// Simulate pressing 'n' to start create
-	model, cmd := m.Update(CreateStartMsg{})
+	model, _ := m.Update(CreateStartMsg{})
 	m2 := model.(*Model)
 
 	if m2.screen != ScreenCreateWizard {
 		t.Errorf("expected ScreenCreateWizard, got %d", m2.screen)
 	}
-	if cmd != nil {
-		// CreateStartMsg currently returns nil command — that's OK
+	if !m2.createWizard.Loading {
+		t.Error("expected wizard to be loading after CreateStartMsg")
+	}
+
+	// Simulate successful data load from API
+	model, _ = m2.Update(WizardDataLoadedMsg{
+		EntryNodes: []string{"forge", "human-entry"},
+		Artefacts:  []string{"petition", "haiku"},
+	})
+	m3 := model.(*Model)
+
+	if m3.createWizard.Loading {
+		t.Error("expected wizard loading to be false after WizardDataLoadedMsg")
 	}
 
 	// Verify the wizard is initialized
-	if m2.createWizard.Step != 0 {
-		t.Errorf("expected wizard step 0, got %d", m2.createWizard.Step)
+	if m3.createWizard.Step != 0 {
+		t.Errorf("expected wizard step 0, got %d", m3.createWizard.Step)
 	}
 
 	// Verify initial wizard state
-	v := m2.View()
+	v := m3.View()
 	if !containsAny(v, "Enter prompt text", "prompt") {
 		t.Error("expected wizard prompt in view, got:", v)
 	}
