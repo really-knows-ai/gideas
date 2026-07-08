@@ -61,9 +61,8 @@ type Model struct {
 	// Debug hint shown when --hitl-port != 8080 and all probes fail
 	debugHint string
 
-	// Delete confirmation state
-	deleteConfirmWorkitem string // name of workitem pending delete confirmation; "" if none
-	deleteConfirmPhase    string // phase of workitem pending confirmation
+	// Delete confirmation state — non-empty means we are awaiting y/N
+	deleteConfirmWorkitem string
 
 	// Create retry state — tracks whether CRD and artefact were already created
 	createHasCRD      bool

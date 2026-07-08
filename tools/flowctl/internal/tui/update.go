@@ -664,7 +664,6 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					// Valid terminal phase — show confirmation prompt
 					m.deleteConfirmWorkitem = msg.WorkitemName
-					m.deleteConfirmPhase = item.State
 				}
 				break
 			}
