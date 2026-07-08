@@ -901,6 +901,9 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.hitlState != nil {
 			m.hitlState.Close(m.pfm)
 		}
+		m.workitemDetail.hitl.Visible = true
+		m.workitemDetail.hitl.Error = fmt.Sprintf("choices: %s", msg.Err)
+		m.workitemDetail.hitl.ErrorRetry = true
 		m.statusMessage = fmt.Sprintf("Unable to load choices: %s", msg.Err)
 
 	case HitlProbeTriggerMsg:
