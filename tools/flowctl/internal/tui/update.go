@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/watch"
 
+	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"github.com/gideas/flow/tools/flowctl/internal/api"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
@@ -69,7 +70,7 @@ func feedbackStateToString(s api.FeedbackState) string {
 	case api.FeedbackStateResolved:
 		return "RESOLVED"
 	default:
-		return "UNSPECIFIED"
+		return flowv1.FeedbackState(s).String()
 	}
 }
 
