@@ -207,14 +207,15 @@ func TestListWorkitems(t *testing.T) {
 		makeWorkitemUnstructured("wi-1", "Running", "sort"),
 		makeWorkitemUnstructured("wi-2", "Completed", ""),
 		makeWorkitemUnstructured("wi-3", "", ""),
+		makeWorkitemUnstructured("wi-4", "Completed", "forge"),
 	)
 	k8s := &K8sClient{CRDClient: crdClient}
 	items, err := k8s.ListWorkitems(context.Background(), "default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(items) != 3 {
-		t.Fatalf("expected 3 items, got %d", len(items))
+	if len(items) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(items))
 	}
 	// wi-1: Running/sort
 	if items[0].Name != "wi-1" {
@@ -247,6 +248,17 @@ func TestListWorkitems(t *testing.T) {
 	}
 	if items[2].Node != "-" {
 		t.Errorf("expected node '-', got %s", items[2].Node)
+	}
+
+	// wi-4: Completed with currentAssignee -> preserves the assignee, not "-"
+	if items[3].Name != "wi-4" {
+		t.Errorf("expected wi-4, got %s", items[3].Name)
+	}
+	if items[3].State != "Completed" {
+		t.Errorf("expected state Completed, got %s", items[3].State)
+	}
+	if items[3].Node != "forge" {
+		t.Errorf("expected node 'forge', got %s", items[3].Node)
 	}
 }
 

@@ -484,8 +484,8 @@ func extractSummaryFromUnstructured(u *unstructured.Unstructured) WorkitemSummar
 		s.Node = assignee
 	}
 
-	// No active assignee: show "-" for terminal states and items with no status
-	if s.State == "Completed" || s.State == "Failed" || s.Node == "" {
+	// No active assignee: show "-"
+	if s.Node == "" {
 		s.Node = "-"
 	}
 
