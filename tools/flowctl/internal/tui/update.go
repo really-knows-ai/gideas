@@ -1247,9 +1247,17 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Build governed artefact options
-		selectedEntry := m.createWizard.Fields.EntryNode
-		if flow.EntryContracts != nil {
-			if ec, ok := flow.EntryContracts[selectedEntry]; ok {
+		selectedNodeName := m.createWizard.Fields.EntryNode
+		// Resolve the entry contract name from the selected node's spec.entry
+		var contractName string
+		for _, n := range nodes {
+			if n.Name == selectedNodeName {
+				contractName = n.Entry
+				break
+			}
+		}
+		if flow.EntryContracts != nil && contractName != "" {
+			if ec, ok := flow.EntryContracts[contractName]; ok {
 				if ecMap, ok := ec.(map[string]interface{}); ok && len(ecMap) > 0 {
 					// Use governed artefact keys from the contract
 					for k := range ecMap {
