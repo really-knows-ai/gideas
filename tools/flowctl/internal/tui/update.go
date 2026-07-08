@@ -1013,6 +1013,11 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 						WorkitemID: m.selectedWorkitemName(),
 					}
 				}
+			} else {
+				m.statusMessage = "Queue unavailable"
+				m.workitemDetail.hitl.Visible = true
+				m.workitemDetail.hitl.Error = "Queue unavailable"
+				m.workitemDetail.hitl.ErrorRetry = true
 			}
 			case api.IsBadRequest(msg.Err):
 				m.statusMessage = fmt.Sprintf("Invalid request: %s", msg.Err)
