@@ -533,7 +533,7 @@ func TestUpdateDeleteResultPartialFailure(t *testing.T) {
 	}
 }
 
-func TestUpdateHitlErrorNotFoundClearsPrompt(t *testing.T) {
+func TestUpdateHitlErrorDefaultShowsRetry(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.workitemDetail.hitl.Visible = true
@@ -546,8 +546,14 @@ func TestUpdateHitlErrorNotFoundClearsPrompt(t *testing.T) {
 	})
 	m2 := model.(*Model)
 
-	if m2.workitemDetail.hitl.Visible {
-		t.Error("expected HITL prompt hidden for not-found error")
+	if !m2.workitemDetail.hitl.Visible {
+		t.Error("expected HITL prompt visible for default error")
+	}
+	if m2.workitemDetail.hitl.Error == "" {
+		t.Error("expected HITL error set")
+	}
+	if !m2.workitemDetail.hitl.ErrorRetry {
+		t.Error("expected ErrorRetry true for default error")
 	}
 	if cmd != nil {
 		t.Error("expected nil command")

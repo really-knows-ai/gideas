@@ -1020,9 +1020,13 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.workitemDetail.hitl.ErrorRetry = true
 			}
 			case api.IsBadRequest(msg.Err):
-				m.statusMessage = fmt.Sprintf("Invalid request: %s", msg.Err)
+				m.workitemDetail.hitl.Visible = true
+				m.workitemDetail.hitl.Error = fmt.Sprintf("Invalid request: %s", msg.Err)
+				m.workitemDetail.hitl.ErrorRetry = true
 			default:
-				m.statusMessage = fmt.Sprintf("HITL error: %s — press 'r' to retry", msg.Err)
+				m.workitemDetail.hitl.Visible = true
+				m.workitemDetail.hitl.Error = msg.Err.Error()
+				m.workitemDetail.hitl.ErrorRetry = true
 			}
 		}
 		if msg.DebugHint != "" {
