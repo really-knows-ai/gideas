@@ -33,8 +33,8 @@ var (
 // K8sClient wraps Kubernetes and controller-runtime clients for CRD operations.
 type K8sClient struct {
 	CoreClient    kubernetes.Interface   // client-go for core/v1
-	crdClient     client.Client          // controller-runtime for CRDs
-	restConfig    *rest.Config            // stored for port-forward creation
+	CRDClient     client.Client          // controller-runtime for CRDs
+	RESTConfig    *rest.Config            // stored for port-forward creation
 	scheme        *runtime.Scheme         // scheme with flow.gideas.io types
 	dynamicClient dynamic.Interface       // client-go dynamic for watch/status
 }
@@ -87,8 +87,8 @@ func NewForConfig(config *rest.Config) (*K8sClient, error) {
 
 	return &K8sClient{
 		CoreClient:    coreClient,
-		crdClient:     crdClient,
-		restConfig:    config,
+		CRDClient:     crdClient,
+		RESTConfig:    config,
 		scheme:        scheme,
 		dynamicClient: dynamicClient,
 	}, nil
@@ -154,7 +154,7 @@ func (c *K8sClient) ListWorkitems(ctx context.Context, namespace string) ([]Work
 		Kind:    "WorkitemList",
 	})
 
-	if err := c.crdClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -250,7 +250,7 @@ func (c *K8sClient) GetWorkitem(ctx context.Context, namespace string, name stri
 		Kind:    "Workitem",
 	})
 
-	if err := c.crdClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
+	if err := 	c.CRDClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
 		return nil, err
 	}
 
@@ -302,7 +302,7 @@ func (c *K8sClient) ListChildren(ctx context.Context, namespace string, parentID
 		Kind:    "WorkitemList",
 	})
 
-	if err := c.crdClient.List(ctx, list,
+	if err := 	c.CRDClient.List(ctx, list,
 		client.InNamespace(namespace),
 		client.MatchingLabels{"flow.gideas.io/parent": parentID},
 	); err != nil {
@@ -326,7 +326,7 @@ func (c *K8sClient) GetFoundryFlow(ctx context.Context, namespace string) (*Foun
 		Kind:    "FoundryFlowList",
 	})
 
-	if err := c.crdClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -356,7 +356,7 @@ func (c *K8sClient) ListFoundryNodes(ctx context.Context, namespace string) ([]F
 		Kind:    "FoundryNodeList",
 	})
 
-	if err := c.crdClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -395,7 +395,7 @@ func (c *K8sClient) ListGovernedArtefacts(ctx context.Context, namespace string)
 		Kind:    "GovernedArtefactList",
 	})
 
-	if err := c.crdClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -420,7 +420,7 @@ func (c *K8sClient) CreateWorkitem(ctx context.Context, namespace string, name s
 	labels["flow.gideas.io/creator"] = "flowctl"
 	obj.SetLabels(labels)
 
-	return c.crdClient.Create(ctx, obj)
+	return 	c.CRDClient.Create(ctx, obj)
 }
 
 // UpdateWorkitemStatus updates the status subresource (phase and assignee).
@@ -458,7 +458,7 @@ func (c *K8sClient) DeleteWorkitem(ctx context.Context, namespace string, name s
 	obj.SetName(name)
 	obj.SetNamespace(namespace)
 
-	return c.crdClient.Delete(ctx, obj)
+	return 	c.CRDClient.Delete(ctx, obj)
 }
 
 // ExtractSummary converts a watch event's runtime.Object into a WorkitemSummary.
@@ -521,6 +521,11 @@ func (c *K8sClient) ResolveSystemNamespace(ctx context.Context, cfgNS, workitemN
 		return cfgNS, nil
 	}
 	return workitemNS, nil
+}
+
+// RESTConfig returns the underlying *rest.Config for port-forward creation.
+func (c *K8sClient) GetRESTConfig() *rest.Config {
+	return c.RESTConfig
 }
 
 // Ensure apiutil is imported for scheme registration (used implicitly).

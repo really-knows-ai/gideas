@@ -208,7 +208,7 @@ func TestListWorkitems(t *testing.T) {
 		makeWorkitemUnstructured("wi-2", "Completed", ""),
 		makeWorkitemUnstructured("wi-3", "", ""),
 	)
-	k8s := &K8sClient{crdClient: crdClient}
+	k8s := &K8sClient{CRDClient: crdClient}
 	items, err := k8s.ListWorkitems(context.Background(), "default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -292,7 +292,7 @@ func TestGetWorkitem(t *testing.T) {
 	)
 
 	_, crdClient := newFakeSchemeAndClient(parent, child)
-	k8s := &K8sClient{crdClient: crdClient}
+	k8s := &K8sClient{CRDClient: crdClient}
 	detail, err := k8s.GetWorkitem(context.Background(), "default", "wi-parent")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -325,7 +325,7 @@ func TestListChildren(t *testing.T) {
 		makeWorkitemWithLabel("child-2", "Completed", "", map[string]string{"flow.gideas.io/parent": "parent-1"}),
 		makeWorkitemWithLabel("other", "Pending", "forge", map[string]string{"flow.gideas.io/parent": "other-parent"}),
 	)
-	k8s := &K8sClient{crdClient: crdClient}
+	k8s := &K8sClient{CRDClient: crdClient}
 	children, err := k8s.ListChildren(context.Background(), "default", "parent-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -345,7 +345,7 @@ func TestListChildren(t *testing.T) {
 
 func TestCreateWorkitem(t *testing.T) {
 	scheme, crdClient := newFakeSchemeAndClient()
-	k8s := &K8sClient{crdClient: crdClient, scheme: scheme}
+	k8s := &K8sClient{CRDClient: crdClient, scheme: scheme}
 	err := k8s.CreateWorkitem(context.Background(), "default", "wi-new", map[string]string{"flow.gideas.io/creator": "flowctl"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -373,7 +373,7 @@ func TestUpdateWorkitemStatus(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme,
 		makeWorkitemUnstructured("wi-test", "", ""),
 	)
-	k8s := &K8sClient{crdClient: crdClient, dynamicClient: dynamicClient, scheme: scheme}
+	k8s := &K8sClient{CRDClient: crdClient, dynamicClient: dynamicClient, scheme: scheme}
 	err := k8s.UpdateWorkitemStatus(context.Background(), "default", "wi-test", "Pending", "forge")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -400,7 +400,7 @@ func TestDeleteWorkitem(t *testing.T) {
 	scheme, crdClient := newFakeSchemeAndClient(
 		makeWorkitemUnstructured("wi-del", "Completed", ""),
 	)
-	k8s := &K8sClient{crdClient: crdClient, scheme: scheme}
+	k8s := &K8sClient{CRDClient: crdClient, scheme: scheme}
 	err := k8s.DeleteWorkitem(context.Background(), "default", "wi-del")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -512,7 +512,7 @@ func TestListFoundryNodes(t *testing.T) {
 		makeFoundryNode("forge", "prompt", []string{"sort", "reviewer"}),
 		makeFoundryNode("sort", "sort", []string{"appraise"}),
 	)
-	k8s := &K8sClient{crdClient: crdClient}
+	k8s := &K8sClient{CRDClient: crdClient}
 	nodes, err := k8s.ListFoundryNodes(context.Background(), "default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -540,7 +540,7 @@ func TestGetFoundryFlow_Singular(t *testing.T) {
 	_, crdClient := newFakeSchemeAndClient(
 		makeFoundryFlow("main-flow", map[string]map[string]string{"prompt": {"governed_artefact": "haiku"}}),
 	)
-	k8s := &K8sClient{crdClient: crdClient}
+	k8s := &K8sClient{CRDClient: crdClient}
 	flow, err := k8s.GetFoundryFlow(context.Background(), "default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -555,7 +555,7 @@ func TestGetFoundryFlow_Singular(t *testing.T) {
 
 func TestGetFoundryFlow_Zero(t *testing.T) {
 	_, crdClient := newFakeSchemeAndClient()
-	k8s := &K8sClient{crdClient: crdClient}
+	k8s := &K8sClient{CRDClient: crdClient}
 	flow, err := k8s.GetFoundryFlow(context.Background(), "default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -570,7 +570,7 @@ func TestGetFoundryFlow_Multiple(t *testing.T) {
 		makeFoundryFlow("flow-1", nil),
 		makeFoundryFlow("flow-2", nil),
 	)
-	k8s := &K8sClient{crdClient: crdClient}
+	k8s := &K8sClient{CRDClient: crdClient}
 	_, err := k8s.GetFoundryFlow(context.Background(), "default")
 	if err == nil {
 		t.Fatal("expected error for multiple flows")

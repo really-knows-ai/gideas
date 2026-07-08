@@ -35,8 +35,11 @@ var watchCmd = &cobra.Command{
 				"Verify KUBECONFIG or ~/.kube/config points to a Foundry Flow cluster.", err)
 		}
 
+		// Create PortForwardManager for pod port-forwards
+		pfm := api.NewPortForwardManager(k8s.GetRESTConfig(), k8s.CoreClient, nil)
+
 		ctx := cmd.Context()
-		model := tui.NewModel(k8s, cfg, ctx)
+		model := tui.NewModelWithPFM(k8s, pfm, cfg, ctx)
 		program := tea.NewProgram(&model, tea.WithAltScreen())
 		model.Program = program
 
@@ -48,6 +51,8 @@ var watchCmd = &cobra.Command{
 		if _, err := program.Run(); err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
+		_ = pfm.CloseAll()
+		fmt.Println("\nShutting down...")
 		return nil
 	},
 }
@@ -63,13 +68,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go func() {
-		<-ctx.Done()
-		fmt.Println("\nShutting down...")
-		os.Exit(0)
-	}()
-
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }

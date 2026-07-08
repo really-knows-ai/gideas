@@ -43,8 +43,8 @@ func TestViewWorkitemDetailScreen(t *testing.T) {
 	if !strings.Contains(v, "wi-001") {
 		t.Error("expected workitem name in detail view, got:", v)
 	}
-	if !strings.Contains(v, "Detail for wi-001") {
-		t.Error("expected 'Detail for wi-001' in view, got:", v)
+	if !strings.Contains(v, "Workitem: wi-001") {
+		t.Error("expected 'Workitem: wi-001' in view, got:", v)
 	}
 }
 
@@ -78,8 +78,14 @@ func TestViewDetailLayout(t *testing.T) {
 	m.workitemDetail.statusBar.WorkitemName = "wi-001"
 	m.workitemDetail.loaded = true
 	v := m.View()
-	// Detail layout renders status bar and placeholder text
+	// Detail layout renders status bar, topology, and artefacts
 	if !strings.Contains(v, "wi-001") {
 		t.Error("expected workitem name in detail layout, got:", v)
+	}
+	if !strings.Contains(v, "Flow Topology") {
+		t.Error("expected Flow Topology in detail layout, got:", v)
+	}
+	if !strings.Contains(v, "Artefacts") {
+		t.Error("expected Artefacts in detail layout, got:", v)
 	}
 }

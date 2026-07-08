@@ -73,29 +73,45 @@ type NamespaceRefreshMsg struct {
 // ─── Workitem detail messages ─────────────────────────────────────────────
 
 // ArtefactsLoadedMsg is sent when artefacts are loaded for a Workitem.
+// Carries api.ArtefactInfo; update handler converts to types.ArtefactNode.
 type ArtefactsLoadedMsg struct {
 	WorkitemID string
-	Artefacts  []types.ArtefactNode
+	Artefacts  []api.ArtefactInfo
 }
 
 // ArtefactExpandedMsg is sent when an artefact is expanded with content.
+// Carries api.FeedbackItem; update handler converts to types.FeedbackItem.
 type ArtefactExpandedMsg struct {
 	WorkitemID    string
 	ArtefactID    string
 	Content       string
 	IsBinary      bool
-	FeedbackItems []types.FeedbackItem
+	BinarySize    int
+	FeedbackItems []api.FeedbackItem
 }
 
 // ArtefactCollapsedMsg is sent when an artefact is collapsed.
 type ArtefactCollapsedMsg struct {
+	WorkitemID string
 	ArtefactID string
+}
+
+// ArtefactLoadErrorMsg is sent when artefact loading fails.
+type ArtefactLoadErrorMsg struct {
+	WorkitemID string
+	ArtefactID string // empty if ListArtefacts failed; set per-artefact if GetArtefact/GetFeedback failed
+	Error      error
 }
 
 // TopologyLoadedMsg is sent when topology data is loaded.
 type TopologyLoadedMsg struct {
 	Nodes []types.TopologyNode
 	Edges []types.TopologyEdge
+}
+
+// WorkitemDetailLoadedMsg is sent when a Workitem detail is loaded.
+type WorkitemDetailLoadedMsg struct {
+	Detail *api.WorkitemDetail
 }
 
 // ─── HITL messages ────────────────────────────────────────────────────────

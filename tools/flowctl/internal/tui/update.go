@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -19,6 +20,74 @@ import (
 var defaultChoices = []types.Choice{
 	{Value: "approve", Label: "Approve", Type: "route"},
 	{Value: "cancel", Label: "Cancel", Type: "cancel"},
+}
+
+// ─── Type Conversion Helpers ────────────────────────────────────────────────
+
+// toArtefactNode converts an api.ArtefactInfo to a types.ArtefactNode for the TUI component.
+func toArtefactNode(info api.ArtefactInfo) types.ArtefactNode {
+	return types.ArtefactNode{
+		ArtefactID: info.ID,
+		GovernedBy: info.GovernedArtefact,
+		Expanded:   false,
+		Content:    "",
+		IsBinary:   false,
+		BinarySize: 0,
+		Feedback:   nil,
+	}
+}
+
+// toFeedbackItem converts an api.FeedbackItem to a types.FeedbackItem for the TUI component.
+func toFeedbackItem(item api.FeedbackItem) types.FeedbackItem {
+	return types.FeedbackItem{
+		ID:         item.ID,
+		State:      feedbackStateToString(item.State),
+		SourceNode: item.SourceNode,
+		Message:    item.Message,
+		Timestamp:  item.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+// feedbackStateToString converts a FeedbackState int to its string representation.
+func feedbackStateToString(s api.FeedbackState) string {
+	switch s {
+	case api.FeedbackStateNew:
+		return "NEW"
+	case api.FeedbackStateActioned:
+		return "ACTIONED"
+	case api.FeedbackStateWontFix:
+		return "WONT_FIX"
+	case api.FeedbackStateRejected:
+		return "REJECTED"
+	case api.FeedbackStateDeadlocked:
+		return "DEADLOCKED"
+	case api.FeedbackStateResolved:
+		return "RESOLVED"
+	default:
+		return "UNSPECIFIED"
+	}
+}
+
+// formatArtefactContent formats artefact content for display.
+// Returns (content string, isBinary bool, binarySize int).
+func formatArtefactContent(raw []byte) (string, bool, int) {
+	if len(raw) == 0 {
+		return "", false, 0
+	}
+	if utf8.Valid(raw) {
+		return string(raw), false, 0
+	}
+	// Binary: store raw content; the component handles hex rendering.
+	return string(raw), true, len(raw)
+}
+
+// convertAPIFeedback converts a slice of api.FeedbackItem to types.FeedbackItem.
+func convertAPIFeedback(items []api.FeedbackItem) []types.FeedbackItem {
+	result := make([]types.FeedbackItem, len(items))
+	for i, item := range items {
+		result[i] = toFeedbackItem(item)
+	}
+	return result
 }
 
 // ─── Root Update ───────────────────────────────────────────────────────────
@@ -303,7 +372,7 @@ func (m *Model) updateNamespaceSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadWorkitems()
 
 	case NamespaceSelectedMsg:
-		// Resolve system namespace for subsequent Archivist port-forward (Phase 04)
+		// Resolve system namespace for subsequent Archivist port-forward
 		sysNS := msg.Namespace
 		if m.k8s != nil {
 			var err error
@@ -342,6 +411,11 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case watch.Modified:
 			for i, item := range m.workitemList.Items {
 				if item.Name == msg.Item.Name {
+					// Check if state or node changed for detail refresh trigger
+					stateChanged := item.State != msg.Item.State || item.Node != msg.Item.Node
+					if stateChanged && m.screen == ScreenWorkitemDetail && m.workitemDetail.workitemName == item.Name {
+						// Trigger artefact refresh (handled in detail handler)
+					}
 					m.workitemList.Items[i] = msg.Item
 					break
 				}
@@ -379,28 +453,26 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadWorkitems()
 
 	case WorkitemSelectedMsg:
-		// Transition to placeholder detail screen (Phase 04 implements full detail)
+		// Fetch full Workitem detail for real data
 		m.workitemDetail.workitemName = msg.Name
-		m.workitemDetail.loading = false
+		m.workitemDetail.loading = true
 		m.workitemDetail.loaded = true
 		m.workitemDetail.statusBar.ScreenName = "Workitem Detail"
 		m.workitemDetail.statusBar.WorkitemName = msg.Name
 		m.workitemDetail.statusBar.Namespace = m.workitemList.Namespace
-		m.workitemDetail.statusBar.State = ""
 		m.workitemDetail.statusBar.Connected = true
+		m.errorBanner = ""
 
-		// Fake topology (placeholder — Phase 04 replaces with real data)
-		m.workitemDetail.topology = fakeTopology()
-
-		// Fake artefacts (placeholder — Phase 04 replaces with real data)
-		m.workitemDetail.artefacts = fakeArtefacts()
-
-		// Fake HITL probe result (placeholder — Phase 05 replaces with real data)
-		m.workitemDetail.hitl = fakeHitlProbe(msg.Name)
+		// Start loading topology, artefacts, and HITL in parallel
+		cmds := []tea.Cmd{
+			m.loadWorkitemDetail(msg.Name),
+			m.loadTopology(),
+			m.loadArtefacts(msg.Name),
+		}
 
 		m.screen = ScreenWorkitemDetail
 		m.err = nil
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case CreateStartMsg:
 		// Transition to create wizard with fake data
@@ -429,20 +501,195 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// loadWorkitemDetail fetches the Workitem detail and builds topology/artefacts.
+func (m *Model) loadWorkitemDetail(name string) tea.Cmd {
+	return func() tea.Msg {
+		if m.k8s == nil {
+			return nil
+		}
+		detail, err := m.k8s.GetWorkitem(m.ctx, m.namespace, name)
+		if err != nil {
+			return ErrorMsg{Source: "workitem-detail", Message: fmt.Sprintf("fetch detail: %v", err)}
+		}
+		return WorkitemDetailLoadedMsg{Detail: detail}
+	}
+}
+
+// loadArtefacts connects to the Archivist and loads artefacts.
+func (m *Model) loadArtefacts(workitemID string) tea.Cmd {
+	return func() tea.Msg {
+		// 1. Find the Archivist pod if needed
+		if m.pfm == nil {
+			return ErrorMsg{Source: "archivist-forward", Message: "no port-forward manager"}
+		}
+
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		// 2. Find a Ready Archivist pod
+		archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
+		if err != nil {
+			return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("find archivist pod: %v", err)}
+		}
+		if !found {
+			return ErrorMsg{Source: "archivist-forward", Message: "no Ready archivist pod found in namespace " + m.systemNS}
+		}
+
+		// 3. Forward port 50054
+		_, localPort, err := m.pfm.ForwardPod(ctx, m.systemNS, archivistPod, 50054)
+		if err != nil {
+			return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("port-forward: %v", err)}
+		}
+
+		// 4. Create Archivist client
+		archivist, err := api.NewArchivistClient(fmt.Sprintf("localhost:%d", localPort))
+		if err != nil {
+			return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("connect: %v", err)}
+		}
+
+		// Store for reuse
+		if m.archivist != nil {
+			m.archivist.Close()
+		}
+		m.archivist = archivist
+
+		// 5. List artefacts
+		artefacts, err := archivist.ListArtefacts(ctx, m.namespace, workitemID)
+		if err != nil {
+			return ArtefactLoadErrorMsg{WorkitemID: workitemID, Error: err}
+		}
+
+		return ArtefactsLoadedMsg{WorkitemID: workitemID, Artefacts: artefacts}
+	}
+}
+
+// loadTopology fetches FoundryNodes and builds the topology graph.
+func (m *Model) loadTopology() tea.Cmd {
+	return func() tea.Msg {
+		if m.k8s == nil {
+			return nil
+		}
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		nodes, err := m.k8s.ListFoundryNodes(ctx, m.namespace)
+		if err != nil {
+			return ErrorMsg{Source: "topology", Message: fmt.Sprintf("ListFoundryNodes: %v", err)}
+		}
+
+		// Build topology nodes
+		topoNodes := make([]types.TopologyNode, 0, len(nodes))
+		nodeSet := make(map[string]bool)
+		for _, n := range nodes {
+			nodeSet[n.Name] = true
+			// Default to unvisited; colouring happens after detail is loaded
+			topoNodes = append(topoNodes, types.TopologyNode{
+				Name:  n.Name,
+				Color: types.TopologyUnvisited,
+			})
+		}
+
+		// Build topology edges, skipping missing targets
+		topoEdges := make([]types.TopologyEdge, 0)
+		for _, n := range nodes {
+			for _, target := range n.Targets {
+				if nodeSet[target] {
+					topoEdges = append(topoEdges, types.TopologyEdge{
+						From: n.Name,
+						To:   target,
+					})
+				}
+			}
+		}
+
+		return TopologyLoadedMsg{Nodes: topoNodes, Edges: topoEdges}
+	}
+}
+
 // updateWorkitemDetail handles semantic messages for the detail screen.
 func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case WorkitemDetailLoadedMsg:
+		m.workitemDetail.detail = msg.Detail
+		m.workitemDetail.loading = false
+		m.workitemDetail.statusBar.State = msg.Detail.State
+
+		// Update topology with correct colours based on currentAssignee and thrashCounters
+		currentNode := msg.Detail.Node
+		if currentNode == "-" {
+			currentNode = ""
+		}
+		thrashCounters := msg.Detail.ThrashCounters
+		for i, node := range m.workitemDetail.topology.Nodes {
+			if node.Name == currentNode {
+				m.workitemDetail.topology.Nodes[i].Color = types.TopologyCurrent
+			} else if _, visited := thrashCounters[node.Name]; visited {
+				m.workitemDetail.topology.Nodes[i].Color = types.TopologyVisited
+			}
+		}
+
 	case ArtefactsLoadedMsg:
-		m.workitemDetail.artefacts.Artefacts = msg.Artefacts
+		// Preserve expansion state across refreshes
+		expandedSet := make(map[string]bool)
+		for _, art := range m.workitemDetail.artefacts.Artefacts {
+			if art.Expanded {
+				expandedSet[art.ArtefactID] = true
+			}
+		}
+
+		// Convert and sort artefacts
+		nodes := make([]types.ArtefactNode, len(msg.Artefacts))
+		for i, a := range msg.Artefacts {
+			nodes[i] = toArtefactNode(a)
+			if expandedSet[a.ID] {
+				nodes[i].Expanded = true
+				// Trigger re-fetch for expanded artefacts
+				// This is batched; individual expand triggers content/feedback loading
+			}
+		}
+		m.workitemDetail.artefacts.Artefacts = nodes
 		m.workitemDetail.artefacts.Loading = false
+		m.errorBanner = ""
+
+		// For expanded artefacts, re-fetch content and feedback
+		var cmds []tea.Cmd
+		for _, art := range m.workitemDetail.artefacts.Artefacts {
+			if art.Expanded && m.archivist != nil {
+				cmds = append(cmds, m.fetchArtefactContent(msg.WorkitemID, art.ArtefactID))
+			}
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+
+	case ArtefactLoadErrorMsg:
+		m.workitemDetail.artefacts.Loading = false
+		if msg.ArtefactID == "" {
+			// List failed
+			m.workitemDetail.artefacts.Error = fmt.Sprintf("Artefacts unavailable: %v", msg.Error)
+		} else {
+			// Per-artefact failure — show in the artefact node
+			for i, art := range m.workitemDetail.artefacts.Artefacts {
+				if art.ArtefactID == msg.ArtefactID {
+					m.workitemDetail.artefacts.Artefacts[i].Content = fmt.Sprintf("Failed to load: %v", msg.Error)
+					break
+				}
+			}
+		}
 
 	case ArtefactExpandedMsg:
 		for i, art := range m.workitemDetail.artefacts.Artefacts {
 			if art.ArtefactID == msg.ArtefactID {
 				m.workitemDetail.artefacts.Artefacts[i].Expanded = true
+				if msg.IsBinary {
+					m.workitemDetail.artefacts.Artefacts[i].IsBinary = true
+					m.workitemDetail.artefacts.Artefacts[i].BinarySize = msg.BinarySize
+				}
 				m.workitemDetail.artefacts.Artefacts[i].Content = msg.Content
-				m.workitemDetail.artefacts.Artefacts[i].IsBinary = msg.IsBinary
-				m.workitemDetail.artefacts.Artefacts[i].Feedback = msg.FeedbackItems
+				m.workitemDetail.artefacts.Artefacts[i].Feedback = convertAPIFeedback(msg.FeedbackItems)
 				break
 			}
 		}
@@ -451,12 +698,35 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, art := range m.workitemDetail.artefacts.Artefacts {
 			if art.ArtefactID == msg.ArtefactID {
 				m.workitemDetail.artefacts.Artefacts[i].Expanded = false
+				m.workitemDetail.artefacts.Artefacts[i].Content = ""
+				m.workitemDetail.artefacts.Artefacts[i].Feedback = nil
 				break
 			}
 		}
 
 	case TopologyLoadedMsg:
-		m.workitemDetail.topology.Nodes = msg.Nodes
+		// Preserve the detail's node coloring if detail was loaded before topology
+		currentNode := ""
+		thrashCounters := make(map[string]int32)
+		if m.workitemDetail.detail != nil {
+			currentNode = m.workitemDetail.detail.Node
+			if currentNode == "-" {
+				currentNode = ""
+			}
+			thrashCounters = m.workitemDetail.detail.ThrashCounters
+		}
+
+		coloredNodes := make([]types.TopologyNode, len(msg.Nodes))
+		for i, n := range msg.Nodes {
+			coloredNodes[i] = n
+			if n.Name == currentNode {
+				coloredNodes[i].Color = types.TopologyCurrent
+			} else if _, visited := thrashCounters[n.Name]; visited {
+				coloredNodes[i].Color = types.TopologyVisited
+			}
+		}
+
+		m.workitemDetail.topology.Nodes = coloredNodes
 		m.workitemDetail.topology.Edges = msg.Edges
 		m.workitemDetail.topology.Loading = false
 
@@ -490,6 +760,22 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workitemDetail.loading = true
 		m.workitemDetail.artefacts.Loading = true
 		m.workitemDetail.topology.Loading = true
+		m.errorBanner = ""
+
+		workitemID := m.workitemDetail.workitemName
+		if workitemID == "" {
+			return m, nil
+		}
+
+		cmds := []tea.Cmd{
+			m.loadTopology(),
+		}
+		if m.archivist != nil {
+			cmds = append(cmds, m.RefreshArtefacts())
+		} else {
+			cmds = append(cmds, m.loadArtefacts(workitemID))
+		}
+		return m, tea.Batch(cmds...)
 
 	case CreateStartMsg:
 		// Open create wizard from detail screen
@@ -498,8 +784,72 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createWizard.EntryNodes = []string{"forge", "human-entry"}
 		m.createWizard.Artefacts = []string{"petition", "haiku"}
 		m.screen = ScreenCreateWizard
+
+	case ErrorMsg:
+		// Show as error banner at top of detail screen
+		m.errorBanner = fmt.Sprintf("⚠ %s: %s", msg.Source, msg.Message)
+		// Clear error banner after 10 seconds
+		return m, tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+			return ClearErrorBannerMsg{}
+		})
+
+	case ClearErrorBannerMsg:
+		m.errorBanner = ""
 	}
 	return m, nil
+}
+
+// ClearErrorBannerMsg clears the error banner.
+type ClearErrorBannerMsg struct{}
+
+// fetchArtefactContent fetches content and feedback for an expanded artefact.
+func (m *Model) fetchArtefactContent(workitemID, artefactID string) tea.Cmd {
+	return func() tea.Msg {
+		if m.archivist == nil {
+			return ArtefactExpandedMsg{
+				WorkitemID:    workitemID,
+				ArtefactID:    artefactID,
+				Content:       "Archivist not connected",
+				FeedbackItems: nil,
+			}
+		}
+
+		// Derive context from model or use background
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		// Get content
+		content, err := m.archivist.GetArtefact(ctx, m.namespace, workitemID, artefactID)
+		if err != nil {
+			return ArtefactExpandedMsg{
+				WorkitemID:    workitemID,
+				ArtefactID:    artefactID,
+				Content:       fmt.Sprintf("Failed to load content: %v", err),
+				FeedbackItems: nil,
+			}
+		}
+
+		// Format content (text or hex preview)
+		contentStr, isBinary, binarySize := formatArtefactContent(content)
+
+		// Get feedback
+		feedback, err := m.archivist.GetFeedback(ctx, m.namespace, workitemID, artefactID)
+		if err != nil {
+			// Non-fatal: show content without feedback
+			feedback = nil
+		}
+
+		return ArtefactExpandedMsg{
+			WorkitemID:    workitemID,
+			ArtefactID:    artefactID,
+			Content:       contentStr,
+			IsBinary:      isBinary,
+			BinarySize:    binarySize,
+			FeedbackItems: feedback,
+		}
+	}
 }
 
 // updateCreateWizard handles semantic messages for the create wizard.
@@ -565,6 +915,29 @@ func (m *Model) updateWorkitemListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.workitemDetail.artefacts, _ = m.workitemDetail.artefacts.Update(msg)
+
+	// Handle artefact expand/collapse at root level for network calls
+	if msg.String() == "enter" || msg.String() == "right" {
+		artefacts := &m.workitemDetail.artefacts
+		if artefacts.Loading || len(artefacts.Artefacts) == 0 {
+			return m, nil
+		}
+		cursor := artefacts.Cursor
+		if cursor < 0 || cursor >= len(artefacts.Artefacts) {
+			return m, nil
+		}
+		art := artefacts.Artefacts[cursor]
+		if art.Expanded {
+			// Already expanded — collapse handled by component; no network call needed
+			return m, nil
+		}
+		// Expanded — fetch content and feedback
+		workitemID := m.workitemDetail.workitemName
+		if workitemID != "" && m.archivist != nil {
+			return m, m.fetchArtefactContent(workitemID, art.ArtefactID)
+		}
+	}
+
 	return m, nil
 }
 
@@ -573,7 +946,7 @@ func (m *Model) updateCreateWizardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ─── Fake data generators (placeholder — Phase 04+ replaces with real data) ─
+// ─── Fake data generators (placeholder — Phase 05+ replaces with real data) ─
 
 func fakeTopology() components.FlowTopologyModel {
 	return components.FlowTopologyModel{

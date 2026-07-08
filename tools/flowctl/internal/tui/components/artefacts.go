@@ -17,7 +17,7 @@ type ArtefactTreeModel struct {
 	Artefacts []types.ArtefactNode
 	Loading   bool
 	Error     string
-	cursor    int // which artefact row is selected
+	Cursor    int // which artefact row is selected (exported for parent access)
 }
 
 // NewArtefactTree creates an ArtefactTreeModel in loading state.
@@ -116,10 +116,7 @@ func (m ArtefactTreeModel) renderBinaryContent(content string, size int) string 
 	}
 
 	for offset := 0; offset < len(data); offset += 16 {
-		// Offset
 		fmt.Fprintf(&b, "      %08x  ", offset)
-
-		// Hex bytes
 		for j := 0; j < 16; j++ {
 			if offset+j < len(data) {
 				fmt.Fprintf(&b, "%02x ", data[offset+j])
@@ -130,9 +127,7 @@ func (m ArtefactTreeModel) renderBinaryContent(content string, size int) string 
 				b.WriteString(" ")
 			}
 		}
-
 		b.WriteString(" |")
-		// ASCII representation
 		for j := 0; j < 16 && offset+j < len(data); j++ {
 			ch := data[offset+j]
 			if ch >= 32 && ch <= 126 {
@@ -169,16 +164,16 @@ func (m ArtefactTreeModel) Update(msg tea.Msg) (ArtefactTreeModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
+			if m.Cursor > 0 {
+				m.Cursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.Artefacts)-1 {
-				m.cursor++
+			if m.Cursor < len(m.Artefacts)-1 {
+				m.Cursor++
 			}
 		case "enter":
-			if m.cursor >= 0 && m.cursor < len(m.Artefacts) {
-				m.Artefacts[m.cursor].Expanded = !m.Artefacts[m.cursor].Expanded
+			if m.Cursor >= 0 && m.Cursor < len(m.Artefacts) {
+				m.Artefacts[m.Cursor].Expanded = !m.Artefacts[m.Cursor].Expanded
 			}
 		}
 	}

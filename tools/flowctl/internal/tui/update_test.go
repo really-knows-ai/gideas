@@ -65,8 +65,8 @@ func TestUpdateWorkitemSelectedTransitionsToDetail(t *testing.T) {
 	if m2.workitemDetail.workitemName != "wi-001" {
 		t.Errorf("expected workitemName wi-001, got %q", m2.workitemDetail.workitemName)
 	}
-	if cmd != nil {
-		t.Error("expected nil command")
+	if cmd == nil {
+		t.Error("expected non-nil command (batched topology/artefacts load)")
 	}
 }
 

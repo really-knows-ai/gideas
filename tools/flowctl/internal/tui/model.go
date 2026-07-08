@@ -25,6 +25,7 @@ const (
 type Model struct {
 	cfg        *config.Config
 	k8s        *api.K8sClient
+	pfm        api.PortForwarder
 	width      int
 	height     int
 	screen     Screen
@@ -33,6 +34,12 @@ type Model struct {
 	ctx        context.Context
 	namespace  string // resolved after namespace selection
 	systemNS   string // resolved after namespace selection
+
+	// Archivist client (created on Workitem detail entry)
+	archivist *api.ArchivistClient
+
+	// Error banner displayed at top of screen
+	errorBanner string
 
 	// Sub-states for each screen
 	namespaceSelector components.NamespaceSelectorModel
@@ -50,6 +57,9 @@ type WorkitemDetailModel struct {
 	loaded       bool
 	workitemName string
 
+	// The resolved Workitem detail (populated on selection)
+	detail *api.WorkitemDetail
+
 	// Sub-components
 	statusBar components.StatusBarModel
 	topology  components.FlowTopologyModel
@@ -63,6 +73,13 @@ func NewModel(k8s *api.K8sClient, cfg *config.Config, ctx context.Context) Model
 	m.k8s = k8s
 	m.cfg = cfg
 	m.ctx = ctx
+	return m
+}
+
+// NewModelWithPFM creates a root Model with K8s client, PortForwarder, config, and context.
+func NewModelWithPFM(k8s *api.K8sClient, pfm api.PortForwarder, cfg *config.Config, ctx context.Context) Model {
+	m := NewModel(k8s, cfg, ctx)
+	m.pfm = pfm
 	return m
 }
 
@@ -94,5 +111,20 @@ func (m *Model) Init() tea.Cmd {
 	}
 	return func() tea.Msg {
 		return m.loadNamespaces()
+	}
+}
+
+// RefreshArtefacts re-fetches artefacts and feedback for the currently selected workitem.
+// It preserves expansion state so expanded artefacts stay expanded after refresh.
+func (m *Model) RefreshArtefacts() tea.Cmd {
+	if m.workitemDetail.workitemName == "" || m.archivist == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		artefacts, err := m.archivist.ListArtefacts(context.Background(), m.namespace, m.workitemDetail.workitemName)
+		if err != nil {
+			return ArtefactLoadErrorMsg{WorkitemID: m.workitemDetail.workitemName, Error: err}
+		}
+		return ArtefactsLoadedMsg{WorkitemID: m.workitemDetail.workitemName, Artefacts: artefacts}
 	}
 }

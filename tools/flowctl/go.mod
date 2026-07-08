@@ -12,6 +12,8 @@ require (
 	sigs.k8s.io/controller-runtime v0.24.1
 )
 
+replace github.com/gideas/flow/gen => ../../gen
+
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect

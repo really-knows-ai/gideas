@@ -6,6 +6,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// errorBannerStyle is used for error banners at the top of the screen.
+var errorBannerStyle = lipgloss.NewStyle().
+	Background(lipgloss.Color("#FFFF00")).
+	Foreground(lipgloss.Color("#000000"))
+
 // View renders the root TUI view based on the current screen.
 func (m *Model) View() string {
 	if m.err != nil {
@@ -29,12 +34,70 @@ func (m *Model) View() string {
 	return "Unknown screen"
 }
 
-// renderDetail renders the Workitem detail screen.
-// Phase 03: placeholder — shows only the workitem name.
-// Phase 04 replaces this with full status bar, topology, artefacts, and HITL.
+// renderDetail renders the Workitem detail screen with error banner,
+// status bar, topology, artefacts, and HITL prompt.
 func (m *Model) renderDetail() string {
-	return lipgloss.JoinVertical(lipgloss.Top,
-		m.workitemDetail.statusBar.View(),
-		fmt.Sprintf("\n  Detail for %s\n\n  Full detail rendering coming in Phase 04.", m.workitemDetail.workitemName),
+	detail := m.workitemDetail
+
+	// Top area: error banner + status bar
+	top := detail.statusBar.View()
+
+	// Error banner (if set)
+	if m.errorBanner != "" {
+		top = errorBannerStyle.Render(m.errorBanner) + "\n" + top
+	}
+
+	// Workitem info line
+	infoLine := ""
+	if detail.detail != nil {
+		infoLine = fmt.Sprintf("  State: %s  |  Node: %s",
+			detail.detail.State,
+			detail.detail.Node,
+		)
+		if detail.detail.FailureReason != "" {
+			infoLine += fmt.Sprintf("  |  Failure: %s", detail.detail.FailureReason)
+		}
+		// Visit counters
+		if len(detail.detail.ThrashCounters) > 0 {
+			counters := ""
+			for name, count := range detail.detail.ThrashCounters {
+				if counters != "" {
+					counters += " "
+				}
+				counters += fmt.Sprintf("%s:%d", name, count)
+			}
+			infoLine += fmt.Sprintf("\n  Visits: %s", counters)
+		}
+	} else if detail.loading {
+		infoLine = "  Loading Workitem detail..."
+	}
+
+	// Topology section
+	topologySection := detail.topology.View()
+
+	// Artefacts section
+	artefactsSection := detail.artefacts.View()
+
+	// HITL prompt
+	hitlSection := detail.hitl.View()
+
+	// Combine everything
+	content := lipgloss.JoinVertical(lipgloss.Top,
+		top,
+		infoLine,
+		"",
+		topologySection,
+		"",
+		artefactsSection,
 	)
+
+	if hitlSection != "" {
+		content = lipgloss.JoinVertical(lipgloss.Top,
+			content,
+			"",
+			hitlSection,
+		)
+	}
+
+	return content
 }
