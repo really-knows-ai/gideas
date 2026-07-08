@@ -987,6 +987,7 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		cmds := []tea.Cmd{
+			m.loadWorkitemDetail(workitemID),
 			m.loadTopology(),
 		}
 		if m.archivist != nil {
