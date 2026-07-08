@@ -90,6 +90,18 @@ func (m *Model) renderDetail() string {
 			}
 			infoLine += fmt.Sprintf("\n  Visits: %s", counters)
 		}
+
+		// Children
+		if len(detail.detail.ChildWorkitems) > 0 {
+			children := ""
+			for _, child := range detail.detail.ChildWorkitems {
+				if children != "" {
+					children += ", "
+				}
+				children += fmt.Sprintf("%s (%s)", child.Name, child.State)
+			}
+			infoLine += fmt.Sprintf("\n  Children: %s", children)
+		}
 	} else if detail.loading {
 		infoLine = "  Loading Workitem detail..."
 	}
