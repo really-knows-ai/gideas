@@ -976,27 +976,44 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMessage = "Already claimed by another client — press 'r' to retry"
 			case api.IsInvalidState(msg.Err):
 				m.statusMessage = "Item in unexpected state — press 'r' to retry"
-			case api.IsQueueUnavailable(msg.Err):
-				if m.hitlState != nil && m.hitlState.GetPendingChoice() != "" {
-					m.statusMessage = "Queue unavailable — retrying..."
-					choice := m.hitlState.GetPendingChoice()
-					return m, func() tea.Msg {
-						err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
-							return m.hitlState.ClaimAndDecide(ctx, choice)
-						})
-						if err != nil {
-							return HitlErrorMsg{
-								WorkitemID: m.selectedWorkitemName(),
-								Err:        err,
-								Retryable:  false,
-							}
-						}
-						return HitlDecidedMsg{
+		case api.IsQueueUnavailable(msg.Err):
+			if m.hitlState != nil && m.hitlState.GetPendingChoice() != "" {
+				m.statusMessage = "Queue unavailable — retrying..."
+				choice := m.hitlState.GetPendingChoice()
+				return m, func() tea.Msg {
+					err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
+						return m.hitlState.ClaimAndDecide(ctx, choice)
+					})
+					if err != nil {
+						return HitlErrorMsg{
 							WorkitemID: m.selectedWorkitemName(),
-							Choice:     choice,
+							Err:        err,
+							Retryable:  false,
 						}
 					}
+					return HitlDecidedMsg{
+						WorkitemID: m.selectedWorkitemName(),
+						Choice:     choice,
+					}
 				}
+			} else if m.hitlState != nil {
+				m.statusMessage = "Queue unavailable — retrying release..."
+				return m, func() tea.Msg {
+					err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
+						return m.hitlState.ReleaseClaim(ctx)
+					})
+					if err != nil {
+						return HitlErrorMsg{
+							WorkitemID: m.selectedWorkitemName(),
+							Err:        err,
+							Retryable:  false,
+						}
+					}
+					return HitlReleasedMsg{
+						WorkitemID: m.selectedWorkitemName(),
+					}
+				}
+			}
 			case api.IsBadRequest(msg.Err):
 				m.statusMessage = fmt.Sprintf("Invalid request: %s", msg.Err)
 			default:
