@@ -166,7 +166,7 @@ func (m FlowTopologyModel) View() string {
 					}
 				}
 				if hasEdge {
-					b.WriteString("───▶")
+					b.WriteString("-->")
 				} else {
 					b.WriteString("    ")
 				}
@@ -225,7 +225,7 @@ func (m FlowTopologyModel) View() string {
 					}
 				}
 				if hasDownEdge {
-					b.WriteString(fmt.Sprintf("  %s───▶  ", strings.Repeat("─", len(nl.name)-2)))
+					b.WriteString(fmt.Sprintf("  %s-->  ", strings.Repeat("─", len(nl.name)-2)))
 				} else {
 					b.WriteString(fmt.Sprintf("  %s      ", strings.Repeat(" ", len(nl.name)-2)))
 				}
