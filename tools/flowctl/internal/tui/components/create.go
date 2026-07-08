@@ -201,6 +201,18 @@ func (m CreateWizardModel) Update(msg tea.Msg) (CreateWizardModel, tea.Cmd) {
 				m.Step--
 				m.cursor = 0
 			}
+		case "r":
+			if m.Stage == StageError && m.Retryable {
+				m.Stage = StageIdle
+				m.Error = ""
+				m.Step = 4
+			}
+		case "c":
+			if m.Stage == StageError {
+				m.Stage = StageIdle
+				m.Error = ""
+				m.Step = 0
+			}
 		}
 	}
 	return m, nil

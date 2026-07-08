@@ -242,6 +242,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// CreateWizard: esc/backspace -> cancel and return to list
+		if m.screen == ScreenCreateWizard && (msg.String() == "esc" || msg.String() == "backspace") {
+			return m.routeMsg(CreateCancelMsg{})
+		}
+
 		// Navigation keys pass through to component-level key handlers
 		return m.routeKeyMsg(msg)
 
@@ -1469,7 +1474,28 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateCreateWizardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Snapshot error state before component update (which may reset it for r/c).
+	wasError := m.createWizard.Stage == components.StageError
+	wasRetryable := m.createWizard.Retryable
+
 	m.createWizard, _ = m.createWizard.Update(msg)
+
+	// Handle semantic keys from error state
+	if wasError {
+		if key == "r" && wasRetryable {
+			return m, func() tea.Msg {
+				return CreateConfirmMsg{}
+			}
+		}
+		if key == "c" {
+			return m, func() tea.Msg {
+				return CreateCancelMsg{}
+			}
+		}
+	}
+
 	return m, nil
 }
 
