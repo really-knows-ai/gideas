@@ -300,8 +300,10 @@ func (m *Model) loadNamespaces() tea.Msg {
 	namespaces, err := m.k8s.ListNamespaces(m.ctx)
 	if err != nil {
 		fallback := api.GetCurrentContextNamespace()
-		if m.cfg.Namespace != "" {
+		if m.cfg.NamespaceExplicit {
 			fallback = m.cfg.Namespace
+		} else if fallback == "" {
+			fallback = "default"
 		}
 		return NamespaceFallbackMsg{Namespace: fallback, Error: err}
 	}
