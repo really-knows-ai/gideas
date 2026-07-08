@@ -73,10 +73,10 @@ func TestParseFlags_Namespace(t *testing.T) {
 			setChanged: false,
 		},
 		{
-			name:       "T3: default fallback when nothing set",
+			name:       "T3: empty when nothing set (caller resolves kube context > default)",
 			flagVal:    "",
 			envVal:     "",
-			want:       "default",
+			want:       "",
 			setChanged: false,
 		},
 	}

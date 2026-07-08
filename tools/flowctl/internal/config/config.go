@@ -22,16 +22,14 @@ type Config struct {
 func ParseFlags(cmd *cobra.Command) (*Config, error) {
 	cfg := &Config{}
 
-	// Namespace: flag > FLOW_NAMESPACE > "default"
+	// Namespace: flag > FLOW_NAMESPACE > (resolved by caller: kube context > "default")
 	if cmd.Flags().Changed("namespace") {
 		cfg.Namespace, _ = cmd.Flags().GetString("namespace")
 		cfg.NamespaceExplicit = true
 	} else if v := os.Getenv("FLOW_NAMESPACE"); v != "" {
 		cfg.Namespace = v
 		cfg.NamespaceExplicit = true
-	} else {
-		cfg.Namespace = "default"
-	}
+	} // else: leave empty for caller to resolve via kube context > "default"
 
 	// SystemNamespace: flag > FLOW_SYSTEM_NAMESPACE > resolved Namespace
 	if cmd.Flags().Changed("system-namespace") {
