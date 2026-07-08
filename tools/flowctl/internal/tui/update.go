@@ -251,6 +251,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.routeKeyMsg(msg)
 
 	case ErrorMsg:
+		// When archivist-forward errors occur on the detail screen, clear loading
+		// and set error on the artefacts panel so it stops showing "Loading..."
+		if m.screen == ScreenWorkitemDetail && (msg.Source == "archivist-forward" || msg.Source == "archivist-list") {
+			m.workitemDetail.artefacts.Loading = false
+			m.workitemDetail.artefacts.Error = msg.Message
+		}
 		m.err = fmt.Errorf("%s: %s", msg.Source, msg.Message)
 		return m, nil
 
@@ -259,6 +265,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// works regardless of current screen.
 		cmd := m.handleWorkitemUpdate(msg)
 		return m, cmd
+
+	case WatchDisconnectedMsg:
+		m.banner = "Reconnecting..."
+		m.bannerSource = "watch"
+		return m, nil
+
+	case WatchReconnectedMsg:
+		if m.bannerSource == "watch" {
+			m.banner = ""
+			m.bannerSource = ""
+		}
+		return m, nil
 
 	default:
 		return m.routeMsg(msg)
@@ -565,12 +583,6 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.workitemList.Items[i].ChildrenCount = count
 			}
 		}
-
-	case WatchDisconnectedMsg:
-		m.workitemList.Disconnected = true
-
-	case WatchReconnectedMsg:
-		m.workitemList.Disconnected = false
 
 	case NamespaceRefreshMsg:
 		m.workitemList.Loading = true
@@ -1180,8 +1192,15 @@ func (m *Model) fetchArtefactContent(workitemID, artefactID string) tea.Cmd {
 		// Get feedback
 		feedback, err := m.archivist.GetFeedback(ctx, m.namespace, workitemID, artefactID)
 		if err != nil {
-			// Non-fatal: show content without feedback
-			feedback = nil
+			// Non-fatal: show content with error feedback item
+			feedback = []api.FeedbackItem{
+				{
+					State:      api.FeedbackStateNew,
+					SourceNode: "archivist",
+					Message:    fmt.Sprintf("Feedback unavailable: %v", err),
+					CreatedAt:  time.Now(),
+				},
+			}
 		}
 
 		return ArtefactExpandedMsg{

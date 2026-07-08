@@ -97,7 +97,7 @@ func (m StatusBarModel) View() string {
 
 	// Disconnected banner
 	if m.Disconnected {
-		b.WriteString(lipgloss.NewStyle().Foreground(styles.WarningColor()).Render("⚠ Disconnected — waiting for reconnection..."))
+		b.WriteString(lipgloss.NewStyle().Foreground(styles.WarningColor()).Render("Reconnecting..."))
 		b.WriteString("\n")
 	}
 

@@ -71,11 +71,6 @@ func (m WorkitemListModel) View() string {
 		return b.String()
 	}
 
-	if m.Disconnected {
-		b.WriteString(lipgloss.NewStyle().Foreground(styles.WarningColor()).Render("⚠ Disconnected — waiting for reconnection..."))
-		b.WriteString("\n\n")
-	}
-
 	if len(m.Items) == 0 {
 		b.WriteString(fmt.Sprintf("\n  No Workitems in namespace %s", m.Namespace))
 		return b.String()

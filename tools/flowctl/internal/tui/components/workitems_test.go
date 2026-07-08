@@ -102,20 +102,6 @@ func TestWorkitemEmptyState(t *testing.T) {
 	}
 }
 
-func TestWorkitemDisconnectedBanner(t *testing.T) {
-	m := NewWorkitemList()
-	m.Loading = false
-	m.Items = []api.WorkitemSummary{
-		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
-	}
-	m.Disconnected = true
-	m.Namespace = "test-ns"
-	v := m.View()
-	if !strings.Contains(v, "Disconnected") {
-		t.Error("expected 'Disconnected' banner in view, got:", v)
-	}
-}
-
 func TestWorkitemErrorState(t *testing.T) {
 	m := NewWorkitemList()
 	m.Loading = false

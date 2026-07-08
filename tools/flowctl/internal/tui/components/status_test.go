@@ -56,8 +56,8 @@ func TestStatusDisconnectedIndicator(t *testing.T) {
 	m.Connected = false
 	m.Disconnected = true
 	v := m.View()
-	if !strings.Contains(v, "Disconnected") {
-		t.Error("expected disconnected text in view, got:", v)
+	if !strings.Contains(v, "Reconnecting") {
+		t.Error("expected 'Reconnecting' text in view, got:", v)
 	}
 }
 

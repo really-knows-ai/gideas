@@ -113,8 +113,11 @@ func TestUpdateWatchDisconnectedShowsBanner(t *testing.T) {
 	model, cmd := m.Update(WatchDisconnectedMsg{})
 	m2 := model.(*Model)
 
-	if !m2.workitemList.Disconnected {
-		t.Error("expected Disconnected=true")
+	if m2.banner != "Reconnecting..." {
+		t.Errorf("expected banner 'Reconnecting...', got %q", m2.banner)
+	}
+	if m2.bannerSource != "watch" {
+		t.Errorf("expected banner source 'watch', got %q", m2.bannerSource)
 	}
 	if cmd != nil {
 		t.Error("expected nil command")
@@ -125,17 +128,22 @@ func TestUpdateWatchReconnectedHidesBanner(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemList
 	m.workitemList.Loading = false
-	m.workitemList.Disconnected = true
 	m.workitemList.Items = []api.WorkitemSummary{
 		{Name: "wi-001", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 	}
 	m.workitemList.Namespace = "test-ns"
 
+	m.banner = "Reconnecting..."
+	m.bannerSource = "watch"
+
 	model, cmd := m.Update(WatchReconnectedMsg{})
 	m2 := model.(*Model)
 
-	if m2.workitemList.Disconnected {
-		t.Error("expected Disconnected=false")
+	if m2.banner != "" {
+		t.Errorf("expected banner cleared, got %q", m2.banner)
+	}
+	if m2.bannerSource != "" {
+		t.Errorf("expected banner source cleared, got %q", m2.bannerSource)
 	}
 	if cmd != nil {
 		t.Error("expected nil command")
