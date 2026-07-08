@@ -116,14 +116,9 @@ type WorkitemDetailLoadedMsg struct {
 
 // ─── HITL messages ────────────────────────────────────────────────────────
 
-// HitlProbeResultMsg is sent when a HITL queue probe succeeds or completes.
-type HitlProbeResultMsg struct {
-	WorkitemID string
-	NodeName   string
-	QueueItem  interface{} // stub; becomes *api.QueueItem in Phase 05
-	Choices    []types.Choice
-	HasCancel  bool
-}
+// HitlProbeTriggerMsg is sent by a scheduled tea.Tick to trigger the next
+// probe attempt.
+type HitlProbeTriggerMsg struct{}
 
 // HitlDecidedMsg is sent when a HITL decision is acknowledged.
 type HitlDecidedMsg struct {

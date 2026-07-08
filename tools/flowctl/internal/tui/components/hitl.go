@@ -1,13 +1,20 @@
 package components
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
+	"github.com/gideas/flow/tools/flowctl/internal/api"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
 )
+
+// ─── HitlPromptModel (Rendering Component) ──────────────────────────────────
 
 // HitlPromptModel is the model for the HITL action prompt.
 type HitlPromptModel struct {
@@ -123,4 +130,294 @@ func (m HitlPromptModel) Update(msg tea.Msg) (HitlPromptModel, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// ─── HITL Probe Message Types ───────────────────────────────────────────────
+
+// HitlProbeResultMsg is sent when a HITL queue probe succeeds with a match.
+type HitlProbeResultMsg struct {
+	WorkitemID string
+	NodeName   string
+	QueueItem  *api.QueueItem
+	Choices    []api.Choice
+	HasCancel  bool
+}
+
+// HitlProbeRetryMsg is returned by the Probe cmd when all pods returned
+// 404/error and retries remain.
+type HitlProbeRetryMsg struct{}
+
+// HitlProbeExhaustedMsg is emitted when all probe retries are exhausted.
+type HitlProbeExhaustedMsg struct {
+	WorkitemID string
+	NodeName   string
+	Diagnostic string
+}
+
+// HitlChoicesBlockedMsg is emitted when /choices returns 5xx — blocks HITL.
+type HitlChoicesBlockedMsg struct {
+	Err error
+}
+
+// ─── HitlState (Lifecycle Manager) ──────────────────────────────────────────
+
+// HitlState tracks the HITL interaction lifecycle.
+// It manages probe retries, port-forwards, and the HITL client session.
+type HitlState struct {
+	active        bool             // true when a queue item has been found
+	hitlBlocked   bool             // true when /choices returned 5xx
+	queueItem     *api.QueueItem
+	choices       []api.Choice
+	hasCancel     bool
+	hitlClient    *api.HitlClient
+	forwardID     string           // port-forward ID for cleanup
+	nodeName      string
+	workitemID    string
+	pendingChoice string           // stored for retry handlers
+
+	// Probe retry state
+	probeAttempts int
+	probeMax      int              // 5 total
+	exhausted     bool
+
+	// Non-default port tracking for debug hint
+	hitlPort       int
+	debugHintShown bool
+}
+
+// NewHitlState creates a HitlState with the given HITL port.
+func NewHitlState(hitlPort int) *HitlState {
+	return &HitlState{
+		probeMax: 5,
+		hitlPort: hitlPort,
+	}
+}
+
+// Probe performs one HITL probe attempt asynchronously.
+// It does not reset probeAttempts — the caller (Update) must reset
+// probeAttempts = 0 before calling Probe for a new workitem cycle.
+// Returns a tea.Cmd that lists pods labeled for the node, opens port-forwards
+// sequentially, and returns one of:
+//
+//	HitlProbeResultMsg     — queue item found
+//	HitlProbeRetryMsg      — no match on any pod, retries remain
+//	HitlProbeExhaustedMsg  — all attempts used, no match
+//	HitlChoicesBlockedMsg  — /choices returned 5xx/transport error
+func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
+	namespace, nodeName, workitemID string, pm api.PortForwarder) tea.Cmd {
+
+	// Close previous HITL forward from any prior attempt
+	if h.forwardID != "" {
+		pm.Close(h.forwardID)
+		h.forwardID = ""
+	}
+	h.hitlClient = nil
+	h.active = false
+	h.nodeName = nodeName
+	h.workitemID = workitemID
+
+	return func() tea.Msg {
+		h.probeAttempts++
+
+		// Per-attempt timeout prevents a stuck probe on a dying pod
+		// from blocking subsequent attempts.
+		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+
+		// List pods labeled flow.gideas.io/node-name=<node>
+		pods, err := clientset.CoreV1().Pods(namespace).List(attemptCtx, metav1.ListOptions{
+			LabelSelector: "flow.gideas.io/node-name=" + nodeName,
+		})
+		if err != nil {
+			if h.probeAttempts >= h.probeMax {
+				h.exhausted = true
+				return HitlProbeExhaustedMsg{
+					WorkitemID: workitemID,
+					NodeName:   nodeName,
+					Diagnostic: fmt.Sprintf("list pods: %v", err),
+				}
+			}
+			return HitlProbeRetryMsg{}
+		}
+
+		// Probe each Ready pod sequentially
+		for _, pod := range pods.Items {
+			if !api.PodReady(&pod) {
+				continue
+			}
+
+			// Open port-forward to pod port --hitl-port
+			forwardID, localPort, err := pm.ForwardPod(attemptCtx, namespace, pod.Name, h.hitlPort)
+			if err != nil {
+				continue // try next pod
+			}
+
+			client := api.NewHitlClient(fmt.Sprintf("http://localhost:%d", localPort))
+			qi, err := client.ProbeQueue(attemptCtx, workitemID)
+			if err != nil || qi == nil {
+				// 404, error, or transport failure — close forward, try next pod
+				pm.Close(forwardID)
+				continue
+			}
+
+			// Found a matching queue item. Keep this forward open.
+			h.forwardID = forwardID
+			h.queueItem = qi
+			h.hitlClient = client
+			h.active = true
+			h.probeAttempts = 0
+
+			// Probe /choices on the same forward
+			choices, err := client.GetChoices(attemptCtx)
+			if err != nil {
+				// 5xx or transport error — block HITL interaction
+				return HitlChoicesBlockedMsg{Err: err}
+			}
+			if choices != nil {
+				h.choices = choices.Choices
+				h.hasCancel = choices.HasCancel
+			} else {
+				// 404 — use defaults
+				h.choices = DefaultAPIChoices()
+				h.hasCancel = true
+			}
+
+			return HitlProbeResultMsg{
+				WorkitemID: workitemID,
+				NodeName:   nodeName,
+				QueueItem:  qi,
+				Choices:    h.choices,
+				HasCancel:  h.hasCancel,
+			}
+		}
+
+		// No pod returned 200.
+		if h.probeAttempts >= h.probeMax {
+			h.exhausted = true
+			diagnostic := "HITL probe timed out — node may not have enqueued the item"
+			if h.hitlPort != 8080 && !h.debugHintShown {
+				h.debugHintShown = true
+				diagnostic += "\nHITL probe failed — verify `--hitl-port` matches the node's `FLOW_HITL_PORT`"
+			}
+			return HitlProbeExhaustedMsg{
+				WorkitemID: workitemID,
+				NodeName:   nodeName,
+				Diagnostic: diagnostic,
+			}
+		}
+
+		return HitlProbeRetryMsg{}
+	}
+}
+
+// ClaimAndDecide claims the queue item then decides with the given choice.
+func (h *HitlState) ClaimAndDecide(ctx context.Context, choice string) error {
+	if !h.active || h.hitlClient == nil {
+		return fmt.Errorf("no active HITL session")
+	}
+	h.pendingChoice = choice
+	// Claim
+	_, err := h.hitlClient.Claim(ctx, h.workitemID)
+	if err != nil {
+		return err
+	}
+	// Decide
+	return h.hitlClient.Decide(ctx, h.workitemID, choice)
+}
+
+// ReleaseClaim abandons the claim without deciding.
+func (h *HitlState) ReleaseClaim(ctx context.Context) error {
+	if !h.active || h.hitlClient == nil {
+		return fmt.Errorf("no active HITL session")
+	}
+	_, err := h.hitlClient.Release(ctx, h.workitemID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Close cleans up the HITL port-forward. Does not stop tea.Tick timers
+// (those are gated by h.exhausted in the Update loop).
+func (h *HitlState) Close(pm api.PortForwarder) {
+	if h.forwardID != "" {
+		pm.Close(h.forwardID)
+		h.forwardID = ""
+	}
+	h.active = false
+	h.exhausted = false
+	h.hitlClient = nil
+}
+
+// RetryQueueUnavailable performs up to 3 retries with 2s backoff
+// for QUEUE_UNAVAILABLE errors on claim/decide/release.
+func (h *HitlState) RetryQueueUnavailable(ctx context.Context, fn func(context.Context) error) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+		err := fn(ctx)
+		if err == nil {
+			return nil
+		}
+		if !api.IsQueueUnavailable(err) {
+			return err // non-retryable error
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("queue unavailable after 3 retries: %w", lastErr)
+}
+
+// ResetForNewWorkitem resets probe state for a new workitem cycle.
+func (h *HitlState) ResetForNewWorkitem() {
+	h.probeAttempts = 0
+	h.exhausted = false
+	h.debugHintShown = false
+}
+
+// ─── Test helpers (for tui package tests) ───────────────────────────────────
+
+// SetActiveForTest sets the active flag for testing.
+func (h *HitlState) SetActiveForTest() { h.active = true }
+
+// SetForwardIDForTest sets the forwardID for testing.
+func (h *HitlState) SetForwardIDForTest(fid string) { h.forwardID = fid }
+
+// ─── Accessor methods (for tui package use) ─────────────────────────────────
+
+// Exhausted returns true when all probe retries have been exhausted.
+func (h *HitlState) Exhausted() bool { return h.exhausted }
+
+// Active returns true when a queue item has been found and HITL is active.
+func (h *HitlState) Active() bool { return h.active }
+
+// SetActive sets the active state.
+func (h *HitlState) SetActive(v bool) { h.active = v }
+
+// Blocked returns true when /choices blocked HITL interaction.
+func (h *HitlState) Blocked() bool { return h.hitlBlocked }
+
+// SetBlocked sets the blocked state.
+func (h *HitlState) SetBlocked(v bool) { h.hitlBlocked = v }
+
+// GetNodeName returns the current node name being probed.
+func (h *HitlState) GetNodeName() string { return h.nodeName }
+
+// GetWorkitemID returns the current workitem ID being probed.
+func (h *HitlState) GetWorkitemID() string { return h.workitemID }
+
+// GetPendingChoice returns the stored pending choice for retry.
+func (h *HitlState) GetPendingChoice() string { return h.pendingChoice }
+
+// DefaultAPIChoices returns the default HITL choices as api.Choice values.
+func DefaultAPIChoices() []api.Choice {
+	return []api.Choice{
+		{Value: "approve", Label: "Approve", Type: "route"},
+		{Value: "cancel", Label: "Cancel", Type: "cancel"},
+	}
 }

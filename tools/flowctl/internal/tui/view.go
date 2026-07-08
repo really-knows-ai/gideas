@@ -11,6 +11,10 @@ var errorBannerStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#FFFF00")).
 	Foreground(lipgloss.Color("#000000"))
 
+// mutedStyle is used for status messages and secondary text.
+var mutedStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("#888888"))
+
 // View renders the root TUI view based on the current screen.
 func (m *Model) View() string {
 	if m.err != nil {
@@ -81,6 +85,12 @@ func (m *Model) renderDetail() string {
 	// HITL prompt
 	hitlSection := detail.hitl.View()
 
+	// Status message at bottom (transient HITL messages, diagnostics, etc.)
+	statusSection := ""
+	if m.statusMessage != "" {
+		statusSection = "\n" + mutedStyle.Render(m.statusMessage)
+	}
+
 	// Combine everything
 	content := lipgloss.JoinVertical(lipgloss.Top,
 		top,
@@ -97,6 +107,10 @@ func (m *Model) renderDetail() string {
 			"",
 			hitlSection,
 		)
+	}
+
+	if statusSection != "" {
+		content += statusSection
 	}
 
 	return content

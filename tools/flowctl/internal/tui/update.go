@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -68,6 +69,27 @@ func feedbackStateToString(s api.FeedbackState) string {
 	}
 }
 
+// toChoice converts an api.Choice to a types.Choice for the TUI component.
+func toChoice(c api.Choice) types.Choice {
+	return types.Choice{
+		Value: c.Value,
+		Label: c.Label,
+		Type:  c.Type,
+	}
+}
+
+// toChoices converts a slice of api.Choice to a slice of types.Choice.
+func toChoices(apiChoices []api.Choice) []types.Choice {
+	if len(apiChoices) == 0 {
+		return nil
+	}
+	result := make([]types.Choice, len(apiChoices))
+	for i, c := range apiChoices {
+		result[i] = toChoice(c)
+	}
+	return result
+}
+
 // formatArtefactContent formats artefact content for display.
 // Returns (content string, isBinary bool, binarySize int).
 func formatArtefactContent(raw []byte) (string, bool, int) {
@@ -103,6 +125,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Global key handlers
 		switch msg.String() {
 		case "ctrl+c", "q":
+			// Clean up HITL port-forward before quitting
+			if m.hitlState != nil && m.pfm != nil {
+				m.hitlState.Close(m.pfm)
+			}
 			return m, tea.Quit
 		}
 
@@ -149,13 +175,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// WorkitemDetail: n -> CreateStartMsg
-		if m.screen == ScreenWorkitemDetail && msg.String() == "n" {
+		// WorkitemDetail: n -> CreateStartMsg (only when HITL is not active)
+		if m.screen == ScreenWorkitemDetail && msg.String() == "n" && (m.hitlState == nil || !m.hitlState.Active()) {
 			return m.routeMsg(CreateStartMsg{})
 		}
 
-		// WorkitemDetail: r -> RefreshMsg
-		if m.screen == ScreenWorkitemDetail && msg.String() == "r" {
+		// WorkitemDetail: r -> RefreshMsg (only when HITL is not active)
+		if m.screen == ScreenWorkitemDetail && msg.String() == "r" && (m.hitlState == nil || !m.hitlState.Active()) {
 			return m.routeMsg(RefreshMsg{})
 		}
 
@@ -178,6 +204,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ErrorMsg:
 		m.err = fmt.Errorf("%s: %s", msg.Source, msg.Message)
 		return m, nil
+
+	case WorkitemUpdateMsg:
+		// Handle WorkitemUpdateMsg at root level so NODE change detection
+		// works regardless of current screen.
+		cmd := m.handleWorkitemUpdate(msg)
+		return m, cmd
 
 	default:
 		return m.routeMsg(msg)
@@ -351,6 +383,45 @@ func (m *Model) debouncedChildCountRefresh() tea.Cmd {
 	}
 }
 
+// handleWorkitemUpdate processes a WorkitemUpdateMsg at the root level.
+// It updates the workitem list and, when on the detail screen, detects NODE
+// changes to trigger HITL probe restart.
+func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
+	// Update the list
+	switch msg.Event {
+	case watch.Added:
+		m.workitemList.Items = append(m.workitemList.Items, msg.Item)
+	case watch.Modified:
+		for i, item := range m.workitemList.Items {
+			if item.Name == msg.Item.Name {
+				// Detect NODE change for HITL probe restart on detail screen
+				if m.screen == ScreenWorkitemDetail && m.workitemDetail.workitemName == item.Name {
+					if item.Node != msg.Item.Node && m.hitlState != nil {
+						// NODE changed — close HITL and start new probe cycle
+						m.hitlState.Close(m.pfm)
+						m.hitlState.ResetForNewWorkitem()
+						m.workitemDetail.hitl.Visible = false
+						if m.k8s != nil && msg.Item.Node != "" && msg.Item.Node != "-" {
+							m.workitemList.Items[i] = msg.Item
+							return tea.Batch(
+								m.debouncedChildCountRefresh(),
+								m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
+									msg.Item.Node, msg.Item.Name, m.pfm),
+							)
+						}
+						// Update the model with the new node info even if probe can't start
+						m.workitemDetail.workitemName = msg.Item.Name
+						m.workitemDetail.detail.Node = msg.Item.Node
+					}
+				}
+				m.workitemList.Items[i] = msg.Item
+				break
+			}
+		}
+	}
+	return m.debouncedChildCountRefresh()
+}
+
 // ─── Screen-level handlers ─────────────────────────────────────────────────
 
 // updateNamespaceSelect handles semantic messages for the namespace select screen.
@@ -404,25 +475,8 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workitemList.Loading = false
 		m.workitemList.Error = msg.Error.Error()
 
-	case WorkitemUpdateMsg:
-		switch msg.Event {
-		case watch.Added:
-			m.workitemList.Items = append(m.workitemList.Items, msg.Item)
-		case watch.Modified:
-			for i, item := range m.workitemList.Items {
-				if item.Name == msg.Item.Name {
-					// Check if state or node changed for detail refresh trigger
-					stateChanged := item.State != msg.Item.State || item.Node != msg.Item.Node
-					if stateChanged && m.screen == ScreenWorkitemDetail && m.workitemDetail.workitemName == item.Name {
-						// Trigger artefact refresh (handled in detail handler)
-					}
-					m.workitemList.Items[i] = msg.Item
-					break
-				}
-			}
-		}
-		// Debounced child count recomputation
-		return m, m.debouncedChildCountRefresh()
+	// Note: WorkitemUpdateMsg is handled at root level in handleWorkitemUpdate.
+	// It is NOT dispatched to this handler.
 
 	case WorkitemDeletedMsg:
 		for i, item := range m.workitemList.Items {
@@ -631,6 +685,18 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Start HITL probe if node is non-empty and non-terminal
+		if m.hitlState != nil && m.k8s != nil && currentNode != "" {
+			m.hitlState.ResetForNewWorkitem()
+			cmds := []tea.Cmd{m.RefreshArtefacts()}
+			probeCmd := m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
+				currentNode, msg.Detail.Name, m.pfm)
+			if probeCmd != nil {
+				cmds = append(cmds, probeCmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
 	case ArtefactsLoadedMsg:
 		// Preserve expansion state across refreshes
 		expandedSet := make(map[string]bool)
@@ -730,23 +796,56 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workitemDetail.topology.Edges = msg.Edges
 		m.workitemDetail.topology.Loading = false
 
-	case HitlProbeResultMsg:
-		if msg.QueueItem != nil {
-			m.workitemDetail.hitl.Visible = true
-			m.workitemDetail.hitl.QueueItemID = msg.WorkitemID
-			if len(msg.Choices) > 0 {
-				m.workitemDetail.hitl.Choices = msg.Choices
-			} else {
-				m.workitemDetail.hitl.Choices = defaultChoices
-			}
-			m.workitemDetail.hitl.Loading = false
-		} else {
-			m.workitemDetail.hitl.Visible = false
+	case components.HitlProbeResultMsg:
+		// HitlState was already populated by the Probe cmd goroutine.
+		// Populate the rendering component from the message.
+		m.workitemDetail.hitl.Visible = true
+		m.workitemDetail.hitl.QueueItemID = msg.WorkitemID
+		m.workitemDetail.hitl.Choices = toChoices(msg.Choices)
+		m.workitemDetail.hitl.Loading = false
+		m.statusMessage = ""
+
+	case components.HitlProbeRetryMsg:
+		if m.hitlState != nil && !m.hitlState.Exhausted() {
+			return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+				return HitlProbeTriggerMsg{}
+			})
+		}
+
+	case components.HitlProbeExhaustedMsg:
+		if m.hitlState != nil {
+			m.hitlState.Close(m.pfm)
+		}
+		m.statusMessage = msg.Diagnostic
+
+	case components.HitlChoicesBlockedMsg:
+		if m.hitlState != nil {
+			m.hitlState.Close(m.pfm)
+		}
+		m.statusMessage = fmt.Sprintf("Unable to load choices: %s", msg.Err)
+
+	case HitlProbeTriggerMsg:
+		if m.hitlState != nil && !m.hitlState.Exhausted() && m.workitemDetail.workitemName != "" {
+			return m, m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
+				m.hitlState.GetNodeName(), m.hitlState.GetWorkitemID(), m.pfm)
 		}
 
 	case HitlDecidedMsg:
 		m.workitemDetail.hitl.Visible = false
 		m.workitemDetail.hitl.Error = ""
+		m.statusMessage = fmt.Sprintf("Decision '%s' submitted", msg.Choice)
+		// Trigger refresh of detail and artefacts
+		var cmds []tea.Cmd
+		if m.workitemDetail.workitemName != "" {
+			cmds = append(cmds, m.loadWorkitemDetail(m.workitemDetail.workitemName))
+		}
+		if refreshCmd := m.RefreshArtefacts(); refreshCmd != nil {
+			cmds = append(cmds, refreshCmd)
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+		return m, nil
 
 	case HitlErrorMsg:
 		if !msg.Retryable {
@@ -754,6 +853,60 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.workitemDetail.hitl.Error = msg.Err.Error()
 			m.workitemDetail.hitl.ErrorRetry = msg.Retryable
+		}
+		// Handle specific error codes per the spec error table
+		if msg.Err != nil {
+			switch {
+			case api.IsQueueItemNotFound(msg.Err):
+				if m.hitlState != nil {
+					m.hitlState.Close(m.pfm)
+				}
+				m.workitemDetail.hitl.Visible = false
+				m.statusMessage = "Queue item no longer exists — refreshing..."
+				var cmds []tea.Cmd
+				if m.workitemDetail.workitemName != "" {
+					cmds = append(cmds, m.loadWorkitemDetail(m.workitemDetail.workitemName))
+				}
+				if refreshCmd := m.RefreshArtefacts(); refreshCmd != nil {
+					cmds = append(cmds, refreshCmd)
+				}
+				if len(cmds) > 0 {
+					return m, tea.Batch(cmds...)
+				}
+				return m, nil
+			case api.IsAlreadyClaimed(msg.Err):
+				m.statusMessage = "Already claimed by another client — press 'r' to retry"
+			case api.IsInvalidState(msg.Err):
+				m.statusMessage = "Item in unexpected state — press 'r' to retry"
+			case api.IsQueueUnavailable(msg.Err):
+				if m.hitlState != nil && m.hitlState.GetPendingChoice() != "" {
+					m.statusMessage = "Queue unavailable — retrying..."
+					choice := m.hitlState.GetPendingChoice()
+					return m, func() tea.Msg {
+						err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
+							return m.hitlState.ClaimAndDecide(ctx, choice)
+						})
+						if err != nil {
+							return HitlErrorMsg{
+								WorkitemID: m.selectedWorkitemName(),
+								Err:        err,
+								Retryable:  false,
+							}
+						}
+						return HitlDecidedMsg{
+							WorkitemID: m.selectedWorkitemName(),
+							Choice:     choice,
+						}
+					}
+				}
+			case api.IsBadRequest(msg.Err):
+				m.statusMessage = fmt.Sprintf("Invalid request: %s", msg.Err)
+			default:
+				m.statusMessage = fmt.Sprintf("HITL error: %s — press 'r' to retry", msg.Err)
+			}
+		}
+		if msg.DebugHint != "" {
+			m.debugHint = msg.DebugHint
 		}
 
 	case RefreshMsg:
@@ -915,6 +1068,82 @@ func (m *Model) updateWorkitemListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.workitemDetail.artefacts, _ = m.workitemDetail.artefacts.Update(msg)
+
+	// HITL action keys — only when HITL is active and not confirming cancel
+	if m.hitlState != nil && m.hitlState.Active() && m.workitemDetail.hitl.Visible && !m.workitemDetail.hitl.ConfirmingCancel {
+		key := msg.String()
+
+		// Handle 'r' for retry
+		if key == "r" {
+			m.workitemDetail.hitl.Error = ""
+			return m, nil
+		}
+
+		// Handle 'y'/'n' for cancel confirmation (handled by component Update too)
+		if key == "y" && m.workitemDetail.hitl.ConfirmingCancel {
+			// Confirm cancel — claim and decide with the pending choice
+			pendingChoice := m.workitemDetail.hitl.PendingChoice
+			m.workitemDetail.hitl.ConfirmingCancel = false
+			m.workitemDetail.hitl.PendingChoice = ""
+			m.workitemDetail.hitl.Loading = true
+			if m.ctx == nil {
+				m.ctx = context.Background()
+			}
+			return m, func() tea.Msg {
+				err := m.hitlState.ClaimAndDecide(m.ctx, pendingChoice)
+				if err != nil {
+					return HitlErrorMsg{
+						WorkitemID: m.hitlState.GetWorkitemID(),
+						Err:        err,
+						Retryable:  api.IsQueueUnavailable(err) || api.IsAlreadyClaimed(err) || api.IsInvalidState(err),
+					}
+				}
+				return HitlDecidedMsg{
+					WorkitemID: m.hitlState.GetWorkitemID(),
+					Choice:     pendingChoice,
+				}
+			}
+		}
+
+		// Match choice keys: first letter of each choice label
+		choices := m.workitemDetail.hitl.Choices
+		if len(choices) == 0 {
+			choices = defaultChoices
+		}
+		for _, ch := range choices {
+			if len(ch.Label) == 0 {
+				continue
+			}
+			shortcut := strings.ToLower(string(ch.Label[0]))
+			if key == shortcut {
+				if ch.Type == "cancel" {
+					// Show confirmation prompt
+					m.workitemDetail.hitl.ConfirmingCancel = true
+					m.workitemDetail.hitl.PendingChoice = ch.Value
+					return m, nil
+				}
+				// Direct route — claim and decide
+				m.workitemDetail.hitl.Loading = true
+				if m.ctx == nil {
+					m.ctx = context.Background()
+				}
+				return m, func() tea.Msg {
+					err := m.hitlState.ClaimAndDecide(m.ctx, ch.Value)
+					if err != nil {
+						return HitlErrorMsg{
+							WorkitemID: m.hitlState.GetWorkitemID(),
+							Err:        err,
+							Retryable:  api.IsQueueUnavailable(err) || api.IsAlreadyClaimed(err) || api.IsInvalidState(err),
+						}
+					}
+					return HitlDecidedMsg{
+						WorkitemID: m.hitlState.GetWorkitemID(),
+						Choice:     ch.Value,
+					}
+				}
+			}
+		}
+	}
 
 	// Handle artefact expand/collapse at root level for network calls
 	if msg.String() == "enter" || msg.String() == "right" {

@@ -41,6 +41,14 @@ type Model struct {
 	// Error banner displayed at top of screen
 	errorBanner string
 
+	// HITL lifecycle manager (created on Init with cfg.HitlPort)
+	hitlState   *components.HitlState
+
+	// Status message displayed in the detail view status bar
+	statusMessage string
+	// Debug hint shown when --hitl-port != 8080 and all probes fail
+	debugHint string
+
 	// Sub-states for each screen
 	namespaceSelector components.NamespaceSelectorModel
 	workitemList      components.WorkitemListModel
@@ -73,6 +81,7 @@ func NewModel(k8s *api.K8sClient, cfg *config.Config, ctx context.Context) Model
 	m.k8s = k8s
 	m.cfg = cfg
 	m.ctx = ctx
+	m.hitlState = components.NewHitlState(cfg.HitlPort)
 	return m
 }
 
@@ -112,6 +121,17 @@ func (m *Model) Init() tea.Cmd {
 	return func() tea.Msg {
 		return m.loadNamespaces()
 	}
+}
+
+// selectedWorkitemName returns the name of the currently selected workitem.
+func (m *Model) selectedWorkitemName() string {
+	if m.workitemDetail.workitemName != "" {
+		return m.workitemDetail.workitemName
+	}
+	if m.workitemList.Cursor >= 0 && m.workitemList.Cursor < len(m.workitemList.Items) {
+		return m.workitemList.Items[m.workitemList.Cursor].Name
+	}
+	return ""
 }
 
 // RefreshArtefacts re-fetches artefacts and feedback for the currently selected workitem.

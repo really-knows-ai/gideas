@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gideas/flow/tools/flowctl/internal/api"
+	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
 )
 
@@ -315,11 +316,11 @@ func TestUpdateHitlProbeFoundShowsPrompt(t *testing.T) {
 	m.screen = ScreenWorkitemDetail
 	m.workitemDetail.workitemName = "wi-001"
 
-	model, cmd := m.Update(HitlProbeResultMsg{
+	model, cmd := m.Update(components.HitlProbeResultMsg{
 		WorkitemID: "wi-001",
 		NodeName:   "forge",
-		QueueItem:  struct{}{}, // non-nil means found
-		Choices: []types.Choice{
+		QueueItem:  &api.QueueItem{WorkitemID: "wi-001"},
+		Choices: []api.Choice{
 			{Value: "approve", Label: "Approve", Type: "route"},
 		},
 		HasCancel: true,
@@ -337,20 +338,30 @@ func TestUpdateHitlProbeFoundShowsPrompt(t *testing.T) {
 	}
 }
 
-func TestUpdateHitlProbeNotFoundHidesPrompt(t *testing.T) {
+func TestUpdateHitlProbeFoundWithChoices(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.workitemDetail.workitemName = "wi-001"
 
-	model, cmd := m.Update(HitlProbeResultMsg{
+	// HitlProbeResultMsg is only emitted by the Probe cmd when a queue item match is found.
+	// In Phase 05, it always means "active".
+	model, cmd := m.Update(components.HitlProbeResultMsg{
 		WorkitemID: "wi-001",
-		NodeName:   "forge",
-		QueueItem:  nil, // nil means not found
+		NodeName:   "human-approval",
+		QueueItem:  &api.QueueItem{WorkitemID: "wi-001"},
+		Choices: []api.Choice{
+			{Value: "approve", Label: "Approve", Type: "route"},
+			{Value: "cancel", Label: "Cancel", Type: "cancel"},
+		},
+		HasCancel: true,
 	})
 	m2 := model.(*Model)
 
-	if m2.workitemDetail.hitl.Visible {
-		t.Error("expected HITL prompt hidden")
+	if !m2.workitemDetail.hitl.Visible {
+		t.Error("expected HITL prompt visible when probe succeeds")
+	}
+	if len(m2.workitemDetail.hitl.Choices) != 2 {
+		t.Errorf("expected 2 choices, got %d", len(m2.workitemDetail.hitl.Choices))
 	}
 	if cmd != nil {
 		t.Error("expected nil command")
