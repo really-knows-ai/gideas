@@ -44,7 +44,7 @@ func (m ArtefactTreeModel) View() string {
 		return b.String()
 	}
 
-	// Sort artefacts lexicographically by ArtefactID
+	// Sort artefacts lexicographically by ArtefactID.
 	sorted := make([]types.ArtefactNode, len(m.Artefacts))
 	copy(sorted, m.Artefacts)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -92,8 +92,9 @@ func (m ArtefactTreeModel) View() string {
 
 					renderedState := stateStyle.Render(stateDisplay)
 					msg := fb.Message
-					if len(msg) > 120 {
-						msg = msg[:120]
+					r := []rune(msg)
+					if len(r) > 120 {
+						msg = string(r[:120])
 					}
 
 					b.WriteString(fmt.Sprintf("        %s  %-14s  %s\n", renderedState, fb.SourceNode, msg))
@@ -162,6 +163,9 @@ func sortFeedback(items []types.FeedbackItem) []types.FeedbackItem {
 func (m ArtefactTreeModel) Update(msg tea.Msg) (ArtefactTreeModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		sort.Slice(m.Artefacts, func(i, j int) bool {
+			return m.Artefacts[i].ArtefactID < m.Artefacts[j].ArtefactID
+		})
 		switch msg.String() {
 		case "up", "k":
 			if m.Cursor > 0 {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -29,10 +30,26 @@ var watchCmd = &cobra.Command{
 			return err
 		}
 
+		// Create log writer early so startup errors are appended to FLOW_LOG_FILE
+		startupLog := tui.NewLogWriter(cfg.LogFile)
+		defer startupLog.Close()
+
 		k8s, err := api.NewK8sClient("")
 		if err != nil {
 			return fmt.Errorf("failed to connect to Kubernetes: %w\n"+
 				"Verify KUBECONFIG or ~/.kube/config points to a Foundry Flow cluster.", err)
+		}
+		checkCtx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		defer cancel()
+		if _, err := k8s.CoreClient.Discovery().RESTClient().Get().AbsPath("/version").DoRaw(checkCtx); err != nil {
+			select {
+			case <-checkCtx.Done():
+				startupLog.Log("ERROR", "startup", fmt.Sprintf("failed to reach Kubernetes API server: %v", checkCtx.Err()))
+				return fmt.Errorf("failed to reach Kubernetes API server: %w", checkCtx.Err())
+			default:
+				startupLog.Log("ERROR", "startup", fmt.Sprintf("failed to reach Kubernetes API server: %v", err))
+				return fmt.Errorf("failed to reach Kubernetes API server: %w", err)
+			}
 		}
 
 		// Create PortForwardManager for pod port-forwards
@@ -60,7 +77,7 @@ var watchCmd = &cobra.Command{
 func init() {
 	watchCmd.Flags().String("namespace", "", "Workitem namespace (overrides FLOW_NAMESPACE)")
 	watchCmd.Flags().String("system-namespace", "", "System services namespace (overrides FLOW_SYSTEM_NAMESPACE)")
-	watchCmd.Flags().Int("hitl-port", 0, "HITL REST port (overrides FLOW_HITL_PORT)")
+	watchCmd.Flags().Int("hitl-port", 8080, "HITL REST port (overrides FLOW_HITL_PORT)")
 	rootCmd.AddCommand(watchCmd)
 }
 

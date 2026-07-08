@@ -189,6 +189,24 @@ func makeGovernedArtefact(name string) *unstructured.Unstructured {
 	return obj
 }
 
+func makeReadyArchivistPod(namespace string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "archivist-0",
+			Namespace: namespace,
+			Labels:    map[string]string{"app.kubernetes.io/name": "flow-archivist"},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.1",
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
+	}
+}
+
 // ─── T1: ListNamespaces ────────────────────────────────────────────────────
 
 func TestListNamespaces(t *testing.T) {
@@ -248,15 +266,15 @@ func TestListWorkitems(t *testing.T) {
 		t.Errorf("expected node '-', got %s", items[1].Node)
 	}
 
-	// wi-3: no status -> State "", Node "-"
+	// wi-3: no status -> State "", Node ""
 	if items[2].Name != "wi-3" {
 		t.Errorf("expected wi-3, got %s", items[2].Name)
 	}
 	if items[2].State != "" {
 		t.Errorf("expected empty state, got %s", items[2].State)
 	}
-	if items[2].Node != "-" {
-		t.Errorf("expected node '-', got %s", items[2].Node)
+	if items[2].Node != "" {
+		t.Errorf("expected empty node, got %s", items[2].Node)
 	}
 
 	// wi-4: Completed with currentAssignee -> preserves the assignee, not "-"
@@ -621,6 +639,25 @@ func TestListGovernedArtefacts(t *testing.T) {
 	}
 	if artefacts[1].Name != "petition" {
 		t.Errorf("expected petition, got %s", artefacts[1].Name)
+	}
+}
+
+// ─── T15: ResolveSystemNamespace auto discovery ─────────────────────────────
+
+func TestResolveSystemNamespaceAutoDiscoversReadyArchivistPod(t *testing.T) {
+	coreClient := k8sfake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "workitems"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "flow-system"}},
+		makeReadyArchivistPod("flow-system"),
+	)
+	k8s := &K8sClient{CoreClient: coreClient}
+
+	ns, err := k8s.ResolveSystemNamespace(context.Background(), "auto", "workitems")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ns != "flow-system" {
+		t.Fatalf("expected flow-system, got %s", ns)
 	}
 }
 

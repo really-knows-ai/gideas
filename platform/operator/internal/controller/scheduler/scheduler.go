@@ -187,7 +187,7 @@ func (s *Scheduler) handleComplete(ctx context.Context, node *flowv1.FoundryNode
 			return nil, err
 		}
 		return &Result{
-			NextAssignee: "",
+			NextAssignee: node.Name,
 			Phase:        "Completed",
 		}, nil
 	}

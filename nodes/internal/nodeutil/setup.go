@@ -4,15 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	flow "github.com/gideas/flow/sdk/go"
 )
 
 // SetupHandler replaces the duplicated preamble found in every push-based
-// node's handler function. It logs the assignment, sets the workitem ID
-// environment variable, creates an SDK client, and fetches the workitem.
+// node's handler function. It logs the assignment, creates an SDK client, and
+// fetches the workitem.
 //
 // The caller must close the client when done (typically via defer client.Close()).
 //
@@ -27,8 +26,7 @@ func SetupHandler(
 		"workitem_id", wctx.GetWorkitemId(),
 		"node_id", wctx.GetNodeId(),
 	)
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, err := flow.NewClient(flow.WithWorkitemID(wctx.GetWorkitemId()))
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: create client: %w", name, err)
 	}

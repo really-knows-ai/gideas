@@ -35,6 +35,10 @@ type ChoicesResponse struct {
 	HasCancel   bool     `json:"hasCancel"`
 }
 
+type ackResponse struct {
+	Acknowledged bool `json:"acknowledged"`
+}
+
 // HitlError represents a structured error from the node's REST API.
 type HitlError struct {
 	Code    string `json:"code"`
@@ -55,11 +59,11 @@ const (
 )
 
 // Matching helpers.
-func IsQueueItemNotFound(err error) bool      { return hasCode(err, ErrQueueItemNotFound) }
-func IsAlreadyClaimed(err error) bool         { return hasCode(err, ErrQueueItemAlreadyClaimed) }
-func IsInvalidState(err error) bool           { return hasCode(err, ErrQueueItemInvalidState) }
-func IsQueueUnavailable(err error) bool       { return hasCode(err, ErrQueueUnavailable) }
-func IsBadRequest(err error) bool             { return hasCode(err, ErrBadRequest) }
+func IsQueueItemNotFound(err error) bool { return hasCode(err, ErrQueueItemNotFound) }
+func IsAlreadyClaimed(err error) bool    { return hasCode(err, ErrQueueItemAlreadyClaimed) }
+func IsInvalidState(err error) bool      { return hasCode(err, ErrQueueItemInvalidState) }
+func IsQueueUnavailable(err error) bool  { return hasCode(err, ErrQueueUnavailable) }
+func IsBadRequest(err error) bool        { return hasCode(err, ErrBadRequest) }
 
 func hasCode(err error, code string) bool {
 	if e, ok := err.(*HitlError); ok {
@@ -182,6 +186,13 @@ func (c *HitlClient) Decide(ctx context.Context, workitemID, choice string) erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
+		var ack ackResponse
+		if err := json.NewDecoder(resp.Body).Decode(&ack); err != nil {
+			return fmt.Errorf("decode decide ack: %w", err)
+		}
+		if !ack.Acknowledged {
+			return fmt.Errorf("decide not acknowledged")
+		}
 		return nil
 	}
 	return parseError(resp.Body)

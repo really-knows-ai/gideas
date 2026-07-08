@@ -125,7 +125,7 @@ metadata:
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: forge:fix-models
+  image: forge:latest
   entry: "standard-entry"
   outputs:
     - name: "default"
@@ -161,6 +161,7 @@ spec:
     - "READ:artefact/haiku"
     - "READ:feedback"
     - "READ:flow"
+    - "READ:law"
     - "WRITE:feedback/deadlocked"
 ---
 
@@ -232,7 +233,7 @@ metadata:
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
-  image: refine:fix-models
+  image: refine:latest
   outputs:
     - name: "default"
       target: "sort"

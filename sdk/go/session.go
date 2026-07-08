@@ -35,6 +35,9 @@ type session struct {
 // establishes gRPC connections to the Sidecar (and optionally the Event Bus).
 func newSession(cfg *clientConfig) (*session, error) {
 	workitemID := os.Getenv(EnvWorkitemID)
+	if cfg.workitemID != "" {
+		workitemID = cfg.workitemID
+	}
 	namespace := os.Getenv(EnvFlowNamespace)
 
 	// Read Event Bus address from env if not explicitly set.

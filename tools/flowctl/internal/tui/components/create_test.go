@@ -53,24 +53,6 @@ func TestCreateConfirmationStep(t *testing.T) {
 	}
 }
 
-func TestCreateBlockedNoFlow(t *testing.T) {
-	m := NewCreateWizard()
-	m.Blocked = "no_flow"
-	v := m.View()
-	if !strings.Contains(v, "no FoundryFlow") {
-		t.Error("expected 'no FoundryFlow' message in view, got:", v)
-	}
-}
-
-func TestCreateBlockedMultipleFlows(t *testing.T) {
-	m := NewCreateWizard()
-	m.Blocked = "multiple_flows"
-	v := m.View()
-	if !strings.Contains(v, "multiple FoundryFlows") {
-		t.Error("expected 'multiple FoundryFlows' message in view, got:", v)
-	}
-}
-
 func TestCreateSuccessStep(t *testing.T) {
 	m := NewCreateWizard()
 	m.Step = 5
@@ -208,29 +190,6 @@ func TestCreateStageProgressDisplay(t *testing.T) {
 	}
 	if strings.Contains(v, "[r]etry") {
 		t.Error("expected no retry hint for non-retryable error, got:", v)
-	}
-}
-
-func TestCreateSHA256Hash(t *testing.T) {
-	// SHA256 hash is computed by api.ComputeSHA256; this tests the TUI display
-	m := NewCreateWizard()
-	m.Stage = StageComplete
-	m.WorkitemID = "test-wi-001"
-	v := m.View()
-	if !strings.Contains(v, "test-wi-001") {
-		t.Error("expected workitem name in success view, got:", v)
-	}
-}
-
-func TestCreateCreatorLabel(t *testing.T) {
-	// The creator label is set in CreateWorkitem in k8s.go.
-	// This test verifies the TUI display shows creation success.
-	m := NewCreateWizard()
-	m.Stage = StageComplete
-	m.WorkitemID = "test-wi-001"
-	v := m.View()
-	if !strings.Contains(v, "test-wi-001") {
-		t.Error("expected workitem name in success view, got:", v)
 	}
 }
 

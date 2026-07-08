@@ -100,7 +100,7 @@ func TestFindReadyPod_Found(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset(pod)
 	mgr := NewPortForwardManager(nil, fakeClient, newMockSPDYForwarder())
 
-	name, found, err := mgr.FindReadyPod("system-ns", "app=archivist")
+	name, found, err := mgr.FindReadyPod(context.Background(), "system-ns", "app=archivist")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestFindReadyPod_NotReady(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset(pod)
 	mgr := NewPortForwardManager(nil, fakeClient, newMockSPDYForwarder())
 
-	_, found, err := mgr.FindReadyPod("system-ns", "app=archivist")
+	_, found, err := mgr.FindReadyPod(context.Background(),"system-ns", "app=archivist")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestFindReadyPod_NotRunning(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset(pod)
 	mgr := NewPortForwardManager(nil, fakeClient, newMockSPDYForwarder())
 
-	_, found, err := mgr.FindReadyPod("system-ns", "app=archivist")
+	_, found, err := mgr.FindReadyPod(context.Background(),"system-ns", "app=archivist")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestFindReadyPod_NoPodIP(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset(pod)
 	mgr := NewPortForwardManager(nil, fakeClient, newMockSPDYForwarder())
 
-	_, found, err := mgr.FindReadyPod("system-ns", "app=archivist")
+	_, found, err := mgr.FindReadyPod(context.Background(),"system-ns", "app=archivist")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestFindReadyPod_FirstMatch(t *testing.T) {
 	)
 	mgr := NewPortForwardManager(nil, fakeClient, newMockSPDYForwarder())
 
-	name, found, err := mgr.FindReadyPod("system-ns", "app=archivist")
+	name, found, err := mgr.FindReadyPod(context.Background(), "system-ns", "app=archivist")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestFindReadyPod_NoMatch(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset(pod)
 	mgr := NewPortForwardManager(nil, fakeClient, newMockSPDYForwarder())
 
-	_, found, err := mgr.FindReadyPod("system-ns", "app=archivist")
+	_, found, err := mgr.FindReadyPod(context.Background(),"system-ns", "app=archivist")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestFindReadyPod_APIFrror(t *testing.T) {
 	}
 	mgr := NewPortForwardManager(nil, errorClient, newMockSPDYForwarder())
 
-	_, _, err := mgr.FindReadyPod("system-ns", "app=archivist")
+	_, _, err := mgr.FindReadyPod(context.Background(),"system-ns", "app=archivist")
 	if err == nil {
 		t.Fatal("expected error from API")
 	}

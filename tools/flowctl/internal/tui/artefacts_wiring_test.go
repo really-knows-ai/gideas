@@ -39,7 +39,7 @@ func newMockPFMWiring(podName string, found bool) *mockPFMWiring {
 	}
 }
 
-func (m *mockPFMWiring) FindReadyPod(namespace, labelSelector string) (string, bool, error) {
+func (m *mockPFMWiring) FindReadyPod(ctx context.Context, namespace, labelSelector string) (string, bool, error) {
 	return m.findPodName, m.findPodFound, nil
 }
 

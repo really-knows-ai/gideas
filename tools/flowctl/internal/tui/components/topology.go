@@ -129,7 +129,6 @@ func (m FlowTopologyModel) View() string {
 	for layerIdx, depth := range layerKeys {
 		nodes := layers[depth]
 		nodeLayout := make([]layoutNode, len(nodes))
-		totalWidth := 0
 
 		for i, name := range nodes {
 			style := styleForNode(nodeColor[name])
@@ -143,25 +142,39 @@ func (m FlowTopologyModel) View() string {
 				width: width,
 				style: style,
 			}
-			totalWidth += width
-			if i < len(nodes)-1 {
-				totalWidth += 4 // spacing
-			}
 		}
 
 		// Draw node boxes (top line)
 		for i, nl := range nodeLayout {
 			b.WriteString(nl.box)
 			if i < len(nodes)-1 {
-				// Check if there's a horizontal edge between these nodes
+				// Check if ANY horizontal edge in this layer crosses this gap — that is,
+				// any edge from a node at or left of position i to a node at or right of
+				// position i+1. This captures both adjacent and non-adjacent same-layer edges.
 				hasEdge := false
-				for _, e := range m.Edges {
-					if e.From == nl.name && e.To == nodes[i+1] {
-						hasEdge = true
-						break
+				for j := 0; j <= i; j++ {
+					for _, e := range m.Edges {
+						if e.From == nodes[j] {
+							for k := i + 1; k < len(nodes); k++ {
+								if e.To == nodes[k] {
+									hasEdge = true
+									break
+								}
+							}
+						}
+						if !hasEdge && e.To == nodes[j] {
+							for k := i + 1; k < len(nodes); k++ {
+								if e.From == nodes[k] {
+									hasEdge = true
+									break
+								}
+							}
+						}
+						if hasEdge {
+							break
+						}
 					}
-					if e.From == nodes[i+1] && e.To == nl.name {
-						hasEdge = true
+					if hasEdge {
 						break
 					}
 				}
@@ -174,9 +187,19 @@ func (m FlowTopologyModel) View() string {
 		}
 		b.WriteString("\n")
 
-		// Draw node labels (bottom line)
+		// Draw node labels (middle line)
 		for i, nl := range nodeLayout {
 			b.WriteString(nl.label)
+			if i < len(nodes)-1 {
+				b.WriteString("    ")
+			}
+		}
+		b.WriteString("\n")
+
+		// Draw node bottom borders
+		for i, nl := range nodeLayout {
+			bottom := fmt.Sprintf("└%s┘", strings.Repeat("─", len(nl.name)+2))
+			b.WriteString(nl.style.Render(bottom))
 			if i < len(nodes)-1 {
 				b.WriteString("    ")
 			}
@@ -202,11 +225,8 @@ func (m FlowTopologyModel) View() string {
 						break
 					}
 				}
-				if hasDownEdge {
-					b.WriteString(fmt.Sprintf("  %s      ", strings.Repeat(" ", len(nl.name)-2)))
-				} else {
-					b.WriteString(fmt.Sprintf("  %s      ", strings.Repeat(" ", len(nl.name)-2)))
-				}
+				pad := max(0, len(nl.name)-2)
+				b.WriteString(fmt.Sprintf("  %s      ", strings.Repeat(" ", pad)))
 			}
 			b.WriteString("\n")
 
@@ -224,10 +244,11 @@ func (m FlowTopologyModel) View() string {
 						break
 					}
 				}
+				pad := max(0, len(nl.name)-2)
 				if hasDownEdge {
-					b.WriteString(fmt.Sprintf("  %s-->  ", strings.Repeat("─", len(nl.name)-2)))
+					b.WriteString(fmt.Sprintf("  %s-->  ", strings.Repeat("-", pad)))
 				} else {
-					b.WriteString(fmt.Sprintf("  %s      ", strings.Repeat(" ", len(nl.name)-2)))
+					b.WriteString(fmt.Sprintf("  %s      ", strings.Repeat(" ", pad)))
 				}
 			}
 			b.WriteString("\n")

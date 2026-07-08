@@ -141,3 +141,28 @@ func TestTopologyCyclicalEdges(t *testing.T) {
 		t.Error("expected node names in view, got:", v)
 	}
 }
+
+func TestTopologyNonAdjacentHorizontalEdge(t *testing.T) {
+	m := NewFlowTopology()
+	m.Loading = false
+	// Entry A fans out to B, C, D (all at layer 1). Edge B→D skips C,
+	// testing that non-adjacent same-layer edges render as crossing arrows.
+	m.Nodes = []types.TopologyNode{
+		{Name: "A", Color: types.TopologyVisited},
+		{Name: "B", Color: types.TopologyCurrent},
+		{Name: "C", Color: types.TopologyUnvisited},
+		{Name: "D", Color: types.TopologyUnvisited},
+	}
+	m.Edges = []types.TopologyEdge{
+		{From: "A", To: "B"},
+		{From: "A", To: "C"},
+		{From: "A", To: "D"},
+		{From: "B", To: "D"}, // non-adjacent: B → D, skipping C
+	}
+	v := m.View()
+	// The non-adjacent edge B→D should render arrows in both gaps:
+	// gap after B (B→C) and gap after C (C→D), since B→D crosses both.
+	if cnt := strings.Count(v, "-->"); cnt < 2 {
+		t.Errorf("expected at least 2 horizontal arrows for non-adjacent edge B→D, got %d\nview:\n%s", cnt, v)
+	}
+}

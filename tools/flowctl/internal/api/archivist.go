@@ -34,7 +34,7 @@ const (
 
 // FeedbackItem represents a single feedback entry for an artefact.
 type FeedbackItem struct {
-	ID         string        // UUID string
+	ID         string // UUID string
 	State      FeedbackState
 	SourceNode string
 	Message    string
@@ -68,8 +68,8 @@ func NewArchivistClient(target string) (*ArchivistClient, error) {
 
 // Close closes the gRPC connection.
 func (c *ArchivistClient) Close() error {
-	if 	c.Conn != nil {
-		return 	c.Conn.Close()
+	if c.Conn != nil {
+		return c.Conn.Close()
 	}
 	return nil
 }
@@ -86,7 +86,7 @@ func withMetadata(ctx context.Context, namespace, workitemID string) context.Con
 // ListArtefacts returns all artefacts for the given workitem.
 func (c *ArchivistClient) ListArtefacts(ctx context.Context, namespace, workitemID string) ([]ArtefactInfo, error) {
 	ctx = withMetadata(ctx, namespace, workitemID)
-	client := flowv1.NewArchivistServiceClient(	c.Conn)
+	client := flowv1.NewArchivistServiceClient(c.Conn)
 	resp, err := client.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
 		WorkitemId: workitemID,
 	})
@@ -113,7 +113,7 @@ func (c *ArchivistClient) ListArtefacts(ctx context.Context, namespace, workitem
 // GetArtefact returns the raw content bytes for a given artefact.
 func (c *ArchivistClient) GetArtefact(ctx context.Context, namespace, workitemID, artefactID string) ([]byte, error) {
 	ctx = withMetadata(ctx, namespace, workitemID)
-	client := flowv1.NewArchivistServiceClient(	c.Conn)
+	client := flowv1.NewArchivistServiceClient(c.Conn)
 	resp, err := client.GetArtefact(ctx, &flowv1.GetArtefactRequest{
 		WorkitemId: workitemID,
 		ArtefactId: artefactID,
@@ -127,7 +127,7 @@ func (c *ArchivistClient) GetArtefact(ctx context.Context, namespace, workitemID
 // GetFeedback returns all feedback items for a given artefact.
 func (c *ArchivistClient) GetFeedback(ctx context.Context, namespace, workitemID, artefactID string) ([]FeedbackItem, error) {
 	ctx = withMetadata(ctx, namespace, workitemID)
-	client := flowv1.NewArchivistServiceClient(	c.Conn)
+	client := flowv1.NewArchivistServiceClient(c.Conn)
 	resp, err := client.GetFeedback(ctx, &flowv1.GetFeedbackRequest{
 		WorkitemId: workitemID,
 		ArtefactId: artefactID,
@@ -139,10 +139,6 @@ func (c *ArchivistClient) GetFeedback(ctx context.Context, namespace, workitemID
 	result := make([]FeedbackItem, 0, len(resp.FeedbackItems))
 	for _, f := range resp.FeedbackItems {
 		state := FeedbackState(f.State.Number())
-		// Map unknown enum values to Unspecified
-		if state < FeedbackStateUnspecified || state > FeedbackStateResolved {
-			state = FeedbackStateUnspecified
-		}
 		result = append(result, FeedbackItem{
 			ID:         f.Id,
 			State:      state,
@@ -166,7 +162,7 @@ func (c *ArchivistClient) GetFeedback(ctx context.Context, namespace, workitemID
 // StoreArtefact stores content for a given artefact.
 func (c *ArchivistClient) StoreArtefact(ctx context.Context, namespace string, req StoreArtefactRequest) error {
 	ctx = withMetadata(ctx, namespace, req.WorkitemID)
-	client := flowv1.NewArchivistServiceClient(	c.Conn)
+	client := flowv1.NewArchivistServiceClient(c.Conn)
 	_, err := client.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
 		WorkitemId:       req.WorkitemID,
 		ArtefactId:       req.ArtefactID,

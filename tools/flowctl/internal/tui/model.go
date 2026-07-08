@@ -23,17 +23,17 @@ const (
 
 // Model is the root bubbletea Model for the flowctl TUI.
 type Model struct {
-	cfg        *config.Config
-	k8s        *api.K8sClient
-	pfm        api.PortForwarder
-	width      int
-	height     int
-	screen     Screen
-	err        error
-	Program    *tea.Program // exported so main.go can set it after tea.NewProgram
-	ctx        context.Context
-	namespace  string // resolved after namespace selection
-	systemNS   string // resolved after namespace selection
+	cfg       *config.Config
+	k8s       *api.K8sClient
+	pfm       api.PortForwarder
+	width     int
+	height    int
+	screen    Screen
+	err       error
+	Program   *tea.Program // exported so main.go can set it after tea.NewProgram
+	ctx       context.Context
+	namespace string // resolved after namespace selection
+	systemNS  string // resolved after namespace selection
 
 	// Archivist client (created on Workitem detail entry)
 	archivist *api.ArchivistClient
@@ -51,10 +51,10 @@ type Model struct {
 
 	// Create wizard data — populated by loadWizardData for contract-based artefact filtering
 	wizardEntryContracts map[string]interface{} // entry contract name -> governed artefact keys
-	wizardNodeEntryMap  map[string]string       // node name -> entry contract name
+	wizardNodeEntryMap   map[string]string      // node name -> entry contract name
 
 	// HITL lifecycle manager (created on Init with cfg.HitlPort)
-	hitlState   *components.HitlState
+	hitlState *components.HitlState
 
 	// Status message displayed in the detail view status bar
 	statusMessage string
@@ -63,7 +63,11 @@ type Model struct {
 
 	// Delete confirmation state
 	deleteConfirmWorkitem string // name of workitem pending delete confirmation; "" if none
-	deleteConfirmPhase   string // phase of workitem pending confirmation
+	deleteConfirmPhase    string // phase of workitem pending confirmation
+
+	// Create retry state — tracks whether CRD and artefact were already created
+	createHasCRD      bool
+	createHasArtefact bool
 
 	// Sub-states for each screen
 	namespaceSelector components.NamespaceSelectorModel
@@ -147,7 +151,7 @@ func (m *Model) Init() tea.Cmd {
 			}
 		}
 		m.systemNS = sysNS
-		return m.loadWorkitems()
+		return tea.Batch(m.loadWorkitems(), m.connectArchivist())
 	}
 	return func() tea.Msg {
 		return m.loadNamespaces()

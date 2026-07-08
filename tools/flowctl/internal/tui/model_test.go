@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -90,7 +91,7 @@ func TestErrorStateRendering(t *testing.T) {
 	m := initialModel()
 
 	// Test error state view
-	m.err = errCreateNeedsRetry
+	m.err = fmt.Errorf("retry create error")
 	v := m.View()
 	if !containsAny(v, "retry") {
 		t.Error("expected error text in error view, got:", v)

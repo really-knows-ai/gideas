@@ -12,8 +12,8 @@ import (
 	"github.com/gideas/flow/tools/flowctl/internal/tui/styles"
 )
 
-// ageString converts time.Duration to a human-readable string like "5m", "2h", "3d".
-func ageString(d time.Duration) string {
+// AgeString converts time.Duration to a human-readable string like "5m", "2h", "3d".
+func AgeString(d time.Duration) string {
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
@@ -100,7 +100,7 @@ func (m WorkitemListModel) View() string {
 		state := stateStyle.Render(item.State)
 		node := nodeStyle.Render(nodeStr)
 		children := fmt.Sprintf("%d", item.ChildrenCount)
-		age := ageString(item.Age)
+		age := AgeString(item.Age)
 
 		line := fmt.Sprintf("%s%-*s  %-*s  %-*s  %-*s  %s",
 			cursor,

@@ -18,12 +18,14 @@ import (
 
 // HitlPromptModel is the model for the HITL action prompt.
 type HitlPromptModel struct {
-	Visible    bool   // true when a queue item exists
-	QueueItemID string
-	Choices    []types.Choice // populated from /choices or defaults
-	Loading    bool   // true while probing or deciding
-	Error      string
-	ErrorRetry bool   // true if retry is possible
+	Visible        bool // true when a queue item exists
+	QueueItemID    string
+	Choices        []types.Choice // populated from /choices or defaults
+	Loading        bool           // true while probing or deciding
+	Error          string
+	ErrorRetry     bool // true if retry is possible
+	ChoicesLoaded  bool // true after /choices returned 200, even if empty
+	DefaultChoices bool // true when using the built-in approve/cancel fallback
 
 	// Cancel confirmation
 	ConfirmingCancel bool   // true when user pressed a cancel-type choice
@@ -90,7 +92,8 @@ func (m HitlPromptModel) View() string {
 
 	// Ready: show choices
 	choices := m.Choices
-	if len(choices) == 0 {
+	usingDefault := m.DefaultChoices || !m.ChoicesLoaded
+	if len(choices) == 0 && usingDefault {
 		choices = defaultChoices
 	}
 
@@ -104,7 +107,9 @@ func (m HitlPromptModel) View() string {
 			b.WriteString(fmt.Sprintf("[%s]%s", strings.ToLower(key), ch.Label[1:]))
 		}
 	}
-	b.WriteString("  [R]elease")
+	if !usingDefault {
+		b.WriteString("  [R]elease")
+	}
 
 	return b.String()
 }
@@ -137,11 +142,13 @@ func (m HitlPromptModel) Update(msg tea.Msg) (HitlPromptModel, tea.Cmd) {
 
 // HitlProbeResultMsg is sent when a HITL queue probe succeeds with a match.
 type HitlProbeResultMsg struct {
-	WorkitemID string
-	NodeName   string
-	QueueItem  *api.QueueItem
-	Choices    []api.Choice
-	HasCancel  bool
+	WorkitemID     string
+	NodeName       string
+	QueueItem      *api.QueueItem
+	Choices        []api.Choice
+	HasCancel      bool
+	ChoicesLoaded  bool
+	DefaultChoices bool
 }
 
 // HitlProbeRetryMsg is returned by the Probe cmd when all pods returned
@@ -165,20 +172,19 @@ type HitlChoicesBlockedMsg struct {
 // HitlState tracks the HITL interaction lifecycle.
 // It manages probe retries, port-forwards, and the HITL client session.
 type HitlState struct {
-	active        bool             // true when a queue item has been found
-	hitlBlocked   bool             // true when /choices returned 5xx
+	active        bool // true when a queue item has been found
 	queueItem     *api.QueueItem
 	choices       []api.Choice
 	hasCancel     bool
 	hitlClient    *api.HitlClient
-	forwardID     string           // port-forward ID for cleanup
+	forwardID     string // port-forward ID for cleanup
 	nodeName      string
 	workitemID    string
-	pendingChoice string           // stored for retry handlers
+	pendingChoice string // stored for retry handlers
 
 	// Probe retry state
 	probeAttempts int
-	probeMax      int              // 5 total
+	probeMax      int // 5 total
 	exhausted     bool
 
 	// Non-default port tracking for debug hint
@@ -274,6 +280,7 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 				// 5xx or transport error — block HITL interaction
 				return HitlChoicesBlockedMsg{Err: err}
 			}
+			defaultChoiceSet := false
 			if choices != nil {
 				h.choices = choices.Choices
 				h.hasCancel = choices.HasCancel
@@ -281,14 +288,17 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 				// 404 — use defaults
 				h.choices = DefaultAPIChoices()
 				h.hasCancel = true
+				defaultChoiceSet = true
 			}
 
 			return HitlProbeResultMsg{
-				WorkitemID: workitemID,
-				NodeName:   nodeName,
-				QueueItem:  qi,
-				Choices:    h.choices,
-				HasCancel:  h.hasCancel,
+				WorkitemID:     workitemID,
+				NodeName:       nodeName,
+				QueueItem:      qi,
+				Choices:        h.choices,
+				HasCancel:      h.hasCancel,
+				ChoicesLoaded:  choices != nil,
+				DefaultChoices: defaultChoiceSet,
 			}
 		}
 
@@ -396,15 +406,6 @@ func (h *HitlState) Exhausted() bool { return h.exhausted }
 
 // Active returns true when a queue item has been found and HITL is active.
 func (h *HitlState) Active() bool { return h.active }
-
-// SetActive sets the active state.
-func (h *HitlState) SetActive(v bool) { h.active = v }
-
-// Blocked returns true when /choices blocked HITL interaction.
-func (h *HitlState) Blocked() bool { return h.hitlBlocked }
-
-// SetBlocked sets the blocked state.
-func (h *HitlState) SetBlocked(v bool) { h.hitlBlocked = v }
 
 // GetNodeName returns the current node name being probed.
 func (h *HitlState) GetNodeName() string { return h.nodeName }

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,15 +19,6 @@ import (
 	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
 )
-
-// Retryable error sentinel for create wizard retry.
-var errCreateNeedsRetry = fmt.Errorf("retry create")
-
-// defaultChoices for the HITL prompt, used by fakeHitlProbe and HitlProbeResultMsg.
-var defaultChoices = []types.Choice{
-	{Value: "approve", Label: "Approve", Type: "route"},
-	{Value: "cancel", Label: "Cancel", Type: "cancel"},
-}
 
 // ─── Type Conversion Helpers ────────────────────────────────────────────────
 
@@ -178,14 +170,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !result.Success {
 					m.logIfEnabled("ERROR", "delete", fmt.Sprintf("cascade failed for %s: %s", name, result.Error))
 					if len(result.Failed) > 0 {
-						failedIDs := make([]string, len(result.Failed))
-						for i, f := range result.Failed {
-							failedIDs[i] = f.WorkitemID
-						}
 						return DeleteResultMsg{
 							WorkitemName:    name,
 							Err:             errors.New(result.Error),
-							FailedChildren:  failedIDs,
+							FailedChildren:  result.Failed,
 							DeletedChildren: result.Deleted,
 						}
 					}
@@ -256,6 +244,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == ScreenWorkitemDetail && (msg.Source == "archivist-forward" || msg.Source == "archivist-list") {
 			m.workitemDetail.artefacts.Loading = false
 			m.workitemDetail.artefacts.Error = msg.Message
+			m.banner = msg.Message
+			m.bannerSource = msg.Source
+			m.logIfEnabled("ERROR", msg.Source, msg.Message)
+			return m, nil
 		}
 		m.err = fmt.Errorf("%s: %s", msg.Source, msg.Message)
 		m.logIfEnabled("ERROR", msg.Source, msg.Message)
@@ -326,14 +318,21 @@ func (m *Model) loadNamespaces() tea.Msg {
 	}
 	namespaces, err := m.k8s.ListNamespaces(m.ctx)
 	if err != nil {
-		fallback := api.GetCurrentContextNamespace()
-		if m.cfg.NamespaceExplicit {
-			fallback = m.cfg.Namespace
-		} else if fallback == "" {
-			fallback = "default"
+		// Distinguish RBAC denial (403) from transient API/server errors.
+		// Only RBAC denial should auto-fallback to the current context namespace;
+		// transient errors (network, timeout, 5xx) are fatal and should be surfaced.
+		if api.IsForbiddenError(err) {
+			fallback := api.GetCurrentContextNamespace()
+			if m.cfg.NamespaceExplicit {
+				fallback = m.cfg.Namespace
+			} else if fallback == "" {
+				fallback = "default"
+			}
+			m.logIfEnabled("WARN", "namespace", fmt.Sprintf("namespace list denied by RBAC; falling back to %s", fallback))
+			return NamespaceFallbackMsg{Namespace: fallback, Error: err}
 		}
-		m.logIfEnabled("WARN", "namespace", fmt.Sprintf("failed to list namespaces: %v; falling back to %s", err, fallback))
-		return NamespaceFallbackMsg{Namespace: fallback, Error: err}
+		m.logIfEnabled("ERROR", "namespace", fmt.Sprintf("namespace list failed: %v", err))
+		return NamespaceFallbackMsg{Namespace: "", Error: err, IsFatal: true}
 	}
 	return NamespaceListLoadedMsg{Namespaces: namespaces}
 }
@@ -418,11 +417,8 @@ func (m *Model) handleWatchEvent(event watch.Event) {
 
 // debouncedChildCountRefresh resets a 200ms debounce timer and returns a Cmd
 // that fires when the timer expires.
-// ponytail: The Cmd goroutine reads m.workitemList.Items to get workitem names
-// for child count queries. In practice bubbletea serializes Cmd execution, but
-// concurrent reads while the main loop writes is a data race by Go's definition.
-// The race window is small (200ms debounce) and the impact is negligible
-// (stale child count). Upgrade: pass a workitem name snapshot from the Update handler.
+// The workitem name snapshot is captured at creation time (Update handler main
+// goroutine) to avoid a data race on m.workitemList.Items from the Cmd goroutine.
 func (m *Model) debouncedChildCountRefresh() tea.Cmd {
 	if m.childCountDebounce == nil {
 		m.childCountDebounce = time.NewTimer(200 * time.Millisecond)
@@ -435,14 +431,13 @@ func (m *Model) debouncedChildCountRefresh() tea.Cmd {
 		}
 		m.childCountDebounce.Reset(200 * time.Millisecond)
 	}
+	// Capture a snapshot of workitem names at creation time (main goroutine)
+	names := make([]string, len(m.workitemList.Items))
+	for i, item := range m.workitemList.Items {
+		names[i] = item.Name
+	}
 	return func() tea.Msg {
 		<-m.childCountDebounce.C
-
-		// Build a snapshot of workitem names from the model
-		names := make([]string, len(m.workitemList.Items))
-		for i, item := range m.workitemList.Items {
-			names[i] = item.Name
-		}
 
 		counts := make(map[string]int, len(names))
 		for _, name := range names {
@@ -463,6 +458,7 @@ func (m *Model) debouncedChildCountRefresh() tea.Cmd {
 // It updates the workitem list and, when on the detail screen, detects NODE
 // changes to trigger HITL probe restart.
 func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
+	var cmds []tea.Cmd
 	// Update the list
 	switch msg.Event {
 	case watch.Added:
@@ -472,6 +468,9 @@ func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
 			if item.Name == msg.Item.Name {
 				// Detect NODE change for HITL probe restart on detail screen
 				if m.screen == ScreenWorkitemDetail && m.workitemDetail.workitemName == item.Name {
+					if m.workitemDetail.detail != nil {
+						m.workitemDetail.detail.WorkitemSummary = msg.Item
+					}
 					if item.Node != msg.Item.Node && m.hitlState != nil {
 						// NODE changed — close HITL and start new probe cycle
 						m.hitlState.Close(m.pfm)
@@ -479,16 +478,10 @@ func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
 						m.workitemDetail.hitl.Visible = false
 						if m.k8s != nil && msg.Item.Node != "" && msg.Item.Node != "-" {
 							m.workitemList.Items[i] = msg.Item
-							return tea.Batch(
-								m.debouncedChildCountRefresh(),
-								m.RefreshArtefacts(),
-								m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
-									msg.Item.Node, msg.Item.Name, m.pfm),
+							cmds = append(cmds,
+								m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace, msg.Item.Node, msg.Item.Name, m.pfm),
 							)
 						}
-						// Update the model with the new node info even if probe can't start
-						m.workitemDetail.workitemName = msg.Item.Name
-						m.workitemDetail.detail.Node = msg.Item.Node
 					}
 				}
 				m.workitemList.Items[i] = msg.Item
@@ -498,10 +491,12 @@ func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
 	}
 	// Refresh artefacts when on the detail screen for the updated workitem
 	if m.screen == ScreenWorkitemDetail && m.workitemDetail.workitemName == msg.Item.Name {
-		return tea.Batch(
+		cmds = append(cmds,
 			m.debouncedChildCountRefresh(),
+			m.loadWorkitemDetail(msg.Item.Name),
 			m.RefreshArtefacts(),
 		)
+		return tea.Batch(cmds...)
 	}
 	return m.debouncedChildCountRefresh()
 }
@@ -512,10 +507,37 @@ func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
 func (m *Model) updateNamespaceSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case NamespaceListLoadedMsg:
+		if len(msg.Namespaces) == 0 {
+			// Zero namespaces — fall back to current context namespace like a denied listing
+			fallback := api.GetCurrentContextNamespace()
+			if fallback == "" {
+				fallback = "default"
+			}
+			sysNS := fallback
+			if m.k8s != nil {
+				var err error
+				sysNS, err = m.k8s.ResolveSystemNamespace(m.ctx, m.cfg.SystemNamespace, fallback)
+				if err != nil {
+					sysNS = fallback
+				}
+			}
+			m.systemNS = sysNS
+			m.namespace = fallback
+			m.workitemList.Namespace = fallback
+			m.screen = ScreenWorkitemList
+			m.logIfEnabled("WARN", "namespace", "zero namespaces found; falling back to "+fallback)
+			return m, tea.Batch(m.loadWorkitems(), m.connectArchivist())
+		}
 		m.namespaceSelector = m.namespaceSelector.SetNamespaces(msg.Namespaces, api.GetCurrentContextNamespace())
 		m.err = nil
 
 	case NamespaceFallbackMsg:
+		if msg.IsFatal {
+			// Transient API/server error — surface to user instead of silent fallback
+			m.logIfEnabled("ERROR", "namespace", fmt.Sprintf("namespace list failed: %v", msg.Error))
+			m.err = msg.Error
+			return m, nil
+		}
 		// Resolve system namespace for subsequent Archivist port-forward
 		sysNS := msg.Namespace
 		if m.k8s != nil {
@@ -528,7 +550,7 @@ func (m *Model) updateNamespaceSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.systemNS = sysNS
 		// Log the fallback reason
 		if msg.Error != nil {
-			m.logIfEnabled("WARN", "namespace", fmt.Sprintf("namespace list failed: %v; falling back to %s", msg.Error, msg.Namespace))
+			m.logIfEnabled("WARN", "namespace", fmt.Sprintf("namespace list denied; falling back to %s", msg.Namespace))
 		}
 		// Auto-select fallback namespace and skip the selector entirely
 		m.namespace = msg.Namespace
@@ -628,6 +650,8 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createWizard = components.NewCreateWizard()
 		m.createWizard.Loading = true
 		m.screen = ScreenCreateWizard
+		m.createHasCRD = false
+		m.createHasArtefact = false
 		return m, m.loadWizardData()
 
 	case DeleteConfirmMsg:
@@ -648,7 +672,11 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DeleteResultMsg:
 		if msg.Err != nil {
-			m.err = fmt.Errorf("delete failed: %s (failed children: %v)", msg.Err, msg.FailedChildren)
+			failed := make([]string, 0, len(msg.FailedChildren))
+			for _, child := range msg.FailedChildren {
+				failed = append(failed, fmt.Sprintf("%s: %s", child.WorkitemID, child.Error))
+			}
+			m.err = fmt.Errorf("delete failed: %s (failed children: %s)", msg.Err, strings.Join(failed, "; "))
 			m.logIfEnabled("ERROR", "delete", m.err.Error())
 		} else {
 			// Success — show brief message
@@ -692,7 +720,7 @@ func (m *Model) connectArchivist() tea.Cmd {
 			ctx = context.Background()
 		}
 
-		archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
+		archivistPod, found, err := m.pfm.FindReadyPod(ctx, m.systemNS, "app.kubernetes.io/name=flow-archivist")
 		if err != nil {
 			m.logIfEnabled("WARN", "archivist", fmt.Sprintf("find archivist pod: %v", err))
 			return nil
@@ -737,7 +765,7 @@ func (m *Model) loadArtefacts(workitemID string) tea.Cmd {
 
 		// Connect lazily if eager connect after namespace resolution did not run or failed
 		if m.archivist == nil {
-			archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
+			archivistPod, found, err := m.pfm.FindReadyPod(ctx, m.systemNS, "app.kubernetes.io/name=flow-archivist")
 			if err != nil {
 				m.logIfEnabled("ERROR", "archivist", fmt.Sprintf("find archivist pod: %v", err))
 				return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("find archivist pod: %v", err)}
@@ -869,6 +897,9 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				nodes[i].Expanded = true
 			}
 		}
+		sort.Slice(nodes, func(i, j int) bool {
+			return nodes[i].ArtefactID < nodes[j].ArtefactID
+		})
 		m.workitemDetail.artefacts.Artefacts = nodes
 		m.workitemDetail.artefacts.Loading = false
 		m.errorBanner = ""
@@ -970,6 +1001,8 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workitemDetail.hitl.Visible = true
 		m.workitemDetail.hitl.QueueItemID = msg.WorkitemID
 		m.workitemDetail.hitl.Choices = toChoices(msg.Choices)
+		m.workitemDetail.hitl.ChoicesLoaded = msg.ChoicesLoaded
+		m.workitemDetail.hitl.DefaultChoices = msg.DefaultChoices
 		m.workitemDetail.hitl.Loading = false
 		m.statusMessage = ""
 
@@ -985,6 +1018,7 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.hitlState.Close(m.pfm)
 		}
 		m.statusMessage = msg.Diagnostic
+		m.logIfEnabled("ERROR", "hitl", fmt.Sprintf("probe exhausted for %s/%s: %s", msg.NodeName, msg.WorkitemID, msg.Diagnostic))
 
 	case components.HitlChoicesBlockedMsg:
 		if m.hitlState != nil {
@@ -1043,7 +1077,8 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workitemDetail.hitl.Error = msg.Err.Error()
 			m.workitemDetail.hitl.ErrorRetry = msg.Retryable
 		}
-		// Handle specific error codes per the spec error table
+		// Handle specific error codes per the spec error table.
+		// When Retryable is false, skip retry-triggering errors to avoid cycling.
 		if msg.Err != nil {
 			switch {
 			case api.IsQueueItemNotFound(msg.Err):
@@ -1067,52 +1102,54 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMessage = "Already claimed by another client — press 'r' to retry"
 			case api.IsInvalidState(msg.Err):
 				m.statusMessage = "Item in unexpected state — press 'r' to retry"
-		case api.IsQueueUnavailable(msg.Err):
-			if m.hitlState != nil && m.hitlState.GetPendingChoice() != "" {
-				m.statusMessage = "Queue unavailable — retrying..."
-				choice := m.hitlState.GetPendingChoice()
-				return m, func() tea.Msg {
-					err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
-						return m.hitlState.ClaimAndDecide(ctx, choice)
-					})
-					if err != nil {
-						return HitlErrorMsg{
+			case api.IsQueueUnavailable(msg.Err) && msg.Retryable:
+				if m.hitlState != nil && m.hitlState.GetPendingChoice() != "" {
+					m.statusMessage = "Queue unavailable — retrying..."
+					choice := m.hitlState.GetPendingChoice()
+					return m, func() tea.Msg {
+						err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
+							return m.hitlState.ClaimAndDecide(ctx, choice)
+						})
+						if err != nil {
+							return HitlErrorMsg{
+								WorkitemID: m.selectedWorkitemName(),
+								Err:        err,
+								Retryable:  false,
+							}
+						}
+						return HitlDecidedMsg{
 							WorkitemID: m.selectedWorkitemName(),
-							Err:        err,
-							Retryable:  false,
+							Choice:     choice,
 						}
 					}
-					return HitlDecidedMsg{
-						WorkitemID: m.selectedWorkitemName(),
-						Choice:     choice,
-					}
-				}
-			} else if m.hitlState != nil {
-				m.statusMessage = "Queue unavailable — retrying release..."
-				return m, func() tea.Msg {
-					err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
-						return m.hitlState.ReleaseClaim(ctx)
-					})
-					if err != nil {
-						return HitlErrorMsg{
+				} else if m.hitlState != nil {
+					m.statusMessage = "Queue unavailable — retrying release..."
+					return m, func() tea.Msg {
+						err := m.hitlState.RetryQueueUnavailable(m.ctx, func(ctx context.Context) error {
+							return m.hitlState.ReleaseClaim(ctx)
+						})
+						if err != nil {
+							return HitlErrorMsg{
+								WorkitemID: m.selectedWorkitemName(),
+								Err:        err,
+								Retryable:  false,
+							}
+						}
+						return HitlReleasedMsg{
 							WorkitemID: m.selectedWorkitemName(),
-							Err:        err,
-							Retryable:  false,
 						}
 					}
-					return HitlReleasedMsg{
-						WorkitemID: m.selectedWorkitemName(),
-					}
+				} else {
+					m.statusMessage = "Queue unavailable"
+					m.workitemDetail.hitl.Visible = true
+					m.workitemDetail.hitl.Error = "Queue unavailable"
+					m.workitemDetail.hitl.ErrorRetry = true
 				}
-			} else {
-				m.statusMessage = "Queue unavailable"
-				m.workitemDetail.hitl.Visible = true
-				m.workitemDetail.hitl.Error = "Queue unavailable"
-				m.workitemDetail.hitl.ErrorRetry = true
-			}
 			case api.IsBadRequest(msg.Err):
 				m.workitemDetail.hitl.Visible = true
-				m.workitemDetail.hitl.Error = fmt.Sprintf("Invalid request: %s", msg.Err)
+				// Strip the "BAD_REQUEST: " prefix to show only the server message
+				errStr := strings.TrimPrefix(msg.Err.Error(), "BAD_REQUEST: ")
+				m.workitemDetail.hitl.Error = fmt.Sprintf("Invalid request: %s", errStr)
 				m.workitemDetail.hitl.ErrorRetry = true
 			default:
 				m.workitemDetail.hitl.Visible = true
@@ -1151,6 +1188,8 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createWizard = components.NewCreateWizard()
 		m.createWizard.Loading = true
 		m.screen = ScreenCreateWizard
+		m.createHasCRD = false
+		m.createHasArtefact = false
 		return m, m.loadWizardData()
 
 	case ErrorMsg:
@@ -1161,6 +1200,21 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
 			return ClearErrorBannerMsg{}
 		})
+
+	case WorkitemDeletedMsg:
+		if m.screen == ScreenWorkitemDetail && m.workitemDetail.workitemName == msg.Name {
+			// The viewed workitem was deleted — clear detail and return to list
+			m.workitemDetail = WorkitemDetailModel{
+				statusBar: components.NewStatusBar(),
+				topology:  components.NewFlowTopology(),
+				artefacts: components.NewArtefactTree(),
+				hitl:      components.NewHitlPrompt(),
+			}
+			m.screen = ScreenWorkitemList
+			m.banner = fmt.Sprintf("Workitem %s was deleted", msg.Name)
+			m.bannerSource = "watch"
+			m.logIfEnabled("INFO", "watch", fmt.Sprintf("workitem %s deleted while viewing detail", msg.Name))
+		}
 
 	case ClearErrorBannerMsg:
 		m.errorBanner = ""
@@ -1387,6 +1441,8 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createWizard.SuccessName = msg.WorkitemName
 		m.createWizard.Stage = components.StageComplete
 		m.createWizard.Loading = false
+		m.createHasCRD = false
+		m.createHasArtefact = false
 		// Populate with real topology data
 		topoCmd := m.loadTopology()
 		arCmd := m.loadArtefacts(msg.WorkitemName)
@@ -1405,6 +1461,8 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createWizard.Stage = components.StageError
 		m.createWizard.Error = msg.Err.Error()
 		m.createWizard.Retryable = msg.Retry
+		m.createHasCRD = msg.HasCRD
+		m.createHasArtefact = msg.HasArtefact
 		m.logIfEnabled("ERROR", "create", fmt.Sprintf("create failed: %v", msg.Err))
 
 	case CreateCancelMsg:
@@ -1412,6 +1470,8 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createWizard = components.NewCreateWizard()
 		m.screen = ScreenWorkitemList
 		m.err = nil
+		m.createHasCRD = false
+		m.createHasArtefact = false
 	}
 	return m, nil
 }
@@ -1429,42 +1489,60 @@ func (m *Model) updateWorkitemListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Snapshot the pre-toggle expanded state for the cursor artefact before
+	// the component update toggles it. The root handler below needs to know
+	// whether the row *was* collapsed (to fetch content) or expanded (to just
+	// collapse via the component), but by the time it checks, the component
+	// has already flipped the flag.
+	var wasExpanded bool
+	cursor := m.workitemDetail.artefacts.Cursor
+	if cursor >= 0 && cursor < len(m.workitemDetail.artefacts.Artefacts) {
+		wasExpanded = m.workitemDetail.artefacts.Artefacts[cursor].Expanded
+	}
+
 	m.workitemDetail.artefacts, _ = m.workitemDetail.artefacts.Update(msg)
 
-	// HITL action keys — only when HITL is active and not confirming cancel
-	if m.hitlState != nil && m.hitlState.Active() && m.workitemDetail.hitl.Visible && !m.workitemDetail.hitl.ConfirmingCancel {
-		key := msg.String()
+	if m.workitemDetail.hitl.Visible && m.workitemDetail.hitl.ErrorRetry && msg.String() == "r" {
+		wasChoicesError := strings.Contains(m.workitemDetail.hitl.Error, "choices")
+		m.workitemDetail.hitl.Error = ""
+		m.workitemDetail.hitl.ErrorRetry = false
+		m.workitemDetail.hitl.Loading = true
+		if m.ctx == nil {
+			m.ctx = context.Background()
+		}
+		if m.hitlState != nil && m.k8s != nil && wasChoicesError {
+			return m, m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
+				m.hitlState.GetNodeName(), m.hitlState.GetWorkitemID(), m.pfm)
+		}
+		if m.hitlState != nil && m.hitlState.GetPendingChoice() != "" {
+			choice := m.hitlState.GetPendingChoice()
+			return m, func() tea.Msg {
+				if err := m.hitlState.ClaimAndDecide(m.ctx, choice); err != nil {
+					return HitlErrorMsg{WorkitemID: m.hitlState.GetWorkitemID(), Err: err, Retryable: true}
+				}
+				return HitlDecidedMsg{WorkitemID: m.hitlState.GetWorkitemID(), Choice: choice}
+			}
+		}
+		if m.hitlState != nil {
+			return m, func() tea.Msg {
+				if err := m.hitlState.ReleaseClaim(m.ctx); err != nil {
+					return HitlErrorMsg{WorkitemID: m.hitlState.GetWorkitemID(), Err: err, Retryable: true}
+				}
+				return HitlReleasedMsg{WorkitemID: m.hitlState.GetWorkitemID()}
+			}
+		}
+	}
 
-		// Handle 'r' for retry
-		if key == "r" {
-			m.workitemDetail.hitl.Error = ""
+	// HITL cancel confirmation keys must be handled before the normal action-key
+	// guard, because that path is intentionally disabled while confirming.
+	if m.hitlState != nil && m.hitlState.Active() && m.workitemDetail.hitl.Visible && m.workitemDetail.hitl.ConfirmingCancel {
+		key := msg.String()
+		if key == "n" {
+			m.workitemDetail.hitl.ConfirmingCancel = false
+			m.workitemDetail.hitl.PendingChoice = ""
 			return m, nil
 		}
-
-		// Handle 'R' (shift+r) for release — abandon the claim
-		if key == "R" {
-			m.workitemDetail.hitl.Loading = true
-			if m.ctx == nil {
-				m.ctx = context.Background()
-			}
-			return m, func() tea.Msg {
-				err := m.hitlState.ReleaseClaim(m.ctx)
-				if err != nil {
-					return HitlErrorMsg{
-						WorkitemID: m.hitlState.GetWorkitemID(),
-						Err:        err,
-						Retryable:  api.IsQueueUnavailable(err) || api.IsInvalidState(err),
-					}
-				}
-				return HitlReleasedMsg{
-					WorkitemID: m.hitlState.GetWorkitemID(),
-				}
-			}
-		}
-
-		// Handle 'y'/'n' for cancel confirmation (handled by component Update too)
-		if key == "y" && m.workitemDetail.hitl.ConfirmingCancel {
-			// Confirm cancel — claim and decide with the pending choice
+		if key == "y" {
 			pendingChoice := m.workitemDetail.hitl.PendingChoice
 			m.workitemDetail.hitl.ConfirmingCancel = false
 			m.workitemDetail.hitl.PendingChoice = ""
@@ -1478,7 +1556,7 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return HitlErrorMsg{
 						WorkitemID: m.hitlState.GetWorkitemID(),
 						Err:        err,
-						Retryable:  api.IsQueueUnavailable(err) || api.IsAlreadyClaimed(err) || api.IsInvalidState(err),
+						Retryable:  true,
 					}
 				}
 				return HitlDecidedMsg{
@@ -1487,12 +1565,44 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		return m, nil
+	}
+
+	// HITL action keys — only when HITL is active and not confirming cancel
+	if m.hitlState != nil && m.hitlState.Active() && m.workitemDetail.hitl.Visible && !m.workitemDetail.hitl.ConfirmingCancel {
+		key := msg.String()
+
+		// Handle 'r' to clear error — only when there's an error to clear;
+		// otherwise fall through to dynamic choice matching.
+		if key == "r" && m.workitemDetail.hitl.Error != "" {
+			m.workitemDetail.hitl.Error = ""
+			return m, nil
+		}
+
+		// Handle 'R' (shift+r) for release — abandon the claim.
+		// Only active when using dynamic choices (not default approve/cancel).
+		if key == "R" && !m.workitemDetail.hitl.DefaultChoices {
+			m.workitemDetail.hitl.Loading = true
+			if m.ctx == nil {
+				m.ctx = context.Background()
+			}
+			return m, func() tea.Msg {
+				err := m.hitlState.ReleaseClaim(m.ctx)
+				if err != nil {
+					return HitlErrorMsg{
+						WorkitemID: m.hitlState.GetWorkitemID(),
+						Err:        err,
+						Retryable:  true,
+					}
+				}
+				return HitlReleasedMsg{
+					WorkitemID: m.hitlState.GetWorkitemID(),
+				}
+			}
+		}
 
 		// Match choice keys: first letter of each choice label
 		choices := m.workitemDetail.hitl.Choices
-		if len(choices) == 0 {
-			choices = defaultChoices
-		}
 		for _, ch := range choices {
 			if len(ch.Label) == 0 {
 				continue
@@ -1516,7 +1626,7 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						return HitlErrorMsg{
 							WorkitemID: m.hitlState.GetWorkitemID(),
 							Err:        err,
-							Retryable:  api.IsQueueUnavailable(err) || api.IsAlreadyClaimed(err) || api.IsInvalidState(err),
+							Retryable:  true,
 						}
 					}
 					return HitlDecidedMsg{
@@ -1539,11 +1649,11 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		art := artefacts.Artefacts[cursor]
-		if art.Expanded {
-			// Already expanded — collapse handled by component; no network call needed
+		if wasExpanded {
+			// Was expanded — collapse handled by component; no network call needed
 			return m, nil
 		}
-		// Expanded — fetch content and feedback
+		// Was collapsed — fetch content and feedback
 		workitemID := m.workitemDetail.workitemName
 		if workitemID != "" && m.archivist != nil {
 			return m, m.fetchArtefactContent(workitemID, art.ArtefactID)
@@ -1565,6 +1675,14 @@ func (m *Model) updateCreateWizardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	selectedNode := m.createWizard.SelectedEntryNode()
 
 	m.createWizard, _ = m.createWizard.Update(msg)
+
+	// Step 4 (confirmation): enter triggers creation
+	if key == "enter" && m.createWizard.Step == 4 && !wasError {
+		// Advance stage to StageIdle first (component keeps stage at StageIdle after tabbing through)
+		return m, func() tea.Msg {
+			return CreateConfirmMsg{}
+		}
+	}
 
 	// If we advanced from step 1 (entry node selection) to step 2, set the
 	// entry node field and filter governed artefacts based on the selected
@@ -1595,71 +1713,94 @@ func (m *Model) updateCreateWizardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // executeCreate performs the full create flow: CRD create -> StoreArtefact -> status update.
 // It runs as a goroutine command, returning CreateSuccessMsg or CreateErrorMsg.
+// On retry (createHasCRD/createHasArtefact), steps 1-3 are skipped.
 func (m *Model) executeCreate(ctx context.Context, selectedNode, promptText, artefactID, governedArtefact string) tea.Msg {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// 1. Generate workitem name
-	artefactID = sanitizeName(artefactID)
-	timestamp := time.Now().Unix()
-	randomBytes := make([]byte, 4)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return CreateErrorMsg{Err: fmt.Errorf("generate random name: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
-	}
-	name := fmt.Sprintf("%s-%d-%x", artefactID, timestamp, randomBytes)
-	m.logIfEnabled("INFO", "create", fmt.Sprintf("generated name: %s", name))
+	// Pre-declare for possible retry within the CRD creation loop
+	var timestamp int64
+	var randomBytes []byte
 
-	// 2. Create Workitem CRD — retry up to 3 times if "already exists"
-	labels := map[string]string{
-		"flow.gideas.io/creator": "flowctl",
+	// 1. Use existing workitem name on retry, or generate a new one
+	var name string
+	if m.createHasCRD {
+		name = m.createWizard.WorkitemID
+		m.logIfEnabled("INFO", "create", fmt.Sprintf("retrying with existing CRD: %s", name))
+	} else {
+		artefactID = sanitizeName(artefactID)
+		timestamp = time.Now().Unix()
+		randomBytes = make([]byte, 4)
+		if _, err := rand.Read(randomBytes); err != nil {
+			return CreateErrorMsg{Err: fmt.Errorf("generate random name: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
+		}
+		name = fmt.Sprintf("%s-%d-%x", artefactID, timestamp, randomBytes)
+		m.logIfEnabled("INFO", "create", fmt.Sprintf("generated name: %s", name))
 	}
-	var crdErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		crdErr = m.k8s.CreateWorkitem(ctx, m.namespace, name, labels)
-		if crdErr == nil {
+
+	// 2. Create Workitem CRD — skip if already created on a prior attempt
+	if !m.createHasCRD {
+		labels := map[string]string{
+			"flow.gideas.io/creator": "flowctl",
+		}
+		var crdErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			crdErr = m.k8s.CreateWorkitem(ctx, m.namespace, name, labels)
+			if crdErr == nil {
+				break
+			}
+			// If already exists, regenerate name and retry
+			if strings.Contains(crdErr.Error(), "already exists") {
+				timestamp = time.Now().Unix()
+				randomBytes = make([]byte, 4)
+				if _, err := rand.Read(randomBytes); err != nil {
+					return CreateErrorMsg{Err: fmt.Errorf("generate name: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
+				}
+				name = fmt.Sprintf("%s-%d-%x", artefactID, timestamp, randomBytes)
+				continue
+			}
+			// Non-conflict error — fail
 			break
 		}
-		// If already exists, regenerate name and retry
-		if strings.Contains(crdErr.Error(), "already exists") {
-			timestamp = time.Now().Unix()
-			if _, err := rand.Read(randomBytes); err != nil {
-				return CreateErrorMsg{Err: fmt.Errorf("generate name: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
-			}
-			name = fmt.Sprintf("%s-%d-%x", artefactID, timestamp, randomBytes)
-			continue
+		if crdErr != nil {
+			m.logIfEnabled("ERROR", "create", fmt.Sprintf("create CRD failed: %v", crdErr))
+			return CreateErrorMsg{Err: fmt.Errorf("create CRD: %w", crdErr), Retry: true, HasCRD: false, HasArtefact: false}
 		}
-		// Non-conflict error — fail
-		break
+		m.createWizard.WorkitemID = name
+		m.logIfEnabled("INFO", "create", fmt.Sprintf("CRD created: %s", name))
 	}
-	if crdErr != nil {
-		m.logIfEnabled("ERROR", "create", fmt.Sprintf("create CRD failed: %v", crdErr))
-		return CreateErrorMsg{Err: fmt.Errorf("create CRD: %w", crdErr), Retry: true, HasCRD: false, HasArtefact: false}
-	}
-	m.createWizard.WorkitemID = name
-	m.logIfEnabled("INFO", "create", fmt.Sprintf("CRD created: %s", name))
 
-	// 3. Compute SHA-256 and store artefact
-	m.createWizard.Stage = components.StageStoringArtefact
-	contentHash := api.ComputeSHA256([]byte(promptText))
-	storeReq := api.StoreArtefactRequest{
-		WorkitemID:       name,
-		ArtefactID:       artefactID,
-		GovernedArtefact: governedArtefact,
-		Content:          []byte(promptText),
-		ContentHash:      contentHash,
-	}
-	if m.archivist != nil {
+	// 3. Compute SHA-256 and store artefact — skip if already stored
+	if !m.createHasArtefact {
+		m.createWizard.Stage = components.StageStoringArtefact
+		contentHash := api.ComputeSHA256([]byte(promptText))
+		storeReq := api.StoreArtefactRequest{
+			WorkitemID:       name,
+			ArtefactID:       artefactID,
+			GovernedArtefact: governedArtefact,
+			Content:          []byte(promptText),
+			ContentHash:      contentHash,
+		}
+		if m.archivist == nil {
+			err := fmt.Errorf("store artefact: Archivist client unavailable")
+			m.logIfEnabled("ERROR", "create", err.Error())
+			if !m.createHasCRD {
+				if delErr := m.k8s.DeleteWorkitem(ctx, m.namespace, name); delErr != nil {
+					m.logIfEnabled("WARN", "create", fmt.Sprintf("cleanup delete failed for %s: %v", name, delErr))
+				}
+			}
+			return CreateErrorMsg{Err: err, Retry: true, HasCRD: m.createHasCRD, HasArtefact: false}
+		}
 		if err := m.archivist.StoreArtefact(ctx, m.namespace, storeReq); err != nil {
 			m.logIfEnabled("ERROR", "create", fmt.Sprintf("StoreArtefact failed: %v", err))
-			// StoreArtefact failed — delete the inert Workitem CRD
-			if delErr := m.k8s.DeleteWorkitem(ctx, m.namespace, name); delErr != nil {
-				m.logIfEnabled("WARN", "create", fmt.Sprintf("cleanup delete failed for %s: %v", name, delErr))
+			if !m.createHasCRD {
+				if delErr := m.k8s.DeleteWorkitem(ctx, m.namespace, name); delErr != nil {
+					m.logIfEnabled("WARN", "create", fmt.Sprintf("cleanup delete failed for %s: %v", name, delErr))
+				}
 			}
-			return CreateErrorMsg{Err: fmt.Errorf("store artefact: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
+			return CreateErrorMsg{Err: fmt.Errorf("store artefact: %w", err), Retry: true, HasCRD: m.createHasCRD, HasArtefact: false}
 		}
 		m.logIfEnabled("INFO", "create", fmt.Sprintf("artefact stored: %s/%s", name, artefactID))
-	} else {
-		m.logIfEnabled("WARN", "create", "no Archivist client — skipping StoreArtefact")
 	}
 
 	// 4. Update status subresource
@@ -1800,61 +1941,5 @@ func (m *Model) filterArtefactsForNode(nodeName string) {
 		if !stillValid && len(filtered) > 0 {
 			m.createWizard.Fields.GovernedArtefact = filtered[0]
 		}
-	}
-}
-
-// ─── Fake data generators (placeholder — Phase 05+ replaces with real data) ─
-
-func fakeTopology() components.FlowTopologyModel {
-	return components.FlowTopologyModel{
-		Loading: false,
-		Nodes: []types.TopologyNode{
-			{Name: "forge", Color: types.TopologyVisited},
-			{Name: "sort", Color: types.TopologyCurrent},
-			{Name: "human-approval", Color: types.TopologyUnvisited},
-			{Name: "refine", Color: types.TopologyUnvisited},
-		},
-		Edges: []types.TopologyEdge{
-			{From: "forge", To: "sort"},
-			{From: "sort", To: "human-approval"},
-			{From: "sort", To: "refine"},
-			{From: "human-approval", To: "refine"},
-		},
-	}
-}
-
-func fakeArtefacts() components.ArtefactTreeModel {
-	return components.ArtefactTreeModel{
-		Loading: false,
-		Artefacts: []types.ArtefactNode{
-			{
-				ArtefactID: "haiku",
-				GovernedBy: "haiku",
-				Expanded:   false,
-				Content:    "",
-				IsBinary:   false,
-				Feedback: []types.FeedbackItem{
-					{ID: "fb-1", State: "NEW", SourceNode: "reviewer", Message: "missing seasonal reference", Timestamp: "2024-01-01T00:00:01Z"},
-					{ID: "fb-2", State: "RESOLVED", SourceNode: "sort", Message: "syllable count fixed", Timestamp: "2024-01-01T00:00:02Z"},
-				},
-			},
-			{
-				ArtefactID: "petition",
-				GovernedBy: "petition",
-				Expanded:   false,
-				Content:    "",
-				IsBinary:   false,
-				Feedback:   nil,
-			},
-		},
-	}
-}
-
-func fakeHitlProbe(name string) components.HitlPromptModel {
-	return components.HitlPromptModel{
-		Visible:     true,
-		QueueItemID: name,
-		Choices:     defaultChoices,
-		Loading:     false,
 	}
 }

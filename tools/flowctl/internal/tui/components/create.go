@@ -12,22 +12,22 @@ import (
 type CreateStage int
 
 const (
-	StageIdle              CreateStage = iota
-	StagePromptText                    // 0: entering prompt text
-	StageEntryNode                     // 1: selecting entry node
-	StageArtefactID                    // 2: entering artefact ID
-	StageGovernedArtefact              // 3: selecting governed artefact
-	StageConfirm                       // 4: confirmation
-	StageCreating                      // 5: CRD create in progress
-	StageStoringArtefact               // 6: StoreArtefact in progress
-	StageUpdatingStatus                // 7: Status update in progress
-	StageComplete                      // 8: creation complete
-	StageError                         // 9: creation error
+	StageIdle             CreateStage = iota
+	StagePromptText                   // 0: entering prompt text
+	StageEntryNode                    // 1: selecting entry node
+	StageArtefactID                   // 2: entering artefact ID
+	StageGovernedArtefact             // 3: selecting governed artefact
+	StageConfirm                      // 4: confirmation
+	StageCreating                     // 5: CRD create in progress
+	StageStoringArtefact              // 6: StoreArtefact in progress
+	StageUpdatingStatus               // 7: Status update in progress
+	StageComplete                     // 8: creation complete
+	StageError                        // 9: creation error
 )
 
 // CreateWizardModel is the model for the create Workitem wizard.
 type CreateWizardModel struct {
-	Step         int    // 0=prompt, 1=entryNode, 2=artefactID, 3=governedArtefact, 4=confirm, 5=success/error
+	Step         int // 0=prompt, 1=entryNode, 2=artefactID, 3=governedArtefact, 4=confirm, 5=success/error
 	Fields       CreateFields
 	FoundryFlows []string
 	EntryNodes   []string
@@ -38,9 +38,9 @@ type CreateWizardModel struct {
 	Blocked      string // "" if not blocked, "no_flow" or "multiple_flows" if blocked
 
 	// Phase 06: create execution stage tracking
-	Stage       CreateStage // current creation stage
-	WorkitemID  string      // ID of created workitem
-	Retryable   bool        // true if retry is possible after error
+	Stage      CreateStage // current creation stage
+	WorkitemID string      // ID of created workitem
+	Retryable  bool        // true if retry is possible after error
 
 	cursor int // cursor for selection fields
 }
@@ -56,7 +56,7 @@ type CreateFields struct {
 // NewCreateWizard creates a CreateWizardModel in initial state.
 func NewCreateWizard() CreateWizardModel {
 	return CreateWizardModel{
-		Step:   0,
+		Step: 0,
 		Fields: CreateFields{
 			ArtefactID: "petition",
 		},
@@ -209,6 +209,20 @@ func (m CreateWizardModel) Update(msg tea.Msg) (CreateWizardModel, tea.Cmd) {
 					m.cursor++
 				}
 			}
+		case "enter":
+			if m.Step == 0 {
+				m.Step = 1
+				m.cursor = 0
+			} else if m.Step == 2 {
+				m.Step = 3
+				m.cursor = 0
+			}
+		case "backspace":
+			if m.Step == 0 && len(m.Fields.PromptText) > 0 {
+				m.Fields.PromptText = m.Fields.PromptText[:len(m.Fields.PromptText)-1]
+			} else if m.Step == 2 && len(m.Fields.ArtefactID) > 0 {
+				m.Fields.ArtefactID = m.Fields.ArtefactID[:len(m.Fields.ArtefactID)-1]
+			}
 		case "tab":
 			if m.Step < 4 {
 				m.Step++
@@ -230,6 +244,13 @@ func (m CreateWizardModel) Update(msg tea.Msg) (CreateWizardModel, tea.Cmd) {
 				m.Stage = StageIdle
 				m.Error = ""
 				m.Step = 0
+			}
+		default:
+			// Accumulate printable characters for text input fields
+			if m.Step == 0 && len(msg.Runes) > 0 {
+				m.Fields.PromptText += string(msg.Runes)
+			} else if m.Step == 2 && len(msg.Runes) > 0 {
+				m.Fields.ArtefactID += string(msg.Runes)
 			}
 		}
 	}

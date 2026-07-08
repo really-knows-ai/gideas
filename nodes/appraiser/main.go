@@ -67,8 +67,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		"node_id", wctx.GetNodeId(),
 	)
 
-	_ = os.Setenv(flow.EnvWorkitemID, wctx.GetWorkitemId())
-	client, err := flow.NewClient()
+	client, err := flow.NewClient(flow.WithWorkitemID(wctx.GetWorkitemId()))
 	if err != nil {
 		return fmt.Errorf("appraiser: create client: %w", err)
 	}

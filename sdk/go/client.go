@@ -45,6 +45,7 @@ type ClientOption func(*clientConfig)
 type clientConfig struct {
 	sidecarAddr  string
 	eventBusAddr string
+	workitemID   string
 	timeout      time.Duration
 	maxRetries   int
 }
@@ -62,6 +63,13 @@ func WithSidecarAddress(addr string) ClientOption {
 func WithEventBusAddress(addr string) ClientOption {
 	return func(c *clientConfig) {
 		c.eventBusAddr = addr
+	}
+}
+
+// WithWorkitemID overrides the current workitem ID read from FLOW_WORKITEM_ID.
+func WithWorkitemID(id string) ClientOption {
+	return func(c *clientConfig) {
+		c.workitemID = id
 	}
 }
 

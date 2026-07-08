@@ -44,7 +44,7 @@ type SPDYForwarder interface {
 // PortForwarder is the interface consumed by the TUI, allowing mock
 // implementations in tests without requiring a cluster or real port-forwards.
 type PortForwarder interface {
-	FindReadyPod(namespace, labelSelector string) (podName string, found bool, err error)
+	FindReadyPod(ctx context.Context, namespace, labelSelector string) (podName string, found bool, err error)
 	ForwardPod(ctx context.Context, namespace, podName string, remotePort int) (forwardID string, localPort int, err error)
 	Close(forwardID string) error
 	CloseAll() error
@@ -134,8 +134,8 @@ func (f *productionSPDYForwarder) ForwardPod(ctx context.Context, namespace, pod
 
 // FindReadyPod lists pods matching labelSelector and returns the first Ready pod.
 // A pod is Ready when: Running phase + Ready=True condition + non-empty PodIP.
-func (m *PortForwardManager) FindReadyPod(namespace, labelSelector string) (podName string, found bool, err error) {
-	pods, err := m.clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+func (m *PortForwardManager) FindReadyPod(ctx context.Context, namespace, labelSelector string) (podName string, found bool, err error) {
+	pods, err := m.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {

@@ -102,25 +102,29 @@ func HandleAppraisal(
 	}
 
 	// ---------------------------------------------------------------
-	// Phase 1: Evaluate ACTIONED and WONT_FIX feedback items (parallel)
+	// Phase 1: Fan-out review — delegate to child Reviewer nodes
 	// ---------------------------------------------------------------
-
-	novelResolved, err := evaluateFeedback(
-		ctx, eval,
-		existingFeedback, inputContent, reviewContent)
-	if err != nil {
-		return fmt.Errorf("appraisal: evaluate feedback: %w", err)
-	}
-
-	// ---------------------------------------------------------------
-	// Phase 2: Fan-out review — delegate to child Reviewer nodes
-	// ---------------------------------------------------------------
-
+	// Run first so appraiser children see the current state and history,
+	// producing new observations against laws and the creative brief.
 	result, err := fanOutAppraisal(
 		ctx, workitem, client, cfg, existingFeedback,
 		inputContent, reviewContent)
 	if err != nil {
 		return fmt.Errorf("appraisal: fan-out review: %w", err)
+	}
+
+	// ---------------------------------------------------------------
+	// Phase 2: Evaluate ACTIONED and WONT_FIX feedback items (parallel)
+	// ---------------------------------------------------------------
+	// Now that we have the full picture (existing feedback + fresh
+	// observations from Phase 1), decide whether each fix truly resolves
+	// the underlying law conflict or just moves it to a different law.
+
+	novelResolved, err := evaluateFeedback(
+		ctx, eval,
+		existingFeedback, result.feedback, inputContent, reviewContent)
+	if err != nil {
+		return fmt.Errorf("appraisal: evaluate feedback: %w", err)
 	}
 
 	slog.Info("appraisal: review complete",
@@ -1069,6 +1073,7 @@ func evaluateFeedback(
 	ctx context.Context,
 	eval flow.EvalContract,
 	feedback []*flow.Feedback,
+	fanOutObservations []reviewItem,
 	inputContent, reviewContent string,
 ) ([]*flow.Feedback, error) {
 	type evalTask struct {
@@ -1093,6 +1098,25 @@ func evaluateFeedback(
 
 	slog.Info("appraisal: evaluating feedback items", "count", len(tasks))
 
+	// Build a summary of fresh observations from the fan-out review so the
+	// eval agent can see whether a fix merely moved a violation to a different
+	// law rather than resolving it.
+	var augmentedReviewContent string
+	if len(fanOutObservations) > 0 {
+		var obs strings.Builder
+		obs.WriteString("\n\n--- Fresh review observations (NOT yet raised as feedback) ---\n")
+		for _, o := range fanOutObservations {
+			obs.WriteString("- " + o.Message)
+			if len(o.CitedLaws) > 0 {
+				obs.WriteString(" [cited: " + strings.Join(o.CitedLaws, ", ") + "]")
+			}
+			obs.WriteString("\n")
+		}
+		augmentedReviewContent = reviewContent + obs.String()
+	} else {
+		augmentedReviewContent = reviewContent
+	}
+
 	type evalResultItem struct {
 		task evalTask
 		out  *flow.EvalResult
@@ -1106,7 +1130,7 @@ func evaluateFeedback(
 		go func(idx int, t evalTask) {
 			defer wg.Done()
 			// EvalContract.Run takes *flowv1.FeedbackItem — use PB() escape hatch.
-			out, err := eval.Run(ctx, t.fb.PB(), inputContent, reviewContent, t.kind)
+			out, err := eval.Run(ctx, t.fb.PB(), inputContent, augmentedReviewContent, t.kind)
 			results[idx] = evalResultItem{task: t, out: out, err: err}
 		}(i, task)
 	}

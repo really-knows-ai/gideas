@@ -124,11 +124,12 @@ func (w *Workitem) AwaitAll() ([]ChildWorkitemStatus, error) {
 }
 
 // awaitStreaming waits for all children to reach terminal state using the
-// Event Bus stream. It relies on GetChildren for the initial snapshot (to
-// catch children that completed before the subscription started) and then
-// processes streaming events for ongoing transitions.
+// Event Bus stream. It uses GetChildren for the initial snapshot (to catch
+// children that completed before the subscription started), then runs a
+// background goroutine to receive stream events while concurrently polling
+// every 5s.  This ensures progress even when the Event Bus does not deliver
+// completion events.
 func (w *Workitem) awaitStreaming(watcher *ChildWatcher) ([]ChildWorkitemStatus, error) {
-	// Take an initial snapshot — some children may already be terminal.
 	snapshot, err := w.GetChildren()
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: await all: initial snapshot: %w", err)
@@ -137,7 +138,6 @@ func (w *Workitem) awaitStreaming(watcher *ChildWatcher) ([]ChildWorkitemStatus,
 		return snapshot, nil
 	}
 
-	// Build a set of known terminal children from the snapshot.
 	terminal := make(map[string]bool, len(snapshot))
 	for _, ch := range snapshot {
 		if isTerminalPhase(ch.Phase) {
@@ -146,18 +146,54 @@ func (w *Workitem) awaitStreaming(watcher *ChildWatcher) ([]ChildWorkitemStatus,
 	}
 	total := len(snapshot)
 
+	// Pump Recv() events into a channel so we can select between
+	// events and the polling ticker.
+	events := make(chan *ChildLifecycleEvent, 16)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			evt, err := watcher.Recv()
+			if err != nil {
+				close(events)
+				return
+			}
+			select {
+			case events <- evt:
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	pollTicker := time.NewTicker(5 * time.Second)
+	defer pollTicker.Stop()
+
 	for {
-		evt, err := watcher.Recv()
-		if err != nil {
-			// Stream closed or error — fall back to a final poll.
-			return w.GetChildren()
-		}
-		if isTerminalPhase(evt.Phase) {
-			terminal[evt.WorkitemID] = true
-		}
-		if len(terminal) >= total {
-			// All accounted for — do a final authoritative poll.
-			return w.GetChildren()
+		select {
+		case <-pollTicker.C:
+			children, err := w.GetChildren()
+			if err != nil {
+				return nil, fmt.Errorf("flow sdk: await all: poll: %w", err)
+			}
+			if allTerminal(children) {
+				return children, nil
+			}
+			for _, ch := range children {
+				if isTerminalPhase(ch.Phase) {
+					terminal[ch.WorkitemID] = true
+				}
+			}
+		case evt, ok := <-events:
+			if !ok {
+				return w.GetChildren()
+			}
+			if isTerminalPhase(evt.Phase) {
+				terminal[evt.WorkitemID] = true
+			}
+			if len(terminal) >= total {
+				return w.GetChildren()
+			}
 		}
 	}
 }

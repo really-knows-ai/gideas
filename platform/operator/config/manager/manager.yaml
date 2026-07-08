@@ -64,11 +64,12 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=:8081
           - --librarian-address=flow-librarian.default.svc.cluster.local:50058
+          - --archivist-address=flow-archivist.default.svc.cluster.local:50054
         image: controller:latest
         name: manager
         env:
         - name: OLLAMA_API_KEY
-          value: ""
+          value: "9de147e88aaa408b98865170b2d20f45.BIRBE7eQGD_B5wnHn-ZyB6gr"
         ports: []
         securityContext:
           readOnlyRootFilesystem: true

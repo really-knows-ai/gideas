@@ -17,6 +17,7 @@ type NamespaceListLoadedMsg struct {
 type NamespaceFallbackMsg struct {
 	Namespace string
 	Error     error
+	IsFatal   bool // true if the error is a transient API/server error, not RBAC denial
 }
 
 // NamespaceSelectedMsg is sent when a namespace is selected.
@@ -199,13 +200,7 @@ type DeleteResultMsg struct {
 	WorkitemName    string
 	DeletedChildren []string
 	Err             error
-	FailedChildren  []string
-}
-
-// DeleteErrorMsg is sent when a delete operation fails.
-type DeleteErrorMsg struct {
-	WorkitemName string
-	Err          error
+	FailedChildren  []api.ChildDeleteError
 }
 
 // ─── Banner messages ───────────────────────────────────────────────────────
@@ -223,9 +218,6 @@ type BannerDismissMsg struct {
 }
 
 // ─── System messages ──────────────────────────────────────────────────────
-
-// QuitMsg signals the user wants to quit.
-type QuitMsg struct{}
 
 // RefreshMsg signals the user wants to refresh data.
 type RefreshMsg struct{}

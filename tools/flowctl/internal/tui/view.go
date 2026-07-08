@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
 )
 
 // errorBannerStyle is used for error banners at the top of the screen.
@@ -73,10 +74,11 @@ func (m *Model) renderDetail() string {
 	// Workitem info line
 	infoLine := ""
 	if detail.detail != nil {
-		infoLine = fmt.Sprintf("  State: %s  |  Node: %s  |  Age: %s",
+		infoLine = fmt.Sprintf("  Name: %s  |  State: %s  |  Node: %s  |  Age: %s",
+			detail.detail.Name,
 			detail.detail.State,
 			detail.detail.Node,
-			detail.detail.Age,
+			components.AgeString(detail.detail.Age),
 		)
 		if detail.detail.FailureReason != "" {
 			infoLine += fmt.Sprintf("  |  Failure: %s", detail.detail.FailureReason)
@@ -106,7 +108,7 @@ func (m *Model) renderDetail() string {
 				if children != "" {
 					children += ", "
 				}
-				children += fmt.Sprintf("%s (%s)", child.Name, child.State)
+				children += fmt.Sprintf("%s (%s, %s)", child.Name, child.State, child.Node)
 			}
 			infoLine += fmt.Sprintf("\n  Children: %s", children)
 		}

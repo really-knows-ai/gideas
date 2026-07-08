@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"net"
@@ -39,6 +40,7 @@ import (
 	flowv1gen "github.com/gideas/flow/gen/flow/v1"
 	flowv1 "github.com/gideas/flow/operator/api/v1"
 	"github.com/gideas/flow/operator/internal/controller"
+	"github.com/gideas/flow/operator/internal/controller/scheduler"
 	"github.com/gideas/flow/operator/internal/rpc"
 	"github.com/gideas/flow/pkg/eventbus"
 	"google.golang.org/grpc"
@@ -69,6 +71,7 @@ func main() {
 	var grpcAddr string
 	var eventBusAddr string
 	var librarianAddr string
+	var archivistAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -80,6 +83,8 @@ func main() {
 		"The address of the Event Bus gRPC server for audit publishing (empty = disabled).")
 	flag.StringVar(&librarianAddr, "librarian-address", "",
 		"The address of the Librarian gRPC server for LawGroup sync (empty = disabled).")
+	flag.StringVar(&archivistAddr, "archivist-address", "",
+		"The address of the Archivist gRPC server for artefact state queries (empty = disabled).")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -242,11 +247,48 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "FoundryNode")
 		os.Exit(1)
 	}
+	// Connect to the Archivist for artefact state queries (required for exit contract validation).
+	var artefactQuerier func(ctx context.Context, workitemID string, governedArtefacts []string) ([]scheduler.ArtefactState, error)
+	if archivistAddr != "" {
+		archConn, archErr := grpc.NewClient(
+			archivistAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if archErr != nil {
+			setupLog.Error(archErr, "Failed to connect to Archivist", "address", archivistAddr)
+			os.Exit(1)
+		}
+		archClient := flowv1gen.NewArchivistServiceClient(archConn)
+		artefactQuerier = func(ctx context.Context, workitemID string, governedArtefacts []string) ([]scheduler.ArtefactState, error) {
+			resp, err := archClient.QueryArtefactState(ctx, &flowv1gen.QueryArtefactStateRequest{
+				WorkitemId:         workitemID,
+				GovernedArtefacts:  governedArtefacts,
+			})
+			if err != nil {
+				return nil, err
+			}
+			states := resp.GetArtefactStates()
+			result := make([]scheduler.ArtefactState, len(states))
+			for i, s := range states {
+				result[i] = scheduler.ArtefactState{
+					ArtefactID:       s.GetArtefactId(),
+					GovernedArtefact: s.GetGovernedArtefact(),
+					StampNames:       s.GetStampNames(),
+				}
+			}
+			return result, nil
+		}
+		setupLog.Info("Connected to Archivist for artefact state queries", "address", archivistAddr)
+	} else {
+		setupLog.Info("Archivist not configured, exit contract validation disabled")
+	}
+
 	if err := (&controller.WorkitemReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Auditor:   auditor,
-		Librarian: librarianClient,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Auditor:         auditor,
+		Librarian:       librarianClient,
+		ArtefactQuerier: artefactQuerier,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Workitem")
 		os.Exit(1)

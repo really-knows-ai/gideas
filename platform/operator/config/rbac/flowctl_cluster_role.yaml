@@ -1,0 +1,68 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: flowctl
+    app.kubernetes.io/managed-by: kustomize
+  name: flowctl-cluster-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - pods/portforward
+  verbs:
+  - create
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - workitems
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - workitems/status
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - foundryflows
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - foundrynodes
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - flow.gideas.io
+  resources:
+  - governedartefacts
+  verbs:
+  - get
+  - list

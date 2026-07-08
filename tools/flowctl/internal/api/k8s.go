@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,11 +37,11 @@ var ErrMultipleFoundryFlows = fmt.Errorf("multiple FoundryFlows detected")
 
 // K8sClient wraps Kubernetes and controller-runtime clients for CRD operations.
 type K8sClient struct {
-	CoreClient    kubernetes.Interface   // client-go for core/v1
-	CRDClient     client.Client          // controller-runtime for CRDs
-	RESTConfig    *rest.Config            // stored for port-forward creation
-	scheme        *runtime.Scheme         // scheme with flow.gideas.io types
-	dynamicClient dynamic.Interface       // client-go dynamic for watch/status
+	CoreClient    kubernetes.Interface // client-go for core/v1
+	CRDClient     client.Client        // controller-runtime for CRDs
+	RESTConfig    *rest.Config         // stored for port-forward creation
+	scheme        *runtime.Scheme      // scheme with flow.gideas.io types
+	dynamicClient dynamic.Interface    // client-go dynamic for watch/status
 }
 
 // WatchOptions controls WatchWithBackoff behavior.
@@ -149,6 +150,12 @@ func (c *K8sClient) ListNamespaces(ctx context.Context) ([]string, error) {
 	return namespaces, nil
 }
 
+// IsForbiddenError checks if the given error is a Kubernetes 403 Forbidden error,
+// indicating RBAC denial rather than a transient connectivity or server error.
+func IsForbiddenError(err error) bool {
+	return apierrors.IsForbidden(err)
+}
+
 // ListWorkitems returns all Workitems in the given namespace as summaries.
 func (c *K8sClient) ListWorkitems(ctx context.Context, namespace string) ([]WorkitemSummary, error) {
 	list := &unstructured.UnstructuredList{}
@@ -158,7 +165,7 @@ func (c *K8sClient) ListWorkitems(ctx context.Context, namespace string) ([]Work
 		Kind:    "WorkitemList",
 	})
 
-	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -210,8 +217,8 @@ func (c *K8sClient) WatchWithBackoff(ctx context.Context, namespace string, hand
 		if options.OnReconnect != nil {
 			options.OnReconnect()
 		}
-		attempt = 0 // reset backoff on successful connection
-
+		// Reset attempt so backoff after a successful watch starts from 1s again
+		attempt = 0
 		events := watcher.ResultChan()
 	eventLoop:
 		for {
@@ -254,7 +261,7 @@ func (c *K8sClient) GetWorkitem(ctx context.Context, namespace string, name stri
 		Kind:    "Workitem",
 	})
 
-	if err := 	c.CRDClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
+	if err := c.CRDClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
 		return nil, err
 	}
 
@@ -306,7 +313,7 @@ func (c *K8sClient) ListChildren(ctx context.Context, namespace string, parentID
 		Kind:    "WorkitemList",
 	})
 
-	if err := 	c.CRDClient.List(ctx, list,
+	if err := c.CRDClient.List(ctx, list,
 		client.InNamespace(namespace),
 		client.MatchingLabels{"flow.gideas.io/parent": parentID},
 	); err != nil {
@@ -330,7 +337,7 @@ func (c *K8sClient) GetFoundryFlow(ctx context.Context, namespace string) (*Foun
 		Kind:    "FoundryFlowList",
 	})
 
-	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -360,7 +367,7 @@ func (c *K8sClient) ListFoundryNodes(ctx context.Context, namespace string) ([]F
 		Kind:    "FoundryNodeList",
 	})
 
-	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -399,7 +406,7 @@ func (c *K8sClient) ListGovernedArtefacts(ctx context.Context, namespace string)
 		Kind:    "GovernedArtefactList",
 	})
 
-	if err := 	c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := c.CRDClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 
@@ -424,7 +431,7 @@ func (c *K8sClient) CreateWorkitem(ctx context.Context, namespace string, name s
 	labels["flow.gideas.io/creator"] = "flowctl"
 	obj.SetLabels(labels)
 
-	return 	c.CRDClient.Create(ctx, obj)
+	return c.CRDClient.Create(ctx, obj)
 }
 
 // UpdateWorkitemStatus updates the status subresource (phase and assignee).
@@ -462,7 +469,7 @@ func (c *K8sClient) DeleteWorkitem(ctx context.Context, namespace string, name s
 	obj.SetName(name)
 	obj.SetNamespace(namespace)
 
-	return 	c.CRDClient.Delete(ctx, obj)
+	return c.CRDClient.Delete(ctx, obj)
 }
 
 // ExtractSummary converts a watch event's runtime.Object into a WorkitemSummary.
@@ -488,8 +495,8 @@ func extractSummaryFromUnstructured(u *unstructured.Unstructured) WorkitemSummar
 		s.Node = assignee
 	}
 
-	// No active assignee: show "-"
-	if s.Node == "" {
+	// Terminal workitems with no active assignee display "-".
+	if s.Node == "" && (s.State == "Completed" || s.State == "Failed") {
 		s.Node = "-"
 	}
 

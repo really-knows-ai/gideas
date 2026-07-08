@@ -7,7 +7,7 @@
 #   docker build -t sort:latest --build-arg NODE=sort -f nodes/Dockerfile .
 FROM golang:1.25 AS builder
 ARG NODE
-ARG CGO_ENABLED=0
+ARG CGO_ENABLED=1
 
 WORKDIR /workspace
 ENV GOWORK=off

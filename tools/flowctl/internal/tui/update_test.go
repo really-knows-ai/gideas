@@ -531,9 +531,12 @@ func TestUpdateDeleteResultPartialFailure(t *testing.T) {
 	}
 
 	model, cmd := m.Update(DeleteResultMsg{
-		WorkitemName:   "wi-001",
-		Err:            errors.New("child deletion failed"),
-		FailedChildren: []string{"child-a", "child-b"},
+		WorkitemName: "wi-001",
+		Err:          errors.New("child deletion failed"),
+		FailedChildren: []api.ChildDeleteError{
+			{WorkitemID: "child-a", Error: "not terminal"},
+			{WorkitemID: "child-b", Error: "delete failed"},
+		},
 	})
 	m2 := model.(*Model)
 

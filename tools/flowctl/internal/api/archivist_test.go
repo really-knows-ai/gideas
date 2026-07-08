@@ -27,13 +27,13 @@ type mockArchivistServer struct {
 	flowv1.UnimplementedArchivistServiceServer
 
 	// Configurable responses
-	listArtefactsResp  *flowv1.ListArtefactsResponse
-	listArtefactsErr   error
-	getArtefactResp    *flowv1.GetArtefactResponse
-	getArtefactErr     error
-	getFeedbackResp    *flowv1.GetFeedbackResponse
-	getFeedbackErr     error
-	storeArtefactErr   error
+	listArtefactsResp *flowv1.ListArtefactsResponse
+	listArtefactsErr  error
+	getArtefactResp   *flowv1.GetArtefactResponse
+	getArtefactErr    error
+	getFeedbackResp   *flowv1.GetFeedbackResponse
+	getFeedbackErr    error
+	storeArtefactErr  error
 
 	// Recorded metadata for inspection
 	lastMetadata metadata.MD
@@ -401,7 +401,7 @@ func TestArchivist_GetFeedbackStateMapping(t *testing.T) {
 		"fb-4": FeedbackStateRejected,
 		"fb-5": FeedbackStateDeadlocked,
 		"fb-6": FeedbackStateResolved,
-		"fb-7": FeedbackStateUnspecified, // unknown → Unspecified
+		"fb-7": FeedbackState(99), // unknown values are preserved for raw enum rendering
 	}
 
 	for _, item := range items {

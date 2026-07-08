@@ -3,6 +3,7 @@ package flow
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	flowv1 "github.com/gideas/flow/gen/flow/v1"
 	"google.golang.org/grpc"
@@ -580,6 +581,76 @@ func TestWorkitem_WatchChildren_ReturnsWatcher(t *testing.T) {
 	}
 	if evt.Phase != PhaseRunning {
 		t.Fatalf("expected Running, got %q", evt.Phase)
+	}
+}
+
+func TestWorkitem_AwaitAll_Streaming_PollsWhenNoEventsArrive(t *testing.T) {
+	spy := &fanoutSpy{
+		getChildrenResp: &flowv1.GetChildrenResponse{
+			Children: []*flowv1.ChildWorkitemStatus{
+				{WorkitemId: "child-001", Phase: "Running"},
+				{WorkitemId: "child-002", Phase: "Running"},
+			},
+		},
+	}
+
+	// Stream stays open forever — no events, no close.  Without the fix,
+	// awaitStreaming blocks on Recv() indefinitely.
+	ebSpy := &controllableEventBusSpy{
+		events: make(chan *flowv1.FlowEvent),
+		done:   make(chan struct{}),
+	}
+
+	client := setupGRPCTestEnvWithEventBus(t, "wi-await-silent-stream",
+		func(s *grpc.Server) {
+			flowv1.RegisterSidecarServiceServer(s, spy)
+			flowv1.RegisterOperatorServiceServer(s, spy)
+			flowv1.RegisterArchivistServiceServer(s, spy)
+			flowv1.RegisterLibrarianServiceServer(s, spy)
+			flowv1.RegisterFrictionLedgerServiceServer(s, spy)
+		},
+		func(s *grpc.Server) {
+			flowv1.RegisterFlowEventBusServiceServer(s, ebSpy)
+		},
+	)
+
+	wi, err := client.GetWorkitem("wi-await-silent-stream")
+	if err != nil {
+		t.Fatalf("GetWorkitem() error: %v", err)
+	}
+
+	done := make(chan []ChildWorkitemStatus, 1)
+	go func() {
+		children, awErr := wi.AwaitAll()
+		if awErr != nil {
+			t.Errorf("AwaitAll() error: %v", awErr)
+		}
+		done <- children
+	}()
+
+	// Give the streaming path time to enter the Recv() loop.
+	time.Sleep(1 * time.Second)
+
+	// Now simulate the children completing.
+	spy.setGetChildrenResp(&flowv1.GetChildrenResponse{
+		Children: []*flowv1.ChildWorkitemStatus{
+			{WorkitemId: "child-001", Phase: "Completed"},
+			{WorkitemId: "child-002", Phase: "Completed"},
+		},
+	})
+
+	select {
+	case children := <-done:
+		if len(children) != 2 {
+			t.Fatalf("expected 2 children, got %d", len(children))
+		}
+		for _, ch := range children {
+			if ch.Phase != PhaseCompleted {
+				t.Fatalf("expected Completed, got %q for %s", ch.Phase, ch.WorkitemID)
+			}
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("AwaitAll() timed out — streaming loop never polls, hangs on Recv()")
 	}
 }
 

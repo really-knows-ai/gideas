@@ -244,6 +244,55 @@ func TestCancelChoiceShowsConfirmation(t *testing.T) {
 	}
 }
 
+func TestCancelConfirmationDismissesOnNo(t *testing.T) {
+	m := initialModel()
+	m.screen = ScreenWorkitemDetail
+	m.hitlState = components.NewHitlState(8080)
+	m.hitlState.SetActiveForTest()
+	m.workitemDetail.hitl.Visible = true
+	m.workitemDetail.hitl.ConfirmingCancel = true
+	m.workitemDetail.hitl.PendingChoice = "cancel"
+
+	model, cmd := m.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m2 := model.(*Model)
+
+	if m2.workitemDetail.hitl.ConfirmingCancel {
+		t.Error("expected cancel confirmation dismissed")
+	}
+	if m2.workitemDetail.hitl.PendingChoice != "" {
+		t.Errorf("expected pendingChoice cleared, got %q", m2.workitemDetail.hitl.PendingChoice)
+	}
+	if cmd != nil {
+		t.Error("expected nil command")
+	}
+}
+
+func TestCancelConfirmationSubmitsOnYes(t *testing.T) {
+	m := initialModel()
+	m.screen = ScreenWorkitemDetail
+	m.hitlState = components.NewHitlState(8080)
+	m.hitlState.SetActiveForTest()
+	m.workitemDetail.hitl.Visible = true
+	m.workitemDetail.hitl.ConfirmingCancel = true
+	m.workitemDetail.hitl.PendingChoice = "cancel"
+
+	model, cmd := m.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m2 := model.(*Model)
+
+	if m2.workitemDetail.hitl.ConfirmingCancel {
+		t.Error("expected cancel confirmation cleared")
+	}
+	if m2.workitemDetail.hitl.PendingChoice != "" {
+		t.Errorf("expected pendingChoice cleared, got %q", m2.workitemDetail.hitl.PendingChoice)
+	}
+	if !m2.workitemDetail.hitl.Loading {
+		t.Error("expected HITL loading while cancel decision command runs")
+	}
+	if cmd == nil {
+		t.Error("expected decision command")
+	}
+}
+
 // W9: Ctrl+C cleans up HITL forward
 func TestCtrlCCleansHitlForward(t *testing.T) {
 	m := initialModel()
@@ -307,7 +356,7 @@ func newMockPortForwarder() *mockPortForwarder {
 	return &mockPortForwarder{forwards: make(map[string]bool)}
 }
 
-func (m *mockPortForwarder) FindReadyPod(namespace, labelSelector string) (string, bool, error) {
+func (m *mockPortForwarder) FindReadyPod(ctx context.Context, namespace, labelSelector string) (string, bool, error) {
 	return "", false, nil
 }
 

@@ -155,3 +155,45 @@ func (p *LibrarianProxy) SearchSimilarLaws(
 ) (*flowv1.SearchSimilarLawsResponse, error) {
 	return p.client.SearchSimilarLaws(ctx, req)
 }
+
+// ListLawGroups forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) ListLawGroups(
+	ctx context.Context, req *flowv1.ListLawGroupsRequest,
+) (*flowv1.ListLawGroupsResponse, error) {
+	return p.client.ListLawGroups(ctx, req)
+}
+
+// GetLawGroup forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) GetLawGroup(
+	ctx context.Context, req *flowv1.GetLawGroupRequest,
+) (*flowv1.GetLawGroupResponse, error) {
+	return p.client.GetLawGroup(ctx, req)
+}
+
+// SyncLawGroup forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) SyncLawGroup(
+	ctx context.Context, req *flowv1.SyncLawGroupRequest,
+) (*flowv1.SyncLawGroupResponse, error) {
+	return p.client.SyncLawGroup(ctx, req)
+}
+
+// DeleteLawGroup forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) DeleteLawGroup(
+	ctx context.Context, req *flowv1.DeleteLawGroupRequest,
+) (*flowv1.DeleteLawGroupResponse, error) {
+	return p.client.DeleteLawGroup(ctx, req)
+}
+
+// CreateDisputeRecord forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) CreateDisputeRecord(
+	ctx context.Context, req *flowv1.CreateDisputeRecordRequest,
+) (*flowv1.CreateDisputeRecordResponse, error) {
+	return p.client.CreateDisputeRecord(ctx, req)
+}
+
+// RetireDisputeRecord forwards to the Librarian (passthrough).
+func (p *LibrarianProxy) RetireDisputeRecord(
+	ctx context.Context, req *flowv1.RetireDisputeRecordRequest,
+) (*flowv1.RetireDisputeRecordResponse, error) {
+	return p.client.RetireDisputeRecord(ctx, req)
+}

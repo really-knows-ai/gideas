@@ -61,6 +61,7 @@ func deleteWorkitemCascade(ctx context.Context, k8s K8sDeleter, namespace string
 	}
 
 	result := &CascadeResult{
+		Success: true,
 		Deleted: make([]string, 0),
 		Failed:  make([]ChildDeleteError, 0),
 	}
@@ -98,8 +99,7 @@ func deleteWorkitemCascade(ctx context.Context, k8s K8sDeleter, namespace string
 	}
 
 	// 4. If any child failed, preserve parent
-	if len(result.Failed) > 0 {
-		result.Success = false
+	if !result.Success {
 		result.Error = fmt.Sprintf("%d child deletion(s) failed", len(result.Failed))
 		return result
 	}
