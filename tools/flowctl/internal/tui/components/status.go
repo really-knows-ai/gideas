@@ -10,16 +10,6 @@ import (
 	"github.com/gideas/flow/tools/flowctl/internal/tui/styles"
 )
 
-// ConnectionStatus represents the health of a service connection.
-type ConnectionStatus int
-
-const (
-	StatusOff  ConnectionStatus = iota // HITL: no probe active
-	StatusOK                            // K8s/Archivist: connected
-	StatusWarn                          // K8s: disconnected; Archivist: forward failed
-	StatusErr                           // K8s/Archivist: unreachable
-)
-
 // StatusBarModel is the model for the status bar header.
 type StatusBarModel struct {
 	ScreenName   string // "Namespace Selection", "Workitem Browser", etc.
@@ -29,20 +19,12 @@ type StatusBarModel struct {
 	Warning      string // non-empty shows yellow warning banner
 	Connected    bool   // green indicator dot
 	Disconnected bool   // yellow indicator with "Disconnected..."
-
-	// Phase 06: connection status indicators
-	K8sStatus      ConnectionStatus // OK, WARN, ERR
-	ArchivistStatus ConnectionStatus // OK, WARN, ERR
-	HitlStatus     ConnectionStatus // OK, OFF
 }
 
 // NewStatusBar creates a StatusBarModel in initial state.
 func NewStatusBar() StatusBarModel {
 	return StatusBarModel{
-		ScreenName:       "Flowctl",
-		K8sStatus:        StatusOff,
-		ArchivistStatus:  StatusOff,
-		HitlStatus:       StatusOff,
+		ScreenName: "Flowctl",
 	}
 }
 
@@ -71,22 +53,7 @@ func (m StatusBarModel) View() string {
 		parts = append(parts, m.State)
 	}
 
-	// Phase 06: connection status indicators on the right
-	var statusIndicators []string
-	statusIndicators = append(statusIndicators, connStatus("K8s", m.K8sStatus))
-	statusIndicators = append(statusIndicators, connStatus("ARC", m.ArchivistStatus))
-	statusIndicators = append(statusIndicators, connStatus("HITL", m.HitlStatus))
-	statusLine := strings.Join(parts, "  │  ")
-	statusRight := strings.Join(statusIndicators, " ")
-	// Pad the status line to push indicators to the right
-	if len(statusLine)+len(statusRight)+4 < 80 {
-		padding := 80 - len(statusLine) - len(statusRight) - 4
-		statusLine = statusLine + strings.Repeat(" ", padding) + "  │  " + statusRight
-	} else {
-		statusLine = statusLine + "  │  " + statusRight
-	}
-
-	b.WriteString(statusLine)
+	b.WriteString(strings.Join(parts, "  │  "))
 	b.WriteString("\n")
 
 	// Warning banner
@@ -102,22 +69,6 @@ func (m StatusBarModel) View() string {
 	}
 
 	return b.String()
-}
-
-// connStatus renders a connection status indicator string.
-func connStatus(label string, s ConnectionStatus) string {
-	switch s {
-	case StatusOff:
-		return fmt.Sprintf("%s:OFF", label)
-	case StatusOK:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render(fmt.Sprintf("%s:OK", label))
-	case StatusWarn:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00")).Render(fmt.Sprintf("%s:WARN", label))
-	case StatusErr:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Render(fmt.Sprintf("%s:ERR", label))
-	default:
-		return fmt.Sprintf("%s:?", label)
-	}
 }
 
 // Update handles messages for the status bar.
