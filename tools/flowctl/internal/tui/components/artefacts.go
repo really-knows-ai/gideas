@@ -90,7 +90,7 @@ func (m ArtefactTreeModel) View() string {
 						stateStyle = styles.StyleState(fb.State)
 					}
 
-					renderedState := stateStyle.Render(fmt.Sprintf("[%s]", stateDisplay))
+					renderedState := stateStyle.Render(stateDisplay)
 					msg := fb.Message
 					if len(msg) > 120 {
 						msg = msg[:120]

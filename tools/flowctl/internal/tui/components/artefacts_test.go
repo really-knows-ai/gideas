@@ -114,8 +114,8 @@ func TestArtefactFeedbackStateNewCyan(t *testing.T) {
 		},
 	}
 	v := m.View()
-	if !strings.Contains(v, "[NEW]") {
-		t.Error("expected [NEW] state in view, got:", v)
+	if !strings.Contains(v, "NEW") {
+		t.Error("expected NEW state in view, got:", v)
 	}
 }
 
@@ -216,8 +216,8 @@ func TestArtefactFeedbackPrefixStripped(t *testing.T) {
 		},
 	}
 	v := m.View()
-	if !strings.Contains(v, "[NEW]") {
-		t.Error("expected stripped state [NEW] in view, got:", v)
+	if !strings.Contains(v, "NEW") {
+		t.Error("expected stripped state NEW in view, got:", v)
 	}
 	if strings.Contains(v, "FEEDBACK_STATE_") {
 		t.Error("expected FEEDBACK_STATE_ prefix to be stripped, got:", v)
