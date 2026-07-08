@@ -30,10 +30,8 @@ func AgeString(d time.Duration) string {
 type WorkitemListModel struct {
 	Items        []api.WorkitemSummary
 	Cursor       int
-	Loading      bool
-	Watching     bool // true when watch is active
-	Disconnected bool // true when watch disconnected, waiting for reconnection
-	Namespace    string
+	Loading   bool
+	Namespace string
 	Error        string
 
 	colWidths columnWidths
