@@ -126,8 +126,8 @@ func (m *Model) Init() tea.Cmd {
 	if m.cfg == nil {
 		return nil
 	}
-	// If --namespace is set, skip the namespace selector entirely
-	if m.cfg.Namespace != "" {
+	// If --namespace or FLOW_NAMESPACE was explicitly set, skip the selector
+	if m.cfg.NamespaceExplicit {
 		m.namespace = m.cfg.Namespace
 		return m.loadWorkitems()
 	}

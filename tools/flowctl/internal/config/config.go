@@ -11,10 +11,11 @@ import (
 
 // Config holds the runtime configuration for flowctl.
 type Config struct {
-	Namespace       string
-	SystemNamespace string
-	HitlPort        int
-	LogFile         string
+	Namespace          string
+	NamespaceExplicit  bool   // true when set via --namespace flag or FLOW_NAMESPACE env var
+	SystemNamespace    string
+	HitlPort           int
+	LogFile            string
 }
 
 // ParseFlags reads configuration with precedence: flag > env var > fallback.
@@ -24,8 +25,10 @@ func ParseFlags(cmd *cobra.Command) (*Config, error) {
 	// Namespace: flag > FLOW_NAMESPACE > "default"
 	if cmd.Flags().Changed("namespace") {
 		cfg.Namespace, _ = cmd.Flags().GetString("namespace")
+		cfg.NamespaceExplicit = true
 	} else if v := os.Getenv("FLOW_NAMESPACE"); v != "" {
 		cfg.Namespace = v
+		cfg.NamespaceExplicit = true
 	} else {
 		cfg.Namespace = "default"
 	}
