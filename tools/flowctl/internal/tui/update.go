@@ -1198,6 +1198,9 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.createWizard.EntryNodes = msg.EntryNodes
 			m.createWizard.Artefacts = msg.Artefacts
+			// Store entry contracts data for contract-based artefact filtering
+			m.wizardEntryContracts = msg.EntryContracts
+			m.wizardNodeEntryMap = msg.NodeEntryMap
 		}
 
 	case CreateFieldUpdatedMsg:
@@ -1260,38 +1263,11 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Build governed artefact options
-		selectedNodeName := m.createWizard.Fields.EntryNode
-		// Resolve the entry contract name from the selected node's spec.entry
-		var contractName string
-		for _, n := range nodes {
-			if n.Name == selectedNodeName {
-				contractName = n.Entry
-				break
-			}
-		}
-		if flow.EntryContracts != nil && contractName != "" {
-			if ec, ok := flow.EntryContracts[contractName]; ok {
-				if ecMap, ok := ec.(map[string]interface{}); ok && len(ecMap) > 0 {
-					// Use governed artefact keys from the contract
-					for k := range ecMap {
-						m.createWizard.Artefacts = append(m.createWizard.Artefacts, k)
-					}
-					// Set default
-					if len(m.createWizard.Artefacts) > 0 {
-						m.createWizard.Fields.GovernedArtefact = m.createWizard.Artefacts[0]
-					}
-				}
-			}
-		}
-		// Fallback: if no artefacts from contracts, list all GovernedArtefacts
-		if len(m.createWizard.Artefacts) == 0 {
-			gas, err := m.k8s.ListGovernedArtefacts(m.ctx, m.namespace)
-			if err == nil {
-				for _, ga := range gas {
-					m.createWizard.Artefacts = append(m.createWizard.Artefacts, ga.Name)
-				}
-			}
+		// Governed artefacts are already filtered by entry contract in
+		// updateCreateWizardKeys when the user selected the entry node.
+		// Validate the selection but do not re-filter here.
+		if m.createWizard.Fields.GovernedArtefact == "" && len(m.createWizard.Artefacts) > 0 {
+			m.createWizard.Fields.GovernedArtefact = m.createWizard.Artefacts[0]
 		}
 
 		// Start the create execution as a background command
@@ -1485,11 +1461,23 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateCreateWizardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Snapshot error state before component update (which may reset it for r/c).
+	// Snapshot error state and step before component update.
 	wasError := m.createWizard.Stage == components.StageError
 	wasRetryable := m.createWizard.Retryable
+	prevStep := m.createWizard.Step
+
+	// Capture entry node selection before step change (cursor is reset by component).
+	selectedNode := m.createWizard.SelectedEntryNode()
 
 	m.createWizard, _ = m.createWizard.Update(msg)
+
+	// If we advanced from step 1 (entry node selection) to step 2, set the
+	// entry node field and filter governed artefacts based on the selected
+	// node's entry contract so step 3 shows the correct options.
+	if prevStep == 1 && m.createWizard.Step == 2 && selectedNode != "" {
+		m.createWizard.Fields.EntryNode = selectedNode
+		m.filterArtefactsForNode(selectedNode)
+	}
 
 	// Handle semantic keys from error state
 	if wasError {
@@ -1650,10 +1638,12 @@ func (m *Model) loadWizardData() tea.Cmd {
 		// 2. Load entry nodes (filter by Entry != "")
 		nodes, err := m.k8s.ListFoundryNodes(m.ctx, m.namespace)
 		var entryNodes []string
+		nodeEntryMap := make(map[string]string)
 		if err == nil {
 			for _, n := range nodes {
 				if n.Entry != "" {
 					entryNodes = append(entryNodes, n.Name)
+					nodeEntryMap[n.Name] = n.Entry
 				}
 			}
 		}
@@ -1668,8 +1658,52 @@ func (m *Model) loadWizardData() tea.Cmd {
 		}
 
 		return WizardDataLoadedMsg{
-			EntryNodes: entryNodes,
-			Artefacts:  artefacts,
+			EntryNodes:     entryNodes,
+			Artefacts:      artefacts,
+			EntryContracts: flow.EntryContracts,
+			NodeEntryMap:   nodeEntryMap,
+		}
+	}
+}
+
+// filterArtefactsForNode filters the create wizard's governed artefact list based on the
+// selected entry node's contract.  If the entry contract has governed artefact keys, only
+// those keys are shown.  Otherwise the full list from GovernedArtefact CRs is retained.
+func (m *Model) filterArtefactsForNode(nodeName string) {
+	if m.wizardEntryContracts == nil {
+		return // no contract data available — keep full list
+	}
+	contractName := m.wizardNodeEntryMap[nodeName]
+	if contractName == "" {
+		return // node has no entry contract — keep full list
+	}
+	ec, ok := m.wizardEntryContracts[contractName]
+	if !ok {
+		return // contract not found — keep full list
+	}
+	ecMap, ok := ec.(map[string]interface{})
+	if !ok || len(ecMap) == 0 {
+		return // empty or invalid contract — fall back to full list
+	}
+
+	// Build filtered list from contract keys
+	filtered := make([]string, 0, len(ecMap))
+	for k := range ecMap {
+		filtered = append(filtered, k)
+	}
+	m.createWizard.Artefacts = filtered
+
+	// Reset the governed artefact field if current selection is no longer valid
+	if m.createWizard.Fields.GovernedArtefact != "" {
+		stillValid := false
+		for _, a := range filtered {
+			if a == m.createWizard.Fields.GovernedArtefact {
+				stillValid = true
+				break
+			}
+		}
+		if !stillValid && len(filtered) > 0 {
+			m.createWizard.Fields.GovernedArtefact = filtered[0]
 		}
 	}
 }

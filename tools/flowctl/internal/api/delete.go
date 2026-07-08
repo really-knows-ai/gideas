@@ -73,12 +73,17 @@ func deleteWorkitemCascade(ctx context.Context, k8s K8sDeleter, namespace string
 	}
 
 	// 2. Recursively delete each child (depth-first, bottom-up).
-	// The recursive DeleteWorkitemCascade handles the child AND all its descendants.
+	// If a child delete fails, the error is recorded and remaining children
+	// are still processed.  The parent is preserved if any child failed.
 	for _, child := range children {
 		// 3. Verify child is terminal
 		if child.State != "Completed" && child.State != "Failed" {
-			result.Error = fmt.Sprintf("child %s is in %s state; cannot delete", child.Name, child.State)
-			return result
+			result.Failed = append(result.Failed, ChildDeleteError{
+				WorkitemID: child.Name,
+				Error:      fmt.Sprintf("child %s is in %s state; cannot delete", child.Name, child.State),
+			})
+			result.Success = false
+			continue
 		}
 
 		// Recursively delete child and all its descendants
@@ -87,16 +92,15 @@ func deleteWorkitemCascade(ctx context.Context, k8s K8sDeleter, namespace string
 		result.Failed = append(result.Failed, childResult.Failed...)
 
 		if !childResult.Success {
-			// Child subtree deletion failed — preserve parent
-			result.Error = childResult.Error
+			// Child subtree deletion failed — record and continue
 			result.Success = false
-			return result
 		}
 	}
 
 	// 4. If any child failed, preserve parent
 	if len(result.Failed) > 0 {
 		result.Success = false
+		result.Error = fmt.Sprintf("%d child deletion(s) failed", len(result.Failed))
 		return result
 	}
 

@@ -27,8 +27,10 @@ func TestFullCreateIntegration(t *testing.T) {
 
 	// Simulate successful data load from API
 	model, _ = m2.Update(WizardDataLoadedMsg{
-		EntryNodes: []string{"forge", "human-entry"},
-		Artefacts:  []string{"petition", "haiku"},
+		EntryNodes:     []string{"forge", "human-entry"},
+		Artefacts:      []string{"petition", "haiku"},
+		EntryContracts: nil,
+		NodeEntryMap:   nil,
 	})
 	m3 := model.(*Model)
 

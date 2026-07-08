@@ -178,10 +178,12 @@ type CreateCancelMsg struct{}
 
 // WizardDataLoadedMsg is sent when initial wizard data is loaded from the API.
 type WizardDataLoadedMsg struct {
-	EntryNodes []string
-	Artefacts  []string
-	Blocked    string // "" if ok, "no_flow" or "multiple_flows"
-	BlockedErr string
+	EntryNodes     []string
+	Artefacts      []string
+	EntryContracts map[string]interface{} // entry contract name -> governed artefact keys (from FoundryFlow spec.entryContracts)
+	NodeEntryMap   map[string]string      // node name -> entry contract name (from FoundryNode spec.entry)
+	Blocked        string                 // "" if ok, "no_flow" or "multiple_flows"
+	BlockedErr     string
 }
 
 // ─── Delete messages ──────────────────────────────────────────────────────

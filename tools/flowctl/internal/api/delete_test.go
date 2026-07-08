@@ -145,9 +145,20 @@ func TestCascadeDeleteBlockedNonTerminal(t *testing.T) {
 	if result.Error == "" {
 		t.Error("expected error message about non-terminal child")
 	}
-	// parent should NOT be deleted
-	if len(mock.deleteCalls) > 0 {
-		t.Errorf("expected no deletions when a child is non-terminal, got %v", mock.deleteCalls)
+	// parent should NOT be deleted, but child-b (terminal sibling) should be
+	if len(mock.deleteCalls) != 1 || mock.deleteCalls[0] != "child-b" {
+		t.Errorf("expected only child-b to be deleted, got %v", mock.deleteCalls)
+	}
+	// child-a should be in the Failed list
+	found := false
+	for _, f := range result.Failed {
+		if f.WorkitemID == "child-a" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected child-a in failed list, got %v", result.Failed)
 	}
 }
 

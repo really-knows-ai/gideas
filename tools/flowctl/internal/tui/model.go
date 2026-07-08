@@ -49,6 +49,10 @@ type Model struct {
 	// Log writer for FLOW_LOG_FILE
 	logWriter *LogWriter
 
+	// Create wizard data — populated by loadWizardData for contract-based artefact filtering
+	wizardEntryContracts map[string]interface{} // entry contract name -> governed artefact keys
+	wizardNodeEntryMap  map[string]string       // node name -> entry contract name
+
 	// HITL lifecycle manager (created on Init with cfg.HitlPort)
 	hitlState   *components.HitlState
 
