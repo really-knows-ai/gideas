@@ -93,8 +93,9 @@ func (m HitlPromptModel) View() string {
 	// Ready: show choices
 	choices := m.Choices
 	usingDefault := m.DefaultChoices || !m.ChoicesLoaded
-	if len(choices) == 0 && usingDefault {
+	if len(choices) == 0 {
 		choices = defaultChoices
+		usingDefault = true
 	}
 
 	b.WriteString("Workitem awaiting decision  ")
@@ -281,11 +282,11 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 				return HitlChoicesBlockedMsg{Err: err}
 			}
 			defaultChoiceSet := false
-			if choices != nil {
+			if choices != nil && len(choices.Choices) > 0 {
 				h.choices = choices.Choices
 				h.hasCancel = choices.HasCancel
 			} else {
-				// 404 — use defaults
+				// 404 or empty choices array — use defaults
 				h.choices = DefaultAPIChoices()
 				h.hasCancel = true
 				defaultChoiceSet = true

@@ -57,6 +57,23 @@ func TestHitlDynamicChoices(t *testing.T) {
 	}
 }
 
+func TestHitlEmptyChoicesFallback(t *testing.T) {
+	m := NewHitlPrompt()
+	m.Visible = true
+	m.Loading = false
+	m.Choices = []types.Choice{} // non-nil but empty — simulates /choices returning {"choices":[]}
+	m.ChoicesLoaded = true
+	m.DefaultChoices = false
+	v := m.View()
+	// Should fall back to defaults to avoid a dead end.
+	if !strings.Contains(v, "[a]") || !strings.Contains(v, "[c]") {
+		t.Error("expected default choice keybindings for empty choices, got:", v)
+	}
+	if strings.Contains(v, "[R]elease") {
+		t.Error("expected no [R]elease when using default fallback, got:", v)
+	}
+}
+
 func TestHitlCancelConfirmation(t *testing.T) {
 	m := NewHitlPrompt()
 	m.Visible = true
