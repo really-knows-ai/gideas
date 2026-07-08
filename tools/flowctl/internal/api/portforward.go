@@ -21,9 +21,7 @@ type forwardState struct {
 	remotePort int
 	namespace  string
 	podName    string
-	stopChan   chan struct{}
-	readyChan  chan struct{}
-	stopFunc   func() // closes stopChan and removes from map; set by ForwardPod
+	stopFunc   func() // calls SPDY stop func and removes from map; set by ForwardPod
 }
 
 // PortForwardManager manages zero or more pod port-forwards.
@@ -184,8 +182,6 @@ func (m *PortForwardManager) ForwardPod(ctx context.Context, namespace, podName 
 		remotePort: remotePort,
 		namespace:  namespace,
 		podName:    podName,
-		stopChan:   make(chan struct{}),
-		readyChan:  make(chan struct{}),
 	}
 
 	state.stopFunc = func() {
