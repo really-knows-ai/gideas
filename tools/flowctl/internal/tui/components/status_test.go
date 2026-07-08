@@ -30,16 +30,6 @@ func TestStatusWorkitemDetail(t *testing.T) {
 	}
 }
 
-func TestStatusWarningBanner(t *testing.T) {
-	m := NewStatusBar()
-	m.ScreenName = "Test"
-	m.Warning = "Archivist port-forward failed"
-	v := m.View()
-	if !strings.Contains(v, "Archivist port-forward failed") {
-		t.Error("expected warning text in view, got:", v)
-	}
-}
-
 func TestStatusConnectedIndicator(t *testing.T) {
 	m := NewStatusBar()
 	m.ScreenName = "Test"

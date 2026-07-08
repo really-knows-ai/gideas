@@ -16,7 +16,6 @@ type StatusBarModel struct {
 	Namespace    string
 	WorkitemName string // empty if at list or namespace screen
 	State        string // Workitem state summary
-	Warning      string // non-empty shows yellow warning banner
 	Connected    bool   // green indicator dot
 	Disconnected bool   // yellow indicator with "Disconnected..."
 }
@@ -55,13 +54,6 @@ func (m StatusBarModel) View() string {
 
 	b.WriteString(strings.Join(parts, "  │  "))
 	b.WriteString("\n")
-
-	// Warning banner
-	if m.Warning != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(styles.WarningColor()).Render(fmt.Sprintf("⚠  %s", m.Warning)))
-		b.WriteString("\n")
-	}
-
 	// Disconnected banner
 	if m.Disconnected {
 		b.WriteString(lipgloss.NewStyle().Foreground(styles.WarningColor()).Render("Reconnecting..."))
