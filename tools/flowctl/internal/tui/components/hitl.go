@@ -147,7 +147,6 @@ type HitlProbeResultMsg struct {
 	NodeName       string
 	QueueItem      *api.QueueItem
 	Choices        []api.Choice
-	HasCancel      bool
 	ChoicesLoaded  bool
 	DefaultChoices bool
 }
@@ -176,7 +175,6 @@ type HitlState struct {
 	active        bool // true when a queue item has been found
 	queueItem     *api.QueueItem
 	choices       []api.Choice
-	hasCancel     bool
 	hitlClient    *api.HitlClient
 	forwardID     string // port-forward ID for cleanup
 	nodeName      string
@@ -284,11 +282,9 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 			defaultChoiceSet := false
 			if choices != nil && len(choices.Choices) > 0 {
 				h.choices = choices.Choices
-				h.hasCancel = choices.HasCancel
 			} else {
 				// 404 or empty choices array — use defaults
 				h.choices = DefaultAPIChoices()
-				h.hasCancel = true
 				defaultChoiceSet = true
 			}
 
@@ -297,7 +293,6 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 				NodeName:       nodeName,
 				QueueItem:      qi,
 				Choices:        h.choices,
-				HasCancel:      h.hasCancel,
 				ChoicesLoaded:  choices != nil,
 				DefaultChoices: defaultChoiceSet,
 			}

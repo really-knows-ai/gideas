@@ -342,7 +342,6 @@ func TestUpdateHitlProbeFoundShowsPrompt(t *testing.T) {
 		Choices: []api.Choice{
 			{Value: "approve", Label: "Approve", Type: "route"},
 		},
-		HasCancel: true,
 	})
 	m2 := model.(*Model)
 
@@ -372,7 +371,6 @@ func TestUpdateHitlProbeFoundWithChoices(t *testing.T) {
 			{Value: "approve", Label: "Approve", Type: "route"},
 			{Value: "cancel", Label: "Cancel", Type: "cancel"},
 		},
-		HasCancel: true,
 	})
 	m2 := model.(*Model)
 

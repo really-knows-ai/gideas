@@ -67,7 +67,6 @@ func TestHitlProbeShowsPrompt(t *testing.T) {
 			{Value: "approve", Label: "Approve", Type: "route"},
 			{Value: "cancel", Label: "Cancel", Type: "cancel"},
 		},
-		HasCancel: true,
 	})
 	m2 := model.(*Model)
 
@@ -117,7 +116,6 @@ func TestDefaultChoicesOnProbeResult(t *testing.T) {
 			{Value: "approve", Label: "Approve", Type: "route"},
 			{Value: "cancel", Label: "Cancel", Type: "cancel"},
 		},
-		HasCancel: true,
 	})
 	m2 := model.(*Model)
 
@@ -152,7 +150,6 @@ func TestDynamicChoicesOnProbeResult(t *testing.T) {
 			{Value: "reject", Label: "Reject", Type: "route"},
 			{Value: "cancel", Label: "Cancel", Type: "cancel"},
 		},
-		HasCancel: true,
 	})
 	m2 := model.(*Model)
 
