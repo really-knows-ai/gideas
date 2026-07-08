@@ -90,6 +90,13 @@ type ArtefactExpandedMsg struct {
 	FeedbackItems []api.FeedbackItem
 }
 
+// ArtefactFeedbackLoadedMsg is sent when feedback is loaded for a specific artefact.
+type ArtefactFeedbackLoadedMsg struct {
+	WorkitemID    string
+	ArtefactID    string
+	FeedbackItems []api.FeedbackItem
+}
+
 // ArtefactCollapsedMsg is sent when an artefact is collapsed.
 type ArtefactCollapsedMsg struct {
 	WorkitemID string

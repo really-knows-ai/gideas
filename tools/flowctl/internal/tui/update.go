@@ -778,19 +778,23 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			nodes[i] = toArtefactNode(a)
 			if expandedSet[a.ID] {
 				nodes[i].Expanded = true
-				// Trigger re-fetch for expanded artefacts
-				// This is batched; individual expand triggers content/feedback loading
 			}
 		}
 		m.workitemDetail.artefacts.Artefacts = nodes
 		m.workitemDetail.artefacts.Loading = false
 		m.errorBanner = ""
 
-		// For expanded artefacts, re-fetch content and feedback
+		// Fetch content for expanded artefacts and feedback for every artefact
 		var cmds []tea.Cmd
-		for _, art := range m.workitemDetail.artefacts.Artefacts {
-			if art.Expanded && m.archivist != nil {
-				cmds = append(cmds, m.fetchArtefactContent(msg.WorkitemID, art.ArtefactID))
+		if m.archivist != nil {
+			for _, art := range m.workitemDetail.artefacts.Artefacts {
+				if art.Expanded {
+					// Expanded artefacts: fetch content + feedback together
+					cmds = append(cmds, m.fetchArtefactContent(msg.WorkitemID, art.ArtefactID))
+				} else {
+					// Collapsed artefacts: fetch feedback only
+					cmds = append(cmds, m.fetchArtefactFeedback(msg.WorkitemID, art.ArtefactID))
+				}
 			}
 		}
 		if len(cmds) > 0 {
@@ -821,6 +825,14 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.workitemDetail.artefacts.Artefacts[i].BinarySize = msg.BinarySize
 				}
 				m.workitemDetail.artefacts.Artefacts[i].Content = msg.Content
+				m.workitemDetail.artefacts.Artefacts[i].Feedback = convertAPIFeedback(msg.FeedbackItems)
+				break
+			}
+		}
+
+	case ArtefactFeedbackLoadedMsg:
+		for i, art := range m.workitemDetail.artefacts.Artefacts {
+			if art.ArtefactID == msg.ArtefactID {
 				m.workitemDetail.artefacts.Artefacts[i].Feedback = convertAPIFeedback(msg.FeedbackItems)
 				break
 			}
@@ -1082,6 +1094,39 @@ func (m *Model) fetchArtefactContent(workitemID, artefactID string) tea.Cmd {
 			Content:       contentStr,
 			IsBinary:      isBinary,
 			BinarySize:    binarySize,
+			FeedbackItems: feedback,
+		}
+	}
+}
+
+// fetchArtefactFeedback fetches feedback for a specific artefact.
+func (m *Model) fetchArtefactFeedback(workitemID, artefactID string) tea.Cmd {
+	return func() tea.Msg {
+		if m.archivist == nil {
+			return ArtefactFeedbackLoadedMsg{
+				WorkitemID:    workitemID,
+				ArtefactID:    artefactID,
+				FeedbackItems: nil,
+			}
+		}
+
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		feedback, err := m.archivist.GetFeedback(ctx, m.namespace, workitemID, artefactID)
+		if err != nil {
+			return ArtefactLoadErrorMsg{
+				WorkitemID: workitemID,
+				ArtefactID: artefactID,
+				Error:      err,
+			}
+		}
+
+		return ArtefactFeedbackLoadedMsg{
+			WorkitemID:    workitemID,
+			ArtefactID:    artefactID,
 			FeedbackItems: feedback,
 		}
 	}
