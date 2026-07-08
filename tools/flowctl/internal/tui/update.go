@@ -450,6 +450,7 @@ func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
 							m.workitemList.Items[i] = msg.Item
 							return tea.Batch(
 								m.debouncedChildCountRefresh(),
+								m.RefreshArtefacts(),
 								m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
 									msg.Item.Node, msg.Item.Name, m.pfm),
 							)
@@ -463,6 +464,13 @@ func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
 				break
 			}
 		}
+	}
+	// Refresh artefacts when on the detail screen for the updated workitem
+	if m.screen == ScreenWorkitemDetail && m.workitemDetail.workitemName == msg.Item.Name {
+		return tea.Batch(
+			m.debouncedChildCountRefresh(),
+			m.RefreshArtefacts(),
+		)
 	}
 	return m.debouncedChildCountRefresh()
 }
