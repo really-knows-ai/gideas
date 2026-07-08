@@ -1191,6 +1191,10 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Blocked != "" {
 			m.createWizard.Blocked = msg.Blocked
 			m.createWizard.Error = msg.BlockedErr
+		} else if msg.BlockedErr != "" {
+			// Transient API or other error — show as error state
+			m.createWizard.Error = msg.BlockedErr
+			m.createWizard.Stage = components.StageError
 		} else {
 			m.createWizard.EntryNodes = msg.EntryNodes
 			m.createWizard.Artefacts = msg.Artefacts
@@ -1217,8 +1221,13 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		flow, err := m.k8s.GetFoundryFlow(m.ctx, m.namespace)
 		if err != nil {
 			m.createWizard.Loading = false
-			m.createWizard.Blocked = "multiple_flows"
-			m.createWizard.Error = err.Error()
+			if errors.Is(err, api.ErrMultipleFoundryFlows) {
+				m.createWizard.Blocked = "multiple_flows"
+				m.createWizard.Error = "multiple FoundryFlows detected; use a namespace with exactly one FoundryFlow"
+			} else {
+				m.createWizard.Error = fmt.Sprintf("Failed to check FoundryFlow: %v", err)
+				m.createWizard.Stage = components.StageError
+			}
 			m.logIfEnabled("ERROR", "create", fmt.Sprintf("foundryflow check failed: %v", err))
 			return m, nil
 		}
@@ -1621,9 +1630,14 @@ func (m *Model) loadWizardData() tea.Cmd {
 		// 1. Check FoundryFlow (blocked state detection)
 		flow, err := m.k8s.GetFoundryFlow(m.ctx, m.namespace)
 		if err != nil {
+			if errors.Is(err, api.ErrMultipleFoundryFlows) {
+				return WizardDataLoadedMsg{
+					Blocked:    "multiple_flows",
+					BlockedErr: "multiple FoundryFlows detected; use a namespace with exactly one FoundryFlow",
+				}
+			}
 			return WizardDataLoadedMsg{
-				Blocked:    "multiple_flows",
-				BlockedErr: err.Error(),
+				BlockedErr: fmt.Sprintf("Failed to check FoundryFlow: %v", err),
 			}
 		}
 		if flow == nil {

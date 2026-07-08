@@ -30,6 +30,10 @@ var (
 	}
 )
 
+// ErrMultipleFoundryFlows is returned by GetFoundryFlow when more than one
+// FoundryFlow CRD exists in the namespace.
+var ErrMultipleFoundryFlows = fmt.Errorf("multiple FoundryFlows detected")
+
 // K8sClient wraps Kubernetes and controller-runtime clients for CRD operations.
 type K8sClient struct {
 	CoreClient    kubernetes.Interface   // client-go for core/v1
@@ -334,7 +338,7 @@ func (c *K8sClient) GetFoundryFlow(ctx context.Context, namespace string) (*Foun
 		return nil, nil
 	}
 	if len(list.Items) > 1 {
-		return nil, fmt.Errorf("multiple FoundryFlows detected in namespace %s; expected exactly one", namespace)
+		return nil, fmt.Errorf("%w in namespace %s; expected exactly one", ErrMultipleFoundryFlows, namespace)
 	}
 
 	flow := &list.Items[0]

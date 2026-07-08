@@ -69,11 +69,11 @@ func (m CreateWizardModel) View() string {
 
 	// Blocked states
 	if m.Blocked == "no_flow" {
-		b.WriteString("Cannot seed — no FoundryFlow in namespace. A Workitem requires exactly one FoundryFlow.\n\nPress esc to return")
+		b.WriteString("no FoundryFlow in namespace\n\nPress esc to return")
 		return b.String()
 	}
 	if m.Blocked == "multiple_flows" {
-		b.WriteString("Cannot seed — multiple FoundryFlows detected. Use a namespace with exactly one FoundryFlow.\n\nPress esc to return")
+		b.WriteString("multiple FoundryFlows detected; use a namespace with exactly one FoundryFlow\n\nPress esc to return")
 		return b.String()
 	}
 
