@@ -137,6 +137,16 @@ func (m *Model) Init() tea.Cmd {
 	// If --namespace or FLOW_NAMESPACE was explicitly set, skip the selector
 	if m.cfg.NamespaceExplicit {
 		m.namespace = m.cfg.Namespace
+		// Resolve system namespace for subsequent Archivist port-forward
+		sysNS := m.namespace
+		if m.k8s != nil {
+			var err error
+			sysNS, err = m.k8s.ResolveSystemNamespace(m.ctx, m.cfg.SystemNamespace, m.namespace)
+			if err != nil {
+				sysNS = m.namespace
+			}
+		}
+		m.systemNS = sysNS
 		return m.loadWorkitems()
 	}
 	return func() tea.Msg {

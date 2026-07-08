@@ -258,6 +258,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workitemDetail.artefacts.Error = msg.Message
 		}
 		m.err = fmt.Errorf("%s: %s", msg.Source, msg.Message)
+		m.logIfEnabled("ERROR", msg.Source, msg.Message)
 		return m, nil
 
 	case WorkitemUpdateMsg:
@@ -269,6 +270,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WatchDisconnectedMsg:
 		m.banner = "Reconnecting..."
 		m.bannerSource = "watch"
+		m.logIfEnabled("WARN", "watch", fmt.Sprintf("watch disconnected: %v", msg.Error))
 		return m, nil
 
 	case WatchReconnectedMsg:
@@ -319,6 +321,7 @@ func (m *Model) routeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) loadNamespaces() tea.Msg {
 	if m.k8s == nil {
+		m.logIfEnabled("WARN", "namespace", "no K8s client; falling back to default")
 		return NamespaceFallbackMsg{Namespace: "default", Error: fmt.Errorf("no K8s client")}
 	}
 	namespaces, err := m.k8s.ListNamespaces(m.ctx)
@@ -329,6 +332,7 @@ func (m *Model) loadNamespaces() tea.Msg {
 		} else if fallback == "" {
 			fallback = "default"
 		}
+		m.logIfEnabled("WARN", "namespace", fmt.Sprintf("failed to list namespaces: %v; falling back to %s", err, fallback))
 		return NamespaceFallbackMsg{Namespace: fallback, Error: err}
 	}
 	return NamespaceListLoadedMsg{Namespaces: namespaces}
@@ -337,10 +341,12 @@ func (m *Model) loadNamespaces() tea.Msg {
 func (m *Model) loadWorkitems() tea.Cmd {
 	return func() tea.Msg {
 		if m.k8s == nil {
+			m.logIfEnabled("ERROR", "workitem", "no K8s client available")
 			return WorkitemLoadErrorMsg{Error: fmt.Errorf("no K8s client")}
 		}
 		items, err := m.k8s.ListWorkitems(m.ctx, m.namespace)
 		if err != nil {
+			m.logIfEnabled("ERROR", "workitem", fmt.Sprintf("list workitems: %v", err))
 			return WorkitemLoadErrorMsg{Error: err}
 		}
 		// Compute child counts in a batch before returning
@@ -520,6 +526,10 @@ func (m *Model) updateNamespaceSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.systemNS = sysNS
+		// Log the fallback reason
+		if msg.Error != nil {
+			m.logIfEnabled("WARN", "namespace", fmt.Sprintf("namespace list failed: %v; falling back to %s", msg.Error, msg.Namespace))
+		}
 		// Auto-select fallback namespace and skip the selector entirely
 		m.namespace = msg.Namespace
 		m.workitemList.Namespace = msg.Namespace
@@ -564,6 +574,7 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WorkitemLoadErrorMsg:
 		m.workitemList.Loading = false
 		m.workitemList.Error = msg.Error.Error()
+		m.logIfEnabled("ERROR", "workitem", fmt.Sprintf("load error: %v", msg.Error))
 
 	// Note: WorkitemUpdateMsg is handled at root level in handleWorkitemUpdate.
 	// It is NOT dispatched to this handler.
@@ -660,6 +671,7 @@ func (m *Model) loadWorkitemDetail(name string) tea.Cmd {
 		}
 		detail, err := m.k8s.GetWorkitem(m.ctx, m.namespace, name)
 		if err != nil {
+			m.logIfEnabled("ERROR", "workitem-detail", fmt.Sprintf("fetch detail for %s: %v", name, err))
 			return ErrorMsg{Source: "workitem-detail", Message: fmt.Sprintf("fetch detail: %v", err)}
 		}
 		return WorkitemDetailLoadedMsg{Detail: detail}
@@ -681,15 +693,22 @@ func (m *Model) connectArchivist() tea.Cmd {
 		}
 
 		archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
-		if err != nil || !found {
-			return nil // archivist not available; loadArtefacts will report the error
+		if err != nil {
+			m.logIfEnabled("WARN", "archivist", fmt.Sprintf("find archivist pod: %v", err))
+			return nil
+		}
+		if !found {
+			m.logIfEnabled("WARN", "archivist", "no Ready archivist pod found in namespace "+m.systemNS)
+			return nil
 		}
 		_, localPort, err := m.pfm.ForwardPod(ctx, m.systemNS, archivistPod, 50054)
 		if err != nil {
+			m.logIfEnabled("WARN", "archivist", fmt.Sprintf("forward pod: %v", err))
 			return nil
 		}
 		archivist, err := api.NewArchivistClient(fmt.Sprintf("localhost:%d", localPort))
 		if err != nil {
+			m.logIfEnabled("WARN", "archivist", fmt.Sprintf("connect: %v", err))
 			return nil
 		}
 		// Close previous client if any
@@ -707,6 +726,7 @@ func (m *Model) connectArchivist() tea.Cmd {
 func (m *Model) loadArtefacts(workitemID string) tea.Cmd {
 	return func() tea.Msg {
 		if m.pfm == nil {
+			m.logIfEnabled("ERROR", "archivist", "no port-forward manager")
 			return ErrorMsg{Source: "archivist-forward", Message: "no port-forward manager"}
 		}
 
@@ -719,17 +739,21 @@ func (m *Model) loadArtefacts(workitemID string) tea.Cmd {
 		if m.archivist == nil {
 			archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
 			if err != nil {
+				m.logIfEnabled("ERROR", "archivist", fmt.Sprintf("find archivist pod: %v", err))
 				return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("find archivist pod: %v", err)}
 			}
 			if !found {
+				m.logIfEnabled("ERROR", "archivist", fmt.Sprintf("no Ready archivist pod found in namespace %s", m.systemNS))
 				return ErrorMsg{Source: "archivist-forward", Message: "no Ready archivist pod found in namespace " + m.systemNS}
 			}
 			_, localPort, err := m.pfm.ForwardPod(ctx, m.systemNS, archivistPod, 50054)
 			if err != nil {
+				m.logIfEnabled("ERROR", "archivist", fmt.Sprintf("port-forward: %v", err))
 				return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("port-forward: %v", err)}
 			}
 			archivist, err := api.NewArchivistClient(fmt.Sprintf("localhost:%d", localPort))
 			if err != nil {
+				m.logIfEnabled("ERROR", "archivist", fmt.Sprintf("connect: %v", err))
 				return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("connect: %v", err)}
 			}
 			if m.archivist != nil {
@@ -741,6 +765,7 @@ func (m *Model) loadArtefacts(workitemID string) tea.Cmd {
 		// List artefacts via the (now established) client
 		artefacts, err := m.archivist.ListArtefacts(ctx, m.namespace, workitemID)
 		if err != nil {
+			m.logIfEnabled("ERROR", "archivist", fmt.Sprintf("list artefacts for %s: %v", workitemID, err))
 			return ArtefactLoadErrorMsg{WorkitemID: workitemID, Error: err}
 		}
 
@@ -760,6 +785,7 @@ func (m *Model) loadTopology() tea.Cmd {
 		}
 		nodes, err := m.k8s.ListFoundryNodes(ctx, m.namespace)
 		if err != nil {
+			m.logIfEnabled("ERROR", "topology", fmt.Sprintf("ListFoundryNodes: %v", err))
 			return ErrorMsg{Source: "topology", Message: fmt.Sprintf("ListFoundryNodes: %v", err)}
 		}
 
@@ -866,6 +892,7 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ArtefactLoadErrorMsg:
 		m.workitemDetail.artefacts.Loading = false
+		m.logIfEnabled("ERROR", "archivist", fmt.Sprintf("artefact load error for %s/%s: %v", msg.WorkitemID, msg.ArtefactID, msg.Error))
 		if msg.ArtefactID == "" {
 			// List failed
 			m.workitemDetail.artefacts.Error = fmt.Sprintf("Artefacts unavailable: %v", msg.Error)
@@ -967,6 +994,7 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workitemDetail.hitl.Error = fmt.Sprintf("choices: %s", msg.Err)
 		m.workitemDetail.hitl.ErrorRetry = true
 		m.statusMessage = fmt.Sprintf("Unable to load choices: %s", msg.Err)
+		m.logIfEnabled("ERROR", "hitl", fmt.Sprintf("choices blocked: %s", msg.Err))
 
 	case HitlProbeTriggerMsg:
 		if m.hitlState != nil && !m.hitlState.Exhausted() && m.workitemDetail.workitemName != "" {
@@ -1008,6 +1036,7 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case HitlErrorMsg:
+		m.logIfEnabled("ERROR", "hitl", fmt.Sprintf("HITL error for %s: %v (retryable=%v)", msg.WorkitemID, msg.Err, msg.Retryable))
 		if !msg.Retryable {
 			m.workitemDetail.hitl.Visible = false
 		} else {
@@ -1127,6 +1156,7 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ErrorMsg:
 		// Show as error banner at top of detail screen
 		m.errorBanner = fmt.Sprintf("⚠ %s: %s", msg.Source, msg.Message)
+		m.logIfEnabled("ERROR", msg.Source, msg.Message)
 		// Clear error banner after 10 seconds
 		return m, tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
 			return ClearErrorBannerMsg{}
@@ -1375,6 +1405,7 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createWizard.Stage = components.StageError
 		m.createWizard.Error = msg.Err.Error()
 		m.createWizard.Retryable = msg.Retry
+		m.logIfEnabled("ERROR", "create", fmt.Sprintf("create failed: %v", msg.Err))
 
 	case CreateCancelMsg:
 		// Return to workitem list

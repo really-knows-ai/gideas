@@ -180,6 +180,15 @@ func makeFoundryFlow(name string, entryContracts map[string]map[string]string) *
 	return obj
 }
 
+func makeGovernedArtefact(name string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetKind("GovernedArtefact")
+	obj.SetName(name)
+	obj.SetNamespace("default")
+	return obj
+}
+
 // ─── T1: ListNamespaces ────────────────────────────────────────────────────
 
 func TestListNamespaces(t *testing.T) {
@@ -589,6 +598,29 @@ func TestGetFoundryFlow_Multiple(t *testing.T) {
 	}
 	if err.Error() != "multiple FoundryFlows detected in namespace default; expected exactly one" {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// ─── T14: ListGovernedArtefacts ─────────────────────────────────────────────
+
+func TestListGovernedArtefacts(t *testing.T) {
+	_, crdClient := newFakeSchemeAndClient(
+		makeGovernedArtefact("haiku"),
+		makeGovernedArtefact("petition"),
+	)
+	k8s := &K8sClient{CRDClient: crdClient}
+	artefacts, err := k8s.ListGovernedArtefacts(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(artefacts) != 2 {
+		t.Fatalf("expected 2 artefacts, got %d", len(artefacts))
+	}
+	if artefacts[0].Name != "haiku" {
+		t.Errorf("expected haiku, got %s", artefacts[0].Name)
+	}
+	if artefacts[1].Name != "petition" {
+		t.Errorf("expected petition, got %s", artefacts[1].Name)
 	}
 }
 
