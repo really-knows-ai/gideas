@@ -73,6 +73,10 @@ type Model struct {
 
 	// Debounce timer for child-count recomputation on watch batches
 	childCountDebounce *time.Timer
+
+	// Watch context and cancel for explicit K8s watch lifecycle management
+	watchCtx    context.Context
+	watchCancel context.CancelFunc
 }
 
 // WorkitemDetailModel holds the sub-components for the detail screen.
@@ -154,6 +158,10 @@ func (m *Model) selectedWorkitemName() string {
 // closeAll closes all open connections: HITL port-forward, Archivist port-forward,
 // K8s watch, gRPC connection. Called on Ctrl+C or q.
 func (m *Model) closeAll() {
+	// 0. Cancel K8s watch context (stops the watch goroutine)
+	if m.watchCancel != nil {
+		m.watchCancel()
+	}
 	// 1. Close HITL port-forward (if open)
 	if m.hitlState != nil && m.pfm != nil {
 		m.hitlState.Close(m.pfm)

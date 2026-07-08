@@ -354,12 +354,13 @@ func (m *Model) computeChildCounts(ctx context.Context, items []api.WorkitemSumm
 // startWorkitemWatch starts a background goroutine that watches Workitems.
 // It calls WatchWithBackoff which blocks until ctx is cancelled.
 // The handler sends messages to the TUI program via program.Send().
+// Requires m.watchCtx to be set before calling — set by the WorkitemsLoadedMsg handler.
 func (m *Model) startWorkitemWatch() tea.Cmd {
-	if m.k8s == nil {
+	if m.k8s == nil || m.watchCtx == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		m.k8s.WatchWithBackoff(m.ctx, m.namespace, func(event watch.Event) {
+		m.k8s.WatchWithBackoff(m.watchCtx, m.namespace, func(event watch.Event) {
 			m.handleWatchEvent(event)
 		}, api.WatchOptions{
 			OnDisconnect: func(err error) {
@@ -491,15 +492,21 @@ func (m *Model) updateNamespaceSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 
 	case NamespaceFallbackMsg:
-		// Fall back to the context namespace with error
-		m.namespaceSelector.Loading = false
-		m.namespaceSelector.Error = msg.Error.Error()
-		// Auto-select fallback namespace
+		// Resolve system namespace for subsequent Archivist port-forward
+		sysNS := msg.Namespace
+		if m.k8s != nil {
+			var err error
+			sysNS, err = m.k8s.ResolveSystemNamespace(m.ctx, m.cfg.SystemNamespace, msg.Namespace)
+			if err != nil {
+				sysNS = msg.Namespace
+			}
+		}
+		m.systemNS = sysNS
+		// Auto-select fallback namespace and skip the selector entirely
 		m.namespace = msg.Namespace
-		// Transition to workitem list with the fallback namespace
 		m.workitemList.Namespace = msg.Namespace
 		m.screen = ScreenWorkitemList
-		return m, m.loadWorkitems()
+		return m, tea.Batch(m.loadWorkitems(), m.connectArchivist())
 
 	case NamespaceSelectedMsg:
 		// Resolve system namespace for subsequent Archivist port-forward
@@ -515,7 +522,7 @@ func (m *Model) updateNamespaceSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.namespace = msg.Namespace
 		m.workitemList.Namespace = msg.Namespace
 		m.screen = ScreenWorkitemList
-		return m, m.loadWorkitems()
+		return m, tea.Batch(m.loadWorkitems(), m.connectArchivist())
 	}
 	return m, nil
 }
@@ -527,6 +534,12 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workitemList.Items = msg.Items
 		m.workitemList.Loading = false
 		m.workitemList.Cursor = 0
+		// Create a cancellable watch context for explicit lifecycle management
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		m.watchCtx, m.watchCancel = context.WithCancel(ctx)
 		// Start the watch in background
 		return m, m.startWorkitemWatch()
 
@@ -641,10 +654,46 @@ func (m *Model) loadWorkitemDetail(name string) tea.Cmd {
 	}
 }
 
-// loadArtefacts connects to the Archivist and loads artefacts.
+// connectArchivist establishes a port-forward to the Archivist pod and creates
+// a gRPC client. It is called after namespace resolution so the connection is
+// ready when entering Workitem detail. If it fails, m.archivist stays nil and
+// loadArtefacts will report the error at entry time.
+func (m *Model) connectArchivist() tea.Cmd {
+	return func() tea.Msg {
+		if m.pfm == nil || m.systemNS == "" {
+			return nil // silently skip — archivist won't be available
+		}
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
+		if err != nil || !found {
+			return nil // archivist not available; loadArtefacts will report the error
+		}
+		_, localPort, err := m.pfm.ForwardPod(ctx, m.systemNS, archivistPod, 50054)
+		if err != nil {
+			return nil
+		}
+		archivist, err := api.NewArchivistClient(fmt.Sprintf("localhost:%d", localPort))
+		if err != nil {
+			return nil
+		}
+		// Close previous client if any
+		if m.archivist != nil {
+			m.archivist.Close()
+		}
+		m.archivist = archivist
+		return nil
+	}
+}
+
+// loadArtefacts loads artefacts for a Workitem. The Archivist connection should
+// already be established by connectArchivist (called after namespace resolution).
+// Falls back to connecting synchronously if m.archivist is nil.
 func (m *Model) loadArtefacts(workitemID string) tea.Cmd {
 	return func() tea.Msg {
-		// 1. Find the Archivist pod if needed
 		if m.pfm == nil {
 			return ErrorMsg{Source: "archivist-forward", Message: "no port-forward manager"}
 		}
@@ -654,35 +703,31 @@ func (m *Model) loadArtefacts(workitemID string) tea.Cmd {
 			ctx = context.Background()
 		}
 
-		// 2. Find a Ready Archivist pod
-		archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
-		if err != nil {
-			return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("find archivist pod: %v", err)}
-		}
-		if !found {
-			return ErrorMsg{Source: "archivist-forward", Message: "no Ready archivist pod found in namespace " + m.systemNS}
+		// Connect lazily if eager connect after namespace resolution did not run or failed
+		if m.archivist == nil {
+			archivistPod, found, err := m.pfm.FindReadyPod(m.systemNS, "app.kubernetes.io/name=flow-archivist")
+			if err != nil {
+				return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("find archivist pod: %v", err)}
+			}
+			if !found {
+				return ErrorMsg{Source: "archivist-forward", Message: "no Ready archivist pod found in namespace " + m.systemNS}
+			}
+			_, localPort, err := m.pfm.ForwardPod(ctx, m.systemNS, archivistPod, 50054)
+			if err != nil {
+				return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("port-forward: %v", err)}
+			}
+			archivist, err := api.NewArchivistClient(fmt.Sprintf("localhost:%d", localPort))
+			if err != nil {
+				return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("connect: %v", err)}
+			}
+			if m.archivist != nil {
+				m.archivist.Close()
+			}
+			m.archivist = archivist
 		}
 
-		// 3. Forward port 50054
-		_, localPort, err := m.pfm.ForwardPod(ctx, m.systemNS, archivistPod, 50054)
-		if err != nil {
-			return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("port-forward: %v", err)}
-		}
-
-		// 4. Create Archivist client
-		archivist, err := api.NewArchivistClient(fmt.Sprintf("localhost:%d", localPort))
-		if err != nil {
-			return ErrorMsg{Source: "archivist-forward", Message: fmt.Sprintf("connect: %v", err)}
-		}
-
-		// Store for reuse
-		if m.archivist != nil {
-			m.archivist.Close()
-		}
-		m.archivist = archivist
-
-		// 5. List artefacts
-		artefacts, err := archivist.ListArtefacts(ctx, m.namespace, workitemID)
+		// List artefacts via the (now established) client
+		artefacts, err := m.archivist.ListArtefacts(ctx, m.namespace, workitemID)
 		if err != nil {
 			return ArtefactLoadErrorMsg{WorkitemID: workitemID, Error: err}
 		}

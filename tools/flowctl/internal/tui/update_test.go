@@ -39,11 +39,15 @@ func TestUpdateNamespaceFallbackTransitionsToList(t *testing.T) {
 	if m2.screen != ScreenWorkitemList {
 		t.Errorf("expected screen WorkitemList, got %d", m2.screen)
 	}
-	if m2.namespaceSelector.Error != "permission denied" {
-		t.Errorf("expected error 'permission denied', got %q", m2.namespaceSelector.Error)
+	// Namespace selector state should not be modified — we skip it entirely on fallback
+	if m2.namespaceSelector.Error != "" {
+		t.Errorf("expected namespace selector error to be empty, got %q", m2.namespaceSelector.Error)
+	}
+	if m2.namespace != "default" {
+		t.Errorf("expected namespace 'default', got %q", m2.namespace)
 	}
 	if cmd == nil {
-		t.Error("expected non-nil command (loadWorkitems)")
+		t.Error("expected non-nil command")
 	}
 }
 
