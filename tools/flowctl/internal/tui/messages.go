@@ -186,6 +186,20 @@ type DeleteErrorMsg struct {
 	Err          error
 }
 
+// ─── Banner messages ───────────────────────────────────────────────────────
+
+// BannerMsg sets a persistent or transient banner at the top of the screen.
+type BannerMsg struct {
+	Source  string // unique source key for dismissal tracking
+	Message string
+	Level   string // "info", "warn", "error"
+}
+
+// BannerDismissMsg clears a banner by source.
+type BannerDismissMsg struct {
+	Source string
+}
+
 // ─── System messages ──────────────────────────────────────────────────────
 
 // QuitMsg signals the user wants to quit.

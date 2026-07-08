@@ -224,8 +224,15 @@ func TestUpdateCreateSuccessTransitionsToDetail(t *testing.T) {
 	if m2.workitemDetail.workitemName != "wi-new-001" {
 		t.Errorf("expected workitemName wi-new-001, got %q", m2.workitemDetail.workitemName)
 	}
-	if cmd != nil {
-		t.Error("expected nil command")
+	if m2.createWizard.Stage != components.StageComplete {
+		t.Errorf("expected StageComplete, got %d", m2.createWizard.Stage)
+	}
+	if m2.createWizard.SuccessName != "wi-new-001" {
+		t.Errorf("expected SuccessName wi-new-001, got %q", m2.createWizard.SuccessName)
+	}
+	// CreateSuccessMsg now triggers topology and artefact loading commands
+	if cmd == nil {
+		t.Error("expected non-nil command (topology/artefacts load)")
 	}
 }
 

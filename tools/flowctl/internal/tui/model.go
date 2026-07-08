@@ -41,6 +41,14 @@ type Model struct {
 	// Error banner displayed at top of screen
 	errorBanner string
 
+	// Transient banner (from BannerMsg) that auto-dismisses after timeout
+	banner        string
+	bannerSource  string
+	bannerTimeout bool // true if banner has an auto-dismiss timer
+
+	// Log writer for FLOW_LOG_FILE
+	logWriter *LogWriter
+
 	// HITL lifecycle manager (created on Init with cfg.HitlPort)
 	hitlState   *components.HitlState
 
@@ -48,6 +56,10 @@ type Model struct {
 	statusMessage string
 	// Debug hint shown when --hitl-port != 8080 and all probes fail
 	debugHint string
+
+	// Delete confirmation state
+	deleteConfirmWorkitem string // name of workitem pending delete confirmation; "" if none
+	deleteConfirmPhase   string // phase of workitem pending confirmation
 
 	// Sub-states for each screen
 	namespaceSelector components.NamespaceSelectorModel
@@ -82,6 +94,7 @@ func NewModel(k8s *api.K8sClient, cfg *config.Config, ctx context.Context) Model
 	m.cfg = cfg
 	m.ctx = ctx
 	m.hitlState = components.NewHitlState(cfg.HitlPort)
+	m.logWriter = NewLogWriter(cfg.LogFile)
 	return m
 }
 
@@ -132,6 +145,27 @@ func (m *Model) selectedWorkitemName() string {
 		return m.workitemList.Items[m.workitemList.Cursor].Name
 	}
 	return ""
+}
+
+// closeAll closes all open connections: HITL port-forward, Archivist port-forward,
+// K8s watch, gRPC connection. Called on Ctrl+C or q.
+func (m *Model) closeAll() {
+	// 1. Close HITL port-forward (if open)
+	if m.hitlState != nil && m.pfm != nil {
+		m.hitlState.Close(m.pfm)
+	}
+	// 2. Close Archivist port-forward (if any)
+	if m.pfm != nil {
+		_ = m.pfm.CloseAll()
+	}
+	// 3. Close gRPC connection
+	if m.archivist != nil {
+		m.archivist.Close()
+	}
+	// 4. Close log writer
+	if m.logWriter != nil {
+		m.logWriter.Close()
+	}
 }
 
 // RefreshArtefacts re-fetches artefacts and feedback for the currently selected workitem.

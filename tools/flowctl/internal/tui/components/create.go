@@ -8,6 +8,23 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// CreateStage tracks which phase of creation the wizard is in.
+type CreateStage int
+
+const (
+	StageIdle              CreateStage = iota
+	StagePromptText                    // 0: entering prompt text
+	StageEntryNode                     // 1: selecting entry node
+	StageArtefactID                    // 2: entering artefact ID
+	StageGovernedArtefact              // 3: selecting governed artefact
+	StageConfirm                       // 4: confirmation
+	StageCreating                      // 5: CRD create in progress
+	StageStoringArtefact               // 6: StoreArtefact in progress
+	StageUpdatingStatus                // 7: Status update in progress
+	StageComplete                      // 8: creation complete
+	StageError                         // 9: creation error
+)
+
 // CreateWizardModel is the model for the create Workitem wizard.
 type CreateWizardModel struct {
 	Step         int    // 0=prompt, 1=entryNode, 2=artefactID, 3=governedArtefact, 4=confirm, 5=success/error
@@ -19,6 +36,11 @@ type CreateWizardModel struct {
 	Error        string
 	SuccessName  string // set on successful creation
 	Blocked      string // "" if not blocked, "no_flow" or "multiple_flows" if blocked
+
+	// Phase 06: create execution stage tracking
+	Stage       CreateStage // current creation stage
+	WorkitemID  string      // ID of created workitem
+	Retryable   bool        // true if retry is possible after error
 
 	cursor int // cursor for selection fields
 }
@@ -63,6 +85,32 @@ func (m CreateWizardModel) View() string {
 			b.WriteString(fmt.Sprintf("Workitem created successfully: %s\n\nPress enter to open the Workitem detail", m.SuccessName))
 		} else {
 			b.WriteString(fmt.Sprintf("Error creating Workitem: %s\n[r]etry  [c]ancel", m.Error))
+		}
+		return b.String()
+	}
+
+	// Phase 06: creation progress stages (Step 6-9 mapped to CreateStage)
+	if m.Stage == StageCreating {
+		b.WriteString("Creating Workitem CRD...")
+		return b.String()
+	}
+	if m.Stage == StageStoringArtefact {
+		b.WriteString("Storing artefact...")
+		return b.String()
+	}
+	if m.Stage == StageUpdatingStatus {
+		b.WriteString("Setting Workitem status...")
+		return b.String()
+	}
+	if m.Stage == StageComplete {
+		b.WriteString(fmt.Sprintf("Workitem created successfully: %s\n\nPress enter to open the Workitem detail", m.WorkitemID))
+		return b.String()
+	}
+	if m.Stage == StageError {
+		if m.Retryable {
+			b.WriteString(fmt.Sprintf("Error: %s\n[r]etry  [c]ancel", m.Error))
+		} else {
+			b.WriteString(fmt.Sprintf("Error: %s\n[c]ancel", m.Error))
 		}
 		return b.String()
 	}

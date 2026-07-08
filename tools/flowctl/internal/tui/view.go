@@ -24,18 +24,36 @@ func (m *Model) View() string {
 		)
 	}
 
-	switch m.screen {
-	case ScreenNamespaceSelect:
-		return m.namespaceSelector.View()
-	case ScreenWorkitemList:
-		return m.workitemList.View()
-	case ScreenWorkitemDetail:
-		return m.renderDetail()
-	case ScreenCreateWizard:
-		return m.createWizard.View()
+	// Delete confirmation overlay (shown on any screen that supports deletion)
+	if m.deleteConfirmWorkitem != "" {
+		return lipgloss.JoinVertical(lipgloss.Top,
+			fmt.Sprintf("Delete Workitem %s and all its children? [y/N]", m.deleteConfirmWorkitem),
+			"",
+			"Any key other than y cancels the deletion.",
+		)
 	}
 
-	return "Unknown screen"
+	// Banner at top of screen (before screen content)
+	var content string
+	switch m.screen {
+	case ScreenNamespaceSelect:
+		content = m.namespaceSelector.View()
+	case ScreenWorkitemList:
+		content = m.workitemList.View()
+	case ScreenWorkitemDetail:
+		content = m.renderDetail()
+	case ScreenCreateWizard:
+		content = m.createWizard.View()
+	default:
+		content = "Unknown screen"
+	}
+
+	// Prepend banner if active
+	if m.banner != "" {
+		content = errorBannerStyle.Render(m.banner) + "\n" + content
+	}
+
+	return content
 }
 
 // renderDetail renders the Workitem detail screen with error banner,

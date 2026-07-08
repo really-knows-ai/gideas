@@ -2,8 +2,9 @@ package tui
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
-	"math/rand"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,6 +17,9 @@ import (
 	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
 	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
 )
+
+// Retryable error sentinel for create wizard retry.
+var errCreateNeedsRetry = fmt.Errorf("retry create")
 
 // defaultChoices for the HITL prompt, used by fakeHitlProbe and HitlProbeResultMsg.
 var defaultChoices = []types.Choice{
@@ -125,10 +129,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Global key handlers
 		switch msg.String() {
 		case "ctrl+c", "q":
-			// Clean up HITL port-forward before quitting
-			if m.hitlState != nil && m.pfm != nil {
-				m.hitlState.Close(m.pfm)
-			}
+			// Clean up all resources before quitting
+			m.closeAll()
 			return m, tea.Quit
 		}
 
@@ -160,6 +162,47 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				item := m.workitemList.Items[m.workitemList.Cursor]
 				return m.routeMsg(DeleteConfirmMsg{WorkitemName: item.Name, Phase: item.State})
 			}
+			return m, nil
+		}
+
+		// Delete confirmation: y -> execute cascade delete
+		if m.deleteConfirmWorkitem != "" && msg.String() == "y" {
+			name := m.deleteConfirmWorkitem
+			m.deleteConfirmWorkitem = ""
+			m.workitemList.Loading = true
+			m.err = nil
+			return m, func() tea.Msg {
+				m.logIfEnabled("INFO", "delete", "cascading delete for "+name)
+				result := api.DeleteWorkitemCascade(m.ctx, m.k8s, m.namespace, name)
+				if !result.Success {
+					m.logIfEnabled("ERROR", "delete", fmt.Sprintf("cascade failed for %s: %s", name, result.Error))
+					if len(result.Failed) > 0 {
+						failedIDs := make([]string, len(result.Failed))
+						for i, f := range result.Failed {
+							failedIDs[i] = f.WorkitemID
+						}
+						return DeleteResultMsg{
+							WorkitemName:    name,
+							Err:             errors.New(result.Error),
+							FailedChildren:  failedIDs,
+							DeletedChildren: result.Deleted,
+						}
+					}
+					return DeleteResultMsg{
+						WorkitemName: name,
+						Err:          errors.New(result.Error),
+					}
+				}
+				return DeleteResultMsg{
+					WorkitemName:    name,
+					DeletedChildren: result.Deleted,
+				}
+			}
+		}
+
+		// Delete confirmation: any non-y key -> cancel
+		if m.deleteConfirmWorkitem != "" {
+			m.deleteConfirmWorkitem = ""
 			return m, nil
 		}
 
@@ -529,11 +572,8 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case CreateStartMsg:
-		// Transition to create wizard with fake data
+		// Transition to create wizard
 		m.createWizard = components.NewCreateWizard()
-		m.createWizard.FoundryFlows = []string{"main-flow"}
-		m.createWizard.EntryNodes = []string{"forge", "human-entry"}
-		m.createWizard.Artefacts = []string{"petition", "haiku"}
 		m.screen = ScreenCreateWizard
 
 	case DeleteConfirmMsg:
@@ -542,6 +582,11 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if item.Name == msg.WorkitemName {
 				if item.State != "Completed" && item.State != "Failed" {
 					m.err = fmt.Errorf("cannot delete Workitem in %s state (only Completed/Failed allowed)", item.State)
+					m.logIfEnabled("WARN", "delete", m.err.Error())
+				} else {
+					// Valid terminal phase — show confirmation prompt
+					m.deleteConfirmWorkitem = msg.WorkitemName
+					m.deleteConfirmPhase = item.State
 				}
 				break
 			}
@@ -550,6 +595,15 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DeleteResultMsg:
 		if msg.Err != nil {
 			m.err = fmt.Errorf("delete failed: %s (failed children: %v)", msg.Err, msg.FailedChildren)
+			m.logIfEnabled("ERROR", "delete", m.err.Error())
+		} else {
+			// Success — show brief message
+			m.banner = fmt.Sprintf("Deleted Workitem %s (%d children)", msg.WorkitemName, len(msg.DeletedChildren))
+			m.bannerSource = "delete"
+			// Auto-dismiss after 3 seconds
+			return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+				return BannerDismissMsg{Source: "delete"}
+			})
 		}
 	}
 	return m, nil
@@ -933,9 +987,6 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CreateStartMsg:
 		// Open create wizard from detail screen
 		m.createWizard = components.NewCreateWizard()
-		m.createWizard.FoundryFlows = []string{"main-flow"}
-		m.createWizard.EntryNodes = []string{"forge", "human-entry"}
-		m.createWizard.Artefacts = []string{"petition", "haiku"}
 		m.screen = ScreenCreateWizard
 
 	case ErrorMsg:
@@ -948,6 +999,22 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ClearErrorBannerMsg:
 		m.errorBanner = ""
+
+	case BannerMsg:
+		m.banner = msg.Message
+		m.bannerSource = msg.Source
+		m.bannerTimeout = true
+		m.logIfEnabled(strings.ToUpper(msg.Level), "banner", msg.Message)
+		return m, tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+			return BannerDismissMsg{Source: msg.Source}
+		})
+
+	case BannerDismissMsg:
+		if m.bannerSource == msg.Source {
+			m.banner = ""
+			m.bannerSource = ""
+			m.bannerTimeout = false
+		}
 	}
 	return m, nil
 }
@@ -1009,11 +1076,8 @@ func (m *Model) fetchArtefactContent(workitemID, artefactID string) tea.Cmd {
 func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case CreateStartMsg:
-		// Initialise wizard with fake data
+		// Initialise wizard
 		m.createWizard = components.NewCreateWizard()
-		m.createWizard.FoundryFlows = []string{"main-flow"}
-		m.createWizard.EntryNodes = []string{"forge", "human-entry"}
-		m.createWizard.Artefacts = []string{"petition", "haiku"}
 		m.createWizard.Step = 0
 
 	case CreateFieldUpdatedMsg:
@@ -1029,27 +1093,121 @@ func (m *Model) updateCreateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case CreateConfirmMsg:
-		// Simulate success with fake name
-		seq := rand.Intn(99999)
-		m.createWizard.SuccessName = fmt.Sprintf("wi-%05d", seq)
-		m.createWizard.Step = 5
-
-	case CreateSuccessMsg:
-		m.workitemDetail.workitemName = msg.WorkitemName
-		m.workitemDetail.loading = false
-		m.workitemDetail.loaded = true
-		// Populate with fake data
-		m.workitemDetail.topology = fakeTopology()
-		m.workitemDetail.artefacts = fakeArtefacts()
-		m.screen = ScreenWorkitemDetail
+		// Real create flow: pre-validate, create CRD, store artefact, update status
+		m.createWizard.Loading = true
 		m.err = nil
 
+		// Pre-create validation
+		flow, err := m.k8s.GetFoundryFlow(m.ctx, m.namespace)
+		if err != nil {
+			m.createWizard.Loading = false
+			m.createWizard.Blocked = "multiple_flows"
+			m.createWizard.Error = err.Error()
+			m.logIfEnabled("ERROR", "create", fmt.Sprintf("foundryflow check failed: %v", err))
+			return m, nil
+		}
+		if flow == nil {
+			m.createWizard.Loading = false
+			m.createWizard.Blocked = "no_flow"
+			m.createWizard.Error = "no FoundryFlow in namespace"
+			m.logIfEnabled("WARN", "create", "create blocked: no FoundryFlow in namespace")
+			return m, nil
+		}
+
+		// Check entry nodes
+		nodes, err := m.k8s.ListFoundryNodes(m.ctx, m.namespace)
+		if err != nil {
+			m.createWizard.Loading = false
+			m.createWizard.Error = fmt.Sprintf("list entry nodes: %v", err)
+			m.logIfEnabled("ERROR", "create", m.createWizard.Error)
+			return m, nil
+		}
+		var entryNodes []string
+		for _, n := range nodes {
+			if n.Entry != "" {
+				entryNodes = append(entryNodes, n.Name)
+			}
+		}
+		if len(entryNodes) == 0 {
+			m.createWizard.Loading = false
+			m.createWizard.Error = "No FoundryNodes with a configured entry point found in namespace"
+			m.logIfEnabled("WARN", "create", m.createWizard.Error)
+			return m, nil
+		}
+
+		// Build governed artefact options
+		selectedEntry := m.createWizard.Fields.EntryNode
+		if flow.EntryContracts != nil {
+			if ec, ok := flow.EntryContracts[selectedEntry]; ok {
+				if ecMap, ok := ec.(map[string]interface{}); ok && len(ecMap) > 0 {
+					// Use governed artefact keys from the contract
+					for k := range ecMap {
+						m.createWizard.Artefacts = append(m.createWizard.Artefacts, k)
+					}
+					// Set default
+					if len(m.createWizard.Artefacts) > 0 {
+						m.createWizard.Fields.GovernedArtefact = m.createWizard.Artefacts[0]
+					}
+				}
+			}
+		}
+		// Fallback: if no artefacts from contracts, list all GovernedArtefacts
+		if len(m.createWizard.Artefacts) == 0 {
+			gas, err := m.k8s.ListGovernedArtefacts(m.ctx, m.namespace)
+			if err == nil {
+				for _, ga := range gas {
+					m.createWizard.Artefacts = append(m.createWizard.Artefacts, ga.Name)
+				}
+			}
+		}
+
+		// Start the create execution as a background command
+		m.createWizard.Stage = components.StageCreating
+		m.createWizard.Loading = false
+		selectedNode := m.createWizard.Fields.EntryNode
+		promptText := m.createWizard.Fields.PromptText
+		artefactID := m.createWizard.Fields.ArtefactID
+		if artefactID == "" {
+			artefactID = "petition"
+		}
+		governedArtefact := m.createWizard.Fields.GovernedArtefact
+		if governedArtefact == "" && len(m.createWizard.Artefacts) > 0 {
+			governedArtefact = m.createWizard.Artefacts[0]
+		}
+
+		return m, func() tea.Msg {
+			return m.executeCreate(m.ctx, selectedNode, promptText, artefactID, governedArtefact)
+		}
+
+	case CreateSuccessMsg:
+		m.createWizard.WorkitemID = msg.WorkitemName
+		m.createWizard.SuccessName = msg.WorkitemName
+		m.createWizard.Stage = components.StageComplete
+		m.createWizard.Loading = false
+		// Populate with real topology data
+		topoCmd := m.loadTopology()
+		arCmd := m.loadArtefacts(msg.WorkitemName)
+		m.workitemDetail.workitemName = msg.WorkitemName
+		m.workitemDetail.loading = true
+		m.workitemDetail.loaded = true
+		m.screen = ScreenWorkitemDetail
+		m.err = nil
+		if topoCmd != nil && arCmd != nil {
+			return m, tea.Batch(topoCmd, arCmd)
+		}
+		return m, nil
+
 	case CreateErrorMsg:
+		m.createWizard.Loading = false
+		m.createWizard.Stage = components.StageError
 		m.createWizard.Error = msg.Err.Error()
+		m.createWizard.Retryable = msg.Retry
 
 	case CreateCancelMsg:
 		// Return to workitem list
+		m.createWizard = components.NewCreateWizard()
 		m.screen = ScreenWorkitemList
+		m.err = nil
 	}
 	return m, nil
 }
@@ -1173,6 +1331,114 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateCreateWizardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.createWizard, _ = m.createWizard.Update(msg)
 	return m, nil
+}
+
+// ─── Create execution helpers ──────────────────────────────────────────────
+
+// executeCreate performs the full create flow: CRD create -> StoreArtefact -> status update.
+// It runs as a goroutine command, returning CreateSuccessMsg or CreateErrorMsg.
+func (m *Model) executeCreate(ctx context.Context, selectedNode, promptText, artefactID, governedArtefact string) tea.Msg {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// 1. Generate workitem name
+	artefactID = sanitizeName(artefactID)
+	timestamp := time.Now().Unix()
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return CreateErrorMsg{Err: fmt.Errorf("generate random name: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
+	}
+	name := fmt.Sprintf("%s-%d-%x", artefactID, timestamp, randomBytes)
+	m.logIfEnabled("INFO", "create", fmt.Sprintf("generated name: %s", name))
+
+	// 2. Create Workitem CRD — retry up to 3 times if "already exists"
+	labels := map[string]string{
+		"flow.gideas.io/creator": "flowctl",
+	}
+	var crdErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		crdErr = m.k8s.CreateWorkitem(ctx, m.namespace, name, labels)
+		if crdErr == nil {
+			break
+		}
+		// If already exists, regenerate name and retry
+		if strings.Contains(crdErr.Error(), "already exists") {
+			timestamp = time.Now().Unix()
+			if _, err := rand.Read(randomBytes); err != nil {
+				return CreateErrorMsg{Err: fmt.Errorf("generate name: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
+			}
+			name = fmt.Sprintf("%s-%d-%x", artefactID, timestamp, randomBytes)
+			continue
+		}
+		// Non-conflict error — fail
+		break
+	}
+	if crdErr != nil {
+		m.logIfEnabled("ERROR", "create", fmt.Sprintf("create CRD failed: %v", crdErr))
+		return CreateErrorMsg{Err: fmt.Errorf("create CRD: %w", crdErr), Retry: true, HasCRD: false, HasArtefact: false}
+	}
+	m.createWizard.WorkitemID = name
+	m.logIfEnabled("INFO", "create", fmt.Sprintf("CRD created: %s", name))
+
+	// 3. Compute SHA-256 and store artefact
+	m.createWizard.Stage = components.StageStoringArtefact
+	contentHash := api.ComputeSHA256([]byte(promptText))
+	storeReq := api.StoreArtefactRequest{
+		WorkitemID:       name,
+		ArtefactID:       artefactID,
+		GovernedArtefact: governedArtefact,
+		Content:          []byte(promptText),
+		ContentHash:      contentHash,
+	}
+	if m.archivist != nil {
+		if err := m.archivist.StoreArtefact(ctx, m.namespace, storeReq); err != nil {
+			m.logIfEnabled("ERROR", "create", fmt.Sprintf("StoreArtefact failed: %v", err))
+			// StoreArtefact failed — delete the inert Workitem CRD
+			if delErr := m.k8s.DeleteWorkitem(ctx, m.namespace, name); delErr != nil {
+				m.logIfEnabled("WARN", "create", fmt.Sprintf("cleanup delete failed for %s: %v", name, delErr))
+			}
+			return CreateErrorMsg{Err: fmt.Errorf("store artefact: %w", err), Retry: true, HasCRD: false, HasArtefact: false}
+		}
+		m.logIfEnabled("INFO", "create", fmt.Sprintf("artefact stored: %s/%s", name, artefactID))
+	} else {
+		m.logIfEnabled("WARN", "create", "no Archivist client — skipping StoreArtefact")
+	}
+
+	// 4. Update status subresource
+	m.createWizard.Stage = components.StageUpdatingStatus
+	if err := m.k8s.UpdateWorkitemStatus(ctx, m.namespace, name, "Pending", selectedNode); err != nil {
+		m.logIfEnabled("ERROR", "create", fmt.Sprintf("status update failed: %v", err))
+		// Status update failed — CRD and artefact exist; retry skips those steps
+		return CreateErrorMsg{
+			Err:         fmt.Errorf("status update: %w", err),
+			Retry:       true,
+			HasCRD:      true,
+			HasArtefact: true,
+		}
+	}
+	m.logIfEnabled("INFO", "create", fmt.Sprintf("workitem %s created successfully (status set)", name))
+
+	return CreateSuccessMsg{WorkitemName: name}
+}
+
+// sanitizeName replaces non-alphanumeric characters with '-' for K8s-safe names.
+func sanitizeName(s string) string {
+	var result strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+			result.WriteRune(r)
+		} else {
+			result.WriteRune('-')
+		}
+	}
+	return result.String()
+}
+
+// logIfEnabled logs a message if the log writer is configured.
+func (m *Model) logIfEnabled(level, component, message string) {
+	if m.logWriter != nil {
+		m.logWriter.Log(level, component, message)
+	}
 }
 
 // ─── Fake data generators (placeholder — Phase 05+ replaces with real data) ─
