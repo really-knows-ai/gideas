@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -82,12 +83,18 @@ func (m *Model) renderDetail() string {
 		}
 		// Visit counters
 		if len(detail.detail.ThrashCounters) > 0 {
+			// Sort keys for deterministic output.
+			keys := make([]string, 0, len(detail.detail.ThrashCounters))
+			for k := range detail.detail.ThrashCounters {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
 			counters := ""
-			for name, count := range detail.detail.ThrashCounters {
+			for _, name := range keys {
 				if counters != "" {
 					counters += " "
 				}
-				counters += fmt.Sprintf("%s:%d", name, count)
+				counters += fmt.Sprintf("%s:%d", name, detail.detail.ThrashCounters[name])
 			}
 			infoLine += fmt.Sprintf("\n  Visits: %s", counters)
 		}
