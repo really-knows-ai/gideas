@@ -104,6 +104,7 @@ func (m HitlPromptModel) View() string {
 			b.WriteString(fmt.Sprintf("[%s]%s", strings.ToLower(key), ch.Label[1:]))
 		}
 	}
+	b.WriteString("  [R]elease")
 
 	return b.String()
 }

@@ -133,6 +133,11 @@ type HitlDecidedMsg struct {
 	Choice     string
 }
 
+// HitlReleasedMsg is sent when a HITL claim is released successfully.
+type HitlReleasedMsg struct {
+	WorkitemID string
+}
+
 // HitlErrorMsg is sent when a HITL operation fails.
 type HitlErrorMsg struct {
 	WorkitemID string

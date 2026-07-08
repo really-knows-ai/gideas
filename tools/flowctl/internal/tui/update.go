@@ -909,6 +909,22 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.hitlState.GetNodeName(), m.hitlState.GetWorkitemID(), m.pfm)
 		}
 
+	case HitlReleasedMsg:
+		m.workitemDetail.hitl.Visible = false
+		m.workitemDetail.hitl.Error = ""
+		m.statusMessage = "Claim released"
+		var cmds []tea.Cmd
+		if m.workitemDetail.workitemName != "" {
+			cmds = append(cmds, m.loadWorkitemDetail(m.workitemDetail.workitemName))
+		}
+		if refreshCmd := m.RefreshArtefacts(); refreshCmd != nil {
+			cmds = append(cmds, refreshCmd)
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+		return m, nil
+
 	case HitlDecidedMsg:
 		m.workitemDetail.hitl.Visible = false
 		m.workitemDetail.hitl.Error = ""
@@ -1301,6 +1317,27 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if key == "r" {
 			m.workitemDetail.hitl.Error = ""
 			return m, nil
+		}
+
+		// Handle 'R' (shift+r) for release — abandon the claim
+		if key == "R" {
+			m.workitemDetail.hitl.Loading = true
+			if m.ctx == nil {
+				m.ctx = context.Background()
+			}
+			return m, func() tea.Msg {
+				err := m.hitlState.ReleaseClaim(m.ctx)
+				if err != nil {
+					return HitlErrorMsg{
+						WorkitemID: m.hitlState.GetWorkitemID(),
+						Err:        err,
+						Retryable:  api.IsQueueUnavailable(err) || api.IsInvalidState(err),
+					}
+				}
+				return HitlReleasedMsg{
+					WorkitemID: m.hitlState.GetWorkitemID(),
+				}
+			}
 		}
 
 		// Handle 'y'/'n' for cancel confirmation (handled by component Update too)
