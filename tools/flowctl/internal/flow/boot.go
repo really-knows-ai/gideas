@@ -33,7 +33,7 @@ var (
 
 const (
 	// operatorNamespace is the target namespace for all operator resources.
-	operatorNamespace = "operator-system"
+	operatorNamespace = "foundry-system"
 
 	// defaultTimeout is how long to wait for the operator Deployment to become ready.
 	defaultTimeout = 120 * time.Second
@@ -105,7 +105,7 @@ func applyCRDs(ctx context.Context, client dynamic.Interface, stderr io.Writer) 
 	return created, nil
 }
 
-// applyOperatorNamespace creates the operator-system namespace if it does not exist.
+// applyOperatorNamespace creates the foundry-system namespace if it does not exist.
 func applyOperatorNamespace(ctx context.Context, client dynamic.Interface) error {
 	data, err := manifestfs.Manifests.ReadFile("operator/namespace.yaml")
 	if err != nil {
@@ -180,7 +180,7 @@ func mutateAndApplyDeployment(ctx context.Context, client dynamic.Interface, ver
 	}
 	deploy := &unstructured.Unstructured{Object: m}
 
-	// Ensure namespace is operator-system.
+	// Ensure namespace is foundry-system.
 	deploy.SetNamespace(operatorNamespace)
 
 	// Find container "manager" and mutate its image tag.

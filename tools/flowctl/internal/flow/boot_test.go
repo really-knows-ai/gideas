@@ -49,9 +49,9 @@ func TestDryRunPrintsManifests(t *testing.T) {
 		t.Errorf("dry-run output missing Deployment")
 	}
 
-	// Should contain operator-system namespace reference.
-	if !strings.Contains(output, "operator-system") {
-		t.Errorf("dry-run output missing operator-system namespace")
+	// Should contain foundry-system namespace reference.
+	if !strings.Contains(output, "foundry-system") {
+		t.Errorf("dry-run output missing foundry-system namespace")
 	}
 
 	// Should contain the summary line.
@@ -310,14 +310,14 @@ func TestWaitForReadySuccess(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 
 	// Create a Deployment that is already ready.
-	dep := fakeDeployment("controller-manager", "operator-system", 1, map[string]string{"control-plane": "controller-manager", "app.kubernetes.io/name": "operator"})
-	_, err := fakeClient.AppsV1().Deployments("operator-system").Create(ctx, dep, metav1.CreateOptions{})
+	dep := fakeDeployment("controller-manager", "foundry-system", 1, map[string]string{"control-plane": "controller-manager", "app.kubernetes.io/name": "operator"})
+	_, err := fakeClient.AppsV1().Deployments("foundry-system").Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create deployment: %v", err)
 	}
 
 	var stderr bytes.Buffer
-	err = waitForOperatorReady(ctx, fakeClient, "operator-system", 5*time.Second, &stderr)
+	err = waitForOperatorReady(ctx, fakeClient, "foundry-system", 5*time.Second, &stderr)
 	if err != nil {
 		t.Fatalf("waitForOperatorReady failed: %v", err)
 	}
@@ -330,14 +330,14 @@ func TestWaitForReadyTimeout(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 
 	// Create a Deployment with 0 AvailableReplicas that never changes.
-	dep := fakeDeployment("controller-manager", "operator-system", 0, map[string]string{"control-plane": "controller-manager", "app.kubernetes.io/name": "operator"})
-	_, err := fakeClient.AppsV1().Deployments("operator-system").Create(ctx, dep, metav1.CreateOptions{})
+	dep := fakeDeployment("controller-manager", "foundry-system", 0, map[string]string{"control-plane": "controller-manager", "app.kubernetes.io/name": "operator"})
+	_, err := fakeClient.AppsV1().Deployments("foundry-system").Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create deployment: %v", err)
 	}
 
 	var stderr bytes.Buffer
-	err = waitForOperatorReady(ctx, fakeClient, "operator-system", 1*time.Second, &stderr)
+	err = waitForOperatorReady(ctx, fakeClient, "foundry-system", 1*time.Second, &stderr)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -352,23 +352,23 @@ func TestPodWatcherReportsWaiting(t *testing.T) {
 	ctx := context.Background()
 	fakeClient := k8sfake.NewSimpleClientset()
 
-	dep := fakeDeployment("controller-manager", "operator-system", 0, map[string]string{"app": "test"})
+	dep := fakeDeployment("controller-manager", "foundry-system", 0, map[string]string{"app": "test"})
 	dep.Generation = 1
 	dep.UID = types.UID("dep-uid-1")
-	_, err := fakeClient.AppsV1().Deployments("operator-system").Create(ctx, dep, metav1.CreateOptions{})
+	_, err := fakeClient.AppsV1().Deployments("foundry-system").Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create deployment: %v", err)
 	}
 
 	// Create a ReplicaSet owned by the deployment, current.
-	rs := fakeReplicaSet("test-rs-abc", "operator-system", 1, 1, map[string]string{"app": "test"}, nil, dep.UID)
-	_, err = fakeClient.AppsV1().ReplicaSets("operator-system").Create(ctx, rs, metav1.CreateOptions{})
+	rs := fakeReplicaSet("test-rs-abc", "foundry-system", 1, 1, map[string]string{"app": "test"}, nil, dep.UID)
+	_, err = fakeClient.AppsV1().ReplicaSets("foundry-system").Create(ctx, rs, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create ReplicaSet: %v", err)
 	}
 
 	// Create a Pod with ImagePullBackOff waiting state.
-	pod := fakePod("test-pod-xyz", "operator-system",
+	pod := fakePod("test-pod-xyz", "foundry-system",
 		&corev1.ContainerStateWaiting{
 			Reason:  "ImagePullBackOff",
 			Message: `Back-off pulling image "controller:bad-tag"`,
@@ -376,7 +376,7 @@ func TestPodWatcherReportsWaiting(t *testing.T) {
 		map[string]string{"app": "test"},
 		rs.UID,
 	)
-	_, err = fakeClient.CoreV1().Pods("operator-system").Create(ctx, pod, metav1.CreateOptions{})
+	_, err = fakeClient.CoreV1().Pods("foundry-system").Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create pod: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestPodWatcherReportsWaiting(t *testing.T) {
 	var stderr bytes.Buffer
 
 	// Use a short timeout; the failing pod should show in stderr before timeout.
-	err = waitForOperatorReady(ctx, fakeClient, "operator-system", 2*time.Second, &stderr)
+	err = waitForOperatorReady(ctx, fakeClient, "foundry-system", 2*time.Second, &stderr)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -401,15 +401,15 @@ func TestWaitForReadyNoReplicaSetYet(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 
 	// Deployment exists but with 0 replicas ready and no ReplicaSet.
-	dep := fakeDeployment("controller-manager", "operator-system", 0, map[string]string{"app": "test"})
-	_, err := fakeClient.AppsV1().Deployments("operator-system").Create(ctx, dep, metav1.CreateOptions{})
+	dep := fakeDeployment("controller-manager", "foundry-system", 0, map[string]string{"app": "test"})
+	_, err := fakeClient.AppsV1().Deployments("foundry-system").Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create deployment: %v", err)
 	}
 
 	var stderr bytes.Buffer
 	// Should keep polling without crashing until timeout.
-	err = waitForOperatorReady(ctx, fakeClient, "operator-system", 1*time.Second, &stderr)
+	err = waitForOperatorReady(ctx, fakeClient, "foundry-system", 1*time.Second, &stderr)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -421,46 +421,46 @@ func TestWaitForReadyMultipleReplicaSets(t *testing.T) {
 	ctx := context.Background()
 	fakeClient := k8sfake.NewSimpleClientset()
 
-	dep := fakeDeployment("controller-manager", "operator-system", 0, map[string]string{"app": "test"})
+	dep := fakeDeployment("controller-manager", "foundry-system", 0, map[string]string{"app": "test"})
 	dep.Generation = 2
 	dep.UID = types.UID("dep-uid-multi")
-	_, err := fakeClient.AppsV1().Deployments("operator-system").Create(ctx, dep, metav1.CreateOptions{})
+	_, err := fakeClient.AppsV1().Deployments("foundry-system").Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create deployment: %v", err)
 	}
 
 	// Stale ReplicaSet (observedGeneration < generation).
-	staleRS := fakeReplicaSet("test-rs-old", "operator-system", dep.Generation, 1, map[string]string{"app": "test"}, nil, dep.UID)
-	_, err = fakeClient.AppsV1().ReplicaSets("operator-system").Create(ctx, staleRS, metav1.CreateOptions{})
+	staleRS := fakeReplicaSet("test-rs-old", "foundry-system", dep.Generation, 1, map[string]string{"app": "test"}, nil, dep.UID)
+	_, err = fakeClient.AppsV1().ReplicaSets("foundry-system").Create(ctx, staleRS, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create stale ReplicaSet: %v", err)
 	}
 
 	// Current ReplicaSet (observedGeneration == generation).
-	currentRS := fakeReplicaSet("test-rs-current", "operator-system", dep.Generation, dep.Generation, map[string]string{"app": "test"}, nil, dep.UID)
+	currentRS := fakeReplicaSet("test-rs-current", "foundry-system", dep.Generation, dep.Generation, map[string]string{"app": "test"}, nil, dep.UID)
 	currentRS.Status.AvailableReplicas = 1
-	_, err = fakeClient.AppsV1().ReplicaSets("operator-system").Create(ctx, currentRS, metav1.CreateOptions{})
+	_, err = fakeClient.AppsV1().ReplicaSets("foundry-system").Create(ctx, currentRS, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create current ReplicaSet: %v", err)
 	}
 
 	// Pod owned by the current ReplicaSet with no waiting state.
-	pod := fakePod("test-pod-current", "operator-system", nil, map[string]string{"app": "test"}, currentRS.UID)
-	_, err = fakeClient.CoreV1().Pods("operator-system").Create(ctx, pod, metav1.CreateOptions{})
+	pod := fakePod("test-pod-current", "foundry-system", nil, map[string]string{"app": "test"}, currentRS.UID)
+	_, err = fakeClient.CoreV1().Pods("foundry-system").Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create pod: %v", err)
 	}
 
 	var stderr bytes.Buffer
 	// Use short timeout; function should keep polling without crashing.
-	err = waitForOperatorReady(ctx, fakeClient, "operator-system", 1*time.Second, &stderr)
+	err = waitForOperatorReady(ctx, fakeClient, "foundry-system", 1*time.Second, &stderr)
 	if err == nil {
 		t.Fatal("expected timeout error (AvailableReplicas is 0 on Deployment), got nil")
 	}
 
 	// Now make the deployment ready by updating its status.
 	dep.Status.AvailableReplicas = 1
-	_, err = fakeClient.AppsV1().Deployments("operator-system").Update(ctx, dep, metav1.UpdateOptions{})
+	_, err = fakeClient.AppsV1().Deployments("foundry-system").Update(ctx, dep, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("failed to update deployment status: %v", err)
 	}

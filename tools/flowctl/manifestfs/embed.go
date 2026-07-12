@@ -5,7 +5,7 @@
 //   - CRDs from platform/operator/config/crd/bases/
 //   - Operator manifests from platform/operator/config/manager/ and config/rbac/
 //
-// Namespace-scoped resources have been rewritten from "system" to "operator-system".
+// Namespace-scoped resources have been rewritten from "system" to "foundry-system".
 // Run `make flowctl-manifests` to refresh these copies.
 //
 //go:generate cp ../../platform/operator/config/crd/bases/*.yaml crd/

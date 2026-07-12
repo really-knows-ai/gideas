@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: controller-manager
-  namespace: operator-system
+  namespace: foundry-system
   labels:
     control-plane: controller-manager
     app.kubernetes.io/name: operator
@@ -34,6 +34,7 @@ spec:
           - --librarian-address=flow-librarian.default.svc.cluster.local:50058
           - --archivist-address=flow-archivist.default.svc.cluster.local:50054
         image: controller:latest
+        imagePullPolicy: IfNotPresent
         name: manager
         env:
         - name: OLLAMA_API_KEY

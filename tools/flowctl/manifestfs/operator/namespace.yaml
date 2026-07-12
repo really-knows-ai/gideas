@@ -5,4 +5,4 @@ metadata:
     control-plane: controller-manager
     app.kubernetes.io/name: operator
     app.kubernetes.io/managed-by: kustomize
-  name: operator-system
+  name: foundry-system
