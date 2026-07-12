@@ -53,6 +53,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "parsing template: %v\n", err)
 		os.Exit(1)
 	}
+	// ponytail: namespace is hardcoded as "haiku-flow" in the template. It should match
+	// the flow name. If flows are renamed, update both template.yaml and regenerate.
 
 	// Generate output
 	var buf bytes.Buffer

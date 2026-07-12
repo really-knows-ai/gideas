@@ -43,7 +43,17 @@ A governed workflow runtime on Kubernetes. Work progresses through adversarial c
 
 ## Getting Started
 
-### 1. Install CRDs
+### 1. Install CRDs and Operator
+
+Use `flowctl init` to install CRDs and deploy the operator into the `operator-system` namespace:
+
+```bash
+tools/flowctl/flowctl init
+```
+
+This installs all cluster-scoped CRDs and the operator deployment. CRDs survive namespace deletion; the operator runs in `operator-system` (not in the flow namespace), so flows can be replaced without affecting the control plane.
+
+Alternatively, install manually:
 
 ```bash
 make -C platform/operator install
@@ -86,6 +96,8 @@ done
 
 ### 3. Deploy the Operator
 
+Use `flowctl init` (see Step 1) to install and manage the operator. Alternatively, deploy manually:
+
 ```bash
 # Pass your Ollama API key for in-cluster model pulling.
 # Get one from https://ollama.com/settings/api-keys
@@ -95,7 +107,7 @@ make -C platform/operator deploy IMG=flow-operator:latest
 ```
 
 The generated operator deployment includes
-`--librarian-address=flow-librarian.default.svc.cluster.local:50058`. Keep that
+`--librarian-address=flow-librarian.haiku-flow.svc.cluster.local:50058`. Keep that
 argument if you customize deployment manifests; without it, `Law` and
 `LawGroup` CRDs reconcile in Kubernetes but are not materialized into the
 Librarian, so appraisal sees zero enforceable laws.
@@ -103,6 +115,14 @@ Librarian, so appraisal sees zero enforceable laws.
 ### 4. Deploy the Haiku demo
 
 The Haiku demo runs a full Foundry Cycle — Forge, Sort, Quench, Appraisal, Appraiser, Refine — producing a syllable-validated, law-attested, and governance-stamped haiku.
+
+First, create the flow namespace (the flow name equals the namespace name):
+
+```bash
+kubectl create ns haiku-flow
+```
+
+Then apply the flow manifests:
 
 ```bash
 kubectl apply -f nodes/haiku-manifests/flow.yaml
@@ -183,8 +203,8 @@ Each `sort` visit checks the exit contract (`appraisal`, `approval`) and all req
 **Operator CrashLoopBackOff:** Verify all CRDs are installed (`kubectl get crd | grep flow.gideas.io`). Missing CRDs (especially `lawgroups`) will cause the operator to fail on startup.
 
 **Laws appear Ready but appraisal reports `total_laws=0`:** Check that the
-operator deployment has `--librarian-address=flow-librarian.default.svc.cluster.local:50058`
-and restart it. The operator must sync `Law` CRDs into the Librarian before
+operator deployment has `--librarian-address=flow-librarian.haiku-flow.svc.cluster.local:50058`
+and restart it (or re-run `flowctl init` to redeploy). The operator must sync `Law` CRDs into the Librarian before
 nodes can query and enforce them.
 
 ## Development

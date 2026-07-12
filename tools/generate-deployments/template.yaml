@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{.Name}}
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: {{.Name}}
 spec:

@@ -10,6 +10,7 @@ set -euo pipefail
 
 PETITION="${1:?Usage: new-haiku <petition-text> [workitem-id]}"
 WORKITEM_ID="${2:-haiku-$(date +%s)}"
+NS="${NEWHAIKU_NAMESPACE:-haiku-flow}"
 ARCHIVIST_PORT="${NEWHAIKU_ARCHIVIST_PORT:-50054}"
 ARCHIVIST="localhost:${ARCHIVIST_PORT}"
 
@@ -32,7 +33,7 @@ echo ""
 # 2. Ensure Archivist is reachable.
 if ! grpcurl -plaintext "$ARCHIVIST" list flow.v1.ArchivistService &>/dev/null; then
     echo "Starting port-forward to flow-archivist..."
-    kubectl port-forward svc/flow-archivist "${ARCHIVIST_PORT}:50054" -n default &>/dev/null &
+    kubectl port-forward svc/flow-archivist "${ARCHIVIST_PORT}:50054" -n "$NS" &>/dev/null &
     ARCHIVIST_PF_PID=$!
     sleep 2
 fi
@@ -57,7 +58,7 @@ apiVersion: flow.gideas.io/v1
 kind: Workitem
 metadata:
   name: $WORKITEM_ID
-  namespace: default
+  namespace: $NS
   labels:
     app.kubernetes.io/part-of: haiku-flow
 EOF
@@ -69,14 +70,14 @@ kubectl proxy --port=8002 &>/dev/null &
 PROXY_PID=$!
 sleep 1
 
-curl -s -X PUT "http://localhost:8002/apis/flow.gideas.io/v1/namespaces/default/workitems/$WORKITEM_ID/status" \
+curl -s -X PUT "http://localhost:8002/apis/flow.gideas.io/v1/namespaces/$NS/workitems/$WORKITEM_ID/status" \
   -H "Content-Type: application/json" \
   -d "{
     \"apiVersion\": \"flow.gideas.io/v1\",
     \"kind\": \"Workitem\",
     \"metadata\": {
       \"name\": \"$WORKITEM_ID\",
-      \"namespace\": \"default\",
+      \"namespace\": \"$NS\",
       \"resourceVersion\": \"$RV\"
     },
     \"status\": {

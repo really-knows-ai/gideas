@@ -4,7 +4,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: forge
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: forge
 spec:
@@ -60,7 +60,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: quench
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: quench
 spec:
@@ -100,7 +100,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sort
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: sort
 spec:
@@ -150,7 +150,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: appraisal
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: appraisal
 spec:
@@ -206,7 +206,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: appraiser
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: appraiser
 spec:
@@ -256,7 +256,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: refine
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: refine
 spec:
@@ -312,7 +312,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: facilitator
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: facilitator
 spec:
@@ -364,7 +364,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: arbiter
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: arbiter
 spec:
@@ -412,7 +412,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: juror
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: juror
 spec:
@@ -462,7 +462,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tribunal
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: tribunal
 spec:
@@ -514,7 +514,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: friction-watcher
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: friction-watcher
 spec:
@@ -556,7 +556,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ttl-watcher
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: ttl-watcher
 spec:
@@ -606,7 +606,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: hitl-appraisal
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: hitl-appraisal
 spec:
@@ -654,7 +654,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: arbiter-hitl-resolve
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: arbiter-hitl-resolve
 spec:
@@ -702,7 +702,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tribunal-hitl-resolve
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: tribunal-hitl-resolve
 spec:
@@ -750,7 +750,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: clerk-forge
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-forge
 spec:
@@ -806,7 +806,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: clerk-sort
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-sort
 spec:
@@ -856,7 +856,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: clerk-appraisal
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-appraisal
 spec:
@@ -912,7 +912,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: clerk-refine
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-refine
 spec:
@@ -968,7 +968,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: clerk-facilitator
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-facilitator
 spec:
@@ -1020,7 +1020,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: codification
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: codification
 spec:
@@ -1068,7 +1068,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: codify-smt
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: codify-smt
 spec:
@@ -1118,7 +1118,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: clerk-done-router
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-done-router
 spec:
@@ -1166,7 +1166,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: hitl-gate
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: hitl-gate
 spec:
@@ -1214,7 +1214,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: law-applicator
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: law-applicator
 spec:
@@ -1256,7 +1256,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: human-arbiter
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: human-arbiter
 spec:
@@ -1296,7 +1296,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: human-approval
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: human-approval
 spec:

@@ -12,7 +12,7 @@ apiVersion: flow.gideas.io/v1
 kind: LawGroup
 metadata:
   name: content
-  namespace: default
+  namespace: haiku-flow
 spec:
   mode: law-by-law
   passes: 2
@@ -21,7 +21,7 @@ apiVersion: flow.gideas.io/v1
 kind: Law
 metadata:
   name: no-weather
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -48,7 +48,7 @@ apiVersion: flow.gideas.io/v1
 kind: Law
 metadata:
   name: no-atmosphere
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:

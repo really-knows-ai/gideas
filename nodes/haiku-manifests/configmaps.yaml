@@ -13,7 +13,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: forge-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: forge
 data:
@@ -28,7 +28,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: sort-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: sort
 data:
@@ -40,7 +40,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: quench-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: quench
 data:
@@ -51,7 +51,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: appraisal-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: appraisal
 data:
@@ -72,7 +72,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: appraiser-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: appraiser
 data:
@@ -84,7 +84,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: refine-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: refine
 data:
@@ -99,7 +99,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: facilitator-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: facilitator
 data:
@@ -111,7 +111,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: arbiter-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: arbiter
 data:
@@ -127,7 +127,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: juror-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: juror
 data:
@@ -138,7 +138,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: tribunal-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: tribunal
 data:
@@ -154,7 +154,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ttl-watcher-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: ttl-watcher
 data:
@@ -167,7 +167,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: hitl-appraisal-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: hitl-appraisal
 data:
@@ -179,7 +179,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: arbiter-hitl-resolve-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: arbiter-hitl-resolve
 data:
@@ -191,7 +191,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: tribunal-hitl-resolve-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: tribunal-hitl-resolve
 data:
@@ -204,7 +204,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: clerk-forge-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-forge
 data:
@@ -232,7 +232,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: clerk-sort-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-sort
 data:
@@ -245,7 +245,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: clerk-appraisal-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-appraisal
 data:
@@ -267,7 +267,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: clerk-refine-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-refine
 data:
@@ -298,7 +298,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: clerk-facilitator-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-facilitator
 data:
@@ -311,7 +311,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: codification-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: codification
 data:
@@ -325,7 +325,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: codify-smt-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: codify-smt
 data:
@@ -337,7 +337,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: clerk-done-router-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: clerk-done-router
 data:
@@ -356,7 +356,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: hitl-gate-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: hitl-gate
 data:
@@ -372,7 +372,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: embassy-config
-  namespace: default
+  namespace: haiku-flow
   labels:
     app.kubernetes.io/name: embassy
 data:

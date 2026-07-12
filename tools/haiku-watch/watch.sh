@@ -10,7 +10,7 @@
 set -uo pipefail
 
 NAME="${1:-}"
-NS="${2:-default}"
+NS="${2:-haiku-flow}"
 ARCHIVIST_PORT="${3:-50054}"
 
 if [ -z "$NAME" ]; then

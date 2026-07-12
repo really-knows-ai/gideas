@@ -21,7 +21,7 @@ apiVersion: flow.gideas.io/v1
 kind: Workitem
 metadata:
   name: haiku-001
-  namespace: default
+  namespace: haiku-flow
 status:
   phase: Pending
   currentAssignee: forge

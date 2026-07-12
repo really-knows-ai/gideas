@@ -15,7 +15,7 @@ apiVersion: flow.gideas.io/v1
 kind: Law
 metadata:
   name: haiku-syllable
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:

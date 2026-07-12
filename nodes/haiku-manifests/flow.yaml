@@ -57,7 +57,7 @@ apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
 metadata:
   name: haiku
-  namespace: default
+  namespace: haiku-flow
 spec:
   stamps:
     - appraisal
@@ -68,7 +68,7 @@ apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
 metadata:
   name: petition
-  namespace: default
+  namespace: haiku-flow
 spec:
   stamps:
     - approval
@@ -77,7 +77,7 @@ apiVersion: flow.gideas.io/v1
 kind: GovernedArtefact
 metadata:
   name: review-data
-  namespace: default
+  namespace: haiku-flow
 spec:
   stamps: []
 ---
@@ -85,7 +85,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryFlow
 metadata:
   name: haiku-flow
-  namespace: default
+  namespace: haiku-flow
 spec:
   entryContracts:
     # The petition must exist when the workitem enters the flow.
@@ -121,7 +121,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: forge
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -139,7 +139,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: sort
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -169,7 +169,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: quench
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -188,7 +188,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: appraisal
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -214,7 +214,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: appraiser
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -229,7 +229,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: refine
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -251,7 +251,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: human-arbiter
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
@@ -273,7 +273,7 @@ apiVersion: flow.gideas.io/v1
 kind: FoundryNode
 metadata:
   name: human-approval
-  namespace: default
+  namespace: haiku-flow
   labels:
     flow.gideas.io/flow-name: haiku-flow
 spec:
