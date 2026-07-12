@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gideas/flow/tools/flowctl/internal/api"
+	"github.com/gideas/flow/tools/flowctl/internal/cmd"
 	"github.com/gideas/flow/tools/flowctl/internal/config"
 	"github.com/gideas/flow/tools/flowctl/internal/tui"
 )
@@ -79,6 +80,7 @@ func init() {
 	watchCmd.Flags().String("system-namespace", "", "System services namespace (overrides FLOW_SYSTEM_NAMESPACE)")
 	watchCmd.Flags().Int("hitl-port", 8080, "HITL REST port (overrides FLOW_HITL_PORT)")
 	rootCmd.AddCommand(watchCmd)
+	rootCmd.AddCommand(cmd.NewPackageCmd())
 }
 
 func main() {

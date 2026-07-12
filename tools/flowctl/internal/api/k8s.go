@@ -539,6 +539,37 @@ func (c *K8sClient) GetRESTConfig() *rest.Config {
 	return c.RESTConfig
 }
 
+// DynamicClient returns the underlying dynamic.Interface for direct CRD operations.
+func (c *K8sClient) DynamicClient() dynamic.Interface {
+	return c.dynamicClient
+}
+
+// NewK8sClientWithComponents creates a K8sClient from pre-built clients.
+// Used by test code to inject fake clients.
+func NewK8sClientWithComponents(dyn dynamic.Interface, core kubernetes.Interface, crd client.Client, scheme *runtime.Scheme) *K8sClient {
+	return &K8sClient{
+		CoreClient:    core,
+		CRDClient:     crd,
+		dynamicClient: dyn,
+		scheme:        scheme,
+	}
+}
+
+// CheckConnectivity performs a 5-second API server reachability probe.
+// Returns nil on success, or an error wrapping the reason for failure.
+func CheckConnectivity(ctx context.Context, k8s *K8sClient) error {
+	_, err := k8s.CoreClient.Discovery().RESTClient().Get().AbsPath("/version").DoRaw(ctx)
+	if err != nil {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("failed to reach Kubernetes API server: %w", ctx.Err())
+		default:
+			return fmt.Errorf("failed to reach Kubernetes API server: %w", err)
+		}
+	}
+	return nil
+}
+
 // Ensure apiutil is imported for scheme registration (used implicitly).
 var _ = apiutil.GVKForObject
 
