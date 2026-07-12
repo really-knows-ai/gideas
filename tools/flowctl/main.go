@@ -17,6 +17,14 @@ import (
 	"github.com/gideas/flow/tools/flowctl/internal/tui"
 )
 
+// Version information set by ldflags at build time.
+// GoReleaser injects these values via -X flags in .goreleaser.yaml.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "flowctl",
 	Short: "Flowctl — Foundry Flow Workitem browser",

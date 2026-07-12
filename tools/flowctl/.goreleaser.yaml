@@ -1,0 +1,120 @@
+# .goreleaser.yaml
+# GoReleaser configuration for flowctl.
+# Triggered by git tags matching flowctl/v* via GitHub Actions.
+#
+# Environment variables (set by the workflow):
+#   GITHUB_TOKEN        — GitHub App installation token (cross-repo scoped)
+#   HOMEBREW_TAP_TOKEN  — same as GITHUB_TOKEN, used by Homebrew upload
+
+version: 2
+
+project_name: flowctl
+
+git:
+  tag_prefix: "flowctl/v"
+
+env:
+  - GOFLAGS=-mod=mod
+  - CGO_ENABLED=0
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  - id: flowctl
+    dir: .
+    main: .
+    binary: flowctl
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ignore: []
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: flowctl
+    formats: ["tar.gz"]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macOS
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - none/only-binary  # archive contains ONLY the binary
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+release:
+  github:
+    owner: gideas
+    name: platform
+  header: |
+    ## flowctl {{ .Version }}
+
+    Published from {{ .GitURL }}@{{ .FullCommit }}.
+
+    ### Installation
+
+    ```bash
+    brew tap gideas/tap && brew install flowctl
+    ```
+
+    Or download the archive for your platform from the assets below.
+  footer: |
+    **Full Changelog:** {{ .PreviousTag }}...{{ .Tag }}
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^Merge"
+  groups:
+    - title: "Features"
+      regexp: "^feat"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^fix"
+      order: 1
+    - title: "Other changes"
+      order: 999
+
+brews:
+  - name: flowctl
+    repository:
+      owner: gideas
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/gideas/platform"
+    description: "Foundry Flow CLI — browse, seed, and manage Workitems on a Foundry Flow cluster."
+    license: "Apache-2.0"
+    test: |
+      system "#{bin}/flowctl", "--help"
+    install: |
+      bin.install "flowctl"
+    commit_author:
+      name: gideas-bot
+      email: bot@gideas.io
+    url_template: "https://github.com/gideas/platform/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    download_strategy: GitHubPrivateRepositoryReleaseDownloadStrategy

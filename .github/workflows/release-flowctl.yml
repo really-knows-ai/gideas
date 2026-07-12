@@ -1,0 +1,55 @@
+# .github/workflows/release-flowctl.yml
+name: Release flowctl
+
+on:
+  push:
+    tags:
+      - "flowctl/v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  goreleaser:
+    name: GoReleaser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/flowctl/go.mod
+          cache: true
+
+      - name: Verify quality gate
+        run: |
+          go vet ./tools/flowctl/...
+          go test ./tools/flowctl/... -count=1
+
+      - name: Generate GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: gideas
+          repositories: |
+            platform
+            homebrew-tap
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> 2"
+          workdir: tools/flowctl
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          HOMEBREW_TAP_TOKEN: ${{ steps.app-token.outputs.token }}
