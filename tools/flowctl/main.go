@@ -82,6 +82,7 @@ func init() {
 	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(cmd.NewPackageCmd())
 	rootCmd.AddCommand(cmd.NewInstallCmd())
+	rootCmd.AddCommand(cmd.NewInitCmd())
 }
 
 func main() {
