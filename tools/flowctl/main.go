@@ -81,6 +81,7 @@ func init() {
 	watchCmd.Flags().Int("hitl-port", 8080, "HITL REST port (overrides FLOW_HITL_PORT)")
 	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(cmd.NewPackageCmd())
+	rootCmd.AddCommand(cmd.NewInstallCmd())
 }
 
 func main() {

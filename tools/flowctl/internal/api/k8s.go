@@ -111,6 +111,13 @@ func addFlowScheme(s *runtime.Scheme) error {
 	s.AddKnownTypeWithName(gv.WithKind("GovernedArtefact"), &unstructured.Unstructured{})
 	s.AddKnownTypeWithName(gv.WithKind("GovernedArtefactList"), &unstructured.UnstructuredList{})
 
+	s.AddKnownTypeWithName(gv.WithKind("Law"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(gv.WithKind("LawList"), &unstructured.UnstructuredList{})
+	s.AddKnownTypeWithName(gv.WithKind("LawGroup"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(gv.WithKind("LawGroupList"), &unstructured.UnstructuredList{})
+	s.AddKnownTypeWithName(gv.WithKind("Treaty"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(gv.WithKind("TreatyList"), &unstructured.UnstructuredList{})
+
 	// Add core/v1 types needed by the scheme for namespace pod operations.
 	if err := corev1.AddToScheme(s); err != nil {
 		return err
