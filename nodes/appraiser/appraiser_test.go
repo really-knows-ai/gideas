@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gideas/flow/nodes/internal/handlers"
-	flow "github.com/gideas/flow/sdk/go"
+	"github.com/foundry/flow/nodes/internal/handlers"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // ---------------------------------------------------------------------------

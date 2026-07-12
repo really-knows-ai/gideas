@@ -4,7 +4,7 @@ import (
 	"sort"
 	"sync"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // Flow wraps the flow topology response for the current namespace.

@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"gopkg.in/yaml.v3"
 )
 

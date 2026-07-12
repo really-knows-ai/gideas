@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 const (
@@ -96,10 +96,10 @@ type FoundryNodeReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes/finalizers,verbs=update
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundryflows,verbs=get;list;watch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundrynodes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundrynodes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundrynodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundryflows,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -566,8 +566,8 @@ func (r *FoundryNodeReconciler) labelsForNode(node *flowv1.FoundryNode) map[stri
 		"app.kubernetes.io/name":       "foundrynode",
 		"app.kubernetes.io/instance":   node.Name,
 		"app.kubernetes.io/managed-by": managedByOperator,
-		"flow.gideas.io/node":          node.Name,
-		"flow.gideas.io/node-name":     node.Name,
+		"flow.foundry.io/node":          node.Name,
+		"flow.foundry.io/node-name":     node.Name,
 	}
 }
 

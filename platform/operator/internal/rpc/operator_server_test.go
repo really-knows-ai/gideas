@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	apiv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	apiv1 "github.com/foundry/flow/operator/api/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -570,12 +570,12 @@ func TestCreateWorkitem_HappyPath(t *testing.T) {
 		t.Fatalf("Expected assignee 'intake', got %s", created.Status.CurrentAssignee)
 	}
 
-	// Verify labels — no flow.gideas.io/flow label, only creator.
-	if _, hasFlowLabel := created.Labels["flow.gideas.io/flow"]; hasFlowLabel {
-		t.Fatal("Expected no flow.gideas.io/flow label on workitem")
+	// Verify labels — no flow.foundry.io/flow label, only creator.
+	if _, hasFlowLabel := created.Labels["flow.foundry.io/flow"]; hasFlowLabel {
+		t.Fatal("Expected no flow.foundry.io/flow label on workitem")
 	}
-	if created.Labels["flow.gideas.io/creator"] != "intake" {
-		t.Fatalf("Expected creator label 'intake', got %s", created.Labels["flow.gideas.io/creator"])
+	if created.Labels["flow.foundry.io/creator"] != "intake" {
+		t.Fatalf("Expected creator label 'intake', got %s", created.Labels["flow.foundry.io/creator"])
 	}
 }
 
@@ -895,15 +895,15 @@ func TestCreateChildWorkitem_HappyPath(t *testing.T) {
 		t.Fatalf("Expected ParentWorkitemID 'parent-wi', got %s", child.Status.ParentWorkitemID)
 	}
 
-	// Verify labels — no flow.gideas.io/flow label.
-	if child.Labels["flow.gideas.io/parent"] != "parent-wi" {
-		t.Fatalf("Expected parent label 'parent-wi', got %s", child.Labels["flow.gideas.io/parent"])
+	// Verify labels — no flow.foundry.io/flow label.
+	if child.Labels["flow.foundry.io/parent"] != "parent-wi" {
+		t.Fatalf("Expected parent label 'parent-wi', got %s", child.Labels["flow.foundry.io/parent"])
 	}
-	if _, hasFlowLabel := child.Labels["flow.gideas.io/flow"]; hasFlowLabel {
-		t.Fatal("Expected no flow.gideas.io/flow label on child workitem")
+	if _, hasFlowLabel := child.Labels["flow.foundry.io/flow"]; hasFlowLabel {
+		t.Fatal("Expected no flow.foundry.io/flow label on child workitem")
 	}
-	if child.Labels["flow.gideas.io/creator"] != "clerk" {
-		t.Fatalf("Expected creator label 'clerk', got %s", child.Labels["flow.gideas.io/creator"])
+	if child.Labels["flow.foundry.io/creator"] != "clerk" {
+		t.Fatalf("Expected creator label 'clerk', got %s", child.Labels["flow.foundry.io/creator"])
 	}
 }
 
@@ -1008,7 +1008,7 @@ func TestRouteChild_HappyPath(t *testing.T) {
 			Name:      "child-wi",
 			Namespace: "default",
 			Labels: map[string]string{
-				"flow.gideas.io/parent": "parent-wi",
+				"flow.foundry.io/parent": "parent-wi",
 			},
 		},
 		Status: apiv1.WorkitemStatus{
@@ -1350,7 +1350,7 @@ func TestGetChildren_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-1",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Running",
@@ -1363,7 +1363,7 @@ func TestGetChildren_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-2",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Completed",
@@ -1376,7 +1376,7 @@ func TestGetChildren_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "unrelated-wi",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "other-parent"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "other-parent"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Running",
@@ -1475,7 +1475,7 @@ func TestSubmitResult_CompletionGuard_ChildrenPending(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-wi",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            phasePending,
@@ -1519,7 +1519,7 @@ func TestSubmitResult_CompletionGuard_ChildrenRunning(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-wi",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Running",
@@ -1563,7 +1563,7 @@ func TestSubmitResult_CompletionGuard_AllChildrenCompleted(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-1",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Completed",
@@ -1575,7 +1575,7 @@ func TestSubmitResult_CompletionGuard_AllChildrenCompleted(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-2",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Failed",
@@ -1656,7 +1656,7 @@ func TestSubmitResult_CompletionGuard_NonCompleteSkipsCheck(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-wi",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Running",
@@ -2001,7 +2001,7 @@ func TestValidateChildAccess_Valid(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-wi",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": "parent-wi"},
+			Labels:    map[string]string{"flow.foundry.io/parent": "parent-wi"},
 		},
 		Status: apiv1.WorkitemStatus{
 			Phase:            phaseCompleted,

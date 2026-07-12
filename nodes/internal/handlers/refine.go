@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"os"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal/artefacts"
-	flow "github.com/gideas/flow/sdk/go"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/artefacts"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // RefineConfig holds handler-level configuration for the Refine handler.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
 
 func TestHitlHidden(t *testing.T) {

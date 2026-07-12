@@ -1,4 +1,4 @@
-module github.com/gideas/flow/tools/generate-deployments
+module github.com/foundry/flow/tools/generate-deployments
 
 go 1.25.3
 

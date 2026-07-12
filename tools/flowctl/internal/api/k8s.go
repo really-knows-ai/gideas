@@ -22,10 +22,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
-// Package GVR constants for flow.gideas.io CRDs.
+// Package GVR constants for flow.foundry.io CRDs.
 var (
 	workitemGVR = schema.GroupVersionResource{
-		Group:    "flow.gideas.io",
+		Group:    "flow.foundry.io",
 		Version:  "v1",
 		Resource: "workitems",
 	}
@@ -40,7 +40,7 @@ type K8sClient struct {
 	CoreClient    kubernetes.Interface // client-go for core/v1
 	CRDClient     client.Client        // controller-runtime for CRDs
 	RESTConfig    *rest.Config         // stored for port-forward creation
-	scheme        *runtime.Scheme      // scheme with flow.gideas.io types
+	scheme        *runtime.Scheme      // scheme with flow.foundry.io types
 	dynamicClient dynamic.Interface    // client-go dynamic for watch/status
 }
 
@@ -99,9 +99,9 @@ func NewForConfig(config *rest.Config) (*K8sClient, error) {
 	}, nil
 }
 
-// addFlowScheme registers unstructured types for flow.gideas.io CRDs.
+// addFlowScheme registers unstructured types for flow.foundry.io CRDs.
 func addFlowScheme(s *runtime.Scheme) error {
-	gv := schema.GroupVersion{Group: "flow.gideas.io", Version: "v1"}
+	gv := schema.GroupVersion{Group: "flow.foundry.io", Version: "v1"}
 	s.AddKnownTypeWithName(gv.WithKind("Workitem"), &unstructured.Unstructured{})
 	s.AddKnownTypeWithName(gv.WithKind("WorkitemList"), &unstructured.UnstructuredList{})
 	s.AddKnownTypeWithName(gv.WithKind("FoundryFlow"), &unstructured.Unstructured{})
@@ -167,7 +167,7 @@ func IsForbiddenError(err error) bool {
 func (c *K8sClient) ListWorkitems(ctx context.Context, namespace string) ([]WorkitemSummary, error) {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "flow.gideas.io",
+		Group:   "flow.foundry.io",
 		Version: "v1",
 		Kind:    "WorkitemList",
 	})
@@ -263,7 +263,7 @@ func (c *K8sClient) WatchWithBackoff(ctx context.Context, namespace string, hand
 func (c *K8sClient) GetWorkitem(ctx context.Context, namespace string, name string) (*WorkitemDetail, error) {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "flow.gideas.io",
+		Group:   "flow.foundry.io",
 		Version: "v1",
 		Kind:    "Workitem",
 	})
@@ -315,14 +315,14 @@ func (c *K8sClient) GetWorkitem(ctx context.Context, namespace string, name stri
 func (c *K8sClient) ListChildren(ctx context.Context, namespace string, parentID string) ([]WorkitemSummary, error) {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "flow.gideas.io",
+		Group:   "flow.foundry.io",
 		Version: "v1",
 		Kind:    "WorkitemList",
 	})
 
 	if err := c.CRDClient.List(ctx, list,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"flow.gideas.io/parent": parentID},
+		client.MatchingLabels{"flow.foundry.io/parent": parentID},
 	); err != nil {
 		return nil, err
 	}
@@ -339,7 +339,7 @@ func (c *K8sClient) ListChildren(ctx context.Context, namespace string, parentID
 func (c *K8sClient) GetFoundryFlow(ctx context.Context, namespace string) (*FoundryFlowSummary, error) {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "flow.gideas.io",
+		Group:   "flow.foundry.io",
 		Version: "v1",
 		Kind:    "FoundryFlowList",
 	})
@@ -369,7 +369,7 @@ func (c *K8sClient) GetFoundryFlow(ctx context.Context, namespace string) (*Foun
 func (c *K8sClient) ListFoundryNodes(ctx context.Context, namespace string) ([]FoundryNodeSummary, error) {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "flow.gideas.io",
+		Group:   "flow.foundry.io",
 		Version: "v1",
 		Kind:    "FoundryNodeList",
 	})
@@ -408,7 +408,7 @@ func (c *K8sClient) ListFoundryNodes(ctx context.Context, namespace string) ([]F
 func (c *K8sClient) ListGovernedArtefacts(ctx context.Context, namespace string) ([]GovernedArtefactSummary, error) {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "flow.gideas.io",
+		Group:   "flow.foundry.io",
 		Version: "v1",
 		Kind:    "GovernedArtefactList",
 	})
@@ -427,7 +427,7 @@ func (c *K8sClient) ListGovernedArtefacts(ctx context.Context, namespace string)
 // CreateWorkitem creates a metadata-only Workitem CRD.
 func (c *K8sClient) CreateWorkitem(ctx context.Context, namespace string, name string, labels map[string]string) error {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("Workitem")
 	obj.SetName(name)
 	obj.SetNamespace(namespace)
@@ -435,7 +435,7 @@ func (c *K8sClient) CreateWorkitem(ctx context.Context, namespace string, name s
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels["flow.gideas.io/creator"] = "flowctl"
+	labels["flow.foundry.io/creator"] = "flowctl"
 	obj.SetLabels(labels)
 
 	return c.CRDClient.Create(ctx, obj)
@@ -471,7 +471,7 @@ func (c *K8sClient) UpdateWorkitemStatus(ctx context.Context, namespace string, 
 // DeleteWorkitem deletes a Workitem CRD.
 func (c *K8sClient) DeleteWorkitem(ctx context.Context, namespace string, name string) error {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("Workitem")
 	obj.SetName(name)
 	obj.SetNamespace(namespace)

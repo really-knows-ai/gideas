@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"

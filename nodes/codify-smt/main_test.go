@@ -7,7 +7,7 @@ import (
 	"testing"
 	"text/template"
 
-	flow "github.com/gideas/flow/sdk/go"
+	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

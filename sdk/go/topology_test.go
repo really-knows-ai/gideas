@@ -3,7 +3,7 @@ package flow
 import (
 	"testing"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // testTopology returns a reusable topology fixture with 3 nodes and an exit contract.

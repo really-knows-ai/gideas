@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	federationv1 "github.com/gideas/flow/federation/api/v1"
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	federationv1 "github.com/foundry/flow/federation/api/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"

@@ -27,7 +27,7 @@ rules:
   verbs:
   - create
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - workitems
   verbs:
@@ -39,28 +39,28 @@ rules:
   - update
   - watch
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - workitems/status
   verbs:
   - get
   - update
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - foundryflows
   verbs:
   - get
   - list
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - foundrynodes
   verbs:
   - get
   - list
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - governedartefacts
   verbs:

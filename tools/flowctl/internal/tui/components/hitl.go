@@ -10,8 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
 
 // ─── HitlPromptModel (Rendering Component) ──────────────────────────────────
@@ -230,9 +230,9 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 
-		// List pods labeled flow.gideas.io/node-name=<node>
+		// List pods labeled flow.foundry.io/node-name=<node>
 		pods, err := clientset.CoreV1().Pods(namespace).List(attemptCtx, metav1.ListOptions{
-			LabelSelector: "flow.gideas.io/node-name=" + nodeName,
+			LabelSelector: "flow.foundry.io/node-name=" + nodeName,
 		})
 		if err != nil {
 			if h.probeAttempts >= h.probeMax {

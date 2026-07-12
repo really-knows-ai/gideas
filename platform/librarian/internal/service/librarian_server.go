@@ -12,12 +12,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gideas/flow/librarian/internal/embed"
-	"github.com/gideas/flow/librarian/internal/store/sqlite"
+	"github.com/foundry/flow/librarian/internal/embed"
+	"github.com/foundry/flow/librarian/internal/store/sqlite"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/pkg/randid"
-	flow "github.com/gideas/flow/sdk/go"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/pkg/randid"
+	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"

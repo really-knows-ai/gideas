@@ -8,7 +8,7 @@ import (
 // namespace. It performs:
 //   - .metadata.namespace = targetNamespace (sets even if absent)
 //   - If kind is "FoundryFlow": .metadata.name = targetNamespace
-//   - If kind is "FoundryNode": .metadata.labels["flow.gideas.io/flow-name"] = targetNamespace
+//   - If kind is "FoundryNode": .metadata.labels["flow.foundry.io/flow-name"] = targetNamespace
 //
 // Fields that are NEVER rewritten (passed through unchanged):
 //   - GovernedArtefact .metadata.name
@@ -34,7 +34,7 @@ func Rewrite(obj *unstructured.Unstructured, targetNamespace string) *unstructur
 		if labels == nil {
 			labels = make(map[string]string)
 		}
-		labels["flow.gideas.io/flow-name"] = targetNamespace
+		labels["flow.foundry.io/flow-name"] = targetNamespace
 		obj.SetLabels(labels)
 	}
 

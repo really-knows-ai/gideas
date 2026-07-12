@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

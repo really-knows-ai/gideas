@@ -1,4 +1,4 @@
-module github.com/gideas/flow/gen
+module github.com/foundry/flow/gen
 
 go 1.25.0
 

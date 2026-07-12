@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	flow "github.com/gideas/flow/sdk/go"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // FetchInputs fetches each artefact by ID and concatenates them with

@@ -30,10 +30,10 @@ import (
 	"log/slog"
 	"os"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal/handlers"
-	"github.com/gideas/flow/nodes/internal/nodeconfig"
-	flow "github.com/gideas/flow/sdk/go"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/handlers"
+	"github.com/foundry/flow/nodes/internal/nodeconfig"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // appraiserNodeConfig holds the node's configuration, loaded from a

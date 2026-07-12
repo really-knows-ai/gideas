@@ -25,7 +25,7 @@ type ManifestResource struct {
 	Kind string `yaml:"kind" json:"kind"`
 }
 
-// schemaRe matches the required format "<group>/v<version>", e.g. "flow.gideas.io/v1".
+// schemaRe matches the required format "<group>/v<version>", e.g. "flow.foundry.io/v1".
 var schemaRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+/v[0-9]+[a-zA-Z0-9._-]*$`)
 
 // Validate checks the manifest for required fields and valid entries.

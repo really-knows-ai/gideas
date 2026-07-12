@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/sidecar/internal/service"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

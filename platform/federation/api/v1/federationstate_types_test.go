@@ -31,7 +31,7 @@ func TestFederationStateRegistersInScheme(t *testing.T) {
 	}
 
 	gvk := schema.GroupVersionKind{
-		Group:   "federation.gideas.io",
+		Group:   "federation.foundry.io",
 		Version: "v1",
 		Kind:    "FederationState",
 	}
@@ -53,7 +53,7 @@ func TestFederationStateListRegistersInScheme(t *testing.T) {
 	}
 
 	gvk := schema.GroupVersionKind{
-		Group:   "federation.gideas.io",
+		Group:   "federation.foundry.io",
 		Version: "v1",
 		Kind:    "FederationStateList",
 	}
@@ -173,7 +173,7 @@ func TestNewTestSchemeIncludesFederationState(t *testing.T) {
 	s := NewTestScheme()
 
 	gvk := schema.GroupVersionKind{
-		Group:   "federation.gideas.io",
+		Group:   "federation.foundry.io",
 		Version: "v1",
 		Kind:    "FederationState",
 	}

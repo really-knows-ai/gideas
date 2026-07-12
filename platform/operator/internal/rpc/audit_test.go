@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	apiv1 "github.com/gideas/flow/operator/api/v1"
-	"github.com/gideas/flow/pkg/eventbus"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	apiv1 "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/pkg/eventbus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

@@ -18,7 +18,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/gideas/flow/pkg/sqldbutil"
+	"github.com/foundry/flow/pkg/sqldbutil"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )

@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"

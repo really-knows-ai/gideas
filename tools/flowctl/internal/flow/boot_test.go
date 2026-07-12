@@ -75,8 +75,8 @@ func TestImageTagMutation(t *testing.T) {
 	}{
 		{ref: "controller:latest", tag: "v1.2.3", want: "controller:v1.2.3"},
 		{ref: "controller", tag: "v1.2.3", want: "controller:v1.2.3"},
-		{ref: "gcr.io/gideas/controller:latest", tag: "v1.2.3", want: "gideas/controller:v1.2.3"},
-		{ref: "gcr.io/gideas/controller@sha256:abc123", tag: "v1.2.3", want: "gideas/controller:v1.2.3"},
+		{ref: "gcr.io/foundry/controller:latest", tag: "v1.2.3", want: "foundry/controller:v1.2.3"},
+		{ref: "gcr.io/foundry/controller@sha256:abc123", tag: "v1.2.3", want: "foundry/controller:v1.2.3"},
 		{ref: "registry:5000/controller:1.0", tag: "2.0", want: "controller:2.0"},
 		{ref: "controller:1.0", tag: "", want: "controller:"},
 		{ref: "localhost/myimage:tag", tag: "newtag", want: "myimage:newtag"},

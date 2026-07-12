@@ -8,8 +8,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/gideas/flow/nodes/internal/artefacts"
-	flow "github.com/gideas/flow/sdk/go"
+	"github.com/foundry/flow/nodes/internal/artefacts"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // Compile-time assertion: AppraiserAgent implements flow.ReviewContract.

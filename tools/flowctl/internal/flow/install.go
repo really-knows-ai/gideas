@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
 )
 
 // execLookPath is a package-level variable so tests can override it
@@ -177,21 +177,21 @@ func cloneRepo(ctx context.Context, url, ref string) (workingDir string, cleanup
 func kindPriority(kind string) (schema.GroupVersionResource, int, bool) {
 	switch kind {
 	case "GovernedArtefact":
-		return schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "governedartefacts"}, 1, true
+		return schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "governedartefacts"}, 1, true
 	case "FoundryFlow":
-		return schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "foundryflows"}, 2, true
+		return schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "foundryflows"}, 2, true
 	case "ConfigMap":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}, 3, true
 	case "FoundryNode":
-		return schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "foundrynodes"}, 4, true
+		return schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "foundrynodes"}, 4, true
 	case "Law":
-		return schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "laws"}, 5, true
+		return schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "laws"}, 5, true
 	case "LawGroup":
-		return schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "lawgroups"}, 5, true
+		return schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "lawgroups"}, 5, true
 	case "Treaty":
-		return schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "treaties"}, 6, true
+		return schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "treaties"}, 6, true
 	case "Workitem":
-		return schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "workitems"}, 7, true
+		return schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "workitems"}, 7, true
 	default:
 		return schema.GroupVersionResource{}, 99, false
 	}
@@ -277,7 +277,7 @@ func InstallFlow(ctx context.Context, k8s *api.K8sClient, opts InstallOptions, s
 	// ── Step 5: CRD check (skip if dry-run) ────────────────────────────
 	if !opts.DryRun {
 		for _, schema := range manifest.Schemas {
-			// Parse group/version from schema string (e.g. "flow.gideas.io/v1")
+			// Parse group/version from schema string (e.g. "flow.foundry.io/v1")
 			parts := strings.SplitN(schema, "/", 2)
 			if len(parts) != 2 {
 				return nil, fmt.Errorf("invalid schema %q: expected format <group>/<version>", schema)

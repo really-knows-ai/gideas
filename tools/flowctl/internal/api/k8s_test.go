@@ -23,40 +23,40 @@ import (
 
 // ─── Setup helpers ─────────────────────────────────────────────────────────
 
-// newFakeScheme creates a scheme with all four flow.gideas.io CRD kinds
+// newFakeScheme creates a scheme with all four flow.foundry.io CRD kinds
 // registered as unstructured.
 func newFakeScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "Workitem"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "Workitem"},
 		&unstructured.Unstructured{},
 	)
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "WorkitemList"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "WorkitemList"},
 		&unstructured.UnstructuredList{},
 	)
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "FoundryFlow"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "FoundryFlow"},
 		&unstructured.Unstructured{},
 	)
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "FoundryFlowList"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "FoundryFlowList"},
 		&unstructured.UnstructuredList{},
 	)
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "FoundryNode"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "FoundryNode"},
 		&unstructured.Unstructured{},
 	)
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "FoundryNodeList"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "FoundryNodeList"},
 		&unstructured.UnstructuredList{},
 	)
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "GovernedArtefact"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "GovernedArtefact"},
 		&unstructured.Unstructured{},
 	)
 	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: "GovernedArtefactList"},
+		schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: "GovernedArtefactList"},
 		&unstructured.UnstructuredList{},
 	)
 	return scheme
@@ -104,7 +104,7 @@ func (c *errorNamespaceInterface) List(ctx context.Context, opts metav1.ListOpti
 
 func makeWorkitemUnstructured(name, state, assignee string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("Workitem")
 	obj.SetName(name)
 	obj.SetNamespace("default")
@@ -143,7 +143,7 @@ func makeWorkitemWithLabel(name, state, assignee string, labels map[string]strin
 
 func makeFoundryNode(name, entry string, targets []string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("FoundryNode")
 	obj.SetName(name)
 	obj.SetNamespace("default")
@@ -162,7 +162,7 @@ func makeFoundryNode(name, entry string, targets []string) *unstructured.Unstruc
 
 func makeFoundryFlow(name string, entryContracts map[string]map[string]string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("FoundryFlow")
 	obj.SetName(name)
 	obj.SetNamespace("default")
@@ -182,7 +182,7 @@ func makeFoundryFlow(name string, entryContracts map[string]map[string]string) *
 
 func makeGovernedArtefact(name string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("GovernedArtefact")
 	obj.SetName(name)
 	obj.SetNamespace("default")
@@ -327,7 +327,7 @@ func TestGetWorkitem(t *testing.T) {
 		map[string]string{"env": "prod"},
 	)
 	child := makeWorkitemWithLabel("wi-child", "Running", "forge",
-		map[string]string{"flow.gideas.io/parent": "wi-parent"},
+		map[string]string{"flow.foundry.io/parent": "wi-parent"},
 	)
 
 	_, crdClient := newFakeSchemeAndClient(parent, child)
@@ -360,9 +360,9 @@ func TestGetWorkitem(t *testing.T) {
 
 func TestListChildren(t *testing.T) {
 	_, crdClient := newFakeSchemeAndClient(
-		makeWorkitemWithLabel("child-1", "Running", "forge", map[string]string{"flow.gideas.io/parent": "parent-1"}),
-		makeWorkitemWithLabel("child-2", "Completed", "", map[string]string{"flow.gideas.io/parent": "parent-1"}),
-		makeWorkitemWithLabel("other", "Pending", "forge", map[string]string{"flow.gideas.io/parent": "other-parent"}),
+		makeWorkitemWithLabel("child-1", "Running", "forge", map[string]string{"flow.foundry.io/parent": "parent-1"}),
+		makeWorkitemWithLabel("child-2", "Completed", "", map[string]string{"flow.foundry.io/parent": "parent-1"}),
+		makeWorkitemWithLabel("other", "Pending", "forge", map[string]string{"flow.foundry.io/parent": "other-parent"}),
 	)
 	k8s := &K8sClient{CRDClient: crdClient}
 	children, err := k8s.ListChildren(context.Background(), "default", "parent-1")
@@ -385,7 +385,7 @@ func TestListChildren(t *testing.T) {
 func TestCreateWorkitem(t *testing.T) {
 	scheme, crdClient := newFakeSchemeAndClient()
 	k8s := &K8sClient{CRDClient: crdClient, scheme: scheme}
-	err := k8s.CreateWorkitem(context.Background(), "default", "wi-new", map[string]string{"flow.gideas.io/creator": "flowctl"})
+	err := k8s.CreateWorkitem(context.Background(), "default", "wi-new", map[string]string{"flow.foundry.io/creator": "flowctl"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -398,8 +398,8 @@ func TestCreateWorkitem(t *testing.T) {
 	if detail.Name != "wi-new" {
 		t.Errorf("expected name wi-new, got %s", detail.Name)
 	}
-	if _, ok := detail.Labels["flow.gideas.io/creator"]; !ok {
-		t.Error("expected flow.gideas.io/creator label")
+	if _, ok := detail.Labels["flow.foundry.io/creator"]; !ok {
+		t.Error("expected flow.foundry.io/creator label")
 	}
 }
 

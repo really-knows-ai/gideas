@@ -33,7 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 	// +kubebuilder:scaffold:imports
 )
 

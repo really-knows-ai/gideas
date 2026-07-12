@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/gideas/flow/nodes/internal/artefacts"
-	flow "github.com/gideas/flow/sdk/go"
+	"github.com/foundry/flow/nodes/internal/artefacts"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // ReviewConfig holds handler-level configuration for the Reviewer handler.

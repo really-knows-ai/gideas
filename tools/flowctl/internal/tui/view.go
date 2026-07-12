@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
 )
 
 // errorBannerStyle is used for error banners at the top of the screen.

@@ -34,7 +34,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 // FoundryFlowReconciler reconciles a FoundryFlow object.
@@ -49,11 +49,11 @@ type FoundryFlowReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundryflows,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundryflows/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundryflows/finalizers,verbs=update
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts,verbs=get;list;watch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundryflows,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundryflows/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundryflows/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundrynodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=governedartefacts,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 

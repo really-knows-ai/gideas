@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/config"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/config"
 )
 
 // New creates and returns a new bubbletea Program with the flowctl TUI.

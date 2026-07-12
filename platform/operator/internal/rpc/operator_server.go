@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	apiv1 "github.com/gideas/flow/operator/api/v1"
-	"github.com/gideas/flow/pkg/eventbus"
-	"github.com/gideas/flow/pkg/randid"
-	flow "github.com/gideas/flow/sdk/go"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	apiv1 "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/pkg/eventbus"
+	"github.com/foundry/flow/pkg/randid"
+	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -380,7 +380,7 @@ func (s *OperatorServer) CreateWorkitem(ctx context.Context, req *flowv1.CreateW
 			Name:      workitemName,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"flow.gideas.io/creator": nodeID,
+				"flow.foundry.io/creator": nodeID,
 			},
 		},
 	}
@@ -422,7 +422,7 @@ func (s *OperatorServer) CreateWorkitem(ctx context.Context, req *flowv1.CreateW
 //  2. Extract workitem_id, namespace, and node_id from Sidecar-injected metadata.
 //  3. Fetch the parent Workitem CRD to confirm it exists.
 //  4. Generate a unique child Workitem name and create the CRD in Pending.
-//  5. Set ParentWorkitemID and flow.gideas.io/parent label.
+//  5. Set ParentWorkitemID and flow.foundry.io/parent label.
 //  6. Return the child_workitem_id.
 func (s *OperatorServer) CreateChildWorkitem(ctx context.Context, _ *flowv1.CreateChildWorkitemRequest) (*flowv1.CreateChildWorkitemResponse, error) {
 	// 1. Capability gate: CREATE:workitem/child.
@@ -466,8 +466,8 @@ func (s *OperatorServer) CreateChildWorkitem(ctx context.Context, _ *flowv1.Crea
 			Name:      childName,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"flow.gideas.io/creator": nodeID,
-				"flow.gideas.io/parent":  parentWorkitemID,
+				"flow.foundry.io/creator": nodeID,
+				"flow.foundry.io/parent":  parentWorkitemID,
 			},
 		},
 	}
@@ -610,7 +610,7 @@ func (s *OperatorServer) RouteChild(ctx context.Context, req *flowv1.RouteChildR
 //
 // Flow:
 //  1. Extract workitem_id and namespace from Sidecar-injected metadata.
-//  2. Query Workitems with flow.gideas.io/parent label matching the caller's Workitem.
+//  2. Query Workitems with flow.foundry.io/parent label matching the caller's Workitem.
 //  3. Return ChildWorkitemStatus for each child.
 func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenRequest) (*flowv1.GetChildrenResponse, error) {
 	// 1. Extract identity from metadata.
@@ -627,7 +627,7 @@ func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenR
 	var childList apiv1.WorkitemList
 	if err := s.K8sClient.List(ctx, &childList,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"flow.gideas.io/parent": parentWorkitemID},
+		client.MatchingLabels{"flow.foundry.io/parent": parentWorkitemID},
 	); err != nil {
 		slog.Error("Failed to list child Workitems", "parent_workitem_id", parentWorkitemID, "error", err)
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to list child workitems: %v", err))
@@ -1097,7 +1097,7 @@ func (s *OperatorServer) checkChildrenTerminal(ctx context.Context, namespace, p
 	var childList apiv1.WorkitemList
 	if err := s.K8sClient.List(ctx, &childList,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"flow.gideas.io/parent": parentWorkitemID},
+		client.MatchingLabels{"flow.foundry.io/parent": parentWorkitemID},
 	); err != nil {
 		return status.Error(codes.Internal, fmt.Sprintf("failed to query child workitems: %v", err))
 	}

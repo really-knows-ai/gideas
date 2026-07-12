@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/gideas/flow/tools/flowctl/internal/tui/styles"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/styles"
 )
 
 // StatusBarModel is the model for the status bar header.

@@ -94,7 +94,7 @@ and push automatically:
    - `test` method: `system "#{bin}/flowctl", "--help"`.
 
 2. **Push**: GoReleaser clones `gideas/homebrew-tap`, writes the formula file
-   to `Formula/flowctl.rb`, commits with author `gideas-bot <bot@gideas.io>`,
+   to `Formula/flowctl.rb`, commits with author `foundry-bot <bot@gideas.io>`,
    and pushes to the `main` branch using the provided token.
 
 3. **No manual formula updates**: Every release automatically updates the

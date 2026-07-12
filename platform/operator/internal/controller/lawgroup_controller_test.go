@@ -14,8 +14,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 // mockLibrarianClient implements flowv1gen.LibrarianServiceClient for testing.
@@ -198,7 +198,7 @@ func TestLawGroupReconciler_DeleteDeletesFromLibrarian(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "security",
 			Namespace:         "default",
-			Finalizers:        []string{"flow.gideas.io/test"},
+			Finalizers:        []string{"flow.foundry.io/test"},
 			DeletionTimestamp: &now,
 		},
 		Spec: flowv1.LawGroupSpec{

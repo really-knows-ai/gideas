@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/flow"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/flow"
 )
 
 // NewPackageCmd creates the `flowctl package <flow-name>` cobra command.

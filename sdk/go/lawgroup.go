@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // GroupMode is the evaluation mode for a law group.

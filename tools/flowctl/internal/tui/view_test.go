@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
 )
 
 func TestViewNamespaceSelectScreen(t *testing.T) {

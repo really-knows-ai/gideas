@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/styles"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/styles"
 )
 
 // AgeString converts time.Duration to a human-readable string like "5m", "2h", "3d".

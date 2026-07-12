@@ -37,12 +37,12 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
-	flowv1 "github.com/gideas/flow/operator/api/v1"
-	"github.com/gideas/flow/operator/internal/controller"
-	"github.com/gideas/flow/operator/internal/controller/scheduler"
-	"github.com/gideas/flow/operator/internal/rpc"
-	"github.com/gideas/flow/pkg/eventbus"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/operator/internal/controller"
+	"github.com/foundry/flow/operator/internal/controller/scheduler"
+	"github.com/foundry/flow/operator/internal/rpc"
+	"github.com/foundry/flow/pkg/eventbus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
@@ -175,7 +175,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "4fbbb497.gideas.io",
+		LeaderElectionID:       "4fbbb497.foundry.io",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -321,7 +321,7 @@ func main() {
 			Scheme:        mgr.GetScheme(),
 			ContainerName: "support-service",
 			AppLabelName:  "flowsupportservice",
-			LabelKey:      "flow.gideas.io/support",
+			LabelKey:      "flow.foundry.io/support",
 			TypeName:      "FlowSupportService",
 		},
 	}).SetupWithManager(mgr); err != nil {
@@ -334,7 +334,7 @@ func main() {
 			Scheme:        mgr.GetScheme(),
 			ContainerName: "codification-service",
 			AppLabelName:  "codificationservice",
-			LabelKey:      "flow.gideas.io/codification",
+			LabelKey:      "flow.foundry.io/codification",
 			TypeName:      "CodificationService",
 		},
 	}).SetupWithManager(mgr); err != nil {

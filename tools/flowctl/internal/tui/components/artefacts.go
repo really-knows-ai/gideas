@@ -8,8 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/gideas/flow/tools/flowctl/internal/tui/styles"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/styles"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
 
 // ArtefactTreeModel is the model for the artefact/feedback tree.

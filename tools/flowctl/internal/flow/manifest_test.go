@@ -10,7 +10,7 @@ func TestManifest_Valid(t *testing.T) {
 		Name:        "haiku-flow",
 		Version:     "1.0.0",
 		Description: "Haiku test flow",
-		Schemas:     []string{"flow.gideas.io/v1"},
+		Schemas:     []string{"flow.foundry.io/v1"},
 		Resources: []ManifestResource{
 			{Path: "flow.yaml", Kind: "FoundryFlow"},
 			{Path: "nodes.yaml", Kind: "FoundryNode"},
@@ -25,7 +25,7 @@ func TestManifest_MissingName(t *testing.T) {
 	m := &Manifest{
 		Version:     "1.0.0",
 		Description: "test",
-		Schemas:     []string{"flow.gideas.io/v1"},
+		Schemas:     []string{"flow.foundry.io/v1"},
 		Resources:   []ManifestResource{{Path: "flow.yaml", Kind: "FoundryFlow"}},
 	}
 	err := m.Validate()
@@ -41,7 +41,7 @@ func TestManifest_MissingVersion(t *testing.T) {
 	m := &Manifest{
 		Name:        "test",
 		Description: "test",
-		Schemas:     []string{"flow.gideas.io/v1"},
+		Schemas:     []string{"flow.foundry.io/v1"},
 		Resources:   []ManifestResource{{Path: "flow.yaml", Kind: "FoundryFlow"}},
 	}
 	err := m.Validate()
@@ -74,7 +74,7 @@ func TestManifest_MissingResources(t *testing.T) {
 	m := &Manifest{
 		Name:    "test",
 		Version: "1.0.0",
-		Schemas: []string{"flow.gideas.io/v1"},
+		Schemas: []string{"flow.foundry.io/v1"},
 	}
 	err := m.Validate()
 	if err == nil {
@@ -89,7 +89,7 @@ func TestManifest_MissingResourcePath(t *testing.T) {
 	m := &Manifest{
 		Name:    "test",
 		Version: "1.0.0",
-		Schemas: []string{"flow.gideas.io/v1"},
+		Schemas: []string{"flow.foundry.io/v1"},
 		Resources: []ManifestResource{
 			{Path: "", Kind: "FoundryFlow"},
 		},
@@ -107,7 +107,7 @@ func TestManifest_MissingResourceKind(t *testing.T) {
 	m := &Manifest{
 		Name:    "test",
 		Version: "1.0.0",
-		Schemas: []string{"flow.gideas.io/v1"},
+		Schemas: []string{"flow.foundry.io/v1"},
 		Resources: []ManifestResource{
 			{Path: "flow.yaml", Kind: ""},
 		},
@@ -125,7 +125,7 @@ func TestManifest_DuplicateResourcePath(t *testing.T) {
 	m := &Manifest{
 		Name:    "test",
 		Version: "1.0.0",
-		Schemas: []string{"flow.gideas.io/v1"},
+		Schemas: []string{"flow.foundry.io/v1"},
 		Resources: []ManifestResource{
 			{Path: "flow.yaml", Kind: "FoundryFlow"},
 			{Path: "flow.yaml", Kind: "FoundryNode"},
@@ -162,7 +162,7 @@ func TestManifest_ValidSchemaFormats(t *testing.T) {
 	m := &Manifest{
 		Name:    "test",
 		Version: "1.0.0",
-		Schemas: []string{"flow.gideas.io/v1", "example.io/v2", "my-group/v10"},
+		Schemas: []string{"flow.foundry.io/v1", "example.io/v2", "my-group/v10"},
 		Resources: []ManifestResource{
 			{Path: "flow.yaml", Kind: "FoundryFlow"},
 		},
@@ -196,7 +196,7 @@ func TestManifest_MarshalRoundTrip(t *testing.T) {
 		Name:        "haiku-flow",
 		Version:     "1.0.0",
 		Description: "Haiku test flow",
-		Schemas:     []string{"flow.gideas.io/v1"},
+		Schemas:     []string{"flow.foundry.io/v1"},
 		Resources: []ManifestResource{
 			{Path: "flow.yaml", Kind: "FoundryFlow"},
 		},
@@ -229,7 +229,7 @@ func TestManifest_UnmarshalInvalidYAML(t *testing.T) {
 
 func TestManifest_UnmarshalWithValidationFailure(t *testing.T) {
 	// Missing name should fail validation
-	data := []byte("version: 1.0.0\nresources:\n  - path: flow.yaml\n    kind: FoundryFlow\nschemas:\n  - flow.gideas.io/v1\n")
+	data := []byte("version: 1.0.0\nresources:\n  - path: flow.yaml\n    kind: FoundryFlow\nschemas:\n  - flow.foundry.io/v1\n")
 	_, err := UnmarshalManifest(data)
 	if err == nil {
 		t.Fatal("expected error, got nil")

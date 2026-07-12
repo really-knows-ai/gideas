@@ -11,10 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/cmd"
-	"github.com/gideas/flow/tools/flowctl/internal/config"
-	"github.com/gideas/flow/tools/flowctl/internal/tui"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/cmd"
+	"github.com/foundry/flow/tools/flowctl/internal/config"
+	"github.com/foundry/flow/tools/flowctl/internal/tui"
 )
 
 // Version information set by ldflags at build time.

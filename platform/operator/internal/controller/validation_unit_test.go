@@ -16,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 func TestValidateImportTypesRequiresEntryBoundNode(t *testing.T) {

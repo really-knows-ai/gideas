@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gideas/flow/archivist/internal/store/sqlite"
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/foundry/flow/archivist/internal/store/sqlite"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc/metadata"
 )
 

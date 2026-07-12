@@ -14,10 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/watch"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
 
 // ─── Type Conversion Helpers ────────────────────────────────────────────────
@@ -1740,7 +1740,7 @@ func (m *Model) executeCreate(ctx context.Context, selectedNode, promptText, art
 	// 2. Create Workitem CRD — skip if already created on a prior attempt
 	if !m.createHasCRD {
 		labels := map[string]string{
-			"flow.gideas.io/creator": "flowctl",
+			"flow.foundry.io/creator": "flowctl",
 		}
 		var crdErr error
 		for attempt := 0; attempt < 3; attempt++ {

@@ -6,9 +6,9 @@ import (
 	"os"
 	"strconv"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/sidecar/internal/buffer"
-	"github.com/gideas/flow/sidecar/internal/service"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/sidecar/internal/buffer"
+	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 )
 

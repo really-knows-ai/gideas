@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: workitems.flow.gideas.io
+  name: workitems.flow.foundry.io
 spec:
-  group: flow.gideas.io
+  group: flow.foundry.io
   names:
     kind: Workitem
     listKind: WorkitemList
@@ -82,7 +82,7 @@ spec:
                   parentWorkitemID is the ID of the parent Workitem that spawned this child.
                   Set by the Operator when a child Workitem is created via CreateChildWorkitem.
                   Empty for root Workitems. Immutable once set.
-                  The label flow.gideas.io/parent is also set for efficient querying.
+                  The label flow.foundry.io/parent is also set for efficient querying.
                 type: string
               phase:
                 description: |-

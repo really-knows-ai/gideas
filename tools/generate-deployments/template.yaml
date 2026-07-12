@@ -14,7 +14,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: {{.Name}}
-        flow.gideas.io/node-name: {{.Name}}
+        flow.foundry.io/node-name: {{.Name}}
     spec:
       containers:
         - name: node

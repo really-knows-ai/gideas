@@ -31,7 +31,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 var _ = Describe("FoundryNode Controller", func() {

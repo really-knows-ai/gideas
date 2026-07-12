@@ -19,11 +19,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gideas/flow/eventbus/internal/service"
-	"github.com/gideas/flow/eventbus/internal/store/sqlite"
-	"github.com/gideas/flow/pkg/randid"
+	"github.com/foundry/flow/eventbus/internal/service"
+	"github.com/foundry/flow/eventbus/internal/store/sqlite"
+	"github.com/foundry/flow/pkg/randid"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )

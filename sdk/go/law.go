@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // Law is a domain object wrapping a governance law from the Librarian.

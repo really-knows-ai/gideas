@@ -1,9 +1,9 @@
-module github.com/gideas/flow/federation
+module github.com/foundry/flow/federation
 
 go 1.25.3
 
 require (
-	github.com/gideas/flow/gen v0.0.0
+	github.com/foundry/flow/gen v0.0.0
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
 	k8s.io/apimachinery v0.35.0
@@ -68,4 +68,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/gideas/flow/gen => ../../gen
+replace github.com/foundry/flow/gen => ../../gen

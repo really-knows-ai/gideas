@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/gideas/flow/eventbus/internal/store/sqlite"
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/foundry/flow/eventbus/internal/store/sqlite"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"

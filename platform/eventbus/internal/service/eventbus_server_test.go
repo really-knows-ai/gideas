@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gideas/flow/eventbus/internal/store/sqlite"
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	"github.com/foundry/flow/eventbus/internal/store/sqlite"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"

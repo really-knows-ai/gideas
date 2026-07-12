@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: foundrynodes.flow.gideas.io
+  name: foundrynodes.flow.foundry.io
 spec:
-  group: flow.gideas.io
+  group: flow.foundry.io
   names:
     kind: FoundryNode
     listKind: FoundryNodeList

@@ -21,7 +21,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gideas/flow/monitor/internal/subscriber"
+	"github.com/foundry/flow/monitor/internal/subscriber"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )

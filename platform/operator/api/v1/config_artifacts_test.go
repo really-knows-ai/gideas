@@ -31,7 +31,7 @@ func TestSampleTreatyUsesAllowedImportTypes(t *testing.T) {
 func TestGeneratedFoundryFlowCRDUsesEmbassyFields(t *testing.T) {
 	t.Parallel()
 
-	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.gideas.io_foundryflows.yaml"))
+	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.foundry.io_foundryflows.yaml"))
 	assertContains(t, content, "federationCA:")
 	assertContains(t, content, "importTypes:")
 	assertContains(t, content, "flow-authored cross-flow import types")
@@ -43,7 +43,7 @@ func TestGeneratedFoundryFlowCRDUsesEmbassyFields(t *testing.T) {
 func TestGeneratedTreatyCRDUsesAllowedImportTypes(t *testing.T) {
 	t.Parallel()
 
-	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.gideas.io_treaties.yaml"))
+	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.foundry.io_treaties.yaml"))
 	assertContains(t, content, "allowedImportTypes:")
 	assertContains(t, content, "effective import-type namespace")
 }

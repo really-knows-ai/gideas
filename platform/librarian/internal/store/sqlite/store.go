@@ -25,7 +25,7 @@ import (
 	"time"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
-	"github.com/gideas/flow/pkg/sqldbutil"
+	"github.com/foundry/flow/pkg/sqldbutil"
 	_ "github.com/mattn/go-sqlite3"
 )
 

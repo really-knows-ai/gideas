@@ -6,9 +6,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/config"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/config"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
 )
 
 // Screen represents the current screen in the TUI.

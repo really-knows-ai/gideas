@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // ChildWorkitem is a handle to a child Workitem created by the parent.

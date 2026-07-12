@@ -1,6 +1,6 @@
 package flow
 
-import flowv1 "github.com/gideas/flow/gen/flow/v1"
+import flowv1 "github.com/foundry/flow/gen/flow/v1"
 
 // IsPetitionAccepted returns true if the petition outcome event indicates
 // the authority accepted the petition.

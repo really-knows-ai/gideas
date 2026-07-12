@@ -16,7 +16,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: forge
-        flow.gideas.io/node-name: forge
+        flow.foundry.io/node-name: forge
     spec:
       containers:
         - name: node
@@ -72,7 +72,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: quench
-        flow.gideas.io/node-name: quench
+        flow.foundry.io/node-name: quench
     spec:
       containers:
         - name: node
@@ -112,7 +112,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: sort
-        flow.gideas.io/node-name: sort
+        flow.foundry.io/node-name: sort
     spec:
       containers:
         - name: node
@@ -162,7 +162,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: appraisal
-        flow.gideas.io/node-name: appraisal
+        flow.foundry.io/node-name: appraisal
     spec:
       containers:
         - name: node
@@ -218,7 +218,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: appraiser
-        flow.gideas.io/node-name: appraiser
+        flow.foundry.io/node-name: appraiser
     spec:
       containers:
         - name: node
@@ -268,7 +268,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: refine
-        flow.gideas.io/node-name: refine
+        flow.foundry.io/node-name: refine
     spec:
       containers:
         - name: node
@@ -324,7 +324,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: facilitator
-        flow.gideas.io/node-name: facilitator
+        flow.foundry.io/node-name: facilitator
     spec:
       containers:
         - name: node
@@ -376,7 +376,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: arbiter
-        flow.gideas.io/node-name: arbiter
+        flow.foundry.io/node-name: arbiter
     spec:
       containers:
         - name: node
@@ -424,7 +424,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: juror
-        flow.gideas.io/node-name: juror
+        flow.foundry.io/node-name: juror
     spec:
       containers:
         - name: node
@@ -474,7 +474,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: tribunal
-        flow.gideas.io/node-name: tribunal
+        flow.foundry.io/node-name: tribunal
     spec:
       containers:
         - name: node
@@ -526,7 +526,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: friction-watcher
-        flow.gideas.io/node-name: friction-watcher
+        flow.foundry.io/node-name: friction-watcher
     spec:
       containers:
         - name: node
@@ -568,7 +568,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: ttl-watcher
-        flow.gideas.io/node-name: ttl-watcher
+        flow.foundry.io/node-name: ttl-watcher
     spec:
       containers:
         - name: node
@@ -618,7 +618,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: hitl-appraisal
-        flow.gideas.io/node-name: hitl-appraisal
+        flow.foundry.io/node-name: hitl-appraisal
     spec:
       containers:
         - name: node
@@ -666,7 +666,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: arbiter-hitl-resolve
-        flow.gideas.io/node-name: arbiter-hitl-resolve
+        flow.foundry.io/node-name: arbiter-hitl-resolve
     spec:
       containers:
         - name: node
@@ -714,7 +714,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: tribunal-hitl-resolve
-        flow.gideas.io/node-name: tribunal-hitl-resolve
+        flow.foundry.io/node-name: tribunal-hitl-resolve
     spec:
       containers:
         - name: node
@@ -762,7 +762,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: clerk-forge
-        flow.gideas.io/node-name: clerk-forge
+        flow.foundry.io/node-name: clerk-forge
     spec:
       containers:
         - name: node
@@ -818,7 +818,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: clerk-sort
-        flow.gideas.io/node-name: clerk-sort
+        flow.foundry.io/node-name: clerk-sort
     spec:
       containers:
         - name: node
@@ -868,7 +868,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: clerk-appraisal
-        flow.gideas.io/node-name: clerk-appraisal
+        flow.foundry.io/node-name: clerk-appraisal
     spec:
       containers:
         - name: node
@@ -924,7 +924,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: clerk-refine
-        flow.gideas.io/node-name: clerk-refine
+        flow.foundry.io/node-name: clerk-refine
     spec:
       containers:
         - name: node
@@ -980,7 +980,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: clerk-facilitator
-        flow.gideas.io/node-name: clerk-facilitator
+        flow.foundry.io/node-name: clerk-facilitator
     spec:
       containers:
         - name: node
@@ -1032,7 +1032,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: codification
-        flow.gideas.io/node-name: codification
+        flow.foundry.io/node-name: codification
     spec:
       containers:
         - name: node
@@ -1080,7 +1080,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: codify-smt
-        flow.gideas.io/node-name: codify-smt
+        flow.foundry.io/node-name: codify-smt
     spec:
       containers:
         - name: node
@@ -1130,7 +1130,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: clerk-done-router
-        flow.gideas.io/node-name: clerk-done-router
+        flow.foundry.io/node-name: clerk-done-router
     spec:
       containers:
         - name: node
@@ -1178,7 +1178,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: hitl-gate
-        flow.gideas.io/node-name: hitl-gate
+        flow.foundry.io/node-name: hitl-gate
     spec:
       containers:
         - name: node
@@ -1226,7 +1226,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: law-applicator
-        flow.gideas.io/node-name: law-applicator
+        flow.foundry.io/node-name: law-applicator
     spec:
       containers:
         - name: node
@@ -1268,7 +1268,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: human-arbiter
-        flow.gideas.io/node-name: human-arbiter
+        flow.foundry.io/node-name: human-arbiter
     spec:
       containers:
         - name: node
@@ -1308,7 +1308,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: human-approval
-        flow.gideas.io/node-name: human-approval
+        flow.foundry.io/node-name: human-approval
     spec:
       containers:
         - name: node

@@ -1,10 +1,10 @@
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   labels:
     app.kubernetes.io/name: operator
     app.kubernetes.io/managed-by: kustomize
-    flow.gideas.io/flow-name: basic-linear-flow
+    flow.foundry.io/flow-name: basic-linear-flow
   name: step-1
   namespace: default
 spec:

@@ -13,11 +13,11 @@ import (
 	"os"
 	"strconv"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 
-	federationv1 "github.com/gideas/flow/federation/api/v1"
-	"github.com/gideas/flow/federation/internal/controller"
-	"github.com/gideas/flow/federation/internal/service"
+	federationv1 "github.com/foundry/flow/federation/api/v1"
+	"github.com/foundry/flow/federation/internal/controller"
+	"github.com/foundry/flow/federation/internal/service"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"

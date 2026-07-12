@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 // GovernedArtefactReconciler reconciles a GovernedArtefact object.
@@ -38,9 +38,9 @@ type GovernedArtefactReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=governedartefacts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=governedartefacts/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=governedartefacts/finalizers,verbs=update
 
 // Reconcile validates the GovernedArtefact and sets a Ready condition.
 func (r *GovernedArtefactReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

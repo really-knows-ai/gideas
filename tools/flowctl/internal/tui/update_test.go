@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
 
 func TestUpdateNamespaceSelectedTransitionsToWorkitemList(t *testing.T) {

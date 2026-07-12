@@ -1,9 +1,9 @@
-module github.com/gideas/flow/sdk/go
+module github.com/foundry/flow/sdk/go
 
 go 1.25.0
 
 require (
-	github.com/gideas/flow/gen v0.0.0
+	github.com/foundry/flow/gen v0.0.0
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	google.golang.org/grpc v1.79.1
@@ -17,4 +17,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 )
 
-replace github.com/gideas/flow/gen => ../../gen
+replace github.com/foundry/flow/gen => ../../gen

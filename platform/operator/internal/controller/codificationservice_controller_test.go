@@ -28,7 +28,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 var _ = Describe("CodificationService Controller", func() {
@@ -85,7 +85,7 @@ var _ = Describe("CodificationService Controller", func() {
 					Scheme:        k8sClient.Scheme(),
 					ContainerName: "codification-service",
 					AppLabelName:  "codificationservice",
-					LabelKey:      "flow.gideas.io/codification",
+					LabelKey:      "flow.foundry.io/codification",
 					TypeName:      "CodificationService",
 				},
 			}

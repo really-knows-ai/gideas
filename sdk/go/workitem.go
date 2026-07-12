@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // Workitem is the composition root for workitem-scoped operations.

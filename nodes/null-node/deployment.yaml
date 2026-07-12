@@ -1,7 +1,7 @@
 # Null-Node Deployment for Foundry Flow Push-Based Dispatcher Verification
 #
 # This manifest deploys the null-node with its sidecar in a single Pod.
-# The Operator discovers these Pods via the flow.gideas.io/node-name label
+# The Operator discovers these Pods via the flow.foundry.io/node-name label
 # and pushes work assignments to the Sidecar via gRPC.
 #
 # Communication path:
@@ -24,16 +24,16 @@ metadata:
   labels:
     app.kubernetes.io/name: null-node
     app.kubernetes.io/part-of: foundry-flow
-    flow.gideas.io/node-name: null-node
+    flow.foundry.io/node-name: null-node
 spec:
   replicas: 1
   selector:
     matchLabels:
-      flow.gideas.io/node-name: null-node
+      flow.foundry.io/node-name: null-node
   template:
     metadata:
       labels:
-        flow.gideas.io/node-name: null-node
+        flow.foundry.io/node-name: null-node
         app.kubernetes.io/name: null-node
     spec:
       containers:
@@ -70,7 +70,7 @@ spec:
               value: "flow-archivist:50054"
 ---
 # FoundryNode CRD for the null-node
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: null-node
@@ -78,7 +78,7 @@ metadata:
   labels:
     app.kubernetes.io/name: operator
     app.kubernetes.io/managed-by: kustomize
-    flow.gideas.io/flow-name: basic-linear-flow
+    flow.foundry.io/flow-name: basic-linear-flow
 spec:
   image: null-node:latest
   exit: "standard-exit"
@@ -86,7 +86,7 @@ spec:
 # Sample Workitem to trigger assignment
 # Apply this after the Deployment and FoundryNode are ready.
 # The Operator will see phase=Pending + currentAssignee=null-node and dispatch.
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: Workitem
 metadata:
   name: test-workitem-001

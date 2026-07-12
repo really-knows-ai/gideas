@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal/tally"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/tally"
 )
 
 func TestTribunal_HappyPath_ConsensusRound1_ClerkChildAndComplete(t *testing.T) {

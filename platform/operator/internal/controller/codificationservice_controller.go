@@ -22,7 +22,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 // CodificationServiceReconciler reconciles a CodificationService object.
@@ -30,9 +30,9 @@ type CodificationServiceReconciler struct {
 	ServiceReconciler
 }
 
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=codificationservices,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=codificationservices/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=codificationservices/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=codificationservices,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=codificationservices/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=codificationservices/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 

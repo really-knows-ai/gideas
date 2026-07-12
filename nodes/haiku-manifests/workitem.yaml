@@ -17,7 +17,7 @@
 # Then apply this workitem to start the cycle:
 #   kubectl apply -f workitem.yaml
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: Workitem
 metadata:
   name: haiku-001

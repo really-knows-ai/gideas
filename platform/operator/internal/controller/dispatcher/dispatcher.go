@@ -15,7 +15,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
@@ -26,7 +26,7 @@ const (
 	// LabelNodeName is the Pod label used to identify which FoundryNode
 	// a Pod belongs to. Set by the Deployment/ReplicaSet that manages the
 	// Node's Pods.
-	LabelNodeName = "flow.gideas.io/node-name"
+	LabelNodeName = "flow.foundry.io/node-name"
 
 	// DefaultSidecarPort is the gRPC port the Sidecar listens on inside
 	// each Pod.
@@ -73,7 +73,7 @@ type AssignResult struct {
 // caller-supplied context (e.g. law_id from an entry-bound watcher node).
 //
 // Steps:
-//  1. List Pods with label flow.gideas.io/node-name=<nodeName>.
+//  1. List Pods with label flow.foundry.io/node-name=<nodeName>.
 //  2. Filter for Running + Ready Pods.
 //  3. Select one Pod (random).
 //  4. Dial PodIP:50051 and call SidecarService.AssignWork.

@@ -1,10 +1,10 @@
-module github.com/gideas/flow/queue
+module github.com/foundry/flow/queue
 
 go 1.25.0
 
 require (
-	github.com/gideas/flow/gen v0.0.0
-	github.com/gideas/flow/sdk/go v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/gen v0.0.0
+	github.com/foundry/flow/sdk/go v0.0.0-00010101000000-000000000000
 	google.golang.org/grpc v1.79.1
 )
 
@@ -18,6 +18,6 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/gideas/flow/gen => ../../gen
+replace github.com/foundry/flow/gen => ../../gen
 
-replace github.com/gideas/flow/sdk/go => ../../sdk/go
+replace github.com/foundry/flow/sdk/go => ../../sdk/go

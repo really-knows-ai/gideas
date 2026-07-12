@@ -8,8 +8,8 @@ import (
 	"strings"
 	"text/template"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	flow "github.com/gideas/flow/sdk/go"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 var _ = Describe("FlowSupportService Controller", func() {
@@ -85,7 +85,7 @@ var _ = Describe("FlowSupportService Controller", func() {
 					Scheme:        k8sClient.Scheme(),
 					ContainerName: "support-service",
 					AppLabelName:  "flowsupportservice",
-					LabelKey:      "flow.gideas.io/support",
+					LabelKey:      "flow.foundry.io/support",
 					TypeName:      "FlowSupportService",
 				},
 			}

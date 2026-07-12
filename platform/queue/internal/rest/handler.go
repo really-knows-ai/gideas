@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/queue/internal/peer"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/queue/internal/peer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

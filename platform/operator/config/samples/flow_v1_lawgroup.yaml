@@ -1,4 +1,4 @@
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: LawGroup
 metadata:
   name: security

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gideas/flow/pkg/sqldbutil"
+	"github.com/foundry/flow/pkg/sqldbutil"
 	_ "github.com/mattn/go-sqlite3" // SQLite driver.
 )
 

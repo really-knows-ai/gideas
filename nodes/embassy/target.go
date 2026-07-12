@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	flow "github.com/gideas/flow/sdk/go"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // importTypeLawPetition is the built-in system import type for cross-flow

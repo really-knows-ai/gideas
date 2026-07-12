@@ -1,6 +1,6 @@
 package service
 
-import flowv1 "github.com/gideas/flow/gen/flow/v1"
+import flowv1 "github.com/foundry/flow/gen/flow/v1"
 
 // Compile-time guard: FederationServer must implement the generated
 // FederationServiceServer interface. If any method is removed or its

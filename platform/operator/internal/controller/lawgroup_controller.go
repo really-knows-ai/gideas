@@ -28,8 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 // LawGroupReconciler reconciles a LawGroup object by syncing it to the
@@ -40,9 +40,9 @@ type LawGroupReconciler struct {
 	Librarian flowv1gen.LibrarianServiceClient
 }
 
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=lawgroups,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=lawgroups/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=lawgroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=lawgroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=lawgroups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=lawgroups/finalizers,verbs=update
 
 // Reconcile syncs the LawGroup CRD into the Librarian.
 // On deletion: calls DeleteLawGroup on the Librarian.

@@ -2,15 +2,15 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/flow.gideas.io_foundryflows.yaml
-- bases/flow.gideas.io_foundrynodes.yaml
-- bases/flow.gideas.io_workitems.yaml
-- bases/flow.gideas.io_governedartefacts.yaml
-- bases/flow.gideas.io_laws.yaml
-- bases/flow.gideas.io_treaties.yaml
-- bases/flow.gideas.io_flowsupportservices.yaml
-- bases/flow.gideas.io_lawgroups.yaml
-- bases/flow.gideas.io_codificationservices.yaml
+- bases/flow.foundry.io_foundryflows.yaml
+- bases/flow.foundry.io_foundrynodes.yaml
+- bases/flow.foundry.io_workitems.yaml
+- bases/flow.foundry.io_governedartefacts.yaml
+- bases/flow.foundry.io_laws.yaml
+- bases/flow.foundry.io_treaties.yaml
+- bases/flow.foundry.io_flowsupportservices.yaml
+- bases/flow.foundry.io_lawgroups.yaml
+- bases/flow.foundry.io_codificationservices.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

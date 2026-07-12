@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/gideas/flow/monitor/internal/metrics"
+	"github.com/foundry/flow/monitor/internal/metrics"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // AuditSubscriber subscribes to the Event Bus audit channel and writes

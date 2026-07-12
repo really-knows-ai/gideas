@@ -19,9 +19,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/gideas/flow/queue/internal/peer"
-	"github.com/gideas/flow/queue/internal/rest"
-	flow "github.com/gideas/flow/sdk/go"
+	"github.com/foundry/flow/queue/internal/peer"
+	"github.com/foundry/flow/queue/internal/rest"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 const (

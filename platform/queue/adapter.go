@@ -3,8 +3,8 @@ package queue
 import (
 	"context"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/queue/internal/rest"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/queue/internal/rest"
 )
 
 type handlerAdapter struct {

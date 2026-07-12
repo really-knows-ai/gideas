@@ -38,7 +38,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - codificationservices
   - flowsupportservices
@@ -58,7 +58,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - codificationservices/finalizers
   - flowsupportservices/finalizers
@@ -72,7 +72,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - flow.gideas.io
+  - flow.foundry.io
   resources:
   - codificationservices/status
   - flowsupportservices/status

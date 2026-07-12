@@ -5,7 +5,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/gideas/flow/eventbus/internal/store/sqlite"
+	"github.com/foundry/flow/eventbus/internal/store/sqlite"
 )
 
 // subscriber represents a single active subscription on a channel.

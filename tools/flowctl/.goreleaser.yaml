@@ -62,7 +62,7 @@ snapshot:
 
 release:
   github:
-    owner: gideas
+    owner: foundry
     name: platform
   header: |
     ## flowctl {{ .Version }}
@@ -72,7 +72,7 @@ release:
     ### Installation
 
     ```bash
-    brew tap gideas/tap && brew install flowctl
+    brew tap foundry/tap && brew install flowctl
     ```
 
     Or download the archive for your platform from the assets below.
@@ -101,12 +101,12 @@ changelog:
 brews:
   - name: flowctl
     repository:
-      owner: gideas
+      owner: foundry
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    homepage: "https://github.com/gideas/platform"
+    homepage: "https://github.com/foundry/platform"
     description: "Foundry Flow CLI — browse, seed, and manage Workitems on a Foundry Flow cluster."
     license: "Apache-2.0"
     test: |
@@ -114,7 +114,7 @@ brews:
     install: |
       bin.install "flowctl"
     commit_author:
-      name: gideas-bot
-      email: bot@gideas.io
-    url_template: "https://github.com/gideas/platform/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+      name: foundry-bot
+      email: bot@foundry.io
+    url_template: "https://github.com/foundry/platform/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     download_strategy: GitHubPrivateRepositoryReleaseDownloadStrategy

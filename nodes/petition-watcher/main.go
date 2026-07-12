@@ -26,10 +26,10 @@ import (
 	"os"
 	"time"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal"
-	"github.com/gideas/flow/nodes/internal/nodeutil"
-	flow "github.com/gideas/flow/sdk/go"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
+	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

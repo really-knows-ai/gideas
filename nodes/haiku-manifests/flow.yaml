@@ -53,7 +53,7 @@
 #   2. kubectl apply -f configmaps.yaml    (node configuration)
 #   3. kubectl apply -f workitem.yaml      (trigger the cycle)
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: GovernedArtefact
 metadata:
   name: haiku
@@ -64,7 +64,7 @@ spec:
     - law-*
     - approval
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: GovernedArtefact
 metadata:
   name: petition
@@ -73,7 +73,7 @@ spec:
   stamps:
     - approval
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: GovernedArtefact
 metadata:
   name: review-data
@@ -81,7 +81,7 @@ metadata:
 spec:
   stamps: []
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryFlow
 metadata:
   name: haiku-flow
@@ -117,13 +117,13 @@ spec:
 ---
 # --- Node Definitions (Topology) ---
 
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: forge
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: forge:latest
   entry: "standard-entry"
@@ -135,13 +135,13 @@ spec:
     - "WRITE:artefact/haiku"
     - "READ:law"
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: sort
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: sort:latest
   exit: "standard-exit"
@@ -165,13 +165,13 @@ spec:
     - "WRITE:feedback/deadlocked"
 ---
 
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: quench
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: haiku-quench:latest
   outputs:
@@ -184,13 +184,13 @@ spec:
     - "WRITE:feedback/new"
     - "ATTEST:artefact/haiku/law-id"
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: appraisal
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: appraisal:latest
   outputs:
@@ -210,13 +210,13 @@ spec:
     - "ATTEST:artefact/haiku/law-*"
     - "CREATE:workitem/child"
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: appraiser
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: appraiser:latest
   outputs: []
@@ -225,13 +225,13 @@ spec:
     - "READ:artefact/review-data"
     - "WRITE:artefact/review-data"
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: refine
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: refine:latest
   outputs:
@@ -247,13 +247,13 @@ spec:
     - "WRITE:feedback/wont_fix"
     - "READ:law"
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: human-arbiter
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: human-arbiter:latest
   exit: "standard-exit"
@@ -269,13 +269,13 @@ spec:
     - "WRITE:feedback/link-ruling"
     - "STAMP:artefact/haiku/arbitrated"
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
   name: human-approval
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   image: human-approval:latest
   exit: "standard-exit"

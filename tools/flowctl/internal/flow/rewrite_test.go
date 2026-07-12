@@ -37,7 +37,7 @@ func TestRewrite_OverwritesExistingNamespace(t *testing.T) {
 
 func TestRewrite_RenamesFoundryFlow(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "FoundryFlow",
 		"metadata": map[string]interface{}{
 			"name": "original-name",
@@ -52,7 +52,7 @@ func TestRewrite_RenamesFoundryFlow(t *testing.T) {
 
 func TestRewrite_DoesNotRenameNonFoundryFlow(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "FoundryNode",
 		"metadata": map[string]interface{}{
 			"name": "original-node",
@@ -67,7 +67,7 @@ func TestRewrite_DoesNotRenameNonFoundryFlow(t *testing.T) {
 
 func TestRewrite_RewritesFlowNameLabelOnFoundryNode(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "FoundryNode",
 		"metadata": map[string]interface{}{
 			"name": "forge",
@@ -78,8 +78,8 @@ func TestRewrite_RewritesFlowNameLabelOnFoundryNode(t *testing.T) {
 	if labels == nil {
 		t.Fatal("labels should not be nil")
 	}
-	if labels["flow.gideas.io/flow-name"] != "my-flow" {
-		t.Errorf("flow-name label = %q, want %q", labels["flow.gideas.io/flow-name"], "my-flow")
+	if labels["flow.foundry.io/flow-name"] != "my-flow" {
+		t.Errorf("flow-name label = %q, want %q", labels["flow.foundry.io/flow-name"], "my-flow")
 	}
 }
 
@@ -99,14 +99,14 @@ func TestRewrite_DoesNotRewriteLabelOnNonFoundryNode(t *testing.T) {
 	if labels["existing"] != "value" {
 		t.Errorf("existing label changed: %v", labels)
 	}
-	if _, ok := labels["flow.gideas.io/flow-name"]; ok {
+	if _, ok := labels["flow.foundry.io/flow-name"]; ok {
 		t.Error("flow-name label should not be set on non-FoundryNode")
 	}
 }
 
 func TestRewrite_DoesNotRewriteGovernedArtefactName(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "GovernedArtefact",
 		"metadata": map[string]interface{}{
 			"name": "haiku",
@@ -121,7 +121,7 @@ func TestRewrite_DoesNotRewriteGovernedArtefactName(t *testing.T) {
 
 func TestRewrite_DoesNotRewriteContractKeys(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "FoundryFlow",
 		"metadata": map[string]interface{}{
 			"name": "original",
@@ -144,7 +144,7 @@ func TestRewrite_DoesNotRewriteContractKeys(t *testing.T) {
 
 func TestRewrite_DoesNotRewriteTreatyRemoteName(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "Treaty",
 		"metadata": map[string]interface{}{
 			"name": "cross-flow-treaty",
@@ -162,7 +162,7 @@ func TestRewrite_DoesNotRewriteTreatyRemoteName(t *testing.T) {
 
 func TestRewrite_FoundryNodeNamePreserved(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "FoundryNode",
 		"metadata": map[string]interface{}{
 			"name": "forge-node",
@@ -177,7 +177,7 @@ func TestRewrite_FoundryNodeNamePreserved(t *testing.T) {
 
 func TestRewrite_FoundryNodeOutputsTargetPreserved(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "flow.gideas.io/v1",
+		"apiVersion": "flow.foundry.io/v1",
 		"kind":       "FoundryNode",
 		"metadata": map[string]interface{}{
 			"name": "forge",

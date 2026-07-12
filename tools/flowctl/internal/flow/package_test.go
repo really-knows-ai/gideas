@@ -18,8 +18,8 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	crdfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/flow"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/flow"
 )
 
 // ─── Fake scheme helpers ─────────────────────────────────────────────────
@@ -31,11 +31,11 @@ func newPackageFakeScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	register := func(kind string) {
 		scheme.AddKnownTypeWithName(
-			schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: kind},
+			schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: kind},
 			&unstructured.Unstructured{},
 		)
 		scheme.AddKnownTypeWithName(
-			schema.GroupVersionKind{Group: "flow.gideas.io", Version: "v1", Kind: kind + "List"},
+			schema.GroupVersionKind{Group: "flow.foundry.io", Version: "v1", Kind: kind + "List"},
 			&unstructured.UnstructuredList{},
 		)
 	}
@@ -70,7 +70,7 @@ func makeObj(apiVersion, kind, name, namespace string) *unstructured.Unstructure
 }
 
 func makeFlow(name, namespace string, entryContracts, exitContracts map[string]map[string]string) *unstructured.Unstructured {
-	obj := makeObj("flow.gideas.io/v1", "FoundryFlow", name, namespace)
+	obj := makeObj("flow.foundry.io/v1", "FoundryFlow", name, namespace)
 	if entryContracts != nil {
 		_ = unstructured.SetNestedMap(obj.Object, toRawMap(entryContracts), "spec", "entryContracts")
 	}
@@ -81,25 +81,25 @@ func makeFlow(name, namespace string, entryContracts, exitContracts map[string]m
 }
 
 func makeNode(name, namespace, flowName string) *unstructured.Unstructured {
-	obj := makeObj("flow.gideas.io/v1", "FoundryNode", name, namespace)
-	obj.SetLabels(map[string]string{"flow.gideas.io/flow-name": flowName})
+	obj := makeObj("flow.foundry.io/v1", "FoundryNode", name, namespace)
+	obj.SetLabels(map[string]string{"flow.foundry.io/flow-name": flowName})
 	return obj
 }
 
 func makeArtefact(name, namespace string) *unstructured.Unstructured {
-	return makeObj("flow.gideas.io/v1", "GovernedArtefact", name, namespace)
+	return makeObj("flow.foundry.io/v1", "GovernedArtefact", name, namespace)
 }
 
 func makeLaw(name, namespace string) *unstructured.Unstructured {
-	return makeObj("flow.gideas.io/v1", "Law", name, namespace)
+	return makeObj("flow.foundry.io/v1", "Law", name, namespace)
 }
 
 func makeLawGroup(name, namespace string) *unstructured.Unstructured {
-	return makeObj("flow.gideas.io/v1", "LawGroup", name, namespace)
+	return makeObj("flow.foundry.io/v1", "LawGroup", name, namespace)
 }
 
 func makeTreaty(name, namespace string) *unstructured.Unstructured {
-	return makeObj("flow.gideas.io/v1", "Treaty", name, namespace)
+	return makeObj("flow.foundry.io/v1", "Treaty", name, namespace)
 }
 
 func toRawMap(m map[string]map[string]string) map[string]interface{} {
@@ -638,7 +638,7 @@ func TestPackageFlow_NodeGroupContracts(t *testing.T) {
 // T23: Convention violation / flow not found when namespace != flow name
 func TestPackageFlow_ConventionViolation(t *testing.T) {
 	// Build an object with mismatched name/namespace.
-	obj := makeObj("flow.gideas.io/v1", "FoundryFlow", "my-flow", "wrong-ns")
+	obj := makeObj("flow.foundry.io/v1", "FoundryFlow", "my-flow", "wrong-ns")
 
 	var crds []runtime.Object
 	crds = append(crds, obj)

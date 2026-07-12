@@ -26,11 +26,11 @@ import (
 	"os"
 	"strings"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/nodes/internal/nodeconfig"
-	"github.com/gideas/flow/nodes/internal/nodeutil"
-	"github.com/gideas/flow/nodes/internal/tally"
-	flow "github.com/gideas/flow/sdk/go"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/nodeconfig"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
+	"github.com/foundry/flow/nodes/internal/tally"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 const (

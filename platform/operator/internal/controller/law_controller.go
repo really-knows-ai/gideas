@@ -31,11 +31,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
-	flowv1 "github.com/gideas/flow/operator/api/v1"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
-const lawLibrarianSyncFinalizer = "flow.gideas.io/law-librarian-sync"
+const lawLibrarianSyncFinalizer = "flow.foundry.io/law-librarian-sync"
 
 // LawReconciler reconciles a Law object.
 //
@@ -49,10 +49,10 @@ type LawReconciler struct {
 	Librarian flowv1gen.LibrarianServiceClient
 }
 
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=laws,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=laws/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=laws/finalizers,verbs=update
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=governedartefacts,verbs=get;list;watch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=laws,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=laws/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=laws/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=governedartefacts,verbs=get;list;watch
 
 // Reconcile computes the content hash for the Law spec, validates structural
 // invariants, and materializes the CRD-backed law in the Librarian.

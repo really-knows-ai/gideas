@@ -1,11 +1,11 @@
-module github.com/gideas/flow/tools/flowctl
+module github.com/foundry/flow/tools/flowctl
 
 go 1.26.0
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/gideas/flow/gen v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/gen v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
@@ -16,7 +16,7 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
-replace github.com/gideas/flow/gen => ../../gen
+replace github.com/foundry/flow/gen => ../../gen
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
@@ -78,3 +78,5 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 )
+
+replace google.golang.org/genproto/googleapis/rpc v0.0.0-20260128011058-8636f8732409 => google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217

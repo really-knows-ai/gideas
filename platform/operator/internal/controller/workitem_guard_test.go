@@ -14,9 +14,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
-	flowv1 "github.com/gideas/flow/operator/api/v1"
-	"github.com/gideas/flow/operator/internal/controller/scheduler"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/operator/internal/controller/scheduler"
 )
 
 const (
@@ -853,7 +853,7 @@ func TestRunning_WithNonTerminalChildren_SkipsTimeout(t *testing.T) {
 			Name:      "child-of-wi-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"flow.gideas.io/parent": testWorkitemName,
+				"flow.foundry.io/parent": testWorkitemName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -898,7 +898,7 @@ func TestRunning_WithAllTerminalChildren_AppliesTimeout(t *testing.T) {
 			Name:      "child-1-of-wi-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"flow.gideas.io/parent": testWorkitemName,
+				"flow.foundry.io/parent": testWorkitemName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -911,7 +911,7 @@ func TestRunning_WithAllTerminalChildren_AppliesTimeout(t *testing.T) {
 			Name:      "child-2-of-wi-1",
 			Namespace: "default",
 			Labels: map[string]string{
-				"flow.gideas.io/parent": testWorkitemName,
+				"flow.foundry.io/parent": testWorkitemName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -954,7 +954,7 @@ func TestRunning_WithMixedChildren_SkipsTimeout(t *testing.T) {
 			Name:      "child-done",
 			Namespace: "default",
 			Labels: map[string]string{
-				"flow.gideas.io/parent": testWorkitemName,
+				"flow.foundry.io/parent": testWorkitemName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -967,7 +967,7 @@ func TestRunning_WithMixedChildren_SkipsTimeout(t *testing.T) {
 			Name:      "child-pending",
 			Namespace: "default",
 			Labels: map[string]string{
-				"flow.gideas.io/parent": testWorkitemName,
+				"flow.foundry.io/parent": testWorkitemName,
 			},
 		},
 		Status: flowv1.WorkitemStatus{
@@ -1080,7 +1080,7 @@ func TestSuspended_ChildrenCompleted_ResumesToPending(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-1",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+			Labels:    map[string]string{"flow.foundry.io/parent": testWorkitemName},
 		},
 		Status: flowv1.WorkitemStatus{
 			Phase:            "Completed",
@@ -1091,7 +1091,7 @@ func TestSuspended_ChildrenCompleted_ResumesToPending(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-2",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+			Labels:    map[string]string{"flow.foundry.io/parent": testWorkitemName},
 		},
 		Status: flowv1.WorkitemStatus{
 			Phase:            "Completed",
@@ -1137,7 +1137,7 @@ func TestSuspended_ChildrenNotCompleted_Requeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-1",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+			Labels:    map[string]string{"flow.foundry.io/parent": testWorkitemName},
 		},
 		Status: flowv1.WorkitemStatus{
 			Phase:            "Completed",
@@ -1148,7 +1148,7 @@ func TestSuspended_ChildrenNotCompleted_Requeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-2",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+			Labels:    map[string]string{"flow.foundry.io/parent": testWorkitemName},
 		},
 		Status: flowv1.WorkitemStatus{
 			Phase:            "Running",
@@ -1220,7 +1220,7 @@ func TestSuspended_ResumePreservesAssignee(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "child-1",
 			Namespace: "default",
-			Labels:    map[string]string{"flow.gideas.io/parent": testWorkitemName},
+			Labels:    map[string]string{"flow.foundry.io/parent": testWorkitemName},
 		},
 		Status: flowv1.WorkitemStatus{
 			Phase:            "Failed",

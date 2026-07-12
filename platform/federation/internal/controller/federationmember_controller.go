@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	federationv1 "github.com/gideas/flow/federation/api/v1"
+	federationv1 "github.com/foundry/flow/federation/api/v1"
 )
 
 // validPublisherLevels is the set of accepted Level values for PublisherRoleSpec.
@@ -30,9 +30,9 @@ type FederationMemberReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=federation.gideas.io,resources=federationmembers,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=federation.gideas.io,resources=federationmembers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=federation.gideas.io,resources=federationstates,verbs=get;list;watch
+// +kubebuilder:rbac:groups=federation.foundry.io,resources=federationmembers,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=federation.foundry.io,resources=federationmembers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=federation.foundry.io,resources=federationstates,verbs=get;list;watch
 
 // Reconcile validates the FederationMember spec, sets the Ready condition,
 // and records the JoinedAt timestamp.

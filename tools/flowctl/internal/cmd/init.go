@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gideas/flow/tools/flowctl/internal/flow"
+	"github.com/foundry/flow/tools/flowctl/internal/flow"
 )
 
 // NewInitCmd creates the `flowctl init` cobra command.

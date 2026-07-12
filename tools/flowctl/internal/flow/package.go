@@ -18,7 +18,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/yaml"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
 )
 
 const (
@@ -53,7 +53,7 @@ func (pw *PackageWriter) Write(w io.Writer) error {
 		Name:        pw.Name,
 		Version:     pw.Version,
 		Description: pw.Description,
-		Schemas:     []string{"flow.gideas.io/v1"},
+		Schemas:     []string{"flow.foundry.io/v1"},
 	}
 
 	// Sorted resource keys for deterministic output
@@ -95,15 +95,15 @@ func (pw *PackageWriter) Write(w io.Writer) error {
 	return nil
 }
 
-// ─── GVR constants for flow.gideas.io CRDs ──────────────────────────────
+// ─── GVR constants for flow.foundry.io CRDs ──────────────────────────────
 
 var (
-	flowGVR     = schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "foundryflows"}
-	nodeGVR     = schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "foundrynodes"}
-	artefactGVR = schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "governedartefacts"}
-	lawGVR      = schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "laws"}
-	lawGroupGVR = schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "lawgroups"}
-	treatyGVR   = schema.GroupVersionResource{Group: "flow.gideas.io", Version: "v1", Resource: "treaties"}
+	flowGVR     = schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "foundryflows"}
+	nodeGVR     = schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "foundrynodes"}
+	artefactGVR = schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "governedartefacts"}
+	lawGVR      = schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "laws"}
+	lawGroupGVR = schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "lawgroups"}
+	treatyGVR   = schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "treaties"}
 )
 
 // ─── PackageOptions ─────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ func PackageFlow(ctx context.Context, k8s *api.K8sClient, opts PackageOptions) (
 	allResources = append(allResources, flowObj)
 
 	// FoundryNodes (with label selector)
-	nodes, err := listResources(ctx, dyn, nodeGVR, ns, "flow.gideas.io/flow-name="+opts.FlowName)
+	nodes, err := listResources(ctx, dyn, nodeGVR, ns, "flow.foundry.io/flow-name="+opts.FlowName)
 	if err != nil {
 		if apierrors.IsForbidden(err) {
 			return nil, fmt.Errorf("permission denied listing foundrynodes: %w", err)
@@ -342,7 +342,7 @@ func PackageFlow(ctx context.Context, k8s *api.K8sClient, opts PackageOptions) (
 		Name:        opts.FlowName,
 		Version:     opts.Version,
 		Description: opts.Description,
-		Schemas:     []string{"flow.gideas.io/v1"},
+		Schemas:     []string{"flow.foundry.io/v1"},
 	}
 
 	// Build resources list in install dependency order

@@ -27,7 +27,7 @@ service OperatorService {
   rpc CreateWorkitem(CreateWorkitemRequest) returns (CreateWorkitemResponse);
 
   // Creates a child Workitem in Pending with parentWorkitemID set to the
-  // caller's current Workitem. The Operator applies the flow.gideas.io/parent
+  // caller's current Workitem. The Operator applies the flow.foundry.io/parent
   // label. Requires CREATE:workitem/child capability. Identity comes from
   // Sidecar-injected metadata — the request body is empty.
   rpc CreateChildWorkitem(CreateChildWorkitemRequest) returns (CreateChildWorkitemResponse);
@@ -41,7 +41,7 @@ service OperatorService {
   rpc RouteChild(RouteChildRequest) returns (RouteChildResponse);
 
   // Returns the current state of all child Workitems for the caller's parent
-  // Workitem. The Operator queries by flow.gideas.io/parent label and includes
+  // Workitem. The Operator queries by flow.foundry.io/parent label and includes
   // artefact references from the Archivist. Identity comes from Sidecar-injected
   // metadata — the request body is empty.
   rpc GetChildren(GetChildrenRequest) returns (GetChildrenResponse);

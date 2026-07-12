@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 	"k8s.io/apimachinery/pkg/watch"
 )
 

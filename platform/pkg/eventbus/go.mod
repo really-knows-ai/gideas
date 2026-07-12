@@ -1,9 +1,9 @@
-module github.com/gideas/flow/pkg/eventbus
+module github.com/foundry/flow/pkg/eventbus
 
 go 1.25.0
 
 require (
-	github.com/gideas/flow/gen v0.0.0
+	github.com/foundry/flow/gen v0.0.0
 	google.golang.org/grpc v1.79.1
 )
 
@@ -15,4 +15,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/gideas/flow/gen => ../../../gen
+replace github.com/foundry/flow/gen => ../../../gen

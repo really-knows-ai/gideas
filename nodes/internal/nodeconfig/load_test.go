@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 func TestParseConsensusStrategy(t *testing.T) {

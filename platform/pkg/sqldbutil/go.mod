@@ -1,3 +1,3 @@
-module github.com/gideas/flow/pkg/sqldbutil
+module github.com/foundry/flow/pkg/sqldbutil
 
 go 1.25.0

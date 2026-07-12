@@ -16,9 +16,9 @@ package buffer
 import (
 	"strconv"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/pkg/eventbus"
-	"github.com/gideas/flow/pkg/randid"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/pkg/eventbus"
+	"github.com/foundry/flow/pkg/randid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

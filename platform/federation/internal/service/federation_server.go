@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -25,7 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	federationv1 "github.com/gideas/flow/federation/api/v1"
+	federationv1 "github.com/foundry/flow/federation/api/v1"
 )
 
 // LibrarianDialer abstracts dialing a remote Librarian so tests can inject

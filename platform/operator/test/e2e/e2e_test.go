@@ -30,7 +30,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/gideas/flow/operator/test/utils"
+	"github.com/foundry/flow/operator/test/utils"
 )
 
 // namespace where the project is deployed in

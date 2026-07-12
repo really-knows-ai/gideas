@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 	"time"
-	flowv1 "github.com/gideas/flow/gen/flow/v1"
-	"github.com/gideas/flow/tools/flowctl/internal/api"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/components"
-	"github.com/gideas/flow/tools/flowctl/internal/tui/types"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
+	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -117,7 +117,7 @@ func startBufconnArchivist(mock *mockArchivistWiring) (*grpc.ClientConn, func(),
 
 func fakeSchemeWiring() *runtime.Scheme {
 	s := runtime.NewScheme()
-	gv := schema.GroupVersion{Group: "flow.gideas.io", Version: "v1"}
+	gv := schema.GroupVersion{Group: "flow.foundry.io", Version: "v1"}
 	s.AddKnownTypeWithName(gv.WithKind("Workitem"), &unstructured.Unstructured{})
 	s.AddKnownTypeWithName(gv.WithKind("WorkitemList"), &unstructured.UnstructuredList{})
 	s.AddKnownTypeWithName(gv.WithKind("FoundryNode"), &unstructured.Unstructured{})
@@ -127,7 +127,7 @@ func fakeSchemeWiring() *runtime.Scheme {
 
 func makeWorkitemWiring(name, state, assignee string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("Workitem")
 	obj.SetName(name)
 	obj.SetNamespace("test-ns")
@@ -142,7 +142,7 @@ func makeWorkitemWiring(name, state, assignee string) *unstructured.Unstructured
 
 func makeFoundryNodeWiring(name string, targets ...string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("flow.gideas.io/v1")
+	obj.SetAPIVersion("flow.foundry.io/v1")
 	obj.SetKind("FoundryNode")
 	obj.SetName(name)
 	obj.SetNamespace("test-ns")

@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gideas/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/internal/api"
 )
 
 // ─── Confirmation Prompt Tests ───────────────────────────────────────────

@@ -11,13 +11,13 @@
 #   kubectl apply -f law-haiku-syllable.yaml
 #   kubectl apply -f laws.yaml  (existing weather/atmosphere laws, if not already applied)
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: Law
 metadata:
   name: haiku-syllable
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   goal: "Haiku must follow the 5-7-5 syllable pattern"
   tier: 3

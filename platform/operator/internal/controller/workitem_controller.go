@@ -30,12 +30,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	flowv1gen "github.com/gideas/flow/gen/flow/v1"
-	flowv1 "github.com/gideas/flow/operator/api/v1"
-	"github.com/gideas/flow/operator/internal/controller/dispatcher"
-	"github.com/gideas/flow/operator/internal/controller/scheduler"
-	"github.com/gideas/flow/pkg/eventbus"
-	"github.com/gideas/flow/pkg/randid"
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/operator/internal/controller/dispatcher"
+	"github.com/foundry/flow/operator/internal/controller/scheduler"
+	"github.com/foundry/flow/pkg/eventbus"
+	"github.com/foundry/flow/pkg/randid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -192,11 +192,11 @@ func (r *WorkitemReconciler) publishLifecycle(workitem *flowv1.Workitem, phase s
 	})
 }
 
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=workitems/finalizers,verbs=update
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundrynodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups=flow.gideas.io,resources=foundryflows,verbs=get;list;watch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=workitems,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=workitems/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=workitems/finalizers,verbs=update
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundrynodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=flow.foundry.io,resources=foundryflows,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -828,7 +828,7 @@ func (r *WorkitemReconciler) hasNonTerminalChildren(ctx context.Context, namespa
 	var childList flowv1.WorkitemList
 	if err := r.List(ctx, &childList,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"flow.gideas.io/parent": parentName},
+		client.MatchingLabels{"flow.foundry.io/parent": parentName},
 	); err != nil {
 		return false, fmt.Errorf("failed to list child workitems: %w", err)
 	}

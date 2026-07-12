@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	federationv1 "github.com/gideas/flow/federation/api/v1"
+	federationv1 "github.com/foundry/flow/federation/api/v1"
 )
 
 const (

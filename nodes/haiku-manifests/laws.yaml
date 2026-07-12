@@ -8,7 +8,7 @@
 # Apply:
 #   kubectl apply -f laws.yaml
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: LawGroup
 metadata:
   name: content
@@ -17,13 +17,13 @@ spec:
   mode: law-by-law
   passes: 2
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: Law
 metadata:
   name: no-weather
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   goal: "Absolutely no references to the weather or meteorological phenomena"
   tier: 3
@@ -44,13 +44,13 @@ spec:
 
         The governing body tolerates zero weather.
 ---
-apiVersion: flow.gideas.io/v1
+apiVersion: flow.foundry.io/v1
 kind: Law
 metadata:
   name: no-atmosphere
   namespace: haiku-flow
   labels:
-    flow.gideas.io/flow-name: haiku-flow
+    flow.foundry.io/flow-name: haiku-flow
 spec:
   goal: "Absolutely no references to atmospheric conditions, sky, or seasonal imagery"
   tier: 3

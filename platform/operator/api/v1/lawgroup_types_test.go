@@ -49,7 +49,7 @@ func TestLawGroupDefaultMode(t *testing.T) {
 func TestGeneratedLawGroupCRD_HasModeEnum(t *testing.T) {
 	t.Parallel()
 
-	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.gideas.io_lawgroups.yaml"))
+	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.foundry.io_lawgroups.yaml"))
 	assertContains(t, content, "enum:")
 	assertContains(t, content, "- bundle")
 	assertContains(t, content, "- law-by-law")
@@ -58,6 +58,6 @@ func TestGeneratedLawGroupCRD_HasModeEnum(t *testing.T) {
 func TestGeneratedLawGroupCRD_HasPassesMinimum(t *testing.T) {
 	t.Parallel()
 
-	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.gideas.io_lawgroups.yaml"))
+	content := mustReadFile(t, filepath.Join("..", "..", "config", "crd", "bases", "flow.foundry.io_lawgroups.yaml"))
 	assertContains(t, content, "minimum: 1")
 }

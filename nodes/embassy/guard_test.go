@@ -1,7 +1,7 @@
 package main
 
 import (
-	flow "github.com/gideas/flow/sdk/go"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // Compile-time guard: embassyHandler must implement the SDK's

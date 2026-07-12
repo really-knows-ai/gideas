@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	flow "github.com/gideas/flow/sdk/go"
+	flow "github.com/foundry/flow/sdk/go"
 )
 
 // EmitTelemetry records a structured telemetry event via the SDK client.

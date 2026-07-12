@@ -1,7 +1,7 @@
 version: v2
 modules:
   - path: proto
-    name: buf.build/gideas/flow
+    name: buf.build/foundry/flow
 lint:
   use:
     - STANDARD

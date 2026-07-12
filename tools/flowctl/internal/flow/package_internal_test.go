@@ -9,7 +9,7 @@ import (
 func makeConventionObj(name, namespace string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "flow.gideas.io/v1",
+			"apiVersion": "flow.foundry.io/v1",
 			"kind":       "FoundryFlow",
 			"metadata": map[string]interface{}{
 				"name":      name,

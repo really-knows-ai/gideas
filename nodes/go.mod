@@ -1,10 +1,10 @@
-module github.com/gideas/flow/nodes
+module github.com/foundry/flow/nodes
 
 go 1.25.0
 
 require (
-	github.com/gideas/flow/gen v0.0.0
-	github.com/gideas/flow/sdk/go v0.0.0
+	github.com/foundry/flow/gen v0.0.0
+	github.com/foundry/flow/sdk/go v0.0.0
 	github.com/google/cel-go v0.26.0
 	github.com/google/uuid v1.6.0
 	github.com/wonglyxng/syllables v1.0.0
@@ -32,6 +32,6 @@ require (
 )
 
 replace (
-	github.com/gideas/flow/gen => ../gen
-	github.com/gideas/flow/sdk/go => ../sdk/go
+	github.com/foundry/flow/gen => ../gen
+	github.com/foundry/flow/sdk/go => ../sdk/go
 )

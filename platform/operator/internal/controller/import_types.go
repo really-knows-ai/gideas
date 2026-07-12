@@ -1,6 +1,6 @@
 package controller
 
-import flowv1 "github.com/gideas/flow/operator/api/v1"
+import flowv1 "github.com/foundry/flow/operator/api/v1"
 
 const builtInLawPetitionImportType = "law-petition"
 

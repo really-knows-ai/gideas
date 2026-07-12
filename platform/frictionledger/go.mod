@@ -1,17 +1,17 @@
-module github.com/gideas/flow/frictionledger
+module github.com/foundry/flow/frictionledger
 
 go 1.25.0
 
-replace github.com/gideas/flow/gen => ../../gen
+replace github.com/foundry/flow/gen => ../../gen
 
-replace github.com/gideas/flow/pkg/randid => ../pkg/randid
+replace github.com/foundry/flow/pkg/randid => ../pkg/randid
 
-replace github.com/gideas/flow/pkg/sqldbutil => ../pkg/sqldbutil
+replace github.com/foundry/flow/pkg/sqldbutil => ../pkg/sqldbutil
 
 require (
-	github.com/gideas/flow/gen v0.0.0-00010101000000-000000000000
-	github.com/gideas/flow/pkg/randid v0.0.0-00010101000000-000000000000
-	github.com/gideas/flow/pkg/sqldbutil v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/gen v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/randid v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/sqldbutil v0.0.0-00010101000000-000000000000
 	github.com/mattn/go-sqlite3 v1.14.34
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11

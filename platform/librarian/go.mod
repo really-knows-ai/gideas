@@ -1,14 +1,14 @@
-module github.com/gideas/flow/librarian
+module github.com/foundry/flow/librarian
 
 go 1.25.0
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
-	github.com/gideas/flow/gen v0.0.0
-	github.com/gideas/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
-	github.com/gideas/flow/pkg/randid v0.0.0-00010101000000-000000000000
-	github.com/gideas/flow/pkg/sqldbutil v0.0.0-00010101000000-000000000000
-	github.com/gideas/flow/sdk/go v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/gen v0.0.0
+	github.com/foundry/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/randid v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/sqldbutil v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/sdk/go v0.0.0-00010101000000-000000000000
 	github.com/mattn/go-sqlite3 v1.14.34
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
@@ -22,12 +22,12 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 )
 
-replace github.com/gideas/flow/gen => ../../gen
+replace github.com/foundry/flow/gen => ../../gen
 
-replace github.com/gideas/flow/pkg/eventbus => ../pkg/eventbus
+replace github.com/foundry/flow/pkg/eventbus => ../pkg/eventbus
 
-replace github.com/gideas/flow/pkg/randid => ../pkg/randid
+replace github.com/foundry/flow/pkg/randid => ../pkg/randid
 
-replace github.com/gideas/flow/pkg/sqldbutil => ../pkg/sqldbutil
+replace github.com/foundry/flow/pkg/sqldbutil => ../pkg/sqldbutil
 
-replace github.com/gideas/flow/sdk/go => ../../sdk/go
+replace github.com/foundry/flow/sdk/go => ../../sdk/go
