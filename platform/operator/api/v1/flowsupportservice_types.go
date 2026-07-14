@@ -22,7 +22,7 @@ import (
 )
 
 // FlowSupportServiceSpec defines the desired state of FlowSupportService.
-// The FlowSupportService CRD declares an optional, Flow-Architect-deployed service container.
+// The FlowSupportService CRD declares an optional, Flow-Engineering-Team-deployed service container.
 type FlowSupportServiceSpec struct {
 	// image is the container image for the Support Service.
 	// +kubebuilder:validation:Required
@@ -83,7 +83,7 @@ type FlowSupportServiceStatus struct {
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=".status.availableReplicas"
 
 // FlowSupportService is the Schema for the flowsupportservices API.
-// It declares an optional, Flow-Architect-deployed service container.
+// It declares an optional, Flow-Engineering-Team-deployed service container.
 type FlowSupportService struct {
 	metav1.TypeMeta `json:",inline"`
 
