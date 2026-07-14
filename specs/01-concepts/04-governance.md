@@ -10,7 +10,7 @@ A [Flow](./00-overview.md) is a sovereign micro-state. It has a body of [law](./
 |--------|----------|--------------------------|
 | **Common Law** | Establishes norms through practice | Nodes with `WRITE:law/tier1` capability ([Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) — Tier 1 [Findings](./03-data-model.md#law-tiers) |
 | **Judiciary** | Resolves disputes, codifies precedent | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) — [Facilitator](./02-foundry-cycle.md#facilitator) (lifecycle), [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver) (disputes), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor) (hearings), [HITL nodes](./02-foundry-cycle.md#hitl-nodes) (human review) — Tier 2 [Rulings](./03-data-model.md#law-tiers) |
-| **Legislature** | Enacts statute through ratified process | Flow Architect (Tier 3), [Federation authority publishers](#federation-and-published-law-distribution) (Tier 4/5) |
+| **Legislature** | Enacts statute through ratified process | Flow Engineering Team (Tier 3), [Federation authority publishers](#federation-and-published-law-distribution) (Tier 4/5) |
 | **Executive** | Enforces compliance | Gate node ([Sort](./02-foundry-cycle.md#sort-gate) in the reference arrangement), [Exit Contract](./03-data-model.md#entry-and-exit-contracts), [Sidecar](../03-node/01-sidecar.md) |
 
 Law hardens through these branches in sequence. Nodes observe patterns during work and record [Findings](./03-data-model.md#law-tiers) — common law that emerges from practice. When Findings conflict or accumulate enough [friction](./00-overview.md#friction), the [Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver) adjudicates and codifies the result as a binding Tier 2 Ruling — precedent forged through judicial process. Rulings that prove durable can be proposed as Tier 3 statutes, but statute requires human ratification. The executive enforces whatever law exists at each tier, without interpretation.
@@ -38,7 +38,7 @@ A Finding that does not accumulate enough friction to trigger a review hearing w
 
 ### Administered Policy (Tier 3)
 
-Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [laws](./03-data-model.md#laws) applied by an administrator — typically via declarative configuration. They have no automatic decay.
+Tier 3 Local Statutes are the Flow's own legislative authority. For standalone Flows, these are [laws](./03-data-model.md#laws) applied by the Flow Engineering Team — typically via declarative configuration. They have no automatic decay.
 
 The [Librarian](../02-flow/04-system-services.md) admits externally applied laws into the active law body only after governance checks complete. Integration sequencing and activation mechanics are defined in [System Services](../02-flow/04-system-services.md).
 
@@ -247,7 +247,7 @@ The [exit contract](./03-data-model.md#entry-and-exit-contracts) enforces compli
 | Capability | Standalone Flow | Federated Flow |
 |------------|----------------|----------------|
 | **Law tiers** | Tiers 1, 2, 3 | Tiers 1, 2, 3, 4, 5 |
-| **Tier 3 authority** | Administrator (declarative configuration) | Administrator or local legislative cycle. May publish for distribution. |
+| **Tier 3 authority** | Flow Engineering Team (declarative configuration) | Flow Engineering Team or local legislative cycle. May publish for distribution. |
 | **Tier 4–5** | Do not exist | Materialised from authority Flow publications via Federation service |
 | **Trust root** | Flow Operator (self-signed) | Federation Root CA |
 | **Cross-Flow stamps** | Treaty crossings: Embassy verifies and applies `imported-*` attestations | Federation member crossings: same Embassy naturalisation with federation trust root; Treaty crossings: same protocol with pinned certificate |

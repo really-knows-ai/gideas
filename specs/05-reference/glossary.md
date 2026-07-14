@@ -38,17 +38,17 @@ The control-plane authority that manages inter-Flow membership, trust-root disco
 
 A self-contained workflow runtime in a single Kubernetes namespace. One namespace, one Flow. All state, storage, governance, and execution live within the boundary. Detail: [Conceptual Overview](../01-concepts/00-overview.md).
 
-### Flow Administrator
-
-The human role accountable for runtime reliability, governance integrity, and recovery readiness of a running Flow. Flow Administrators monitor, triage, and recover Flows in production. Distinct from the [Flow Architect](#flow-architect) (who designs the Flow) and the [Operator](#operator-flow-operator) (the Kubernetes controller). Detail: [Operations](../02-flow/07-operations.md).
-
 ### Federated Queue Mesh
 
 The horizontal scaling architecture for HITL nodes. Uses Headless Service DNS for peer discovery, scatter-gather for reads, proxy routing for writes, and shared-nothing SQLite persistence. No centralised database. Detail: [SDK HITL](../04-sdk/08-sdk-hitl.md#federated-queue-mesh).
 
-### Flow Architect
+### Flow Engineering Team
 
-The human role that designs and configures a Flow — defining topology, capability grants, contracts, stamp vocabulary, and policy limits through CRD configuration. The Flow Architect chooses which nodes exist, what they can do, and how work routes between them.
+The human role that designs and builds a Flow — defining topology, capability grants, contracts, stamp vocabulary, and policy limits through CRD configuration. The Flow Engineering Team chooses which nodes exist, what they can do, and how work routes between them. The Flow Engineering Team is also responsible for creating Tier 3 statutes and below. Different permission levels within the Flow Engineering Team may exist but the team is a single role from the platform's perspective.
+
+### Foundry Administrator
+
+The human role accountable for installing CRDs, operating Foundry infrastructure, and managing Kubernetes, platform, and multi-flow administration. Foundry Administrators handle infrastructure-level concerns that span Flows — cluster operations, CRD deployment, runtime infrastructure, observability plumbing, and recovery readiness — distinct from the [Flow Engineering Team](#flow-engineering-team), which designs and builds individual Flows, and the [Operator](#operator-flow-operator), which is the Kubernetes controller. Detail: [Operations](../02-flow/07-operations.md).
 
 ### Flow Monitor
 
@@ -68,7 +68,7 @@ The durable event distribution service in the Control Plane. Receives events fro
 
 ### Flow Support Service
 
-An optional, Flow-Architect-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via the [FlowSupportService CRD](./crds.md#flowsupportservice). Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
+An optional, Flow-Engineering-Team-deployed container that exposes gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct gRPC). Support Services run in the Flow namespace, do not process Workitems, and are declared via the [FlowSupportService CRD](./crds.md#flowsupportservice). Detail: [System Services](../02-flow/04-system-services.md#flow-support-services), [SDK Overview](../04-sdk/00-overview.md#flowsupportservice-base-class).
 
 ### FoundryAgent
 
@@ -124,7 +124,7 @@ The creator node. Generates artefacts seeded by law context queried from the Lib
 
 ### Foundry Cycle
 
-The reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) demonstrating adversarial creation, validation, review, and refinement. Flow Architects adapt it to their context. The platform enforces behaviour through capabilities and configuration, not node names. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md).
+The reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) demonstrating adversarial creation, validation, review, and refinement. The Flow Engineering Team adapts it to its context. The platform enforces behaviour through capabilities and configuration, not node names. Detail: [Foundry Cycle](../01-concepts/02-foundry-cycle.md).
 
 ### Quench (reference arrangement)
 
@@ -312,7 +312,7 @@ A field on a feedback item set by the [Arbiter](#arbiter) when rendering a verdi
 
 ### Local Statute (Tier 3)
 
-A persistent law enacted by the Flow Architect. For standalone Flows, applied as a CRD by an administrator. Has no automatic decay. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
+A persistent law created and applied by the Flow Engineering Team. Has no automatic decay. Detail: [Data Model](../01-concepts/03-data-model.md#law-tiers).
 
 ### representation
 

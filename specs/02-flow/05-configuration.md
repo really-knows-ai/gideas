@@ -190,7 +190,7 @@ Stamp authority is configured through capability grants on FoundryNode.
 - Grant scope is exact for governed artefact name and stamp name.
 - A node may apply only stamps it is granted.
 
-Stamp names are governance conventions chosen by the [Flow Architect](../05-reference/glossary.md#flow-architect). The platform does not attach special system semantics to names.
+Stamp names are governance conventions chosen by the [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team). The platform does not attach special system semantics to names.
 
 Stamp application is write-once per artefact version hash:
 
@@ -210,7 +210,7 @@ Nodes granted `READ:flow` capability can call [`GetFlowTopology`](../05-referenc
 
 Gate nodes use this information to build stamp-to-provider mappings dynamically: for each node in the topology, inspect its capabilities for `STAMP:artefact/<governed-artefact-name>/<stamp>` grants to determine which node can provide which stamp. Combined with the calling node's configured outputs, this enables fully dynamic routing without hardcoded node names or stamp associations.
 
-The `NODE_ORDER` environment variable (comma-separated node names, set via FoundryNode CRD container env) controls the order in which the gate evaluates stamp phases. This gives the Flow Architect explicit control over evaluation order without coupling gate logic to specific topologies.
+The `NODE_ORDER` environment variable (comma-separated node names, set via FoundryNode CRD container env) controls the order in which the gate evaluates stamp phases. This gives the Flow Engineering Team explicit control over evaluation order without coupling gate logic to specific topologies.
 
 ## Child Workitem Contracts
 
@@ -225,7 +225,7 @@ Child contracts are configured on the FoundryNode that creates and routes child 
 
 ## Reference Arrangement Defaults and Custom Topology
 
-The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement and standard recommendation for governed workflows. [Flow Architects](../05-reference/glossary.md#flow-architect) can adapt topology while preserving platform invariants.
+The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) is the reference arrangement and standard recommendation for governed workflows. The [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team) can adapt topology while preserving platform invariants.
 
 Reference arrangement expectations:
 

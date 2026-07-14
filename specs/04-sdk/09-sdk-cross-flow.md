@@ -153,7 +153,7 @@ The node implementer's responsibility is limited to: handing export work to Emba
 1. Export is triggered by routing a Workitem to Embassy, not by an SDK method. The Embassy handles packaging and transfer.
 2. Import materialisation is Embassy-internal. Node handlers see normal Workitem assignments with locally-attested `imported-*` stamps.
 3. Embassy resolves imports against one effective namespace composed of built-in system import types plus flow-authored `crossFlow.importTypes`. Senders target public import type names, never internal node names.
-4. `law-petition` is the only currently defined built-in system import type. Flow architects do not declare it in YAML.
+4. `law-petition` is the only currently defined built-in system import type. The Flow Engineering Team does not declare it in YAML.
 5. Naturalisation applies `imported-<stamp>` attestation stamps for each verified foreign stamp. Foreign stamps remain for provenance.
 6. Local contracts evaluate `imported-*` stamps at the Operator level, not in node code.
 7. Node handlers do not specify destination Flows, target Embassies, or import types.

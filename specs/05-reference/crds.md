@@ -6,14 +6,14 @@ All custom resources use API group `flow.gideas.io/v1` and are namespace-scoped.
 
 | CRD | Owner | Purpose |
 |-----|-------|---------|
-| [FoundryFlow](#foundryflow) | Flow Architect / Operator | Flow-wide contracts, governance policy, cross-flow settings, Federation membership |
-| [FoundryNode](#foundrynode) | Flow Architect / Operator | Node-local behaviour, capabilities, routing outputs, contract bindings |
+| [FoundryFlow](#foundryflow) | Flow Engineering Team / Operator | Flow-wide contracts, governance policy, cross-flow settings, Federation membership |
+| [FoundryNode](#foundrynode) | Flow Engineering Team / Operator | Node-local behaviour, capabilities, routing outputs, contract bindings |
 | [Workitem](#workitem) | Operator (sole mutator) | Workitem lifecycle state, assignment, routing |
-| [GovernedArtefact](#governedartefact) | Flow Architect | Governed artefact registration and stamp vocabulary |
+| [GovernedArtefact](#governedartefact) | Flow Engineering Team | Governed artefact registration and stamp vocabulary |
 | [Law](#law) | Librarian / Judiciary / nodes | Law goal, representations, tier, lifecycle metadata |
-| [Treaty](#treaty) | Flow Architect | Directed cross-flow trust policy (including allowed import types) |
-| [FlowSupportService](#flowsupportservice) | Flow Architect / Operator | Support Service capability declaration and infrastructure |
-| [CodificationService](#codificationservice) | Flow Architect / Operator | Codification Service: output format declaration and deployment |
+| [Treaty](#treaty) | Flow Engineering Team | Directed cross-flow trust policy (including allowed import types) |
+| [FlowSupportService](#flowsupportservice) | Flow Engineering Team / Operator | Support Service capability declaration and infrastructure |
+| [CodificationService](#codificationservice) | Flow Engineering Team / Operator | Codification Service: output format declaration and deployment |
 
 ---
 
@@ -68,7 +68,7 @@ The Judiciary is a runtime-mandated subsystem — the Operator provisions it wit
 | **[HITL node](../04-sdk/08-sdk-hitl.md)** | Generic config-driven Human-in-the-Loop node. Used for hung-jury resolution and for human approval in the Clerk cycle's Tier 3-5 petition path. Single image, multiple CRD instances. | Operator-provisioned |
 | **[Facilitator](../01-concepts/02-foundry-cycle.md#arbiter-path-deadlock-resolution)** | Deadlock resolution lifecycle node. Assembles evidence, creates an Arbiter child Workitem, suspends, resumes, and routes the result back into the parent Flow. | Operator-provisioned |
 
-The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Architect). The Arbiter and Tribunal hold `READ:law`, `WRITE:friction`, `CREATE:workitem/child`, and the feedback-resolution capabilities needed for their flows. Clerk-cycle nodes hold the read, write, child-workitem, and codification capabilities required for petition drafting and review. The law-applicator holds the Librarian capabilities needed to apply T1-3 petitions and create dispute records for T4-5 petitions. HITL nodes hold `USE:queue/server` and the storage needed for queue persistence. The Embassy holds the cross-flow transfer capabilities and storage needed for manifest preflight, package staging, and import materialisation; it is a separate boundary node, not part of the Judiciary capability bundle.
+The Judiciary's capabilities are fixed by the runtime (not configurable by the Flow Engineering Team). The Arbiter and Tribunal hold `READ:law`, `WRITE:friction`, `CREATE:workitem/child`, and the feedback-resolution capabilities needed for their flows. Clerk-cycle nodes hold the read, write, child-workitem, and codification capabilities required for petition drafting and review. The law-applicator holds the Librarian capabilities needed to apply T1-3 petitions and create dispute records for T4-5 petitions. HITL nodes hold `USE:queue/server` and the storage needed for queue persistence. The Embassy holds the cross-flow transfer capabilities and storage needed for manifest preflight, package staging, and import materialisation; it is a separate boundary node, not part of the Judiciary capability bundle.
 
 The Operator also provisions a `law-reference` GovernedArtefact alongside the Tribunal. Its stamp vocabulary is empty. The `law-reference` artefact's content is a plain-text string containing the target law ID. The Tribunal's hearing entry contract requires a single `law-reference` artefact; its hearing exit contract requires it to still be present. The Operator also provisions a `petition` GovernedArtefact for the inner cycle. The [petition artefact](../01-concepts/02-foundry-cycle.md#petition-artefact) is a YAML/Markdown GovernedArtefact containing the complete proposed change set (`petition_id`, context, changes, and formal representations where applicable). Dispute records are Library entities used to track active T4-5 petitions while authority outcomes are pending.
 
@@ -93,7 +93,7 @@ The Operator also provisions a `law-reference` GovernedArtefact alongside the Tr
 | `tier4` | `float` | no | Accumulated friction threshold for Tier 4 laws (State Constitutions). |
 | `tier5` | `float` | no | Accumulated friction threshold for Tier 5 laws (Federal Accords). |
 
-When a law's accumulated friction crosses its tier's configured threshold, the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node triggers a review hearing. For Tiers 1-2, the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Architect or the Federation authority publisher.
+When a law's accumulated friction crosses its tier's configured threshold, the [Friction Watcher](../01-concepts/02-foundry-cycle.md#friction-watcher) node triggers a review hearing. For Tiers 1-2, the [Tribunal](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) adjudicates directly. For Tiers 3-5, the hearing outcome is a petition to the Flow Engineering Team or the Federation authority publisher.
 
 ### ReviewTTLs
 
@@ -283,7 +283,7 @@ The GovernedArtefact CRD registers a governed artefact and declares its stamp vo
 
 ## Law
 
-The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by the [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) via the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle), which drafts petitions, fans out to Codification nodes where needed, and routes approved T1-3 petitions through the law-applicator to the Librarian; Tier 3 Local Statutes are applied by the Flow Architect; Tiers 4-5 arrive from the Federation service as published laws. A law that is under active dispute (referenced by a dispute record) cannot be retired or demoted until the dispute is resolved. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
+The Law object is managed by the [Librarian](../02-flow/04-system-services.md#librarian). Tier 1 Findings are created by nodes with `WRITE:law/tier1` capability; Tier 2 Rulings are minted by the [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) via the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle), which drafts petitions, fans out to Codification nodes where needed, and routes approved T1-3 petitions through the law-applicator to the Librarian; Tier 3 Local Statutes are applied by the Flow Engineering Team; Tiers 4-5 arrive from the Federation service as published laws. A law that is under active dispute (referenced by a dispute record) cannot be retired or demoted until the dispute is resolved. Detail: [Data Model](../01-concepts/03-data-model.md#laws), [Governance](../01-concepts/04-governance.md).
 
 ### `spec`
 
@@ -333,7 +333,7 @@ The Treaty CRD defines a directed trust policy for cross-flow collaboration betw
 
 ## FlowSupportService
 
-The FlowSupportService CRD declares an optional, Flow-Architect-deployed service container. Detail: [System Services](../02-flow/04-system-services.md#flow-support-services).
+The FlowSupportService CRD declares an optional, Flow-Engineering-Team-deployed service container. Detail: [System Services](../02-flow/04-system-services.md#flow-support-services).
 
 ### `spec`
 

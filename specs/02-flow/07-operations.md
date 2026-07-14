@@ -4,7 +4,7 @@ Operations covers how a Flow is monitored, triaged, recovered, and validated in 
 
 ## Operational Scope
 
-Flow Administrators are accountable for three outcomes:
+Foundry Administrators are accountable for three outcomes:
 
 - Runtime reliability: [Workitems](./02-workitem.md) continue to flow with predictable latency and bounded failure rate.
 - Governance integrity: [stamps](../01-concepts/03-data-model.md#passports-and-stamps), [feedback](../01-concepts/03-data-model.md#feedback) lineage, [law](../01-concepts/03-data-model.md#laws) lineage, and hearing outcomes remain trustworthy.
@@ -13,8 +13,8 @@ Flow Administrators are accountable for three outcomes:
 Control boundaries are explicit:
 
 - Service teams own service-level backup and restore for their stores.
-- Cluster administrators own Kubernetes control-plane backup and restore.
-- Flow Administrators own end-to-end validation that restored systems preserve Flow invariants.
+- Foundry Administrators own Kubernetes control-plane backup and restore.
+- Foundry Administrators own end-to-end validation that restored systems preserve Flow invariants.
 
 ## Telemetry Architecture
 
@@ -43,7 +43,7 @@ Audit continuity is a runtime requirement and a mandatory operational capability
 
 ## Core Metrics and Friction Operations
 
-Flow Administrators track at least these metric families:
+Foundry Administrators track at least these metric families:
 
 - Assignment and queue health: queue depth, assignment latency, running duration.
 - Transition outcomes: completion rate, failure rate, timeout rate, thrash rate.
@@ -77,7 +77,7 @@ flowchart TD
 
     AV --> N1["Apply service-specific runbook"]
     IN --> N2["Quarantine affected path and verify lineage"]
-    GV --> N3["Escalate to Flow Administrators"]
+    GV --> N3["Escalate to Foundry Administrators"]
     CP --> N4["Scale or throttle according to policy"]
 ```
 
@@ -87,7 +87,7 @@ Triage must preserve evidence. Incident response never deletes unresolved audit 
 
 All operational error handling maps to [Error Catalogue](../05-reference/error-catalogue.md).
 
-- Flow Administrators must use documented error families and remediation paths.
+- Foundry Administrators must use documented error families and remediation paths.
 - Runbooks must not introduce undocumented failure codes or ad-hoc semantics.
 - Source attribution (Operator, Sidecar, node, system service, federation transfer path) must be preserved in incident records.
 
@@ -167,7 +167,7 @@ All production operations preserve these invariants:
 1. Audit logging is mandatory runtime output with monitored continuity guarantees.
 2. Friction is a first-class, source-attributed operational signal.
 3. Backup ownership boundaries are explicit by data surface.
-4. etcd/CRD backup remains a cluster-admin responsibility.
+4. etcd/CRD backup remains a Foundry Administrator responsibility.
 5. Restore procedures preserve stamp, feedback, and law lineage integrity.
 6. Error handling follows shared [Error Catalogue](../05-reference/error-catalogue.md) semantics.
 7. Federation operations preserve provenance chain and topology-dependent authority across member Flows.

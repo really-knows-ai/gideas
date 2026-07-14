@@ -158,7 +158,7 @@ The Librarian API manages the Flow's body of law. Node-facing methods are reache
 | Method | Request | Response | Description |
 |--------|---------|----------|-------------|
 | `GetLaw` | `law_id` | `law` | Returns the full law object by identifier. Used by Judiciary nodes for hearing evidence retrieval. |
-| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law written by the [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) or by administrator action. If the source petition carried a `petition_id`, that provenance is stored on the written law. |
+| `WriteLaw` | `law` | `law_id`, `version_hash` | Persists a law written by the [law-applicator](../01-concepts/02-foundry-cycle.md#law-applicator) or by the Flow Engineering Team. If the source petition carried a `petition_id`, that provenance is stored on the written law. |
 | `RetireLaw` | `law_id` | `acknowledged` | Removes a law from the active Library. History is preserved in the audit log. |
 | `CreateDisputeRecord` | `petition_id`, `cited_law_ids[]` | `dispute_record_id` | Creates a dispute record for an approved T4-5 petition before Embassy export. |
 | `RetireDisputeRecord` | `petition_id` | `acknowledged` | Retires the active dispute record for the specified petition. Used when the petition outcome is known. |

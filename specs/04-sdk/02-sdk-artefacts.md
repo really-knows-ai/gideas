@@ -100,7 +100,7 @@ Stamp inspection methods are factual queries. The SDK exposes what stamps exist,
 Methods that interpret stamp semantics are intentionally absent:
 
 - No `IsValid()`, `IsCompliant()`, or `Satisfies(contract)` — the node does not judge artefact validity.
-- No `IsApproved()` or `IsSecurityReviewed()` — stamp names are conventions chosen by the [Flow Architect](../02-flow/05-configuration.md), not privileged system constants.
+- No `IsApproved()` or `IsSecurityReviewed()` — stamp names are conventions chosen by the [Flow Engineering Team](../02-flow/05-configuration.md#stamp-grant-and-capability-semantics), not privileged system constants.
 
 ### Stamp Application
 

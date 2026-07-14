@@ -77,7 +77,7 @@ Finding creation is the only law-writing operation available through the node SD
 |------|----------------|---------------|
 | 1 — Finding | Nodes with `WRITE:law/tier1` | Yes — `RecordFinding` |
 | 2 — Ruling | [Judiciary](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) (via the [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) and [law-applicator](../01-concepts/02-foundry-cycle.md#clerk-cycle), `WRITE:law/tier2`) | No |
-| 3 — Local Statute | Flow Architect (human-administered or local legislative cycle) | No |
+| 3 — Local Statute | Flow Engineering Team (human-administered or local legislative cycle) | No |
 | 4 — State Constitution | [Federation](../01-concepts/04-governance.md#authority-publisher-roles) (state-level authority publisher Flow) | No |
 | 5 — Federal Accord | Federation | No |
 

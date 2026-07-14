@@ -1,10 +1,10 @@
 # The Foundry Cycle
 
-The Foundry Cycle is the reference arrangement — a standard pattern of node roles that demonstrates how adversarial cycles of creation, validation, review, and refinement drive unreliable agents to produce artefacts that are provably compliant with a body of governance. It is not the only way to structure a Flow. It is the way the standard library structures one, and the pattern [Flow Architects](../05-reference/glossary.md#flow-architect) are expected to adapt to their specific problem space.
+The Foundry Cycle is the reference arrangement — a standard pattern of node roles that demonstrates how adversarial cycles of creation, validation, review, and refinement drive unreliable agents to produce artefacts that are provably compliant with a body of governance. It is not the only way to structure a Flow. It is the way the standard library structures one, and the pattern the [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team) is expected to adapt to its specific problem space.
 
-The standard library provides configurable reference implementations for each node role as container images. [Flow Architects](../05-reference/glossary.md#flow-architect) can extend them, adapt them, merge responsibilities across fewer nodes, split them across more, or implement completely custom nodes. The platform enforces behaviour through [capabilities and configuration](../02-flow/05-configuration.md) — not node names. A node named "Validator" that holds the same capabilities as the reference Sort node behaves identically from the platform's perspective.
+The standard library provides configurable reference implementations for each node role as container images. The [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team) can extend them, adapt them, merge responsibilities across fewer nodes, split them across more, or implement completely custom nodes. The platform enforces behaviour through [capabilities and configuration](../02-flow/05-configuration.md) — not node names. A node named "Validator" that holds the same capabilities as the reference Sort node behaves identically from the platform's perspective.
 
-The Judiciary is the exception. It is a standard runtime subsystem present in every Flow, not a swappable reference implementation. [Flow Architects](../05-reference/glossary.md#flow-architect) do not choose whether to include it.
+The Judiciary is the exception. It is a standard runtime subsystem present in every Flow, not a swappable reference implementation. The [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team) does not choose whether to include it.
 
 ---
 
@@ -41,7 +41,7 @@ Refine addresses feedback. It reads the applicable laws for the governed artefac
 
 ### The Judiciary — Standard Subsystem
 
-The Judiciary is the judicial branch of the Flow. It is built into the runtime as a standard subsystem — every Flow includes it, and Flow Architects do not choose whether to include it. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking.
+The Judiciary is the judicial branch of the Flow. It is built into the runtime as a standard subsystem — every Flow includes it, and the Flow Engineering Team does not choose whether to include it. All deliberation and legislative processes are externalised into the flow topology as node-based Workitem transitions — every step produces auditable artefacts with full friction tracking.
 
 The Judiciary comprises a lifecycle node ([Facilitator](#facilitator)), orchestration nodes ([Arbiter](#arbiter-deadlock-resolver), [Tribunal](#tribunal-hearing-conductor)), deliberation nodes ([Juror](#juror-judicial-agent)), watcher nodes ([Friction Watcher](#friction-watcher), [TTL Watcher](#ttl-watcher)), and a legislative inner cycle (the [Clerk cycle](#clerk-cycle) using [Codification](#codification-nodes), [Rule Router](#rule-router), and [law-applicator](#law-applicator) nodes), plus generic [HITL](#hitl-nodes) nodes for human review. Cross-flow petition export then hands off to the operator-provisioned [Embassy](../02-flow/06-cross-flow.md), which is a separate boundary node present in every Flow.
 
@@ -217,7 +217,7 @@ flowchart LR
     HITL -->|cancel| Complete(( ))
 ```
 
-In the reference arrangement, Refine routes back through Quench — deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort (or to whatever gate node the Flow Architect has configured). Deadlock-escalated Workitems route through the Facilitator to the Arbiter, which fans out to Jurors, tallies internally, and on consensus creates a Clerk cycle child. Hearing [Workitems](./03-data-model.md#workitems) follow the hearing path through the Tribunal to a fire-and-forget Clerk cycle child. Human escalation for hung juries is handled by generic [HITL nodes](#hitl-nodes). Higher-authority escalation for T4-5 petitions exits via the [Embassy](../02-flow/06-cross-flow.md) as a `law-petition`.
+In the reference arrangement, Refine routes back through Quench — deterministic validation runs again on the revised artefact. Topologies without Quench route Refine directly to Sort (or to whatever gate node the Flow Engineering Team has configured). Deadlock-escalated Workitems route through the Facilitator to the Arbiter, which fans out to Jurors, tallies internally, and on consensus creates a Clerk cycle child. Hearing [Workitems](./03-data-model.md#workitems) follow the hearing path through the Tribunal to a fire-and-forget Clerk cycle child. Human escalation for hung juries is handled by generic [HITL nodes](#hitl-nodes). Higher-authority escalation for T4-5 petitions exits via the [Embassy](../02-flow/06-cross-flow.md) as a `law-petition`.
 
 ---
 
@@ -250,12 +250,12 @@ The underlying platform mechanism is capability-gated law access. Law read and w
 
 ## Adapting the Arrangement
 
-The reference arrangement is a starting point. [Flow Architects](../05-reference/glossary.md#flow-architect) adapt it to their context:
+The reference arrangement is a starting point. The [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team) adapts it to its context:
 
 - **Add nodes.** A topology might insert a "Translate" node between Forge and Quench, or add a second review stage with different stamp authority.
 - **Merge responsibilities.** A simple topology might combine validation and review into a single node that holds both deterministic and non-deterministic capabilities.
 - **Split gate nodes.** A complex topology might use separate gate nodes for feedback routing and stamp verification.
-- **Replace reference implementations.** The standard library containers are configurable, but a Flow Architect can implement entirely custom nodes that fulfil the same platform contracts.
+- **Replace reference implementations.** The standard library containers are configurable, but the Flow Engineering Team can implement entirely custom nodes that fulfil the same platform contracts.
 - **Omit optional nodes.** Quench is optional. Topologies without deterministic validation omit it entirely.
 
 The platform enforces behaviour through capabilities, contracts, and Operator validation — not through node names or a fixed topology. A Flow that uses none of the reference node names but grants the same capabilities and binds the same contracts produces identical governance outcomes.

@@ -48,7 +48,7 @@ The Sidecar brokers requests to six categories of runtime service. Each path has
 | [Operator](../02-flow/01-operator.md) | Submit routing instructions and control-plane mutation requests | Operator validates and persists |
 | [Archivist](../02-flow/04-system-services.md#archivist) | Proxy artefact, feedback, and stamp operations | Archivist authorises based on capability and Workitem scope |
 | [Librarian](../02-flow/04-system-services.md#librarian) | Proxy law retrieval and write operations | Librarian authorises based on capability grants |
-| [Flow Support Services](../02-flow/04-system-services.md#flow-support-services) | Proxy capability-gated requests to Flow-Architect-deployed services | Support Service validates capability grants |
+| [Flow Support Services](../02-flow/04-system-services.md#flow-support-services) | Proxy capability-gated requests to Flow-Engineering-Team-deployed services | Support Service validates capability grants |
 | [Flow Event Bus](../02-flow/04-system-services.md#flow-event-bus) | Publish telemetry, metrics, and friction signals | Flow Event Bus persists and distributes |
 | [Friction Ledger](../02-flow/04-system-services.md#friction-ledger) | Proxy friction queries | Friction Ledger serves aggregated friction data |
 

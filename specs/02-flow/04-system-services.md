@@ -12,7 +12,7 @@ Each service owns one primary concern:
 - **Archivist**: artefact lifecycle and provenance beyond Workitem references.
 - **Flow Monitor**: pipeline adapter for metrics export (Prometheus) and audit log emission (JSON Lines to stdout).
 - **Backup surfaces**: service-owned backup scope for embedded stores and content stores, coordinated with infrastructure-level backup ownership.
-- **Flow Support Services**: optional, Flow-Architect-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the worked example in this spec.
+- **Flow Support Services**: optional, Flow-Engineering-Team-deployed containers that expose pluggable gRPC capabilities consumed by nodes (via [Sidecar](../03-node/01-sidecar.md) mediation) and system services (directly). Codification Services are the worked example in this spec.
 - **Federation Service**: cross-Flow law distribution, federation membership management, and federation trust root (federation root CA) coordination. Covered in detail in [Federation](./08-federation.md).
 
 No service duplicates another service's source of truth.
@@ -27,7 +27,7 @@ flowchart TD
     SC --> EB["Flow Event Bus"]
     SC --> FL["Friction Ledger"]
 
-    SC --> SS["Support Services<br/>(Flow Architect deployed)"]
+    SC --> SS["Support Services<br/>(Flow Engineering Team deployed)"]
 
     EB --> FL
     EB --> FM["Flow Monitor"]
@@ -263,7 +263,7 @@ The Flow Monitor does not persist events or serve query APIs. It is a stateless 
 
 ## Flow Support Services
 
-Flow Support Services are optional containers deployed by the Flow Architect that expose gRPC capabilities to nodes and system services. They run in the Flow namespace — pluggable, replaceable, and Flow-Architect-owned.
+Flow Support Services are optional containers deployed by the Flow Engineering Team that expose gRPC capabilities to nodes and system services. They run in the Flow namespace — pluggable, replaceable, and Flow-Engineering-Team-owned.
 
 Support Services do not process Workitems — they expose gRPC capabilities consumed by nodes and system services through different access paths:
 
@@ -305,7 +305,7 @@ Codification Services expose a single `Encode` [gRPC method](../05-reference/grp
 
 The Judiciary (via the [Clerk cycle](./03-nodes-external.md#the-judiciary--standard-subsystem)) decides what the petition says; each Codification Service translates the goal into its declared formal syntax.
 
-Flow Architects deploy zero or more CodificationService CRDs. Each declares exactly one `outputFormat` — `codify-smt` outputs `application/smt-lib`, `codify-rego` outputs `application/rego`. If no CodificationService is registered or none are ready at the time of petition drafting, the Clerk cycle assembles petitions with prose representations only — governance hardening through codification is optional, not a platform requirement.
+The Flow Engineering Team deploys zero or more CodificationService CRDs. Each declares exactly one `outputFormat` — `codify-smt` outputs `application/smt-lib`, `codify-rego` outputs `application/rego`. If no CodificationService is registered or none are ready at the time of petition drafting, the Clerk cycle assembles petitions with prose representations only — governance hardening through codification is optional, not a platform requirement.
 
 ```mermaid
 sequenceDiagram
@@ -473,7 +473,7 @@ Core call paths are stable:
 - Librarian -> Friction Ledger: QueryFriction for law lifecycle queries.
 - Tribunal (via Sidecar) -> Friction Ledger: friction queries for hearing evidence.
 - Flow Event Bus -> Flow Monitor: telemetry and audit channel subscriptions for metrics export and audit log emission.
-- Sidecar <-> Support Services: capability-gated operations on Flow-Architect-deployed services.
+- Sidecar <-> Support Services: capability-gated operations on Flow-Engineering-Team-deployed services.
 - Codification nodes (via Sidecar) <-> Codification Services: encode requests during petition drafting.
 - Operator -> Flow Event Bus: Workitem lifecycle events (publish to workitem channel on every phase transition).
 

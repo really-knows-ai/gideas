@@ -48,13 +48,13 @@ The reference arrangement gate decision order:
 2. **Stamp evaluation in configured order** — for each stamp phase (ordered by `NODE_ORDER` env var), check whether the stamp is present. If the stamp is present but the providing node left unresolved feedback (identified via `FeedbackItem.source`), route to refinement. If the stamp is missing, route to the providing node via the gate's configured output.
 3. **All governance satisfied** (all stamps present, no per-phase unresolved feedback) — apply any stamps the gate itself can provide (discovered from its own `STAMP` capabilities and the exit contract), call `complete()`, and let the Operator validate the bound [exit contract](../02-flow/05-configuration.md#exit-node-semantics).
 
-Gate nodes discover stamp-to-node mappings at runtime via [`GetFlowTopology`](../05-reference/grpc-api.md#node-facing-methods-via-sidecar) (requires `READ:flow` capability). The response provides all peer nodes with their capabilities and outputs, enabling the gate to build provider maps dynamically. The `NODE_ORDER` environment variable (set via FoundryNode CRD container env) controls the evaluation order of stamp phases, giving the Flow Architect explicit sequencing control without coupling gate logic to specific topologies.
+Gate nodes discover stamp-to-node mappings at runtime via [`GetFlowTopology`](../05-reference/grpc-api.md#node-facing-methods-via-sidecar) (requires `READ:flow` capability). The response provides all peer nodes with their capabilities and outputs, enabling the gate to build provider maps dynamically. The `NODE_ORDER` environment variable (set via FoundryNode CRD container env) controls the evaluation order of stamp phases, giving the Flow Engineering Team explicit sequencing control without coupling gate logic to specific topologies.
 
 Deadlocked feedback is a special case of unresolved feedback. Gate implementations must check for deadlock before evaluating stamp phases, because deadlocked items route to the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) rather than to refinement. The SDK provides feedback-depth queries and `FeedbackItem.source` to support per-phase feedback attribution.
 
 **Contempt Guard awareness.** After the [Arbiter](../02-flow/03-nodes-external.md#the-judiciary--standard-subsystem) renders a verdict with a linked ruling, that verdict is binding. The [Contempt Guard](../01-concepts/03-data-model.md#contempt-guard) enforced by the Archivist prevents nodes from refusing feedback that carries a linked ruling. Gate implementations that route based on feedback state must account for the possibility that a previously deadlocked item has been resolved by the Arbiter and now carries a binding ruling — the normal refinement path applies, and the refining node cannot mark it `wont_fix`.
 
-**Stamp-provider discovery is configuration-driven.** Gate nodes do not hardcode which node provides which stamp. They call [`GetFlowTopology`](../05-reference/grpc-api.md#node-facing-methods-via-sidecar) (via `READ:flow` capability) to discover stamp-to-node mappings from node capabilities at runtime. This preserves topology freedom — a Flow Architect can reassign stamp authority without modifying gate logic.
+**Stamp-provider discovery is configuration-driven.** Gate nodes do not hardcode which node provides which stamp. They call [`GetFlowTopology`](../05-reference/grpc-api.md#node-facing-methods-via-sidecar) (via `READ:flow` capability) to discover stamp-to-node mappings from node capabilities at runtime. This preserves topology freedom — the Flow Engineering Team can reassign stamp authority without modifying gate logic.
 
 ## Human-in-the-Loop Pattern
 
@@ -245,9 +245,9 @@ flowchart TD
 
 **Direct service calls bypassing Sidecar.** Node code that calls Archivist, Librarian, or other runtime services directly, bypassing Sidecar authentication and mediation. Even if network connectivity exists, bypass paths violate the trust boundary and produce operations without verifiable provenance.
 
-**Hardcoded stamp-provider routing.** Gate logic that routes to a specific node name for a specific stamp instead of discovering the provider from Flow configuration. This couples the gate implementation to a specific topology and breaks when the Flow Architect reassigns stamp authority.
+**Hardcoded stamp-provider routing.** Gate logic that routes to a specific node name for a specific stamp instead of discovering the provider from Flow configuration. This couples the gate implementation to a specific topology and breaks when the Flow Engineering Team reassigns stamp authority.
 
-**Treating stamp names as platform keywords.** Node logic that assigns special semantics to stamp names like "approval" or "review." The platform treats all stamp names identically — they are [naming conventions](../02-flow/05-configuration.md#stamp-grant-and-capability-semantics) chosen by the Flow Architect, not system-privileged identifiers.
+**Treating stamp names as platform keywords.** Node logic that assigns special semantics to stamp names like "approval" or "review." The platform treats all stamp names identically — they are [naming conventions](../02-flow/05-configuration.md#stamp-grant-and-capability-semantics) chosen by the Flow Engineering Team, not system-privileged identifiers.
 
 **Optimistic governance assumptions.** Handlers that assume a stamp or feedback state will be in a particular condition without checking. Current state must be read from the Archivist through the SDK at the start of each assignment.
 

@@ -34,7 +34,7 @@ A **[law](./03-data-model.md#laws)** is a governance rule with a textual **goal*
 
 ## The Foundry Cycle
 
-The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. [Flow Architects](../05-reference/glossary.md#flow-architect) adapt it to their context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
+The [Foundry Cycle](./02-foundry-cycle.md) is the reference arrangement — the standard pattern of node roles (Forge, Quench, Appraise, Sort, Refine) that demonstrates how adversarial cycles of creation, validation, review, and refinement produce artefacts that are provably compliant with a body of governance. The [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team) adapts it to its context: adding nodes, merging responsibilities, splitting gate nodes, or replacing reference implementations entirely.
 
 The Judiciary is the exception — it is a standard runtime subsystem present in every Flow, not a swappable reference implementation. It comprises lifecycle nodes ([Facilitator](./02-foundry-cycle.md#facilitator)), orchestration nodes ([Arbiter](./02-foundry-cycle.md#arbiter-deadlock-resolver), [Tribunal](./02-foundry-cycle.md#tribunal-hearing-conductor)), deliberation nodes ([Juror](./02-foundry-cycle.md#juror-judicial-agent)), watcher nodes ([Friction Watcher](./02-foundry-cycle.md#friction-watcher), [TTL Watcher](./02-foundry-cycle.md#ttl-watcher)), a legislative inner cycle (the [Clerk cycle](./02-foundry-cycle.md#clerk-cycle) using [Codification](./02-foundry-cycle.md#codification-nodes), [Rule Router](./02-foundry-cycle.md#rule-router), and [law-applicator](./02-foundry-cycle.md#law-applicator) nodes), and generic [HITL](./02-foundry-cycle.md#hitl-nodes) nodes for human review.
 
@@ -62,7 +62,7 @@ Laws are tiered by authority and lifecycle:
 |------|------|--------|-----------|
 | 1 | **Finding** | Nodes (any with `WRITE:law/tier1` capability; [Appraise](./02-foundry-cycle.md#appraise-reviewer), [Refine](./02-foundry-cycle.md#refine-refiner) in the reference arrangement) | Ephemeral. Decays if uncited, promoted if heavily used. |
 | 2 | **Ruling** | [Judiciary](./02-foundry-cycle.md#the-judiciary--standard-subsystem) (via the Clerk cycle and law-applicator) | Binding precedent. Minted when disputes are resolved. |
-| 3 | **Local Statute** | [Flow Architect](../05-reference/glossary.md#flow-architect) | Local policy. Human-administered or via local legislative cycle. |
+| 3 | **Local Statute** | [Flow Engineering Team](../05-reference/glossary.md#flow-engineering-team) | Local policy. Human-administered or via local legislative cycle. |
 | 4 | **State Constitution** | [Federation](./04-governance.md) (state-level authority publisher) | Organisational policy. Published by an authority Flow and distributed to subscriber Flows within the same state by the [Federation service](../02-flow/08-federation.md). |
 | 5 | **Federal Accord** | [Federation](./04-governance.md) (federation-level authority publisher) | Cross-organisation. Published by a federation-level authority Flow and distributed to all subscriber Flows by the [Federation service](../02-flow/08-federation.md). |
 
@@ -74,7 +74,7 @@ The system naturally hardens soft rules into strict ones. A Tier 1 Finding begin
 
 Tiers 1 and 2 emerge from within a Flow. Tier 3 is the Flow's own legislative authority. Tiers 4 and 5 arrive from external authority publishers via the [Federation service](../02-flow/08-federation.md).
 
-A standalone Flow (no federation membership) manages its own Tier 3 Local Statutes as CRDs applied by an administrator. Tiers 4 and 5 do not exist in this configuration.
+A standalone Flow (no federation membership) manages its own Tier 3 Local Statutes as CRDs applied by the Flow Engineering Team. Tiers 4 and 5 do not exist in this configuration.
 
 When a Flow joins a [Federation](./04-governance.md), it gains identity, trust-root discovery, and membership in a governed topology. The Federation defines **states** — groups of Flows that share organisational relationships — and designates **authority publisher** roles that determine which Flows may publish local Tier 3 laws outward. A state-level authority publishes laws that materialise as Tier 4 in subscriber Flows; a federation-level authority publishes laws that materialise as Tier 5 across the federation.
 

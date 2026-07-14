@@ -24,7 +24,7 @@ The Operator reconciles four state surfaces continuously:
 - **[FoundryFlow](../05-reference/crds.md#foundryflow)**: contracts, policy limits, and cross-flow policy.
 - **[FoundryNode](../05-reference/crds.md#foundrynode)**: node capability envelope, routing outputs, timeout budget, and entry/exit bindings.
 - **Workitem**: lifecycle progression through assignment, routing, and completion transition.
-- **Support Service**: deployment lifecycle, health monitoring, and scaling policy for Flow-Architect-deployed [Flow Support Services](./04-system-services.md#flow-support-services).
+- **Support Service**: deployment lifecycle, health monitoring, and scaling policy for Flow-Engineering-Team-deployed [Flow Support Services](./04-system-services.md#flow-support-services).
 
 ```mermaid
 flowchart TD

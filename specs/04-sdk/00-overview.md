@@ -81,7 +81,7 @@ All surfaces share the same trust model: SDK calls transit the Sidecar, which au
 
 ## FlowSupportService Base Class
 
-[Flow Support Services](../02-flow/04-system-services.md#flow-support-services) are optional, Flow-Architect-deployed containers that expose gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct service-to-service calls). The SDK provides `FlowSupportService` as the base class for building these services.
+[Flow Support Services](../02-flow/04-system-services.md#flow-support-services) are optional, Flow-Engineering-Team-deployed containers that expose gRPC capabilities consumed by nodes (through Sidecar mediation) and by system services (through direct service-to-service calls). The SDK provides `FlowSupportService` as the base class for building these services.
 
 `FlowSupportService` covers:
 

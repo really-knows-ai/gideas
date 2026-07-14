@@ -117,7 +117,7 @@ Telemetry from different runtime layers serves different audiences:
 
 | Layer | Emitter | Signal Type | Audience |
 |-------|---------|-------------|----------|
-| Node handler | SDK telemetry calls | Custom events, friction, business metrics | Application operators, Flow Architects |
+| Node handler | SDK telemetry calls | Custom events, friction, business metrics | Application operators, Flow Engineering Team |
 | Sidecar | Sidecar internals | Mediation metrics (request counts, latencies, auth failures) | Platform operators |
 | Runtime services | Archivist, Librarian, Operator | Authoritative audit events (version creation, stamp application, law lifecycle, state transitions) | Auditors, compliance |
 

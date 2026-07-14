@@ -69,7 +69,7 @@ Enforcement split:
 
 ## Reference Arrangement
 
-The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) defines the reference arrangement — node roles, cycle topology, and law authority. Flow Architects adapt it to their context while preserving the runtime invariants below.
+The [Foundry Cycle](../01-concepts/02-foundry-cycle.md) defines the reference arrangement — node roles, cycle topology, and law authority. The Flow Engineering Team adapts it to its context while preserving the runtime invariants below.
 
 From the platform's perspective, reference-arrangement node names (Forge, Quench, Appraise, Sort, Refine) carry no special runtime semantics. All node behaviour is determined by capability grants and configuration. A node named "Sort" with no `READ:flow` capability cannot perform gate logic; a node named "MyGate" with the right capabilities can.
 
@@ -137,7 +137,7 @@ The [Clerk cycle](../01-concepts/02-foundry-cycle.md#clerk-cycle) mirrors the ma
 
 ### Judiciary Node Capabilities
 
-Arbiter and Tribunal capabilities are fixed by the runtime (not configurable by the Flow Architect):
+Arbiter and Tribunal capabilities are fixed by the runtime (not configurable by the Flow Engineering Team):
 
 - `WRITE:law/tier2` — resolve Tier 1-2 conflicts and mint Tier 2 Rulings via Clerk cycle.
 - `READ:law` — query the Library for law context.
