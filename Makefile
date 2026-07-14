@@ -51,7 +51,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 # CGO-enabled node binaries (built from ./nodes/<name>/).
-CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise hitl-sort human-approval human-arbiter juror law-applicator null-node petition-watcher refine rule-router sort tribunal ttl-watcher
+CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise hitl-sort human-approval human-arbiter juror law-applicator petition-watcher refine rule-router sort tribunal ttl-watcher
 
 # CGO-enabled platform service binaries (built from ./platform/<name>/cmd/).
 CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian
@@ -122,6 +122,10 @@ lint-all: lint lint-operator ## Run golangci-lint across every module including 
 
 .PHONY: check
 check: fmt vet lint ## Run fmt, vet, and lint in sequence.
+
+.PHONY: validate-isoflow
+validate-isoflow: ## Validate isoflow.json structure and description lengths.
+	python3 tools/validate-isoflow.py isoflow.json
 
 .PHONY: check-fix
 check-fix: tidy lint-fix ## Run tidy, fmt (via goimports), and lint with auto-fix.
