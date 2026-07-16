@@ -9,7 +9,6 @@ import (
 )
 
 // apiError is the standard error response envelope for the HITL REST API.
-// Error codes match the stable codes from specs/05-reference/error-catalogue.md.
 type apiError struct {
 	Error apiErrorDetail `json:"error"`
 }

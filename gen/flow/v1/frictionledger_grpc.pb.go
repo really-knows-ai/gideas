@@ -31,7 +31,6 @@ const (
 // friction events, persists them, evaluates thresholds, and serves
 // aggregated friction queries.
 //
-// See: specs/02-flow/04-system-services.md (Service Invariant #15)
 type FrictionLedgerServiceClient interface {
 	// Returns aggregated friction data across the requested axes.
 	// Used by the Librarian for hearing threshold evaluation and by the
@@ -66,7 +65,6 @@ func (c *frictionLedgerServiceClient) QueryFriction(ctx context.Context, in *Que
 // friction events, persists them, evaluates thresholds, and serves
 // aggregated friction queries.
 //
-// See: specs/02-flow/04-system-services.md (Service Invariant #15)
 type FrictionLedgerServiceServer interface {
 	// Returns aggregated friction data across the requested axes.
 	// Used by the Librarian for hearing threshold evaluation and by the

@@ -7,7 +7,6 @@ import "flow/v1/common.proto";
 
 // ArchivistService manages artefact lifecycle and provenance.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#archivist-api
 service ArchivistService {
   // --- Service-Facing Methods ---
 

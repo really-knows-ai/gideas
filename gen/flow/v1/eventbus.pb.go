@@ -79,7 +79,6 @@ func (x *Label) GetValue() string {
 }
 
 // A durable event published to the Flow Event Bus.
-// See: specs/05-reference/grpc-api.md#flowevent
 type FlowEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique event identifier (assigned by publisher).

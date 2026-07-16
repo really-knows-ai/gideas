@@ -18,7 +18,6 @@ enum Severity {
 }
 
 // Feedback lifecycle states.
-// See: specs/01-concepts/03-data-model.md#feedback-lifecycle
 enum FeedbackState {
   FEEDBACK_STATE_UNSPECIFIED = 0;
   FEEDBACK_STATE_NEW = 1;
@@ -58,7 +57,6 @@ enum Verdict {
 // --- Shared Messages ---
 
 // Structured error model used by all runtime services.
-// See: specs/05-reference/error-catalogue.md
 message Error {
   // Stable error identifier (e.g. "INVALID_ROUTE", "CAPABILITY_DENIED").
   // Does not change across releases.
@@ -75,7 +73,6 @@ message Error {
 }
 
 // Routing instruction submitted by a node handler via SubmitResult.
-// See: specs/05-reference/crds.md#routinginstruction
 message RoutingInstruction {
   // The routing type.
   RoutingType type = 1;
@@ -87,7 +84,6 @@ message RoutingInstruction {
 
 // Identity context injected by the Sidecar on every outgoing request.
 // Nodes cannot override or spoof these fields.
-// See: specs/05-reference/grpc-api.md#identity-injection
 message WorkitemContext {
   // Kubernetes namespace that owns this flow (one namespace = one FoundryFlow).
   // The Sidecar populates this from the FLOW_NAMESPACE environment variable.
@@ -109,7 +105,6 @@ message ArtefactRef {
 }
 
 // A cryptographic stamp applied to an artefact version.
-// See: specs/01-concepts/03-data-model.md#passports-and-stamps
 message Stamp {
   // Governance checkpoint name (e.g. "linter", "security-review", "approval").
   string name = 1;
@@ -131,7 +126,6 @@ message Stamp {
 }
 
 // A single feedback item on an artefact.
-// See: specs/01-concepts/03-data-model.md#feedback
 message FeedbackItem {
   string id = 1;
   // Node identity of the feedback creator. Populated by the Archivist from
@@ -158,7 +152,6 @@ message FeedbackEvent {
 }
 
 // Structured justification for a wont_fix refusal.
-// See: specs/01-concepts/03-data-model.md#forced-choice-justification
 message Justification {
   oneof kind {
     Citation citation = 1;
@@ -177,7 +170,6 @@ message NovelArgument {
 }
 
 // A law object: governance rule with a clear goal.
-// See: specs/01-concepts/03-data-model.md#laws
 message Law {
   string id = 1;
   string goal = 2;
@@ -189,12 +181,10 @@ message Law {
   google.protobuf.Timestamp updated_at = 8;
   reserved 9;
   // Law group name. Empty means "default" group.
-  // See: specs/05-reference/crds.md#lawgroup
   string group = 10;
 }
 
 // A typed representation of a law's goal.
-// See: specs/05-reference/crds.md#representation
 message Representation {
   // MIME type (e.g. "text/markdown", "application/rego").
   string type = 1;

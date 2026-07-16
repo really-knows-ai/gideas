@@ -11,7 +11,7 @@ Turn a project idea into a reviewed spec at `plans/<project-name>/SPEC.md`. The 
 
 ### 1. Explore project context
 
-Read `AGENTS.md` and the relevant `specs/` documents to understand the system architecture, conventions, and existing patterns. Check existing plans under `plans/` for prior or related work. Follow the repository's Go, proto, and Kubernetes conventions where they are clear.
+Read `AGENTS.md` and the relevant `_old/specs/` documents (archived) to understand the intended system architecture, conventions, and existing patterns. Check existing plans under `plans/` for prior or related work. Follow the repository's Go, proto, and Kubernetes conventions where they are clear.
 
 If the idea is too large for one project folder, help the user split it into smaller projects and choose the first one to specify.
 

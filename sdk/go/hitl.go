@@ -87,7 +87,6 @@ type PeerResolver interface {
 }
 
 // Sentinel errors for queue operations. These map to stable error codes
-// in the error catalogue (specs/05-reference/error-catalogue.md).
 var (
 	// ErrQueueItemNotFound is returned when a queue operation references
 	// an item that does not exist on the target shard.

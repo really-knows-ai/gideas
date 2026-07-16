@@ -6,7 +6,6 @@
 #   - JSON Lines to stdout for audit events
 #
 # It persists only a small checkpoint file for replay position.
-# See: specs/02-flow/04-system-services.md (Service Invariant #16)
 #
 # Prerequisites:
 #   - Build monitor image: docker build -t flow-monitor:latest -f monitor/Dockerfile .

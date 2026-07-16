@@ -8,7 +8,6 @@
 //
 // Each active Workitem assignment maintains an independent session with
 // its own inactivity timer and pause state. The timer measures idle time,
-// not total execution time. See: specs/03-node/01-sidecar.md
 package service
 
 import (
@@ -218,8 +217,6 @@ func (s *SidecarServer) Heartbeat(_ context.Context, req *flowv1.HeartbeatReques
 // Workitem assignment. The timer remains suspended until ResumeTimer is
 // called or the handler returns. Used by HITL nodes to park Workitems
 // while awaiting external input without triggering timeout.
-//
-// See: specs/03-node/01-sidecar.md#heartbeat-and-activity-tracking
 func (s *SidecarServer) PauseTimer(
 	_ context.Context, req *flowv1.PauseTimerRequest,
 ) (*flowv1.PauseTimerResponse, error) {
@@ -251,8 +248,6 @@ func (s *SidecarServer) PauseTimer(
 
 // ResumeTimer resumes the Sidecar's inactivity timer after a PauseTimer
 // call. The timer resets to the full timeout window on resume.
-//
-// See: specs/03-node/01-sidecar.md#heartbeat-and-activity-tracking
 func (s *SidecarServer) ResumeTimer(
 	_ context.Context, req *flowv1.ResumeTimerRequest,
 ) (*flowv1.ResumeTimerResponse, error) {
@@ -386,7 +381,6 @@ func (s *SidecarServer) ensureNodeConnection() error {
 // Sidecar-authoritative identity, and submits the friction event to the
 // async telemetry buffer with HIGH priority for delivery to the Event Bus.
 //
-// Per spec (specs/03-node/02-configuration.md), WRITE:friction is the one
 // capability enforced by the Sidecar rather than the owning service.
 func (s *SidecarServer) AddFriction(
 	ctx context.Context, req *flowv1.AddFrictionRequest,

@@ -8,7 +8,6 @@ import "google/protobuf/duration.proto";
 
 // OperatorService handles Workitem control-plane mutations.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#operator-api
 service OperatorService {
   // --- Node-Facing Methods (via Sidecar) ---
 

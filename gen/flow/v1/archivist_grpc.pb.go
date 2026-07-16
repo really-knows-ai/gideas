@@ -48,7 +48,6 @@ const (
 //
 // ArchivistService manages artefact lifecycle and provenance.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#archivist-api
 type ArchivistServiceClient interface {
 	// Returns artefact presence and stamp state for exit contract validation.
 	// Called by the Operator's reconciliation loop.
@@ -328,7 +327,6 @@ func (c *archivistServiceClient) LinkRuling(ctx context.Context, in *LinkRulingR
 //
 // ArchivistService manages artefact lifecycle and provenance.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#archivist-api
 type ArchivistServiceServer interface {
 	// Returns artefact presence and stamp state for exit contract validation.
 	// Called by the Operator's reconciliation loop.

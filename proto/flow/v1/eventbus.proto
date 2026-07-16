@@ -17,7 +17,6 @@ message Label {
 }
 
 // A durable event published to the Flow Event Bus.
-// See: specs/05-reference/grpc-api.md#flowevent
 message FlowEvent {
   // Unique event identifier (assigned by publisher).
   string event_id = 1;
@@ -108,7 +107,6 @@ message SubscribeFilter {
 // FlowEventBusService is the durable pub/sub bus for all Flow runtime
 // events. Events are persisted to SQLite before fan-out. Retention is
 // per-channel and operator-configurable.
-// See: specs/02-flow/04-system-services.md (Service Invariant #13)
 service FlowEventBusService {
   // Publish persists an event and fans it out to active subscribers.
   rpc Publish(PublishRequest) returns (PublishResponse);

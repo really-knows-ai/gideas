@@ -34,7 +34,6 @@ const (
 // NodeService on the same gRPC port. Peers discover each other via headless
 // service DNS and use this service for scatter-gather reads and proxy writes.
 //
-// See: specs/04-sdk/08-sdk-hitl.md
 type QueuePeerServiceClient interface {
 	// Returns queue items from this shard's local queue.db.
 	// Used by scatter-gather reads to collect items across all shards.
@@ -111,7 +110,6 @@ func (c *queuePeerServiceClient) DecideItem(ctx context.Context, in *DecideItemR
 // NodeService on the same gRPC port. Peers discover each other via headless
 // service DNS and use this service for scatter-gather reads and proxy writes.
 //
-// See: specs/04-sdk/08-sdk-hitl.md
 type QueuePeerServiceServer interface {
 	// Returns queue items from this shard's local queue.db.
 	// Used by scatter-gather reads to collect items across all shards.

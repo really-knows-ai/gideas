@@ -6,7 +6,6 @@ package flow.v1;
 // Shared types for the judiciary subsystem (Juror nodes, Deliberation Gate,
 // Clerk node, Tribunal, Arbiter). No service definition -- the judiciary
 // operates through standard node Workitem assignments, not dedicated RPCs.
-// See: specs/02-flow/03-nodes-external.md#judiciary-subsystem
 
 // --- Enums ---
 

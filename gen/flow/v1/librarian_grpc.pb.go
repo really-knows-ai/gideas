@@ -43,7 +43,6 @@ const (
 //
 // LibrarianService manages the Flow's body of law.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#librarian-api
 type LibrarianServiceClient interface {
 	// Returns laws matching the filter. Three query modes:
 	// (1) no filter - all laws
@@ -269,7 +268,6 @@ func (c *librarianServiceClient) DeleteLawGroup(ctx context.Context, in *DeleteL
 //
 // LibrarianService manages the Flow's body of law.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#librarian-api
 type LibrarianServiceServer interface {
 	// Returns laws matching the filter. Three query modes:
 	// (1) no filter - all laws

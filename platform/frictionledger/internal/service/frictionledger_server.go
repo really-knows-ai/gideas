@@ -4,8 +4,6 @@
 // data. It subscribes to the Event Bus telemetry channel for friction events,
 // persists them to a local SQLite store, evaluates per-law thresholds, and
 // publishes threshold-crossing events to the Event Bus friction channel.
-//
-// See: specs/02-flow/04-system-services.md (Service Invariant #15)
 package service
 
 import (

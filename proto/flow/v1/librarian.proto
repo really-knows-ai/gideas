@@ -8,7 +8,6 @@ import "google/protobuf/timestamp.proto";
 
 // LibrarianService manages the Flow's body of law.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#librarian-api
 service LibrarianService {
   // --- Node-Facing Methods (via Sidecar) ---
 

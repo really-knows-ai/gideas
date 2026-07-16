@@ -18,8 +18,6 @@ const DefaultTimeout = 5 * time.Minute
 // The namespace is not per-session — it is a Sidecar-level constant
 // read from the FLOW_NAMESPACE environment variable. Sessions only
 // track the workitem and node identity for the assignment.
-//
-// See: specs/03-node/01-sidecar.md#heartbeat-and-activity-tracking
 type session struct {
 	mu sync.Mutex
 

@@ -80,7 +80,6 @@ func (Severity) EnumDescriptor() ([]byte, []int) {
 }
 
 // Feedback lifecycle states.
-// See: specs/01-concepts/03-data-model.md#feedback-lifecycle
 type FeedbackState int32
 
 const (
@@ -308,7 +307,6 @@ func (Verdict) EnumDescriptor() ([]byte, []int) {
 }
 
 // Structured error model used by all runtime services.
-// See: specs/05-reference/error-catalogue.md
 type Error struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Stable error identifier (e.g. "INVALID_ROUTE", "CAPABILITY_DENIED").
@@ -383,7 +381,6 @@ func (x *Error) GetRetryable() bool {
 }
 
 // Routing instruction submitted by a node handler via SubmitResult.
-// See: specs/05-reference/crds.md#routinginstruction
 type RoutingInstruction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The routing type.
@@ -441,7 +438,6 @@ func (x *RoutingInstruction) GetTarget() string {
 
 // Identity context injected by the Sidecar on every outgoing request.
 // Nodes cannot override or spoof these fields.
-// See: specs/05-reference/grpc-api.md#identity-injection
 type WorkitemContext struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Kubernetes namespace that owns this flow (one namespace = one FoundryFlow).
@@ -571,7 +567,6 @@ func (x *ArtefactRef) GetGovernedArtefact() string {
 }
 
 // A cryptographic stamp applied to an artefact version.
-// See: specs/01-concepts/03-data-model.md#passports-and-stamps
 type Stamp struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Governance checkpoint name (e.g. "linter", "security-review", "approval").
@@ -663,7 +658,6 @@ func (x *Stamp) GetCreatedAt() *timestamppb.Timestamp {
 }
 
 // A single feedback item on an artefact.
-// See: specs/01-concepts/03-data-model.md#feedback
 type FeedbackItem struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -854,7 +848,6 @@ func (x *FeedbackEvent) GetTimestamp() *timestamppb.Timestamp {
 }
 
 // Structured justification for a wont_fix refusal.
-// See: specs/01-concepts/03-data-model.md#forced-choice-justification
 type Justification struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Kind:
@@ -1028,7 +1021,6 @@ func (x *NovelArgument) GetArgument() string {
 }
 
 // A law object: governance rule with a clear goal.
-// See: specs/01-concepts/03-data-model.md#laws
 type Law struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -1040,7 +1032,6 @@ type Law struct {
 	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// Law group name. Empty means "default" group.
-	// See: specs/05-reference/crds.md#lawgroup
 	Group         string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1140,7 +1131,6 @@ func (x *Law) GetGroup() string {
 }
 
 // A typed representation of a law's goal.
-// See: specs/05-reference/crds.md#representation
 type Representation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// MIME type (e.g. "text/markdown", "application/rego").

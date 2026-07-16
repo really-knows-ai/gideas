@@ -120,7 +120,6 @@ const (
 // node-originated requests. System-to-system calls (no x-flow-node-id)
 // pass through unconditionally.
 //
-// Per spec (specs/05-reference/grpc-api.md, API Invariant #3):
 // "Capability enforcement is performed by the owning service."
 func checkCapability(ctx context.Context, required string) error {
 	md, ok := metadata.FromIncomingContext(ctx)

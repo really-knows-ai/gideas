@@ -262,7 +262,6 @@ func WithSuspendTimeout(d time.Duration) SuspendOption {
 // interceptor as a session lookup key. The Sidecar overwrites all identity
 // metadata (flow_namespace, workitem_id, node_id) with authoritative values from
 // the active assignment session before forwarding to upstream services.
-// See: specs/05-reference/grpc-api.md#identity-injection
 func workitemContextInterceptor(workitemID string) grpc.UnaryClientInterceptor {
 	return func(
 		ctx context.Context,

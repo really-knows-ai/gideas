@@ -108,7 +108,6 @@ func main() {
 	// assignment session (or entry-bound fallback). This ensures that
 	// all proxied RPCs carry the correct identity context regardless of
 	// what the node SDK sends.
-	// See: specs/05-reference/grpc-api.md#identity-injection
 	srv := grpc.NewServer(
 		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, namespace, nodeID, capabilities)),
 	)

@@ -40,7 +40,6 @@ const (
 // service definitions are not duplicated here -- the Go SDK will connect
 // to the Sidecar's port and use the respective service stubs.
 //
-// See: specs/05-reference/grpc-api.md#sidecar-mediated-sdk-paths
 type SidecarServiceClient interface {
 	// Resets the Sidecar's inactivity timer. Implicit heartbeats occur on
 	// every SDK call; this method provides an explicit signal for long-running
@@ -52,7 +51,6 @@ type SidecarServiceClient interface {
 	// the handler returns. Used by HITL nodes to park Workitems while awaiting
 	// external input without triggering timeout. The Workitem remains in
 	// Running state -- this is a Sidecar-local mechanism.
-	// See: specs/04-sdk/08-sdk-hitl.md
 	PauseTimer(ctx context.Context, in *PauseTimerRequest, opts ...grpc.CallOption) (*PauseTimerResponse, error)
 	// Resumes the Sidecar's inactivity timer after a PauseTimer call. The
 	// timer resets to the full timeout window on resume.
@@ -65,7 +63,6 @@ type SidecarServiceClient interface {
 	// active session, enforces the WRITE:friction capability gate, wraps the
 	// event in a FlowEvent envelope, and publishes to the Event Bus telemetry
 	// channel. The SDK never builds FlowEvent messages directly.
-	// See: specs/04-sdk/06-sdk-telemetry.md
 	AddFriction(ctx context.Context, in *AddFrictionRequest, opts ...grpc.CallOption) (*AddFrictionResponse, error)
 	// Records a custom telemetry event. The Sidecar injects identity fields,
 	// wraps the event in a standard FlowEvent envelope with timestamp and
@@ -155,7 +152,6 @@ func (c *sidecarServiceClient) RecordTelemetry(ctx context.Context, in *RecordTe
 // service definitions are not duplicated here -- the Go SDK will connect
 // to the Sidecar's port and use the respective service stubs.
 //
-// See: specs/05-reference/grpc-api.md#sidecar-mediated-sdk-paths
 type SidecarServiceServer interface {
 	// Resets the Sidecar's inactivity timer. Implicit heartbeats occur on
 	// every SDK call; this method provides an explicit signal for long-running
@@ -167,7 +163,6 @@ type SidecarServiceServer interface {
 	// the handler returns. Used by HITL nodes to park Workitems while awaiting
 	// external input without triggering timeout. The Workitem remains in
 	// Running state -- this is a Sidecar-local mechanism.
-	// See: specs/04-sdk/08-sdk-hitl.md
 	PauseTimer(context.Context, *PauseTimerRequest) (*PauseTimerResponse, error)
 	// Resumes the Sidecar's inactivity timer after a PauseTimer call. The
 	// timer resets to the full timeout window on resume.
@@ -180,7 +175,6 @@ type SidecarServiceServer interface {
 	// active session, enforces the WRITE:friction capability gate, wraps the
 	// event in a FlowEvent envelope, and publishes to the Event Bus telemetry
 	// channel. The SDK never builds FlowEvent messages directly.
-	// See: specs/04-sdk/06-sdk-telemetry.md
 	AddFriction(context.Context, *AddFrictionRequest) (*AddFrictionResponse, error)
 	// Records a custom telemetry event. The Sidecar injects identity fields,
 	// wraps the event in a standard FlowEvent envelope with timestamp and

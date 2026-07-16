@@ -5,7 +5,6 @@
 //   - JSON Lines to stdout for audit events
 //
 // The Monitor persists only a small checkpoint file for replay position
-// (not a data store). See: specs/02-flow/04-system-services.md
 // (Service Invariant #16).
 //
 // Usage:

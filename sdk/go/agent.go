@@ -21,7 +21,6 @@ const (
 	DefaultHeartbeatInterval = 15 * time.Second
 
 	// telemetryEventLLMCost is the standard event type for LLM inference cost
-	// accounting. See specs/04-sdk/06-sdk-telemetry.md#inference-cost-accounting-convention.
 	telemetryEventLLMCost = "foundry.cost.llm"
 )
 

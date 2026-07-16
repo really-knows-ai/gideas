@@ -30,7 +30,6 @@ const (
 // FlowEventBusService is the durable pub/sub bus for all Flow runtime
 // events. Events are persisted to SQLite before fan-out. Retention is
 // per-channel and operator-configurable.
-// See: specs/02-flow/04-system-services.md (Service Invariant #13)
 type FlowEventBusServiceClient interface {
 	// Publish persists an event and fans it out to active subscribers.
 	Publish(ctx context.Context, in *PublishRequest, opts ...grpc.CallOption) (*PublishResponse, error)
@@ -83,7 +82,6 @@ type FlowEventBusService_SubscribeClient = grpc.ServerStreamingClient[FlowEvent]
 // FlowEventBusService is the durable pub/sub bus for all Flow runtime
 // events. Events are persisted to SQLite before fan-out. Retention is
 // per-channel and operator-configurable.
-// See: specs/02-flow/04-system-services.md (Service Invariant #13)
 type FlowEventBusServiceServer interface {
 	// Publish persists an event and fans it out to active subscribers.
 	Publish(context.Context, *PublishRequest) (*PublishResponse, error)

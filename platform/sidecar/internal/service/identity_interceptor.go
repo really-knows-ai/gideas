@@ -31,7 +31,6 @@ const (
 // IdentityInterceptor returns a gRPC unary server interceptor that enriches
 // incoming metadata with authoritative identity and capability fields.
 //
-// Per spec (specs/05-reference/grpc-api.md#identity-injection), the Sidecar
 // is the sole authority for runtime attribution on node-originated requests.
 // Nodes cannot override or spoof these fields. The interceptor operates in
 // two modes:

@@ -3,8 +3,6 @@
 // The Flow Monitor is a stateless pipeline adapter that subscribes to the
 // Event Bus and exports telemetry as Prometheus metrics and audit events as
 // JSON Lines to stdout.
-//
-// See: specs/02-flow/04-system-services.md (Service Invariant #16)
 package metrics
 
 import (

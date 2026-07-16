@@ -6,7 +6,6 @@ A governed workflow runtime on Kubernetes. Work progresses through adversarial c
 
 | Directory | Description |
 |-----------|-------------|
-| `specs/` | [Technical specification](specs/README.md) — the authoritative source of truth |
 | `proto/` | Protocol Buffer definitions (the wire contract) |
 | `gen/` | Generated Go code from proto definitions |
 | `platform/operator/` | Control plane — Kubebuilder controller managing Flows, Workitems, and CRDs |
@@ -221,6 +220,3 @@ make tidy           # go mod tidy across all workspace modules
 
 See `make help` for the full target list.
 
-## Specification
-
-The full technical specification lives in [`specs/`](specs/README.md). Start with [Concepts](specs/01-concepts/00-overview.md), then [Architecture](specs/01-concepts/01-architecture.md).

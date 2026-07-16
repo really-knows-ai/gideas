@@ -1,7 +1,5 @@
 // Package subscriber provides Event Bus subscription handlers for the
 // Flow Monitor's stateless pipeline adapter.
-//
-// See: specs/02-flow/04-system-services.md (Service Invariant #16)
 package subscriber
 
 import (

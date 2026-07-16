@@ -6,17 +6,6 @@ This repository contains the technical specification and reference implementatio
 
 ## Repository Structure
 
-### Documentation (`/specs`)
-
-The authoritative source of truth for the system design.
-
-/specs
-├── 01-concepts/        # Helicopter view — read first
-├── 02-flow/            # The Platform — assumes nodes exist
-├── 03-node/            # Building Nodes — internal runtime architecture
-├── 04-sdk/             # SDK — external developer interface
-└── 05-reference/       # CRDs, APIs, Errors, Glossary
-
 ### Implementation (Source Code)
 
 The "Walking Skeleton" and reference components.
@@ -58,10 +47,8 @@ The "Walking Skeleton" and reference components.
 
 ## Reading Order
 
-1. **Concepts** (`specs/01-concepts`) — What Foundry Flow is and why it exists.
-2. **Architecture** (`specs/01-concepts/01-architecture.md`) — The Six-Plane Model.
-3. **The Contract** (`proto/`) — The wire protocol that binds the components.
-4. **Implementation** — The code in `platform/operator`, `platform/sidecar`, and `sdk`.
+1. **The Contract** (`proto/`) — The wire protocol that binds the components.
+2. **Implementation** — The code in `platform/operator`, `platform/sidecar`, and `sdk`.
 
 ## Hard Rule: The Repo Is Always Green
 
@@ -139,8 +126,6 @@ plans/<project-name>/
 └── REVIEW.md        # Spec-compliance audit checklist (produced by implementation-review)
 ```
 
-The `specs/` directory remains the authoritative system-level source of truth. The `plans/` directory contains per-feature execution plans and reviews.
-
 **Important:** `plans/` is gitignored by design — its contents are never committed. Because the Glob tool relies on the git index, it will not find files under `plans/`. You **must** use `ls` (via Bash) to list directory contents under `plans/`.
 
 ### Worktree Convention
@@ -209,7 +194,7 @@ Additional project-specific skills:
 | Skill | Purpose |
 |-------|---------|
 | `spec-lint-fix` | Run markdown linting from `tools/spec-lint/`, fix issues, rerun until clean |
-| `spec-review` | Deep-review all spec documents against AGENTS.md, produce or continue REVIEW.md |
+| `spec-review` | Deep-review all spec documents against project requirements, produce or continue REVIEW.md |
 | `publish-release` | Quality gate, build, changelog, README review, tag, push, and `gh release create` |
 | `commit-push` | Commit and push all changes (update gitignore where needed) |
 | `ponytail-review` | Review diffs for over-engineering: what to delete, simplify, or replace with stdlib/native equivalents |

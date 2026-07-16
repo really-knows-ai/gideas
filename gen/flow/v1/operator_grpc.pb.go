@@ -36,7 +36,6 @@ const (
 //
 // OperatorService handles Workitem control-plane mutations.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#operator-api
 type OperatorServiceClient interface {
 	// Submits the handler's routing instruction. The Operator validates routing
 	// guards and applies the lifecycle transition.
@@ -186,7 +185,6 @@ func (c *operatorServiceClient) ValidateChildAccess(ctx context.Context, in *Val
 //
 // OperatorService handles Workitem control-plane mutations.
 // Node-facing methods are reached through the Sidecar.
-// See: specs/05-reference/grpc-api.md#operator-api
 type OperatorServiceServer interface {
 	// Submits the handler's routing instruction. The Operator validates routing
 	// guards and applies the lifecycle transition.

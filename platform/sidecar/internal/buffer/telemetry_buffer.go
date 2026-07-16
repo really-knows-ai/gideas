@@ -9,8 +9,6 @@
 // Internally the buffer delegates to two [eventbus.AsyncPublisher] instances
 // (one per priority) which handle buffered-channel queueing, background
 // drain, exponential-backoff retry, and graceful shutdown.
-//
-// See: specs/04-sdk/06-sdk-telemetry.md
 package buffer
 
 import (
