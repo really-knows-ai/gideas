@@ -1,6 +1,6 @@
 ---
 name: special-fixer
-description: Fix items from a review checklist produced by special-review. Dispatches implementers per item who verify the claim before acting — if they disagree they mark [~] wont-fix. Items are completed one at a time. Wont-fix items can be re-opened [!] by a subsequent review, and the implementer may [~] them again if they believe the reviewer is wrong.
+description: Fix items from a review checklist produced by special-review. Dispatches implementers per item who verify the claim before acting — if they disagree they mark [~] wont-fix. Items are completed one at a time. Wont-fix items can be re-opened [!] by a subsequent review, and the implementer may [~] them again if they believe the reviewer is wrong. Reads LEARNINGS.md from the companion review directory and provides it to implementers.
 ---
 
 # Special Fixer
@@ -9,6 +9,10 @@ Fix items from a review checklist (produced by `special-review`).  Each item is
 handled by an independent implementer who first verifies the claim, then fixes
 it or marks it wont-fix.  The implementer treats every claim with serious
 skepticism — the default stance is "prove it before you touch anything."
+
+The implementer also reads the companion `LEARNINGS.md` file (if present)
+so they understand established patterns and do not fix things in a way that
+violates prior learnings.
 
 The implementer may disagree with the reviewer.  That's expected.  If the
 implementer believes the reviewer is wrong, they mark the item `[~]` wont-fix
@@ -27,6 +31,10 @@ The file must exist and must contain at least one `- [ ]` or `- [!]` item.
 If no open items exist, stop and report that there is nothing to fix.
 
 Read the full review file.  Note every item and its state.
+
+Also read the companion `LEARNINGS.md` file if it exists (same directory as
+the review file).  Its contents will be provided to implementers so they
+understand established patterns and constraints.
 
 ### 2. Dispatch implementers per item
 
@@ -47,11 +55,18 @@ files, read the files listed at the top of the review under "Files reviewed."
 **Criteria:**
 [criteria from the review header]
 
+**Prior learnings (follow these rules during the fix):**
+[contents of LEARNINGS.md, if it exists — otherwise "None."]
+
 **Rules:**
 1. Verify the claim.  Read the relevant code yourself.  Check whether the
    divergence from criteria actually exists.  Is the reviewer correct?
 2. If you agree the claim is valid:
    - Implement the minimum fix that resolves the divergence.
+   - Your fix must respect the Prior learnings.  If a learning says "no
+     hardcoded line numbers", use section headings in your fix.  If a
+     learning says "every RPC needs a response type", add the response
+     type definition.
    - Run `make check-fix` and `go test ./...` on the changed code (or the
      relevant subset).  Do not commit.
    - Report: "Fixed: <what you changed and why.> <quality gate result.>"
@@ -142,6 +157,8 @@ An implementer marks an item `[~]` when:
   source files.  Committing is a separate step.
 - No severity judgements in wont-fix justifications.  Just explain why the
   item should not be fixed.
+- **Respect Prior learnings.**  If a learning says "no hardcoded line
+  numbers", do not introduce new hardcoded line numbers in your fix.
 
 ## Common Mistakes
 
@@ -162,3 +179,6 @@ An implementer marks an item `[~]` when:
   "I checked and the fix no longer holds."  The implementer re-evaluates
   — they may agree (fix) or disagree (wont-fix again).  Neither outcome
   is a failure.
+- **Ignoring Prior learnings.**  If a learning says "use section headings
+  not line numbers" and the implementer fixes a cross-reference by updating
+  the line number, that fix will be rejected on the next review pass.

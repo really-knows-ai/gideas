@@ -1,6 +1,6 @@
 ---
 name: special-review
-description: Review requested files against provided criteria and produce a flat checklist of issues in an output file. No severity judgements — if something diverges from the criteria it goes in the list. Merges new findings with any existing review file, re-verifying completed and wont-fix items.
+description: Review requested files against provided criteria and produce a flat checklist of issues in an output file. No severity judgements — if something diverges from the criteria it goes in the list. Merges new findings with any existing review file, re-verifying completed and wont-fix items. Consolidates the review on each pass by removing resolved items and distilling learnings.
 ---
 
 # Special Review
@@ -14,6 +14,13 @@ If the output file already exists, perform a fresh review of the requested
 files, then merge new findings into the existing review.  Previously resolved
 items (`[x]`) and wont-fix items (`[~]`) must be re-verified against the current
 state.  Items that no longer pass are re-opened with `[!]`.
+
+The special-review also manages a companion `LEARNINGS.md` file alongside
+the review output.  On each pass, it consolidates the review by removing
+resolved and wont-fix items from the main checklist, and distills key
+pattern-level learnings into `LEARNINGS.md`.  These learnings are then fed
+to subagents on subsequent passes so they don't re-flag the same class of
+issue.
 
 ## Workflow
 
@@ -31,7 +38,7 @@ The user must provide three things:
 
 If any of the three is missing, ask the user to provide it before proceeding.
 
-### 2. Read the targets and criteria
+### 2. Read the targets, criteria, and learnings
 
 Read every target file the user listed.  If any file does not exist or cannot
 be read, report the missing path and stop.
@@ -39,6 +46,11 @@ be read, report the missing path and stop.
 Read the criteria.  If it is a file path, read the file.  If it is inline
 text, use it directly.  If it is a description, treat it as the review
 standard.
+
+Read the companion `LEARNINGS.md` file if it exists (same directory as the
+output file, named `LEARNINGS.md`).  If present, its contents must be
+provided to reviewer subagents as prior guidance — reviewers should not
+flag issues that are already documented as resolved learnings.
 
 ### 3. Read the existing review (if present)
 
@@ -50,8 +62,6 @@ state:
 - `- [~]` — previously marked wont-fix with a justification
 - `- [!]` — previously re-opened (a prior review found a resolved or
   wont-fix item was no longer valid)
-
-Do not delete the existing file.  New findings will be merged into it.
 
 ### 4. Dispatch reviewer subagents
 
@@ -71,9 +81,12 @@ from the criteria, it goes in the list.
 **Criteria:**
 [the relevant criteria for this review unit]
 
+**Prior learnings (do not re-flag these patterns):**
+[contents of LEARNINGS.md, if it exists — otherwise "None."]
+
 **Rules:**
 - No severity labels.  No ranking.  No "blocker" vs "minor."
-- If the target code does something that contradicts or deviates from the
+- If the target does something that contradicts or deviates from the
   criteria, list it as a finding.  Be specific: include file paths and
   line numbers.
 - If a criteria requirement is not addressed at all by the target files,
@@ -82,6 +95,11 @@ from the criteria, it goes in the list.
   could be written differently.
 - Do not review the criteria itself.  Only review the target files against
   the criteria.
+- **Do not re-flag patterns documented in Prior learnings.**  If a learning
+  says "no hardcoded line numbers", do not flag stale line numbers.  If a
+  learning says "every RPC needs a response type", do not flag missing
+  proto types unless the target introduces a NEW RPC not covered by the
+  learning.
 
 **Output format per finding:**
 `- [ ] <file>:<line> — <description of the divergence.>`
@@ -121,21 +139,53 @@ whether the justification is still valid given the current code state.
 **Merging new findings:**
 For each finding from the fresh review, check whether the existing review
 already covers the same issue (by comparing file, line, and description).
+Also check whether the finding is covered by a learning in `LEARNINGS.md`.
 
 - If an existing `- [ ]` item matches → keep the existing item (don't
   duplicate).
 - If an existing `- [x]` item matches but the divergence is back → change
   to `- [!]` (handled above).
-- If no existing item matches → append the new `- [ ]` item.
+- If the finding matches a learning in `LEARNINGS.md` → do NOT append it.
+  The learning already captures this pattern as a known issue.
+- If no existing item matches and no learning covers it → append the
+  new `- [ ]` item.
 
 **Preserving open items:**
 Existing `- [ ]` items that are NOT covered by the fresh review findings
 remain as-is — they are still open and unaddressed.
 
-### 7. Write the merged review
+### 7. Consolidate the review and update learnings
+
+After every third pass (or when the user requests consolidation):
+
+**Prune resolved items:** Remove all `- [x]` and `- [~]` items from the
+checklist.  Their resolution history is preserved in the git history of the
+review file.
+
+**Distill learnings:** Scan the removed `[x]` and `[~]` items for recurring
+patterns.  For each pattern that appeared 3+ times across passes, add an
+entry to `LEARNINGS.md` (same directory as the review file).  A learning
+entry is a concrete rule, not a specific finding:
+
+```
+## Cross-References
+
+- **No hardcoded line numbers in prose.** Use section headings (`§R6: Operator
+  Reconciliation → spec changes`) instead of `R6 lines 389-394`.
+- **Cross-references between sections** must be precise.  Referencing the
+  wrong section is a common source of stale bugs.
+```
+
+Learnings are fed to reviewer subagents on subsequent passes so they do not
+re-flag the same class of issue.
+
+**Update the header:** Replace the review pass counter with a consolidated
+header showing total resolved/wont-fix/open counts.
+
+### 8. Write the merged review
 
 Write the complete merged checklist to the output file path.  Include a
-header with the review date and the files/criteria reviewed:
+header with the review date, files/criteria reviewed, and summary counts:
 
 ```markdown
 # Special Review
@@ -144,17 +194,22 @@ header with the review date and the files/criteria reviewed:
 **Files reviewed:** <list of target files>
 **Criteria:** <criteria summary or file path>
 
-## Findings
+## Summary
 
-- [x] ...
-- [~] ...
+| State | Count |
+|-------|-------|
+| `[x]` Resolved | <count> |
+| `[~]` Wont-fix | <count> |
+| `[ ]` Open | <count> |
+
+## Open Items
+
 - [ ] ...
-- [!] ...
 ```
 
 Do not add commentary, summaries, or recommendations outside the checklist.
 
-### 8. Report to the user
+### 9. Report to the user
 
 Report:
 - Number of new findings added
@@ -162,6 +217,8 @@ Report:
 - Number of `[x]` items verified (still fixed)
 - Number of `[~]` items verified (still valid)
 - Number of pre-existing `[ ]` items carried forward
+- Number of items removed during consolidation (if any)
+- Number of learnings added/updated in `LEARNINGS.md`
 - Output file path
 
 ## Checklist format rules
@@ -220,3 +277,5 @@ to `- [!]` with an explanation:
   path), ask for what's missing — do not guess.
 - The output file is always written to the provided path.  It may be
   gitignored (under `plans/`) or tracked — the skill does not commit.
+- The companion `LEARNINGS.md` is written to the same directory as the
+  review file.
