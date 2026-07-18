@@ -1,6 +1,6 @@
 ---
 name: special-review
-description: Review requested files against provided criteria and produce a flat checklist of issues in an output file. No severity judgements — if something diverges from the criteria it goes in the list. Merges new findings with any existing review file, re-verifying completed and wont-fix items. Consolidates the review on each pass by removing resolved items and distilling learnings.
+description: Review requested files against provided criteria and produce a flat checklist of issues. Verifies and prunes prior resolved/wont-fix items upfront, captures learnings, then runs a full fresh review with parallel subagents. Deduplicates against learnings and prior open items.
 ---
 
 # Special Review
@@ -10,52 +10,52 @@ issues at the given output path. Make no severity judgements, no ranking, no
 blocker-versus-non-blocker classification — if something diverges from the
 provided criteria, it goes in the list.
 
-If the output file already exists, perform a fresh review of the requested
-files, then merge new findings into the existing review.  Previously resolved
-items (`[x]`) and wont-fix items (`[~]`) must be re-verified against the current
-state.  Items that no longer pass are re-opened with `[!]`.
+Every invocation is a **full-rigour fresh review**. Prior resolved (`[x]`) and
+wont-fix (`[~]`) items are verified and pruned *before* the fresh review runs,
+so the review always starts from a clean base.  Reviewers are provided with
+`LEARNINGS.md` so they do not re-flag already-documented patterns.
 
-The special-review also manages a companion `LEARNINGS.md` file alongside
-the review output.  On each pass, it consolidates the review by removing
-resolved and wont-fix items from the main checklist, and distills key
-pattern-level learnings into `LEARNINGS.md`.  These learnings are then fed
-to subagents on subsequent passes so they don't re-flag the same class of
-issue.
+## ⚠️ Pre-flight: READ THIS FIRST
+
+**Before any tool call**, answer these three questions in your initial response:
+
+1. Does REVIEW.md contain `[x]` or `[~]` items? → If yes, go to **Step 2**.
+   Do NOT read any plan files or code — only read REVIEW.md and LEARNINGS.md.
+2. Does the user's request include files, criteria, and an output path? →
+   If missing, ask. Do NOT proceed without them.
+   - **Implicit output path:** If the user references a project directory
+     (e.g. "cartographer") and `plans/<project>/REVIEW.md` already exists,
+     that file is the implicit output path. Do not ask.
+3. Have you already read any target file (plan files, source code, etc.)? →
+   If yes, stop. You have violated the skill. Report the error to the user.
+
+### Golden Rule
+
+**Never read target files yourself.** The subagents read them. Your job is
+dispatch, not investigation. If you find yourself reading anything other than
+REVIEW.md, LEARNINGS.md, or the criteria document, stop — you are violating
+the skill.
 
 ## Workflow
 
-### 1. Gather inputs from the user
+### 1. Read REVIEW.md and determine what needs reviewing
 
-The user must provide three things:
+The existing REVIEW.md is the starting point.  If the output file path
+points to an existing REVIEW.md, read it:
 
-1. **Files to review** — a list of file paths (glob patterns accepted).  These
-   are the target files assessed against the criteria.
-2. **Criteria** — what to check for.  This can be a file path (e.g. a spec
-   document), inline text, or a description of the rules to apply.
-3. **Output file path** — where to write the checklist.  If it points into
-   `plans/<project>/REVIEW.md`, it follows the project review convention.
-   Otherwise any writable path is accepted.
+- **If REVIEW.md contains `[x]` or `[~]` items** — those claims need
+  verifying first.  Proceed to Step 2 (verify and prune).  Do NOT gather
+  criteria or target file lists yet; the verification subagents only need
+  the file references in each item, not the full target set.
+- **If REVIEW.md has only `[ ]` and `[!]` items, or REVIEW.md does not
+  exist** — there is nothing to verify.  Skip to Step 3 (gather inputs for
+  fresh review).
 
-If any of the three is missing, ask the user to provide it before proceeding.
+Read the companion `LEARNINGS.md` if it exists (same directory as
+REVIEW.md, named `LEARNINGS.md`).
 
-### 2. Read the targets, criteria, and learnings
-
-Read every target file the user listed.  If any file does not exist or cannot
-be read, report the missing path and stop.
-
-Read the criteria.  If it is a file path, read the file.  If it is inline
-text, use it directly.  If it is a description, treat it as the review
-standard.
-
-Read the companion `LEARNINGS.md` file if it exists (same directory as the
-output file, named `LEARNINGS.md`).  If present, its contents must be
-provided to reviewer subagents as prior guidance — reviewers should not
-flag issues that are already documented as resolved learnings.
-
-### 3. Read the existing review (if present)
-
-If the output file already exists, read it in full.  Note every item and its
-state:
+Parse the actual checklist entries in REVIEW.md (not the summary header
+counts, which may be stale):
 
 - `- [ ]` — open, not yet addressed
 - `- [x]` — previously fixed and approved
@@ -63,17 +63,148 @@ state:
 - `- [!]` — previously re-opened (a prior review found a resolved or
   wont-fix item was no longer valid)
 
-### 4. Dispatch reviewer subagents
+### 2. Verify and prune existing review (separate phase)
 
-Break the review into independent units by separating target files or criteria
-sections.  Dispatch one `@reviewer` subagent per unit, all in parallel.
+This is a **separate phase** from the fresh review below.  It runs only when
+REVIEW.md contains `[x]` or `[~]` items.
 
-Each subagent receives this prompt:
+**Only the items listed in the file matter** — ignore the summary header
+counts.  If the file lists 10 items but the header says 233, you verify
+the 10 items that are actually present.
+
+**How to dispatch verification subagents:**
+Use `task(subagent_type: "reviewer")` for each item (or small batch of
+related items).  The verification subagent does NOT run a full review of
+the target files — it reads only the specific file(s) and line(s) referenced
+by each item to check whether the claim still holds.  Do NOT read the target
+files yourself in this step.
+
+Each verification subagent receives this prompt:
 
 ```
-Review these target files against the provided criteria.  Produce a flat
-checklist of issues.  Make no severity judgements — if something diverges
-from the criteria, it goes in the list.
+Verify whether the following prior review item(s) still hold against the
+current code.  This is not a fresh review of the whole file — you are only
+checking whether the specific claim(s) below remain valid.
+
+**Target files to read:**
+[list of files referenced by the item(s)]
+
+**Prior item(s) to verify:**
+
+1. `[x] <file>:<line> — <description>`
+   - Previously marked fixed.  Check whether the divergence described
+     is still absent from the current code.
+2. `[~] <file>:<line> — <description>`
+   - Previously marked wont-fix with justification: <justification>.
+     Check whether that justification is still valid given the current
+     code state.
+
+**Rules:**
+- Read the relevant lines in the target files to determine current state.
+- For each item, report one of:
+  - **Verified** — the claim still holds (fix is still in place /
+    justification is still valid).
+  - **Re-opened** — the claim no longer holds, with a specific
+    explanation of what changed.
+- Be precise: reference the file and line numbers you checked.
+
+**Output format:**
+For each verified item:
+`VERIFIED <state> <file>:<line> — <description>`
+
+For each re-opened item:
+`REOPENED <file>:<line> — <description>
+  - Re-opened: <specific reason the claim no longer holds.>`
+```
+
+Wait for all verification subagents to complete.
+
+**You may NOT proceed to Step 3 until the following three substeps are all
+complete.  A reading of the subagent reports is not enough — you must
+materially edit the review file and learnings file.**
+
+### 2a. Process results
+
+- Items reported as `VERIFIED` → mark for pruning.
+- Items reported as `REOPENED` → change to `- [!]` with the re-opened
+  explanation from the subagent.
+
+If any verification subagent reports an unexpected state or ambiguity,
+re-read the relevant file manually to resolve.
+
+### 2b. Capture learnings
+
+Scan the verified `[x]` and `[~]` items for recurring patterns that would
+be useful for future reviewers.  For each distinct pattern, append an entry
+to `LEARNINGS.md` (create it if it does not exist).  A learning entry is a
+concrete rule that captures *what was learned*, not a specific finding:
+
+```markdown
+## Cross-References
+
+- **No hardcoded line numbers in prose.** Use section headings (`§R6: Operator
+  Reconciliation → spec changes`) instead of `R6 lines 389-394`.
+- **Cross-references between sections** must be precise.  Referencing the
+  wrong section is a common source of stale bugs.
+```
+
+Do not add a learning for a pattern that is already documented in
+`LEARNINGS.md`.
+
+### 2c. Delete verified items from the review file
+
+Remove all verified `[x]` and `[~]` items from the review.  Re-opened `[!]`
+items and pre-existing `[ ]` items remain.  Their resolution history is
+preserved in git history.
+
+Only after all three substeps are done should you proceed to Step 3.
+
+After this step, the review file contains only `[ ]` and `[!]` items.
+
+### 3. Gather inputs for the full-rigour review
+
+Before the fresh review can run, three things are needed:
+
+1. **Files to review** — a list of file paths (glob patterns accepted).
+   The user typically provides these in their message.  If missing, ask.
+2. **Criteria** — what to check for.  This can be a file path (e.g. a
+   spec document), inline text, or a description of the review standard.
+3. **Output file path** — already known from Step 1.  If it was never
+   established, check whether the user referenced a project directory
+   with an existing `plans/<project>/REVIEW.md`.  If so, use that as the
+   implicit output path.  Otherwise, ask the user.
+
+Read the criteria.  If it is a file path, read the file.  If it is inline
+text, use it directly.  If it is a description, treat it as the review
+standard.
+
+**Do NOT read the target files here.**  The full-rigour subagents
+(Step 4) will read the files they need.  Your job is to partition the
+work and dispatch.
+
+If any of the three is missing, ask the user before proceeding.
+
+### 4. Dispatch reviewer subagents — fresh full-rigour review
+
+Break the review into independent units by separating target files or criteria
+sections.  Use `task(subagent_type: "reviewer")` to dispatch one subagent per
+unit, all in parallel.
+
+**Do NOT read the target files yourself** — the subagents read them.  Your
+job is to partition the work and dispatch.  If you already read parts of a
+target file (e.g., during verification), the subagents still read the full
+file for their complete assessment.
+
+The fresh review is **full rigour** — it applies the provided criteria
+comprehensively, as if for the first time.  The existence of prior review
+passes does not reduce the depth or scope of this review.  Each subagent
+receives this prompt:
+
+```
+Full-rigour review: assess these target files against the provided criteria
+as if for the first time.  Produce a flat checklist of issues.  Make no
+severity judgements — if something diverges from the criteria, it goes in
+the list.
 
 **Target files to review:**
 [list of one or more file paths]
@@ -81,8 +212,8 @@ from the criteria, it goes in the list.
 **Criteria:**
 [the relevant criteria for this review unit]
 
-**Prior learnings (do not re-flag these patterns):**
-[contents of LEARNINGS.md, if it exists — otherwise "None."]
+**Prior learnings (do not re-flag documented patterns):**
+[contents of LEARNINGS.md — if empty, "None."]
 
 **Rules:**
 - No severity labels.  No ranking.  No "blocker" vs "minor."
@@ -100,6 +231,9 @@ from the criteria, it goes in the list.
   learning says "every RPC needs a response type", do not flag missing
   proto types unless the target introduces a NEW RPC not covered by the
   learning.
+- This is a full-rigour pass.  Prior review passes do not reduce the depth
+  or scope of this review.  Every file and every line is assessed against
+  the criteria.
 
 **Output format per finding:**
 `- [ ] <file>:<line> — <description of the divergence.>`
@@ -109,83 +243,34 @@ If you find no divergences, respond with "No findings."
 
 Wait for all subagents to complete before proceeding.
 
-### 5. Collect and consolidate findings
+### 5. Collect, deduplicate, and consolidate findings
 
-Gather all findings from the subagents.  This is the **fresh review** result —
-a flat list of `- [ ]` items.
+**Deduplicate across reviewers:**
+Gather all findings from the subagents.  Compare by file, line, and
+description.  If the same finding appears in multiple reviewer outputs,
+keep only one copy.
 
-### 6. Merge with existing review (if present)
+**Remove findings covered by LEARNINGS.md:**
+For each remaining finding, check whether it matches a pattern already
+documented in `LEARNINGS.md`.  If it does, discard it — the learning
+already captures the issue.
 
-If an existing review file exists, cross-reference the fresh findings against it:
+**Merge with existing open items:**
+Take the pre-existing `[ ]` and `[!]` items (carried forward from step 2).
+For each finding from the fresh review, check whether it matches an
+existing `[ ]` or `[!]` item (by file, line, and description):
 
-**Verifying `[x]` items:**
-For each item previously marked `- [x]`, check whether the divergence it
-described still exists in the current code.  Read the relevant files and
-verify the fix is still in place.
+- If a matching `[ ]` item exists → keep the existing item (don't duplicate).
+- If a matching `[!]` item exists → keep the existing item (don't duplicate).
+- If no matching item exists → append the new `- [ ]` item.
 
-- If the fix holds → keep `- [x]`.
-- If the divergence has returned → change to `- [!]` and add an indented
-  explanation: `- Re-opened: <reason the fix no longer holds.>`
+Existing `[ ]` and `[!]` items that are NOT re-discovered by the fresh
+review remain as-is — they are still open and unaddressed.
 
-**Checking `[~]` items:**
-For each item marked `- [~]`, read the wont-fix justification.  Determine
-whether the justification is still valid given the current code state.
+### 6. Write the consolidated review
 
-- If the justification still holds → keep `- [~]`.
-- If the justification no longer holds (e.g. the code changed and the
-  reason no longer applies) → change to `- [!]` and add:
-  `- Re-opened: <reason the justification no longer holds.>`
-
-**Merging new findings:**
-For each finding from the fresh review, check whether the existing review
-already covers the same issue (by comparing file, line, and description).
-Also check whether the finding is covered by a learning in `LEARNINGS.md`.
-
-- If an existing `- [ ]` item matches → keep the existing item (don't
-  duplicate).
-- If an existing `- [x]` item matches but the divergence is back → change
-  to `- [!]` (handled above).
-- If the finding matches a learning in `LEARNINGS.md` → do NOT append it.
-  The learning already captures this pattern as a known issue.
-- If no existing item matches and no learning covers it → append the
-  new `- [ ]` item.
-
-**Preserving open items:**
-Existing `- [ ]` items that are NOT covered by the fresh review findings
-remain as-is — they are still open and unaddressed.
-
-### 7. Consolidate the review and update learnings
-
-After every third pass (or when the user requests consolidation):
-
-**Prune resolved items:** Remove all `- [x]` and `- [~]` items from the
-checklist.  Their resolution history is preserved in the git history of the
-review file.
-
-**Distill learnings:** Scan the removed `[x]` and `[~]` items for recurring
-patterns.  For each pattern that appeared 3+ times across passes, add an
-entry to `LEARNINGS.md` (same directory as the review file).  A learning
-entry is a concrete rule, not a specific finding:
-
-```
-## Cross-References
-
-- **No hardcoded line numbers in prose.** Use section headings (`§R6: Operator
-  Reconciliation → spec changes`) instead of `R6 lines 389-394`.
-- **Cross-references between sections** must be precise.  Referencing the
-  wrong section is a common source of stale bugs.
-```
-
-Learnings are fed to reviewer subagents on subsequent passes so they do not
-re-flag the same class of issue.
-
-**Update the header:** Replace the review pass counter with a consolidated
-header showing total resolved/wont-fix/open counts.
-
-### 8. Write the merged review
-
-Write the complete merged checklist to the output file path.  Include a
-header with the review date, files/criteria reviewed, and summary counts:
+Write the complete checklist to the output file path.  Include a header with
+the review date, files/criteria reviewed, and summary counts:
 
 ```markdown
 # Special Review
@@ -198,9 +283,8 @@ header with the review date, files/criteria reviewed, and summary counts:
 
 | State | Count |
 |-------|-------|
-| `[x]` Resolved | <count> |
-| `[~]` Wont-fix | <count> |
 | `[ ]` Open | <count> |
+| `[!]` Re-opened | <count> |
 
 ## Open Items
 
@@ -209,15 +293,16 @@ header with the review date, files/criteria reviewed, and summary counts:
 
 Do not add commentary, summaries, or recommendations outside the checklist.
 
-### 9. Report to the user
+### 7. Report to the user
 
 Report:
-- Number of new findings added
-- Number of `[!]` items re-opened
-- Number of `[x]` items verified (still fixed)
-- Number of `[~]` items verified (still valid)
+- Number of `[x]` items verified and pruned (how many were still fixed)
+- Number of `[~]` items verified and pruned (how many were still valid)
+- Number of `[!]` items re-opened from prior `[x]` or `[~]` claims
+- Number of new findings from fresh review
+- Number of fresh findings removed because covered by `LEARNINGS.md`
 - Number of pre-existing `[ ]` items carried forward
-- Number of items removed during consolidation (if any)
+- Number of pre-existing `[!]` items carried forward
 - Number of learnings added/updated in `LEARNINGS.md`
 - Output file path
 
