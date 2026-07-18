@@ -52,7 +52,12 @@ points to an existing REVIEW.md, read it:
   fresh review).
 
 Read the companion `LEARNINGS.md` if it exists (same directory as
-REVIEW.md, named `LEARNINGS.md`).
+REVIEW.md, named `LEARNINGS.md`).  LEARNINGS.md contains three kinds
+of section: permanent pattern learnings, known deviations, and candidate
+patterns.  Candidate patterns are unproven — they emerged from fresh
+findings in a prior cycle but have not yet had items fixed and verified.
+They do not cause pruning, but fresh reviewers should be aware of them
+to avoid re-discovering the same root causes.
 
 Parse the actual checklist entries in REVIEW.md (not the summary header
 counts, which may be stale):
@@ -163,7 +168,11 @@ are the same across different files or lines:
   of finding.  Use "must", "must not", or standard imperative form.>
 ```
 
-**Do not** add a learning for a pattern already documented in `LEARNINGS.md`.
+**Do not** add a learning for a pattern already documented in `LEARNINGS.md`
+(check the permanent learnings, Known Deviations, and Candidate Patterns
+sections — if a candidate pattern matches, promote it: move the entry from
+`## Candidate Patterns` to its appropriate permanent section, dropping the
+*(unproven)* tag, and delete the `## Candidate Patterns` section if empty).
 **Do not** add a learning for a cluster of fewer than 3 items — it may be
 an isolated issue, not a pattern.
 
@@ -287,6 +296,10 @@ the list.
 **Prior learnings (do not re-flag documented patterns):**
 [contents of LEARNINGS.md — if empty, "None."]
 
+Candidate patterns in LEARNINGS.md are unproven — do not prune findings
+that match them, but note them as context.  The same root cause observed
+across multiple fresh findings signals the pattern may be real.
+
 **Rules:**
 - No severity labels.  No ranking.  No "blocker" vs "minor."
 - If the target does something that contradicts or deviates from the
@@ -332,6 +345,12 @@ when BOTH conditions hold:
 - **Same category:** The finding would not exist if the rule in the
   learning were followed — it is a new instance of a previously
   identified category, not a previously unseen type of divergence.
+
+**Candidate patterns do NOT trigger pruning.**  The `## Candidate Patterns`
+section of LEARNINGS.md contains unproven patterns from fresh findings.
+Findings matching a candidate pattern are kept — the pattern needs
+verification through fixes before it can prune anything.  Only permanent
+learnings and Known Deviations trigger pruning.
 
 Examples:
 
@@ -395,13 +414,51 @@ If you find one, report it.
 **Output:**
 - For each false positive: `FALSE-POSITIVE <description> — <reason it is covered by a learning>`
 - For each duplicate: `DUPLICATE <description> — <reason it duplicates another item>`
-- For each learning suggestion: `LEARNING-SUGGESTION <proposed title> — <pattern observed, e.g., "3+ findings about missing context.Context on I/O methods">`
+- For each learning suggestion: `LEARNING-SUGGESTION <proposed title> — <pattern observed, e.g., "3+ findings about missing context.Context on I/O methods">` followed by the concrete rule text on the next line: `  Rule: <actionable rule using "must" or "must not">`
 - If all items pass and no learning suggestions: `ALL CLEAR`
 ```
 
 Wait for the subagent to complete.  If it reports false positives or
 duplicates, remove them from the list and re-run step 5a until it
 reports `ALL CLEAR`.  Do not proceed to step 6 until the list passes.
+False positives and duplicates must both be gone; learning suggestions
+do NOT block progress — they are written to LEARNINGS.md and the loop
+continues.
+
+### 5b. Write candidate patterns to LEARNINGS.md
+
+After the consolidation audit passes (no false positives, no duplicates),
+take the `LEARNING-SUGGESTION` lines from the audit subagent's output and
+write them to `LEARNINGS.md` under a `## Candidate Patterns` section.
+
+**Format each candidate pattern as:**
+
+```markdown
+## Candidate Patterns
+
+These patterns emerged from fresh findings but are unproven — the
+underlying items haven't been fixed and verified yet.  They do not cause
+pruning (findings matching them are kept).  Once 3+ items in a cluster are
+fixed `[x]` in a future cycle, the candidate pattern is promoted to a
+permanent learning and moved to its appropriate section (see step 2b-i).
+
+- **<Rule title>** *(unproven — <count> findings)*: <Concrete, actionable
+  rule that would prevent this class of finding.  Use "must" or "must not".>
+```
+
+**Merge with existing candidates:** If `LEARNINGS.md` already has a
+`## Candidate Patterns` section, compare existing entries against the new
+suggestions:
+
+- If a new suggestion matches an existing candidate → keep the existing
+  entry and update its count.
+- If a new suggestion is not in the existing list → append it.
+- If an existing candidate was NOT re-suggested by the audit → it may have
+  been resolved or dissipated.  Remove it from the section.
+- If the section becomes empty after cleanup, delete it.
+
+**Do not** write a candidate pattern for a category already covered by a
+permanent learning or Known Deviation.
 
 ### 6. Write the consolidated review
 
@@ -443,6 +500,7 @@ Report:
 - Number of pre-existing `[ ]` items carried forward (if any)
 - Number of pre-existing `[!]` items carried forward (if any)
 - Number of learnings added/updated in `LEARNINGS.md`
+- Number of candidate patterns written to/bumped in `LEARNINGS.md`
 - Number of learnings tightened during consolidation
 - Output file path
 
