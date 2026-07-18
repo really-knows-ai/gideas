@@ -132,24 +132,48 @@ materially edit the review file and learnings file.**
 If any verification subagent reports an unexpected state or ambiguity,
 re-read the relevant file manually to resolve.
 
-### 2b. Capture learnings
+### 2b. Capture learnings (from verified items)
 
-Scan the verified `[x]` and `[~]` items for recurring patterns that would
-be useful for future reviewers.  For each distinct pattern, append an entry
-to `LEARNINGS.md` (create it if it does not exist).  A learning entry is a
-concrete rule that captures *what was learned*, not a specific finding:
+Scan the verified `[x]` and `[~]` items for **recurring patterns** —
+clusters of 3+ items that share the same root-cause category.  For each
+cluster, append a learning entry to `LEARNINGS.md` (create it if it does
+not exist).
+
+**A finding becomes a learning only after it has been fixed and verified.**
+The `[x]` items are proven: the finding was raised, a fix was applied, and
+verification confirmed the fix is still in place.  This is the reliable
+signal that the pattern is real and the fix approach works.  Fresh-review
+findings (step 4) are unproven — they may be valid, invalid, or marked
+wont-fix later.
+
+**How to identify patterns:**
+Look for verified items where the *type of divergence* and the *type of fix*
+are the same across different files or lines:
+- Same class of bug fixed the same way in multiple locations → a rule
+  the plan should follow from the start next time
+- Same missing documentation/justification added as a `ponytail:` across
+  multiple items → a pattern the plan authors aren't following
+- Same cross-phase mismatch caught repeatedly → a structural gap in how
+  the plan defines handoffs
+
+**For each pattern, append to LEARNINGS.md:**
 
 ```markdown
-## Cross-References
+## <Section Name>
 
-- **No hardcoded line numbers in prose.** Use section headings (`§R6: Operator
-  Reconciliation → spec changes`) instead of `R6 lines 389-394`.
-- **Cross-references between sections** must be precise.  Referencing the
-  wrong section is a common source of stale bugs.
+- **<Rule title>**: <Concrete, actionable rule that would prevent this class
+  of finding.  Use "must", "must not", or standard imperative form.>
 ```
 
-Do not add a learning for a pattern that is already documented in
-`LEARNINGS.md`.
+**Do not** add a learning for a pattern already documented in `LEARNINGS.md`.
+**Do not** add a learning for a cluster of fewer than 3 items — it may be
+an isolated issue, not a pattern.
+
+**Note:** The verified items are deleted from the review file in step 2c
+below, so perform this scan *before* deleting them.  If you later prune
+fresh findings in step 5 as "covered by a learning," consider whether
+that learning needs tightening — a learning that matches many findings
+per pass is too broad and may need splitting into narrower sub-rules.
 
 ### 2c. Delete verified items from the review file
 
@@ -251,9 +275,33 @@ description.  If the same finding appears in multiple reviewer outputs,
 keep only one copy.
 
 **Remove findings covered by LEARNINGS.md:**
-For each remaining finding, check whether it matches a pattern already
-documented in `LEARNINGS.md`.  If it does, discard it — the learning
-already captures the issue.
+For each remaining finding, check whether it is an instance of a pattern
+already documented in `LEARNINGS.md`.  A finding IS covered (discard it)
+when BOTH conditions hold:
+
+- **Rule exists:** The learning states a concrete, actionable rule that
+  the finding violates (not a general observation about current state).
+- **Same category:** The finding would not exist if the rule in the
+  learning were followed — it is a new instance of a previously
+  identified category, not a previously unseen type of divergence.
+
+Examples:
+
+| Learning | Finding | Covered? |
+|----------|---------|----------|
+| "CRD YAML filenames use `flow.foundry.io` prefix" | "Line 55 references `flow.gideas.io_foundrygraphs.yaml`" | Yes — same category (wrong prefix), new location |
+| "Cross-phase interface alignment must be exact" | "SetRemote signature differs between Phase 3 and Phase 4" | Yes — same category (signature mismatch), new instance |
+| "No existing codebase uses mTLS" | "Plan introduces mTLS without accounting for first-use cost" | No — learning is an observation about current state, not a rule about what plans must do |
+| "Capability/auth infra must be built from scratch" | "Plan assumes Ed25519 key generation exists" | Yes — same category (assuming pre-existing auth infra) |
+
+When in doubt, KEEP the finding.  The consolidation audit (step 5a) will
+catch false negatives.
+
+After pruning, check whether any learning was matched multiple times.
+If so, consider tightening its wording — a learning that catches many
+instances per pass is too broad and will generate more findings next
+round.  Split broad learnings into narrower sub-rules or add qualifying
+conditions.
 
 **Merge with existing open items:**
 Take the pre-existing `[ ]` and `[!]` items (carried forward from step 2).
@@ -266,6 +314,46 @@ existing `[ ]` or `[!]` item (by file, line, and description):
 
 Existing `[ ]` and `[!]` items that are NOT re-discovered by the fresh
 review remain as-is — they are still open and unaddressed.
+
+### 5a. Consolidation audit
+
+After pruning learning-covered items and merging with existing items,
+dispatch ONE reviewer subagent to audit the remaining list.  The subagent
+receives:
+
+```
+You are auditing a consolidated review checklist after learning-covered
+items have been pruned.  Check the remaining items for:
+
+1. **Any item that IS covered by a learning in LEARNINGS.md** but was
+   not pruned.  If found, report it as a false positive.
+2. **Any pair of items that describe the same divergence** (same issue,
+   different wording or line numbers).  If found, report the duplicate.
+3. **Any cluster of 3+ related findings** that share a root-cause category
+    not yet covered by LEARNINGS.md.  These are *candidate* patterns — they
+    may become learnings once fixed and verified in a future cycle, but
+    fresh findings are unproven.  Report them as suggestions only.
+
+Be strict: if an item is a new instance of a known category (e.g. a
+different file using the wrong CRD prefix), it should have been pruned.
+If you find one, report it.
+
+**LEARNINGS.md:**
+[contents of LEARNINGS.md]
+
+**Remaining findings:**
+[numbered list of remaining findings]
+
+**Output:**
+- For each false positive: `FALSE-POSITIVE <description> — <reason it is covered by a learning>`
+- For each duplicate: `DUPLICATE <description> — <reason it duplicates another item>`
+- For each learning suggestion: `LEARNING-SUGGESTION <proposed title> — <pattern observed, e.g., "3+ findings about missing context.Context on I/O methods">`
+- If all items pass and no learning suggestions: `ALL CLEAR`
+```
+
+Wait for the subagent to complete.  If it reports false positives or
+duplicates, remove them from the list and re-run step 5a until it
+reports `ALL CLEAR`.  Do not proceed to step 6 until the list passes.
 
 ### 6. Write the consolidated review
 
@@ -301,9 +389,13 @@ Report:
 - Number of `[!]` items re-opened from prior `[x]` or `[~]` claims
 - Number of new findings from fresh review
 - Number of fresh findings removed because covered by `LEARNINGS.md`
-- Number of pre-existing `[ ]` items carried forward
-- Number of pre-existing `[!]` items carried forward
+- Number of false positives caught by consolidation audit
+- Number of duplicates caught by consolidation audit
+- Final number of `[ ]` open items
+- Number of pre-existing `[ ]` items carried forward (if any)
+- Number of pre-existing `[!]` items carried forward (if any)
 - Number of learnings added/updated in `LEARNINGS.md`
+- Number of learnings tightened during consolidation
 - Output file path
 
 ## Checklist format rules
