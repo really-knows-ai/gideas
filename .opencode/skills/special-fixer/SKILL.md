@@ -1,14 +1,16 @@
 ---
 name: special-fixer
-description: Fix items from a review checklist produced by special-review. Dispatches implementers per item who verify the claim before acting — if they disagree they mark [~] wont-fix. Items are completed one at a time. Wont-fix items can be re-opened [!] by a subsequent review, and the implementer may [~] them again if they believe the reviewer is wrong. Reads LEARNINGS.md from the companion review directory and provides it to implementers.
+description: Fix items from a review checklist produced by special-review. Groups items by target file, then dispatches one implementer per file group to avoid stampedes and reduce redundant reads. Each implementer verifies the claim before acting — if they disagree they mark [~] wont-fix. Reads LEARNINGS.md from the companion review directory and provides it to implementers.
 ---
 
 # Special Fixer
 
-Fix items from a review checklist (produced by `special-review`).  Each item is
-handled by an independent implementer who first verifies the claim, then fixes
-it or marks it wont-fix.  The implementer treats every claim with serious
-skepticism — the default stance is "prove it before you touch anything."
+Fix items from a review checklist (produced by `special-review`).  Items are
+grouped by target file, then each file group is handled by one implementer who
+processes all items for that file sequentially — first verifying each claim,
+then fixing or marking wont-fix.  The implementer treats every claim with
+serious skepticism — the default stance is "prove it before you touch
+anything."
 
 The implementer also reads the companion `LEARNINGS.md` file (if present)
 so they understand established patterns and do not fix things in a way that
@@ -36,21 +38,52 @@ Also read the companion `LEARNINGS.md` file if it exists (same directory as
 the review file).  Its contents will be provided to implementers so they
 understand established patterns and constraints.
 
-### 2. Dispatch implementers per item
+Read `AGENTS.md` in the repository root (if it exists) for project-structure
+context.  Extract a one-paragraph summary describing what kind of project
+this is — e.g., whether it uses a phased-plan workflow under `plans/`,
+whether the review targets plan documents or source code, and any relevant
+conventions.  This context is passed to implementers.
 
-For each `- [ ]` and `- [!]` item in the checklist, dispatch one `@implementer`
-subagent.  All implementers run in parallel.  Each receives this prompt:
+### 2. Group items by target file
+
+Parse every `- [ ]` and `- [!]` item to identify its **primary target file**
+— the first file reference in the item text (e.g., `PHASE_01.md:500-503` →
+primary file is `PHASE_01.md`).  Group items by this primary file.
+
+Items with no file reference go into a `general` group.
+
+Before dispatching, validate each item's file+line references:
+- If a referenced file does not exist, note it for the implementer.
+- If a referenced line number falls outside the file's current length, adjust
+  or flag the reference.
+
+Also determine the **file category** for each group:
+- **plan files** — files under a `plans/` directory
+- **code files** — all other source files
+
+This determines which quality gate applies (see Hard Rules).
+
+### 3. Dispatch one implementer per file group
+
+For each file group, dispatch one `@implementer` subagent.  All implementers
+run in parallel.  Each receives this prompt:
 
 ```
-Fix or evaluate the following review item.  You must verify the claim before
-acting — do not take the reviewer's word at face value.
+You are responsible for fixing all review items assigned to <FILE>.
+Handle them in the order listed below.
 
-**Review item:**
-[verbatim text of the item, including any indented sub-lines]
+**Project context:**
+[one-paragraph summary extracted from AGENTS.md]
 
-**Target files:**
-Read the files referenced by the item.  If the item references no specific
-files, read the files listed at the top of the review under "Files reviewed."
+**Your file:** <FILE>
+**Read-only context files** (read for context, do not edit):
+<comma-separated list of secondary files referenced by items in this group>
+
+**Handle these items in order:**
+
+1. [verbatim item 1]
+2. [verbatim item 2]
+...
 
 **Criteria:**
 [criteria from the review header]
@@ -59,33 +92,39 @@ files, read the files listed at the top of the review under "Files reviewed."
 [contents of LEARNINGS.md, if it exists — otherwise "None."]
 
 **Rules:**
-1. Verify the claim.  Read the relevant code yourself.  Check whether the
-   divergence from criteria actually exists.  Is the reviewer correct?
-2. If you agree the claim is valid:
-   - Implement the minimum fix that resolves the divergence.
-   - Your fix must respect the Prior learnings.  If a learning says "no
-     hardcoded line numbers", use section headings in your fix.  If a
-     learning says "every RPC needs a response type", add the response
-     type definition.
-   - Run `make check-fix` and `go test ./...` on the changed code (or the
-     relevant subset).  Do not commit.
-   - Report: "Fixed: <what you changed and why.> <quality gate result.>"
-3. If you disagree with the claim:
-   - Do not change any code.
-   - Report: "Wont-fix: <clear explanation of why the reviewer's claim is
-     incorrect or why fixing it would cause harm.>"  Provide specific
-   evidence — file paths, line numbers, test output.
-4. If the item was marked `[!]` (re-opened), read the re-opening reason.
-   Re-evaluate the claim in light of it.  You may still disagree.
-5. If you need more context (files not referenced in the item, spec
-   documents), read them before deciding.  Do not guess.
-6. Make no changes beyond what the item requires.  No opportunistic
+1. Read <FILE> once.  Then process each item in order, applying fixes
+   sequentially within the same file.  Do not re-read the file between
+   items.
+2. For each item, verify the claim first — do not take the reviewer's word
+   at face value.
+3. If you agree the claim is valid:
+   - Apply the minimum fix that resolves the divergence, respecting Prior
+     learnings.
+   - Report: "Item N — Fixed: <what you changed and why.>"
+4. If you disagree with the claim:
+   - Do not change any code for that item.
+   - Report: "Item N — Wont-fix: <clear explanation with evidence — file
+     paths, line numbers, spec sections.>"
+5. If two items conflict (e.g., one adds a method, another removes it), do
+   not guess.  Report both as `conflict` with an explanation.
+6. If an item references additional files outside your primary file, read
+   them for context only.  Do not edit them.
+7. Make no changes beyond what the items require.  No opportunistic
    refactoring.  No bonus fixes.
+8. Run the quality gate after ALL fixes are applied (see below).  Do not
+   run it between items.
+
+**Quality gate:**
+- If file category is "plan files": no build gate.  Verify only that the
+  file parses as valid Markdown (e.g., no unclosed code fences).
+- If file category is "code files": run `make check-fix` and `go test ./...`
+  (or the relevant subset) on the changed code.
+- Report the quality gate outcome after your last item.
 ```
 
 Wait for all implementers to complete before proceeding.
 
-### 3. Update the review checklist
+### 4. Update the review checklist
 
 For each implementer result:
 
@@ -106,12 +145,12 @@ For each implementer result:
     - Wont-fix: <why the implementer still disagrees despite the re-opening reason.>
   ```
 
-### 4. Write the updated review
+### 5. Write the updated review
 
 Write the modified review file back to its original path.  Do not add summary
 text — only update item states and append the fix/wont-fix detail lines.
 
-### 5. Report to the user
+### 6. Report to the user
 
 Report:
 - Number of items fixed (`[ ]` → `[x]`)
@@ -151,8 +190,11 @@ An implementer marks an item `[~]` when:
 - `[~]` items left as-is — they were previously marked wont-fix and the
   justification was verified by `special-review`.  Do not re-evaluate
   unless they were re-opened as `[!]`.
-- Run the quality gate (`make check-fix` + `go test ./...`) on changed code
-  before reporting a fix.
+- **Quality gate depends on file category:**
+  - **Plan files** (under `plans/`): no build gate.  Verify the file is
+    valid Markdown (no unclosed code fences, broken tables, etc.).
+  - **Code files** (all other): run `make check-fix` and `go test ./...`
+    (or the relevant subset) on changed code before reporting a fix.
 - Do not commit.  This skill only updates the review checklist and modifies
   source files.  Committing is a separate step.
 - No severity judgements in wont-fix justifications.  Just explain why the
