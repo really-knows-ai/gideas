@@ -119,9 +119,9 @@ For each re-opened item:
 
 Wait for all verification subagents to complete.
 
-**You may NOT proceed to Step 3 until the following three substeps are all
-complete.  A reading of the subagent reports is not enough — you must
-materially edit the review file and learnings file.**
+**You may NOT proceed to Step 3 until the following four substeps (2a, 2b-i,
+2b-ii, 2c) are all complete.  A reading of the subagent reports is not enough
+— you must materially edit the review file and learnings file.**
 
 ### 2a. Process results
 
@@ -132,19 +132,17 @@ materially edit the review file and learnings file.**
 If any verification subagent reports an unexpected state or ambiguity,
 re-read the relevant file manually to resolve.
 
-### 2b. Capture learnings (from verified items)
+### 2b-i. Pattern learnings (from verified `[x]` items)
 
-Scan the verified `[x]` and `[~]` items for **recurring patterns** —
-clusters of 3+ items that share the same root-cause category.  For each
-cluster, append a learning entry to `LEARNINGS.md` (create it if it does
-not exist).
+Scan the verified `[x]` items for **recurring patterns** — clusters of 3+
+items that share the same root-cause category.  For each cluster, append
+a prescriptive learning to `LEARNINGS.md` (create it if it does not exist).
 
-**A finding becomes a learning only after it has been fixed and verified.**
-The `[x]` items are proven: the finding was raised, a fix was applied, and
-verification confirmed the fix is still in place.  This is the reliable
-signal that the pattern is real and the fix approach works.  Fresh-review
-findings (step 4) are unproven — they may be valid, invalid, or marked
-wont-fix later.
+**A pattern learning requires proven fixes.** The `[x]` items are proven:
+the finding was raised, a fix was applied, and verification confirmed the
+fix is still in place.  This is the reliable signal that the pattern is
+real and the fix approach works.  Fresh-review findings (step 4) are
+unproven — they may be valid, invalid, or marked wont-fix later.
 
 **How to identify patterns:**
 Look for verified items where the *type of divergence* and the *type of fix*
@@ -175,13 +173,63 @@ fresh findings in step 5 as "covered by a learning," consider whether
 that learning needs tightening — a learning that matches many findings
 per pass is too broad and may need splitting into narrower sub-rules.
 
+### 2b-ii. Known-deviation learnings (from verified `[~]` items)
+
+For **every** verified `[~]` (wont-fix) item, extract a learning that
+documents the divergence as intentional and instructs reviewers to skip it.
+There is **no minimum threshold** — every verified wont-fix decision is
+context that fresh reviewers need to avoid re-discovering and re-flagging
+the same divergence.
+
+These learnings serve a different purpose than pattern learnings.  They
+don't prescribe a fix — they document *what to skip* and *why*.
+
+**For each verified `[~]` item, append to LEARNINGS.md:**
+
+```markdown
+## Known Deviations
+
+- **<Deviation title>**: <What the divergence is.> <Why it is intentional —
+  the justification from the wont-fix item.> Do not flag <specific thing to
+  skip> as a finding.
+```
+
+Examples:
+
+```markdown
+## Known Deviations
+
+- **Cartographer store gRPC codes**: The store layer's `GRPCCode()` method
+  on sentinel errors intentionally deviates from the codebase pattern
+  (gRPC-agnostic store layers).  Justification: 30+ distinct error types;
+  typed sentinels improve testability and the Phase 4 handoff contract
+  explicitly requires `GRPCCode()`.  Do not flag gRPC import or
+  `codes.Code` usage in the Cartographer store as a finding.
+
+- **Sqlite store uses direct SQL instead of ORM**: The sqlite stores
+  are intentionally raw SQL.  Justification: the schema is simple and
+  the ORM layer adds indirection without benefit.  Do not flag raw SQL
+  queries in `internal/store/` as a finding.
+```
+
+**Do not** add a learning if the pattern is already documented in
+`LEARNINGS.md` (check both the prescriptive sections and the Known
+Deviations section).
+
+**Do not** add a learning from a `[~]` item whose justification was found
+invalid during verification (those were re-opened in step 2a).
+
+**Note:** `[~]` items are pruned in step 2c below.  Their wont-fix
+justification survives in LEARNINGS.md.  Fresh reviewers receive
+LEARNINGS.md in their prompt and will skip these documented deviations.
+
 ### 2c. Delete verified items from the review file
 
 Remove all verified `[x]` and `[~]` items from the review.  Re-opened `[!]`
 items and pre-existing `[ ]` items remain.  Their resolution history is
 preserved in git history.
 
-Only after all three substeps are done should you proceed to Step 3.
+Only after all four substeps (2a, 2b-i, 2b-ii, 2c) are done should you proceed to Step 3.
 
 After this step, the review file contains only `[ ]` and `[!]` items.
 
