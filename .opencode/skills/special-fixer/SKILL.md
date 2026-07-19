@@ -35,8 +35,8 @@ If no open items exist, stop and report that there is nothing to fix.
 Read the full review file.  Note every item and its state.
 
 Also read the companion `LEARNINGS.md` file if it exists (same directory as
-the review file).  Its contents will be provided to implementers so they
-understand established patterns and constraints.
+the review file).  Its path will be included in the implementer prompt so
+implementers read it themselves and follow established patterns and constraints.
 
 Read `AGENTS.md` in the repository root (if it exists) for project-structure
 context.  Extract a one-paragraph summary describing what kind of project
@@ -88,8 +88,8 @@ Handle them in the order listed below.
 **Criteria:**
 [criteria from the review header]
 
-**Prior learnings (follow these rules during the fix):**
-[contents of LEARNINGS.md, if it exists — otherwise "None."]
+**Prior learnings (read this file and follow its rules during the fix):**
+[path to LEARNINGS.md in the review directory, if it exists — otherwise "None."]
 
 **Rules:**
 1. Read <FILE> once.  Then process each item in order, applying fixes
