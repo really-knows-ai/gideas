@@ -12,6 +12,20 @@ This skill manages a deep review of the Foundry Flow specification. It has two m
 
 The mode is determined automatically based on the state of `REVIEW.md`.
 
+### Classification note
+
+This skill reviews **specification documents** — the project's source of truth. It uses a severity-based classification (Critical / Significant / Minor) because the spec is design authority, not implementation instructions.
+
+For **phased plan reviews** (like those under `plans/`), use the `special-review` skill which classifies findings by remediation type:
+
+| Tag | Meaning | Applies to | Does not apply |
+|-----|---------|------------|----------------|
+| `[FIX]` | Text is wrong — must be corrected | Plans, specs, or source code | — |
+| `[PONYTAIL]` | Deliberate simplification — needs `ponytail:` documenting the ceiling | Plans, specs, or source code | — |
+| `[IMPL-NOTE]` | Plan/spec is correct but incomplete — needs context for the implementer at coding time | Plans and specs | **Source code reviews** — when reviewing actual implementation against a spec, a gap is either `[FIX]` (the code is wrong) or not a finding |
+
+When a spec issue is a deliberate simplification, use the Significant or Minor severity and note in the suggested fix that a `ponytail:`-style clarification should be added. When a spec issue is factually wrong or internally contradictory, use Critical.
+
 ---
 
 ## Entry Point
