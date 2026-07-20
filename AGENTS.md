@@ -123,7 +123,7 @@ plans/<project-name>/
 ├── PLAN.md          # How to build it (phased breakdown, execution order)
 ├── PHASE_01.md      # Individual phase files (one per phase)
 ├── PHASE_02.md
-└── REVIEW.md        # Spec-compliance audit checklist (produced by implementation-review)
+└── REVIEW.md        # Spec-compliance audit checklist
 ```
 
 **Important:** `plans/` is gitignored by design — its contents are never committed. Because the Glob tool relies on the git index, it will not find files under `plans/`. You **must** use `ls` (via Bash) to list directory contents under `plans/`.
@@ -164,18 +164,17 @@ Execute the phased plan in a fresh git worktree and `dev/<project-slug>` branch.
 
 Run: `execute-phased-plan` skill.
 
-#### 4. Review (`implementation-review`)
+#### 4. Review (`special-review`)
 
-Audit the current repository state against `SPEC.md`. Dispatches parallel reviewer subagents (one per spec section) to find deviations. Consolidates findings into `REVIEW.md` as a checklist, cross-referencing against previously resolved and wont-fix items. Output: `REVIEW.md` checklist.
+Review files against provided criteria. Verifies and prunes prior resolved/wont-fix items, captures learnings, then runs a full fresh review with parallel subagents. Every finding is classified with a remediation tag (`[FIX]` / `[PONYTAIL]` / `[IMPL-NOTE]`). Output: `REVIEW.md` checklist.
 
-Run: `implementation-review` skill.
+Run: `special-review` skill.
 
-#### 5. Fix (`systematic-fix-and-review` / `fix-review-item`)
+#### 5. Fix (`special-fixer`)
 
-Fix items from `REVIEW.md`.
+Fix items from a `REVIEW.md` checklist. Groups items by target file, dispatches one implementer per group. Each implementer verifies the claim before acting, applies the fix matching the classification tag, or marks wont-fix with justification. Supports REPL-mode re-evaluation cycles.
 
-- **`fix-review-item`**: Fixes exactly one `- [ ]` item, commits the fix (with quality gate), and stops. Run repeatedly for incremental progress.
-- **`systematic-fix-and-review`**: Fixes every `- [ ]` item through strict fix → reviewer → commit cycles. Adds a reviewer gate between fix and commit. Runs until every item is `- [x]` or `- [~]` (wont-fix).
+Run: `special-fixer` skill.
 
 ### Subagents
 
@@ -193,8 +192,6 @@ Additional project-specific skills:
 
 | Skill | Purpose |
 |-------|---------|
-| `spec-lint-fix` | Run markdown linting from `tools/spec-lint/`, fix issues, rerun until clean |
-| `spec-review` | Deep-review all spec documents against project requirements, produce or continue REVIEW.md |
 | `publish-release` | Quality gate, build, changelog, README review, tag, push, and `gh release create` |
 | `commit-push` | Commit and push all changes (update gitignore where needed) |
 | `ponytail-review` | Review diffs for over-engineering: what to delete, simplify, or replace with stdlib/native equivalents |

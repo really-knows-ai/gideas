@@ -276,6 +276,13 @@ job is to partition the work and dispatch.  If you already read parts of a
 target file (e.g., during verification), the subagents still read the full
 file for their complete assessment.
 
+**When building subagent prompts, reference file paths rather than
+inlining their contents** — the subagent reviewers have access to every
+file in the repository and will read the files themselves.  Do not embed
+Criteria document text, LEARNINGS.md entries, or long excerpts inline;
+instead, provide the file path and let the subagent read it.  This keeps
+prompts concise and avoids stale copies.
+
 The fresh review is **full rigour** — it applies the provided criteria
 comprehensively, as if for the first time.  The existence of prior review
 passes does not reduce the depth or scope of this review.  Each subagent
@@ -290,11 +297,11 @@ the list.
 **Target files to review:**
 [list of one or more file paths]
 
-**Criteria:**
-[the relevant criteria for this review unit]
+**Criteria (read this file, do not inline):**
+[path to the criteria document, e.g. "plans/cartographer/SPEC.md"]
 
-**Prior learnings (do not re-flag documented patterns):**
-[contents of LEARNINGS.md — if empty, "None."]
+**Prior learnings (read this file, do not re-flag documented patterns):**
+[path to LEARNINGS.md]
 
 Candidate patterns in LEARNINGS.md are unproven — do not prune findings
 that match them, but note them as context.  The same root cause observed
@@ -316,12 +323,25 @@ across multiple fresh findings signals the pattern may be real.
   learning says "every RPC needs a response type", do not flag missing
   proto types unless the target introduces a NEW RPC not covered by the
   learning.
+- **Classify each finding with one of three tags** based on the nature of
+  the issue and the kind of resolution it needs:
+  - `[FIX]` — the text/code is wrong and must be corrected (errors,
+    contradictions, broken commands, SPEC violations).
+  - `[PONYTAIL]` — a deliberate simplification with a known ceiling that
+    needs a `ponytail:` annotation documenting the trade-off and upgrade
+    path.
+  - `[IMPL-NOTE]` — the content is correct but incomplete; the implementer
+    needs additional context or clarification at coding time.  Only use
+    this when reviewing **plans or specs** — if reviewing implementation
+    source code, a gap is either `[FIX]` or not a finding.
 - This is a full-rigour pass.  Prior review passes do not reduce the depth
   or scope of this review.  Every file and every line is assessed against
   the criteria.
 
 **Output format per finding:**
-`- [ ] <file>:<line> — <description of the divergence.>`
+`- [ ] [TAG] <file>:<line> — <description of the divergence.>`
+
+Where `TAG` is one of `FIX`, `PONYTAIL`, or `IMPL-NOTE`.
 
 If you find no divergences, respond with "No findings."
 ```
@@ -377,7 +397,8 @@ existing `[ ]` or `[!]` item (by file, line, and description):
 
 - If a matching `[ ]` item exists → keep the existing item (don't duplicate).
 - If a matching `[!]` item exists → keep the existing item (don't duplicate).
-- If no matching item exists → append the new `- [ ]` item.
+- If no matching item exists → append the new `- [ ] [TAG] ...` item,
+  preserving the classification tag from the subagent's output.
 
 Existing `[ ]` and `[!]` items that are NOT re-discovered by the fresh
 review remain as-is — they are still open and unaddressed.
@@ -481,8 +502,14 @@ the review date, files/criteria reviewed, and summary counts:
 
 ## Open Items
 
+- [ ] [TAG] <file>:<line> — <description>
 - [ ] ...
 ```
+
+Where `TAG` is one of:
+- `[FIX]` — text/code is wrong; must be corrected, not just annotated.
+- `[PONYTAIL]` — deliberate simplification; needs `ponytail:` documenting the ceiling.
+- `[IMPL-NOTE]` — correct but incomplete; needs context for the implementer at coding time (only applies to plan/spec reviews, not source-code reviews).
 
 Do not add commentary, summaries, or recommendations outside the checklist.
 
@@ -509,11 +536,15 @@ Report:
 Every item follows this structure:
 
 ```
-- [<state>] <location> — <description>
+- [<state>] [TAG] <location> — <description>
   - <detail line, if needed>
 ```
 
 - `<state>` is one of ` ` (open), `x` (resolved), `~` (wont-fix), `!` (re-opened).
+- `<TAG>` is one of `FIX`, `PONYTAIL`, `IMPL-NOTE` — classifies the kind of resolution needed:
+  - `FIX` — the text/code is wrong and must be corrected.
+  - `PONYTAIL` — deliberate simplification; add `ponytail:` documenting the ceiling.
+  - `IMPL-NOTE` — correct but incomplete; add context for the implementer (only for plan/spec reviews).
 - `<location>` is a file path with optional line number (`file.go:42`).
 - `<description>` is a single sentence describing the divergence from
   criteria.  No severity words allowed (no "critical," "minor," "blocker,"
