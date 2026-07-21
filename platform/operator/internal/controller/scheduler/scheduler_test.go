@@ -435,6 +435,7 @@ func TestExitContract_Satisfied(t *testing.T) {
 			{ArtefactID: "art-1", GovernedArtefact: "haiku", StampNames: []string{"review", "approval"}},
 		}, nil
 	}
+	sched.LawQuerier = &mockLawQuerier{}
 	wi := newTestWorkitem(nil)
 	flow := newTestFlow(100, map[string]flowv1.Contract{
 		"standard-exit": {"haiku": {"review", "approval"}},

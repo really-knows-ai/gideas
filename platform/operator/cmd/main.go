@@ -22,6 +22,8 @@ import (
 	"flag"
 	"net"
 	"os"
+	"strconv"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -38,14 +40,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	flowv1gen "github.com/foundry/flow/gen/flow/v1"
-	flowv1 "github.com/foundry/flow/operator/api/v1"
-	"github.com/foundry/flow/operator/internal/controller"
-	"github.com/foundry/flow/operator/internal/controller/scheduler"
-	"github.com/foundry/flow/operator/internal/rpc"
 	"github.com/foundry/flow/pkg/eventbus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
+
+	flowv1 "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/operator/internal/controller"
+	"github.com/foundry/flow/operator/internal/controller/scheduler"
+	"github.com/foundry/flow/operator/internal/rpc"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -81,6 +84,23 @@ func main() {
 	flag.StringVar(&grpcAddr, "grpc-bind-address", ":50052", "The address the Operator gRPC server binds to.")
 	flag.StringVar(&eventBusAddr, "event-bus-address", "",
 		"The address of the Event Bus gRPC server for audit publishing (empty = disabled).")
+	var (
+		proxyAddr                string
+		readinessTimeoutStr      string
+		cartographerPortStr      string
+		cartographerImage        string
+		capabilityStalenessWindow string
+	)
+	flag.StringVar(&proxyAddr, "proxy-bind-address", "",
+		"The address the Cartographer gRPC proxy server binds to (default :50053).")
+	flag.StringVar(&readinessTimeoutStr, "readiness-timeout", "",
+		"Maximum time to wait for Cartographer pod readiness (default 5m).")
+	flag.StringVar(&cartographerPortStr, "cartographer-port", "",
+		"The gRPC port the Cartographer listens on (default 50051).")
+	flag.StringVar(&cartographerImage, "cartographer-image", "",
+		"The Cartographer container image to deploy (default flow-operator:latest).")
+	flag.StringVar(&capabilityStalenessWindow, "capability-staleness-window", "",
+		"Staleness window for capability attestations (Go duration, e.g. \"30s\"; negative duration like \"-1s\" to disable; default 30s).")
 	flag.StringVar(&librarianAddr, "librarian-address", "",
 		"The address of the Librarian gRPC server for LawGroup sync (empty = disabled).")
 	flag.StringVar(&archivistAddr, "archivist-address", "",
@@ -104,6 +124,52 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// Env var overrides for Cartographer-related flags.
+	if proxyAddr == "" {
+		if v := os.Getenv("OPERATOR_PROXY_PORT"); v != "" {
+			proxyAddr = ":" + v
+		}
+	}
+	if proxyAddr == "" {
+		proxyAddr = ":50053"
+	}
+
+	if readinessTimeoutStr == "" {
+		if v := os.Getenv("CARTOGRAPHER_READINESS_TIMEOUT"); v != "" {
+			readinessTimeoutStr = v
+		}
+	}
+	if readinessTimeoutStr == "" {
+		readinessTimeoutStr = "5m"
+	}
+
+	if cartographerPortStr == "" {
+		if v := os.Getenv("CARTOGRAPHER_PORT"); v != "" {
+			cartographerPortStr = v
+		}
+	}
+	if cartographerPortStr == "" {
+		cartographerPortStr = "50051"
+	}
+
+	if cartographerImage == "" {
+		if v := os.Getenv("CARTOGRAPHER_IMAGE"); v != "" {
+			cartographerImage = v
+		}
+	}
+	if cartographerImage == "" {
+		cartographerImage = controller.DefaultCartographerImage
+	}
+
+	if capabilityStalenessWindow == "" {
+		if v := os.Getenv("CAPABILITY_STALENESS_WINDOW"); v != "" {
+			capabilityStalenessWindow = v
+		}
+	}
+	if capabilityStalenessWindow == "" {
+		capabilityStalenessWindow = "30s"
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -261,8 +327,8 @@ func main() {
 		archClient := flowv1gen.NewArchivistServiceClient(archConn)
 		artefactQuerier = func(ctx context.Context, workitemID string, governedArtefacts []string) ([]scheduler.ArtefactState, error) {
 			resp, err := archClient.QueryArtefactState(ctx, &flowv1gen.QueryArtefactStateRequest{
-				WorkitemId:         workitemID,
-				GovernedArtefacts:  governedArtefacts,
+				WorkitemId:        workitemID,
+				GovernedArtefacts: governedArtefacts,
 			})
 			if err != nil {
 				return nil, err
@@ -351,6 +417,80 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
+	// -----------------------------------------------------------------------
+	// Cartographer Initialization
+	// -----------------------------------------------------------------------
+	operatorNamespace := os.Getenv("POD_NAMESPACE")
+	if operatorNamespace == "" {
+		operatorNamespace = "operator-system"
+	}
+
+	// Generate the operator's Ed25519 signing key pair on startup, if not already present.
+	operatorKey, err := controller.InitializeOperatorSigningKey(context.Background(), mgr.GetClient(), operatorNamespace)
+	if err != nil {
+		setupLog.Error(err, "unable to initialize operator signing key")
+		os.Exit(1)
+	}
+
+	// Generate (or re-read) the sidecar signing key pair on startup.
+	if err := controller.InitializeSidecarSigningKey(context.Background(), mgr.GetClient(), operatorNamespace); err != nil {
+		setupLog.Error(err, "unable to initialize sidecar signing key")
+		os.Exit(1)
+	}
+
+	// Read readiness timeout from --readiness-timeout flag (default 5m).
+	readinessTimeout, err := time.ParseDuration(readinessTimeoutStr)
+	if err != nil {
+		setupLog.Error(err, "invalid --readiness-timeout", "value", readinessTimeoutStr)
+		os.Exit(1)
+	}
+
+	// Parse proxy port from --proxy-bind-address (default ":50053").
+	_, proxyPortStr, err := net.SplitHostPort(proxyAddr)
+	if err != nil {
+		setupLog.Error(err, "invalid --proxy-bind-address", "address", proxyAddr)
+		os.Exit(1)
+	}
+	proxyPort, err := strconv.Atoi(proxyPortStr)
+	if err != nil {
+		setupLog.Error(err, "invalid port in --proxy-bind-address", "address", proxyAddr, "port", proxyPortStr)
+		os.Exit(1)
+	}
+
+	// Parse Cartographer port from --cartographer-port flag (default 50051).
+	cartographerPort64, err := strconv.ParseInt(cartographerPortStr, 10, 32)
+	if err != nil {
+		setupLog.Error(err, "invalid --cartographer-port", "value", cartographerPortStr)
+		os.Exit(1)
+	}
+	cartographerPort := int32(cartographerPort64)
+
+	// Create the shared proxy routing table.
+	proxyRoutingTable := controller.NewProxyRoutingTable()
+
+	// Validate --capability-staleness-window as a Go duration string.
+	if _, err := time.ParseDuration(capabilityStalenessWindow); err != nil {
+		setupLog.Error(err, "invalid --capability-staleness-window", "value", capabilityStalenessWindow)
+		os.Exit(1)
+	}
+
+	// Create and register the FoundryGraph reconciler with all fields.
+	if err := (&controller.FoundryGraphReconciler{
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		OperatorNamespace:        operatorNamespace,
+		CartographerPort:         cartographerPort,
+		ReadinessTimeout:         readinessTimeout,
+		CartographerImage:        cartographerImage,
+		EventBusAddress:          ebAddr,
+		CapabilityStalenessWindow: capabilityStalenessWindow,
+		ProxyRoutingTable:        proxyRoutingTable,
+		CartographerDialer:       controller.DialCartographer,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "FoundryGraph")
+		os.Exit(1)
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")
 		os.Exit(1)
@@ -398,6 +538,30 @@ func main() {
 		if operatorSrv.Auditor != nil {
 			operatorSrv.Auditor.Stop()
 		}
+	}()
+
+	// -----------------------------------------------------------------------
+	// Cartographer gRPC Proxy Server
+	// -----------------------------------------------------------------------
+	proxyLis, err := net.Listen("tcp", proxyAddr)
+	if err != nil {
+		setupLog.Error(err, "unable to listen for proxy", "address", proxyAddr)
+		os.Exit(1)
+	}
+	proxySrv := grpc.NewServer()
+	proxyServer := controller.NewProxyServer(proxyRoutingTable, mgr.GetClient(), proxyPort, controller.DialCartographer, operatorKey)
+	flowv1gen.RegisterCartographerServiceServer(proxySrv, proxyServer)
+
+	go func() {
+		setupLog.Info("Cartographer proxy server listening", "address", proxyLis.Addr().String())
+		if err := proxySrv.Serve(proxyLis); err != nil {
+			setupLog.Error(err, "Cartographer proxy server error")
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		setupLog.Info("Shutting down Cartographer proxy server")
+		proxySrv.GracefulStop()
 	}()
 
 	if err := mgr.Start(ctx); err != nil {

@@ -83,6 +83,7 @@ resources:
 - api:
     crdVersion: v1
     namespaced: true
+  controller: true
   domain: foundry.io
   group: flow
   kind: FoundryGraph
