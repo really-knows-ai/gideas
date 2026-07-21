@@ -3123,5 +3123,3 @@ func TestPullAlreadyUpToDate2(t *testing.T) {
 		t.Fatalf("TestPullAlreadyUpToDate2: %v", err)
 	}
 }
-
-

@@ -27,8 +27,8 @@ type Capabilities struct {
 // CapabilityVerifier verifies Ed25519-signed capability attestations in
 // gRPC metadata at ingress.
 type CapabilityVerifier struct {
-	operatorKey    ed25519.PublicKey
-	sidecarKey     ed25519.PublicKey
+	operatorKey     ed25519.PublicKey
+	sidecarKey      ed25519.PublicKey
 	stalenessWindow time.Duration // negative disables staleness check
 }
 

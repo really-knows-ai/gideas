@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"runtime"
 	"sync"
@@ -139,9 +140,7 @@ func (m *idTypeMap) snapshot() map[string]string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	snap := make(map[string]string, len(m.types))
-	for k, v := range m.types {
-		snap[k] = v
-	}
+	maps.Copy(snap, m.types)
 	return snap
 }
 
@@ -337,9 +336,9 @@ func (g *Graph) ListEntities(entityType string, opts ...ListEntitiesOption) (*En
 	}
 
 	req := &flowv1.ListEntitiesRequest{
-		EntityType:   entityType,
-		PageSize:     cfg.pageSize,
-		PageToken:    cfg.pageToken,
+		EntityType: entityType,
+		PageSize:   cfg.pageSize,
+		PageToken:  cfg.pageToken,
 	}
 
 	var resp *flowv1.ListEntitiesResponse
@@ -574,9 +573,7 @@ func (g *Graph) BeginTransaction(opts ...BeginTxOption) (*Transaction, error) {
 	// Snapshot the current ID-to-type map into the transaction.
 	txTypeMap := newIDTypeMap()
 	txTypeMap.mu.Lock()
-	for k, v := range g.idTypeMap.snapshot() {
-		txTypeMap.types[k] = v
-	}
+	maps.Copy(txTypeMap.types, g.idTypeMap.snapshot())
 	txTypeMap.mu.Unlock()
 
 	return &Transaction{

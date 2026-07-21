@@ -15,12 +15,12 @@ import (
 // Embedding is a pointer to distinguish nil (not set, omitted from JSON)
 // from an empty slice (set but empty, serialised as "embedding": []).
 type EntityJSON struct {
-	ID         uuid.UUID          `json:"id"`
-	Type       string             `json:"type"`
-	Properties map[string]string  `json:"properties,omitempty"`
-	Embedding  *[]float32         `json:"embedding,omitempty"`
-	CreatedAt  time.Time          `json:"created_at"`
-	UpdatedAt  time.Time          `json:"updated_at"`
+	ID         uuid.UUID         `json:"id"`
+	Type       string            `json:"type"`
+	Properties map[string]string `json:"properties,omitempty"`
+	Embedding  *[]float32        `json:"embedding,omitempty"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 // EdgeJSON is the file-per-element serialisation format for edges.
@@ -104,7 +104,7 @@ type EdgeEntry struct {
 type ChangeKind int
 
 const (
-	ChangeAddEntity  ChangeKind = iota
+	ChangeAddEntity ChangeKind = iota
 	ChangeModEntity
 	ChangeDelEntity
 	ChangeAddEdge
@@ -124,9 +124,9 @@ type ChangeLogEntry struct {
 	Kind      ChangeKind
 	ID        string
 	Type      string
-	Suspected bool          // true when reconstructed during startup recovery (deletions only)
-	Entity    *EntityEntry  `json:"entity,omitempty"` // full snapshot for add/modify entity
-	Edge      *EdgeEntry    `json:"edge,omitempty"`   // full snapshot for add edge
+	Suspected bool         // true when reconstructed during startup recovery (deletions only)
+	Entity    *EntityEntry `json:"entity,omitempty"` // full snapshot for add/modify entity
+	Edge      *EdgeEntry   `json:"edge,omitempty"`   // full snapshot for add edge
 }
 
 // ChangeLog tracks mutations within a transaction using per-category maps.

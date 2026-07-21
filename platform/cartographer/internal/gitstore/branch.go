@@ -171,5 +171,3 @@ func (g *gitStore) SetBranchRef(ctx context.Context, branch string, hash string)
 	}
 	return nil
 }
-
-

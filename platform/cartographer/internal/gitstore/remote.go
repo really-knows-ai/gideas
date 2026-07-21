@@ -343,5 +343,3 @@ func (g *gitStore) resolveAuth() (transport.AuthMethod, error) {
 	}
 	return auth, nil
 }
-
-

@@ -12,6 +12,7 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/google/uuid v1.6.0
+	golang.org/x/crypto v0.50.0
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
 	k8s.io/apimachinery v0.35.0
@@ -52,7 +53,6 @@ require (
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect

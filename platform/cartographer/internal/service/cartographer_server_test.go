@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/foundry/flow/cartographer/internal/store"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -923,9 +923,7 @@ func TestConcurrentNonTxWrites(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 				EntityType: "Component",
 				Properties: map[string]string{"name": "concurrent"},
@@ -933,7 +931,7 @@ func TestConcurrentNonTxWrites(t *testing.T) {
 			if err != nil && status.Code(err) != codes.AlreadyExists {
 				t.Errorf("concurrent CreateEntity failed: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

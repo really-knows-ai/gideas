@@ -23,8 +23,8 @@ type Ticker interface {
 // realClock implements Clock using the standard time package.
 type realClock struct{}
 
-func (realClock) Now() time.Time                     { return time.Now() }
-func (realClock) NewTicker(d time.Duration) Ticker   { return &realTicker{t: time.NewTicker(d)} }
+func (realClock) Now() time.Time                   { return time.Now() }
+func (realClock) NewTicker(d time.Duration) Ticker { return &realTicker{t: time.NewTicker(d)} }
 
 type realTicker struct{ t *time.Ticker }
 
@@ -35,9 +35,9 @@ func (r *realTicker) Stop()               { r.t.Stop() }
 type TransactionManager struct {
 	mu             sync.RWMutex
 	active         map[string]*TransactionState
-	defaultTimeout  time.Duration
-	hardMaxTimeout  time.Duration // 7 days
-	changeLogCap    int           // 100000
+	defaultTimeout time.Duration
+	hardMaxTimeout time.Duration // 7 days
+	changeLogCap   int           // 100000
 	clock          Clock
 }
 
@@ -57,11 +57,11 @@ type TransactionState struct {
 // NewTransactionManager creates a manager with the real clock.
 func NewTransactionManager(defaultTimeout, hardMaxTimeout time.Duration, changeLogCap int, opts ...func(*TransactionManager)) *TransactionManager {
 	tm := &TransactionManager{
-		active:          make(map[string]*TransactionState),
-		defaultTimeout:  defaultTimeout,
-		hardMaxTimeout:  hardMaxTimeout,
-		changeLogCap:    changeLogCap,
-		clock:           &realClock{},
+		active:         make(map[string]*TransactionState),
+		defaultTimeout: defaultTimeout,
+		hardMaxTimeout: hardMaxTimeout,
+		changeLogCap:   changeLogCap,
+		clock:          &realClock{},
 	}
 	for _, o := range opts {
 		o(tm)

@@ -35,6 +35,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 	flowv1gen "github.com/foundry/flow/gen/flow/v1"
 )
@@ -121,7 +124,7 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	if oldSpec != nil {
 		if !specSemanticallyEqual(oldSpec, &fg.Spec) {
-			diffResult = diffSchema(&fg.Spec, &fg.Spec)
+			diffResult = diffSchema(oldSpec, &fg.Spec)
 			if diffResult == SchemaDiffNone {
 				// Non-schema field changed; set diffResult to indicate no schema change.
 				// We use a special internal detection: since diffSchema returned None but
@@ -261,7 +264,7 @@ func (r *FoundryGraphReconciler) applySchema(ctx context.Context, fg *flowv1.Fou
 
 // isFailedPrecondition checks if a gRPC error is FAILED_PRECONDITION.
 func isFailedPrecondition(err error) bool {
-	return false // TODO: parse gRPC status code
+	return status.Code(err) == codes.FailedPrecondition
 }
 
 // waitForReadiness polls the Deployment until it is ready or the timeout elapses.

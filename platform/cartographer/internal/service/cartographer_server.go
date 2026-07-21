@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/foundry/flow/cartographer/internal/store"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -50,9 +51,10 @@ type CartographerServer struct {
 	readSecretFn func(ctx context.Context, name string) (map[string]string, error)
 	remoteURL    string
 
-	auditor      TelemetryPublisher
-	newIDFn      func() string
-	podNamespace string
+	auditor          TelemetryPublisher
+	newIDFn          func() string
+	podNamespace     string
+	defaultTimeout   time.Duration
 
 	gcStop chan struct{}
 
@@ -82,10 +84,11 @@ func NewCartographerServer(
 		readSecretFn: readSecretFn,
 		remoteURL:    remoteURL,
 		newIDFn:      uuid.NewString,
-		podNamespace: podNamespace,
-		auditor:      nil,
-		gcStop:       make(chan struct{}),
-		txManager:    NewTransactionManager(defaultTimeout, 7*24*time.Hour, changeLogCap),
+		podNamespace:   podNamespace,
+		defaultTimeout: defaultTimeout,
+		auditor:        nil,
+		gcStop:         make(chan struct{}),
+		txManager:      NewTransactionManager(defaultTimeout, 7*24*time.Hour, changeLogCap),
 	}
 	for _, o := range opts {
 		o(srv)
@@ -326,10 +329,8 @@ func (s *CartographerServer) checkTxCap(ctx context.Context, required string) er
 	if caps == nil {
 		return errCapabilityDenied(required)
 	}
-	for _, c := range caps.Caps {
-		if c == required {
-			return nil
-		}
+	if slices.Contains(caps.Caps, required) {
+		return nil
 	}
 	return errCapabilityDenied(required)
 }
@@ -352,7 +353,11 @@ func (s *CartographerServer) ExecuteCypher(ctx context.Context, req *flowv1.Exec
 	}
 	var params map[string]any
 	if req.Params != nil {
-		params = map[string]any{"_raw": req.Params.AsInterface()}
+		if s := req.Params.GetStructValue(); s != nil {
+			params = s.AsMap()
+		} else {
+			return nil, errCypherParamsNotAStruct()
+		}
 	}
 	rows, err := s.store.ExecuteCypher(ctx, req.Cypher, params, s.resolveBranch(req.TransactionId))
 	if err != nil {
@@ -746,7 +751,7 @@ func (s *CartographerServer) BeginTransaction(ctx context.Context, req *flowv1.B
 		return nil, err
 	}
 	txID := s.newIDFn()
-	requestedTimeout := 30 * time.Minute
+	requestedTimeout := s.defaultTimeout
 	if req.Timeout != nil {
 		requestedTimeout = req.Timeout.AsDuration()
 	}
@@ -1141,10 +1146,7 @@ func (s *CartographerServer) ExportGraph(req *flowv1.ExportGraphRequest, stream 
 	}
 	const chunkSize = 1024 * 64
 	for i := 0; i < len(data); i += chunkSize {
-		end := i + chunkSize
-		if end > len(data) {
-			end = len(data)
-		}
+		end := min(i+chunkSize, len(data))
 		if err := stream.Send(&flowv1.ExportGraphResponse{Chunk: data[i:end]}); err != nil {
 			return errExportGraphMidStream(err.Error())
 		}

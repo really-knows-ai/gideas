@@ -48,8 +48,8 @@ func extractEntityTypes(cypher string) []string {
 			continue
 		}
 		// Split on colon to get individual labels.
-		parts := strings.Split(labelsStr, ":")
-		for _, label := range parts {
+		parts := strings.SplitSeq(labelsStr, ":")
+		for label := range parts {
 			if label == "" {
 				continue
 			}

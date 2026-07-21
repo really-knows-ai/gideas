@@ -136,7 +136,7 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	cl := NewChangeLog()
 
 	// Add 100K entries (the cap)
-	for i := 0; i < 100000; i++ {
+	for i := range 100000 {
 		if err := cl.AddEntity(formatIntID(i), "Component", nil, nil); err != nil {
 			t.Fatalf("AddEntity %d failed: %v", i, err)
 		}
@@ -155,7 +155,7 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 
 	// Verify each typed method enforces the cap
 	cl2 := NewChangeLog()
-	for i := 0; i < 100000; i++ {
+	for i := range 100000 {
 		_ = cl2.AddEntity(formatIntID(i), "Component", nil, nil)
 	}
 	if err := cl2.AddEntity("x", "Component", nil, nil); err != ErrChangeLogFull {
@@ -176,7 +176,7 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 
 	// Generic Add method
 	cl3 := NewChangeLog()
-	for i := 0; i < 100000; i++ {
+	for i := range 100000 {
 		_ = cl3.Add(ChangeLogEntry{
 			Kind: ChangeAddEntity,
 			ID:   formatIntID(i),
@@ -224,7 +224,7 @@ func TestChangeLogConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Concurrently add entries
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -236,13 +236,11 @@ func TestChangeLogConcurrent(t *testing.T) {
 	}
 
 	// Concurrently read entries
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 10 {
+		wg.Go(func() {
 			_ = cl.Entries()
 			_ = cl.Len()
-		}()
+		})
 	}
 
 	wg.Wait()

@@ -297,6 +297,10 @@ func errWipeGraphMidWipe(detail string) error {
 	return status.Errorf(codes.Internal, "wipe graph failed partway through: %s", detail)
 }
 
+func errCypherParamsNotAStruct() error {
+	return status.Error(codes.InvalidArgument, "cypher query parameters must be a JSON object")
+}
+
 func errNoTransportCredentials() error {
 	return status.Error(codes.Unavailable, "no transport credentials configured")
 }
