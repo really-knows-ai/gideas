@@ -21,6 +21,11 @@ import (
 
 const bufSize = 1024 * 1024
 
+// testSidecarPriv is a test-level Ed25519 private key used for signing
+// capability metadata in tests. It is lazily initialized by the first
+// call to testCtx.
+var testSidecarPriv ed25519.PrivateKey
+
 // =========================================================================
 // Test utilities
 // =========================================================================
@@ -96,9 +101,20 @@ func (m *mockTelemetryPublisher) Events() []*flowv1.PublishRequest {
 	return r
 }
 
+// initTestKey generates the shared test key pair once and returns the public key.
+func initTestKey() ed25519.PublicKey {
+	if testSidecarPriv != nil {
+		return testSidecarPriv.Public().(ed25519.PublicKey)
+	}
+	pub, priv := generateTestKey()
+	testSidecarPriv = priv
+	return pub
+}
+
 // newTestServer creates a CartographerServer with in-memory store and temp gitstore.
 func newTestServer(t *testing.T) (*CartographerServer, store.Store, gitstore.GitStore) {
 	t.Helper()
+	scPub := initTestKey()
 	st, err := store.OpenInMemory()
 	if err != nil {
 		t.Fatalf("OpenInMemory: %v", err)
@@ -107,12 +123,35 @@ func newTestServer(t *testing.T) (*CartographerServer, store.Store, gitstore.Git
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
+	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
-		st, gs, make([]byte, 32), make([]byte, 32),
+		st, gs, opPub, scPub,
 		nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 	)
 	srv.MarkDBReady()
 	return srv, st, gs
+}
+
+// testCtx returns a context with full wildcard capabilities (READ:graph/entity/*,
+// WRITE:graph/entity/*, READ:graph/tx, WRITE:graph/tx) verified and stored in
+// context (simulating the interceptor path).
+func testCtx() context.Context {
+	initTestKey()
+	caps := "READ:graph/entity/*,WRITE:graph/entity/*,READ:graph/tx,WRITE:graph/tx"
+	sig, signedAt := signCapabilities(caps, testSidecarPriv)
+	md := metadata.Pairs(
+		MetadataKeyCapabilities, caps,
+		MetadataKeyCapabilitiesSignature, sig,
+		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
+		MetadataKeyCapabilitiesSignedBy, "sidecar",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	// Store capabilities directly (simulates what VerifyInterceptor would do).
+	c := &Capabilities{
+		Caps:     []string{"READ:graph/entity/*", "WRITE:graph/entity/*", "READ:graph/tx", "WRITE:graph/tx"},
+		SignedBy: "sidecar",
+	}
+	return StoreCapabilitiesInContext(ctx, c)
 }
 
 // applyTestSchema applies a minimal test schema.
@@ -186,6 +225,9 @@ func TestCapability_InvalidSignature(t *testing.T) {
 	_, err := srv.verifier.verify(ctx)
 	if err == nil {
 		t.Fatal("expected error for invalid signature, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
 	}
 }
 
@@ -340,7 +382,7 @@ func TestWipeGraph_WithOpenTx(t *testing.T) {
 
 func TestExecuteCypher_EmptyQuery(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: ""})
 	if err == nil {
@@ -353,7 +395,7 @@ func TestExecuteCypher_EmptyQuery(t *testing.T) {
 
 func TestExecuteCypher_ValidQuery(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "test"}, nil, "")
@@ -369,7 +411,7 @@ func TestExecuteCypher_ValidQuery(t *testing.T) {
 
 func TestExecuteCypher_MutationRejected(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "CREATE (n:Test)"})
 	if err == nil {
@@ -382,7 +424,7 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 
 func TestFullTextSearch_EmptyQuery(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: ""})
 	if err == nil {
@@ -395,7 +437,7 @@ func TestFullTextSearch_EmptyQuery(t *testing.T) {
 
 func TestFullTextSearch_Valid(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "apple", "version": "1"}, nil, "")
@@ -411,7 +453,7 @@ func TestFullTextSearch_Valid(t *testing.T) {
 
 func TestListEntities_UnknownType(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: "NonExistent"})
 	if err == nil {
@@ -424,7 +466,7 @@ func TestListEntities_UnknownType(t *testing.T) {
 
 func TestListEntities_Valid(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "a"}, nil, "")
@@ -444,7 +486,7 @@ func TestListEntities_Valid(t *testing.T) {
 
 func TestSearchNeighbors_NonIndexed(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 
@@ -456,6 +498,9 @@ func TestSearchNeighbors_NonIndexed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-indexed type, got nil")
 	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
 }
 
 // =========================================================================
@@ -464,7 +509,7 @@ func TestSearchNeighbors_NonIndexed(t *testing.T) {
 
 func TestCreateEntity_Valid(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	resp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
@@ -484,7 +529,7 @@ func TestCreateEntity_Valid(t *testing.T) {
 
 func TestCreateEntity_UnknownType(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
@@ -501,7 +546,7 @@ func TestCreateEntity_UnknownType(t *testing.T) {
 
 func TestCreateEntity_DuplicateID(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	resp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
@@ -527,7 +572,7 @@ func TestCreateEntity_DuplicateID(t *testing.T) {
 
 func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
@@ -537,11 +582,14 @@ func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing required property, got nil")
 	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
 }
 
 func TestUpdateEntity_NotFound(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
@@ -558,7 +606,7 @@ func TestUpdateEntity_NotFound(t *testing.T) {
 
 func TestUpdateEntity_Valid(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "original"}, nil, "")
@@ -577,7 +625,7 @@ func TestUpdateEntity_Valid(t *testing.T) {
 
 func TestDeleteEntity_NotFound(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
@@ -593,7 +641,7 @@ func TestDeleteEntity_NotFound(t *testing.T) {
 
 func TestDeleteEntity_Valid(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "delete-me"}, nil, "")
@@ -609,7 +657,7 @@ func TestDeleteEntity_Valid(t *testing.T) {
 
 func TestCreateEdge_Valid(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
@@ -631,7 +679,7 @@ func TestCreateEdge_Valid(t *testing.T) {
 
 func TestCreateEdge_SourceNotFound(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
@@ -649,7 +697,7 @@ func TestCreateEdge_SourceNotFound(t *testing.T) {
 
 func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
@@ -662,11 +710,14 @@ func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown edge type, got nil")
 	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
 }
 
 func TestDeleteEdge_NotFound(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{
@@ -686,7 +737,7 @@ func TestDeleteEdge_NotFound(t *testing.T) {
 
 func TestTransaction_BeginCommit(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 
@@ -737,7 +788,7 @@ func TestTransaction_BeginCommit(t *testing.T) {
 
 func TestTransaction_BeginRollback(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 
@@ -773,7 +824,7 @@ func TestTransaction_BeginRollback(t *testing.T) {
 
 func TestTransaction_ExtendTimeout(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
 		Timeout: durationpb.New(5 * time.Minute),
@@ -794,7 +845,7 @@ func TestTransaction_ExtendTimeout(t *testing.T) {
 
 func TestTransaction_InvalidTxID(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{
 		TransactionId: "not-a-uuid",
@@ -809,7 +860,7 @@ func TestTransaction_InvalidTxID(t *testing.T) {
 
 func TestTransaction_NotFound(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 		TransactionId: "00000000-0000-0000-0000-000000000000",
@@ -828,7 +879,7 @@ func TestTransaction_NotFound(t *testing.T) {
 
 func TestEmptyTransaction_CommitNoOp(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
@@ -845,7 +896,7 @@ func TestEmptyTransaction_CommitNoOp(t *testing.T) {
 
 func TestEmptyTransaction_RollbackNoOp(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
@@ -866,7 +917,7 @@ func TestEmptyTransaction_RollbackNoOp(t *testing.T) {
 
 func TestConcurrentNonTxWrites(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 
@@ -893,8 +944,9 @@ func TestConcurrentNonTxWrites(t *testing.T) {
 
 func TestExportGraph_UnsupportedFormat(t *testing.T) {
 	srv, _, _ := newTestServer(t)
+	ctx := testCtx()
 
-	_, err := collectExportData(srv, "unsupported")
+	_, err := collectExportData(srv, ctx, "unsupported")
 	if err == nil {
 		t.Fatal("expected error for unsupported format, got nil")
 	}
@@ -905,13 +957,13 @@ func TestExportGraph_UnsupportedFormat(t *testing.T) {
 
 func TestExportGraph_JSON(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "a"}, nil, "")
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "b"}, nil, "")
 
-	data, err := collectExportData(srv, "json")
+	data, err := collectExportData(srv, ctx, "json")
 	if err != nil {
 		t.Fatalf("export JSON failed: %v", err)
 	}
@@ -922,12 +974,12 @@ func TestExportGraph_JSON(t *testing.T) {
 
 func TestExportGraph_GraphML(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
 
-	data, err := collectExportData(srv, "graphml")
+	data, err := collectExportData(srv, ctx, "graphml")
 	if err != nil {
 		t.Fatalf("export GraphML failed: %v", err)
 	}
@@ -937,7 +989,121 @@ func TestExportGraph_GraphML(t *testing.T) {
 }
 
 // =========================================================================
-// 9. Telemetry tests
+// 9. Missing error-condition tests
+// =========================================================================
+
+func TestSearchNeighbors_Valid(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := testCtx()
+
+	// Apply a schema with a vector-indexed type.
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+
+	// Bootstrap with first entity (establishes dimension).
+	_, _ = srv.store.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, "")
+	_, _ = srv.store.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "b"}, []float32{0.0, 1.0, 0.0}, "")
+
+	resp, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  []float32{1.0, 0.0, 0.0},
+		EntityType: "VectorType",
+		TopK:       5,
+	})
+	if err != nil {
+		t.Fatalf("SearchNeighbors failed: %v", err)
+	}
+	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one neighbor result")
+	}
+}
+
+func TestRefreshTransaction_NoConflicts(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	ctx := testCtx()
+
+	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+
+	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: beginResp.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("RefreshTransaction failed: %v", err)
+	}
+}
+
+func TestDeleteEdge_Valid(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
+	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, "")
+
+	createResp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:     "DEPENDS_ON",
+		FromEntityId: svc.Id,
+		ToEntityId:   comp.Id,
+		Properties:   map[string]string{"weight": "high"},
+	})
+	if err != nil {
+		t.Fatalf("CreateEdge failed: %v", err)
+	}
+
+	deleteResp, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: createResp.EdgeId})
+	if err != nil {
+		t.Fatalf("DeleteEdge failed: %v", err)
+	}
+	if deleteResp.EdgeId != createResp.EdgeId {
+		t.Fatalf("expected deleted edge ID %q, got %q", createResp.EdgeId, deleteResp.EdgeId)
+	}
+}
+
+func TestGetTransactionDiff_WrongCapability(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := store.OpenInMemory()
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	// Capabilities missing READ:graph/tx.
+	ctx := capabilityContext("WRITE:graph/entity/*,WRITE:graph/tx", scPriv, "sidecar")
+
+	_, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{
+		TransactionId: "00000000-0000-0000-0000-000000000000",
+	})
+	if err == nil {
+		t.Fatal("expected error for wrong capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+func TestWipeGraph_Clean(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{})
+	if err != nil {
+		t.Fatalf("WipeGraph on empty graph failed: %v", err)
+	}
+}
+
+// =========================================================================
+// 10. Telemetry tests
 // =========================================================================
 
 func TestTelemetry_TransactionGC(t *testing.T) {

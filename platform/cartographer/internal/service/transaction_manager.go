@@ -147,13 +147,21 @@ func (tm *TransactionManager) ValidateActive(txID string) error {
 
 // ExtendTimeout extends the transaction timeout by the given duration.
 // The total lifetime (now - createdAt + duration) must not exceed the hard max.
+// ponytail: acquires the write lock for the entire operation to prevent a TOCTOU
+// race between Lookup (RLock) and modification (Lock). The upgrade path is to
+// split into a RLock-protected read phase followed by a Lock-protected write
+// phase with re-verification, but the write-lock-held duration is negligible so
+// this simpler approach is preferred.
 func (tm *TransactionManager) ExtendTimeout(txID string, duration time.Duration) error {
 	if duration <= 0 {
 		return errInvalidExtendTimeoutDuration("duration must be positive")
 	}
 
-	state, err := tm.Lookup(txID)
-	if err != nil {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	state, ok := tm.active[txID]
+	if !ok {
 		return errTransactionNotFound(txID)
 	}
 
@@ -163,9 +171,7 @@ func (tm *TransactionManager) ExtendTimeout(txID string, duration time.Duration)
 		return errInvalidExtendTimeoutDuration("total lifetime would exceed 7-day maximum")
 	}
 
-	tm.mu.Lock()
 	state.ExpiresAt = now.Add(duration)
-	tm.mu.Unlock()
 	return nil
 }
 

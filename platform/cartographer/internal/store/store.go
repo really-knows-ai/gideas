@@ -29,6 +29,7 @@ type Store interface {
 	CreateEdge(ctx context.Context, edgeType, fromID, toID string, properties map[string]string, branch string) (*Edge, error)
 	DeleteEdge(ctx context.Context, id, branch string) (*Edge, error)
 	GetEdge(ctx context.Context, id, branch string) (*Edge, error)
+	ListEdgesOfType(ctx context.Context, edgeType, branch string) ([]Edge, error)
 
 	// Query
 	ExecuteCypher(ctx context.Context, cypher string, params map[string]any, branch string) ([]map[string]any, error)
@@ -58,8 +59,8 @@ type Store interface {
 	Health(ctx context.Context) (*HealthResult, error)
 
 	// Branch scanning
-	DumpAllEntities(txID string) ([]Entity, error)
-	DumpAllEdges(txID string) ([]Edge, error)
+	DumpAllEntities(ctx context.Context, txID string) ([]Entity, error)
+	DumpAllEdges(ctx context.Context, txID string) ([]Edge, error)
 	ListEntityTypes(txID string) ([]string, error)
 
 	Close() error

@@ -1080,6 +1080,38 @@ func (db *ladybugDB) GetEdge(ctx context.Context, id, branch string) (*Edge, err
 	return &e, nil
 }
 
+func (db *ladybugDB) ListEdgesOfType(ctx context.Context, edgeType, branch string) ([]Edge, error) {
+	// ponytail: branch parameter handling follows the same pattern as
+	// ListEntities — treat "main" and "" as the main DB.
+	if branch != "" && branch != "main" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		var results []Edge
+		for _, e := range br.edges {
+			if e.Type == edgeType {
+				results = append(results, *e)
+			}
+		}
+		return results, nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	var results []Edge
+	for _, e := range db.edges {
+		if e.Type == edgeType {
+			results = append(results, *e)
+		}
+	}
+	return results, nil
+}
+
 // --- Query methods ---
 
 func (db *ladybugDB) ExecuteCypher(ctx context.Context, cypher string, params map[string]any, branch string) ([]map[string]any, error) {
@@ -2068,7 +2100,7 @@ func (db *ladybugDB) Health(ctx context.Context) (*HealthResult, error) {
 
 // --- Branch scanning ---
 
-func (db *ladybugDB) DumpAllEntities(txID string) ([]Entity, error) {
+func (db *ladybugDB) DumpAllEntities(ctx context.Context, txID string) ([]Entity, error) {
 	br, ok := db.branches[txID]
 	if !ok {
 		return []Entity{}, nil // absent file -> empty
@@ -2084,7 +2116,7 @@ func (db *ladybugDB) DumpAllEntities(txID string) ([]Entity, error) {
 	return entities, nil
 }
 
-func (db *ladybugDB) DumpAllEdges(txID string) ([]Edge, error) {
+func (db *ladybugDB) DumpAllEdges(ctx context.Context, txID string) ([]Edge, error) {
 	br, ok := db.branches[txID]
 	if !ok {
 		return []Edge{}, nil // absent file -> empty

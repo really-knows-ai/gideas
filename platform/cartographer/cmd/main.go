@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,10 @@ import (
 	"github.com/foundry/flow/cartographer/internal/service"
 	"github.com/foundry/flow/cartographer/internal/store"
 	"github.com/foundry/flow/pkg/eventbus"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
+	gogitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
@@ -147,23 +152,53 @@ func main() {
 	// -----------------------------------------------------------------------
 	if remoteURL != "" {
 		// Build resolveAuthFn closure that re-reads the Secret on each call.
-		resolveAuthFn := func() (interface{}, error) {
+		// Constructs the appropriate transport.AuthMethod based on URL scheme.
+		resolveAuthFn := func() (transport.AuthMethod, error) {
 			if remoteAuthSecretRef == "" || readSecretFn == nil {
+				// No auth configured — use nil auth (public repos, token-in-URL).
 				return nil, nil
 			}
 			data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
 			if err != nil {
 				return nil, err
 			}
-			return data, nil
+			parsedURL, parseErr := url.Parse(remoteURL)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			switch parsedURL.Scheme {
+			case "ssh":
+				sshUser := parsedURL.User.Username()
+				if sshUser == "" {
+					sshUser = "git"
+				}
+				keyPEM, hasKey := data["ssh-privatekey"]
+				if hasKey && keyPEM != "" {
+					signer, signErr := gogitssh.NewPublicKeys(sshUser, []byte(keyPEM), "")
+					if signErr != nil {
+						return nil, signErr
+					}
+					signer.HostKeyCallback = gossh.InsecureIgnoreHostKey() // ponytail: KnownHosts callback deferred for now
+					return signer, nil
+				}
+				// No SSH key in secret; return nil for anonymous SSH access.
+				return nil, nil
+			case "https":
+				httpsUser := parsedURL.User.Username()
+				if httpsUser == "" {
+					httpsUser = data["username"]
+				}
+				if password, hasPW := data["password"]; hasPW && password != "" {
+					return &http.BasicAuth{Username: httpsUser, Password: password}, nil
+				}
+				// No password in secret; return nil for anonymous HTTPS access.
+				return nil, nil
+			default:
+				return nil, gitstore.ErrUnsupportedURLScheme
+			}
 		}
-		// ponytail: The gitstore's SetRemote expects func() (transport.AuthMethod, error).
-		// The actual auth method construction happens at the gitstore layer using the
-		// URL scheme and the resolved secret data. Here we pass a generic resolver;
-		// The gitstore interprets the response based on the remote URL scheme.
-		_ = resolveAuthFn
 
-		if err := gs.SetRemote(context.Background(), remoteURL, nil); err != nil {
+		if err := gs.SetRemote(context.Background(), remoteURL, resolveAuthFn); err != nil {
 			slog.Warn("Failed to configure remote", "error", err)
 		} else {
 			slog.Info("Remote configured", "url", remoteURL)
@@ -174,6 +209,39 @@ func main() {
 	// 6. Optional remote pull on init
 	// -----------------------------------------------------------------------
 	if remotePullOnInit && remoteURL != "" {
+		// Pre-flight auth check: if auth config is missing or malformed,
+		// fail fatally — the init pull cannot be attempted.
+		authFn := func() (transport.AuthMethod, error) {
+			if remoteAuthSecretRef == "" || readSecretFn == nil {
+				return nil, gitstore.ErrAuthConfigMissing
+			}
+			data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
+			if err != nil {
+				return nil, fmt.Errorf("pre-flight auth: read secret: %w", err)
+			}
+			parsedURL, parseErr := url.Parse(remoteURL)
+			if parseErr != nil {
+				return nil, fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
+			}
+			switch parsedURL.Scheme {
+			case "ssh":
+				if _, ok := data["ssh-privatekey"]; !ok {
+					return nil, gitstore.ErrAuthConfigMissing
+				}
+			case "https":
+				if _, ok := data["password"]; !ok {
+					return nil, gitstore.ErrAuthConfigMissing
+				}
+			default:
+				return nil, gitstore.ErrUnsupportedURLScheme
+			}
+			return nil, nil // Only checking config, not constructing auth
+		}
+		if _, authErr := authFn(); authErr != nil {
+			slog.Error("Pre-flight auth config failure", "error", authErr)
+			os.Exit(1)
+		}
+
 		empty, err := gs.IsEmpty(context.Background())
 		if err == nil && empty {
 			slog.Info("Pulling from remote on init", "url", remoteURL)

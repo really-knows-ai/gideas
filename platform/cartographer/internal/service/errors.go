@@ -129,9 +129,13 @@ func isSchemaError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Schema errors wrap well-known sentinels from the schema package.
-	// We match on message prefixes since we can't import the schema package
-	// without creating a cycle (store -> schema <- service).
+	// ponytail: string-prefix matching against error messages is fragile. Any
+	// change in the schema package's error formatting will silently break this
+	// mapping. The alternative would be importing the schema package directly
+	// for sentinel comparisons, but that creates a cycle (store -> schema <-
+	// service). Upgrade path: extract schema error sentinels into a shared
+	// package importable by both store and service, or use numeric error codes
+	// embedded in the error chain.
 	msg := err.Error()
 	schemaPrefixes := []string{
 		"duplicate type name",

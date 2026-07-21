@@ -1701,13 +1701,14 @@ func TestHealth_Basic(t *testing.T) {
 
 func TestDumpAllEntities_EmptyBranch(t *testing.T) {
 	testingShortGuard(t)
+	ctx := context.Background()
 	s, err := OpenInMemory()
 	if err != nil {
 		t.Fatalf("OpenInMemory failed: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	entities, err := s.DumpAllEntities("nonexistent-tx")
+	entities, err := s.DumpAllEntities(ctx, "nonexistent-tx")
 	if err != nil {
 		t.Fatalf("DumpAllEntities failed: %v", err)
 	}
@@ -1718,13 +1719,14 @@ func TestDumpAllEntities_EmptyBranch(t *testing.T) {
 
 func TestDumpAllEdges_EmptyBranch(t *testing.T) {
 	testingShortGuard(t)
+	ctx := context.Background()
 	s, err := OpenInMemory()
 	if err != nil {
 		t.Fatalf("OpenInMemory failed: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	edges, err := s.DumpAllEdges("nonexistent-tx")
+	edges, err := s.DumpAllEdges(ctx, "nonexistent-tx")
 	if err != nil {
 		t.Fatalf("DumpAllEdges failed: %v", err)
 	}
