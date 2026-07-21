@@ -173,6 +173,15 @@ func (c *Client) GetFlow() (*Flow, error) {
 	return newFlow(resp, c.session.namespace), nil
 }
 
+// GetGraph returns the Cartographer graph handle for the current flow.
+// The returned *Graph shares the Client's session for gRPC connectivity.
+func (c *Client) GetGraph() (*Graph, error) {
+	if c.session == nil {
+		return nil, fmt.Errorf("flow sdk: client not initialised")
+	}
+	return &Graph{session: c.session}, nil
+}
+
 // GetNode returns the calling node's identity and capabilities.
 func (c *Client) GetNode() (*Node, error) {
 	if c.session == nil {

@@ -22,7 +22,7 @@ help: ## Display this help.
 CGO_TEST_SERVICES = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: test
-test: test-sdk test-sidecar $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
+test: test-sdk test-sidecar test-flowctl $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -31,6 +31,10 @@ test-sdk: ## Run SDK unit tests.
 .PHONY: test-sidecar
 test-sidecar: ## Run Sidecar unit tests.
 	go test -v ./platform/sidecar/...
+
+.PHONY: test-flowctl
+test-flowctl: ## Run flowctl unit tests.
+	go test -v ./tools/flowctl/...
 
 $(foreach srv,$(CGO_TEST_SERVICES),$(eval .PHONY: test-$(srv)))
 $(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; CGO_ENABLED=1 go test -v ./platform/$(srv)/...))
@@ -57,7 +61,7 @@ CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy faci
 CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: build
-build: build-sidecar build-null-node $(addprefix build-,$(CGO_NODE_BINS)) $(addprefix build-,$(CGO_PLATFORM_BINS)) ## Build all binaries.
+build: build-sidecar build-null-node build-flowctl $(addprefix build-,$(CGO_NODE_BINS)) $(addprefix build-,$(CGO_PLATFORM_BINS)) ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -66,6 +70,10 @@ build-sidecar: ## Build the Sidecar binary.
 .PHONY: build-null-node
 build-null-node: ## Build the Null Node binary.
 	go build -o bin/null-node ./nodes/null-node
+
+.PHONY: build-flowctl
+build-flowctl: ## Build the flowctl binary.
+	CGO_ENABLED=0 go build -o bin/flowctl ./tools/flowctl
 
 $(foreach bin,$(CGO_NODE_BINS),$(eval .PHONY: build-$(bin)))
 $(foreach bin,$(CGO_NODE_BINS),$(eval build-$(bin): ; CGO_ENABLED=1 go build -o bin/$(bin) ./nodes/$(bin)))
@@ -155,7 +163,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/queue nodes platform/operator; do \
+	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/queue nodes platform/operator tools/flowctl; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done

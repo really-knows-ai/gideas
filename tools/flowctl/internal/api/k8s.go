@@ -117,6 +117,8 @@ func addFlowScheme(s *runtime.Scheme) error {
 	s.AddKnownTypeWithName(gv.WithKind("LawGroupList"), &unstructured.UnstructuredList{})
 	s.AddKnownTypeWithName(gv.WithKind("Treaty"), &unstructured.Unstructured{})
 	s.AddKnownTypeWithName(gv.WithKind("TreatyList"), &unstructured.UnstructuredList{})
+	s.AddKnownTypeWithName(gv.WithKind("FoundryGraph"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(gv.WithKind("FoundryGraphList"), &unstructured.UnstructuredList{})
 
 	// Add core/v1 types needed by the scheme for namespace pod operations.
 	if err := corev1.AddToScheme(s); err != nil {
@@ -539,6 +541,28 @@ func (c *K8sClient) ResolveSystemNamespace(ctx context.Context, cfgNS, workitemN
 		return cfgNS, nil
 	}
 	return workitemNS, nil
+}
+
+// ResolveNamespace performs a pure label scan with no fallback chain.
+// It returns the namespace of the first Running and Ready pod matching
+// labelSelector. Returns an error if no matching pod is found.
+//
+// Unlike ResolveSystemNamespace, this method has no cfgNS/workitemNS
+// fallback chain. Callers that need explicit-config or workitem-namespace
+// fallback should use ResolveSystemNamespace instead.
+func (c *K8sClient) ResolveNamespace(ctx context.Context, labelSelector string) (string, error) {
+	pods, err := c.CoreClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing pods across all namespaces: %w", err)
+	}
+	for _, pod := range pods.Items {
+		if PodReady(&pod) {
+			return pod.Namespace, nil
+		}
+	}
+	return "", fmt.Errorf("no Ready operator pod found matching label %q", labelSelector)
 }
 
 // RESTConfig returns the underlying *rest.Config for port-forward creation.

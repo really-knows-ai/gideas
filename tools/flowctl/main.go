@@ -91,6 +91,7 @@ func init() {
 	rootCmd.AddCommand(cmd.NewPackageCmd())
 	rootCmd.AddCommand(cmd.NewInstallCmd())
 	rootCmd.AddCommand(cmd.NewInitCmd())
+	rootCmd.AddCommand(cmd.NewGraphCmd())
 }
 
 func main() {
