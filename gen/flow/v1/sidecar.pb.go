@@ -684,8 +684,8 @@ const file_flow_v1_sidecar_proto_rawDesc = "" +
 	"\n" +
 	"AssignWork\x12\x1a.flow.v1.AssignWorkRequest\x1a\f.flow.v1.Ack\x12H\n" +
 	"\vAddFriction\x12\x1b.flow.v1.AddFrictionRequest\x1a\x1c.flow.v1.AddFrictionResponse\x12T\n" +
-	"\x0fRecordTelemetry\x12\x1f.flow.v1.RecordTelemetryRequest\x1a .flow.v1.RecordTelemetryResponseB\x83\x01\n" +
-	"\vcom.flow.v1B\fSidecarProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\x0fRecordTelemetry\x12\x1f.flow.v1.RecordTelemetryRequest\x1a .flow.v1.RecordTelemetryResponseB\x84\x01\n" +
+	"\vcom.flow.v1B\fSidecarProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_sidecar_proto_rawDescOnce sync.Once

@@ -1,15 +1,16 @@
 go 1.25.3
 
 use (
-	./operator
-	./sidecar
+	../gen
+	./archivist
+	./cartographer
 	./eventbus
 	./federation
 	./frictionledger
-	./monitor
 	./librarian
-	./archivist
-	./queue
+	./monitor
+	./operator
 	./pkg/eventbus
-	../gen
+	./queue
+	./sidecar
 )

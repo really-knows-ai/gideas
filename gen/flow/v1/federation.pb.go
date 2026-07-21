@@ -1503,8 +1503,8 @@ const file_flow_v1_federation_proto_rawDesc = "" +
 	"\x11GetPetitionTarget\x12!.flow.v1.GetPetitionTargetRequest\x1a\".flow.v1.GetPetitionTargetResponse\x12Z\n" +
 	"\x11SubmitPublication\x12!.flow.v1.SubmitPublicationRequest\x1a\".flow.v1.SubmitPublicationResponse\x12X\n" +
 	"\x13SubscribeLawUpdates\x12#.flow.v1.SubscribeLawUpdatesRequest\x1a\x1a.flow.v1.PublishedLawEvent0\x01\x12g\n" +
-	"\x19SubscribePetitionOutcomes\x12).flow.v1.SubscribePetitionOutcomesRequest\x1a\x1d.flow.v1.PetitionOutcomeEvent0\x01B\x86\x01\n" +
-	"\vcom.flow.v1B\x0fFederationProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\x19SubscribePetitionOutcomes\x12).flow.v1.SubscribePetitionOutcomesRequest\x1a\x1d.flow.v1.PetitionOutcomeEvent0\x01B\x87\x01\n" +
+	"\vcom.flow.v1B\x0fFederationProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_federation_proto_rawDescOnce sync.Once

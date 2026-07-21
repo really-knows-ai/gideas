@@ -1521,8 +1521,8 @@ const file_flow_v1_operator_proto_rawDesc = "" +
 	"\vGetChildren\x12\x1b.flow.v1.GetChildrenRequest\x1a\x1c.flow.v1.GetChildrenResponse\x12Q\n" +
 	"\x0eResumeWorkitem\x12\x1e.flow.v1.ResumeWorkitemRequest\x1a\x1f.flow.v1.ResumeWorkitemResponse\x12i\n" +
 	"\x16ListSuspendedWorkitems\x12&.flow.v1.ListSuspendedWorkitemsRequest\x1a'.flow.v1.ListSuspendedWorkitemsResponse\x12`\n" +
-	"\x13ValidateChildAccess\x12#.flow.v1.ValidateChildAccessRequest\x1a$.flow.v1.ValidateChildAccessResponseB\x84\x01\n" +
-	"\vcom.flow.v1B\rOperatorProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\x13ValidateChildAccess\x12#.flow.v1.ValidateChildAccessRequest\x1a$.flow.v1.ValidateChildAccessResponseB\x85\x01\n" +
+	"\vcom.flow.v1B\rOperatorProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_operator_proto_rawDescOnce sync.Once

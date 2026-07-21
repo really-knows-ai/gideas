@@ -1,6 +1,6 @@
 module github.com/foundry/flow/librarian
 
-go 1.25.0
+go 1.25.3
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6

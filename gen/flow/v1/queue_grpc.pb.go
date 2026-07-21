@@ -33,7 +33,6 @@ const (
 // Each HITL node replica runs a QueuePeerService server alongside its
 // NodeService on the same gRPC port. Peers discover each other via headless
 // service DNS and use this service for scatter-gather reads and proxy writes.
-//
 type QueuePeerServiceClient interface {
 	// Returns queue items from this shard's local queue.db.
 	// Used by scatter-gather reads to collect items across all shards.
@@ -109,7 +108,6 @@ func (c *queuePeerServiceClient) DecideItem(ctx context.Context, in *DecideItemR
 // Each HITL node replica runs a QueuePeerService server alongside its
 // NodeService on the same gRPC port. Peers discover each other via headless
 // service DNS and use this service for scatter-gather reads and proxy writes.
-//
 type QueuePeerServiceServer interface {
 	// Returns queue items from this shard's local queue.db.
 	// Used by scatter-gather reads to collect items across all shards.

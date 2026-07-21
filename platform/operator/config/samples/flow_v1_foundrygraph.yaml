@@ -1,0 +1,9 @@
+apiVersion: flow.foundry.io/v1
+kind: FoundryGraph
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: foundrygraph-sample
+spec:
+  # TODO(user): Add fields here

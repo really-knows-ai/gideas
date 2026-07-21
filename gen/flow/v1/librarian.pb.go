@@ -1877,8 +1877,8 @@ const file_flow_v1_librarian_proto_rawDesc = "" +
 	"\vGetLawGroup\x12\x1b.flow.v1.GetLawGroupRequest\x1a\x1c.flow.v1.GetLawGroupResponse\x12N\n" +
 	"\rListLawGroups\x12\x1d.flow.v1.ListLawGroupsRequest\x1a\x1e.flow.v1.ListLawGroupsResponse\x12K\n" +
 	"\fSyncLawGroup\x12\x1c.flow.v1.SyncLawGroupRequest\x1a\x1d.flow.v1.SyncLawGroupResponse\x12Q\n" +
-	"\x0eDeleteLawGroup\x12\x1e.flow.v1.DeleteLawGroupRequest\x1a\x1f.flow.v1.DeleteLawGroupResponseB\x85\x01\n" +
-	"\vcom.flow.v1B\x0eLibrarianProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\x0eDeleteLawGroup\x12\x1e.flow.v1.DeleteLawGroupRequest\x1a\x1f.flow.v1.DeleteLawGroupResponseB\x86\x01\n" +
+	"\vcom.flow.v1B\x0eLibrarianProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_librarian_proto_rawDescOnce sync.Once

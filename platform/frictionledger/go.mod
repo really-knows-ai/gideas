@@ -1,6 +1,6 @@
 module github.com/foundry/flow/frictionledger
 
-go 1.25.0
+go 1.25.3
 
 replace github.com/foundry/flow/gen => ../../gen
 

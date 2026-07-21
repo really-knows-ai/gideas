@@ -11,4 +11,5 @@ resources:
 - flow_v1_flowsupportservice.yaml
 - flow_v1_codificationservice.yaml
 - flow_v1_lawgroup.yaml
+- flow_v1_foundrygraph.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

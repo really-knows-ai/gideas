@@ -568,9 +568,9 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"\tClaimItem\x12\x19.flow.v1.ClaimItemRequest\x1a\x1a.flow.v1.ClaimItemResponse\x12H\n" +
 	"\vReleaseItem\x12\x1b.flow.v1.ReleaseItemRequest\x1a\x1c.flow.v1.ReleaseItemResponse\x12E\n" +
 	"\n" +
-	"DecideItem\x12\x1a.flow.v1.DecideItemRequest\x1a\x1b.flow.v1.DecideItemResponseB\x81\x01\n" +
+	"DecideItem\x12\x1a.flow.v1.DecideItemRequest\x1a\x1b.flow.v1.DecideItemResponseB\x82\x01\n" +
 	"\vcom.flow.v1B\n" +
-	"QueueProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"QueueProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_queue_proto_rawDescOnce sync.Once

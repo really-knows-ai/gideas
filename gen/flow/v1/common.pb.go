@@ -1740,8 +1740,8 @@ const file_flow_v1_common_proto_rawDesc = "" +
 	"\x13VERDICT_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fVERDICT_PROMOTE\x10\x01\x12\x12\n" +
 	"\x0eVERDICT_RETIRE\x10\x02\x12\x12\n" +
-	"\x0eVERDICT_DEMOTE\x10\x03B\x82\x01\n" +
-	"\vcom.flow.v1B\vCommonProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\x0eVERDICT_DEMOTE\x10\x03B\x83\x01\n" +
+	"\vcom.flow.v1B\vCommonProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_common_proto_rawDescOnce sync.Once

@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- foundrygraph_admin_role.yaml
+- foundrygraph_editor_role.yaml
+- foundrygraph_viewer_role.yaml
 - codificationservice_admin_role.yaml
 - codificationservice_editor_role.yaml
 - codificationservice_viewer_role.yaml
@@ -47,3 +50,5 @@ resources:
 - foundryflow_admin_role.yaml
 - foundryflow_editor_role.yaml
 - foundryflow_viewer_role.yaml
+
+

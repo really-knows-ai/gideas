@@ -4,6 +4,7 @@ use (
 	./gen
 	./nodes
 	./platform/archivist
+	./platform/cartographer
 	./platform/eventbus
 	./platform/federation
 	./platform/frictionledger

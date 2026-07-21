@@ -1,6 +1,6 @@
 module github.com/foundry/flow/gen
 
-go 1.25.0
+go 1.25.3
 
 require (
 	google.golang.org/grpc v1.79.1

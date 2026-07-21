@@ -26,8 +26,8 @@ const file_flow_v1_node_proto_rawDesc = "" +
 	"\n" +
 	"\x12flow/v1/node.proto\x12\aflow.v1\x1a\x15flow/v1/sidecar.proto2B\n" +
 	"\vNodeService\x123\n" +
-	"\aProcess\x12\x1a.flow.v1.AssignWorkRequest\x1a\f.flow.v1.AckB\x80\x01\n" +
-	"\vcom.flow.v1B\tNodeProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\aProcess\x12\x1a.flow.v1.AssignWorkRequest\x1a\f.flow.v1.AckB\x81\x01\n" +
+	"\vcom.flow.v1B\tNodeProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var file_flow_v1_node_proto_goTypes = []any{
 	(*AssignWorkRequest)(nil), // 0: flow.v1.AssignWorkRequest

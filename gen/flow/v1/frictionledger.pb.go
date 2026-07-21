@@ -206,8 +206,8 @@ const file_flow_v1_frictionledger_proto_rawDesc = "" +
 	"\x15QueryFrictionResponse\x12K\n" +
 	"\x13friction_aggregates\x18\x01 \x03(\v2\x1a.flow.v1.FrictionAggregateR\x12frictionAggregates2g\n" +
 	"\x15FrictionLedgerService\x12N\n" +
-	"\rQueryFriction\x12\x1d.flow.v1.QueryFrictionRequest\x1a\x1e.flow.v1.QueryFrictionResponseB\x8a\x01\n" +
-	"\vcom.flow.v1B\x13FrictionledgerProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\rQueryFriction\x12\x1d.flow.v1.QueryFrictionRequest\x1a\x1e.flow.v1.QueryFrictionResponseB\x8b\x01\n" +
+	"\vcom.flow.v1B\x13FrictionledgerProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_frictionledger_proto_rawDescOnce sync.Once

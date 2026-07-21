@@ -30,7 +30,6 @@ const (
 // friction data. It subscribes to the Event Bus telemetry channel for
 // friction events, persists them, evaluates thresholds, and serves
 // aggregated friction queries.
-//
 type FrictionLedgerServiceClient interface {
 	// Returns aggregated friction data across the requested axes.
 	// Used by the Librarian for hearing threshold evaluation and by the
@@ -64,7 +63,6 @@ func (c *frictionLedgerServiceClient) QueryFriction(ctx context.Context, in *Que
 // friction data. It subscribes to the Event Bus telemetry channel for
 // friction events, persists them, evaluates thresholds, and serves
 // aggregated friction queries.
-//
 type FrictionLedgerServiceServer interface {
 	// Returns aggregated friction data across the requested axes.
 	// Used by the Librarian for hearing threshold evaluation and by the

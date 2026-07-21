@@ -500,8 +500,8 @@ const file_flow_v1_eventbus_proto_rawDesc = "" +
 	"\fmatch_labels\x18\x04 \x03(\v2\x0e.flow.v1.LabelR\vmatchLabelsJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x042\x91\x01\n" +
 	"\x13FlowEventBusService\x12<\n" +
 	"\aPublish\x12\x17.flow.v1.PublishRequest\x1a\x18.flow.v1.PublishResponse\x12<\n" +
-	"\tSubscribe\x12\x19.flow.v1.SubscribeRequest\x1a\x12.flow.v1.FlowEvent0\x01B\x84\x01\n" +
-	"\vcom.flow.v1B\rEventbusProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\tSubscribe\x12\x19.flow.v1.SubscribeRequest\x1a\x12.flow.v1.FlowEvent0\x01B\x85\x01\n" +
+	"\vcom.flow.v1B\rEventbusProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_eventbus_proto_rawDescOnce sync.Once

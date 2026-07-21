@@ -764,8 +764,8 @@ const file_flow_v1_embassy_proto_rawDesc = "" +
 	"\x0eEmbassyService\x12Z\n" +
 	"\x11PreflightManifest\x12!.flow.v1.PreflightManifestRequest\x1a\".flow.v1.PreflightManifestResponse\x12H\n" +
 	"\rStreamPackage\x12\x15.flow.v1.PackageChunk\x1a\x1e.flow.v1.StreamPackageResponse(\x01\x12G\n" +
-	"\rExportPackage\x12\x1d.flow.v1.ExportPackageRequest\x1a\x15.flow.v1.PackageChunk0\x01B\x83\x01\n" +
-	"\vcom.flow.v1B\fEmbassyProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\rExportPackage\x12\x1d.flow.v1.ExportPackageRequest\x1a\x15.flow.v1.PackageChunk0\x01B\x84\x01\n" +
+	"\vcom.flow.v1B\fEmbassyProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_embassy_proto_rawDescOnce sync.Once

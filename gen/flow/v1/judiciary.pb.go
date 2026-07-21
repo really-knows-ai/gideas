@@ -151,8 +151,8 @@ const file_flow_v1_judiciary_proto_rawDesc = "" +
 	"\x1eCONSENSUS_STRATEGY_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"CONSENSUS_STRATEGY_SIMPLE_MAJORITY\x10\x01\x12%\n" +
 	"!CONSENSUS_STRATEGY_SUPER_MAJORITY\x10\x02\x12 \n" +
-	"\x1cCONSENSUS_STRATEGY_UNANIMITY\x10\x03B\x85\x01\n" +
-	"\vcom.flow.v1B\x0eJudiciaryProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"\x1cCONSENSUS_STRATEGY_UNANIMITY\x10\x03B\x86\x01\n" +
+	"\vcom.flow.v1B\x0eJudiciaryProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_judiciary_proto_rawDescOnce sync.Once

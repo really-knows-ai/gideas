@@ -2428,8 +2428,8 @@ const file_flow_v1_archivist_proto_rawDesc = "" +
 	"\x10GetFeedbackDepth\x12 .flow.v1.GetFeedbackDepthRequest\x1a!.flow.v1.GetFeedbackDepthResponse\x12W\n" +
 	"\x10DeadlockFeedback\x12 .flow.v1.DeadlockFeedbackRequest\x1a!.flow.v1.DeadlockFeedbackResponse\x12E\n" +
 	"\n" +
-	"LinkRuling\x12\x1a.flow.v1.LinkRulingRequest\x1a\x1b.flow.v1.LinkRulingResponseB\x85\x01\n" +
-	"\vcom.flow.v1B\x0eArchivistProtoP\x01Z)github.com/gideas/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
+	"LinkRuling\x12\x1a.flow.v1.LinkRulingRequest\x1a\x1b.flow.v1.LinkRulingResponseB\x86\x01\n" +
+	"\vcom.flow.v1B\x0eArchivistProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
 var (
 	file_flow_v1_archivist_proto_rawDescOnce sync.Once

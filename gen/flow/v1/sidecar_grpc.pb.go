@@ -39,7 +39,6 @@ const (
 // Archivist, Librarian, FrictionLedger) when called from the Node. Those
 // service definitions are not duplicated here -- the Go SDK will connect
 // to the Sidecar's port and use the respective service stubs.
-//
 type SidecarServiceClient interface {
 	// Resets the Sidecar's inactivity timer. Implicit heartbeats occur on
 	// every SDK call; this method provides an explicit signal for long-running
@@ -151,7 +150,6 @@ func (c *sidecarServiceClient) RecordTelemetry(ctx context.Context, in *RecordTe
 // Archivist, Librarian, FrictionLedger) when called from the Node. Those
 // service definitions are not duplicated here -- the Go SDK will connect
 // to the Sidecar's port and use the respective service stubs.
-//
 type SidecarServiceServer interface {
 	// Resets the Sidecar's inactivity timer. Implicit heartbeats occur on
 	// every SDK call; this method provides an explicit signal for long-running

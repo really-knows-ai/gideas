@@ -49,7 +49,7 @@ type OperatorServiceClient interface {
 	// The Operator validates the bound entry contract against artefact state.
 	CreateWorkitem(ctx context.Context, in *CreateWorkitemRequest, opts ...grpc.CallOption) (*CreateWorkitemResponse, error)
 	// Creates a child Workitem in Pending with parentWorkitemID set to the
-	// caller's current Workitem. The Operator applies the flow.gideas.io/parent
+	// caller's current Workitem. The Operator applies the flow.foundry.io/parent
 	// label. Requires CREATE:workitem/child capability. Identity comes from
 	// Sidecar-injected metadata — the request body is empty.
 	CreateChildWorkitem(ctx context.Context, in *CreateChildWorkitemRequest, opts ...grpc.CallOption) (*CreateChildWorkitemResponse, error)
@@ -61,7 +61,7 @@ type OperatorServiceClient interface {
 	// that contract before routing.
 	RouteChild(ctx context.Context, in *RouteChildRequest, opts ...grpc.CallOption) (*RouteChildResponse, error)
 	// Returns the current state of all child Workitems for the caller's parent
-	// Workitem. The Operator queries by flow.gideas.io/parent label and includes
+	// Workitem. The Operator queries by flow.foundry.io/parent label and includes
 	// artefact references from the Archivist. Identity comes from Sidecar-injected
 	// metadata — the request body is empty.
 	GetChildren(ctx context.Context, in *GetChildrenRequest, opts ...grpc.CallOption) (*GetChildrenResponse, error)
@@ -198,7 +198,7 @@ type OperatorServiceServer interface {
 	// The Operator validates the bound entry contract against artefact state.
 	CreateWorkitem(context.Context, *CreateWorkitemRequest) (*CreateWorkitemResponse, error)
 	// Creates a child Workitem in Pending with parentWorkitemID set to the
-	// caller's current Workitem. The Operator applies the flow.gideas.io/parent
+	// caller's current Workitem. The Operator applies the flow.foundry.io/parent
 	// label. Requires CREATE:workitem/child capability. Identity comes from
 	// Sidecar-injected metadata — the request body is empty.
 	CreateChildWorkitem(context.Context, *CreateChildWorkitemRequest) (*CreateChildWorkitemResponse, error)
@@ -210,7 +210,7 @@ type OperatorServiceServer interface {
 	// that contract before routing.
 	RouteChild(context.Context, *RouteChildRequest) (*RouteChildResponse, error)
 	// Returns the current state of all child Workitems for the caller's parent
-	// Workitem. The Operator queries by flow.gideas.io/parent label and includes
+	// Workitem. The Operator queries by flow.foundry.io/parent label and includes
 	// artefact references from the Archivist. Identity comes from Sidecar-injected
 	// metadata — the request body is empty.
 	GetChildren(context.Context, *GetChildrenRequest) (*GetChildrenResponse, error)
