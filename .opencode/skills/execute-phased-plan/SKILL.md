@@ -5,7 +5,7 @@ description: Use when executing a project folder under plans/ that contains SPEC
 
 # Execute Phased Plan
 
-Execute a phased implementation plan from `plans/<project-name>/` in an isolated git worktree. Each phase is implemented, verified, reviewed, and committed before the next phase begins. `SPEC.md` and `LEARNINGS.md` (if present) stay available to every agent throughout the work.
+Execute a phased implementation plan from `plans/<project-name>/` in an isolated git worktree. Each phase is implemented, verified, reviewed, and committed before the next phase begins. `SPEC.md` and `LEARNINGS.md` (if present) stay available to every agent throughout the work. Phase-level and final reviews use the `special-review` skill; fixes use the `special-fixer` skill.
 
 ## Workflow
 
@@ -79,43 +79,34 @@ After the implementer returns, inspect the worktree diff and run the phase verif
 
 ### 4. Review the phase
 
-After verification succeeds, dispatch a reviewer subagent with this prompt:
+After verification succeeds, run a structured review using the `special-review` skill, then fix any issues using the `special-fixer` skill.
 
-The main agent MUST read `LEARNINGS.md` (if it exists) and pass its full contents into the reviewer prompt. The reviewer checks that the implementation does not violate any documented patterns or known deviations from `LEARNINGS.md` — this is in addition to checking SPEC compliance.
+#### 4a. Run special-review
 
-```
-Review this implemented phase.
+Load the `special-review` skill and follow its workflow:
 
-**Spec file:**
-[path to SPEC.md]
+- **Files to review**: All files modified or added in the current worktree diff (the files implementing this phase's deliverables).
+- **Criteria**: `plans/<project>/SPEC.md` and `plans/<project>/PHASE_XX.md` — the implementation must satisfy every spec requirement relevant to this phase and meet the phase's acceptance criteria.
+- **Output path**: `plans/<project>/phase-XX-review.md` (per-phase review artifact).
+- **Prior learnings**: The skill reads `plans/<project>/LEARNINGS.md` automatically from the same directory.
 
-**Plan file:**
-[path to PLAN.md]
+The special-review workflow produces a consolidated checklist of any divergences.
 
-**Current phase file:**
-[path to PHASE_XX.md]
+#### 4b. Run special-fixer
 
-**Learnings from prior review cycles (do not re-flag documented patterns):**
-[full contents of LEARNINGS.md, or "None"]
+If the phase review produced any open items (`- [ ]` or `- [!]` in the review file), load the `special-fixer` skill and follow its workflow:
 
-**Implementation state:**
-Review the current worktree diff and relevant files. Do not rely on git commit history.
+- **Review file**: `plans/<project>/phase-XX-review.md`
+- The skill groups items by target file, dispatches implementers in parallel, and updates the review checklist with fix/wont-fix results.
 
-Check for:
-1. The current phase deliverables are implemented.
-2. The implementation satisfies the current phase acceptance criteria.
-3. The implementation stays aligned with `SPEC.md`.
-4. Prior-phase behaviour remains intact.
-5. Tests, verification, and error handling are sufficient for this phase.
-6. The implementation does not reintroduce issues documented in Learnings — cross-reference each relevant learning against the diff.
-7. The work is ready to commit as a complete phase.
+#### 4c. Re-verify and re-review
 
-Respond with one of:
-- "APPROVED" (phase is complete and ready to commit)
-- A numbered list of specific issues to fix, referencing any violated learning by name where applicable
-```
+After the fixer completes:
+1. If any items were fixed (`- [x]`), re-run the phase verification steps from the phase file.
+2. If any items remain open (`- [ ]` or `- [!]`), re-run special-review (step 4a) with the same inputs.
+3. If any items were marked wont-fix (`- [~]`), the main agent reads their justifications and decides whether to accept or escalate.
 
-If the reviewer raises issues, dispatch the implementer again with the reviewer feedback verbatim, then re-run phase verification and review. Maximum two review cycles per phase before stopping and reporting the blocker to the user.
+Maximum two review-fix cycles per phase before stopping and reporting the blocker to the user.
 
 ### 5. Commit the phase
 
@@ -153,46 +144,33 @@ These two commands are non-negotiable — see `AGENTS.md`. Fix failures through 
 
 ### 8. Final spec-fulfilment review
 
-Dispatch a final reviewer subagent with this prompt:
+After all phases are committed and the full quality gate (step 7) passes, run a final structured review using the `special-review` skill, then fix any remaining issues using the `special-fixer` skill.
 
-The main agent MUST read `LEARNINGS.md` (if it exists) and pass its full contents into the final reviewer prompt. The final review cross-references the implementation against both `SPEC.md` and `LEARNINGS.md` to catch any recurrence of documented issues.
+#### 8a. Run special-review
 
-```
-Review the completed implementation against `SPEC.md`.
+Load the `special-review` skill and follow its workflow:
 
-**Spec file:**
-[path to SPEC.md]
+- **Files to review**: All implementation files affected across all phases — the complete worktree implementation state.
+- **Criteria**: `plans/<project>/SPEC.md` — does the full implementation satisfy every spec requirement?
+- **Output path**: `plans/<project>/REVIEW.md` (the project's canonical review artifact).
+- **Prior learnings**: The skill reads `plans/<project>/LEARNINGS.md` automatically.
 
-**Plan file:**
-[path to PLAN.md]
+The special-review workflow produces a consolidated checklist of spec-compliance gaps.
 
-**Phase files:**
-[paths to all PHASE_XX.md files, in order]
+#### 8b. Run special-fixer
 
-**Learnings from prior review cycles (do not re-flag documented patterns):**
-[full contents of LEARNINGS.md, or "None"]
+If the final review produced any open items, load the `special-fixer` skill and follow its workflow:
 
-**Implementation state:**
-Review the current worktree and relevant files. Do not review git commit history. Assess the implemented system as it exists now.
+- **Review file**: `plans/<project>/REVIEW.md`
 
-Primary question:
-Does the implemented system fulfil `SPEC.md`?
+#### 8c. Re-run quality gate and re-review
 
-Check for:
-1. Every spec requirement is implemented.
-2. The implemented phases fit together coherently.
-3. Edge cases and error handling from the spec are covered.
-4. User-facing behaviour matches the spec.
-5. Tests and verification provide appropriate confidence.
-6. No plan phase left incomplete or contradicted the spec.
-7. The implementation does not reintroduce issues documented in Learnings — cross-reference each relevant learning against the final state.
+After the fixer completes:
+1. Re-run the full quality gate (`go test ./... && make check-fix`).
+2. If any items remain open, re-run special-review (step 8a) — it will prune newly-fixed items, verify wont-fix justifications, and produce a fresh checklist.
+3. Re-run the quality gate after any fixes.
 
-Respond with one of:
-- "APPROVED" (the implementation fulfils `SPEC.md` and respects documented learnings)
-- A numbered list of specific gaps to fix, referencing any violated learning by name where applicable
-```
-
-If the final reviewer raises gaps, dispatch the implementer with the review feedback verbatim, re-run the full quality gate, and re-run the final review. Commit approved final fixes separately. Maximum two final review cycles before stopping and reporting unresolved gaps to the user.
+Maximum two final review cycles before stopping and reporting unresolved gaps to the user.
 
 ### 9. Report completion
 
@@ -208,20 +186,25 @@ Report:
 
 - Start a fresh git worktree and development branch before implementation.
 - Keep `SPEC.md` and `LEARNINGS.md` (if it exists) available to every implementer and reviewer subagent.
-- The main agent MUST read `LEARNINGS.md` and inline its full contents into implementer and reviewer prompts — do not delegate reading to subagents.
+- The main agent MUST read `LEARNINGS.md` and inline its full contents into implementer prompts — do not delegate reading to subagents. The `special-review` skill reads LEARNINGS.md automatically for its reviewers.
 - Execute phases strictly in order.
 - Commit after each approved phase.
-- Run a reviewer after each phase.
-- Run a final review against `SPEC.md` after all phases are complete.
+- Phase reviews use the `special-review` skill (producing a per-phase review file) followed by the `special-fixer` skill (if issues found).
+- Run a final review against `SPEC.md` after all phases are complete, using `special-review` + `special-fixer`.
 - The final review evaluates the implementation state, not branch history.
-- Stop after two failed review cycles for the same phase or final review.
+- Stop after two failed review-fix cycles for the same phase or final review.
 
 ## Common Mistakes
 
 - **Working in the current checkout**: Phased execution starts in a fresh worktree and branch.
 - **Skipping phase commits**: Each approved phase becomes its own commit before the next phase starts.
-- **Letting agents work from phase files alone**: Every implementer and reviewer receives `SPEC.md`, the plan, the current phase path, and the full contents of `LEARNINGS.md`.
-- **Letting subagents read `LEARNINGS.md` themselves**: The main agent reads `LEARNINGS.md` and inlines its full contents into subagent prompts. Subagents may not locate or interpret it correctly if given only a file path.
+- **Letting agents work from phase files alone**: Every implementer receives `SPEC.md`, the plan, the current phase path, and the full contents of `LEARNINGS.md`.
+- **Letting subagents read `LEARNINGS.md` themselves**: The main agent reads `LEARNINGS.md` and inlines its full contents into implementer prompts. Subagents may not locate or interpret it correctly if given only a file path. The `special-review` skill handles its own LEARNINGS.md reading — let it do that.
+- **Skipping the special-review → special-fixer loop for phase reviews**: After each phase, always run `special-review` first, then `special-fixer` if issues exist. Do not skip to commit without a structured review artifact.
+- **Reviewing against phase files alone**: Phase reviews use `SPEC.md` + `PHASE_XX.md` as criteria, not just the phase file. The implementation must satisfy spec requirements, not just the phase's documented scope.
+- **Running the final review without loading `special-review`**: Do not inline-review the final implementation. Load the `special-review` skill and follow its workflow — it handles consolidation, deduplication, and learning pruning.
+- **Applying fixes without `special-fixer`**: When review issues exist, load `special-fixer` rather than dispatching ad-hoc implementers. The fixer groups items by file, dispatches in parallel, and tags results correctly.
+- **Running `special-review` without an output path**: Phase reviews always write to `phase-XX-review.md`; the final review writes to `REVIEW.md`. Without a distinct path, per-phase review artifacts would overwrite each other.
 - **Ignoring `LEARNINGS.md` during implementation**: The learnings document captures patterns identified in prior review cycles. Implementers must cross-reference every relevant learning against their code. Known Deviations document what NOT to flag, so reviewers need them too. Treat `LEARNINGS.md` as co-equal with `SPEC.md` — both constrain what correct implementation looks like.
 - **Reviewing git history in the final review**: The final reviewer assesses the current implementation against `SPEC.md`.
 - **Running phases in parallel**: Phases are sequential because each phase may depend on prior handoffs.
