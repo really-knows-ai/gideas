@@ -19,7 +19,7 @@ help: ## Display this help.
 # ---------------------------------------------------------------------------
 
 # Platform test services that require CGO for SQLite.
-CGO_TEST_SERVICES = archivist monitor eventbus frictionledger librarian
+CGO_TEST_SERVICES = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: test
 test: test-sdk test-sidecar $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
@@ -54,7 +54,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise hitl-sort human-approval human-arbiter juror law-applicator petition-watcher refine rule-router sort tribunal ttl-watcher
 
 # CGO-enabled platform service binaries (built from ./platform/<name>/cmd/).
-CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian
+CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: build
 build: build-sidecar build-null-node $(addprefix build-,$(CGO_NODE_BINS)) $(addprefix build-,$(CGO_PLATFORM_BINS)) ## Build all binaries.
@@ -107,11 +107,11 @@ vet: ## Run go vet across the workspace.
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
-	"$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
+	"$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint with auto-fix (excludes operator).
-	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
+	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint-operator
 lint-operator: ## Run golangci-lint for the operator (delegates to operator/Makefile).

@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cartographer-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cartographer
+  labels:
+    app: cartographer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cartographer
+  template:
+    metadata:
+      labels:
+        app: cartographer
+    spec:
+      serviceAccountName: cartographer
+      containers:
+        - name: cartographer
+          image: cartographer:latest
+          ports:
+            - containerPort: 50051
+              name: grpc
+          env:
+            - name: LADYBUG_DB_PATH
+              value: /data
+            - name: CARTOGRAPHER_PORT
+              value: "50051"
+            - name: TRANSACTION_TIMEOUT
+              value: "30m"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPERATOR_VERIFICATION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cartographer-operator-key
+                  key: key
+            - name: SIDECAR_VERIFICATION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cartographer-sidecar-key
+                  key: key
+            # Optional:
+            # - name: REMOTE_URL
+            #   value: ""
+            # - name: REMOTE_AUTH_SECRET_REF
+            #   value: ""
+            # - name: EVENT_BUS_ADDRESS
+            #   value: ""
+            # - name: CAPABILITY_STALENESS_WINDOW
+            #   value: "30s"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            grpc:
+              port: 50051
+              service: grpc.health.v1.Health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cartographer-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cartographer
+spec:
+  selector:
+    app: cartographer
+  ports:
+    - port: 50051
+      targetPort: grpc
+      name: grpc
+  type: ClusterIP

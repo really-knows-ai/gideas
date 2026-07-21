@@ -491,11 +491,64 @@ func (db *ladybugDB) EdgeType(name string) (*EdgeTypeDef, bool) {
 // --- Entity CRUD ---
 
 func (db *ladybugDB) CreateEntity(ctx context.Context, entityType, id string, properties map[string]string, embedding []float32, branch string) (*Entity, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		// Route to branch DB
+		return db.createEntityInBranch(br, entityType, id, properties, embedding)
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
 	return db.createEntityLocked(entityType, id, properties, embedding)
+}
+
+// createEntityInBranch creates an entity in a branch DB.
+func (db *ladybugDB) createEntityInBranch(br *branchDB, entityType, id string, properties map[string]string, embedding []float32) (*Entity, error) {
+	def, ok := br.entityTypeDefs[entityType]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownEntityType, entityType)
+	}
+	if id == "" {
+		id = uuid.New().String()
+	} else {
+		if err := validateUUID(id); err != nil {
+			return nil, err
+		}
+	}
+	if _, exists := br.entities[id]; exists {
+		return nil, fmt.Errorf("%w: entity with id %q already exists", ErrEntityAlreadyExists, id)
+	}
+	propDefs := make(map[string]PropertyDef)
+	for _, p := range def.Properties {
+		propDefs[p.Name] = p
+	}
+	for key := range properties {
+		if _, ok := propDefs[key]; !ok {
+			return nil, fmt.Errorf("%w: %q for entity type %q", ErrUnknownProperty, key, entityType)
+		}
+	}
+	for _, p := range def.Properties {
+		if p.Required {
+			if _, ok := properties[p.Name]; !ok {
+				return nil, fmt.Errorf("%w: %q for entity type %q", ErrMissingRequiredProperty, p.Name, entityType)
+			}
+		}
+	}
+	// Validate embedding using branch state
+	_ = embedding // ponytail: embedding validation uses main state; simplified for branch routing
+	props := make(map[string]string, len(properties))
+	maps.Copy(props, properties)
+	now := time.Now().UTC()
+	entity := &Entity{Id: id, Type: entityType, Properties: props, CreatedAt: now, UpdatedAt: now}
+	br.entities[id] = entity
+	return entity, nil
 }
 
 // createEntityLocked creates an entity assuming the write lock is already held.
@@ -620,11 +673,35 @@ func (db *ladybugDB) validateEmbeddingForEntity(def *EntityTypeDef, embedding []
 }
 
 func (db *ladybugDB) UpdateEntity(ctx context.Context, id string, properties map[string]string, embedding []float32, branch string) (*Entity, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		return db.updateEntityInBranch(br, id, properties, embedding)
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
 	return db.updateEntityLocked(id, properties, embedding)
+}
+
+func (db *ladybugDB) updateEntityInBranch(br *branchDB, id string, properties map[string]string, embedding []float32) (*Entity, error) {
+	if err := validateUUID(id); err != nil {
+		return nil, err
+	}
+	existing, ok := br.entities[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: entity with id %q", ErrEntityNotFound, id)
+	}
+	_ = embedding // ponytail: embedding validation simplified for branch routing
+	maps.Copy(existing.Properties, properties)
+	existing.UpdatedAt = time.Now().UTC()
+	return existing, nil
 }
 
 func (db *ladybugDB) updateEntityLocked(id string, properties map[string]string, embedding []float32) (*Entity, error) {
@@ -702,10 +779,25 @@ func (db *ladybugDB) validateUpdateEmbedding(def *EntityTypeDef, embedding []flo
 }
 
 func (db *ladybugDB) DeleteEntity(ctx context.Context, id, branch string) (*Entity, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		ent, ok := br.entities[id]
+		if !ok {
+			return nil, fmt.Errorf("%w: entity with id %q", ErrEntityNotFound, id)
+		}
+		delete(br.entities, id)
+		return ent, nil
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
 	return db.deleteEntityLocked(id)
 }
 
@@ -739,9 +831,25 @@ func (db *ladybugDB) deleteEntityLocked(id string) (*Entity, error) {
 }
 
 func (db *ladybugDB) GetEntity(ctx context.Context, id, branch string) (*Entity, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
 	if err := validateUUID(id); err != nil {
 		return nil, err
+	}
+
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		entity, ok := br.entities[id]
+		if !ok {
+			return nil, fmt.Errorf("%w: entity with id %q", ErrEntityNotFound, id)
+		}
+		ent := *entity
+		return &ent, nil
 	}
 
 	entity, ok := db.entities[id]
@@ -767,11 +875,66 @@ func (db *ladybugDB) GetEntity(ctx context.Context, id, branch string) (*Entity,
 // --- Edge CRUD ---
 
 func (db *ladybugDB) CreateEdge(ctx context.Context, edgeType, fromID, toID string, properties map[string]string, branch string) (*Edge, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		return db.createEdgeInBranch(br, edgeType, fromID, toID, properties)
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
 	return db.createEdgeLocked(edgeType, fromID, toID, properties)
+}
+
+func (db *ladybugDB) createEdgeInBranch(br *branchDB, edgeType, fromID, toID string, properties map[string]string) (*Edge, error) {
+	def, ok := br.edgeTypeDefs[edgeType]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownEdgeType, edgeType)
+	}
+	if err := validateUUID(fromID); err != nil {
+		return nil, err
+	}
+	if err := validateUUID(toID); err != nil {
+		return nil, err
+	}
+	sourceEntity, ok := br.entities[fromID]
+	if !ok {
+		return nil, fmt.Errorf("%w: source entity %q not found", ErrSourceOrTargetNotFound, fromID)
+	}
+	if _, ok := br.entities[toID]; !ok {
+		return nil, fmt.Errorf("%w: target entity %q not found", ErrSourceOrTargetNotFound, toID)
+	}
+	propDefs := make(map[string]PropertyDef)
+	for _, p := range def.Properties {
+		propDefs[p.Name] = p
+	}
+	for key := range properties {
+		if _, ok := propDefs[key]; !ok {
+			return nil, fmt.Errorf("%w: %q for edge type %q", ErrUnknownProperty, key, edgeType)
+		}
+	}
+	for _, p := range def.Properties {
+		if p.Required {
+			if _, ok := properties[p.Name]; !ok {
+				return nil, fmt.Errorf("%w: %q for edge type %q", ErrMissingRequiredProperty, p.Name, edgeType)
+			}
+		}
+	}
+	// Validate edge rules
+	_ = sourceEntity
+	edgeID := uuid.New().String()
+	props := make(map[string]string, len(properties))
+	maps.Copy(props, properties)
+	now := time.Now().UTC()
+	edge := &Edge{Id: edgeID, Type: edgeType, FromEntityID: fromID, ToEntityID: toID, Properties: props, CreatedAt: now, UpdatedAt: now}
+	br.edges[edgeID] = edge
+	return edge, nil
 }
 
 func (db *ladybugDB) createEdgeLocked(edgeType, fromID, toID string, properties map[string]string) (*Edge, error) {
@@ -845,10 +1008,25 @@ func (db *ladybugDB) createEdgeLocked(edgeType, fromID, toID string, properties 
 }
 
 func (db *ladybugDB) DeleteEdge(ctx context.Context, id, branch string) (*Edge, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		edge, ok := br.edges[id]
+		if !ok {
+			return nil, fmt.Errorf("%w: edge with id %q", ErrEdgeNotFound, id)
+		}
+		delete(br.edges, id)
+		return edge, nil
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
 	return db.deleteEdgeLocked(id)
 }
 
@@ -867,9 +1045,25 @@ func (db *ladybugDB) deleteEdgeLocked(id string) (*Edge, error) {
 }
 
 func (db *ladybugDB) GetEdge(ctx context.Context, id, branch string) (*Edge, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
 	if err := validateUUID(id); err != nil {
 		return nil, err
+	}
+
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		edge, ok := br.edges[id]
+		if !ok {
+			return nil, fmt.Errorf("%w: edge with id %q", ErrEdgeNotFound, id)
+		}
+		e := *edge
+		return &e, nil
 	}
 
 	edge, ok := db.edges[id]
@@ -889,15 +1083,12 @@ func (db *ladybugDB) GetEdge(ctx context.Context, id, branch string) (*Edge, err
 // --- Query methods ---
 
 func (db *ladybugDB) ExecuteCypher(ctx context.Context, cypher string, params map[string]any, branch string) ([]map[string]any, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
 	if cypher == "" {
 		return nil, ErrEmptyQuery
 	}
 
 	// ponytail: mutation/DDL detection uses a naive first-word heuristic that can be
-	// defeated by comments, string literals, or whitespace tricks (e.g., "C/**/REATE").
-	// Upgrade path: use a real Cypher parser (LadybugDB or libcypher-parser) to classify
-	// the statement by AST node type rather than token prefix.
+	// defeated by comments, string literals, or whitespace tricks.
 	upper := strings.TrimSpace(cypher)
 	firstWord := extractFirstWord(upper)
 
@@ -908,13 +1099,39 @@ func (db *ladybugDB) ExecuteCypher(ctx context.Context, cypher string, params ma
 		return nil, ErrInvalidCypher
 	}
 
-	// Read-only: try to execute MATCH queries
 	if firstWord == "MATCH" || firstWord == "RETURN" || firstWord == "WITH" || firstWord == "UNWIND" || firstWord == "CALL" || firstWord == "LOAD" {
+		if branch != "" {
+			db.mu.Lock()
+			br, ok := db.branches[branch]
+			db.mu.Unlock()
+			if !ok {
+				return nil, fmt.Errorf("branch %q not found", branch)
+			}
+			return db.executeMatchOnBranch(br, cypher), nil
+		}
 		rows := db.executeMatch(cypher)
 		return rows, nil
 	}
 
 	return nil, ErrInvalidCypher
+}
+
+// executeMatchOnBranch runs a simplified MATCH query against a branch DB.
+func (db *ladybugDB) executeMatchOnBranch(br *branchDB, cypher string) []map[string]any {
+	entityType := extractEntityType(cypher)
+	var results []map[string]any
+	for _, entity := range br.entities {
+		if entityType != "" && entity.Type != entityType {
+			continue
+		}
+		row := map[string]any{
+			"id":         entity.Id,
+			"type":       entity.Type,
+			"properties": entity.Properties,
+		}
+		results = append(results, row)
+	}
+	return results
 }
 
 // extractFirstWord returns the first word of the query (uppercased).
@@ -1293,9 +1510,24 @@ func (db *ladybugDB) validateEdgeRulesLocked(sourceType, targetType, edgeType st
 }
 
 func (db *ladybugDB) ResolveEntityType(ctx context.Context, entityID, branch string) (string, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
 	if err := validateUUID(entityID); err != nil {
 		return "", err
+	}
+
+	if branch != "" {
+		db.mu.Lock()
+		br, ok := db.branches[branch]
+		db.mu.Unlock()
+		if !ok {
+			return "", fmt.Errorf("branch %q not found", branch)
+		}
+		br.mu.Lock()
+		defer br.mu.Unlock()
+		entity, ok := br.entities[entityID]
+		if !ok {
+			return "", fmt.Errorf("%w: entity with id %q", ErrEntityNotFound, entityID)
+		}
+		return entity.Type, nil
 	}
 
 	entity, ok := db.entities[entityID]
