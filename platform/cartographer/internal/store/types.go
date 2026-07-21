@@ -1,0 +1,99 @@
+package store
+
+import "time"
+
+// Entity represents a single knowledge-graph entity with its identifier,
+// type, properties, optional vector embedding, and creation/update timestamps.
+// ponytail: CreatedAt and UpdatedAt are store-domain fields not present in the
+// proto Entity message (PHASE_01.md:315-320). The proto Entity carries only
+// entity_id, entity_type, properties, and embedding. The service layer must
+// populate the proto response without timestamp fields; timestamps are used
+// internally by the store and by transaction diff/recovery logic.
+type Entity struct {
+	Id         string
+	Type       string
+	Properties map[string]string
+	Embedding  []float32
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// Edge represents a single directed edge between two entities.
+type Edge struct {
+	Id           string
+	Type         string
+	FromEntityID string
+	ToEntityID   string
+	Properties   map[string]string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// PageToken is the opaque cursor type for paginated ListEntities results.
+// An empty PageToken denotes the first page; the final page returns an empty string.
+// The format is a base64-encoded string of the last-seen entity ID (UUID v4,
+// dashed hex format). The ListEntities signature uses the underlying string type
+// for gRPC wire compatibility; this type documents the data contract explicitly.
+type PageToken string
+
+// Row represents a single result row returned by ExecuteCypher.
+// ponytail: Retained for internal use; the public ExecuteCypher method returns
+// []map[string]any for consistency with Phase 4's Store interface.
+type Row struct {
+	Values []any
+}
+
+// NeighborResult represents a single nearest-neighbor result returned
+// by SearchNeighbors.
+type NeighborResult struct {
+	Entity   Entity
+	Distance float64 // ponytail: named Distance (store domain) vs SearchNeighborResult.score (proto wire). The service layer maps Distance to the proto's double score field when constructing SearchNeighborResult responses.
+}
+
+// PropertyDef describes a single property definition in a schema type.
+type PropertyDef struct {
+	Name     string
+	Type     string
+	Required bool
+}
+
+// EntityTypeDef describes a known entity type in the graph schema.
+// This is distinct from the proto EntityType message used by ApplySchema;
+// it is the store's domain type for schema introspection by consumers
+// such as gitstore (Phase 3). Named EntityTypeDef (not EntityType) to avoid
+// collision with flowv1.EntityType from the generated proto types.
+type EntityTypeDef struct {
+	Name              string
+	Properties        []PropertyDef
+	EnableVectorIndex bool
+}
+
+// EdgeTypeDef describes a known edge type in the graph schema.
+// This is the store's domain type for schema introspection by consumers
+// such as gitstore (Phase 3). Named EdgeTypeDef (not EdgeType) to avoid
+// collision with flowv1.EdgeType from the generated proto types.
+type EdgeTypeDef struct {
+	Name       string
+	Properties []PropertyDef
+}
+
+// SchemaProvider is the subset of the store API that schema consumers
+// (e.g., gitstore in Phase 3) depend on. The Store interface includes
+// these methods directly; SchemaProvider is a narrower consumer-facing
+// interface. The concrete ladybugDB type satisfies both interfaces.
+type SchemaProvider interface {
+	EntityTypeNames() []string
+	EdgeTypeNames() []string
+	EntityType(name string) (*EntityTypeDef, bool)
+	EdgeType(name string) (*EdgeTypeDef, bool)
+}
+
+// HealthResult captures the three health axes checked by Health().
+// The service layer maps these into the proto HealthCheckResponse fields
+// (ladybug_ok, schema_applied, pvc_writable) and/or the aggregate gRPC
+// health protocol (SERVING when all three are true, NOT_SERVING otherwise).
+type HealthResult struct {
+	LadybugOK     bool
+	SchemaApplied bool
+	PVCWritable   bool
+}
