@@ -98,6 +98,10 @@ func (g *gitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
 // FromEntityID, and ToEntityID as UUID v4, creates the directory if needed,
 // and marshals the edge to indented JSON.
 func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
+	if edgeType != edge.Type {
+		return fmt.Errorf("edge type mismatch: directory type %q != edge type %q", edgeType, edge.Type)
+	}
+
 	uid, err := uuid.Parse(edge.ID)
 	if err != nil || uid.Version() != 4 {
 		return ErrInvalidUUID
