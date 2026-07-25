@@ -3,7 +3,9 @@ package gitstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -43,9 +45,7 @@ func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([
 	dir := filepath.Join("entities", entityType)
 	entries, err := g.fs.ReadDir(dir)
 	if err != nil {
-		if strings.Contains(err.Error(), "directory not found") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "file does not exist") {
+		if isNotExist(err) {
 			return []EntityFile{}, nil
 		}
 		return nil, fmt.Errorf("read entity dir %s: %w", dir, err)
@@ -99,6 +99,10 @@ func (g *gitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
 // as a UUID v4, creates the directory if needed, and marshals the entity
 // to indented JSON.
 func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
+	if entityType != ent.Type {
+		return fmt.Errorf("entity type mismatch: %q != %q", entityType, ent.Type)
+	}
+
 	uid, err := uuid.Parse(ent.ID)
 	if err != nil || uid.Version() != 4 {
 		return ErrInvalidUUID
@@ -152,9 +156,7 @@ func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 func (g *gitStore) removeEntityFile(entityType string, id string) error {
 	path := filepath.Join("entities", entityType, id+".json")
 	if err := g.fs.Remove(path); err != nil {
-		if strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "file does not exist") ||
-			strings.Contains(err.Error(), "not found") {
+		if isNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("remove entity file %s: %w", path, err)
@@ -167,9 +169,7 @@ func (g *gitStore) removeEntityFile(entityType string, id string) error {
 func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 	entries, err := fs.ReadDir(baseDir)
 	if err != nil {
-		if strings.Contains(err.Error(), "directory not found") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "file does not exist") {
+		if isNotExist(err) {
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("read dir %s: %w", baseDir, err)
@@ -198,4 +198,11 @@ func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 
 	sort.Strings(types)
 	return types, nil
+}
+
+// isNotExist returns true if err indicates a file or directory does not exist.
+// Handles both OS-backed errors (os.PathError / syscall.ENOENT) and go-billy
+// internal filesystem errors.
+func isNotExist(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, os.ErrNotExist)
 }

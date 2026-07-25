@@ -43,9 +43,7 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 	dir := filepath.Join("edges", edgeType)
 	entries, err := g.fs.ReadDir(dir)
 	if err != nil {
-		if strings.Contains(err.Error(), "directory not found") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "file does not exist") {
+		if isNotExist(err) {
 			return []EdgeFile{}, nil
 		}
 		return nil, fmt.Errorf("read edge dir %s: %w", dir, err)
@@ -99,7 +97,7 @@ func (g *gitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
 // and marshals the edge to indented JSON.
 func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 	if edgeType != edge.Type {
-		return fmt.Errorf("edge type mismatch: directory type %q != edge type %q", edgeType, edge.Type)
+		return fmt.Errorf("edge type mismatch: %q != %q", edgeType, edge.Type)
 	}
 
 	uid, err := uuid.Parse(edge.ID)
@@ -157,9 +155,7 @@ func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 func (g *gitStore) removeEdgeFile(edgeType string, id string) error {
 	path := filepath.Join("edges", edgeType, id+".json")
 	if err := g.fs.Remove(path); err != nil {
-		if strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "file does not exist") ||
-			strings.Contains(err.Error(), "not found") {
+		if isNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("remove edge file %s: %w", path, err)

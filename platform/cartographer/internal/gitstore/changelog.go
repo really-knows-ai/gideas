@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"sort"
+	"time"
 )
 
 // NewChangeLog creates a new ChangeLog with all maps initialised.
@@ -26,19 +27,57 @@ func (cl *ChangeLog) Add(entry ChangeLogEntry) error {
 		return ErrChangeLogFull
 	}
 
+	return cl.add(entry)
+}
+
+// AddEntry adds a ChangeLogEntry to the ChangeLog without checking the 100K cap.
+// Used during startup recovery reconstruction (RecoverOpenTransactions) where
+// entries were already subject to the cap when originally added — per-transaction
+// re-checking is unnecessary since the original addition was already gated.
+// Returns ErrUnknownChangeKind for unrecognised ChangeKind values.
+//
+// ponytail: Recovery bypasses the cap via this method. The per-transaction cap
+// means a single recovered transaction cannot exceed 100K entries. If the recovery
+// algorithm changes to merge entries across transactions into a single ChangeLog,
+// callers must ensure the combined count does not exceed the cap.
+func (cl *ChangeLog) AddEntry(entry ChangeLogEntry) error {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+
+	return cl.add(entry)
+}
+
+// add is the shared insertion logic used by both Add and AddEntry.
+// Must be called with cl.mu held.
+func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 	switch entry.Kind {
 	case ChangeAddEntity:
+		if _, exists := cl.AddedEntities[entry.ID]; !exists {
+			cl.count++
+		}
 		cl.AddedEntities[entry.ID] = entry.Entity
 	case ChangeModEntity:
+		if _, exists := cl.ModifiedEntities[entry.ID]; !exists {
+			cl.count++
+		}
 		cl.ModifiedEntities[entry.ID] = entry.Entity
 	case ChangeDelEntity:
+		if _, exists := cl.DeletedEntities[entry.ID]; !exists {
+			cl.count++
+		}
 		cl.DeletedEntities[entry.ID] = &DeletionInfo{
 			Type:      entry.Type,
 			Suspected: entry.Suspected,
 		}
 	case ChangeAddEdge:
+		if _, exists := cl.AddedEdges[entry.ID]; !exists {
+			cl.count++
+		}
 		cl.AddedEdges[entry.ID] = entry.Edge
 	case ChangeDelEdge:
+		if _, exists := cl.DeletedEdges[entry.ID]; !exists {
+			cl.count++
+		}
 		cl.DeletedEdges[entry.ID] = &DeletionInfo{
 			Type:      entry.Type,
 			Suspected: entry.Suspected,
@@ -47,7 +86,6 @@ func (cl *ChangeLog) Add(entry ChangeLogEntry) error {
 		return ErrUnknownChangeKind
 	}
 
-	cl.count++
 	return nil
 }
 
@@ -61,13 +99,17 @@ func (cl *ChangeLog) AddEntity(id, entityType string, props map[string]string, e
 		return ErrChangeLogFull
 	}
 
+	if _, exists := cl.AddedEntities[id]; !exists {
+		cl.count++
+	}
 	cl.AddedEntities[id] = &EntityEntry{
 		ID:         id,
 		Type:       entityType,
 		Properties: props,
 		Embedding:  embedding,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	}
-	cl.count++
 	return nil
 }
 
@@ -81,13 +123,17 @@ func (cl *ChangeLog) ModifyEntity(id, entityType string, props map[string]string
 		return ErrChangeLogFull
 	}
 
+	if _, exists := cl.ModifiedEntities[id]; !exists {
+		cl.count++
+	}
 	cl.ModifiedEntities[id] = &EntityEntry{
 		ID:         id,
 		Type:       entityType,
 		Properties: props,
 		Embedding:  embedding,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	}
-	cl.count++
 	return nil
 }
 
@@ -101,11 +147,13 @@ func (cl *ChangeLog) DeleteEntity(id, entityType string) error {
 		return ErrChangeLogFull
 	}
 
+	if _, exists := cl.DeletedEntities[id]; !exists {
+		cl.count++
+	}
 	cl.DeletedEntities[id] = &DeletionInfo{
 		Type:      entityType,
 		Suspected: false,
 	}
-	cl.count++
 	return nil
 }
 
@@ -119,14 +167,18 @@ func (cl *ChangeLog) AddEdge(id, edgeType, fromID, toID string, props map[string
 		return ErrChangeLogFull
 	}
 
+	if _, exists := cl.AddedEdges[id]; !exists {
+		cl.count++
+	}
 	cl.AddedEdges[id] = &EdgeEntry{
 		ID:           id,
 		Type:         edgeType,
 		FromEntityID: fromID,
 		ToEntityID:   toID,
 		Properties:   props,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
-	cl.count++
 	return nil
 }
 
@@ -140,11 +192,13 @@ func (cl *ChangeLog) DeleteEdge(id, edgeType string) error {
 		return ErrChangeLogFull
 	}
 
+	if _, exists := cl.DeletedEdges[id]; !exists {
+		cl.count++
+	}
 	cl.DeletedEdges[id] = &DeletionInfo{
 		Type:      edgeType,
 		Suspected: false,
 	}
-	cl.count++
 	return nil
 }
 
@@ -154,7 +208,7 @@ func (cl *ChangeLog) Entries() []ChangeLogEntry {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
-	var entries []ChangeLogEntry
+	entries := make([]ChangeLogEntry, 0, cl.count)
 	for id, ent := range cl.AddedEntities {
 		entries = append(entries, ChangeLogEntry{
 			Kind:   ChangeAddEntity,

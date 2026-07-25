@@ -276,10 +276,6 @@ func TestChangeLogGenericAdd(t *testing.T) {
 
 // formatIntID formats an int as a padded string ID for test use.
 func formatIntID(n int) string {
-	buf := make([]byte, 36)
-	for i := range buf {
-		buf[i] = '0'
-	}
 	s := ""
 	for n >= 0 {
 		s = string(rune('a'+n%26)) + s

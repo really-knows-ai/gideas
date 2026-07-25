@@ -27,8 +27,8 @@ type EntityJSON struct {
 type EdgeJSON struct {
 	ID           uuid.UUID         `json:"id"`
 	Type         string            `json:"type"`
-	FromEntityID uuid.UUID         `json:"from_entity_id"`
-	ToEntityID   uuid.UUID         `json:"to_entity_id"`
+	FromEntityID uuid.UUID         `json:"from"`
+	ToEntityID   uuid.UUID         `json:"to"`
 	Properties   map[string]string `json:"properties,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`

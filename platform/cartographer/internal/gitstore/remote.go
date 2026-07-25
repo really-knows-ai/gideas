@@ -195,6 +195,9 @@ func (g *gitStore) HasRemote(ctx context.Context) (bool, error) {
 // g.remoteURL). After fetching, the local main ref is set to the fetched
 // commit and the working tree is checked out to main.
 func (g *gitStore) CloneSingleBranch(ctx context.Context, url, branch string) error {
+	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "ssh://") {
+		return ErrUnsupportedURLScheme
+	}
 	if g.authFn == nil {
 		return ErrAuthConfigMissing
 	}

@@ -2015,6 +2015,20 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	}
 }
 
+func TestCloneSingleBranchInvalidScheme(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		err := gs.CloneSingleBranch(ctx(), "file:///tmp/repo.git", "main")
+		if !errors.Is(err, ErrUnsupportedURLScheme) {
+			return fmt.Errorf("expected ErrUnsupportedURLScheme, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CloneSingleBranchInvalidScheme: %v", err)
+	}
+}
+
 // ============================================================================
 // T8: GitLogOneline
 // ============================================================================
@@ -2631,7 +2645,9 @@ func TestPullFromRemote(t *testing.T) {
 	}
 }
 
-// TestCloneSingleBranchFromRemote tests CloneSingleBranch with an actual remote.
+// TestCloneSingleBranchFromRemote tests clone from a remote via internal operations
+// (the same flow as CloneSingleBranch, exercised without URL scheme validation
+// since file:// URLs are not valid remote schemes per SPEC).
 func TestCloneSingleBranchFromRemote(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -2688,10 +2704,72 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 			return noopAuth{}, nil
 		}
 
-		// Clone from remote
-		if err := gs.CloneSingleBranch(ctx(), "file://"+bareDir, "main"); err != nil {
-			return fmt.Errorf("CloneSingleBranch: %w", err)
+		auth, err := gs.resolveAuth()
+		if err != nil {
+			return fmt.Errorf("resolve auth: %w", err)
 		}
+
+		// Configure remote directly (bypassing CloneSingleBranch which
+		// rejects file:// URLs — this test exercises the internal operations:
+		// fetch, ref setup, checkout, and reopen).
+		_, err = gs.repo.CreateRemote(&config.RemoteConfig{
+			Name: "origin",
+			URLs: []string{"file://" + bareDir},
+		})
+		if err != nil && !errors.Is(err, git.ErrRemoteExists) {
+			return fmt.Errorf("create remote: %w", err)
+		}
+
+		// Fetch from remote
+		err = gs.repo.FetchContext(ctx(), &git.FetchOptions{
+			RemoteName: "origin",
+			Auth:       auth,
+			Force:      false,
+		})
+		if err != nil {
+			if errors.Is(err, git.NoErrAlreadyUpToDate) {
+				// up-to-date is fine
+			} else {
+				return fmt.Errorf("fetch: %w", err)
+			}
+		}
+
+		// Resolve remote tracking ref for main
+		remoteRef, err := gs.repo.Reference(
+			plumbing.ReferenceName("refs/remotes/origin/main"), true)
+		if err != nil {
+			return fmt.Errorf("resolve remote ref: %w", err)
+		}
+
+		mainRef := plumbing.NewHashReference(
+			plumbing.ReferenceName("refs/heads/main"),
+			remoteRef.Hash(),
+		)
+		if err := gs.backend.SetReference(mainRef); err != nil {
+			return fmt.Errorf("set main ref: %w", err)
+		}
+
+		// Checkout main
+		if err := gs.wt.Checkout(&git.CheckoutOptions{
+			Branch: plumbing.ReferenceName("refs/heads/main"),
+			Force:  true,
+		}); err != nil {
+			return fmt.Errorf("checkout main: %w", err)
+		}
+
+		// Re-open repo to refresh worktree
+		repoPath := gs.basePath + "/graph-repo"
+		reopened, err := git.PlainOpen(repoPath)
+		if err != nil {
+			return fmt.Errorf("reopen repo: %w", err)
+		}
+		wt, err := reopened.Worktree()
+		if err != nil {
+			return fmt.Errorf("reopen worktree: %w", err)
+		}
+		gs.repo = reopened
+		gs.wt = wt
+		gs.fs = wt.Filesystem
 
 		// Verify the data file exists
 		if _, err := gs.fs.Stat("data.txt"); err != nil {

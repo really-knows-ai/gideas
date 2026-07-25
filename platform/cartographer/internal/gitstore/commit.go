@@ -27,9 +27,7 @@ func (g *gitStore) GitRm(ctx context.Context, path string) error {
 	// Check if path exists
 	_, err := g.fs.Stat(path)
 	if err != nil {
-		if strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "file does not exist") ||
-			strings.Contains(err.Error(), "not found") {
+		if isNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("stat %s: %w", path, err)
