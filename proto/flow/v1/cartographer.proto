@@ -68,10 +68,14 @@ message ExecuteCypherRequest {
   string transaction_id = 3;
 }
 
-// IMPL-NOTE: The repeated google.protobuf.ListValue type is broader than SPEC §R2's
-// "flat tuples" wording — it permits nested structures (lists within lists, structs).
+// FlatTuple represents a single row of scalar values from a Cypher query result.
+// Each value is a scalar (string, number, bool, or null) — never a nested list or struct.
+message FlatTuple {
+  repeated google.protobuf.Value values = 1;
+}
+
 message ExecuteCypherResponse {
-  repeated google.protobuf.ListValue rows = 1;
+  repeated FlatTuple rows = 1;
 }
 
 message SearchNeighborsRequest {
@@ -265,6 +269,12 @@ message EntityType {
   string name = 1;
   repeated Property properties = 2;
   bool enable_vector_index = 3;
+  // Connection rules governing edges from this entity type.
+  // Multiple rules are OR-ed — if *any* rule permits the connection, the edge
+  // is allowed. Within a single rule, see ConnectionRule documentation for
+  // the AND semantics between can_connect_to and using.
+  // An empty or omitted rules list means this entity type permits no edges
+  // (every CreateEdge from this source is rejected with PERMISSION_DENIED).
   repeated ConnectionRule rules = 4;
 }
 
@@ -279,8 +289,24 @@ message Property {
   bool required = 3;
 }
 
+// ConnectionRule defines a single rule entry in an entity type's connection policy.
+// Rule composition semantics (from FoundryGraph CRD spec R1):
+//   - Multiple entries in the parent `rules` list are OR-ed: if *any* rule permits
+//     the connection, the edge is allowed.
+//   - Within a single rule, BOTH `can_connect_to` AND `using` must be satisfied
+//     (AND semantics between the two lists).
+//   - Within each list, matching is by membership (implicit OR) — the target matches
+//     if it equals any entry in the list.
+//   - An empty `can_connect_to` or `using` list makes this rule permanently
+//     unsatisfiable (rejected at ApplySchema time).
+//   - Only the source entity type's rules are evaluated; the target's rules play
+//     no role in edge authorization.
 message ConnectionRule {
+  // Target entity types that the source entity type may connect to.
+  // Membership check (implicit OR): the edge's target type must match any entry.
   repeated string can_connect_to = 1;
+  // Edge types that may be used for the connection.
+  // Membership check (implicit OR): the edge's type must match any entry.
   repeated string using = 2;
 }
 

@@ -83,18 +83,62 @@ func (x *ExecuteCypherRequest) GetTransactionId() string {
 	return ""
 }
 
-// IMPL-NOTE: The repeated google.protobuf.ListValue type is broader than SPEC §R2's
-// "flat tuples" wording — it permits nested structures (lists within lists, structs).
+// FlatTuple represents a single row of scalar values from a Cypher query result.
+// Each value is a scalar (string, number, bool, or null) — never a nested list or struct.
+type FlatTuple struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        []*structpb.Value      `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FlatTuple) Reset() {
+	*x = FlatTuple{}
+	mi := &file_flow_v1_cartographer_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlatTuple) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlatTuple) ProtoMessage() {}
+
+func (x *FlatTuple) ProtoReflect() protoreflect.Message {
+	mi := &file_flow_v1_cartographer_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlatTuple.ProtoReflect.Descriptor instead.
+func (*FlatTuple) Descriptor() ([]byte, []int) {
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *FlatTuple) GetValues() []*structpb.Value {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
 type ExecuteCypherResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Rows          []*structpb.ListValue  `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	Rows          []*FlatTuple           `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExecuteCypherResponse) Reset() {
 	*x = ExecuteCypherResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[1]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -106,7 +150,7 @@ func (x *ExecuteCypherResponse) String() string {
 func (*ExecuteCypherResponse) ProtoMessage() {}
 
 func (x *ExecuteCypherResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[1]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -119,10 +163,10 @@ func (x *ExecuteCypherResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteCypherResponse.ProtoReflect.Descriptor instead.
 func (*ExecuteCypherResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{1}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *ExecuteCypherResponse) GetRows() []*structpb.ListValue {
+func (x *ExecuteCypherResponse) GetRows() []*FlatTuple {
 	if x != nil {
 		return x.Rows
 	}
@@ -141,7 +185,7 @@ type SearchNeighborsRequest struct {
 
 func (x *SearchNeighborsRequest) Reset() {
 	*x = SearchNeighborsRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[2]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -153,7 +197,7 @@ func (x *SearchNeighborsRequest) String() string {
 func (*SearchNeighborsRequest) ProtoMessage() {}
 
 func (x *SearchNeighborsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[2]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -166,7 +210,7 @@ func (x *SearchNeighborsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchNeighborsRequest.ProtoReflect.Descriptor instead.
 func (*SearchNeighborsRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{2}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SearchNeighborsRequest) GetEmbedding() []float32 {
@@ -206,7 +250,7 @@ type SearchNeighborsResponse struct {
 
 func (x *SearchNeighborsResponse) Reset() {
 	*x = SearchNeighborsResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[3]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -218,7 +262,7 @@ func (x *SearchNeighborsResponse) String() string {
 func (*SearchNeighborsResponse) ProtoMessage() {}
 
 func (x *SearchNeighborsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[3]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -231,7 +275,7 @@ func (x *SearchNeighborsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchNeighborsResponse.ProtoReflect.Descriptor instead.
 func (*SearchNeighborsResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{3}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SearchNeighborsResponse) GetResults() []*SearchNeighborResult {
@@ -253,7 +297,7 @@ type SearchNeighborResult struct {
 
 func (x *SearchNeighborResult) Reset() {
 	*x = SearchNeighborResult{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[4]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -265,7 +309,7 @@ func (x *SearchNeighborResult) String() string {
 func (*SearchNeighborResult) ProtoMessage() {}
 
 func (x *SearchNeighborResult) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[4]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -278,7 +322,7 @@ func (x *SearchNeighborResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchNeighborResult.ProtoReflect.Descriptor instead.
 func (*SearchNeighborResult) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{4}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SearchNeighborResult) GetEntityId() string {
@@ -320,7 +364,7 @@ type FullTextSearchRequest struct {
 
 func (x *FullTextSearchRequest) Reset() {
 	*x = FullTextSearchRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[5]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -332,7 +376,7 @@ func (x *FullTextSearchRequest) String() string {
 func (*FullTextSearchRequest) ProtoMessage() {}
 
 func (x *FullTextSearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[5]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -345,7 +389,7 @@ func (x *FullTextSearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FullTextSearchRequest.ProtoReflect.Descriptor instead.
 func (*FullTextSearchRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{5}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FullTextSearchRequest) GetQuery() string {
@@ -378,7 +422,7 @@ type FullTextSearchResponse struct {
 
 func (x *FullTextSearchResponse) Reset() {
 	*x = FullTextSearchResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[6]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -390,7 +434,7 @@ func (x *FullTextSearchResponse) String() string {
 func (*FullTextSearchResponse) ProtoMessage() {}
 
 func (x *FullTextSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[6]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -403,7 +447,7 @@ func (x *FullTextSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FullTextSearchResponse.ProtoReflect.Descriptor instead.
 func (*FullTextSearchResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{6}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FullTextSearchResponse) GetResults() []*Entity {
@@ -425,7 +469,7 @@ type ListEntitiesRequest struct {
 
 func (x *ListEntitiesRequest) Reset() {
 	*x = ListEntitiesRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[7]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -437,7 +481,7 @@ func (x *ListEntitiesRequest) String() string {
 func (*ListEntitiesRequest) ProtoMessage() {}
 
 func (x *ListEntitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[7]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -450,7 +494,7 @@ func (x *ListEntitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEntitiesRequest.ProtoReflect.Descriptor instead.
 func (*ListEntitiesRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{7}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListEntitiesRequest) GetEntityType() string {
@@ -491,7 +535,7 @@ type ListEntitiesResponse struct {
 
 func (x *ListEntitiesResponse) Reset() {
 	*x = ListEntitiesResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[8]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -503,7 +547,7 @@ func (x *ListEntitiesResponse) String() string {
 func (*ListEntitiesResponse) ProtoMessage() {}
 
 func (x *ListEntitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[8]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -516,7 +560,7 @@ func (x *ListEntitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEntitiesResponse.ProtoReflect.Descriptor instead.
 func (*ListEntitiesResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{8}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListEntitiesResponse) GetEntities() []*Entity {
@@ -546,7 +590,7 @@ type CreateEntityRequest struct {
 
 func (x *CreateEntityRequest) Reset() {
 	*x = CreateEntityRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[9]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -558,7 +602,7 @@ func (x *CreateEntityRequest) String() string {
 func (*CreateEntityRequest) ProtoMessage() {}
 
 func (x *CreateEntityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[9]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -571,7 +615,7 @@ func (x *CreateEntityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEntityRequest.ProtoReflect.Descriptor instead.
 func (*CreateEntityRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{9}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CreateEntityRequest) GetEntityType() string {
@@ -621,7 +665,7 @@ type CreateEntityResponse struct {
 
 func (x *CreateEntityResponse) Reset() {
 	*x = CreateEntityResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[10]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -633,7 +677,7 @@ func (x *CreateEntityResponse) String() string {
 func (*CreateEntityResponse) ProtoMessage() {}
 
 func (x *CreateEntityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[10]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -646,7 +690,7 @@ func (x *CreateEntityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEntityResponse.ProtoReflect.Descriptor instead.
 func (*CreateEntityResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{10}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CreateEntityResponse) GetEntityId() string {
@@ -689,7 +733,7 @@ type UpdateEntityRequest struct {
 
 func (x *UpdateEntityRequest) Reset() {
 	*x = UpdateEntityRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[11]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -701,7 +745,7 @@ func (x *UpdateEntityRequest) String() string {
 func (*UpdateEntityRequest) ProtoMessage() {}
 
 func (x *UpdateEntityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[11]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -714,7 +758,7 @@ func (x *UpdateEntityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateEntityRequest.ProtoReflect.Descriptor instead.
 func (*UpdateEntityRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{11}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *UpdateEntityRequest) GetId() string {
@@ -757,7 +801,7 @@ type UpdateEntityResponse struct {
 
 func (x *UpdateEntityResponse) Reset() {
 	*x = UpdateEntityResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[12]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -769,7 +813,7 @@ func (x *UpdateEntityResponse) String() string {
 func (*UpdateEntityResponse) ProtoMessage() {}
 
 func (x *UpdateEntityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[12]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -782,7 +826,7 @@ func (x *UpdateEntityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateEntityResponse.ProtoReflect.Descriptor instead.
 func (*UpdateEntityResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{12}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *UpdateEntityResponse) GetEntityId() string {
@@ -823,7 +867,7 @@ type DeleteEntityRequest struct {
 
 func (x *DeleteEntityRequest) Reset() {
 	*x = DeleteEntityRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[13]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -835,7 +879,7 @@ func (x *DeleteEntityRequest) String() string {
 func (*DeleteEntityRequest) ProtoMessage() {}
 
 func (x *DeleteEntityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[13]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -848,7 +892,7 @@ func (x *DeleteEntityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEntityRequest.ProtoReflect.Descriptor instead.
 func (*DeleteEntityRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{13}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *DeleteEntityRequest) GetId() string {
@@ -877,7 +921,7 @@ type DeleteEntityResponse struct {
 
 func (x *DeleteEntityResponse) Reset() {
 	*x = DeleteEntityResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[14]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -889,7 +933,7 @@ func (x *DeleteEntityResponse) String() string {
 func (*DeleteEntityResponse) ProtoMessage() {}
 
 func (x *DeleteEntityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[14]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -902,7 +946,7 @@ func (x *DeleteEntityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEntityResponse.ProtoReflect.Descriptor instead.
 func (*DeleteEntityResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{14}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DeleteEntityResponse) GetEntityId() string {
@@ -946,7 +990,7 @@ type CreateEdgeRequest struct {
 
 func (x *CreateEdgeRequest) Reset() {
 	*x = CreateEdgeRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[15]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -958,7 +1002,7 @@ func (x *CreateEdgeRequest) String() string {
 func (*CreateEdgeRequest) ProtoMessage() {}
 
 func (x *CreateEdgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[15]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -971,7 +1015,7 @@ func (x *CreateEdgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEdgeRequest.ProtoReflect.Descriptor instead.
 func (*CreateEdgeRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{15}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CreateEdgeRequest) GetEdgeType() string {
@@ -1022,7 +1066,7 @@ type CreateEdgeResponse struct {
 
 func (x *CreateEdgeResponse) Reset() {
 	*x = CreateEdgeResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[16]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1034,7 +1078,7 @@ func (x *CreateEdgeResponse) String() string {
 func (*CreateEdgeResponse) ProtoMessage() {}
 
 func (x *CreateEdgeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[16]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1047,7 +1091,7 @@ func (x *CreateEdgeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEdgeResponse.ProtoReflect.Descriptor instead.
 func (*CreateEdgeResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{16}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CreateEdgeResponse) GetEdgeId() string {
@@ -1095,7 +1139,7 @@ type DeleteEdgeRequest struct {
 
 func (x *DeleteEdgeRequest) Reset() {
 	*x = DeleteEdgeRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[17]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1107,7 +1151,7 @@ func (x *DeleteEdgeRequest) String() string {
 func (*DeleteEdgeRequest) ProtoMessage() {}
 
 func (x *DeleteEdgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[17]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1120,7 +1164,7 @@ func (x *DeleteEdgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEdgeRequest.ProtoReflect.Descriptor instead.
 func (*DeleteEdgeRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{17}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DeleteEdgeRequest) GetId() string {
@@ -1150,7 +1194,7 @@ type DeleteEdgeResponse struct {
 
 func (x *DeleteEdgeResponse) Reset() {
 	*x = DeleteEdgeResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[18]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1162,7 +1206,7 @@ func (x *DeleteEdgeResponse) String() string {
 func (*DeleteEdgeResponse) ProtoMessage() {}
 
 func (x *DeleteEdgeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[18]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1175,7 +1219,7 @@ func (x *DeleteEdgeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEdgeResponse.ProtoReflect.Descriptor instead.
 func (*DeleteEdgeResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{18}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DeleteEdgeResponse) GetEdgeId() string {
@@ -1222,7 +1266,7 @@ type BeginTransactionRequest struct {
 
 func (x *BeginTransactionRequest) Reset() {
 	*x = BeginTransactionRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[19]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1234,7 +1278,7 @@ func (x *BeginTransactionRequest) String() string {
 func (*BeginTransactionRequest) ProtoMessage() {}
 
 func (x *BeginTransactionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[19]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1247,7 +1291,7 @@ func (x *BeginTransactionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginTransactionRequest.ProtoReflect.Descriptor instead.
 func (*BeginTransactionRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{19}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *BeginTransactionRequest) GetTimeout() *durationpb.Duration {
@@ -1267,7 +1311,7 @@ type BeginTransactionResponse struct {
 
 func (x *BeginTransactionResponse) Reset() {
 	*x = BeginTransactionResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[20]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1279,7 +1323,7 @@ func (x *BeginTransactionResponse) String() string {
 func (*BeginTransactionResponse) ProtoMessage() {}
 
 func (x *BeginTransactionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[20]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1292,7 +1336,7 @@ func (x *BeginTransactionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginTransactionResponse.ProtoReflect.Descriptor instead.
 func (*BeginTransactionResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{20}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BeginTransactionResponse) GetTransactionId() string {
@@ -1318,7 +1362,7 @@ type CommitTransactionRequest struct {
 
 func (x *CommitTransactionRequest) Reset() {
 	*x = CommitTransactionRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[21]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1330,7 +1374,7 @@ func (x *CommitTransactionRequest) String() string {
 func (*CommitTransactionRequest) ProtoMessage() {}
 
 func (x *CommitTransactionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[21]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1343,7 +1387,7 @@ func (x *CommitTransactionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitTransactionRequest.ProtoReflect.Descriptor instead.
 func (*CommitTransactionRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{21}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CommitTransactionRequest) GetTransactionId() string {
@@ -1361,7 +1405,7 @@ type CommitTransactionResponse struct {
 
 func (x *CommitTransactionResponse) Reset() {
 	*x = CommitTransactionResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[22]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1373,7 +1417,7 @@ func (x *CommitTransactionResponse) String() string {
 func (*CommitTransactionResponse) ProtoMessage() {}
 
 func (x *CommitTransactionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[22]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1386,7 +1430,7 @@ func (x *CommitTransactionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitTransactionResponse.ProtoReflect.Descriptor instead.
 func (*CommitTransactionResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{22}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{23}
 }
 
 type RollbackTransactionRequest struct {
@@ -1398,7 +1442,7 @@ type RollbackTransactionRequest struct {
 
 func (x *RollbackTransactionRequest) Reset() {
 	*x = RollbackTransactionRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[23]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1410,7 +1454,7 @@ func (x *RollbackTransactionRequest) String() string {
 func (*RollbackTransactionRequest) ProtoMessage() {}
 
 func (x *RollbackTransactionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[23]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1423,7 +1467,7 @@ func (x *RollbackTransactionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackTransactionRequest.ProtoReflect.Descriptor instead.
 func (*RollbackTransactionRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{23}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RollbackTransactionRequest) GetTransactionId() string {
@@ -1441,7 +1485,7 @@ type RollbackTransactionResponse struct {
 
 func (x *RollbackTransactionResponse) Reset() {
 	*x = RollbackTransactionResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[24]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1453,7 +1497,7 @@ func (x *RollbackTransactionResponse) String() string {
 func (*RollbackTransactionResponse) ProtoMessage() {}
 
 func (x *RollbackTransactionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[24]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1466,7 +1510,7 @@ func (x *RollbackTransactionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackTransactionResponse.ProtoReflect.Descriptor instead.
 func (*RollbackTransactionResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{24}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{25}
 }
 
 type RefreshTransactionRequest struct {
@@ -1478,7 +1522,7 @@ type RefreshTransactionRequest struct {
 
 func (x *RefreshTransactionRequest) Reset() {
 	*x = RefreshTransactionRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[25]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1490,7 +1534,7 @@ func (x *RefreshTransactionRequest) String() string {
 func (*RefreshTransactionRequest) ProtoMessage() {}
 
 func (x *RefreshTransactionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[25]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1503,7 +1547,7 @@ func (x *RefreshTransactionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshTransactionRequest.ProtoReflect.Descriptor instead.
 func (*RefreshTransactionRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{25}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RefreshTransactionRequest) GetTransactionId() string {
@@ -1521,7 +1565,7 @@ type RefreshTransactionResponse struct {
 
 func (x *RefreshTransactionResponse) Reset() {
 	*x = RefreshTransactionResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[26]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1533,7 +1577,7 @@ func (x *RefreshTransactionResponse) String() string {
 func (*RefreshTransactionResponse) ProtoMessage() {}
 
 func (x *RefreshTransactionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[26]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1546,7 +1590,7 @@ func (x *RefreshTransactionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshTransactionResponse.ProtoReflect.Descriptor instead.
 func (*RefreshTransactionResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{26}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{27}
 }
 
 type GetTransactionDiffRequest struct {
@@ -1558,7 +1602,7 @@ type GetTransactionDiffRequest struct {
 
 func (x *GetTransactionDiffRequest) Reset() {
 	*x = GetTransactionDiffRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[27]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1570,7 +1614,7 @@ func (x *GetTransactionDiffRequest) String() string {
 func (*GetTransactionDiffRequest) ProtoMessage() {}
 
 func (x *GetTransactionDiffRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[27]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1583,7 +1627,7 @@ func (x *GetTransactionDiffRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTransactionDiffRequest.ProtoReflect.Descriptor instead.
 func (*GetTransactionDiffRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{27}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetTransactionDiffRequest) GetTransactionId() string {
@@ -1607,7 +1651,7 @@ type GetTransactionDiffResponse struct {
 
 func (x *GetTransactionDiffResponse) Reset() {
 	*x = GetTransactionDiffResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[28]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1619,7 +1663,7 @@ func (x *GetTransactionDiffResponse) String() string {
 func (*GetTransactionDiffResponse) ProtoMessage() {}
 
 func (x *GetTransactionDiffResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[28]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1632,7 +1676,7 @@ func (x *GetTransactionDiffResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTransactionDiffResponse.ProtoReflect.Descriptor instead.
 func (*GetTransactionDiffResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{28}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetTransactionDiffResponse) GetAddedEntities() []*DiffEntry {
@@ -1692,7 +1736,7 @@ type DiffEntry struct {
 
 func (x *DiffEntry) Reset() {
 	*x = DiffEntry{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[29]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1704,7 +1748,7 @@ func (x *DiffEntry) String() string {
 func (*DiffEntry) ProtoMessage() {}
 
 func (x *DiffEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[29]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1717,7 +1761,7 @@ func (x *DiffEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffEntry.ProtoReflect.Descriptor instead.
 func (*DiffEntry) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{29}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *DiffEntry) GetId() string {
@@ -1779,7 +1823,7 @@ type ExtendTimeoutRequest struct {
 
 func (x *ExtendTimeoutRequest) Reset() {
 	*x = ExtendTimeoutRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[30]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1791,7 +1835,7 @@ func (x *ExtendTimeoutRequest) String() string {
 func (*ExtendTimeoutRequest) ProtoMessage() {}
 
 func (x *ExtendTimeoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[30]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1804,7 +1848,7 @@ func (x *ExtendTimeoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtendTimeoutRequest.ProtoReflect.Descriptor instead.
 func (*ExtendTimeoutRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{30}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ExtendTimeoutRequest) GetTransactionId() string {
@@ -1829,7 +1873,7 @@ type ExtendTimeoutResponse struct {
 
 func (x *ExtendTimeoutResponse) Reset() {
 	*x = ExtendTimeoutResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[31]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1841,7 +1885,7 @@ func (x *ExtendTimeoutResponse) String() string {
 func (*ExtendTimeoutResponse) ProtoMessage() {}
 
 func (x *ExtendTimeoutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[31]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1854,7 +1898,7 @@ func (x *ExtendTimeoutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtendTimeoutResponse.ProtoReflect.Descriptor instead.
 func (*ExtendTimeoutResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{31}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{32}
 }
 
 type Entity struct {
@@ -1869,7 +1913,7 @@ type Entity struct {
 
 func (x *Entity) Reset() {
 	*x = Entity{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[32]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1881,7 +1925,7 @@ func (x *Entity) String() string {
 func (*Entity) ProtoMessage() {}
 
 func (x *Entity) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[32]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1894,7 +1938,7 @@ func (x *Entity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Entity.ProtoReflect.Descriptor instead.
 func (*Entity) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{32}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *Entity) GetEntityId() string {
@@ -1935,7 +1979,7 @@ type Schema struct {
 
 func (x *Schema) Reset() {
 	*x = Schema{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[33]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1947,7 +1991,7 @@ func (x *Schema) String() string {
 func (*Schema) ProtoMessage() {}
 
 func (x *Schema) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[33]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1960,7 +2004,7 @@ func (x *Schema) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Schema.ProtoReflect.Descriptor instead.
 func (*Schema) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{33}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *Schema) GetEntityTypes() []*EntityType {
@@ -1989,7 +2033,7 @@ type EntityType struct {
 
 func (x *EntityType) Reset() {
 	*x = EntityType{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[34]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2001,7 +2045,7 @@ func (x *EntityType) String() string {
 func (*EntityType) ProtoMessage() {}
 
 func (x *EntityType) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[34]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2014,7 +2058,7 @@ func (x *EntityType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntityType.ProtoReflect.Descriptor instead.
 func (*EntityType) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{34}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *EntityType) GetName() string {
@@ -2055,7 +2099,7 @@ type EdgeType struct {
 
 func (x *EdgeType) Reset() {
 	*x = EdgeType{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[35]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2067,7 +2111,7 @@ func (x *EdgeType) String() string {
 func (*EdgeType) ProtoMessage() {}
 
 func (x *EdgeType) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[35]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2080,7 +2124,7 @@ func (x *EdgeType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeType.ProtoReflect.Descriptor instead.
 func (*EdgeType) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{35}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *EdgeType) GetName() string {
@@ -2108,7 +2152,7 @@ type Property struct {
 
 func (x *Property) Reset() {
 	*x = Property{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[36]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2120,7 +2164,7 @@ func (x *Property) String() string {
 func (*Property) ProtoMessage() {}
 
 func (x *Property) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[36]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2133,7 +2177,7 @@ func (x *Property) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Property.ProtoReflect.Descriptor instead.
 func (*Property) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{36}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *Property) GetName() string {
@@ -2167,7 +2211,7 @@ type ConnectionRule struct {
 
 func (x *ConnectionRule) Reset() {
 	*x = ConnectionRule{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[37]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2179,7 +2223,7 @@ func (x *ConnectionRule) String() string {
 func (*ConnectionRule) ProtoMessage() {}
 
 func (x *ConnectionRule) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[37]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2192,7 +2236,7 @@ func (x *ConnectionRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectionRule.ProtoReflect.Descriptor instead.
 func (*ConnectionRule) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{37}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ConnectionRule) GetCanConnectTo() []string {
@@ -2218,7 +2262,7 @@ type ApplySchemaRequest struct {
 
 func (x *ApplySchemaRequest) Reset() {
 	*x = ApplySchemaRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[38]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2230,7 +2274,7 @@ func (x *ApplySchemaRequest) String() string {
 func (*ApplySchemaRequest) ProtoMessage() {}
 
 func (x *ApplySchemaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[38]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2243,7 +2287,7 @@ func (x *ApplySchemaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplySchemaRequest.ProtoReflect.Descriptor instead.
 func (*ApplySchemaRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{38}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ApplySchemaRequest) GetSchema() *Schema {
@@ -2261,7 +2305,7 @@ type ApplySchemaResponse struct {
 
 func (x *ApplySchemaResponse) Reset() {
 	*x = ApplySchemaResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[39]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2273,7 +2317,7 @@ func (x *ApplySchemaResponse) String() string {
 func (*ApplySchemaResponse) ProtoMessage() {}
 
 func (x *ApplySchemaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[39]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2286,7 +2330,7 @@ func (x *ApplySchemaResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplySchemaResponse.ProtoReflect.Descriptor instead.
 func (*ApplySchemaResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{39}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{40}
 }
 
 type WipeGraphRequest struct {
@@ -2297,7 +2341,7 @@ type WipeGraphRequest struct {
 
 func (x *WipeGraphRequest) Reset() {
 	*x = WipeGraphRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[40]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2309,7 +2353,7 @@ func (x *WipeGraphRequest) String() string {
 func (*WipeGraphRequest) ProtoMessage() {}
 
 func (x *WipeGraphRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[40]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2322,7 +2366,7 @@ func (x *WipeGraphRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WipeGraphRequest.ProtoReflect.Descriptor instead.
 func (*WipeGraphRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{40}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{41}
 }
 
 type WipeGraphResponse struct {
@@ -2333,7 +2377,7 @@ type WipeGraphResponse struct {
 
 func (x *WipeGraphResponse) Reset() {
 	*x = WipeGraphResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[41]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2345,7 +2389,7 @@ func (x *WipeGraphResponse) String() string {
 func (*WipeGraphResponse) ProtoMessage() {}
 
 func (x *WipeGraphResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[41]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2358,7 +2402,7 @@ func (x *WipeGraphResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WipeGraphResponse.ProtoReflect.Descriptor instead.
 func (*WipeGraphResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{41}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{42}
 }
 
 type HealthCheckRequest struct {
@@ -2369,7 +2413,7 @@ type HealthCheckRequest struct {
 
 func (x *HealthCheckRequest) Reset() {
 	*x = HealthCheckRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[42]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2381,7 +2425,7 @@ func (x *HealthCheckRequest) String() string {
 func (*HealthCheckRequest) ProtoMessage() {}
 
 func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[42]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2394,7 +2438,7 @@ func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{42}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{43}
 }
 
 type HealthCheckResponse struct {
@@ -2408,7 +2452,7 @@ type HealthCheckResponse struct {
 
 func (x *HealthCheckResponse) Reset() {
 	*x = HealthCheckResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[43]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2420,7 +2464,7 @@ func (x *HealthCheckResponse) String() string {
 func (*HealthCheckResponse) ProtoMessage() {}
 
 func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[43]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2433,7 +2477,7 @@ func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{43}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *HealthCheckResponse) GetLadybugOk() bool {
@@ -2465,7 +2509,7 @@ type PullFromRemoteRequest struct {
 
 func (x *PullFromRemoteRequest) Reset() {
 	*x = PullFromRemoteRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[44]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2477,7 +2521,7 @@ func (x *PullFromRemoteRequest) String() string {
 func (*PullFromRemoteRequest) ProtoMessage() {}
 
 func (x *PullFromRemoteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[44]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2490,7 +2534,7 @@ func (x *PullFromRemoteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullFromRemoteRequest.ProtoReflect.Descriptor instead.
 func (*PullFromRemoteRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{44}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{45}
 }
 
 type PullFromRemoteResponse struct {
@@ -2501,7 +2545,7 @@ type PullFromRemoteResponse struct {
 
 func (x *PullFromRemoteResponse) Reset() {
 	*x = PullFromRemoteResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[45]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2513,7 +2557,7 @@ func (x *PullFromRemoteResponse) String() string {
 func (*PullFromRemoteResponse) ProtoMessage() {}
 
 func (x *PullFromRemoteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[45]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2526,7 +2570,7 @@ func (x *PullFromRemoteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullFromRemoteResponse.ProtoReflect.Descriptor instead.
 func (*PullFromRemoteResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{45}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{46}
 }
 
 type ExportGraphRequest struct {
@@ -2538,7 +2582,7 @@ type ExportGraphRequest struct {
 
 func (x *ExportGraphRequest) Reset() {
 	*x = ExportGraphRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[46]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2550,7 +2594,7 @@ func (x *ExportGraphRequest) String() string {
 func (*ExportGraphRequest) ProtoMessage() {}
 
 func (x *ExportGraphRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[46]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2563,7 +2607,7 @@ func (x *ExportGraphRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportGraphRequest.ProtoReflect.Descriptor instead.
 func (*ExportGraphRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{46}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ExportGraphRequest) GetFormat() string {
@@ -2582,7 +2626,7 @@ type ExportGraphResponse struct {
 
 func (x *ExportGraphResponse) Reset() {
 	*x = ExportGraphResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2594,7 +2638,7 @@ func (x *ExportGraphResponse) String() string {
 func (*ExportGraphResponse) ProtoMessage() {}
 
 func (x *ExportGraphResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2607,7 +2651,7 @@ func (x *ExportGraphResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportGraphResponse.ProtoReflect.Descriptor instead.
 func (*ExportGraphResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{47}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ExportGraphResponse) GetChunk() []byte {
@@ -2625,9 +2669,11 @@ const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\x14ExecuteCypherRequest\x12\x16\n" +
 	"\x06cypher\x18\x01 \x01(\tR\x06cypher\x12.\n" +
 	"\x06params\x18\x02 \x01(\v2\x16.google.protobuf.ValueR\x06params\x12%\n" +
-	"\x0etransaction_id\x18\x03 \x01(\tR\rtransactionId\"G\n" +
-	"\x15ExecuteCypherResponse\x12.\n" +
-	"\x04rows\x18\x01 \x03(\v2\x1a.google.protobuf.ListValueR\x04rows\"\x93\x01\n" +
+	"\x0etransaction_id\x18\x03 \x01(\tR\rtransactionId\";\n" +
+	"\tFlatTuple\x12.\n" +
+	"\x06values\x18\x01 \x03(\v2\x16.google.protobuf.ValueR\x06values\"?\n" +
+	"\x15ExecuteCypherResponse\x12&\n" +
+	"\x04rows\x18\x01 \x03(\v2\x12.flow.v1.FlatTupleR\x04rows\"\x93\x01\n" +
 	"\x16SearchNeighborsRequest\x12\x1c\n" +
 	"\tembedding\x18\x01 \x03(\x02R\tembedding\x12\x1f\n" +
 	"\ventity_type\x18\x02 \x01(\tR\n" +
@@ -2892,148 +2938,149 @@ func file_flow_v1_cartographer_proto_rawDescGZIP() []byte {
 	return file_flow_v1_cartographer_proto_rawDescData
 }
 
-var file_flow_v1_cartographer_proto_msgTypes = make([]protoimpl.MessageInfo, 59)
+var file_flow_v1_cartographer_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
 var file_flow_v1_cartographer_proto_goTypes = []any{
 	(*ExecuteCypherRequest)(nil),        // 0: flow.v1.ExecuteCypherRequest
-	(*ExecuteCypherResponse)(nil),       // 1: flow.v1.ExecuteCypherResponse
-	(*SearchNeighborsRequest)(nil),      // 2: flow.v1.SearchNeighborsRequest
-	(*SearchNeighborsResponse)(nil),     // 3: flow.v1.SearchNeighborsResponse
-	(*SearchNeighborResult)(nil),        // 4: flow.v1.SearchNeighborResult
-	(*FullTextSearchRequest)(nil),       // 5: flow.v1.FullTextSearchRequest
-	(*FullTextSearchResponse)(nil),      // 6: flow.v1.FullTextSearchResponse
-	(*ListEntitiesRequest)(nil),         // 7: flow.v1.ListEntitiesRequest
-	(*ListEntitiesResponse)(nil),        // 8: flow.v1.ListEntitiesResponse
-	(*CreateEntityRequest)(nil),         // 9: flow.v1.CreateEntityRequest
-	(*CreateEntityResponse)(nil),        // 10: flow.v1.CreateEntityResponse
-	(*UpdateEntityRequest)(nil),         // 11: flow.v1.UpdateEntityRequest
-	(*UpdateEntityResponse)(nil),        // 12: flow.v1.UpdateEntityResponse
-	(*DeleteEntityRequest)(nil),         // 13: flow.v1.DeleteEntityRequest
-	(*DeleteEntityResponse)(nil),        // 14: flow.v1.DeleteEntityResponse
-	(*CreateEdgeRequest)(nil),           // 15: flow.v1.CreateEdgeRequest
-	(*CreateEdgeResponse)(nil),          // 16: flow.v1.CreateEdgeResponse
-	(*DeleteEdgeRequest)(nil),           // 17: flow.v1.DeleteEdgeRequest
-	(*DeleteEdgeResponse)(nil),          // 18: flow.v1.DeleteEdgeResponse
-	(*BeginTransactionRequest)(nil),     // 19: flow.v1.BeginTransactionRequest
-	(*BeginTransactionResponse)(nil),    // 20: flow.v1.BeginTransactionResponse
-	(*CommitTransactionRequest)(nil),    // 21: flow.v1.CommitTransactionRequest
-	(*CommitTransactionResponse)(nil),   // 22: flow.v1.CommitTransactionResponse
-	(*RollbackTransactionRequest)(nil),  // 23: flow.v1.RollbackTransactionRequest
-	(*RollbackTransactionResponse)(nil), // 24: flow.v1.RollbackTransactionResponse
-	(*RefreshTransactionRequest)(nil),   // 25: flow.v1.RefreshTransactionRequest
-	(*RefreshTransactionResponse)(nil),  // 26: flow.v1.RefreshTransactionResponse
-	(*GetTransactionDiffRequest)(nil),   // 27: flow.v1.GetTransactionDiffRequest
-	(*GetTransactionDiffResponse)(nil),  // 28: flow.v1.GetTransactionDiffResponse
-	(*DiffEntry)(nil),                   // 29: flow.v1.DiffEntry
-	(*ExtendTimeoutRequest)(nil),        // 30: flow.v1.ExtendTimeoutRequest
-	(*ExtendTimeoutResponse)(nil),       // 31: flow.v1.ExtendTimeoutResponse
-	(*Entity)(nil),                      // 32: flow.v1.Entity
-	(*Schema)(nil),                      // 33: flow.v1.Schema
-	(*EntityType)(nil),                  // 34: flow.v1.EntityType
-	(*EdgeType)(nil),                    // 35: flow.v1.EdgeType
-	(*Property)(nil),                    // 36: flow.v1.Property
-	(*ConnectionRule)(nil),              // 37: flow.v1.ConnectionRule
-	(*ApplySchemaRequest)(nil),          // 38: flow.v1.ApplySchemaRequest
-	(*ApplySchemaResponse)(nil),         // 39: flow.v1.ApplySchemaResponse
-	(*WipeGraphRequest)(nil),            // 40: flow.v1.WipeGraphRequest
-	(*WipeGraphResponse)(nil),           // 41: flow.v1.WipeGraphResponse
-	(*HealthCheckRequest)(nil),          // 42: flow.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),         // 43: flow.v1.HealthCheckResponse
-	(*PullFromRemoteRequest)(nil),       // 44: flow.v1.PullFromRemoteRequest
-	(*PullFromRemoteResponse)(nil),      // 45: flow.v1.PullFromRemoteResponse
-	(*ExportGraphRequest)(nil),          // 46: flow.v1.ExportGraphRequest
-	(*ExportGraphResponse)(nil),         // 47: flow.v1.ExportGraphResponse
-	nil,                                 // 48: flow.v1.SearchNeighborResult.PropertiesEntry
-	nil,                                 // 49: flow.v1.CreateEntityRequest.PropertiesEntry
-	nil,                                 // 50: flow.v1.CreateEntityResponse.PropertiesEntry
-	nil,                                 // 51: flow.v1.UpdateEntityRequest.PropertiesEntry
-	nil,                                 // 52: flow.v1.UpdateEntityResponse.PropertiesEntry
-	nil,                                 // 53: flow.v1.DeleteEntityResponse.PropertiesEntry
-	nil,                                 // 54: flow.v1.CreateEdgeRequest.PropertiesEntry
-	nil,                                 // 55: flow.v1.CreateEdgeResponse.PropertiesEntry
-	nil,                                 // 56: flow.v1.DeleteEdgeResponse.PropertiesEntry
-	nil,                                 // 57: flow.v1.DiffEntry.PropertiesEntry
-	nil,                                 // 58: flow.v1.Entity.PropertiesEntry
-	(*structpb.Value)(nil),              // 59: google.protobuf.Value
-	(*structpb.ListValue)(nil),          // 60: google.protobuf.ListValue
+	(*FlatTuple)(nil),                   // 1: flow.v1.FlatTuple
+	(*ExecuteCypherResponse)(nil),       // 2: flow.v1.ExecuteCypherResponse
+	(*SearchNeighborsRequest)(nil),      // 3: flow.v1.SearchNeighborsRequest
+	(*SearchNeighborsResponse)(nil),     // 4: flow.v1.SearchNeighborsResponse
+	(*SearchNeighborResult)(nil),        // 5: flow.v1.SearchNeighborResult
+	(*FullTextSearchRequest)(nil),       // 6: flow.v1.FullTextSearchRequest
+	(*FullTextSearchResponse)(nil),      // 7: flow.v1.FullTextSearchResponse
+	(*ListEntitiesRequest)(nil),         // 8: flow.v1.ListEntitiesRequest
+	(*ListEntitiesResponse)(nil),        // 9: flow.v1.ListEntitiesResponse
+	(*CreateEntityRequest)(nil),         // 10: flow.v1.CreateEntityRequest
+	(*CreateEntityResponse)(nil),        // 11: flow.v1.CreateEntityResponse
+	(*UpdateEntityRequest)(nil),         // 12: flow.v1.UpdateEntityRequest
+	(*UpdateEntityResponse)(nil),        // 13: flow.v1.UpdateEntityResponse
+	(*DeleteEntityRequest)(nil),         // 14: flow.v1.DeleteEntityRequest
+	(*DeleteEntityResponse)(nil),        // 15: flow.v1.DeleteEntityResponse
+	(*CreateEdgeRequest)(nil),           // 16: flow.v1.CreateEdgeRequest
+	(*CreateEdgeResponse)(nil),          // 17: flow.v1.CreateEdgeResponse
+	(*DeleteEdgeRequest)(nil),           // 18: flow.v1.DeleteEdgeRequest
+	(*DeleteEdgeResponse)(nil),          // 19: flow.v1.DeleteEdgeResponse
+	(*BeginTransactionRequest)(nil),     // 20: flow.v1.BeginTransactionRequest
+	(*BeginTransactionResponse)(nil),    // 21: flow.v1.BeginTransactionResponse
+	(*CommitTransactionRequest)(nil),    // 22: flow.v1.CommitTransactionRequest
+	(*CommitTransactionResponse)(nil),   // 23: flow.v1.CommitTransactionResponse
+	(*RollbackTransactionRequest)(nil),  // 24: flow.v1.RollbackTransactionRequest
+	(*RollbackTransactionResponse)(nil), // 25: flow.v1.RollbackTransactionResponse
+	(*RefreshTransactionRequest)(nil),   // 26: flow.v1.RefreshTransactionRequest
+	(*RefreshTransactionResponse)(nil),  // 27: flow.v1.RefreshTransactionResponse
+	(*GetTransactionDiffRequest)(nil),   // 28: flow.v1.GetTransactionDiffRequest
+	(*GetTransactionDiffResponse)(nil),  // 29: flow.v1.GetTransactionDiffResponse
+	(*DiffEntry)(nil),                   // 30: flow.v1.DiffEntry
+	(*ExtendTimeoutRequest)(nil),        // 31: flow.v1.ExtendTimeoutRequest
+	(*ExtendTimeoutResponse)(nil),       // 32: flow.v1.ExtendTimeoutResponse
+	(*Entity)(nil),                      // 33: flow.v1.Entity
+	(*Schema)(nil),                      // 34: flow.v1.Schema
+	(*EntityType)(nil),                  // 35: flow.v1.EntityType
+	(*EdgeType)(nil),                    // 36: flow.v1.EdgeType
+	(*Property)(nil),                    // 37: flow.v1.Property
+	(*ConnectionRule)(nil),              // 38: flow.v1.ConnectionRule
+	(*ApplySchemaRequest)(nil),          // 39: flow.v1.ApplySchemaRequest
+	(*ApplySchemaResponse)(nil),         // 40: flow.v1.ApplySchemaResponse
+	(*WipeGraphRequest)(nil),            // 41: flow.v1.WipeGraphRequest
+	(*WipeGraphResponse)(nil),           // 42: flow.v1.WipeGraphResponse
+	(*HealthCheckRequest)(nil),          // 43: flow.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),         // 44: flow.v1.HealthCheckResponse
+	(*PullFromRemoteRequest)(nil),       // 45: flow.v1.PullFromRemoteRequest
+	(*PullFromRemoteResponse)(nil),      // 46: flow.v1.PullFromRemoteResponse
+	(*ExportGraphRequest)(nil),          // 47: flow.v1.ExportGraphRequest
+	(*ExportGraphResponse)(nil),         // 48: flow.v1.ExportGraphResponse
+	nil,                                 // 49: flow.v1.SearchNeighborResult.PropertiesEntry
+	nil,                                 // 50: flow.v1.CreateEntityRequest.PropertiesEntry
+	nil,                                 // 51: flow.v1.CreateEntityResponse.PropertiesEntry
+	nil,                                 // 52: flow.v1.UpdateEntityRequest.PropertiesEntry
+	nil,                                 // 53: flow.v1.UpdateEntityResponse.PropertiesEntry
+	nil,                                 // 54: flow.v1.DeleteEntityResponse.PropertiesEntry
+	nil,                                 // 55: flow.v1.CreateEdgeRequest.PropertiesEntry
+	nil,                                 // 56: flow.v1.CreateEdgeResponse.PropertiesEntry
+	nil,                                 // 57: flow.v1.DeleteEdgeResponse.PropertiesEntry
+	nil,                                 // 58: flow.v1.DiffEntry.PropertiesEntry
+	nil,                                 // 59: flow.v1.Entity.PropertiesEntry
+	(*structpb.Value)(nil),              // 60: google.protobuf.Value
 	(*durationpb.Duration)(nil),         // 61: google.protobuf.Duration
 }
 var file_flow_v1_cartographer_proto_depIdxs = []int32{
-	59, // 0: flow.v1.ExecuteCypherRequest.params:type_name -> google.protobuf.Value
-	60, // 1: flow.v1.ExecuteCypherResponse.rows:type_name -> google.protobuf.ListValue
-	4,  // 2: flow.v1.SearchNeighborsResponse.results:type_name -> flow.v1.SearchNeighborResult
-	48, // 3: flow.v1.SearchNeighborResult.properties:type_name -> flow.v1.SearchNeighborResult.PropertiesEntry
-	32, // 4: flow.v1.FullTextSearchResponse.results:type_name -> flow.v1.Entity
-	32, // 5: flow.v1.ListEntitiesResponse.entities:type_name -> flow.v1.Entity
-	49, // 6: flow.v1.CreateEntityRequest.properties:type_name -> flow.v1.CreateEntityRequest.PropertiesEntry
-	50, // 7: flow.v1.CreateEntityResponse.properties:type_name -> flow.v1.CreateEntityResponse.PropertiesEntry
-	51, // 8: flow.v1.UpdateEntityRequest.properties:type_name -> flow.v1.UpdateEntityRequest.PropertiesEntry
-	52, // 9: flow.v1.UpdateEntityResponse.properties:type_name -> flow.v1.UpdateEntityResponse.PropertiesEntry
-	53, // 10: flow.v1.DeleteEntityResponse.properties:type_name -> flow.v1.DeleteEntityResponse.PropertiesEntry
-	54, // 11: flow.v1.CreateEdgeRequest.properties:type_name -> flow.v1.CreateEdgeRequest.PropertiesEntry
-	55, // 12: flow.v1.CreateEdgeResponse.properties:type_name -> flow.v1.CreateEdgeResponse.PropertiesEntry
-	56, // 13: flow.v1.DeleteEdgeResponse.properties:type_name -> flow.v1.DeleteEdgeResponse.PropertiesEntry
-	61, // 14: flow.v1.BeginTransactionRequest.timeout:type_name -> google.protobuf.Duration
-	61, // 15: flow.v1.BeginTransactionResponse.applied_timeout:type_name -> google.protobuf.Duration
-	29, // 16: flow.v1.GetTransactionDiffResponse.added_entities:type_name -> flow.v1.DiffEntry
-	29, // 17: flow.v1.GetTransactionDiffResponse.modified_entities:type_name -> flow.v1.DiffEntry
-	29, // 18: flow.v1.GetTransactionDiffResponse.deleted_entities:type_name -> flow.v1.DiffEntry
-	29, // 19: flow.v1.GetTransactionDiffResponse.added_edges:type_name -> flow.v1.DiffEntry
-	29, // 20: flow.v1.GetTransactionDiffResponse.modified_edges:type_name -> flow.v1.DiffEntry
-	29, // 21: flow.v1.GetTransactionDiffResponse.deleted_edges:type_name -> flow.v1.DiffEntry
-	57, // 22: flow.v1.DiffEntry.properties:type_name -> flow.v1.DiffEntry.PropertiesEntry
-	61, // 23: flow.v1.ExtendTimeoutRequest.duration:type_name -> google.protobuf.Duration
-	58, // 24: flow.v1.Entity.properties:type_name -> flow.v1.Entity.PropertiesEntry
-	34, // 25: flow.v1.Schema.entity_types:type_name -> flow.v1.EntityType
-	35, // 26: flow.v1.Schema.edge_types:type_name -> flow.v1.EdgeType
-	36, // 27: flow.v1.EntityType.properties:type_name -> flow.v1.Property
-	37, // 28: flow.v1.EntityType.rules:type_name -> flow.v1.ConnectionRule
-	36, // 29: flow.v1.EdgeType.properties:type_name -> flow.v1.Property
-	33, // 30: flow.v1.ApplySchemaRequest.schema:type_name -> flow.v1.Schema
-	0,  // 31: flow.v1.CartographerService.ExecuteCypher:input_type -> flow.v1.ExecuteCypherRequest
-	2,  // 32: flow.v1.CartographerService.SearchNeighbors:input_type -> flow.v1.SearchNeighborsRequest
-	5,  // 33: flow.v1.CartographerService.FullTextSearch:input_type -> flow.v1.FullTextSearchRequest
-	7,  // 34: flow.v1.CartographerService.ListEntities:input_type -> flow.v1.ListEntitiesRequest
-	9,  // 35: flow.v1.CartographerService.CreateEntity:input_type -> flow.v1.CreateEntityRequest
-	11, // 36: flow.v1.CartographerService.UpdateEntity:input_type -> flow.v1.UpdateEntityRequest
-	13, // 37: flow.v1.CartographerService.DeleteEntity:input_type -> flow.v1.DeleteEntityRequest
-	15, // 38: flow.v1.CartographerService.CreateEdge:input_type -> flow.v1.CreateEdgeRequest
-	17, // 39: flow.v1.CartographerService.DeleteEdge:input_type -> flow.v1.DeleteEdgeRequest
-	19, // 40: flow.v1.CartographerService.BeginTransaction:input_type -> flow.v1.BeginTransactionRequest
-	21, // 41: flow.v1.CartographerService.CommitTransaction:input_type -> flow.v1.CommitTransactionRequest
-	23, // 42: flow.v1.CartographerService.RollbackTransaction:input_type -> flow.v1.RollbackTransactionRequest
-	25, // 43: flow.v1.CartographerService.RefreshTransaction:input_type -> flow.v1.RefreshTransactionRequest
-	27, // 44: flow.v1.CartographerService.GetTransactionDiff:input_type -> flow.v1.GetTransactionDiffRequest
-	30, // 45: flow.v1.CartographerService.ExtendTimeout:input_type -> flow.v1.ExtendTimeoutRequest
-	38, // 46: flow.v1.CartographerService.ApplySchema:input_type -> flow.v1.ApplySchemaRequest
-	40, // 47: flow.v1.CartographerService.WipeGraph:input_type -> flow.v1.WipeGraphRequest
-	42, // 48: flow.v1.CartographerService.HealthCheck:input_type -> flow.v1.HealthCheckRequest
-	44, // 49: flow.v1.CartographerService.PullFromRemote:input_type -> flow.v1.PullFromRemoteRequest
-	46, // 50: flow.v1.CartographerService.ExportGraph:input_type -> flow.v1.ExportGraphRequest
-	1,  // 51: flow.v1.CartographerService.ExecuteCypher:output_type -> flow.v1.ExecuteCypherResponse
-	3,  // 52: flow.v1.CartographerService.SearchNeighbors:output_type -> flow.v1.SearchNeighborsResponse
-	6,  // 53: flow.v1.CartographerService.FullTextSearch:output_type -> flow.v1.FullTextSearchResponse
-	8,  // 54: flow.v1.CartographerService.ListEntities:output_type -> flow.v1.ListEntitiesResponse
-	10, // 55: flow.v1.CartographerService.CreateEntity:output_type -> flow.v1.CreateEntityResponse
-	12, // 56: flow.v1.CartographerService.UpdateEntity:output_type -> flow.v1.UpdateEntityResponse
-	14, // 57: flow.v1.CartographerService.DeleteEntity:output_type -> flow.v1.DeleteEntityResponse
-	16, // 58: flow.v1.CartographerService.CreateEdge:output_type -> flow.v1.CreateEdgeResponse
-	18, // 59: flow.v1.CartographerService.DeleteEdge:output_type -> flow.v1.DeleteEdgeResponse
-	20, // 60: flow.v1.CartographerService.BeginTransaction:output_type -> flow.v1.BeginTransactionResponse
-	22, // 61: flow.v1.CartographerService.CommitTransaction:output_type -> flow.v1.CommitTransactionResponse
-	24, // 62: flow.v1.CartographerService.RollbackTransaction:output_type -> flow.v1.RollbackTransactionResponse
-	26, // 63: flow.v1.CartographerService.RefreshTransaction:output_type -> flow.v1.RefreshTransactionResponse
-	28, // 64: flow.v1.CartographerService.GetTransactionDiff:output_type -> flow.v1.GetTransactionDiffResponse
-	31, // 65: flow.v1.CartographerService.ExtendTimeout:output_type -> flow.v1.ExtendTimeoutResponse
-	39, // 66: flow.v1.CartographerService.ApplySchema:output_type -> flow.v1.ApplySchemaResponse
-	41, // 67: flow.v1.CartographerService.WipeGraph:output_type -> flow.v1.WipeGraphResponse
-	43, // 68: flow.v1.CartographerService.HealthCheck:output_type -> flow.v1.HealthCheckResponse
-	45, // 69: flow.v1.CartographerService.PullFromRemote:output_type -> flow.v1.PullFromRemoteResponse
-	47, // 70: flow.v1.CartographerService.ExportGraph:output_type -> flow.v1.ExportGraphResponse
-	51, // [51:71] is the sub-list for method output_type
-	31, // [31:51] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	60, // 0: flow.v1.ExecuteCypherRequest.params:type_name -> google.protobuf.Value
+	60, // 1: flow.v1.FlatTuple.values:type_name -> google.protobuf.Value
+	1,  // 2: flow.v1.ExecuteCypherResponse.rows:type_name -> flow.v1.FlatTuple
+	5,  // 3: flow.v1.SearchNeighborsResponse.results:type_name -> flow.v1.SearchNeighborResult
+	49, // 4: flow.v1.SearchNeighborResult.properties:type_name -> flow.v1.SearchNeighborResult.PropertiesEntry
+	33, // 5: flow.v1.FullTextSearchResponse.results:type_name -> flow.v1.Entity
+	33, // 6: flow.v1.ListEntitiesResponse.entities:type_name -> flow.v1.Entity
+	50, // 7: flow.v1.CreateEntityRequest.properties:type_name -> flow.v1.CreateEntityRequest.PropertiesEntry
+	51, // 8: flow.v1.CreateEntityResponse.properties:type_name -> flow.v1.CreateEntityResponse.PropertiesEntry
+	52, // 9: flow.v1.UpdateEntityRequest.properties:type_name -> flow.v1.UpdateEntityRequest.PropertiesEntry
+	53, // 10: flow.v1.UpdateEntityResponse.properties:type_name -> flow.v1.UpdateEntityResponse.PropertiesEntry
+	54, // 11: flow.v1.DeleteEntityResponse.properties:type_name -> flow.v1.DeleteEntityResponse.PropertiesEntry
+	55, // 12: flow.v1.CreateEdgeRequest.properties:type_name -> flow.v1.CreateEdgeRequest.PropertiesEntry
+	56, // 13: flow.v1.CreateEdgeResponse.properties:type_name -> flow.v1.CreateEdgeResponse.PropertiesEntry
+	57, // 14: flow.v1.DeleteEdgeResponse.properties:type_name -> flow.v1.DeleteEdgeResponse.PropertiesEntry
+	61, // 15: flow.v1.BeginTransactionRequest.timeout:type_name -> google.protobuf.Duration
+	61, // 16: flow.v1.BeginTransactionResponse.applied_timeout:type_name -> google.protobuf.Duration
+	30, // 17: flow.v1.GetTransactionDiffResponse.added_entities:type_name -> flow.v1.DiffEntry
+	30, // 18: flow.v1.GetTransactionDiffResponse.modified_entities:type_name -> flow.v1.DiffEntry
+	30, // 19: flow.v1.GetTransactionDiffResponse.deleted_entities:type_name -> flow.v1.DiffEntry
+	30, // 20: flow.v1.GetTransactionDiffResponse.added_edges:type_name -> flow.v1.DiffEntry
+	30, // 21: flow.v1.GetTransactionDiffResponse.modified_edges:type_name -> flow.v1.DiffEntry
+	30, // 22: flow.v1.GetTransactionDiffResponse.deleted_edges:type_name -> flow.v1.DiffEntry
+	58, // 23: flow.v1.DiffEntry.properties:type_name -> flow.v1.DiffEntry.PropertiesEntry
+	61, // 24: flow.v1.ExtendTimeoutRequest.duration:type_name -> google.protobuf.Duration
+	59, // 25: flow.v1.Entity.properties:type_name -> flow.v1.Entity.PropertiesEntry
+	35, // 26: flow.v1.Schema.entity_types:type_name -> flow.v1.EntityType
+	36, // 27: flow.v1.Schema.edge_types:type_name -> flow.v1.EdgeType
+	37, // 28: flow.v1.EntityType.properties:type_name -> flow.v1.Property
+	38, // 29: flow.v1.EntityType.rules:type_name -> flow.v1.ConnectionRule
+	37, // 30: flow.v1.EdgeType.properties:type_name -> flow.v1.Property
+	34, // 31: flow.v1.ApplySchemaRequest.schema:type_name -> flow.v1.Schema
+	0,  // 32: flow.v1.CartographerService.ExecuteCypher:input_type -> flow.v1.ExecuteCypherRequest
+	3,  // 33: flow.v1.CartographerService.SearchNeighbors:input_type -> flow.v1.SearchNeighborsRequest
+	6,  // 34: flow.v1.CartographerService.FullTextSearch:input_type -> flow.v1.FullTextSearchRequest
+	8,  // 35: flow.v1.CartographerService.ListEntities:input_type -> flow.v1.ListEntitiesRequest
+	10, // 36: flow.v1.CartographerService.CreateEntity:input_type -> flow.v1.CreateEntityRequest
+	12, // 37: flow.v1.CartographerService.UpdateEntity:input_type -> flow.v1.UpdateEntityRequest
+	14, // 38: flow.v1.CartographerService.DeleteEntity:input_type -> flow.v1.DeleteEntityRequest
+	16, // 39: flow.v1.CartographerService.CreateEdge:input_type -> flow.v1.CreateEdgeRequest
+	18, // 40: flow.v1.CartographerService.DeleteEdge:input_type -> flow.v1.DeleteEdgeRequest
+	20, // 41: flow.v1.CartographerService.BeginTransaction:input_type -> flow.v1.BeginTransactionRequest
+	22, // 42: flow.v1.CartographerService.CommitTransaction:input_type -> flow.v1.CommitTransactionRequest
+	24, // 43: flow.v1.CartographerService.RollbackTransaction:input_type -> flow.v1.RollbackTransactionRequest
+	26, // 44: flow.v1.CartographerService.RefreshTransaction:input_type -> flow.v1.RefreshTransactionRequest
+	28, // 45: flow.v1.CartographerService.GetTransactionDiff:input_type -> flow.v1.GetTransactionDiffRequest
+	31, // 46: flow.v1.CartographerService.ExtendTimeout:input_type -> flow.v1.ExtendTimeoutRequest
+	39, // 47: flow.v1.CartographerService.ApplySchema:input_type -> flow.v1.ApplySchemaRequest
+	41, // 48: flow.v1.CartographerService.WipeGraph:input_type -> flow.v1.WipeGraphRequest
+	43, // 49: flow.v1.CartographerService.HealthCheck:input_type -> flow.v1.HealthCheckRequest
+	45, // 50: flow.v1.CartographerService.PullFromRemote:input_type -> flow.v1.PullFromRemoteRequest
+	47, // 51: flow.v1.CartographerService.ExportGraph:input_type -> flow.v1.ExportGraphRequest
+	2,  // 52: flow.v1.CartographerService.ExecuteCypher:output_type -> flow.v1.ExecuteCypherResponse
+	4,  // 53: flow.v1.CartographerService.SearchNeighbors:output_type -> flow.v1.SearchNeighborsResponse
+	7,  // 54: flow.v1.CartographerService.FullTextSearch:output_type -> flow.v1.FullTextSearchResponse
+	9,  // 55: flow.v1.CartographerService.ListEntities:output_type -> flow.v1.ListEntitiesResponse
+	11, // 56: flow.v1.CartographerService.CreateEntity:output_type -> flow.v1.CreateEntityResponse
+	13, // 57: flow.v1.CartographerService.UpdateEntity:output_type -> flow.v1.UpdateEntityResponse
+	15, // 58: flow.v1.CartographerService.DeleteEntity:output_type -> flow.v1.DeleteEntityResponse
+	17, // 59: flow.v1.CartographerService.CreateEdge:output_type -> flow.v1.CreateEdgeResponse
+	19, // 60: flow.v1.CartographerService.DeleteEdge:output_type -> flow.v1.DeleteEdgeResponse
+	21, // 61: flow.v1.CartographerService.BeginTransaction:output_type -> flow.v1.BeginTransactionResponse
+	23, // 62: flow.v1.CartographerService.CommitTransaction:output_type -> flow.v1.CommitTransactionResponse
+	25, // 63: flow.v1.CartographerService.RollbackTransaction:output_type -> flow.v1.RollbackTransactionResponse
+	27, // 64: flow.v1.CartographerService.RefreshTransaction:output_type -> flow.v1.RefreshTransactionResponse
+	29, // 65: flow.v1.CartographerService.GetTransactionDiff:output_type -> flow.v1.GetTransactionDiffResponse
+	32, // 66: flow.v1.CartographerService.ExtendTimeout:output_type -> flow.v1.ExtendTimeoutResponse
+	40, // 67: flow.v1.CartographerService.ApplySchema:output_type -> flow.v1.ApplySchemaResponse
+	42, // 68: flow.v1.CartographerService.WipeGraph:output_type -> flow.v1.WipeGraphResponse
+	44, // 69: flow.v1.CartographerService.HealthCheck:output_type -> flow.v1.HealthCheckResponse
+	46, // 70: flow.v1.CartographerService.PullFromRemote:output_type -> flow.v1.PullFromRemoteResponse
+	48, // 71: flow.v1.CartographerService.ExportGraph:output_type -> flow.v1.ExportGraphResponse
+	52, // [52:72] is the sub-list for method output_type
+	32, // [32:52] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_cartographer_proto_init() }
@@ -3047,7 +3094,7 @@ func file_flow_v1_cartographer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_cartographer_proto_rawDesc), len(file_flow_v1_cartographer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   59,
+			NumMessages:   60,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
