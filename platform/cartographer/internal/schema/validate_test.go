@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -43,11 +45,8 @@ func TestValidate_DuplicateEntityTypeName(t *testing.T) {
 	}
 	if err := Validate(s); err == nil {
 		t.Fatal("expected ErrDuplicateTypeName, got nil")
-	} else if err.Error() != ErrDuplicateTypeName.Error() && !contains(err.Error(), "duplicate type name") {
-		// Check via errors.Is-style prefix matching
-		if err.Error() != "duplicate type name: \"Component\"" {
-			t.Fatalf("expected duplicate type name error, got: %v", err)
-		}
+	} else if !errors.Is(err, ErrDuplicateTypeName) {
+		t.Fatalf("expected ErrDuplicateTypeName, got: %v", err)
 	}
 }
 
@@ -451,6 +450,42 @@ func TestValidate_CypherIdentifierBoundaryCases(t *testing.T) {
 	}
 }
 
+func TestValidate_NameLengthBoundary(t *testing.T) {
+	// 255-char name is the maximum allowed length (SPEC R1, validateName in validate.go).
+	long255 := "x" + strings.Repeat("a", 254)
+	if len(long255) != 255 {
+		t.Fatalf("test string length is %d, expected 255", len(long255))
+	}
+
+	// 256-char name should be rejected.
+	long256 := "x" + strings.Repeat("a", 255)
+	if len(long256) != 256 {
+		t.Fatalf("test string length is %d, expected 256", len(long256))
+	}
+
+	// 255-char name accepted.
+	s := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: long255},
+		},
+	}
+	if err := Validate(s); err != nil {
+		t.Fatalf("expected nil error for 255-char name, got: %v", err)
+	}
+
+	// 256-char name rejected.
+	s = &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: long256},
+		},
+	}
+	if err := Validate(s); err == nil {
+		t.Fatal("expected ErrInvalidName for 256-char name, got nil")
+	} else if !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("expected ErrInvalidName, got: %v", err)
+	}
+}
+
 func TestValidate_CrossTypeNameDuplicationAllowed(t *testing.T) {
 	s := &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
@@ -463,18 +498,4 @@ func TestValidate_CrossTypeNameDuplicationAllowed(t *testing.T) {
 	if err := Validate(s); err != nil {
 		t.Fatalf("expected nil error for cross-list name overlap, got: %v", err)
 	}
-}
-
-// contains is a helper for substring matching.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && containsStr(s, substr)
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
