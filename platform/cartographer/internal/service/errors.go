@@ -26,8 +26,6 @@ func mapStoreError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrMissingRequiredProperty):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, store.ErrNonStringProperty):
-		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrEntityNotFound):
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, store.ErrEntityAlreadyExists):
@@ -85,6 +83,13 @@ func mapStoreError(err error) error {
 }
 
 // mapTxError maps a transaction-manager error to a gRPC status error.
+// ponytail: unused — all transaction-manager callers (ValidateActive,
+// ExtendTimeout, Create, Lookup) return pre-formatted gRPC status errors
+// directly via the err* constructors in this file. The only raw gitstore error
+// this function would map (gitstore.ErrChangeLogFull → ResourceExhausted) is
+// handled by mapGitError, which is now used by the AddChangeLogEntry callers.
+// This function is kept as a convenience for future transaction-manager errors
+// that are not gitstore errors.
 func mapTxError(err error) error {
 	if err == nil {
 		return nil
@@ -99,6 +104,11 @@ func mapTxError(err error) error {
 func mapGitError(err error) error {
 	if err == nil {
 		return nil
+	}
+
+	// Pass through already-formatted gRPC status errors without double-wrapping.
+	if _, ok := status.FromError(err); ok {
+		return err
 	}
 
 	switch {
@@ -249,12 +259,12 @@ func errUnsupportedExportFormat(fmt string) error {
 	return status.Errorf(codes.InvalidArgument, "unsupported export format: %q", fmt)
 }
 
-func errExportGraphBufferAllocation(detail string) error {
-	return status.Errorf(codes.ResourceExhausted, "export graph buffer allocation failed: %s", detail)
-}
-
 func errExportGraphMidStream(detail string) error {
 	return status.Errorf(codes.Internal, "export graph stream failure: %s", detail)
+}
+
+func errExportGraphBufferAllocation(detail string) error {
+	return status.Errorf(codes.ResourceExhausted, "export graph buffer allocation failed: %s", detail)
 }
 
 func errApplySchemaBeforeDBReady() error {
@@ -302,7 +312,7 @@ func errCypherParamsNotAStruct() error {
 }
 
 func errNoTransportCredentials() error {
-	return status.Error(codes.Unavailable, "no transport credentials configured")
+	return status.Error(codes.Unauthenticated, "no transport credentials configured")
 }
 
 func errCapabilitySignedByUnrecognized(signer string) error {

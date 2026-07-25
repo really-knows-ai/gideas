@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -51,10 +53,10 @@ type CartographerServer struct {
 	readSecretFn func(ctx context.Context, name string) (map[string]string, error)
 	remoteURL    string
 
-	auditor          TelemetryPublisher
-	newIDFn          func() string
-	podNamespace     string
-	defaultTimeout   time.Duration
+	auditor        TelemetryPublisher
+	newIDFn        func() string
+	podNamespace   string
+	defaultTimeout time.Duration
 
 	gcStop chan struct{}
 
@@ -78,17 +80,24 @@ func NewCartographerServer(
 		podNamespace = "default"
 	}
 	srv := &CartographerServer{
-		store:        s,
-		gitstore:     gs,
-		verifier:     NewCapabilityVerifier(operatorKey, sidecarKey, stalenessWindow),
-		readSecretFn: readSecretFn,
-		remoteURL:    remoteURL,
-		newIDFn:      uuid.NewString,
+		store:          s,
+		gitstore:       gs,
+		verifier:       NewCapabilityVerifier(operatorKey, sidecarKey, stalenessWindow),
+		readSecretFn:   readSecretFn,
+		remoteURL:      remoteURL,
+		newIDFn:        uuid.NewString,
 		podNamespace:   podNamespace,
 		defaultTimeout: defaultTimeout,
 		auditor:        nil,
 		gcStop:         make(chan struct{}),
-		txManager:      NewTransactionManager(defaultTimeout, 7*24*time.Hour, changeLogCap),
+		// ponytail: hardMaxTimeout of 7*24*time.Hour (7 days) is passed as a bare
+		// literal to NewTransactionManager. The same constant is used by ExtendTimeout
+		// via tm.hardMaxTimeout. If this value drifts on future edits (e.g. is replaced
+		// with a config parameter in a different location), ExtendTimeout silently uses
+		// the wrong ceiling. There is no named constant shared between the constructor
+		// call site and the TransactionManager field. Upgrade path: define a package-level
+		// const HardMaxTimeout = 7 * 24 * time.Hour and reference it in both places.
+		txManager: NewTransactionManager(defaultTimeout, 7*24*time.Hour, changeLogCap),
 	}
 	for _, o := range opts {
 		o(srv)
@@ -163,6 +172,12 @@ func (s *CartographerServer) rollbackTransaction(ctx context.Context, txID strin
 }
 
 // RecoverOpenTransactions recovers transactions from a previous crash.
+// Implements the SPEC R9 change-log recovery diff algorithm:
+//  1. Compare each branch-DB entity/edge against the corresponding main file
+//     to classify it as added, modified, or unchanged.
+//  2. Detect suspected deletions (entities/edges in main but absent from the branch DB).
+//  3. If the branch DB content is identical to main for every entity and edge
+//     (diff is empty), the transaction was already committed — clean up and skip.
 func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error {
 	branches, err := s.gitstore.ListBranches(ctx)
 	if err != nil {
@@ -183,29 +198,33 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 			slog.Warn("RecoverOpenTransactions: deleted orphaned git branch", "tx_id", txID)
 			continue
 		}
+
+		mainEntities, mainEdges := s.buildMainFileLookups(ctx)
+
 		cl := gitstore.NewChangeLog()
-		for _, ent := range entities {
-			cl.Add(gitstore.ChangeLogEntry{
-				Kind: gitstore.ChangeAddEntity,
-				ID:   ent.Id,
-				Type: ent.Type,
-				Entity: &gitstore.EntityEntry{
-					ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
-					Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
-				},
+		entityChanged := s.recoverEntityChanges(cl, entities, mainEntities)
+		edgeChanged := s.recoverEdgeChanges(cl, edges, mainEdges)
+
+		// SPEC recovery step 5: If the diff is empty (branch DB identical to main),
+		// the transaction was already committed — clean up and do not recover.
+		if !entityChanged && !edgeChanged {
+			_ = s.gitstore.WithGitLock(func() error {
+				_ = s.gitstore.RestoreMain(ctx)
+				_ = s.gitstore.DeleteBranch(ctx, txID)
+				return nil
 			})
+			_ = s.store.DropBranchDB(txID)
+			slog.Info("RecoverOpenTransactions: already committed, deleted", "tx_id", txID)
+			continue
 		}
-		for _, edge := range edges {
-			cl.Add(gitstore.ChangeLogEntry{
-				Kind: gitstore.ChangeAddEdge,
-				ID:   edge.Id, Type: edge.Type,
-				Edge: &gitstore.EdgeEntry{
-					ID: edge.Id, Type: edge.Type,
-					FromEntityID: edge.FromEntityID, ToEntityID: edge.ToEntityID,
-					Properties: edge.Properties, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
-				},
-			})
-		}
+
+		// ponytail: Every recovered transaction gets the hard-max timeout (7 days)
+		// because the original requested timeout was not persisted to the branch DB.
+		// A recovered transaction that originally had a 30-minute timeout now lives
+		// for up to 7 days unless explicitly rolled back or ExtendTimeout is called
+		// with a shorter duration. Upgrade path: persist the requested timeout alongside
+		// the branch DB (e.g. a metadata file in the git branch or a sidecar record)
+		// and read it back here instead of using the hard maximum.
 		state, err := s.txManager.Create(txID, 7*24*time.Hour, "")
 		if err != nil {
 			_ = s.gitstore.WithGitLock(func() error { _ = s.gitstore.DeleteBranch(ctx, txID); return nil })
@@ -218,7 +237,137 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 	return nil
 }
 
+// buildMainFileLookups reads all entity and edge files from main's git working
+// tree and returns lookup maps keyed by (entityType -> entityID -> file).
+func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (map[string]map[string]gitstore.EntityFile, map[string]map[string]gitstore.EdgeFile) {
+	mainEntities := make(map[string]map[string]gitstore.EntityFile)
+	mainEdges := make(map[string]map[string]gitstore.EdgeFile)
+	_ = s.gitstore.WithGitLock(func() error {
+		_ = s.gitstore.RestoreMain(ctx)
+		_ = s.gitstore.CleanUntracked(ctx)
+		mainEntityTypes, _ := s.gitstore.ListEntityTypes(ctx)
+		for _, et := range mainEntityTypes {
+			files, _ := s.gitstore.ReadAllEntityFiles(ctx, et)
+			byID := make(map[string]gitstore.EntityFile, len(files))
+			for _, f := range files {
+				byID[f.ID] = f
+			}
+			mainEntities[et] = byID
+		}
+		mainEdgeTypes, _ := s.gitstore.ListEdgeTypes(ctx)
+		for _, et := range mainEdgeTypes {
+			files, _ := s.gitstore.ReadAllEdgeFiles(ctx, et)
+			byID := make(map[string]gitstore.EdgeFile, len(files))
+			for _, f := range files {
+				byID[f.ID] = f
+			}
+			mainEdges[et] = byID
+		}
+		return nil
+	})
+	return mainEntities, mainEdges
+}
+
+// recoverEntityChanges classifies branch DB entities against main files and
+// adds ChangeLog entries for non-unchanged entities. It also detects suspected
+// deletions for entities present in main but absent from the branch DB.
+// Returns true if any change was recorded.
+func (s *CartographerServer) recoverEntityChanges(cl *gitstore.ChangeLog, entities []store.Entity, mainEntities map[string]map[string]gitstore.EntityFile) bool {
+	anyChange := false
+	// Build a set of (type, id) present in the branch DB for deletion detection.
+	branchSet := make(map[string]map[string]bool)
+	for _, ent := range entities {
+		if branchSet[ent.Type] == nil {
+			branchSet[ent.Type] = make(map[string]bool)
+		}
+		branchSet[ent.Type][ent.Id] = true
+
+		mainFile, exists := mainEntities[ent.Type][ent.Id]
+		if exists && entityContentEqual(ent, mainFile) {
+			continue // unchanged — skip
+		}
+		kind := gitstore.ChangeModEntity
+		if !exists {
+			kind = gitstore.ChangeAddEntity
+		}
+		_ = cl.AddEntry(gitstore.ChangeLogEntry{
+			Kind: kind,
+			ID:   ent.Id, Type: ent.Type,
+			Entity: &gitstore.EntityEntry{
+				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
+				Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
+			},
+		})
+		anyChange = true
+	}
+	// Suspected deletions: entities in main but not in the branch DB.
+	for et, typeMap := range mainEntities {
+		for id := range typeMap {
+			if !branchSet[et][id] {
+				_ = cl.AddEntry(gitstore.ChangeLogEntry{
+					Kind: gitstore.ChangeDelEntity,
+					ID:   id, Type: et,
+					Suspected: true,
+				})
+				anyChange = true
+			}
+		}
+	}
+	return anyChange
+}
+
+// recoverEdgeChanges classifies branch DB edges against main files and adds
+// ChangeLog entries for non-unchanged edges. It also detects suspected
+// deletions for edges present in main but absent from the branch DB.
+// Returns true if any change was recorded.
+func (s *CartographerServer) recoverEdgeChanges(cl *gitstore.ChangeLog, edges []store.Edge, mainEdges map[string]map[string]gitstore.EdgeFile) bool {
+	anyChange := false
+	branchSet := make(map[string]map[string]bool)
+	for _, edge := range edges {
+		if branchSet[edge.Type] == nil {
+			branchSet[edge.Type] = make(map[string]bool)
+		}
+		branchSet[edge.Type][edge.Id] = true
+
+		mainFile, exists := mainEdges[edge.Type][edge.Id]
+		if exists && edgeContentEqual(edge, mainFile) {
+			continue // unchanged — skip
+		}
+		_ = cl.AddEntry(gitstore.ChangeLogEntry{
+			Kind: gitstore.ChangeAddEdge,
+			ID:   edge.Id, Type: edge.Type,
+			Edge: &gitstore.EdgeEntry{
+				ID: edge.Id, Type: edge.Type,
+				FromEntityID: edge.FromEntityID, ToEntityID: edge.ToEntityID,
+				Properties: edge.Properties, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
+			},
+		})
+		anyChange = true
+	}
+	// Suspected edge deletions: edges in main but not in the branch DB.
+	for et, typeMap := range mainEdges {
+		for id := range typeMap {
+			if !branchSet[et][id] {
+				_ = cl.AddEntry(gitstore.ChangeLogEntry{
+					Kind: gitstore.ChangeDelEdge,
+					ID:   id, Type: et,
+					Suspected: true,
+				})
+				anyChange = true
+			}
+		}
+	}
+	return anyChange
+}
+
 // startGC runs the GC loop.
+// ponytail: The 30-second fixed tick interval is a coarse heuristic suitable
+// for typical transaction lifetimes (minutes to hours). On a cluster with many
+// short-lived transactions, the GC backlog may accumulate between ticks,
+// temporarily occupying git branch and branch-DB resources. On a cluster with
+// very long-lived transactions, the frequent tick wastes CPU. Upgrade path:
+// make the interval configurable via a server option or env var, or use an
+// adaptive interval based on the current transaction count.
 func (s *CartographerServer) startGC() {
 	ticker := s.txManager.clock.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -246,35 +395,42 @@ func (s *CartographerServer) gcTick() {
 	if len(expiredTxIDs) == 0 {
 		return
 	}
-	_ = s.withGitLock(func() error {
-		for _, txID := range expiredTxIDs {
-			state, err := s.txManager.Lookup(txID)
-			if err != nil {
-				continue
-			}
-			if !now.After(state.ExpiresAt.Add(30 * time.Second)) {
-				continue
-			}
+	for _, txID := range expiredTxIDs {
+		state, err := s.txManager.Lookup(txID)
+		if err != nil {
+			continue
+		}
+		if !now.After(state.ExpiresAt.Add(30 * time.Second)) {
+			continue
+		}
+		var merged bool
+		_ = s.withGitLock(func() error {
 			_ = s.gitstore.RestoreMain(ctx)
 			_ = s.gitstore.CleanUntracked(ctx)
-			merged := false
-			logs, _ := s.gitstore.GitLogOneline(ctx, txID)
-			if len(logs) > 0 {
-				merged = true
-			}
-			if !merged && s.ladybugPath != "" {
-				_ = s.store.WipeAll(ctx)
-				_ = s.store.RehydrateMainFromFiles(ctx,
-					filepath.Join(s.ladybugPath, "graph-repo/entities"),
-					filepath.Join(s.ladybugPath, "graph-repo/edges"))
-			}
+			logs, _ := s.gitstore.GitLogOneline(ctx, "transaction:"+txID)
+			merged = len(logs) > 0
 			_ = s.gitstore.DeleteBranch(ctx, txID)
-			s.txManager.Delete(txID)
-			_ = s.store.DropBranchDB(txID)
-			s.publishTelemetry("cartographer.transaction_gc", map[string]string{"tx_id": txID, "reason": "timeout"})
+			return nil
+		})
+		// ponytail: When ladybugPath is empty (default in-memory config), the
+		// !merged re-hydration path is silently skipped. This means expired
+		// transactions whose branch was never merged into main leave the in-memory
+		// store unchanged — their data persists until the process restarts. This
+		// is correct for the dev/stub store (no persistence) but risks stale
+		// branch data accumulating in production LadybugDB deployments that
+		// neglect to set ladybugPath. Upgrade path: require ladybugPath in
+		// production configs and return an error if re-hydration is needed but
+		// the path is empty.
+		if !merged && s.ladybugPath != "" {
+			_ = s.store.WipeAll(ctx)
+			_ = s.store.RehydrateMainFromFiles(ctx,
+				filepath.Join(s.ladybugPath, "graph-repo/entities"),
+				filepath.Join(s.ladybugPath, "graph-repo/edges"))
 		}
-		return nil
-	})
+		s.txManager.Delete(txID)
+		_ = s.store.DropBranchDB(txID)
+		s.publishTelemetry("cartographer.transaction_gc", map[string]string{"tx_id": txID, "reason": "timeout"})
+	}
 }
 
 // computeSchemaHash computes a hash of schema type names.
@@ -335,16 +491,60 @@ func (s *CartographerServer) checkTxCap(ctx context.Context, required string) er
 	return errCapabilityDenied(required)
 }
 
+// checkWildcardEntityCap checks that the caller holds the wildcard entity
+// capability (<prefix>:graph/entity/*). It uses already-verified capabilities
+// from the context, avoiding the full Ed25519 signature re-verification that
+// CheckCapability performs.
+func (s *CartographerServer) checkWildcardEntityCap(ctx context.Context, prefix string) error {
+	caps, err := ExtractCapabilities(ctx)
+	if err != nil {
+		return err
+	}
+	if caps == nil {
+		return errCapabilityDenied(prefix + ":graph/entity/*")
+	}
+	if err := s.verifier.CheckWildcard(caps, prefix); err != nil {
+		return errCapabilityDenied(prefix + ":graph/entity/*")
+	}
+	return nil
+}
+
+// extractEntityTypesFromMetadata reads entity type annotations from gRPC
+// metadata (set by the SDK from Cypher MATCH patterns) and returns them as
+// a string slice. When no entity type metadata is present (system-to-system
+// calls, or the SDK could not parse the Cypher), an empty slice is returned.
+func extractEntityTypesFromMetadata(ctx context.Context) []string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil
+	}
+	return md.Get(MetadataKeyEntityTypes)
+}
+
 // =========================================================================
 // Read Path
 // =========================================================================
 
 func (s *CartographerServer) ExecuteCypher(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+	// Authoritative type-specific capability checking per SPEC R2/R3.
+	// When the SDK parses the Cypher query, it annotates gRPC metadata with
+	// entity type labels via "x-flow-entity-types". Check each extracted
+	// type individually; fall back to the wildcard when metadata is absent
+	// (e.g. system-to-system calls or pre-SDK clients).
+	entityTypes := extractEntityTypesFromMetadata(ctx)
+	if len(entityTypes) > 0 {
+		for _, et := range entityTypes {
+			if err := s.checkEntityCap(ctx, "READ", et); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
+			return nil, err
+		}
+	}
 	if req.Cypher == "" {
 		return nil, errEmptyExecuteCypherQuery()
-	}
-	if err := s.verifier.CheckCapability(ctx, "READ:graph/entity/*"); err != nil {
-		return nil, err
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
@@ -363,38 +563,45 @@ func (s *CartographerServer) ExecuteCypher(ctx context.Context, req *flowv1.Exec
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
-	return &flowv1.ExecuteCypherResponse{Rows: rowsToListValues(rows)}, nil
+	return &flowv1.ExecuteCypherResponse{Rows: rowsToTuples(rows)}, nil
 }
 
-func rowsToListValues(rows []map[string]any) []*structpb.ListValue {
-	result := make([]*structpb.ListValue, 0, len(rows))
+// rowsToTuples converts a []map[string]any result from LadybugDB into a
+// []*flowv1.FlatTuple. Each map entry is stringified and wrapped in a
+// structpb.Value to produce flat tuples per SPEC §R2.
+func rowsToTuples(rows []map[string]any) []*flowv1.FlatTuple {
+	result := make([]*flowv1.FlatTuple, 0, len(rows))
 	for _, row := range rows {
 		values := make([]*structpb.Value, 0, len(row))
 		for _, v := range row {
-			values = append(values, structpb.NewStringValue(fmt.Sprintf("%v", v)))
+			val, err := structpb.NewValue(v)
+			if err != nil {
+				val = structpb.NewStringValue(fmt.Sprintf("%v", v))
+			}
+			values = append(values, val)
 		}
-		result = append(result, &structpb.ListValue{Values: values})
+		result = append(result, &flowv1.FlatTuple{Values: values})
 	}
 	return result
 }
 
 func (s *CartographerServer) SearchNeighbors(ctx context.Context, req *flowv1.SearchNeighborsRequest) (*flowv1.SearchNeighborsResponse, error) {
-	topK := int(req.TopK)
-	if topK < 0 {
-		return nil, errInvalidTopK(topK)
-	}
-	if topK == 0 {
-		topK = 10
-	}
 	entityType := req.EntityType
 	if entityType == "" {
-		if err := s.verifier.CheckCapability(ctx, "READ:graph/entity/*"); err != nil {
+		if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
 			return nil, err
 		}
 	} else {
 		if err := s.checkEntityCap(ctx, "READ", entityType); err != nil {
 			return nil, err
 		}
+	}
+	topK := int(req.TopK)
+	if topK < 0 {
+		return nil, errInvalidTopK(topK)
+	}
+	if topK == 0 {
+		topK = 10
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
@@ -419,17 +626,17 @@ func (s *CartographerServer) SearchNeighbors(ctx context.Context, req *flowv1.Se
 }
 
 func (s *CartographerServer) FullTextSearch(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
-	if req.Query == "" {
-		return nil, errEmptyFullTextSearchQuery()
-	}
 	if req.EntityType == "" {
-		if err := s.verifier.CheckCapability(ctx, "READ:graph/entity/*"); err != nil {
+		if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
 			return nil, err
 		}
 	} else {
 		if err := s.checkEntityCap(ctx, "READ", req.EntityType); err != nil {
 			return nil, err
 		}
+	}
+	if req.Query == "" {
+		return nil, errEmptyFullTextSearchQuery()
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
@@ -512,13 +719,15 @@ func (s *CartographerServer) CreateEntity(ctx context.Context, req *flowv1.Creat
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		_ = s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeAddEntity, ID: ent.Id, Type: ent.Type,
 			Entity: &gitstore.EntityEntry{
 				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
 				Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
 			},
-		})
+		}); err != nil {
+			return nil, mapGitError(err)
+		}
 	} else {
 		s.writeLock.Lock()
 		ent, err = s.store.CreateEntity(ctx, req.EntityType, req.Id, req.Properties, req.Embedding, branch)
@@ -535,6 +744,9 @@ func (s *CartographerServer) CreateEntity(ctx context.Context, req *flowv1.Creat
 func (s *CartographerServer) UpdateEntity(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "entity ID is required")
+	}
+	if !isValidUUID(req.Id) {
+		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
 	}
 	// Resolve entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
@@ -561,13 +773,15 @@ func (s *CartographerServer) UpdateEntity(ctx context.Context, req *flowv1.Updat
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		_ = s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeModEntity, ID: ent.Id, Type: ent.Type,
 			Entity: &gitstore.EntityEntry{
 				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
 				Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
 			},
-		})
+		}); err != nil {
+			return nil, mapGitError(err)
+		}
 	} else {
 		s.writeLock.Lock()
 		ent, err = s.store.UpdateEntity(ctx, req.Id, req.Properties, req.Embedding, branch)
@@ -614,9 +828,11 @@ func (s *CartographerServer) DeleteEntity(ctx context.Context, req *flowv1.Delet
 		if lookupErr != nil {
 			return nil, mapStoreError(lookupErr)
 		}
-		_ = s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeDelEntity, ID: existing.Id, Type: existing.Type,
-		})
+		}); err != nil {
+			return nil, mapGitError(err)
+		}
 		ent, err = s.store.DeleteEntity(ctx, req.Id, branch)
 		if err != nil {
 			return nil, mapStoreError(err)
@@ -663,14 +879,16 @@ func (s *CartographerServer) CreateEdge(ctx context.Context, req *flowv1.CreateE
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		_ = s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeAddEdge, ID: edge.Id, Type: edge.Type,
 			Edge: &gitstore.EdgeEntry{
 				ID: edge.Id, Type: edge.Type,
 				FromEntityID: edge.FromEntityID, ToEntityID: edge.ToEntityID,
 				Properties: edge.Properties, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
 			},
-		})
+		}); err != nil {
+			return nil, mapGitError(err)
+		}
 	} else {
 		s.writeLock.Lock()
 		edge, err = s.store.CreateEdge(ctx, req.EdgeType, req.FromEntityId, req.ToEntityId, req.Properties, branch)
@@ -726,9 +944,11 @@ func (s *CartographerServer) DeleteEdge(ctx context.Context, req *flowv1.DeleteE
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		_ = s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeDelEdge, ID: edge.Id, Type: edge.Type,
-		})
+		}); err != nil {
+			return nil, mapGitError(err)
+		}
 	} else {
 		s.writeLock.Lock()
 		edge, err = s.store.DeleteEdge(ctx, req.Id, branch)
@@ -868,46 +1088,63 @@ func (s *CartographerServer) CommitTransaction(ctx context.Context, req *flowv1.
 				return nil
 			}
 		}
-		_ = s.gitstore.AddAll(ctx, "entities")
-		_ = s.gitstore.AddAll(ctx, "edges")
-		if err := s.gitstore.Commit(ctx, fmt.Sprintf("tx %s", req.TransactionId)); err != nil {
-			commitErr = fmt.Errorf("commit: %w", err)
-			return nil
-		}
+		// Divergence check: verify main has not advanced since last sync
+		// (SPEC serialisation flow step 5 — must precede step 6 git add+commit).
 		curHead, _ := s.gitstore.BranchHEAD(ctx, "main")
 		if curHead != state.MainHeadAtLastSync && state.MainHeadAtLastSync != "" {
 			commitErr = errCommitNotUpToDate()
 			return nil
 		}
+		_ = s.gitstore.AddAll(ctx, "entities")
+		_ = s.gitstore.AddAll(ctx, "edges")
+		if err := s.gitstore.Commit(ctx, fmt.Sprintf("transaction:%s", req.TransactionId)); err != nil {
+			commitErr = fmt.Errorf("commit: %w", err)
+			return nil
+		}
+		// SPEC steps 7-8: Acquire write lock, wipe + rehydrate main DB.
+		s.writeLock.Lock()
+		if err := s.store.WipeAll(ctx); err != nil {
+			s.writeLock.Unlock()
+			commitErr = fmt.Errorf("wipe main store: %w", err)
+			return nil
+		}
+		if s.ladybugPath != "" {
+			if err := s.store.RehydrateMainFromFiles(ctx,
+				filepath.Join(s.ladybugPath, "graph-repo/entities"),
+				filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
+				s.writeLock.Unlock()
+				commitErr = fmt.Errorf("rehydrate main from files: %w", err)
+				return nil
+			}
+		}
+		_ = s.store.RehydrateFromBranch(ctx, req.TransactionId)
+		// SPEC step 9: Release write lock.
+		s.writeLock.Unlock()
+
+		// SPEC step 10: Fast-forward merge to main.
 		if err := s.gitstore.FastForwardMerge(ctx, req.TransactionId, "main"); err != nil {
 			commitErr = fmt.Errorf("merge: %w", err)
 			return nil
 		}
+		// SPEC step 11: Restore main in the working tree.
 		_ = s.gitstore.RestoreMain(ctx)
 		_ = s.gitstore.CleanUntracked(ctx)
-
-		s.writeLock.Lock()
-		defer s.writeLock.Unlock()
-		_ = s.store.WipeAll(ctx)
-		_ = s.store.RehydrateMainFromFiles(ctx,
-			filepath.Join(s.ladybugPath, "graph-repo/entities"),
-			filepath.Join(s.ladybugPath, "graph-repo/edges"))
-		_ = s.store.RehydrateFromBranch(ctx, req.TransactionId)
-
-		// Fire-and-forget push.
-		if s.remoteURL != "" {
-			go func() {
-				pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				if err := s.gitstore.WithGitLock(func() error {
-					return s.gitstore.PushRemote(pushCtx)
-				}); err != nil {
-					s.publishTelemetry("cartographer.push_failed", map[string]string{"error": err.Error()})
-				}
-			}()
-		}
 		return nil
 	})
+
+	// Fire-and-forget push (outside git lock to avoid nested lock acquisition).
+	if s.remoteURL != "" {
+		go func() {
+			pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := s.gitstore.WithGitLock(func() error {
+				return s.gitstore.PushRemote(pushCtx)
+			}); err != nil {
+				slog.Warn("commit: remote push failed", "error", err.Error())
+				s.publishTelemetry("cartographer.push_failed", map[string]string{"error": err.Error()})
+			}
+		}()
+	}
 
 	if commitErr != nil {
 		return nil, mapGitError(commitErr)
@@ -984,6 +1221,45 @@ func (s *CartographerServer) RefreshTransaction(ctx context.Context, req *flowv1
 		_ = s.store.HydrateBranchFromFiles(ctx, req.TransactionId,
 			filepath.Join(s.ladybugPath, "graph-repo/entities"),
 			filepath.Join(s.ladybugPath, "graph-repo/edges"))
+	}
+	// SPEC R9 refresh flow steps 3-5: validate against main and re-apply changes.
+	for _, entry := range state.ChangeLog.Entries() {
+		switch entry.Kind {
+		case gitstore.ChangeAddEntity:
+			_, err := s.store.CreateEntity(ctx, entry.Type, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, req.TransactionId)
+			if err != nil {
+				if errors.Is(err, store.ErrEntityAlreadyExists) || errors.Is(err, store.ErrEmbeddingDimension) {
+					return nil, errRefreshConflict(req.TransactionId)
+				}
+				return nil, mapStoreError(err)
+			}
+		case gitstore.ChangeModEntity:
+			_, err := s.store.UpdateEntity(ctx, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, req.TransactionId)
+			if err != nil {
+				if errors.Is(err, store.ErrEntityNotFound) || errors.Is(err, store.ErrEmbeddingDimension) {
+					return nil, errRefreshConflict(req.TransactionId)
+				}
+				return nil, mapStoreError(err)
+			}
+		case gitstore.ChangeDelEntity:
+			_, err := s.store.DeleteEntity(ctx, entry.ID, req.TransactionId)
+			if err != nil && !errors.Is(err, store.ErrEntityNotFound) {
+				return nil, mapStoreError(err)
+			}
+		case gitstore.ChangeAddEdge:
+			_, err := s.store.CreateEdge(ctx, entry.Type, entry.Edge.FromEntityID, entry.Edge.ToEntityID, entry.Edge.Properties, req.TransactionId)
+			if err != nil {
+				if errors.Is(err, store.ErrSourceOrTargetNotFound) || errors.Is(err, store.ErrEmbeddingDimension) {
+					return nil, errRefreshConflict(req.TransactionId)
+				}
+				return nil, mapStoreError(err)
+			}
+		case gitstore.ChangeDelEdge:
+			_, err := s.store.DeleteEdge(ctx, entry.ID, req.TransactionId)
+			if err != nil && !errors.Is(err, store.ErrEdgeNotFound) {
+				return nil, mapStoreError(err)
+			}
+		}
 	}
 	return &flowv1.RefreshTransactionResponse{}, nil
 }
@@ -1062,13 +1338,20 @@ func (s *CartographerServer) ApplySchema(ctx context.Context, req *flowv1.ApplyS
 }
 
 func (s *CartographerServer) WipeGraph(ctx context.Context, req *flowv1.WipeGraphRequest) (*flowv1.WipeGraphResponse, error) {
-	if s.txManager.HasActive() {
-		return nil, errWipeGraphOpenTransactions()
-	}
 	var wipeErr error
 	_ = s.withGitLock(func() error {
-		_ = s.gitstore.GitRm(ctx, "entities")
-		_ = s.gitstore.GitRm(ctx, "edges")
+		if s.txManager.HasActive() {
+			wipeErr = errWipeGraphOpenTransactions()
+			return nil
+		}
+		if err := s.gitstore.GitRm(ctx, "entities"); err != nil {
+			wipeErr = fmt.Errorf("git rm entities: %w", err)
+			return nil
+		}
+		if err := s.gitstore.GitRm(ctx, "edges"); err != nil {
+			wipeErr = fmt.Errorf("git rm edges: %w", err)
+			return nil
+		}
 		if err := s.gitstore.Commit(ctx, "wipe"); err != nil {
 			wipeErr = err
 			return nil
@@ -1077,7 +1360,7 @@ func (s *CartographerServer) WipeGraph(ctx context.Context, req *flowv1.WipeGrap
 		return nil
 	})
 	if wipeErr != nil {
-		return nil, errWipeGraphMidWipe(wipeErr.Error())
+		return nil, wipeErr
 	}
 	s.writeLock.Lock()
 	if err := s.store.WipeAll(ctx); err != nil {
@@ -1125,11 +1408,15 @@ func (s *CartographerServer) PullFromRemote(ctx context.Context, req *flowv1.Pul
 	}
 	s.writeLock.Lock()
 	defer s.writeLock.Unlock()
-	_ = s.store.WipeAll(ctx)
-	if err := s.store.RehydrateMainFromFiles(ctx,
-		filepath.Join(s.ladybugPath, "graph-repo/entities"),
-		filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
+	if err := s.store.WipeAll(ctx); err != nil {
 		return nil, errPullFromRemoteRehydrationFailed(err.Error())
+	}
+	if s.ladybugPath != "" {
+		if err := s.store.RehydrateMainFromFiles(ctx,
+			filepath.Join(s.ladybugPath, "graph-repo/entities"),
+			filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
+			return nil, errPullFromRemoteRehydrationFailed(err.Error())
+		}
 	}
 	return &flowv1.PullFromRemoteResponse{}, nil
 }
@@ -1140,10 +1427,25 @@ func (s *CartographerServer) ExportGraph(req *flowv1.ExportGraphRequest, stream 
 	if err := s.verifier.CheckCapability(ctx, "READ:graph/entity/*"); err != nil {
 		return err
 	}
-	data, err := collectExportData(s, ctx, req.GetFormat())
-	if err != nil {
-		return err
+
+	// collectExportData may panic (e.g. bytes.ErrTooLarge, make() OOM) when the
+	// in-memory serialisation buffer exceeds available memory, which would crash
+	// the process rather than return a controlled error. The recover below converts
+	// such panics to RESOURCE_EXHAUSTED, matching SPEC R11 and the error table.
+	var data []byte
+	var collectErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				collectErr = errExportGraphBufferAllocation(fmt.Sprintf("%v", r))
+			}
+		}()
+		data, collectErr = collectExportData(s, ctx, req.GetFormat())
+	}()
+	if collectErr != nil {
+		return collectErr
 	}
+
 	const chunkSize = 1024 * 64
 	for i := 0; i < len(data); i += chunkSize {
 		end := min(i+chunkSize, len(data))
@@ -1209,4 +1511,50 @@ func toGitEdges(entries []*gitstore.EdgeEntry) []gitstore.Edge {
 		}
 	}
 	return r
+}
+
+// entityContentEqual returns true when the data content of a store.Entity
+// matches a gitstore.EntityFile (ignoring timestamps, since these may differ
+// due to JSON round-trip precision or re-hydration timing).
+func entityContentEqual(a store.Entity, b gitstore.EntityFile) bool {
+	if a.Id != b.ID || a.Type != b.Type {
+		return false
+	}
+	if len(a.Properties) != len(b.Properties) {
+		return false
+	}
+	for k, v := range a.Properties {
+		if b.Properties[k] != v {
+			return false
+		}
+	}
+	if len(a.Embedding) != len(b.Embedding) {
+		return false
+	}
+	for i := range a.Embedding {
+		if a.Embedding[i] != b.Embedding[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// edgeContentEqual returns true when the data content of a store.Edge
+// matches a gitstore.EdgeFile (ignoring timestamps).
+func edgeContentEqual(a store.Edge, b gitstore.EdgeFile) bool {
+	if a.Id != b.ID || a.Type != b.Type {
+		return false
+	}
+	if a.FromEntityID != b.FromEntityID || a.ToEntityID != b.ToEntityID {
+		return false
+	}
+	if len(a.Properties) != len(b.Properties) {
+		return false
+	}
+	for k, v := range a.Properties {
+		if b.Properties[k] != v {
+			return false
+		}
+	}
+	return true
 }

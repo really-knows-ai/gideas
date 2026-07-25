@@ -206,6 +206,15 @@ func (v *CapabilityVerifier) CheckWildcard(caps *Capabilities, requiredCapPrefix
 
 // CheckCapability combines extract + verify + match in one call for handlers
 // that don't need Mode 1/Mode 2 branching.
+// impl-note: This re-implements the full verification flow (reading metadata,
+// selecting verifier key, decoding signature, verifying Ed25519, parsing
+// capabilities) independently of the interceptor-based flow in VerifyInterceptor.
+// Notably it does not include the staleness check (anti-replay) that the
+// interceptor performs, so error semantics differ: a stale capability that
+// the interceptor would reject with PERMISSION_DENIED may be accepted here.
+// Production handlers should rely on ExtractCapabilities after the interceptor
+// has run; this method exists as a defence-in-depth path for test contexts
+// that bypass the interceptor.
 func (v *CapabilityVerifier) CheckCapability(ctx context.Context, required string) error {
 	// Re-verify signature from metadata (defence-in-depth for tests).
 	md, ok := metadata.FromIncomingContext(ctx)
@@ -286,6 +295,11 @@ func (v *CapabilityVerifier) checkTxCap(ctx context.Context, required string) er
 
 // checkEntityCap is a helper for checking entity-level capabilities
 // (Mode 1 — specific type).
+// impl-note: Checks only the exact "<prefix>:graph/entity/<entityType>" match
+// via CheckSpecificType. Does not fall back to checking
+// "<prefix>:graph/entity/*" as a wildcard. Every caller must independently
+// implement wildcard fallback logic when the entity type may be unknown or a
+// broad capability is acceptable.
 func (v *CapabilityVerifier) checkEntityCap(ctx context.Context, prefix, entityType string) error {
 	caps, err := ExtractCapabilities(ctx)
 	if err != nil {
@@ -298,6 +312,23 @@ func (v *CapabilityVerifier) checkEntityCap(ctx context.Context, prefix, entityT
 }
 
 // isValidUUID returns true if s looks like a UUID v4 (basic format check).
+// ponytail: Only validates hex characters and dash positions — does not verify
+// the UUID v4 version nibble (position 14 must be '4') or variant bits
+// (position 19 must be 8/9/a/b). Non-v4 UUIDs (v1, v2, v3, v5) pass
+// validation. Consequences: (1) SPEC violation — non-v4 UUIDs are accepted
+// despite SPEC requiring "valid UUID v4" for entity, edge, and transaction IDs
+// (INVALID_ARGUMENT per SPEC error table). (2) v1 UUIDs encode creation
+// timestamps, leaking temporal information about ID generation; v3/v5 UUIDs
+// are deterministic from namespace/name inputs, enabling inference of inputs
+// by enumerating observed IDs. (3) Per-version uniqueness and collision
+// characteristics differ — while collision probability is negligible for all
+// UUID versions, environments that audit or validate for v4 compliance would
+// report false positives on accepted non-v4 IDs. Deployment-context risk:
+// caller-supplied entity/edge IDs and proxy-forwarded transaction IDs are the
+// primary external source; the Cartographer's own auto-generation produces
+// correct UUID v4. Upgrade path: add s[14] == '4' version nibble check and
+// s[19] variant check accepting '8','9','a','A','b','B' (both cases — the
+// hex check accepts A-F).
 func isValidUUID(s string) bool {
 	if len(s) != 36 {
 		return false

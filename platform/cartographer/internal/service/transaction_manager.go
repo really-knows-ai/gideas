@@ -145,8 +145,15 @@ func (tm *TransactionManager) ValidateActive(txID string) error {
 	return nil
 }
 
-// ExtendTimeout extends the transaction timeout by the given duration.
+// ExtendTimeout replaces the transaction expiry with now+duration.
+// It does not _extend_ the current expiry (i.e. it is not
+// max(oldExpiry, now+duration)). If a previous call set ExpiresAt further in
+// the future and the new duration is shorter, the remaining lifetime shrinks.
 // The total lifetime (now - createdAt + duration) must not exceed the hard max.
+// ponytail: replace-vs-extend semantics are deliberate per SPEC ("resets expiry
+// timer"), but the name "ExtendTimeout" is misleading. If max(oldExpiry,
+// now+duration) semantics are desired, change the assignment to
+// max(state.ExpiresAt, now.Add(duration)).
 // ponytail: acquires the write lock for the entire operation to prevent a TOCTOU
 // race between Lookup (RLock) and modification (Lock). The upgrade path is to
 // split into a RLock-protected read phase followed by a Lock-protected write
@@ -183,8 +190,7 @@ func (tm *TransactionManager) AddChangeLogEntry(txID string, entry gitstore.Chan
 		return errTransactionNotFound(txID)
 	}
 
-	state.ChangeLog.Add(entry)
-	return nil
+	return state.ChangeLog.Add(entry)
 }
 
 // HasActive returns true if any registered transaction has not timed out.

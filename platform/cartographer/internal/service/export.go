@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
+	"sort"
 
 	"github.com/foundry/flow/cartographer/internal/store"
 )
@@ -30,6 +32,9 @@ type graphJSON struct {
 
 // collectExportData collects and serialises the full graph.
 // acceptCtx is the optional gRPC context for cancellation; uses context.Background() if nil.
+// ponytail: a nil acceptCtx silently loses cancellation/timing. The handler always passes a
+// valid context today, so this is harmless. If that invariant ever changes, either require
+// a non-nil context or derive one with a timeout before the fallback.
 func collectExportData(s *CartographerServer, acceptCtx context.Context, format string) ([]byte, error) {
 	ctx := acceptCtx
 	if ctx == nil {
@@ -68,6 +73,11 @@ func collectExportData(s *CartographerServer, acceptCtx context.Context, format 
 }
 
 // serializeGraph serialises entities and edges into the requested format.
+// ponytail: format strings "json" and "graphml" are bare literals because the
+// SPEC (R11) defines exactly these two formats and Go has no compile-time
+// exhaustiveness for string switches. Adding a format requires updating both
+// this switch and adding a matching serialize* function — there is no third
+// call site that would benefit from a shared constant today.
 func serializeGraph(format string, entities []store.Entity, edges []store.Edge) ([]byte, error) {
 	switch format {
 	case "json":
@@ -83,31 +93,21 @@ func serializeJSON(entities []store.Entity, edges []store.Edge) ([]byte, error) 
 	g := graphJSON{}
 	for _, e := range entities {
 		node := graphNode{ID: e.Id, Type: e.Type}
+		// ponytail: aliases e.Properties to avoid allocation-per-entity.
+		// Safe because the caller (collectExportData) discards entities
+		// after serialization. If a future caller retains entities after
+		// serializeGraph, this aliasing could cause data races or mutation;
+		// copy the map in that case.
 		if len(e.Properties) > 0 {
-			props := make(map[string]string)
-			for k, v := range e.Properties {
-				if v != "" {
-					props[k] = v
-				}
-			}
-			if len(props) > 0 {
-				node.Properties = props
-			}
+			node.Properties = e.Properties
 		}
 		g.Nodes = append(g.Nodes, node)
 	}
 	for _, e := range edges {
 		edge := graphEdge{ID: e.Id, Type: e.Type, From: e.FromEntityID, To: e.ToEntityID}
+		// ponytail: same aliasing rationale as the entity block above.
 		if len(e.Properties) > 0 {
-			props := make(map[string]string)
-			for k, v := range e.Properties {
-				if v != "" {
-					props[k] = v
-				}
-			}
-			if len(props) > 0 {
-				edge.Properties = props
-			}
+			edge.Properties = e.Properties
 		}
 		g.Edges = append(g.Edges, edge)
 	}
@@ -118,21 +118,57 @@ func serializeGraphML(entities []store.Entity, edges []store.Edge) ([]byte, erro
 	var buf bytes.Buffer
 	buf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	buf.WriteString(`<graphml xmlns="http://graphml.graphdrawing.org/xmlns">` + "\n")
+
+	// Collect unique property keys used on nodes and edges.
+	nodeKeys := map[string]struct{}{}
+	edgeKeys := map[string]struct{}{}
+	for _, e := range entities {
+		for k := range e.Properties {
+			nodeKeys[k] = struct{}{}
+		}
+	}
+	for _, e := range edges {
+		for k := range e.Properties {
+			edgeKeys[k] = struct{}{}
+		}
+	}
+
+	// Emit <key> declarations before <graph>. Sorted for deterministic output.
+	nodeKeyList := make([]string, 0, len(nodeKeys))
+	for k := range nodeKeys {
+		nodeKeyList = append(nodeKeyList, k)
+	}
+	sort.Strings(nodeKeyList)
+	for _, k := range nodeKeyList {
+		fmt.Fprintf(&buf, `  <key id="%s" for="node" attr.name="%s" attr.type="string"/>`+"\n",
+			html.EscapeString(k), html.EscapeString(k))
+	}
+
+	edgeKeyList := make([]string, 0, len(edgeKeys))
+	for k := range edgeKeys {
+		edgeKeyList = append(edgeKeyList, k)
+	}
+	sort.Strings(edgeKeyList)
+	for _, k := range edgeKeyList {
+		fmt.Fprintf(&buf, `  <key id="%s" for="edge" attr.name="%s" attr.type="string"/>`+"\n",
+			html.EscapeString(k), html.EscapeString(k))
+	}
+
 	buf.WriteString(`  <graph id="G" edgedefault="directed">` + "\n")
 	for _, e := range entities {
-		buf.WriteString(fmt.Sprintf(`    <node id="%s">`, e.Id))
+		fmt.Fprintf(&buf, `    <node id="%s">`, e.Id)
 		for k, v := range e.Properties {
 			if v != "" {
-				buf.WriteString(fmt.Sprintf(`<data key="%s">%s</data>`, k, v))
+				fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
 			}
 		}
 		buf.WriteString("</node>\n")
 	}
 	for _, e := range edges {
-		buf.WriteString(fmt.Sprintf(`    <edge id="%s" source="%s" target="%s">`, e.Id, e.FromEntityID, e.ToEntityID))
+		fmt.Fprintf(&buf, `    <edge id="%s" source="%s" target="%s">`, e.Id, e.FromEntityID, e.ToEntityID)
 		for k, v := range e.Properties {
 			if v != "" {
-				buf.WriteString(fmt.Sprintf(`<data key="%s">%s</data>`, k, v))
+				fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
 			}
 		}
 		buf.WriteString("</edge>\n")
