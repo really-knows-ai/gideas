@@ -53,3 +53,4 @@ ttl-watcher
 
 # Archived legacy documentation and specs
 _old/
+/cmd
