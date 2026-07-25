@@ -1,6 +1,6 @@
 module github.com/foundry/flow/librarian
 
-go 1.25.3
+go 1.26
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
@@ -10,12 +10,26 @@ require (
 	github.com/foundry/flow/pkg/sqldbutil v0.0.0-00010101000000-000000000000
 	github.com/foundry/flow/sdk/go v0.0.0-00010101000000-000000000000
 	github.com/mattn/go-sqlite3 v1.14.34
-	google.golang.org/grpc v1.79.3
+	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 )
 
 require (
+	github.com/LadybugDB/go-ladybug v0.17.0 // indirect
+	github.com/apache/arrow-go/v18 v18.6.0 // indirect
+	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/google/flatbuffers v25.12.19+incompatible // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	github.com/shopspring/decimal v1.4.0 // indirect
+	github.com/zeebo/xxh3 v1.1.0 // indirect
+	go.opentelemetry.io/otel/metric v1.41.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.40.0 // indirect
+	go.opentelemetry.io/otel/trace v1.41.0 // indirect
+	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
