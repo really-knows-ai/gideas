@@ -1,3 +1,5 @@
+//go:build !ladybug
+
 package flow
 
 import (
@@ -9,12 +11,14 @@ import (
 // entity-type labels referenced in MATCH patterns.
 // Returns nil if parsing fails (caller falls back to wildcard).
 //
-// ponytail: Uses regex-based extraction as a fallback when the LadybugDB
-// parser is unavailable. The regex approach handles common Cypher patterns
-// but may miss edge cases (e.g., multi-line MATCH expressions, parameterised
-// labels). Upgrade path: switch to github.com/LadybugDB/go-ladybug/parser
-// when available. The function signature remains unchanged regardless of
-// extraction strategy — callers handle nil returns with wildcard fallback.
+// ponytail: This implementation uses regex-based extraction as a pure-Go
+// fallback when the LadybugDB C library (liblbug) is not available. The
+// regex approach handles common Cypher patterns but may miss edge cases
+// (e.g., multi-line MATCH expressions, parameterised labels). When built
+// with `-tags ladybug` and liblbug is installed, the LadybugDB-backed
+// implementation in cypher_ladybug.go is used instead. The function
+// signature remains identical regardless of extraction strategy — callers
+// handle nil returns with wildcard fallback.
 func extractEntityTypes(cypher string) []string {
 	if cypher == "" {
 		return nil

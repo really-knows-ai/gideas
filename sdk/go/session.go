@@ -136,7 +136,7 @@ func (s *session) Close() error {
 // per the operation-specific table. types are the entity type(s) required
 // for capability resolution by the Sidecar proxy.
 func (s *session) call(ctx context.Context, fn func(context.Context) error, key string, types ...string) error {
-	if len(types) > 0 {
+	if len(types) > 0 && key != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, key, strings.Join(types, ","))
 	}
 	// Apply per-call timeout from the session config.

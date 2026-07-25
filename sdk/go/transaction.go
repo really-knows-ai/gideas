@@ -488,7 +488,9 @@ func (tx *Transaction) ExtendTimeout(d time.Duration) (time.Duration, error) {
 
 	// ponytail: ExtendTimeoutResponse does not return AppliedTimeout.
 	// The server caps silently; return the requested duration as the
-	// best-effort approximation. A future proto update should add
+	// best-effort approximation. Callers relying on the return value for
+	// timeout tracking will see the requested (possibly uncapped) value,
+	// not the server-enforced cap. A future proto update should add
 	// AppliedTimeout to ExtendTimeoutResponse.
 	tx.timeout = d
 	return d, nil

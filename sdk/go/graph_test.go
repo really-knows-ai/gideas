@@ -2,6 +2,8 @@ package flow
 
 import (
 	"context"
+	"errors"
+	"io"
 	"math"
 	"testing"
 	"time"
@@ -138,7 +140,7 @@ func (m *mockCartographerClient) ExportGraph(ctx context.Context, req *flowv1.Ex
 	if m.exportGraph != nil {
 		return m.exportGraph(ctx, req)
 	}
-	return nil, nil
+	return nil, errors.New("ExportGraph mock function not set")
 }
 func (m *mockCartographerClient) PullFromRemote(ctx context.Context, req *flowv1.PullFromRemoteRequest, opts ...grpc.CallOption) (*flowv1.PullFromRemoteResponse, error) {
 	if m.pullFromRemote != nil {
@@ -632,7 +634,7 @@ func (s *mockStream) Recv() (*flowv1.ExportGraphResponse, error) {
 		return nil, s.err
 	}
 	if s.pos >= len(s.chunks) {
-		return nil, nil // stream end
+		return nil, io.EOF // stream end
 	}
 	chunk := s.chunks[s.pos]
 	s.pos++

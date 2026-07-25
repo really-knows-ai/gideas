@@ -372,6 +372,13 @@ func (g *Graph) ListEntities(entityType string, opts ...ListEntitiesOption) (*En
 }
 
 // CreateEntity creates a new entity. If id is nil, the server auto-generates a UUID v4.
+//
+// ponytail: Client-side UUID v4 format validation is intentionally omitted.
+// When id is non-nil, it is passed as-is to the Cartographer, which validates
+// the format and returns INVALID_ARGUMENT on malformed UUIDs. This is
+// consistent with the SPEC's server-side validation model — the server is
+// authoritative for all structural validation including UUID format, entity
+// type existence, property schema, and embedding constraints.
 func (g *Graph) CreateEntity(entityType string, id *string, properties map[string]string, embedding []float32) (*Entity, error) {
 	if g.session == nil {
 		return nil, fmt.Errorf("flow sdk: graph not initialised")
@@ -526,11 +533,15 @@ func (g *Graph) DeleteEdge(id string) (*Edge, error) {
 
 	var resp *flowv1.DeleteEdgeResponse
 	// Always annotate WRITE:graph/entity/* (Cartographer is authoritative for source type).
+	// ponytail: DeleteEdge always uses the wildcard "*" as the entity type
+	// because the edge's source entity type is resolved authoritatively by the
+	// Cartographer (R3). The metadata key "x-flow-entity-type" is used here
+	// for consistency with other write-path wildcard annotations.
 	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
 		var callErr error
 		resp, callErr = g.session.Cartographer.DeleteEdge(ctx, req)
 		return callErr
-	}, "", "*")
+	}, "x-flow-entity-type", "*")
 	if err != nil {
 		return nil, err
 	}
