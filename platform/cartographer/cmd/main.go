@@ -94,7 +94,10 @@ func main() {
 			os.Exit(1)
 		}
 
-		os.Remove(filepath.Join(ladybugDBPath, "main.lbug"))
+		if rmErr := os.Remove(filepath.Join(ladybugDBPath, "main.lbug")); rmErr != nil {
+			slog.Error("Failed to remove corrupt main.lbug, cannot recover", "error", rmErr)
+			os.Exit(1)
+		}
 
 		if empty {
 			dbStore, dbErr = store.Open(ladybugDBPath)
@@ -109,6 +112,12 @@ func main() {
 				slog.Error("Failed to open database for re-hydration", "error", dbErr)
 				os.Exit(1)
 			}
+			// ponytail: These paths mirror the gitstore's internal working tree structure:
+			// gitstore.New(basePath) creates the repo at <basePath>/graph-repo/ and the
+			// working tree uses relative directories "entities/" and "edges/" (see
+			// platform/cartographer/internal/gitstore/gitstore.go:114,148-153).  If the
+			// gitstore changes its path convention (e.g. a configurable subdirectory or
+			// flat file layout), these paths must be updated in tandem.
 			entitiesDir := filepath.Join(ladybugDBPath, "graph-repo/entities")
 			edgesDir := filepath.Join(ladybugDBPath, "graph-repo/edges")
 			if err := dbStore.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir); err != nil {
@@ -126,7 +135,11 @@ func main() {
 
 	k8sConfig, inClusterErr := rest.InClusterConfig()
 	if inClusterErr != nil {
-		k8sConfig, _ = clientcmd.BuildConfigFromFlags("", "")
+		var kubeErr error
+		k8sConfig, kubeErr = clientcmd.BuildConfigFromFlags("", "")
+		if kubeErr != nil {
+			slog.Warn("Kubeconfig fallback also failed (expected when running outside cluster)", "error", kubeErr)
+		}
 	}
 
 	if k8sConfig != nil {
