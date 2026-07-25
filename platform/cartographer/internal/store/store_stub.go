@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -18,20 +17,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/foundry/flow/cartographer/internal/schema"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/google/uuid"
 )
 
 // Column names reserved for entity types (cannot be used as property names).
 const reservedColumnProperties = "_properties"
-
-func isAlpha(c rune) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-func isDigit(c rune) bool {
-	return c >= '0' && c <= '9'
-}
 
 // ladybugDB is the concrete in-memory implementation of Store.
 // This stub is used when the LadybugDB C library is not available (default build).
@@ -120,7 +112,7 @@ func (db *ladybugDB) Close() error {
 
 // --- Schema methods ---
 
-func (db *ladybugDB) ApplySchema(ctx context.Context, schema *flowv1.Schema) error {
+func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -129,12 +121,12 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, schema *flowv1.Schema) err
 	}
 
 	// Validate first
-	if err := ValidateSchemaInternal(schema); err != nil {
+	if err := ValidateSchemaInternal(s); err != nil {
 		return err
 	}
 
 	// Apply entity types
-	for _, et := range schema.EntityTypes {
+	for _, et := range s.EntityTypes {
 		if existing, ok := db.entityTypeDefs[et.Name]; ok {
 			// Check for incompatible (destructive) changes
 			if err := checkEntityTypeCompatibility(existing, et); err != nil {
@@ -173,21 +165,19 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, schema *flowv1.Schema) err
 			db.entityTypeDefs[et.Name] = def
 		}
 
-		// Update rule index if rules are provided
-		if len(et.Rules) > 0 {
-			clone := make([]*flowv1.ConnectionRule, len(et.Rules))
-			for i, r := range et.Rules {
-				clone[i] = &flowv1.ConnectionRule{
-					CanConnectTo: append([]string{}, r.CanConnectTo...),
-					Using:        append([]string{}, r.Using...),
-				}
+		// Update rule index (empty/nil rules list clears rules, meaning no edges permitted).
+		clone := make([]*flowv1.ConnectionRule, len(et.Rules))
+		for i, r := range et.Rules {
+			clone[i] = &flowv1.ConnectionRule{
+				CanConnectTo: append([]string{}, r.CanConnectTo...),
+				Using:        append([]string{}, r.Using...),
 			}
-			db.ruleIndex[et.Name] = clone
 		}
+		db.ruleIndex[et.Name] = clone
 	}
 
 	// Apply edge types
-	for _, et := range schema.EdgeTypes {
+	for _, et := range s.EdgeTypes {
 		if existing, ok := db.edgeTypeDefs[et.Name]; ok {
 			// Check for incompatible (destructive) changes
 			if err := checkEdgeTypeCompatibility(existing, et); err != nil {
@@ -275,165 +265,8 @@ func checkEntityTypeCompatibility(existing *EntityTypeDef, newET *flowv1.EntityT
 }
 
 // ValidateSchemaInternal is the schema-level validation function used by the store stub.
-func ValidateSchemaInternal(schema *flowv1.Schema) error {
-	// We import the schema package and delegate
-	return validateViaSchemaPackage(schema)
-}
-
-func validateViaSchemaPackage(schema *flowv1.Schema) error {
-	// Inline call to schema.Validate to avoid import cycle
-	// (the store package would import schema, which imports gen - that's fine)
-	return schemaValidate(schema)
-}
-
-// schemaValidate imports the schema validation engine
-func schemaValidate(s *flowv1.Schema) error {
-	// Reuse the validation logic from the schema package
-	return validateSchema(s)
-}
-
-func validateSchema(s *flowv1.Schema) error {
-	entityTypeNames := make(map[string]bool)
-	for _, et := range s.EntityTypes {
-		if entityTypeNames[et.Name] {
-			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
-		}
-		entityTypeNames[et.Name] = true
-	}
-	edgeTypeNames := make(map[string]bool)
-	for _, et := range s.EdgeTypes {
-		if edgeTypeNames[et.Name] {
-			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
-		}
-		edgeTypeNames[et.Name] = true
-	}
-	for _, et := range s.EntityTypes {
-		if err := validateEntityTypeSchema(et, entityTypeNames, edgeTypeNames); err != nil {
-			return err
-		}
-	}
-	for _, et := range s.EdgeTypes {
-		if err := validateEdgeTypeSchema(et); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateEntityTypeSchema(et *flowv1.EntityType, entityTypeNames, edgeTypeNames map[string]bool) error {
-	if err := validateNameFormat(et.Name); err != nil {
-		return err
-	}
-	if _, ok := reservedWordsList()[strings.ToUpper(et.Name)]; ok {
-		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
-	}
-	propNames := make(map[string]bool)
-	for _, p := range et.Properties {
-		if propNames[p.Name] {
-			return fmt.Errorf("%w: duplicate property %q in entity type %q", ErrDuplicatePropertyName, p.Name, et.Name)
-		}
-		propNames[p.Name] = true
-		if err := validateNameFormat(p.Name); err != nil {
-			return fmt.Errorf("%w: property %q in entity type %q", err, p.Name, et.Name)
-		}
-		if _, ok := reservedWordsList()[strings.ToUpper(p.Name)]; ok {
-			return fmt.Errorf("%w: property %q in entity type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
-		}
-		if p.Name == "id" || p.Name == reservedColumnProperties {
-			return fmt.Errorf("%w: property %q in entity type %q collides with reserved column", ErrImplicitColumnCollision, p.Name, et.Name)
-		}
-		if et.EnableVectorIndex && p.Name == "embedding" {
-			return fmt.Errorf("%w: property %q in entity type %q collides with embedding column when vector index is enabled", ErrImplicitColumnCollision, p.Name, et.Name)
-		}
-		if p.Type != "string" {
-			return fmt.Errorf("%w: property %q in entity type %q has type %q", ErrInvalidPropertyType, p.Name, et.Name, p.Type)
-		}
-	}
-	return validateRulesSchema(et.Rules, entityTypeNames, edgeTypeNames, et.Name)
-}
-
-func validateEdgeTypeSchema(et *flowv1.EdgeType) error {
-	if err := validateNameFormat(et.Name); err != nil {
-		return err
-	}
-	if _, ok := reservedWordsList()[strings.ToUpper(et.Name)]; ok {
-		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
-	}
-	propNames := make(map[string]bool)
-	for _, p := range et.Properties {
-		if propNames[p.Name] {
-			return fmt.Errorf("%w: duplicate property %q in edge type %q", ErrDuplicatePropertyName, p.Name, et.Name)
-		}
-		propNames[p.Name] = true
-		if err := validateNameFormat(p.Name); err != nil {
-			return fmt.Errorf("%w: property %q in edge type %q", err, p.Name, et.Name)
-		}
-		if _, ok := reservedWordsList()[strings.ToUpper(p.Name)]; ok {
-			return fmt.Errorf("%w: property %q in edge type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
-		}
-		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" || p.Name == reservedColumnProperties {
-			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column", ErrImplicitColumnCollision, p.Name, et.Name)
-		}
-		if p.Type != "string" {
-			return fmt.Errorf("%w: property %q in edge type %q has type %q", ErrInvalidPropertyType, p.Name, et.Name, p.Type)
-		}
-	}
-	return nil
-}
-
-func validateRulesSchema(rules []*flowv1.ConnectionRule, entityTypeNames, edgeTypeNames map[string]bool, entityTypeName string) error {
-	for i, rule := range rules {
-		if len(rule.CanConnectTo) == 0 {
-			return fmt.Errorf("%w: rule %d in entity type %q has empty canConnectTo", ErrEmptyRuleList, i, entityTypeName)
-		}
-		if len(rule.Using) == 0 {
-			return fmt.Errorf("%w: rule %d in entity type %q has empty using", ErrEmptyRuleList, i, entityTypeName)
-		}
-		for _, target := range rule.CanConnectTo {
-			if !entityTypeNames[target] {
-				return fmt.Errorf("%w: canConnectTo references undeclared entity type %q in rule %d of %q", ErrUndeclaredTypeRef, target, i, entityTypeName)
-			}
-		}
-		for _, edgeRef := range rule.Using {
-			if !edgeTypeNames[edgeRef] {
-				return fmt.Errorf("%w: using references undeclared edge type %q in rule %d of %q", ErrUndeclaredTypeRef, edgeRef, i, entityTypeName)
-			}
-		}
-	}
-	return nil
-}
-
-func validateNameFormat(name string) error {
-	if len(name) == 0 || len(name) > 255 {
-		return fmt.Errorf("%w: %q (length %d)", ErrInvalidName, name, len(name))
-	}
-	for i, c := range name {
-		if i == 0 {
-			if !isAlpha(c) && c != '_' {
-				return fmt.Errorf("%w: %q does not match [a-zA-Z_][a-zA-Z0-9_]*", ErrInvalidName, name)
-			}
-		} else {
-			if !isAlpha(c) && !isDigit(c) && c != '_' {
-				return fmt.Errorf("%w: %q does not match [a-zA-Z_][a-zA-Z0-9_]*", ErrInvalidName, name)
-			}
-		}
-	}
-	return nil
-}
-
-func reservedWordsList() map[string]bool {
-	return map[string]bool{
-		"ALL": true, "AND": true, "AS": true, "ASC": true, "ASCENDING": true,
-		"BY": true, "CALL": true, "CASE": true, "CONTAINS": true, "CREATE": true,
-		"DELETE": true, "DESC": true, "DESCENDING": true, "DETACH": true, "DISTINCT": true,
-		"DROP": true, "ELSE": true, "END": true, "ENDS": true, "EXISTS": true,
-		"FALSE": true, "FOREACH": true, "IN": true, "INDEX": true, "IS": true,
-		"LIMIT": true, "LOAD": true, "MATCH": true, "MERGE": true, "NOT": true,
-		"NULL": true, "ON": true, "OPTIONAL": true, "OR": true, "ORDER": true,
-		"REMOVE": true, "RETURN": true, "SET": true, "SKIP": true, "START": true,
-		"STARTS": true, "THEN": true, "TRUE": true, "UNION": true, "UNWIND": true,
-		"USING": true, "WHEN": true, "WHERE": true, "WITH": true, "XOR": true, "YIELD": true,
-	}
+func ValidateSchemaInternal(s *flowv1.Schema) error {
+	return schema.Validate(s)
 }
 
 func (db *ladybugDB) TableExists(entityType string) bool {
@@ -450,8 +283,8 @@ func (db *ladybugDB) ListMainEntityTypes() ([]string, error) {
 	return names, nil
 }
 
-func (db *ladybugDB) ValidateSchema(ctx context.Context, schema *flowv1.Schema) error {
-	return validateSchema(schema)
+func (db *ladybugDB) ValidateSchema(ctx context.Context, s *flowv1.Schema) error {
+	return ValidateSchemaInternal(s)
 }
 
 func (db *ladybugDB) EntityTypeNames() []string {
@@ -494,11 +327,12 @@ func (db *ladybugDB) CreateEntity(ctx context.Context, entityType, id string, pr
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		// Route to branch DB
 		return db.createEntityInBranch(br, entityType, id, properties, embedding)
@@ -542,11 +376,25 @@ func (db *ladybugDB) createEntityInBranch(br *branchDB, entityType, id string, p
 		}
 	}
 	// Validate embedding using branch state
-	_ = embedding // ponytail: embedding validation uses main state; simplified for branch routing
+	if err := br.validateBranchEmbedding(def, embedding, entityType); err != nil {
+		return nil, err
+	}
+
+	// Store embedding if type is indexed and embedding is non-nil
+	var storedEmbedding []float32
+	if def.EnableVectorIndex && embedding != nil && len(embedding) > 0 {
+		storedEmbedding = embedding
+	} else if !def.EnableVectorIndex {
+		// Non-indexed type: discard embedding (but validate NaN/inf)
+		storedEmbedding = nil
+	} else {
+		storedEmbedding = nil
+	}
+
 	props := make(map[string]string, len(properties))
 	maps.Copy(props, properties)
 	now := time.Now().UTC()
-	entity := &Entity{Id: id, Type: entityType, Properties: props, CreatedAt: now, UpdatedAt: now}
+	entity := &Entity{Id: id, Type: entityType, Properties: props, Embedding: storedEmbedding, CreatedAt: now, UpdatedAt: now}
 	br.entities[id] = entity
 	return entity, nil
 }
@@ -672,15 +520,53 @@ func (db *ladybugDB) validateEmbeddingForEntity(def *EntityTypeDef, embedding []
 	return nil
 }
 
+// validateBranchEmbedding validates the embedding against the entity type's schema using branch state.
+func (br *branchDB) validateBranchEmbedding(def *EntityTypeDef, embedding []float32, entityType string) error {
+	// NaN/infinity check applies regardless of indexed status
+	for _, v := range embedding {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return ErrNaNOrInfEmbedding
+		}
+	}
+
+	if !def.EnableVectorIndex {
+		return nil // Non-indexed type: discard embedding after NaN check
+	}
+
+	if len(embedding) == 0 {
+		// Bootstrap check: first entity MUST include embedding
+		if !br.bootstrapped[entityType] {
+			return fmt.Errorf("%w: entity type %q has vector index enabled but no embedding provided", ErrVectorBootstrap, entityType)
+		}
+		return nil // Subsequent entities may omit embedding
+	}
+
+	// Validate dimension
+	dim, bootstrapped := br.vecDimension[entityType]
+	if !bootstrapped {
+		// First embedding write: bootstrap the dimension
+		br.bootstrapped[entityType] = true
+		br.vecDimension[entityType] = len(embedding)
+		return nil
+	}
+
+	if len(embedding) != dim {
+		return fmt.Errorf("%w: expected dimension %d, got %d", ErrEmbeddingDimension, dim, len(embedding))
+	}
+
+	return nil
+}
+
 func (db *ladybugDB) UpdateEntity(ctx context.Context, id string, properties map[string]string, embedding []float32, branch string) (*Entity, error) {
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		return db.updateEntityInBranch(br, id, properties, embedding)
 	}
@@ -698,8 +584,38 @@ func (db *ladybugDB) updateEntityInBranch(br *branchDB, id string, properties ma
 	if !ok {
 		return nil, fmt.Errorf("%w: entity with id %q", ErrEntityNotFound, id)
 	}
-	_ = embedding // ponytail: embedding validation simplified for branch routing
+	// Look up entity type for embedding validation
+	def, ok := br.entityTypeDefs[existing.Type]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownEntityType, existing.Type)
+	}
+
+	// Validate properties
+	propDefs := make(map[string]bool)
+	for _, p := range def.Properties {
+		propDefs[p.Name] = true
+	}
+	for key := range properties {
+		if !propDefs[key] {
+			return nil, fmt.Errorf("%w: %q for entity type %q", ErrUnknownProperty, key, existing.Type)
+		}
+	}
+
+	// Embedding validation using branch state
+	hasNewEmbedding := len(embedding) > 0
+	if err := br.validateBranchUpdateEmbedding(def, embedding, existing.Type, hasNewEmbedding); err != nil {
+		return nil, err
+	}
+
+	// Apply updates
 	maps.Copy(existing.Properties, properties)
+
+	if def.EnableVectorIndex && embedding != nil && hasNewEmbedding {
+		existing.Embedding = embedding
+	}
+	// ponytail: Non-indexed types discard embedding after NaN check above.
+	// Empty/nil embedding on indexed types preserves the existing value.
+
 	existing.UpdatedAt = time.Now().UTC()
 	return existing, nil
 }
@@ -778,19 +694,56 @@ func (db *ladybugDB) validateUpdateEmbedding(def *EntityTypeDef, embedding []flo
 	return nil
 }
 
+// validateBranchUpdateEmbedding validates embedding update using branch state.
+func (br *branchDB) validateBranchUpdateEmbedding(def *EntityTypeDef, embedding []float32, entityType string, hasNewEmbedding bool) error {
+	for _, v := range embedding {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return ErrNaNOrInfEmbedding
+		}
+	}
+
+	if !def.EnableVectorIndex {
+		return nil // Non-indexed: discard after NaN check
+	}
+
+	if !hasNewEmbedding {
+		return nil // Preserve existing
+	}
+
+	// Check dimension match against established dimension
+	if dim, bootstrapped := br.vecDimension[entityType]; bootstrapped {
+		if len(embedding) != dim {
+			return fmt.Errorf("%w: expected dimension %d, got %d", ErrEmbeddingDimension, dim, len(embedding))
+		}
+	} else if len(embedding) > 0 {
+		// Bootstrap with this update
+		br.bootstrapped[entityType] = true
+		br.vecDimension[entityType] = len(embedding)
+	}
+
+	return nil
+}
+
 func (db *ladybugDB) DeleteEntity(ctx context.Context, id, branch string) (*Entity, error) {
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		ent, ok := br.entities[id]
 		if !ok {
 			return nil, fmt.Errorf("%w: entity with id %q", ErrEntityNotFound, id)
+		}
+		// Cascade-delete edges referencing this entity
+		for eid, edge := range br.edges {
+			if edge.FromEntityID == id || edge.ToEntityID == id {
+				delete(br.edges, eid)
+			}
 		}
 		delete(br.entities, id)
 		return ent, nil
@@ -838,11 +791,12 @@ func (db *ladybugDB) GetEntity(ctx context.Context, id, branch string) (*Entity,
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		entity, ok := br.entities[id]
 		if !ok {
@@ -878,11 +832,12 @@ func (db *ladybugDB) CreateEdge(ctx context.Context, edgeType, fromID, toID stri
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		return db.createEdgeInBranch(br, edgeType, fromID, toID, properties)
 	}
@@ -927,7 +882,9 @@ func (db *ladybugDB) createEdgeInBranch(br *branchDB, edgeType, fromID, toID str
 		}
 	}
 	// Validate edge rules
-	_ = sourceEntity
+	if err := br.validateEdgeRulesLocked(sourceEntity.Type, br.entities[toID].Type, edgeType); err != nil {
+		return nil, err
+	}
 	edgeID := uuid.New().String()
 	props := make(map[string]string, len(properties))
 	maps.Copy(props, properties)
@@ -1011,11 +968,12 @@ func (db *ladybugDB) DeleteEdge(ctx context.Context, id, branch string) (*Edge, 
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		edge, ok := br.edges[id]
 		if !ok {
@@ -1052,11 +1010,12 @@ func (db *ladybugDB) GetEdge(ctx context.Context, id, branch string) (*Edge, err
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		edge, ok := br.edges[id]
 		if !ok {
@@ -1081,16 +1040,18 @@ func (db *ladybugDB) GetEdge(ctx context.Context, id, branch string) (*Edge, err
 }
 
 func (db *ladybugDB) ListEdgesOfType(ctx context.Context, edgeType, branch string) ([]Edge, error) {
-	// ponytail: branch parameter handling follows the same pattern as
-	// ListEntities — treat "main" and "" as the main DB.
+	// ponytail: Unlike ListEntities (which ignores branch entirely), this method
+	// actually routes non-empty non-"main" branches to br.edges. Treat "main" and
+	// "" as the main DB.
 	if branch != "" && branch != "main" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return nil, fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		var results []Edge
 		for _, e := range br.edges {
@@ -1135,11 +1096,15 @@ func (db *ladybugDB) ExecuteCypher(ctx context.Context, cypher string, params ma
 		if branch != "" {
 			db.mu.Lock()
 			br, ok := db.branches[branch]
-			db.mu.Unlock()
 			if !ok {
+				db.mu.Unlock()
 				return nil, fmt.Errorf("branch %q not found", branch)
 			}
-			return db.executeMatchOnBranch(br, cypher), nil
+			br.mu.Lock()
+			db.mu.Unlock()
+			result := db.executeMatchOnBranch(br, cypher)
+			br.mu.Unlock()
+			return result, nil
 		}
 		rows := db.executeMatch(cypher)
 		return rows, nil
@@ -1299,7 +1264,9 @@ func extractLimit(cypher string) int {
 }
 
 func (db *ladybugDB) SearchNeighbors(ctx context.Context, embedding []float32, entityType string, topK int, branch string) ([]NeighborResult, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	// ponytail: branch parameter accepted but ignored; SPEC R2 requires read-path methods
+	// with an optional transactionId to scope operations to that transaction's isolated
+	// branch instance. Branch routing deferred.
 	// Validate embedding
 	for _, v := range embedding {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
@@ -1386,7 +1353,9 @@ func cosineDistance(a, b []float32) float64 {
 }
 
 func (db *ladybugDB) FullTextSearch(ctx context.Context, query, entityType string, branch string) ([]Entity, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	// ponytail: branch parameter accepted but ignored; SPEC R2 requires read-path methods
+	// with an optional transactionId to scope operations to that transaction's isolated
+	// branch instance. Branch routing deferred.
 	if query == "" {
 		return nil, ErrEmptyQuery
 	}
@@ -1419,7 +1388,9 @@ func (db *ladybugDB) FullTextSearch(ctx context.Context, query, entityType strin
 }
 
 func (db *ladybugDB) ListEntities(ctx context.Context, entityType string, pageSize int, pageToken string, branch string) ([]Entity, string, error) {
-	// ponytail: branch parameter accepted but ignored; branch routing deferred to Phase 4.
+	// ponytail: branch parameter accepted but ignored; SPEC R2 requires read-path methods
+	// with an optional transactionId to scope operations to that transaction's isolated
+	// branch instance. Branch routing deferred.
 	if pageSize < 0 {
 		return nil, "", ErrInvalidPageSize
 	}
@@ -1541,6 +1512,33 @@ func (db *ladybugDB) validateEdgeRulesLocked(sourceType, targetType, edgeType st
 	return fmt.Errorf("%w: entity type %q does not permit connection to %q via %q", ErrEdgeRuleViolation, sourceType, targetType, edgeType)
 }
 
+func (br *branchDB) validateEdgeRulesLocked(sourceType, targetType, edgeType string) error {
+	if _, ok := br.entityTypeDefs[sourceType]; !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownEntityType, sourceType)
+	}
+	if _, ok := br.entityTypeDefs[targetType]; !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownEntityType, targetType)
+	}
+	if _, ok := br.edgeTypeDefs[edgeType]; !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownEdgeType, edgeType)
+	}
+
+	rules, ok := br.ruleIndex[sourceType]
+	if !ok || len(rules) == 0 {
+		return fmt.Errorf("%w: entity type %q does not permit any edges", ErrEdgeRuleViolation, sourceType)
+	}
+
+	for _, rule := range rules {
+		targetMatch := slices.Contains(rule.CanConnectTo, targetType)
+		edgeMatch := slices.Contains(rule.Using, edgeType)
+		if targetMatch && edgeMatch {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: entity type %q does not permit connection to %q via %q", ErrEdgeRuleViolation, sourceType, targetType, edgeType)
+}
+
 func (db *ladybugDB) ResolveEntityType(ctx context.Context, entityID, branch string) (string, error) {
 	if err := validateUUID(entityID); err != nil {
 		return "", err
@@ -1549,11 +1547,12 @@ func (db *ladybugDB) ResolveEntityType(ctx context.Context, entityID, branch str
 	if branch != "" {
 		db.mu.Lock()
 		br, ok := db.branches[branch]
-		db.mu.Unlock()
 		if !ok {
+			db.mu.Unlock()
 			return "", fmt.Errorf("branch %q not found", branch)
 		}
 		br.mu.Lock()
+		db.mu.Unlock()
 		defer br.mu.Unlock()
 		entity, ok := br.entities[entityID]
 		if !ok {
@@ -1652,11 +1651,30 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 	br.mu.Lock()
 	defer br.mu.Unlock()
 
-	// Read all entities from branch and upsert into main
+	// Full replacement: drop existing data and re-create from branch.
+	db.entities = make(map[string]*Entity, len(br.entities))
 	maps.Copy(db.entities, br.entities)
-
-	// Read all edges from branch and upsert into main
+	db.edges = make(map[string]*Edge, len(br.edges))
 	maps.Copy(db.edges, br.edges)
+
+	// Promote bootstrapped and vecDimension from branch to main (SPEC R7 dimension scope).
+	db.bootstrapped = make(map[string]bool, len(br.bootstrapped))
+	maps.Copy(db.bootstrapped, br.bootstrapped)
+	db.vecDimension = make(map[string]int, len(br.vecDimension))
+	maps.Copy(db.vecDimension, br.vecDimension)
+
+	// Promote ruleIndex from branch to main.
+	db.ruleIndex = make(map[string][]*flowv1.ConnectionRule, len(br.ruleIndex))
+	for name, rules := range br.ruleIndex {
+		clonedRules := make([]*flowv1.ConnectionRule, len(rules))
+		for i, r := range rules {
+			clonedRules[i] = &flowv1.ConnectionRule{
+				CanConnectTo: append([]string{}, r.CanConnectTo...),
+				Using:        append([]string{}, r.Using...),
+			}
+		}
+		db.ruleIndex[name] = clonedRules
+	}
 
 	return nil
 }
@@ -1664,29 +1682,6 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	// Check directories exist
-	entInfo, err := os.Stat(entitiesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%w: %q", ErrInvalidEntityDir, entitiesDir)
-		}
-		return err
-	}
-	if !entInfo.IsDir() {
-		return fmt.Errorf("%w: %q is not a directory", ErrInvalidEntityDir, entitiesDir)
-	}
-
-	edgeInfo, err := os.Stat(edgesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%w: %q", ErrInvalidEdgeDir, edgesDir)
-		}
-		return err
-	}
-	if !edgeInfo.IsDir() {
-		return fmt.Errorf("%w: %q is not a directory", ErrInvalidEdgeDir, edgesDir)
-	}
 
 	// WipeAll (drop-and-recreate semantics)
 	db.entities = make(map[string]*Entity)
@@ -1699,9 +1694,34 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	db.bootstrapped = make(map[string]bool)
 	db.vecDimension = make(map[string]int)
 
-	// Read entity files
-	if err := db.readEntitiesFromDir(entitiesDir); err != nil {
+	// Check directories exist — if not, the git repo is empty (no commits on main).
+	// Initialize fresh maps instead of erroring; SPEC R8 requires a fresh main.lbug.
+	entInfo, err := os.Stat(entitiesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Empty repo — no entities to read
+		} else {
+			return err
+		}
+	} else if !entInfo.IsDir() {
+		return fmt.Errorf("%w: %q is not a directory", ErrInvalidEntityDir, entitiesDir)
+	} else {
+		// Read entity files
+		if err := db.readEntitiesFromDir(entitiesDir); err != nil {
+			return err
+		}
+	}
+
+	edgeInfo, err := os.Stat(edgesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Empty repo — no edges to read
+			return nil
+		}
 		return err
+	}
+	if !edgeInfo.IsDir() {
+		return fmt.Errorf("%w: %q is not a directory", ErrInvalidEdgeDir, edgesDir)
 	}
 
 	// Read edge files
@@ -1724,9 +1744,13 @@ func (db *ladybugDB) readEntitiesFromDir(dir string) error {
 		}
 		typeName := entry.Name()
 
-		// Skip unknown types silently
-		if _, ok := db.entityTypeDefs[typeName]; !ok {
-			continue
+		// Skip unknown types silently, but only when schema has been applied.
+		// Without applied schema (e.g. during corruption recovery before ApplySchema),
+		// load all entity type directories to avoid data loss.
+		if len(db.entityTypeDefs) > 0 {
+			if _, ok := db.entityTypeDefs[typeName]; !ok {
+				continue
+			}
 		}
 
 		typeDir := filepath.Join(dir, typeName)
@@ -1810,9 +1834,13 @@ func (db *ladybugDB) readEdgesFromDir(dir string) error {
 		}
 		typeName := entry.Name()
 
-		// Skip unknown types silently
-		if _, ok := db.edgeTypeDefs[typeName]; !ok {
-			continue
+		// Skip unknown types silently, but only when schema has been applied.
+		// Without applied schema (e.g. during corruption recovery before ApplySchema),
+		// load all edge type directories to avoid data loss.
+		if len(db.edgeTypeDefs) > 0 {
+			if _, ok := db.edgeTypeDefs[typeName]; !ok {
+				continue
+			}
 		}
 
 		typeDir := filepath.Join(dir, typeName)
@@ -2036,6 +2064,8 @@ func (db *ladybugDB) HydrateBranchFromFiles(ctx context.Context, txID, entitiesD
 }
 
 func (db *ladybugDB) IsVectorIndexBootstrapped(entityType, dbName string) bool {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if dbName == "main" || dbName == "" {
 		return db.bootstrapped[entityType]
 	}
@@ -2048,6 +2078,8 @@ func (db *ladybugDB) IsVectorIndexBootstrapped(entityType, dbName string) bool {
 }
 
 func (db *ladybugDB) GetEstablishedDimension(entityType, dbName string) (int, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if dbName == "main" || dbName == "" {
 		if dim, ok := db.vecDimension[entityType]; ok {
 			return dim, nil
@@ -2101,12 +2133,14 @@ func (db *ladybugDB) Health(ctx context.Context) (*HealthResult, error) {
 // --- Branch scanning ---
 
 func (db *ladybugDB) DumpAllEntities(ctx context.Context, txID string) ([]Entity, error) {
+	db.mu.Lock()
 	br, ok := db.branches[txID]
 	if !ok {
-		return []Entity{}, nil // absent file -> empty
+		db.mu.Unlock()
+		return nil, fmt.Errorf("branch for tx %q not found", txID)
 	}
-
 	br.mu.Lock()
+	db.mu.Unlock()
 	defer br.mu.Unlock()
 
 	entities := make([]Entity, 0, len(br.entities))
@@ -2117,12 +2151,14 @@ func (db *ladybugDB) DumpAllEntities(ctx context.Context, txID string) ([]Entity
 }
 
 func (db *ladybugDB) DumpAllEdges(ctx context.Context, txID string) ([]Edge, error) {
+	db.mu.Lock()
 	br, ok := db.branches[txID]
 	if !ok {
-		return []Edge{}, nil // absent file -> empty
+		db.mu.Unlock()
+		return nil, fmt.Errorf("branch for tx %q not found", txID)
 	}
-
 	br.mu.Lock()
+	db.mu.Unlock()
 	defer br.mu.Unlock()
 
 	edges := make([]Edge, 0, len(br.edges))
@@ -2133,12 +2169,14 @@ func (db *ladybugDB) DumpAllEdges(ctx context.Context, txID string) ([]Edge, err
 }
 
 func (db *ladybugDB) ListEntityTypes(txID string) ([]string, error) {
+	db.mu.Lock()
 	br, ok := db.branches[txID]
 	if !ok {
-		return []string{}, nil // absent file -> empty
+		db.mu.Unlock()
+		return nil, fmt.Errorf("branch for tx %q not found", txID)
 	}
-
 	br.mu.Lock()
+	db.mu.Unlock()
 	defer br.mu.Unlock()
 
 	names := make([]string, 0, len(br.entityTypeDefs))
@@ -2150,16 +2188,6 @@ func (db *ladybugDB) ListEntityTypes(txID string) ([]string, error) {
 }
 
 // --- Validation helpers ---
-
-// ErrDuplicateTypeName is a re-exported error from schema package for the store tests.
-var ErrDuplicateTypeName = errors.New("duplicate type name")
-var ErrDuplicatePropertyName = errors.New("duplicate property name")
-var ErrInvalidName = errors.New("invalid name format or length")
-var ErrReservedWord = errors.New("name is a reserved word")
-var ErrImplicitColumnCollision = errors.New("property name collides with implicit column")
-var ErrInvalidPropertyType = errors.New("property type must be 'string'")
-var ErrEmptyRuleList = errors.New("rule entry has empty canConnectTo or using list")
-var ErrUndeclaredTypeRef = errors.New("rule references undeclared type")
 
 // validateUUID validates that the given string is a valid UUID v4.
 func validateUUID(id string) error {

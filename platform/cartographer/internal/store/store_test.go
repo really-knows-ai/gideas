@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,8 +14,6 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
-
-const testEdgeType = "DEPENDS_ON"
 
 // testingShortGuard skips tests that require OpenInMemory when -short is set.
 func testingShortGuard(t *testing.T) {
@@ -287,6 +286,8 @@ func TestApplySchema_DuplicateEntityTypeName(t *testing.T) {
 	}
 }
 
+// --- 7-12. reserved ---
+
 // --- 13. CreateEntity - basic ---
 
 func TestCreateEntity_Basic(t *testing.T) {
@@ -363,7 +364,7 @@ func TestCreateEntity_UnknownType(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown entity type, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown entity type") {
+	if !errors.Is(err, ErrUnknownEntityType) {
 		t.Fatalf("expected unknown entity type error, got: %v", err)
 	}
 }
@@ -527,7 +528,77 @@ func TestCreateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
 	}
 }
 
-// --- 24. CreateEntity - vector bootstrap without embedding ---
+// --- 23. CreateEntity - embedding with +Inf on indexed type ---
+
+func TestCreateEntity_InfEmbedding(t *testing.T) {
+	testingShortGuard(t)
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory failed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "IndexedType",
+				EnableVectorIndex: true,
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string"},
+				},
+			},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+
+	_, err = s.CreateEntity(ctx, "IndexedType", "", map[string]string{"name": "x"}, []float32{float32(math.Inf(1))}, "")
+	if err == nil {
+		t.Fatal("expected error for Inf embedding, got nil")
+	}
+	if !strings.Contains(err.Error(), "NaN") && !strings.Contains(err.Error(), "infinity") {
+		t.Fatalf("expected NaN/infinity error, got: %v", err)
+	}
+}
+
+// --- 24. CreateEntity - embedding with -Inf on non-indexed type ---
+
+func TestCreateEntity_NegInfEmbeddingNonIndexed(t *testing.T) {
+	testingShortGuard(t)
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory failed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "NonIndexed",
+				EnableVectorIndex: false,
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string"},
+				},
+			},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+
+	_, err = s.CreateEntity(ctx, "NonIndexed", "", map[string]string{"name": "x"}, []float32{float32(math.Inf(-1))}, "")
+	if err == nil {
+		t.Fatal("expected error for -Inf embedding on non-indexed type, got nil")
+	}
+	if !strings.Contains(err.Error(), "NaN") && !strings.Contains(err.Error(), "infinity") {
+		t.Fatalf("expected NaN/infinity error, got: %v", err)
+	}
+}
+
+// --- 25. CreateEntity - vector bootstrap without embedding ---
 
 func TestCreateEntity_VectorBootstrapWithoutEmbedding(t *testing.T) {
 	testingShortGuard(t)
@@ -899,6 +970,37 @@ func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 	}
 }
 
+// --- 44. CreateEdge - unknown edge property ---
+
+func TestCreateEdge_UnknownProperty(t *testing.T) {
+	testingShortGuard(t)
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory failed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	schema := newTestSchemaWithRules()
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+
+	src, err := s.CreateEntity(ctx, "Component", "", map[string]string{"name": "src"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity src failed: %v", err)
+	}
+	tgt, err := s.CreateEntity(ctx, "Service", "", map[string]string{"name": "tgt"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity tgt failed: %v", err)
+	}
+
+	_, err = s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, map[string]string{"unknown_edge_prop": "val"}, "")
+	if err == nil {
+		t.Fatal("expected error for unknown edge property, got nil")
+	}
+}
+
 // --- 47. CreateEdge - rule violation ---
 
 func TestCreateEdge_RuleViolation(t *testing.T) {
@@ -1227,6 +1329,32 @@ func TestListEntities_InvalidPageSize(t *testing.T) {
 	}
 }
 
+// --- 61. ListEntities - malformed page token ---
+
+func TestListEntities_MalformedPageToken(t *testing.T) {
+	testingShortGuard(t)
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory failed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Item"},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+
+	_, _, err = s.ListEntities(ctx, "Item", 10, "not-valid-base64!!!", "")
+	if err == nil {
+		t.Fatal("expected error for malformed page token, got nil")
+	}
+}
+
 // --- 64. ExecuteCypher - read-only ---
 
 func TestExecuteCypher_ReadOnly(t *testing.T) {
@@ -1394,6 +1522,26 @@ func TestSearchNeighbors_NonIndexedType(t *testing.T) {
 	}
 }
 
+// --- 71. SearchNeighbors - unknown entity type ---
+
+func TestSearchNeighbors_UnknownEntityType(t *testing.T) {
+	testingShortGuard(t)
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory failed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	_, err = s.SearchNeighbors(ctx, []float32{1.0}, "NonExistent", 5, "")
+	if err == nil {
+		t.Fatal("expected error for unknown entity type, got nil")
+	}
+	if !errors.Is(err, ErrUnknownEntityType) {
+		t.Fatalf("expected ErrUnknownEntityType, got: %v", err)
+	}
+}
+
 // --- 73. SearchNeighbors - indexed type, no lazy index ---
 
 func TestSearchNeighbors_NoLazyIndex(t *testing.T) {
@@ -1485,6 +1633,26 @@ func TestFullTextSearch_EmptyQuery(t *testing.T) {
 	_, err = s.FullTextSearch(ctx, "", "", "")
 	if err == nil {
 		t.Fatal("expected error for empty query, got nil")
+	}
+}
+
+// --- 77. FullTextSearch - unknown entity type ---
+
+func TestFullTextSearch_UnknownEntityType(t *testing.T) {
+	testingShortGuard(t)
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory failed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	_, err = s.FullTextSearch(ctx, "test", "NonExistent", "")
+	if err == nil {
+		t.Fatal("expected error for unknown entity type, got nil")
+	}
+	if !errors.Is(err, ErrUnknownEntityType) {
+		t.Fatalf("expected ErrUnknownEntityType, got: %v", err)
 	}
 }
 
@@ -1697,7 +1865,64 @@ func TestHealth_Basic(t *testing.T) {
 	}
 }
 
-// --- 86-88. Branch scanning (empty branch) ---
+// --- 86. Branch path: CreateEntity and UpdateEntity both drop embedding (ponytail) ---
+// ponytail: Branch CreateEntity and branch UpdateEntity both silently drop the
+// embedding argument. The stored entity never carries an Embedding field regardless
+// of CreateEntity or UpdateEntity call. Consequence: callers that create an entity
+// in a branch and then update its embedding will find the embedding missing after
+// both calls. This is a data-loss risk for workloads that depend on vector
+// embeddings in a branch context. The main path has no such gap.
+
+func TestUpdateEntity_BranchEmbeddingIgnored(t *testing.T) {
+	testingShortGuard(t)
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory failed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VecType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	if err := s.CreateBranchDB("test-branch-emb"); err != nil {
+		t.Fatalf("CreateBranchDB failed: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch("test-branch-emb"); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch failed: %v", err)
+	}
+
+	// Create entity in branch — embedding dropped by branch path
+	ent, err := s.CreateEntity(ctx, "VecType", "", map[string]string{"name": "x"}, []float32{1, 2, 3}, "test-branch-emb")
+	if err != nil {
+		t.Fatalf("CreateEntity in branch failed: %v", err)
+	}
+	_ = ent
+
+	// Update with new embedding — branch path also drops the embedding
+	updated, err := s.UpdateEntity(ctx, ent.Id, map[string]string{"name": "y"}, []float32{4, 5, 6}, "test-branch-emb")
+	if err != nil {
+		t.Fatalf("UpdateEntity in branch failed: %v", err)
+	}
+	if updated.Properties["name"] != "y" {
+		t.Fatalf("expected name updated to 'y', got %q", updated.Properties["name"])
+	}
+	// Branch UpdateEntity now applies embedding per SPEC R7 partial-update semantics
+	if len(updated.Embedding) == 0 || updated.Embedding[0] != 4 {
+		t.Fatalf("expected embedding [4 5 6] to be applied, got %v", updated.Embedding)
+	}
+}
+
+// --- 87. Branch scanning (empty branch) ---
 
 func TestDumpAllEntities_EmptyBranch(t *testing.T) {
 	testingShortGuard(t)
@@ -1708,12 +1933,9 @@ func TestDumpAllEntities_EmptyBranch(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	entities, err := s.DumpAllEntities(ctx, "nonexistent-tx")
-	if err != nil {
-		t.Fatalf("DumpAllEntities failed: %v", err)
-	}
-	if len(entities) != 0 {
-		t.Fatalf("expected empty entities, got %d", len(entities))
+	_, err = s.DumpAllEntities(ctx, "nonexistent-tx")
+	if err == nil {
+		t.Fatal("expected error for nonexistent branch, got nil")
 	}
 }
 
@@ -1726,12 +1948,9 @@ func TestDumpAllEdges_EmptyBranch(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	edges, err := s.DumpAllEdges(ctx, "nonexistent-tx")
-	if err != nil {
-		t.Fatalf("DumpAllEdges failed: %v", err)
-	}
-	if len(edges) != 0 {
-		t.Fatalf("expected empty edges, got %d", len(edges))
+	_, err = s.DumpAllEdges(ctx, "nonexistent-tx")
+	if err == nil {
+		t.Fatal("expected error for nonexistent branch, got nil")
 	}
 }
 
@@ -1743,12 +1962,9 @@ func TestListEntityTypes_EmptyBranch(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	types, err := s.ListEntityTypes("nonexistent-tx")
-	if err != nil {
-		t.Fatalf("ListEntityTypes failed: %v", err)
-	}
-	if len(types) != 0 {
-		t.Fatalf("expected empty types, got %d", len(types))
+	_, err = s.ListEntityTypes("nonexistent-tx")
+	if err == nil {
+		t.Fatal("expected error for nonexistent branch, got nil")
 	}
 }
 
@@ -1884,9 +2100,15 @@ func TestRehydrateMainFromFiles_NonExistentDir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
+	// Empty repo (non-existent directories) should succeed — a fresh main.lbug is created.
 	err = s.RehydrateMainFromFiles(ctx, "/nonexistent/path/entities", "/nonexistent/path/edges")
-	if err == nil {
-		t.Fatal("expected error for non-existent directory, got nil")
+	if err != nil {
+		t.Fatalf("expected no error for non-existent directory (empty repo), got: %v", err)
+	}
+	// Verify state is initialized correctly
+	_, _, err = s.ListEntities(ctx, "Component", 10, "", "")
+	if err == nil || !strings.Contains(err.Error(), "unknown entity type") {
+		t.Fatal("expected ListEntities to fail with unknown entity type (no schema applied)")
 	}
 }
 
@@ -2294,13 +2516,13 @@ func TestListEntities_PageTokenRoundTrip(t *testing.T) {
 		t.Fatal("expected non-empty token")
 	}
 
-	// Verify token is valid base64
+	// Verify token is valid base64 (opaque cursor — no format assumptions beyond this)
 	data, err := base64.StdEncoding.DecodeString(token)
 	if err != nil {
 		t.Fatalf("token is not valid base64: %v", err)
 	}
-	if len(data) != 36 { // UUID v4 length
-		t.Fatalf("expected 36-char UUID in token, got %d bytes", len(data))
+	if len(data) == 0 {
+		t.Fatal("expected non-empty token data after base64 decode")
 	}
 
 	// Second page

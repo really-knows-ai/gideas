@@ -29,20 +29,6 @@ type Edge struct {
 	UpdatedAt    time.Time
 }
 
-// PageToken is the opaque cursor type for paginated ListEntities results.
-// An empty PageToken denotes the first page; the final page returns an empty string.
-// The format is a base64-encoded string of the last-seen entity ID (UUID v4,
-// dashed hex format). The ListEntities signature uses the underlying string type
-// for gRPC wire compatibility; this type documents the data contract explicitly.
-type PageToken string
-
-// Row represents a single result row returned by ExecuteCypher.
-// ponytail: Retained for internal use; the public ExecuteCypher method returns
-// []map[string]any for consistency with Phase 4's Store interface.
-type Row struct {
-	Values []any
-}
-
 // NeighborResult represents a single nearest-neighbor result returned
 // by SearchNeighbors.
 type NeighborResult struct {

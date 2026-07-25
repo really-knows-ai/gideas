@@ -17,7 +17,6 @@ var (
 	ErrUnknownEntityType       = errors.New("unknown entity type")
 	ErrUnknownProperty         = errors.New("unknown property")
 	ErrMissingRequiredProperty = errors.New("missing required property")
-	ErrNonStringProperty       = errors.New("property value must be a string")
 	ErrEntityNotFound          = errors.New("entity not found")
 	ErrEntityAlreadyExists     = errors.New("entity already exists")
 	ErrInvalidIDFormat         = errors.New("invalid ID format: must be a valid UUID v4")

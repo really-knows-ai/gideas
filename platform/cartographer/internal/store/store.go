@@ -1,3 +1,13 @@
+// Package store provides the LadybugDB graph database abstraction layer.
+//
+// Design boundary: The Store interface covers only the graph database (schema,
+// entity/edge CRUD, queries, branch DB lifecycle). Transaction change-log
+// management — append, read, and cap enforcement — is NOT part of this layer.
+// The gitstore package owns the ChangeLog type and its 100K cap
+// (ErrChangeLogFull). The service-layer TransactionManager holds the ChangeLog
+// and routes mutation entries to it. The Store has no awareness of the change
+// log; implementers adding transaction-scoped features must use
+// TransactionManager.AddChangeLogEntry and gitstore.ChangeLog directly.
 package store
 
 import (
@@ -8,6 +18,12 @@ import (
 
 // Store is the interface the service layer depends on.
 // It defines the complete graph database abstraction for the Cartographer.
+//
+// NOTE: Transaction change-log management is intentionally absent from this
+// interface. The change log (append, read, 100K cap enforcement) is owned
+// by the gitstore package and the service-layer TransactionManager. The Store
+// layer is concerned only with LadybugDB schema and data operations; change
+// tracking is a separate concern.
 type Store interface {
 	// Schema
 	ApplySchema(ctx context.Context, schema *flowv1.Schema) error
