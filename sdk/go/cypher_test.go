@@ -5,16 +5,18 @@ import (
 	"testing"
 )
 
+const componentType = "Component"
+
 func TestExtractLabels_SimpleMatch(t *testing.T) {
 	labels := extractEntityTypes("MATCH (c:Component) RETURN c")
-	if len(labels) != 1 || labels[0] != "Component" {
-		t.Errorf("expected [Component], got %v", labels)
+	if len(labels) != 1 || labels[0] != componentType {
+		t.Errorf("expected [%s], got %v", componentType, labels)
 	}
 }
 
 func TestExtractLabels_MultiLabel(t *testing.T) {
 	labels := extractEntityTypes("MATCH (c:Component:Service) RETURN c")
-	expected := []string{"Component", "Service"}
+	expected := []string{componentType, "Service"}
 	if !slices.Equal(labels, expected) {
 		t.Errorf("expected %v, got %v", expected, labels)
 	}
@@ -29,7 +31,7 @@ func TestExtractLabels_NoLabels(t *testing.T) {
 
 func TestExtractLabels_RelationshipPattern(t *testing.T) {
 	labels := extractEntityTypes("MATCH (a:Service)-[:DEPENDS_ON]->(b:Component) RETURN a, b")
-	expected := []string{"Service", "Component"}
+	expected := []string{"Service", componentType}
 	if !slices.Equal(labels, expected) {
 		t.Errorf("expected %v, got %v", expected, labels)
 	}
@@ -59,7 +61,7 @@ func TestExtractLabels_CreateStatement(t *testing.T) {
 
 func TestExtractLabels_MultiMatch(t *testing.T) {
 	labels := extractEntityTypes("MATCH (c:Component) MATCH (s:Service) RETURN c, s")
-	expected := []string{"Component", "Service"}
+	expected := []string{componentType, "Service"}
 	if !slices.Equal(labels, expected) {
 		t.Errorf("expected %v, got %v", expected, labels)
 	}
@@ -67,8 +69,8 @@ func TestExtractLabels_MultiMatch(t *testing.T) {
 
 func TestExtractLabels_DuplicateTypes(t *testing.T) {
 	labels := extractEntityTypes("MATCH (c:Component)-->(s:Component) RETURN c, s")
-	expected := []string{"Component"}
+	expected := []string{componentType}
 	if !slices.Equal(labels, expected) {
-		t.Errorf("expected [Component], got %v", labels)
+		t.Errorf("expected [%s], got %v", componentType, labels)
 	}
 }

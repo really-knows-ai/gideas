@@ -215,7 +215,9 @@ func (tx *Transaction) ListEntities(entityType string, opts ...ListEntitiesOptio
 // ---------------------------------------------------------------------------
 
 // CreateEntity creates an entity within the transaction.
-func (tx *Transaction) CreateEntity(entityType string, id *string, properties map[string]string, embedding []float32) (*Entity, error) {
+func (tx *Transaction) CreateEntity(
+	entityType string, id *string, properties map[string]string, embedding []float32,
+) (*Entity, error) {
 	if err := tx.checkRolled(); err != nil {
 		return nil, err
 	}
@@ -325,7 +327,9 @@ func (tx *Transaction) DeleteEntity(id string) (*Entity, error) {
 }
 
 // CreateEdge creates a directed edge within the transaction.
-func (tx *Transaction) CreateEdge(edgeType, fromEntityID, toEntityID string, properties map[string]string) (*Edge, error) {
+func (tx *Transaction) CreateEdge(
+	edgeType, fromEntityID, toEntityID string, properties map[string]string,
+) (*Edge, error) {
 	if err := tx.checkRolled(); err != nil {
 		return nil, err
 	}

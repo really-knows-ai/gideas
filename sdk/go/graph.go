@@ -76,7 +76,9 @@ type ExportStream struct {
 
 // newExportStream creates an ExportStream with a finalizer that cancels the
 // stream context on GC.
-func newExportStream(ctx context.Context, cancel context.CancelFunc, stream grpc.ServerStreamingClient[flowv1.ExportGraphResponse]) *ExportStream {
+func newExportStream(
+	ctx context.Context, cancel context.CancelFunc, stream grpc.ServerStreamingClient[flowv1.ExportGraphResponse],
+) *ExportStream {
 	s := &ExportStream{ctx: ctx, cancel: cancel, stream: stream}
 	runtime.SetFinalizer(s, func(s *ExportStream) { s.cancel() })
 	return s
@@ -379,7 +381,9 @@ func (g *Graph) ListEntities(entityType string, opts ...ListEntitiesOption) (*En
 // consistent with the SPEC's server-side validation model — the server is
 // authoritative for all structural validation including UUID format, entity
 // type existence, property schema, and embedding constraints.
-func (g *Graph) CreateEntity(entityType string, id *string, properties map[string]string, embedding []float32) (*Entity, error) {
+func (g *Graph) CreateEntity(
+	entityType string, id *string, properties map[string]string, embedding []float32,
+) (*Entity, error) {
 	if g.session == nil {
 		return nil, fmt.Errorf("flow sdk: graph not initialised")
 	}

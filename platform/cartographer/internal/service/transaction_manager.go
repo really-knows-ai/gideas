@@ -55,7 +55,10 @@ type TransactionState struct {
 }
 
 // NewTransactionManager creates a manager with the real clock.
-func NewTransactionManager(defaultTimeout, hardMaxTimeout time.Duration, changeLogCap int, opts ...func(*TransactionManager)) *TransactionManager {
+func NewTransactionManager(
+	defaultTimeout, hardMaxTimeout time.Duration, changeLogCap int,
+	opts ...func(*TransactionManager),
+) *TransactionManager {
 	tm := &TransactionManager{
 		active:         make(map[string]*TransactionState),
 		defaultTimeout: defaultTimeout,
@@ -76,7 +79,9 @@ func WithClock(c Clock) func(*TransactionManager) {
 
 // Create registers a new transaction with the given ID and requested timeout.
 // The timeout is capped at the hard maximum. Returns the transaction state.
-func (tm *TransactionManager) Create(txID string, requestedTimeout time.Duration, mainHeadAtLastSync string) (*TransactionState, error) {
+func (tm *TransactionManager) Create(
+	txID string, requestedTimeout time.Duration, mainHeadAtLastSync string,
+) (*TransactionState, error) {
 	cappedTimeout := requestedTimeout
 	if cappedTimeout <= 0 {
 		cappedTimeout = tm.defaultTimeout

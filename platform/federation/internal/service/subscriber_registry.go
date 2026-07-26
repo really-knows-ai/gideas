@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"sync"
 
@@ -139,8 +140,9 @@ func (r *SubscriberRegistry) DispatchLawEvent(
 			}
 		}
 
-		//nolint:errcheck // Best-effort delivery; disconnected streams handled by context cancellation.
-		_ = sub.stream.Send(event)
+		if err := sub.stream.Send(event); err != nil {
+			slog.Warn("Failed to send law event to subscriber", "error", err)
+		}
 	}
 }
 
@@ -152,8 +154,9 @@ func (r *SubscriberRegistry) DispatchPetitionOutcomeEvent(_ context.Context, eve
 	defer r.mu.RUnlock()
 
 	for _, sub := range r.petitionSubscribers {
-		//nolint:errcheck // Best-effort delivery.
-		_ = sub.stream.Send(event)
+		if err := sub.stream.Send(event); err != nil {
+			slog.Warn("Failed to send petition event to subscriber", "error", err)
+		}
 	}
 }
 

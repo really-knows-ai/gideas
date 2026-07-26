@@ -86,7 +86,10 @@ func main() {
 	// 4. Handle main.lbug corruption recovery
 	// -----------------------------------------------------------------------
 	if dbErr != nil {
-		slog.Warn("Failed to open main.lbug, attempting recovery", "path", filepath.Join(ladybugDBPath, "main.lbug"), "error", dbErr)
+		slog.Warn("Failed to open main.lbug, attempting recovery",
+			"path", filepath.Join(ladybugDBPath, "main.lbug"),
+			"error", dbErr,
+		)
 
 		empty, isEmptyErr := gs.IsEmpty(context.Background())
 		if isEmptyErr != nil {
@@ -146,8 +149,8 @@ func main() {
 		clientset, kErr := kubernetes.NewForConfig(k8sConfig)
 		if kErr != nil {
 			slog.Warn("Failed to create Kubernetes clientset", "error", kErr)
-			readSecretFn = func(ctx context.Context, name string) (map[string]string, error) {
-				return nil, fmt.Errorf("Kubernetes client unavailable: %w", kErr)
+			readSecretFn = func(_ context.Context, _ string) (map[string]string, error) {
+				return nil, fmt.Errorf("kubernetes client unavailable: %w", kErr)
 			}
 		} else {
 			readSecretFn = newReadSecretFn(clientset, podNamespace)
@@ -156,7 +159,7 @@ func main() {
 	} else {
 		slog.Warn("Kubernetes client not configured — running outside cluster")
 		readSecretFn = func(ctx context.Context, name string) (map[string]string, error) {
-			return nil, fmt.Errorf("Kubernetes client not configured")
+			return nil, fmt.Errorf("kubernetes client not configured")
 		}
 	}
 
@@ -164,53 +167,7 @@ func main() {
 	// 5a. Configure remote auth on gitstore
 	// -----------------------------------------------------------------------
 	if remoteURL != "" {
-		// Build resolveAuthFn closure that re-reads the Secret on each call.
-		// Constructs the appropriate transport.AuthMethod based on URL scheme.
-		resolveAuthFn := func() (transport.AuthMethod, error) {
-			if remoteAuthSecretRef == "" || readSecretFn == nil {
-				// No auth configured — use nil auth (public repos, token-in-URL).
-				return nil, nil
-			}
-			data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
-			if err != nil {
-				return nil, err
-			}
-			parsedURL, parseErr := url.Parse(remoteURL)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			switch parsedURL.Scheme {
-			case "ssh":
-				sshUser := parsedURL.User.Username()
-				if sshUser == "" {
-					sshUser = "git"
-				}
-				keyPEM, hasKey := data["ssh-privatekey"]
-				if hasKey && keyPEM != "" {
-					signer, signErr := gogitssh.NewPublicKeys(sshUser, []byte(keyPEM), "")
-					if signErr != nil {
-						return nil, signErr
-					}
-					signer.HostKeyCallback = gossh.InsecureIgnoreHostKey() // ponytail: KnownHosts callback deferred for now
-					return signer, nil
-				}
-				// No SSH key in secret; return nil for anonymous SSH access.
-				return nil, nil
-			case "https":
-				httpsUser := parsedURL.User.Username()
-				if httpsUser == "" {
-					httpsUser = data["username"]
-				}
-				if password, hasPW := data["password"]; hasPW && password != "" {
-					return &http.BasicAuth{Username: httpsUser, Password: password}, nil
-				}
-				// No password in secret; return nil for anonymous HTTPS access.
-				return nil, nil
-			default:
-				return nil, gitstore.ErrUnsupportedURLScheme
-			}
-		}
-
+		resolveAuthFn := buildResolveAuthFn(remoteAuthSecretRef, readSecretFn, remoteURL)
 		if err := gs.SetRemote(context.Background(), remoteURL, resolveAuthFn); err != nil {
 			slog.Warn("Failed to configure remote", "error", err)
 		} else {
@@ -222,50 +179,7 @@ func main() {
 	// 6. Optional remote pull on init
 	// -----------------------------------------------------------------------
 	if remotePullOnInit && remoteURL != "" {
-		// Pre-flight auth check: if auth config is missing or malformed,
-		// fail fatally — the init pull cannot be attempted.
-		authFn := func() (transport.AuthMethod, error) {
-			if remoteAuthSecretRef == "" || readSecretFn == nil {
-				return nil, gitstore.ErrAuthConfigMissing
-			}
-			data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
-			if err != nil {
-				return nil, fmt.Errorf("pre-flight auth: read secret: %w", err)
-			}
-			parsedURL, parseErr := url.Parse(remoteURL)
-			if parseErr != nil {
-				return nil, fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
-			}
-			switch parsedURL.Scheme {
-			case "ssh":
-				if _, ok := data["ssh-privatekey"]; !ok {
-					return nil, gitstore.ErrAuthConfigMissing
-				}
-			case "https":
-				if _, ok := data["password"]; !ok {
-					return nil, gitstore.ErrAuthConfigMissing
-				}
-			default:
-				return nil, gitstore.ErrUnsupportedURLScheme
-			}
-			return nil, nil // Only checking config, not constructing auth
-		}
-		if _, authErr := authFn(); authErr != nil {
-			slog.Error("Pre-flight auth config failure", "error", authErr)
-			os.Exit(1)
-		}
-
-		empty, err := gs.IsEmpty(context.Background())
-		if err == nil && empty {
-			slog.Info("Pulling from remote on init", "url", remoteURL)
-			if err := gs.WithGitLock(func() error {
-				return gs.CloneSingleBranch(context.Background(), remoteURL, "main")
-			}); err != nil {
-				slog.Warn("Initial clone failed (non-blocking)", "error", err)
-			} else {
-				slog.Info("Initial clone from remote succeeded")
-			}
-		}
+		tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn)
 	}
 
 	// -----------------------------------------------------------------------
@@ -352,44 +266,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		sig := <-sigCh
-		slog.Info("Received signal, shutting down", "signal", sig)
-
-		healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
-
-		// GracefulStop waits for in-flight RPCs.
-		done := make(chan struct{})
-		go func() {
-			grpcServer.GracefulStop()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(30 * time.Second):
-			grpcServer.Stop()
-		}
-
-		server.StopGC()
-		_ = dbStore.Close()
-
-		_ = gs.WithGitLock(func() error {
-			_ = gs.RestoreMain(context.Background())
-			_ = gs.CleanUntracked(context.Background())
-			return nil
-		})
-		_ = gs.Close()
-
-		if auditPub != nil {
-			auditPub.Stop()
-		}
-		if eventBusCloser != nil {
-			_ = eventBusCloser()
-		}
-
-		slog.Info("Cartographer shut down")
-		os.Exit(0)
-	}()
+	go waitForShutdown(sigCh, healthSrv, grpcServer, server, dbStore, gs, auditPub, eventBusCloser)
 
 	// -----------------------------------------------------------------------
 	// 15. Serve
@@ -399,6 +276,150 @@ func main() {
 		slog.Error("gRPC serve error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func tryRemotePullOnInit(
+	gs gitstore.GitStore,
+	remoteURL string,
+	remoteAuthSecretRef string,
+	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
+) {
+	authFn := func() error {
+		if remoteAuthSecretRef == "" || readSecretFn == nil {
+			return gitstore.ErrAuthConfigMissing
+		}
+		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
+		if err != nil {
+			return fmt.Errorf("pre-flight auth: read secret: %w", err)
+		}
+		parsedURL, parseErr := url.Parse(remoteURL)
+		if parseErr != nil {
+			return fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
+		}
+		switch parsedURL.Scheme {
+		case "ssh":
+			if _, ok := data["ssh-privatekey"]; !ok {
+				return gitstore.ErrAuthConfigMissing
+			}
+		case "https":
+			if _, ok := data["password"]; !ok {
+				return gitstore.ErrAuthConfigMissing
+			}
+		default:
+			return gitstore.ErrUnsupportedURLScheme
+		}
+		return nil
+	}
+	if authErr := authFn(); authErr != nil {
+		slog.Error("Pre-flight auth config failure", "error", authErr)
+		os.Exit(1)
+	}
+	empty, err := gs.IsEmpty(context.Background())
+	if err == nil && empty {
+		slog.Info("Pulling from remote on init", "url", remoteURL)
+		if err := gs.WithGitLock(func() error {
+			return gs.CloneSingleBranch(context.Background(), remoteURL, "main")
+		}); err != nil {
+			slog.Warn("Initial clone failed (non-blocking)", "error", err)
+		} else {
+			slog.Info("Initial clone from remote succeeded")
+		}
+	}
+}
+
+func buildResolveAuthFn(
+	remoteAuthSecretRef string,
+	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
+	remoteURL string,
+) func() (transport.AuthMethod, error) {
+	return func() (transport.AuthMethod, error) {
+		if remoteAuthSecretRef == "" || readSecretFn == nil {
+			return nil, nil
+		}
+		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
+		if err != nil {
+			return nil, err
+		}
+		parsedURL, parseErr := url.Parse(remoteURL)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		switch parsedURL.Scheme {
+		case "ssh":
+			sshUser := parsedURL.User.Username()
+			if sshUser == "" {
+				sshUser = "git"
+			}
+			keyPEM, hasKey := data["ssh-privatekey"]
+			if hasKey && keyPEM != "" {
+				signer, signErr := gogitssh.NewPublicKeys(sshUser, []byte(keyPEM), "")
+				if signErr != nil {
+					return nil, signErr
+				}
+				signer.HostKeyCallback = gossh.InsecureIgnoreHostKey()
+				return signer, nil
+			}
+			return nil, nil
+		case "https":
+			httpsUser := parsedURL.User.Username()
+			if httpsUser == "" {
+				httpsUser = data["username"]
+			}
+			if password, hasPW := data["password"]; hasPW && password != "" {
+				return &http.BasicAuth{Username: httpsUser, Password: password}, nil
+			}
+			return nil, nil
+		default:
+			return nil, gitstore.ErrUnsupportedURLScheme
+		}
+	}
+}
+
+func waitForShutdown(
+	sigCh chan os.Signal,
+	healthSrv *health.Server,
+	grpcServer *grpc.Server,
+	server *service.CartographerServer,
+	dbStore store.Store,
+	gs gitstore.GitStore,
+	auditPub *eventbus.AsyncPublisher,
+	eventBusCloser func() error,
+) {
+	sig := <-sigCh
+	slog.Info("Received signal, shutting down", "signal", sig)
+
+	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+
+	done := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		grpcServer.Stop()
+	}
+
+	server.StopGC()
+	_ = dbStore.Close()
+
+	_ = gs.WithGitLock(func() error {
+		_ = gs.RestoreMain(context.Background())
+		_ = gs.CleanUntracked(context.Background())
+		return nil
+	})
+	_ = gs.Close()
+
+	if auditPub != nil {
+		auditPub.Stop()
+	}
+	if eventBusCloser != nil {
+		_ = eventBusCloser()
+	}
+
+	slog.Info("Cartographer shut down")
+	os.Exit(0)
 }
 
 func getEnv(key, defaultVal string) string {
@@ -426,7 +447,9 @@ func loadVerificationKey(envVar string) ed25519.PublicKey {
 	return ed25519.PublicKey(keyBytes)
 }
 
-func newReadSecretFn(clientset *kubernetes.Clientset, namespace string) func(ctx context.Context, name string) (map[string]string, error) {
+func newReadSecretFn(clientset *kubernetes.Clientset, namespace string) func(
+	ctx context.Context, name string,
+) (map[string]string, error) {
 	return func(ctx context.Context, name string) (map[string]string, error) {
 		secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, name, v1.GetOptions{})
 		if err != nil {

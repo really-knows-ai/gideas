@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // FederationStateSpec defines the desired state of FederationState.
@@ -58,5 +59,9 @@ type FederationStateList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&FederationState{}, &FederationStateList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &FederationState{}, &FederationStateList{})
+		metav1.AddToGroupVersion(s, GroupVersion)
+		return nil
+	})
 }

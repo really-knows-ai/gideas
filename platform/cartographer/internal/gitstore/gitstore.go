@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-git/v5"
@@ -81,9 +80,6 @@ type gitStore struct {
 
 	remoteURL string
 	authFn    func() (transport.AuthMethod, error)
-
-	pushInFlight atomic.Bool
-	pushNeeded   atomic.Bool
 }
 
 // initDir creates a directory with a .gitkeep file so go-git can stage it.
@@ -96,7 +92,7 @@ func initDir(wt *git.Worktree, fs billy.Filesystem, name string) error {
 	if err != nil {
 		return err
 	}
-	f.Close()
+	_ = f.Close()
 	if _, err := wt.Add(keep); err != nil {
 		return err
 	}

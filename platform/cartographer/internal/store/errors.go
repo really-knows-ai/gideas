@@ -20,7 +20,9 @@ var (
 	ErrEntityNotFound          = errors.New("entity not found")
 	ErrEntityAlreadyExists     = errors.New("entity already exists")
 	ErrInvalidIDFormat         = errors.New("invalid ID format: must be a valid UUID v4")
-	ErrVectorBootstrap         = errors.New("vector index dimension cannot be bootstrapped: first entity must include an embedding")
+	ErrVectorBootstrap         = errors.New(
+		"vector index dimension cannot be bootstrapped: first entity must include an embedding",
+	)
 )
 
 // Edge CRUD errors

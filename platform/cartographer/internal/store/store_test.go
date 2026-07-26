@@ -15,6 +15,9 @@ import (
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
+// Edge type name used throughout tests.
+const edgeTypeDependsOn = "DEPENDS_ON"
+
 // testingShortGuard skips tests that require OpenInMemory when -short is set.
 func testingShortGuard(t *testing.T) {
 	t.Helper()
@@ -37,7 +40,7 @@ func newTestSchema() *flowv1.Schema {
 		},
 		EdgeTypes: []*flowv1.EdgeType{
 			{
-				Name: "DEPENDS_ON",
+				Name: edgeTypeDependsOn,
 				Properties: []*flowv1.Property{
 					{Name: "weight", Type: "string"},
 				},
@@ -57,7 +60,7 @@ func newTestSchemaWithRules() *flowv1.Schema {
 				},
 				EnableVectorIndex: false,
 				Rules: []*flowv1.ConnectionRule{
-					{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+					{CanConnectTo: []string{"Service"}, Using: []string{edgeTypeDependsOn}},
 				},
 			},
 			{
@@ -69,7 +72,7 @@ func newTestSchemaWithRules() *flowv1.Schema {
 		},
 		EdgeTypes: []*flowv1.EdgeType{
 			{
-				Name: "DEPENDS_ON",
+				Name: edgeTypeDependsOn,
 				Properties: []*flowv1.Property{
 					{Name: "weight", Type: "string"},
 				},
@@ -130,11 +133,11 @@ func TestApplySchema_CreatesTables(t *testing.T) {
 	}
 
 	// Create edge
-	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", c.Id, svc.Id, map[string]string{"weight": "high"}, "")
+	edge, err := s.CreateEdge(ctx, edgeTypeDependsOn, c.Id, svc.Id, map[string]string{"weight": "high"}, "")
 	if err != nil {
 		t.Fatalf("CreateEdge failed: %v", err)
 	}
-	if edge.Type != "DEPENDS_ON" {
+	if edge.Type != edgeTypeDependsOn {
 		t.Fatalf("expected edge type DEPENDS_ON, got %q", edge.Type)
 	}
 }
@@ -833,7 +836,7 @@ func TestDeleteEntity_CascadeEdges(t *testing.T) {
 		t.Fatalf("CreateEntity tgt failed: %v", err)
 	}
 
-	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, nil, "")
+	edge, err := s.CreateEdge(ctx, edgeTypeDependsOn, src.Id, tgt.Id, nil, "")
 	if err != nil {
 		t.Fatalf("CreateEdge failed: %v", err)
 	}
@@ -910,11 +913,11 @@ func TestCreateEdge_Basic(t *testing.T) {
 		t.Fatalf("CreateEntity tgt failed: %v", err)
 	}
 
-	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, map[string]string{"weight": "high"}, "")
+	edge, err := s.CreateEdge(ctx, edgeTypeDependsOn, src.Id, tgt.Id, map[string]string{"weight": "high"}, "")
 	if err != nil {
 		t.Fatalf("CreateEdge failed: %v", err)
 	}
-	if edge.Type != "DEPENDS_ON" {
+	if edge.Type != edgeTypeDependsOn {
 		t.Fatalf("expected edge type DEPENDS_ON, got %q", edge.Type)
 	}
 	if edge.Properties["weight"] != "high" {
@@ -937,7 +940,9 @@ func TestCreateEdge_SourceNotFound(t *testing.T) {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
 
-	_, err = s.CreateEdge(ctx, "DEPENDS_ON", "00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000001", nil, "")
+	_, err = s.CreateEdge(ctx, edgeTypeDependsOn,
+		"00000000-0000-0000-0000-000000000000",
+		"00000000-0000-0000-0000-000000000001", nil, "")
 	if err == nil {
 		t.Fatal("expected error for not-found source, got nil")
 	}
@@ -995,7 +1000,7 @@ func TestCreateEdge_UnknownProperty(t *testing.T) {
 		t.Fatalf("CreateEntity tgt failed: %v", err)
 	}
 
-	_, err = s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, map[string]string{"unknown_edge_prop": "val"}, "")
+	_, err = s.CreateEdge(ctx, edgeTypeDependsOn, src.Id, tgt.Id, map[string]string{"unknown_edge_prop": "val"}, "")
 	if err == nil {
 		t.Fatal("expected error for unknown edge property, got nil")
 	}
@@ -1020,7 +1025,7 @@ func TestCreateEdge_RuleViolation(t *testing.T) {
 					{Name: "name", Type: "string"},
 				},
 				Rules: []*flowv1.ConnectionRule{
-					{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+					{CanConnectTo: []string{"Service"}, Using: []string{edgeTypeDependsOn}},
 				},
 			},
 			{
@@ -1037,7 +1042,7 @@ func TestCreateEdge_RuleViolation(t *testing.T) {
 			},
 		},
 		EdgeTypes: []*flowv1.EdgeType{
-			{Name: "DEPENDS_ON"},
+			{Name: edgeTypeDependsOn},
 		},
 	}
 	if err := s.ApplySchema(ctx, schema); err != nil {
@@ -1054,7 +1059,7 @@ func TestCreateEdge_RuleViolation(t *testing.T) {
 	}
 
 	// Component -> OtherType is NOT allowed (rule only allows Component -> Service)
-	_, err = s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, nil, "")
+	_, err = s.CreateEdge(ctx, edgeTypeDependsOn, src.Id, tgt.Id, nil, "")
 	if err == nil {
 		t.Fatal("expected PERMISSION_DENIED for rule violation, got nil")
 	}
@@ -1079,12 +1084,12 @@ func TestCreateEdge_SelfReferencing(t *testing.T) {
 					{Name: "name", Type: "string"},
 				},
 				Rules: []*flowv1.ConnectionRule{
-					{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+					{CanConnectTo: []string{"Component"}, Using: []string{edgeTypeDependsOn}},
 				},
 			},
 		},
 		EdgeTypes: []*flowv1.EdgeType{
-			{Name: "DEPENDS_ON"},
+			{Name: edgeTypeDependsOn},
 		},
 	}
 	if err := s.ApplySchema(ctx, schema); err != nil {
@@ -1100,7 +1105,7 @@ func TestCreateEdge_SelfReferencing(t *testing.T) {
 		t.Fatalf("CreateEntity failed: %v", err)
 	}
 
-	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", a.Id, b.Id, nil, "")
+	edge, err := s.CreateEdge(ctx, edgeTypeDependsOn, a.Id, b.Id, nil, "")
 	if err != nil {
 		t.Fatalf("self-referencing edge should be allowed: %v", err)
 	}
@@ -1134,7 +1139,7 @@ func TestDeleteEdge_Basic(t *testing.T) {
 		t.Fatalf("CreateEntity failed: %v", err)
 	}
 
-	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, nil, "")
+	edge, err := s.CreateEdge(ctx, edgeTypeDependsOn, src.Id, tgt.Id, nil, "")
 	if err != nil {
 		t.Fatalf("CreateEdge failed: %v", err)
 	}
@@ -1195,7 +1200,7 @@ func TestGetEdge_Basic(t *testing.T) {
 		t.Fatalf("CreateEntity failed: %v", err)
 	}
 
-	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, map[string]string{"weight": "low"}, "")
+	edge, err := s.CreateEdge(ctx, edgeTypeDependsOn, src.Id, tgt.Id, map[string]string{"weight": "low"}, "")
 	if err != nil {
 		t.Fatalf("CreateEdge failed: %v", err)
 	}
@@ -1204,7 +1209,7 @@ func TestGetEdge_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEdge failed: %v", err)
 	}
-	if got.Type != "DEPENDS_ON" {
+	if got.Type != edgeTypeDependsOn {
 		t.Fatalf("expected type DEPENDS_ON, got %q", got.Type)
 	}
 	if got.FromEntityID != src.Id {
@@ -1767,12 +1772,12 @@ func TestValidateEdgeRules_Basic(t *testing.T) {
 	}
 
 	// Valid connection: Component -> Service via DEPENDS_ON
-	if err := s.ValidateEdgeRules("Component", "Service", "DEPENDS_ON"); err != nil {
+	if err := s.ValidateEdgeRules("Component", "Service", edgeTypeDependsOn); err != nil {
 		t.Fatalf("expected valid edge rules, got: %v", err)
 	}
 
 	// Invalid: Component -> Component via DEPENDS_ON
-	if err := s.ValidateEdgeRules("Component", "Component", "DEPENDS_ON"); err == nil {
+	if err := s.ValidateEdgeRules("Component", "Component", edgeTypeDependsOn); err == nil {
 		t.Fatal("expected error for invalid edge connection")
 	}
 }
@@ -2363,7 +2368,7 @@ func TestSchemaProviderInterface(t *testing.T) {
 		t.Fatal("expected Component entity type to exist")
 	}
 
-	if def, ok := sp.EdgeType("DEPENDS_ON"); !ok || def == nil {
+	if def, ok := sp.EdgeType(edgeTypeDependsOn); !ok || def == nil {
 		t.Fatal("expected DEPENDS_ON edge type to exist")
 	}
 }
@@ -2776,13 +2781,13 @@ func TestCreateEdge_InvalidIDFormat(t *testing.T) {
 	}
 
 	// Invalid fromID
-	_, err = s.CreateEdge(ctx, "DEPENDS_ON", "bad-uuid", ent.Id, nil, "")
+	_, err = s.CreateEdge(ctx, edgeTypeDependsOn, "bad-uuid", ent.Id, nil, "")
 	if err == nil {
 		t.Fatal("expected error for invalid fromID format")
 	}
 
 	// Invalid toID
-	_, err = s.CreateEdge(ctx, "DEPENDS_ON", ent.Id, "bad-uuid", nil, "")
+	_, err = s.CreateEdge(ctx, edgeTypeDependsOn, ent.Id, "bad-uuid", nil, "")
 	if err == nil {
 		t.Fatal("expected error for invalid toID format")
 	}
@@ -3238,7 +3243,11 @@ func TestRehydrateMainFromFiles_DropAndRecreate(t *testing.T) {
 	}
 
 	// Verify all 3 entities exist
-	for _, id := range []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "cccccccc-cccc-4ccc-8ccc-cccccccccccc"} {
+	for _, id := range []string{
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+	} {
 		if _, err := s.GetEntity(ctx, id, ""); err != nil {
 			t.Fatalf("GetEntity %q after first rehydrate failed: %v", id, err)
 		}

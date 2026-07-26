@@ -89,10 +89,12 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 
 		// 5. Implicit-column collision (entities)
 		if p.Name == "id" || p.Name == "_properties" {
-			return fmt.Errorf("%w: property %q in entity type %q collides with reserved column", ErrImplicitColumnCollision, p.Name, et.Name)
+			return fmt.Errorf("%w: property %q in entity type %q collides with reserved column",
+				ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 		if et.EnableVectorIndex && p.Name == "embedding" {
-			return fmt.Errorf("%w: property %q in entity type %q collides with embedding column when vector index is enabled", ErrImplicitColumnCollision, p.Name, et.Name)
+			return fmt.Errorf("%w: property %q in entity type %q collides with embedding column when vector index is enabled",
+				ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 
 		// 7. Property type must be "string"
@@ -136,7 +138,8 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 
 		// 6. Implicit-column collision (edges)
 		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" || p.Name == "_properties" {
-			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column", ErrImplicitColumnCollision, p.Name, et.Name)
+			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column",
+				ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 
 		// 7. Property type must be "string"
@@ -148,7 +151,8 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 	return nil
 }
 
-func validateRules(rules []*flowv1.ConnectionRule, entityTypeNames, edgeTypeNames map[string]bool, entityTypeName string) error {
+func validateRules(rules []*flowv1.ConnectionRule, entityTypeNames,
+	edgeTypeNames map[string]bool, entityTypeName string) error {
 	for i, rule := range rules {
 		if len(rule.CanConnectTo) == 0 {
 			return fmt.Errorf("%w: rule %d in entity type %q has empty canConnectTo", ErrEmptyRuleList, i, entityTypeName)
@@ -158,12 +162,14 @@ func validateRules(rules []*flowv1.ConnectionRule, entityTypeNames, edgeTypeName
 		}
 		for _, target := range rule.CanConnectTo {
 			if !entityTypeNames[target] {
-				return fmt.Errorf("%w: canConnectTo references undeclared entity type %q in rule %d of %q", ErrUndeclaredTypeRef, target, i, entityTypeName)
+				return fmt.Errorf("%w: canConnectTo references undeclared entity type %q in rule %d of %q",
+					ErrUndeclaredTypeRef, target, i, entityTypeName)
 			}
 		}
 		for _, edgeRef := range rule.Using {
 			if !edgeTypeNames[edgeRef] {
-				return fmt.Errorf("%w: using references undeclared edge type %q in rule %d of %q", ErrUndeclaredTypeRef, edgeRef, i, entityTypeName)
+				return fmt.Errorf("%w: using references undeclared edge type %q in rule %d of %q",
+					ErrUndeclaredTypeRef, edgeRef, i, entityTypeName)
 			}
 		}
 	}

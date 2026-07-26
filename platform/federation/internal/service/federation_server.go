@@ -642,7 +642,7 @@ func (s *FederationServer) searchLibrarian(
 	if err != nil {
 		return searchResult{err: fmt.Errorf("dial %s: %w", endpoint, err)}
 	}
-	defer closer() //nolint:errcheck
+	defer func() { _ = closer() }()
 
 	resp, err := libClient.SearchSimilarLaws(ctx, &flowv1.SearchSimilarLawsRequest{
 		QueryText:   candidateLaw.GetGoal(),

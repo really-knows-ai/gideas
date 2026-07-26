@@ -17,7 +17,7 @@ func newMockTx(mock *mockCartographerClient) *Transaction {
 	}
 	return &Transaction{
 		session:   sess,
-		id:        "tx-1",
+		id:        embassyTestTxID,
 		idTypeMap: newIDTypeMap(),
 	}
 }
@@ -38,7 +38,7 @@ func TestCreateEntityInTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntity returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -57,7 +57,7 @@ func TestUpdateEntityInTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -75,7 +75,7 @@ func TestDeleteEntityInTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -97,7 +97,7 @@ func TestCreateEdgeInTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -115,7 +115,7 @@ func TestDeleteEdgeInTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -133,7 +133,7 @@ func TestTxExecuteCypher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteCypher returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -141,7 +141,9 @@ func TestTxExecuteCypher(t *testing.T) {
 func TestTxSearchNeighbors(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{
-		searchNeighbors: func(ctx context.Context, req *flowv1.SearchNeighborsRequest) (*flowv1.SearchNeighborsResponse, error) {
+		searchNeighbors: func(ctx context.Context,
+			req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
 			capturedTxID = req.GetTransactionId()
 			return &flowv1.SearchNeighborsResponse{}, nil
 		},
@@ -151,7 +153,7 @@ func TestTxSearchNeighbors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchNeighbors returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -169,7 +171,7 @@ func TestTxFullTextSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullTextSearch returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -187,7 +189,7 @@ func TestTxListEntities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEntities returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -195,7 +197,9 @@ func TestTxListEntities(t *testing.T) {
 func TestDiff(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{
-		getTxDiff: func(ctx context.Context, req *flowv1.GetTransactionDiffRequest) (*flowv1.GetTransactionDiffResponse, error) {
+		getTxDiff: func(ctx context.Context,
+			req *flowv1.GetTransactionDiffRequest,
+		) (*flowv1.GetTransactionDiffResponse, error) {
 			capturedTxID = req.GetTransactionId()
 			return &flowv1.GetTransactionDiffResponse{}, nil
 		},
@@ -205,7 +209,7 @@ func TestDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diff returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -213,7 +217,9 @@ func TestDiff(t *testing.T) {
 func TestRefresh(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{
-		refreshTx: func(ctx context.Context, req *flowv1.RefreshTransactionRequest) (*flowv1.RefreshTransactionResponse, error) {
+		refreshTx: func(ctx context.Context,
+			req *flowv1.RefreshTransactionRequest,
+		) (*flowv1.RefreshTransactionResponse, error) {
 			capturedTxID = req.GetTransactionId()
 			return &flowv1.RefreshTransactionResponse{}, nil
 		},
@@ -223,7 +229,7 @@ func TestRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Refresh returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -241,7 +247,7 @@ func TestCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit returned error: %v", err)
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 }
@@ -250,7 +256,10 @@ func TestRollback(t *testing.T) {
 	var capturedTxID string
 	called := false
 	mock := &mockCartographerClient{
-		rollbackTx: func(ctx context.Context, req *flowv1.RollbackTransactionRequest) (*flowv1.RollbackTransactionResponse, error) {
+		rollbackTx: func(
+			ctx context.Context,
+			req *flowv1.RollbackTransactionRequest,
+		) (*flowv1.RollbackTransactionResponse, error) {
 			capturedTxID = req.GetTransactionId()
 			called = true
 			return &flowv1.RollbackTransactionResponse{}, nil
@@ -264,7 +273,7 @@ func TestRollback(t *testing.T) {
 	if !called {
 		t.Error("expected RollbackTransaction to be called")
 	}
-	if capturedTxID != "tx-1" {
+	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
 	if !tx.rolledBack {
@@ -275,7 +284,10 @@ func TestRollback(t *testing.T) {
 func TestRollback_Idempotent(t *testing.T) {
 	callCount := 0
 	mock := &mockCartographerClient{
-		rollbackTx: func(ctx context.Context, req *flowv1.RollbackTransactionRequest) (*flowv1.RollbackTransactionResponse, error) {
+		rollbackTx: func(
+			ctx context.Context,
+			req *flowv1.RollbackTransactionRequest,
+		) (*flowv1.RollbackTransactionResponse, error) {
 			callCount++
 			return &flowv1.RollbackTransactionResponse{}, nil
 		},
@@ -341,7 +353,7 @@ func TestTransaction_InheritsMapSnapshot(t *testing.T) {
 	mock := &mockCartographerClient{
 		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
 			return &flowv1.BeginTransactionResponse{
-				TransactionId: "tx-1",
+				TransactionId: embassyTestTxID,
 			}, nil
 		},
 	}

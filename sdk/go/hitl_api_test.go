@@ -13,7 +13,7 @@ import (
 // Tests — HITL REST API
 // ---------------------------------------------------------------------------
 
-const testWorkitemID = "wi-1" //nolint:goconst // test constant
+const testWorkitemID = "wi-1"
 
 // newTestQueueManager creates an in-memory QueueManager for API tests.
 func newTestQueueManager(t *testing.T) *queueManagerImpl {

@@ -157,7 +157,7 @@ func (g *gitStore) SetBranchRef(ctx context.Context, branch string, hash string)
 		return fmt.Errorf("invalid commit hash: %q", hash)
 	}
 	for _, c := range hash {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return fmt.Errorf("invalid commit hash: %q", hash)
 		}
 	}

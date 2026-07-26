@@ -27,122 +27,173 @@ type mockCartographerClient struct {
 	deleteEntity    func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error)
 	createEdge      func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error)
 	deleteEdge      func(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error)
-	beginTx         func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error)
-	commitTx        func(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error)
-	rollbackTx      func(ctx context.Context, req *flowv1.RollbackTransactionRequest) (*flowv1.RollbackTransactionResponse, error)
-	refreshTx       func(ctx context.Context, req *flowv1.RefreshTransactionRequest) (*flowv1.RefreshTransactionResponse, error)
-	getTxDiff       func(ctx context.Context, req *flowv1.GetTransactionDiffRequest) (*flowv1.GetTransactionDiffResponse, error)
-	extendTimeout   func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error)
-	exportGraph     func(ctx context.Context, req *flowv1.ExportGraphRequest) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error)
-	pullFromRemote  func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error)
+	beginTx         func(ctx context.Context,
+		req *flowv1.BeginTransactionRequest,
+	) (*flowv1.BeginTransactionResponse, error)
+	commitTx func(ctx context.Context,
+		req *flowv1.CommitTransactionRequest,
+	) (*flowv1.CommitTransactionResponse, error)
+	rollbackTx func(ctx context.Context,
+		req *flowv1.RollbackTransactionRequest,
+	) (*flowv1.RollbackTransactionResponse, error)
+	refreshTx func(ctx context.Context,
+		req *flowv1.RefreshTransactionRequest,
+	) (*flowv1.RefreshTransactionResponse, error)
+	getTxDiff func(ctx context.Context,
+		req *flowv1.GetTransactionDiffRequest,
+	) (*flowv1.GetTransactionDiffResponse, error)
+	extendTimeout func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error)
+	exportGraph   func(ctx context.Context, req *flowv1.ExportGraphRequest,
+	) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error)
+	pullFromRemote func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error)
 }
 
-func (m *mockCartographerClient) ExecuteCypher(ctx context.Context, req *flowv1.ExecuteCypherRequest, opts ...grpc.CallOption) (*flowv1.ExecuteCypherResponse, error) {
+func (m *mockCartographerClient) ExecuteCypher(
+	ctx context.Context, req *flowv1.ExecuteCypherRequest, opts ...grpc.CallOption,
+) (*flowv1.ExecuteCypherResponse, error) {
 	if m.executeCypher != nil {
 		return m.executeCypher(ctx, req)
 	}
 	return &flowv1.ExecuteCypherResponse{}, nil
 }
-func (m *mockCartographerClient) SearchNeighbors(ctx context.Context, req *flowv1.SearchNeighborsRequest, opts ...grpc.CallOption) (*flowv1.SearchNeighborsResponse, error) {
+func (m *mockCartographerClient) SearchNeighbors(
+	ctx context.Context, req *flowv1.SearchNeighborsRequest, opts ...grpc.CallOption,
+) (*flowv1.SearchNeighborsResponse, error) {
 	if m.searchNeighbors != nil {
 		return m.searchNeighbors(ctx, req)
 	}
 	return &flowv1.SearchNeighborsResponse{}, nil
 }
-func (m *mockCartographerClient) FullTextSearch(ctx context.Context, req *flowv1.FullTextSearchRequest, opts ...grpc.CallOption) (*flowv1.FullTextSearchResponse, error) {
+func (m *mockCartographerClient) FullTextSearch(
+	ctx context.Context, req *flowv1.FullTextSearchRequest, opts ...grpc.CallOption,
+) (*flowv1.FullTextSearchResponse, error) {
 	if m.fullTextSearch != nil {
 		return m.fullTextSearch(ctx, req)
 	}
 	return &flowv1.FullTextSearchResponse{}, nil
 }
-func (m *mockCartographerClient) ListEntities(ctx context.Context, req *flowv1.ListEntitiesRequest, opts ...grpc.CallOption) (*flowv1.ListEntitiesResponse, error) {
+func (m *mockCartographerClient) ListEntities(
+	ctx context.Context, req *flowv1.ListEntitiesRequest, opts ...grpc.CallOption,
+) (*flowv1.ListEntitiesResponse, error) {
 	if m.listEntities != nil {
 		return m.listEntities(ctx, req)
 	}
 	return &flowv1.ListEntitiesResponse{}, nil
 }
-func (m *mockCartographerClient) CreateEntity(ctx context.Context, req *flowv1.CreateEntityRequest, opts ...grpc.CallOption) (*flowv1.CreateEntityResponse, error) {
+func (m *mockCartographerClient) CreateEntity(
+	ctx context.Context, req *flowv1.CreateEntityRequest, opts ...grpc.CallOption,
+) (*flowv1.CreateEntityResponse, error) {
 	if m.createEntity != nil {
 		return m.createEntity(ctx, req)
 	}
 	return &flowv1.CreateEntityResponse{}, nil
 }
-func (m *mockCartographerClient) UpdateEntity(ctx context.Context, req *flowv1.UpdateEntityRequest, opts ...grpc.CallOption) (*flowv1.UpdateEntityResponse, error) {
+func (m *mockCartographerClient) UpdateEntity(
+	ctx context.Context, req *flowv1.UpdateEntityRequest, opts ...grpc.CallOption,
+) (*flowv1.UpdateEntityResponse, error) {
 	if m.updateEntity != nil {
 		return m.updateEntity(ctx, req)
 	}
 	return &flowv1.UpdateEntityResponse{}, nil
 }
-func (m *mockCartographerClient) DeleteEntity(ctx context.Context, req *flowv1.DeleteEntityRequest, opts ...grpc.CallOption) (*flowv1.DeleteEntityResponse, error) {
+func (m *mockCartographerClient) DeleteEntity(
+	ctx context.Context, req *flowv1.DeleteEntityRequest, opts ...grpc.CallOption,
+) (*flowv1.DeleteEntityResponse, error) {
 	if m.deleteEntity != nil {
 		return m.deleteEntity(ctx, req)
 	}
 	return &flowv1.DeleteEntityResponse{}, nil
 }
-func (m *mockCartographerClient) CreateEdge(ctx context.Context, req *flowv1.CreateEdgeRequest, opts ...grpc.CallOption) (*flowv1.CreateEdgeResponse, error) {
+func (m *mockCartographerClient) CreateEdge(
+	ctx context.Context, req *flowv1.CreateEdgeRequest, opts ...grpc.CallOption,
+) (*flowv1.CreateEdgeResponse, error) {
 	if m.createEdge != nil {
 		return m.createEdge(ctx, req)
 	}
 	return &flowv1.CreateEdgeResponse{}, nil
 }
-func (m *mockCartographerClient) DeleteEdge(ctx context.Context, req *flowv1.DeleteEdgeRequest, opts ...grpc.CallOption) (*flowv1.DeleteEdgeResponse, error) {
+func (m *mockCartographerClient) DeleteEdge(
+	ctx context.Context, req *flowv1.DeleteEdgeRequest, opts ...grpc.CallOption,
+) (*flowv1.DeleteEdgeResponse, error) {
 	if m.deleteEdge != nil {
 		return m.deleteEdge(ctx, req)
 	}
 	return &flowv1.DeleteEdgeResponse{}, nil
 }
-func (m *mockCartographerClient) BeginTransaction(ctx context.Context, req *flowv1.BeginTransactionRequest, opts ...grpc.CallOption) (*flowv1.BeginTransactionResponse, error) {
+func (m *mockCartographerClient) BeginTransaction(
+	ctx context.Context, req *flowv1.BeginTransactionRequest, opts ...grpc.CallOption,
+) (*flowv1.BeginTransactionResponse, error) {
 	if m.beginTx != nil {
 		return m.beginTx(ctx, req)
 	}
 	return &flowv1.BeginTransactionResponse{}, nil
 }
-func (m *mockCartographerClient) CommitTransaction(ctx context.Context, req *flowv1.CommitTransactionRequest, opts ...grpc.CallOption) (*flowv1.CommitTransactionResponse, error) {
+func (m *mockCartographerClient) CommitTransaction(
+	ctx context.Context, req *flowv1.CommitTransactionRequest, opts ...grpc.CallOption,
+) (*flowv1.CommitTransactionResponse, error) {
 	if m.commitTx != nil {
 		return m.commitTx(ctx, req)
 	}
 	return &flowv1.CommitTransactionResponse{}, nil
 }
-func (m *mockCartographerClient) RollbackTransaction(ctx context.Context, req *flowv1.RollbackTransactionRequest, opts ...grpc.CallOption) (*flowv1.RollbackTransactionResponse, error) {
+func (m *mockCartographerClient) RollbackTransaction(
+	ctx context.Context, req *flowv1.RollbackTransactionRequest, opts ...grpc.CallOption,
+) (*flowv1.RollbackTransactionResponse, error) {
 	if m.rollbackTx != nil {
 		return m.rollbackTx(ctx, req)
 	}
 	return &flowv1.RollbackTransactionResponse{}, nil
 }
-func (m *mockCartographerClient) RefreshTransaction(ctx context.Context, req *flowv1.RefreshTransactionRequest, opts ...grpc.CallOption) (*flowv1.RefreshTransactionResponse, error) {
+func (m *mockCartographerClient) RefreshTransaction(
+	ctx context.Context, req *flowv1.RefreshTransactionRequest, opts ...grpc.CallOption,
+) (*flowv1.RefreshTransactionResponse, error) {
 	if m.refreshTx != nil {
 		return m.refreshTx(ctx, req)
 	}
 	return &flowv1.RefreshTransactionResponse{}, nil
 }
-func (m *mockCartographerClient) GetTransactionDiff(ctx context.Context, req *flowv1.GetTransactionDiffRequest, opts ...grpc.CallOption) (*flowv1.GetTransactionDiffResponse, error) {
+func (m *mockCartographerClient) GetTransactionDiff(
+	ctx context.Context, req *flowv1.GetTransactionDiffRequest, opts ...grpc.CallOption,
+) (*flowv1.GetTransactionDiffResponse, error) {
 	if m.getTxDiff != nil {
 		return m.getTxDiff(ctx, req)
 	}
 	return &flowv1.GetTransactionDiffResponse{}, nil
 }
-func (m *mockCartographerClient) ExtendTimeout(ctx context.Context, req *flowv1.ExtendTimeoutRequest, opts ...grpc.CallOption) (*flowv1.ExtendTimeoutResponse, error) {
+func (m *mockCartographerClient) ExtendTimeout(
+	ctx context.Context, req *flowv1.ExtendTimeoutRequest, opts ...grpc.CallOption,
+) (*flowv1.ExtendTimeoutResponse, error) {
 	if m.extendTimeout != nil {
 		return m.extendTimeout(ctx, req)
 	}
 	return &flowv1.ExtendTimeoutResponse{}, nil
 }
-func (m *mockCartographerClient) ApplySchema(ctx context.Context, req *flowv1.ApplySchemaRequest, opts ...grpc.CallOption) (*flowv1.ApplySchemaResponse, error) {
+func (m *mockCartographerClient) ApplySchema(
+	ctx context.Context, req *flowv1.ApplySchemaRequest, opts ...grpc.CallOption,
+) (*flowv1.ApplySchemaResponse, error) {
 	return &flowv1.ApplySchemaResponse{}, nil
 }
-func (m *mockCartographerClient) WipeGraph(ctx context.Context, req *flowv1.WipeGraphRequest, opts ...grpc.CallOption) (*flowv1.WipeGraphResponse, error) {
+func (m *mockCartographerClient) WipeGraph(
+	ctx context.Context, req *flowv1.WipeGraphRequest, opts ...grpc.CallOption,
+) (*flowv1.WipeGraphResponse, error) {
 	return &flowv1.WipeGraphResponse{}, nil
 }
-func (m *mockCartographerClient) HealthCheck(ctx context.Context, req *flowv1.HealthCheckRequest, opts ...grpc.CallOption) (*flowv1.HealthCheckResponse, error) {
+func (m *mockCartographerClient) HealthCheck(
+	ctx context.Context, req *flowv1.HealthCheckRequest, opts ...grpc.CallOption,
+) (*flowv1.HealthCheckResponse, error) {
 	return &flowv1.HealthCheckResponse{}, nil
 }
-func (m *mockCartographerClient) ExportGraph(ctx context.Context, req *flowv1.ExportGraphRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
+func (m *mockCartographerClient) ExportGraph(
+	ctx context.Context, req *flowv1.ExportGraphRequest, opts ...grpc.CallOption,
+) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
 	if m.exportGraph != nil {
 		return m.exportGraph(ctx, req)
 	}
 	return nil, errors.New("ExportGraph mock function not set")
 }
-func (m *mockCartographerClient) PullFromRemote(ctx context.Context, req *flowv1.PullFromRemoteRequest, opts ...grpc.CallOption) (*flowv1.PullFromRemoteResponse, error) {
+func (m *mockCartographerClient) PullFromRemote(
+	ctx context.Context, req *flowv1.PullFromRemoteRequest, opts ...grpc.CallOption,
+) (*flowv1.PullFromRemoteResponse, error) {
 	if m.pullFromRemote != nil {
 		return m.pullFromRemote(ctx, req)
 	}
@@ -192,7 +243,7 @@ func TestExecuteCypher(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	_, err := g.ExecuteCypher("MATCH (c:Component) RETURN c", nil)
+	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
 	if err != nil {
 		t.Fatalf("ExecuteCypher returned error: %v", err)
 	}
@@ -200,12 +251,14 @@ func TestExecuteCypher(t *testing.T) {
 
 func TestSearchNeighbors(t *testing.T) {
 	mock := &mockCartographerClient{
-		searchNeighbors: func(ctx context.Context, req *flowv1.SearchNeighborsRequest) (*flowv1.SearchNeighborsResponse, error) {
+		searchNeighbors: func(ctx context.Context,
+			req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
 			return &flowv1.SearchNeighborsResponse{}, nil
 		},
 	}
 	g := newMockGraph(mock)
-	_, err := g.SearchNeighbors([]float32{0.1, 0.2}, "Component", 10)
+	_, err := g.SearchNeighbors([]float32{0.1, 0.2}, componentType, 10)
 	if err != nil {
 		t.Fatalf("SearchNeighbors returned error: %v", err)
 	}
@@ -213,7 +266,7 @@ func TestSearchNeighbors(t *testing.T) {
 
 func TestSearchNeighbors_NaNRejection(t *testing.T) {
 	g := newMockGraph(&mockCartographerClient{})
-	_, err := g.SearchNeighbors([]float32{float32(math.NaN())}, "Component", 10)
+	_, err := g.SearchNeighbors([]float32{float32(math.NaN())}, componentType, 10)
 	if err == nil {
 		t.Fatal("expected error for NaN embedding")
 	}
@@ -229,7 +282,7 @@ func TestFullTextSearch(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	_, err := g.FullTextSearch("test query", "Component")
+	_, err := g.FullTextSearch("test query", componentType)
 	if err != nil {
 		t.Fatalf("FullTextSearch returned error: %v", err)
 	}
@@ -238,7 +291,7 @@ func TestFullTextSearch(t *testing.T) {
 func TestListEntities(t *testing.T) {
 	mock := &mockCartographerClient{
 		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			if req.GetEntityType() != "Component" {
+			if req.GetEntityType() != componentType {
 				t.Errorf("expected entity type Component, got %s", req.GetEntityType())
 			}
 			return &flowv1.ListEntitiesResponse{}, nil
@@ -267,7 +320,7 @@ func TestListEntities_Pagination(t *testing.T) {
 	g := newMockGraph(mock)
 
 	// First page
-	page, err := g.ListEntities("Component", WithPageSize(50))
+	page, err := g.ListEntities(componentType, WithPageSize(50))
 	if err != nil {
 		t.Fatalf("ListEntities returned error: %v", err)
 	}
@@ -279,7 +332,7 @@ func TestListEntities_Pagination(t *testing.T) {
 	}
 
 	// Second page
-	_, err = g.ListEntities("Component", WithPageSize(50), WithPageToken("next-token"))
+	_, err = g.ListEntities(componentType, WithPageSize(50), WithPageToken("next-token"))
 	if err != nil {
 		t.Fatalf("ListEntities returned error: %v", err)
 	}
@@ -312,21 +365,21 @@ func TestCreateEntity(t *testing.T) {
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
 			return &flowv1.CreateEntityResponse{
 				EntityId:   "test-id",
-				EntityType: "Component",
+				EntityType: componentType,
 				Properties: req.GetProperties(),
 			}, nil
 		},
 	}
 	g := newMockGraph(mock)
 	props := map[string]string{"name": "test"}
-	entity, err := g.CreateEntity("Component", nil, props, nil)
+	entity, err := g.CreateEntity(componentType, nil, props, nil)
 	if err != nil {
 		t.Fatalf("CreateEntity returned error: %v", err)
 	}
 	if entity.ID != "test-id" {
 		t.Errorf("expected entity ID test-id, got %s", entity.ID)
 	}
-	if entity.Type != "Component" {
+	if entity.Type != componentType {
 		t.Errorf("expected entity type Component, got %s", entity.Type)
 	}
 	if entity.Properties["name"] != "test" {
@@ -373,7 +426,7 @@ func TestCreateEntity_PopulatesMap(t *testing.T) {
 		t.Fatalf("CreateEntity returned error: %v", err)
 	}
 	typ, ok := g.idTypeMap.resolve("entity-1")
-	if !ok || typ != "Component" {
+	if !ok || typ != componentType {
 		t.Errorf("expected Component type for entity-1, got %q (ok=%v)", typ, ok)
 	}
 }
@@ -585,12 +638,12 @@ func TestListEntities_PopulatesMap(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	_, err := g.ListEntities("Component")
+	_, err := g.ListEntities(componentType)
 	if err != nil {
 		t.Fatalf("ListEntities returned error: %v", err)
 	}
 	typ, ok := g.idTypeMap.resolve("e1")
-	if !ok || typ != "Component" {
+	if !ok || typ != componentType {
 		t.Errorf("expected Component for e1, got %q (ok=%v)", typ, ok)
 	}
 	typ, ok = g.idTypeMap.resolve("e2")

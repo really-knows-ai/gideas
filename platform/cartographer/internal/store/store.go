@@ -36,22 +36,32 @@ type Store interface {
 	EdgeType(name string) (*EdgeTypeDef, bool)
 
 	// Entity CRUD
-	CreateEntity(ctx context.Context, entityType, id string, properties map[string]string, embedding []float32, branch string) (*Entity, error)
-	UpdateEntity(ctx context.Context, id string, properties map[string]string, embedding []float32, branch string) (*Entity, error)
+	CreateEntity(ctx context.Context, entityType, id string,
+		properties map[string]string, embedding []float32, branch string,
+	) (*Entity, error)
+	UpdateEntity(ctx context.Context, id string,
+		properties map[string]string, embedding []float32, branch string,
+	) (*Entity, error)
 	DeleteEntity(ctx context.Context, id, branch string) (*Entity, error)
 	GetEntity(ctx context.Context, id, branch string) (*Entity, error)
 
 	// Edge CRUD
-	CreateEdge(ctx context.Context, edgeType, fromID, toID string, properties map[string]string, branch string) (*Edge, error)
+	CreateEdge(ctx context.Context, edgeType, fromID, toID string,
+		properties map[string]string, branch string,
+	) (*Edge, error)
 	DeleteEdge(ctx context.Context, id, branch string) (*Edge, error)
 	GetEdge(ctx context.Context, id, branch string) (*Edge, error)
 	ListEdgesOfType(ctx context.Context, edgeType, branch string) ([]Edge, error)
 
 	// Query
 	ExecuteCypher(ctx context.Context, cypher string, params map[string]any, branch string) ([]map[string]any, error)
-	SearchNeighbors(ctx context.Context, embedding []float32, entityType string, topK int, branch string) ([]NeighborResult, error)
+	SearchNeighbors(ctx context.Context, embedding []float32,
+		entityType string, topK int, branch string,
+	) ([]NeighborResult, error)
 	FullTextSearch(ctx context.Context, query, entityType string, branch string) ([]Entity, error)
-	ListEntities(ctx context.Context, entityType string, pageSize int, pageToken string, branch string) ([]Entity, string, error)
+	ListEntities(ctx context.Context, entityType string,
+		pageSize int, pageToken string, branch string,
+	) ([]Entity, string, error)
 
 	// Rules (edge validation)
 	ValidateEdgeRules(sourceType, targetType, edgeType string) error

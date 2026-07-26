@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +36,10 @@ type CapabilityVerifier struct {
 // NewCapabilityVerifier creates a verifier from the two Ed25519 public keys
 // and the anti-replay staleness window. Passing a negative stalenessWindow
 // disables the staleness check.
-func NewCapabilityVerifier(operatorKey, sidecarKey ed25519.PublicKey, stalenessWindow time.Duration) *CapabilityVerifier {
+func NewCapabilityVerifier(
+	operatorKey, sidecarKey ed25519.PublicKey,
+	stalenessWindow time.Duration,
+) *CapabilityVerifier {
 	return &CapabilityVerifier{
 		operatorKey:     operatorKey,
 		sidecarKey:      sidecarKey,
@@ -49,7 +53,10 @@ func NewCapabilityVerifier(operatorKey, sidecarKey ed25519.PublicKey, stalenessW
 // through — the handler then skips capability checks. If present but
 // unverifiable (bad signature, stale timestamp, unknown signer), the
 // interceptor returns PERMISSION_DENIED before the handler runs.
-func (v *CapabilityVerifier) VerifyInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+func (v *CapabilityVerifier) VerifyInterceptor(
+	ctx context.Context, req any,
+	info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
+) (any, error) {
 	ctx, err := v.verify(ctx)
 	if err != nil {
 		return nil, err
@@ -59,7 +66,10 @@ func (v *CapabilityVerifier) VerifyInterceptor(ctx context.Context, req any, inf
 
 // VerifyStreamInterceptor is a grpc.StreamServerInterceptor that verifies the
 // Ed25519 capability signature on every streaming RPC at ingress.
-func (v *CapabilityVerifier) VerifyStreamInterceptor(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+func (v *CapabilityVerifier) VerifyStreamInterceptor(
+	srv any, ss grpc.ServerStream,
+	info *grpc.StreamServerInfo, handler grpc.StreamHandler,
+) error {
 	ctx, err := v.verify(ss.Context())
 	if err != nil {
 		return err
@@ -180,10 +190,8 @@ func (v *CapabilityVerifier) CheckSpecificType(caps *Capabilities, requiredCapPr
 		return errCapabilityDenied(requiredCapPrefix + ":graph/entity/" + entityType)
 	}
 	required := requiredCapPrefix + ":graph/entity/" + entityType
-	for _, c := range caps.Caps {
-		if c == required {
-			return nil
-		}
+	if slices.Contains(caps.Caps, required) {
+		return nil
 	}
 	return errCapabilityDenied(required)
 }
@@ -196,10 +204,8 @@ func (v *CapabilityVerifier) CheckWildcard(caps *Capabilities, requiredCapPrefix
 		return errWildcardMissing
 	}
 	required := requiredCapPrefix + ":graph/entity/*"
-	for _, c := range caps.Caps {
-		if c == required {
-			return nil
-		}
+	if slices.Contains(caps.Caps, required) {
+		return nil
 	}
 	return errWildcardMissing
 }
@@ -267,48 +273,10 @@ func (v *CapabilityVerifier) CheckCapability(ctx context.Context, required strin
 	}
 
 	// Check required capability.
-	caps := strings.Split(capsStr, ",")
-	for _, c := range caps {
-		if c == required {
-			return nil
-		}
+	if slices.Contains(strings.Split(capsStr, ","), required) {
+		return nil
 	}
 	return errCapabilityDenied(required)
-}
-
-// checkTxCap is a helper for checking WRITE:graph/tx or READ:graph/tx capabilities.
-func (v *CapabilityVerifier) checkTxCap(ctx context.Context, required string) error {
-	caps, err := ExtractCapabilities(ctx)
-	if err != nil {
-		return err
-	}
-	if caps == nil {
-		return errCapabilityDenied(required)
-	}
-	for _, c := range caps.Caps {
-		if c == required {
-			return nil
-		}
-	}
-	return errCapabilityDenied(required)
-}
-
-// checkEntityCap is a helper for checking entity-level capabilities
-// (Mode 1 — specific type).
-// impl-note: Checks only the exact "<prefix>:graph/entity/<entityType>" match
-// via CheckSpecificType. Does not fall back to checking
-// "<prefix>:graph/entity/*" as a wildcard. Every caller must independently
-// implement wildcard fallback logic when the entity type may be unknown or a
-// broad capability is acceptable.
-func (v *CapabilityVerifier) checkEntityCap(ctx context.Context, prefix, entityType string) error {
-	caps, err := ExtractCapabilities(ctx)
-	if err != nil {
-		return err
-	}
-	if caps == nil {
-		return errCapabilityDenied(prefix + ":graph/entity/" + entityType)
-	}
-	return v.CheckSpecificType(caps, prefix, entityType)
 }
 
 // isValidUUID returns true if s looks like a UUID v4 (basic format check).
@@ -339,7 +307,7 @@ func isValidUUID(s string) bool {
 				return false
 			}
 		} else {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 				return false
 			}
 		}
@@ -356,12 +324,4 @@ func validateTxID(txID string) error {
 		return errInvalidTransactionIDFormat(txID)
 	}
 	return nil
-}
-
-// branchForTx returns the LadybugDB branch name for a transaction.
-func branchForTx(txID string) string {
-	if txID == "" {
-		return ""
-	}
-	return txID
 }

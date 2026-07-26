@@ -20,8 +20,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-const bufSize = 1024 * 1024
-
 // testSidecarPriv is a test-level Ed25519 private key used for signing
 // capability metadata in tests. It is lazily initialized by the first
 // call to testCtx.
@@ -166,7 +164,7 @@ func initTestKey() ed25519.PublicKey {
 }
 
 // newTestServer creates a CartographerServer with in-memory store and temp gitstore.
-func newTestServer(t *testing.T) (*CartographerServer, store.Store, gitstore.GitStore) {
+func newTestServer(t *testing.T) (*CartographerServer, store.Store) {
 	t.Helper()
 	scPub := initTestKey()
 	st, err := store.OpenInMemory()
@@ -183,7 +181,7 @@ func newTestServer(t *testing.T) (*CartographerServer, store.Store, gitstore.Git
 		nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 	)
 	srv.MarkDBReady()
-	return srv, st, gs
+	return srv, st
 }
 
 // testCtx returns a context with full wildcard capabilities (READ:graph/entity/*,
@@ -363,7 +361,7 @@ func TestCapability_StaleCapability(t *testing.T) {
 // =========================================================================
 
 func TestApplySchema_Valid(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := context.Background()
 
 	schema := &flowv1.Schema{
@@ -379,7 +377,7 @@ func TestApplySchema_Valid(t *testing.T) {
 }
 
 func TestApplySchema_Idempotent(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := context.Background()
 
 	schema := &flowv1.Schema{
@@ -396,7 +394,7 @@ func TestApplySchema_Idempotent(t *testing.T) {
 }
 
 func TestApplySchema_InvalidSchema(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := context.Background()
 
 	// Duplicate entity type name is an invalid schema.
@@ -416,7 +414,7 @@ func TestApplySchema_InvalidSchema(t *testing.T) {
 }
 
 func TestHealthCheck_Healthy(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := context.Background()
 
 	resp, err := srv.HealthCheck(ctx, &flowv1.HealthCheckRequest{})
@@ -435,7 +433,7 @@ func TestHealthCheck_Healthy(t *testing.T) {
 }
 
 func TestWipeGraph_WithOpenTx(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := context.Background()
 
 	// Create an active transaction.
@@ -445,7 +443,7 @@ func TestWipeGraph_WithOpenTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBranchDB: %v", err)
 	}
-	srv.txManager.Create("test-tx", 5*time.Minute, "head")
+	_, _ = srv.txManager.Create("test-tx", 5*time.Minute, "head")
 
 	_, err = srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{})
 	if err == nil {
@@ -461,7 +459,7 @@ func TestWipeGraph_WithOpenTx(t *testing.T) {
 // =========================================================================
 
 func TestExecuteCypher_EmptyQuery(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: ""})
@@ -474,7 +472,7 @@ func TestExecuteCypher_EmptyQuery(t *testing.T) {
 }
 
 func TestExecuteCypher_ValidQuery(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -490,7 +488,7 @@ func TestExecuteCypher_ValidQuery(t *testing.T) {
 }
 
 func TestExecuteCypher_MutationRejected(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "CREATE (n:Test)"})
@@ -503,7 +501,7 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 }
 
 func TestFullTextSearch_EmptyQuery(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: ""})
@@ -516,7 +514,7 @@ func TestFullTextSearch_EmptyQuery(t *testing.T) {
 }
 
 func TestFullTextSearch_Valid(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -532,7 +530,7 @@ func TestFullTextSearch_Valid(t *testing.T) {
 }
 
 func TestListEntities_UnknownType(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: "NonExistent"})
@@ -545,7 +543,7 @@ func TestListEntities_UnknownType(t *testing.T) {
 }
 
 func TestListEntities_Valid(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -565,7 +563,7 @@ func TestListEntities_Valid(t *testing.T) {
 }
 
 func TestSearchNeighbors_NonIndexed(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -588,7 +586,7 @@ func TestSearchNeighbors_NonIndexed(t *testing.T) {
 // =========================================================================
 
 func TestCreateEntity_Valid(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -608,7 +606,7 @@ func TestCreateEntity_Valid(t *testing.T) {
 }
 
 func TestCreateEntity_UnknownType(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -625,7 +623,7 @@ func TestCreateEntity_UnknownType(t *testing.T) {
 }
 
 func TestCreateEntity_DuplicateID(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -651,7 +649,7 @@ func TestCreateEntity_DuplicateID(t *testing.T) {
 }
 
 func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -668,7 +666,7 @@ func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
 }
 
 func TestUpdateEntity_NotFound(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -685,7 +683,7 @@ func TestUpdateEntity_NotFound(t *testing.T) {
 }
 
 func TestUpdateEntity_Valid(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -704,7 +702,7 @@ func TestUpdateEntity_Valid(t *testing.T) {
 }
 
 func TestDeleteEntity_NotFound(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -720,7 +718,7 @@ func TestDeleteEntity_NotFound(t *testing.T) {
 }
 
 func TestDeleteEntity_Valid(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -736,7 +734,7 @@ func TestDeleteEntity_Valid(t *testing.T) {
 }
 
 func TestCreateEdge_Valid(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -758,7 +756,7 @@ func TestCreateEdge_Valid(t *testing.T) {
 }
 
 func TestCreateEdge_SourceNotFound(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -776,7 +774,7 @@ func TestCreateEdge_SourceNotFound(t *testing.T) {
 }
 
 func TestCreateEdge_UnknownEdgeType(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -796,7 +794,7 @@ func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 }
 
 func TestDeleteEdge_NotFound(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -816,7 +814,7 @@ func TestDeleteEdge_NotFound(t *testing.T) {
 // =========================================================================
 
 func TestTransaction_BeginCommit(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -867,7 +865,7 @@ func TestTransaction_BeginCommit(t *testing.T) {
 }
 
 func TestTransaction_BeginRollback(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -903,7 +901,7 @@ func TestTransaction_BeginRollback(t *testing.T) {
 }
 
 func TestTransaction_ExtendTimeout(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
@@ -924,7 +922,7 @@ func TestTransaction_ExtendTimeout(t *testing.T) {
 }
 
 func TestTransaction_TimedOut(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -959,7 +957,7 @@ func TestTransaction_TimedOut(t *testing.T) {
 }
 
 func TestTransaction_InvalidTxID(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{
@@ -974,7 +972,7 @@ func TestTransaction_InvalidTxID(t *testing.T) {
 }
 
 func TestTransaction_NotFound(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
@@ -993,7 +991,7 @@ func TestTransaction_NotFound(t *testing.T) {
 // =========================================================================
 
 func TestEmptyTransaction_CommitNoOp(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -1010,7 +1008,7 @@ func TestEmptyTransaction_CommitNoOp(t *testing.T) {
 }
 
 func TestEmptyTransaction_RollbackNoOp(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -1031,7 +1029,7 @@ func TestEmptyTransaction_RollbackNoOp(t *testing.T) {
 // =========================================================================
 
 func TestConcurrentNonTxWrites(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1066,7 +1064,7 @@ func TestConcurrentNonTxWrites(t *testing.T) {
 // =========================================================================
 
 func TestExportGraph_UnsupportedFormat(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := collectExportData(srv, ctx, "unsupported")
@@ -1079,7 +1077,7 @@ func TestExportGraph_UnsupportedFormat(t *testing.T) {
 }
 
 func TestExportGraph_JSON(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1096,7 +1094,7 @@ func TestExportGraph_JSON(t *testing.T) {
 }
 
 func TestExportGraph_GraphML(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1116,7 +1114,7 @@ func TestExportGraph_GraphML(t *testing.T) {
 // =========================================================================
 
 func TestSearchNeighbors_Valid(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	// Apply a schema with a vector-indexed type.
@@ -1151,7 +1149,7 @@ func TestSearchNeighbors_Valid(t *testing.T) {
 }
 
 func TestRefreshTransaction_NoConflicts(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -1168,7 +1166,7 @@ func TestRefreshTransaction_NoConflicts(t *testing.T) {
 }
 
 func TestDeleteEdge_Valid(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1216,7 +1214,7 @@ func TestGetTransactionDiff_WrongCapability(t *testing.T) {
 }
 
 func TestWipeGraph_Clean(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := context.Background()
 
 	_, err := srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{})
@@ -1230,7 +1228,7 @@ func TestWipeGraph_Clean(t *testing.T) {
 // =========================================================================
 
 func TestPullFromRemote_RemoteNotConfigured(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.PullFromRemote(ctx, &flowv1.PullFromRemoteRequest{})
@@ -1268,7 +1266,7 @@ func TestPullFromRemote_AuthConfigMissing(t *testing.T) {
 // =========================================================================
 
 func TestCommitTransaction_Divergence(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1304,7 +1302,7 @@ func TestCommitTransaction_Divergence(t *testing.T) {
 }
 
 func TestCommitTransaction_SchemaIncompatible(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1370,7 +1368,7 @@ func TestCommitTransaction_SchemaIncompatible(t *testing.T) {
 // =========================================================================
 
 func TestExtendTimeout_NonPositiveDuration(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -1403,7 +1401,7 @@ func TestExtendTimeout_NonPositiveDuration(t *testing.T) {
 }
 
 func TestExtendTimeout_ExceedsMaxTotalLifetime(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
@@ -1433,7 +1431,7 @@ func TestExtendTimeout_ExceedsMaxTotalLifetime(t *testing.T) {
 // =========================================================================
 
 func TestRollbackTransaction_NotFound(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
@@ -1501,7 +1499,7 @@ func TestBeginTransaction_ResourceExhausted(t *testing.T) {
 // =========================================================================
 
 func TestExecuteCypher_InvalidSyntax(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1522,7 +1520,7 @@ func TestExecuteCypher_InvalidSyntax(t *testing.T) {
 // =========================================================================
 
 func TestSearchNeighbors_UnknownEntityType(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1541,7 +1539,7 @@ func TestSearchNeighbors_UnknownEntityType(t *testing.T) {
 }
 
 func TestSearchNeighbors_InvalidTopK(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	_, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
@@ -1558,7 +1556,7 @@ func TestSearchNeighbors_InvalidTopK(t *testing.T) {
 }
 
 func TestSearchNeighbors_NaNEmbedding(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	schema := &flowv1.Schema{
@@ -1590,7 +1588,7 @@ func TestSearchNeighbors_NaNEmbedding(t *testing.T) {
 }
 
 func TestSearchNeighbors_EmbeddingDimensionMismatch(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	schema := &flowv1.Schema{
@@ -1626,7 +1624,7 @@ func TestSearchNeighbors_EmbeddingDimensionMismatch(t *testing.T) {
 // =========================================================================
 
 func TestFullTextSearch_UnknownEntityType(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1648,7 +1646,7 @@ func TestFullTextSearch_UnknownEntityType(t *testing.T) {
 // =========================================================================
 
 func TestListEntities_InvalidPageSize(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1679,7 +1677,7 @@ func TestListEntities_InvalidPageSize(t *testing.T) {
 }
 
 func TestListEntities_InvalidPageToken(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1702,7 +1700,7 @@ func TestListEntities_InvalidPageToken(t *testing.T) {
 // =========================================================================
 
 func TestCreateEdge_TargetNotFound(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1722,7 +1720,7 @@ func TestCreateEdge_TargetNotFound(t *testing.T) {
 }
 
 func TestCreateEdge_RuleViolation(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1746,7 +1744,7 @@ func TestCreateEdge_RuleViolation(t *testing.T) {
 }
 
 func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	// Apply schema with a required edge property.
@@ -1789,7 +1787,7 @@ func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
 }
 
 func TestCreateEdge_UnknownProperty(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1811,7 +1809,7 @@ func TestCreateEdge_UnknownProperty(t *testing.T) {
 }
 
 func TestCreateEdge_InvalidIDFormat(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1834,7 +1832,7 @@ func TestCreateEdge_InvalidIDFormat(t *testing.T) {
 // =========================================================================
 
 func TestUpdateEntity_UnknownProperty(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1853,7 +1851,7 @@ func TestUpdateEntity_UnknownProperty(t *testing.T) {
 }
 
 func TestUpdateEntity_InvalidIDFormat(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1871,7 +1869,7 @@ func TestUpdateEntity_InvalidIDFormat(t *testing.T) {
 }
 
 func TestUpdateEntity_NaNEmbedding(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	schema := &flowv1.Schema{
@@ -1902,7 +1900,7 @@ func TestUpdateEntity_NaNEmbedding(t *testing.T) {
 }
 
 func TestUpdateEntity_EmbeddingDimensionMismatch(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	schema := &flowv1.Schema{
@@ -1937,7 +1935,7 @@ func TestUpdateEntity_EmbeddingDimensionMismatch(t *testing.T) {
 // =========================================================================
 
 func TestCreateEntity_UnknownProperty(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1955,7 +1953,7 @@ func TestCreateEntity_UnknownProperty(t *testing.T) {
 }
 
 func TestCreateEntity_InvalidIDFormat(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -1974,7 +1972,7 @@ func TestCreateEntity_InvalidIDFormat(t *testing.T) {
 }
 
 func TestCreateEntity_NaNEmbedding(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	schema := &flowv1.Schema{
@@ -2004,7 +2002,7 @@ func TestCreateEntity_NaNEmbedding(t *testing.T) {
 }
 
 func TestCreateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	// Component is a non-indexed type (enableVectorIndex not set).
@@ -2024,7 +2022,7 @@ func TestCreateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
 }
 
 func TestCreateEntity_EmbeddingDimensionMismatch(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	schema := &flowv1.Schema{
@@ -2056,7 +2054,7 @@ func TestCreateEntity_EmbeddingDimensionMismatch(t *testing.T) {
 }
 
 func TestCreateEntity_VectorBootstrap(t *testing.T) {
-	srv, st, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	schema := &flowv1.Schema{
@@ -2119,7 +2117,7 @@ func TestWipeGraph_MidWipeFailure(t *testing.T) {
 // =========================================================================
 
 func TestApplySchema_DestructiveChange(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := context.Background()
 
 	// Apply initial schema.
@@ -2178,7 +2176,7 @@ func TestApplySchema_BeforeDBReady(t *testing.T) {
 }
 
 func TestApplySchema_AdditiveChange(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := context.Background()
 
 	// Apply initial schema.
@@ -2215,7 +2213,7 @@ func TestApplySchema_AdditiveChange(t *testing.T) {
 // =========================================================================
 
 func TestExportGraph_EmptyGraph(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	// No data in the graph — export should succeed with an empty result.
@@ -2484,7 +2482,7 @@ func TestCapability_StalenessBoundary_NegativeWindow(t *testing.T) {
 // =========================================================================
 
 func TestGitLockSerialization(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 
 	var wg sync.WaitGroup
 	concurrent := 0

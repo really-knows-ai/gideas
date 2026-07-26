@@ -62,10 +62,10 @@ func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([
 		}
 		var ej EntityJSON
 		if err := json.NewDecoder(f).Decode(&ej); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("decode entity file %s: %w", fi.Name(), err)
 		}
-		f.Close()
+		_ = f.Close()
 
 		ef := EntityFile{
 			ID:         ej.ID.String(),
@@ -139,7 +139,7 @@ func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 	if err != nil {
 		return fmt.Errorf("create entity file %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write entity file %s: %w", path, err)

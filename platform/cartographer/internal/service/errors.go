@@ -11,7 +11,9 @@ import (
 
 // errWildcardMissing is an internal sentinel used for handler branching only.
 // Handlers MUST NOT return it through the gRPC boundary.
-var errWildcardMissing = errors.New("wildcard capability missing — internal sentinel for handler branching; not a gRPC status error")
+var errWildcardMissing = errors.New(
+	"wildcard capability missing — internal sentinel for handler branching; not a gRPC status error",
+)
 
 // mapStoreError maps a store-layer error to a gRPC status error.
 func mapStoreError(err error) error {
@@ -80,24 +82,6 @@ func mapStoreError(err error) error {
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
-}
-
-// mapTxError maps a transaction-manager error to a gRPC status error.
-// ponytail: unused — all transaction-manager callers (ValidateActive,
-// ExtendTimeout, Create, Lookup) return pre-formatted gRPC status errors
-// directly via the err* constructors in this file. The only raw gitstore error
-// this function would map (gitstore.ErrChangeLogFull → ResourceExhausted) is
-// handled by mapGitError, which is now used by the AddChangeLogEntry callers.
-// This function is kept as a convenience for future transaction-manager errors
-// that are not gitstore errors.
-func mapTxError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, gitstore.ErrChangeLogFull) {
-		return status.Error(codes.ResourceExhausted, "transaction change log full (100K cap)")
-	}
-	return status.Error(codes.Internal, err.Error())
 }
 
 // mapGitError maps a gitstore-layer error to a gRPC status error.
@@ -179,18 +163,6 @@ func errInvalidTopK(given int) error {
 	return status.Errorf(codes.InvalidArgument, "invalid topK value: %d", given)
 }
 
-func errNonIndexedEntityType(typeName string) error {
-	return status.Errorf(codes.InvalidArgument, "entity type %q does not have vector index enabled", typeName)
-}
-
-func errEntityNotFound(id string) error {
-	return status.Errorf(codes.NotFound, "entity not found: %q", id)
-}
-
-func errEdgeNotFound(id string) error {
-	return status.Errorf(codes.NotFound, "edge not found: %q", id)
-}
-
 func errCapabilityDenied(required string) error {
 	return status.Errorf(codes.PermissionDenied, "capability denied: %s", required)
 }
@@ -201,14 +173,6 @@ func errInvalidCapabilitySignature() error {
 
 func errStaleCapability() error {
 	return status.Error(codes.PermissionDenied, "stale capability (anti-replay)")
-}
-
-func errMutationNotAllowed() error {
-	return status.Error(codes.PermissionDenied, "mutation or DDL Cypher statements are not allowed")
-}
-
-func errInvalidCypherSyntax(detail string) error {
-	return status.Errorf(codes.InvalidArgument, "invalid Cypher syntax: %s", detail)
 }
 
 func errTransactionTimedOut(txID string) error {
@@ -233,22 +197,6 @@ func errWipeGraphOpenTransactions() error {
 
 func errRemoteNotConfigured() error {
 	return status.Error(codes.FailedPrecondition, "no remote configured")
-}
-
-func errRemoteAuthConfigMissing() error {
-	return status.Error(codes.FailedPrecondition, "remote auth configuration missing")
-}
-
-func errRemoteCredentialsRejected() error {
-	return status.Error(codes.Unauthenticated, "remote credentials rejected")
-}
-
-func errUnsupportedRemoteURLScheme(scheme string) error {
-	return status.Errorf(codes.InvalidArgument, "unsupported remote URL scheme: %q", scheme)
-}
-
-func errRemotePullDiverged() error {
-	return status.Error(codes.FailedPrecondition, "remote pull would diverge")
 }
 
 func errPullFromRemoteRehydrationFailed(detail string) error {
@@ -283,10 +231,6 @@ func errSchemaChangedIncompatibly(detail string) error {
 	return status.Errorf(codes.FailedPrecondition, "schema changed incompatibly since transaction began: %s", detail)
 }
 
-func errTransactionChangeLogExceeded() error {
-	return status.Error(codes.ResourceExhausted, "transaction change log cap exceeded (100K)")
-}
-
 func errBeginTransactionResourceExhausted(detail string) error {
 	return status.Errorf(codes.ResourceExhausted, "cannot begin transaction: %s", detail)
 }
@@ -299,20 +243,12 @@ func errEmptyFullTextSearchQuery() error {
 	return status.Error(codes.InvalidArgument, "empty full-text search query")
 }
 
-func errInvalidPageToken(token string) error {
-	return status.Errorf(codes.InvalidArgument, "invalid page token: %q", token)
-}
-
 func errWipeGraphMidWipe(detail string) error {
 	return status.Errorf(codes.Internal, "wipe graph failed partway through: %s", detail)
 }
 
 func errCypherParamsNotAStruct() error {
 	return status.Error(codes.InvalidArgument, "cypher query parameters must be a JSON object")
-}
-
-func errNoTransportCredentials() error {
-	return status.Error(codes.Unauthenticated, "no transport credentials configured")
 }
 
 func errCapabilitySignedByUnrecognized(signer string) error {

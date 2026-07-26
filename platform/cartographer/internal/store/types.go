@@ -33,7 +33,9 @@ type Edge struct {
 // by SearchNeighbors.
 type NeighborResult struct {
 	Entity   Entity
-	Distance float64 // ponytail: named Distance (store domain) vs SearchNeighborResult.score (proto wire). The service layer maps Distance to the proto's double score field when constructing SearchNeighborResult responses.
+	Distance float64 // ponytail: named Distance (store domain) vs SearchNeighborResult.score
+	// (proto wire). The service layer maps Distance to the proto's double score field
+	// when constructing SearchNeighborResult responses.
 }
 
 // PropertyDef describes a single property definition in a schema type.

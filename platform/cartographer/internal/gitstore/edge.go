@@ -58,12 +58,11 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 		if err != nil {
 			return nil, fmt.Errorf("open edge file %s: %w", fi.Name(), err)
 		}
+		defer func() { _ = f.Close() }()
 		var ej EdgeJSON
 		if err := json.NewDecoder(f).Decode(&ej); err != nil {
-			f.Close()
 			return nil, fmt.Errorf("decode edge file %s: %w", fi.Name(), err)
 		}
-		f.Close()
 
 		ef := EdgeFile{
 			ID:           ej.ID.String(),
@@ -138,7 +137,7 @@ func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 	if err != nil {
 		return fmt.Errorf("create edge file %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write edge file %s: %w", path, err)

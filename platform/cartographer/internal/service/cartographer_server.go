@@ -42,7 +42,6 @@ type CartographerServer struct {
 	verifier    *CapabilityVerifier
 	ladybugPath string
 
-	txMu      sync.RWMutex
 	txManager *TransactionManager
 
 	writeLock sync.Mutex
@@ -239,7 +238,10 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 
 // buildMainFileLookups reads all entity and edge files from main's git working
 // tree and returns lookup maps keyed by (entityType -> entityID -> file).
-func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (map[string]map[string]gitstore.EntityFile, map[string]map[string]gitstore.EdgeFile) {
+func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (
+	map[string]map[string]gitstore.EntityFile,
+	map[string]map[string]gitstore.EdgeFile,
+) {
 	mainEntities := make(map[string]map[string]gitstore.EntityFile)
 	mainEdges := make(map[string]map[string]gitstore.EdgeFile)
 	_ = s.gitstore.WithGitLock(func() error {
@@ -272,7 +274,11 @@ func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (map[stri
 // adds ChangeLog entries for non-unchanged entities. It also detects suspected
 // deletions for entities present in main but absent from the branch DB.
 // Returns true if any change was recorded.
-func (s *CartographerServer) recoverEntityChanges(cl *gitstore.ChangeLog, entities []store.Entity, mainEntities map[string]map[string]gitstore.EntityFile) bool {
+func (s *CartographerServer) recoverEntityChanges(
+	cl *gitstore.ChangeLog,
+	entities []store.Entity,
+	mainEntities map[string]map[string]gitstore.EntityFile,
+) bool {
 	anyChange := false
 	// Build a set of (type, id) present in the branch DB for deletion detection.
 	branchSet := make(map[string]map[string]bool)
@@ -320,7 +326,11 @@ func (s *CartographerServer) recoverEntityChanges(cl *gitstore.ChangeLog, entiti
 // ChangeLog entries for non-unchanged edges. It also detects suspected
 // deletions for edges present in main but absent from the branch DB.
 // Returns true if any change was recorded.
-func (s *CartographerServer) recoverEdgeChanges(cl *gitstore.ChangeLog, edges []store.Edge, mainEdges map[string]map[string]gitstore.EdgeFile) bool {
+func (s *CartographerServer) recoverEdgeChanges(
+	cl *gitstore.ChangeLog,
+	edges []store.Edge,
+	mainEdges map[string]map[string]gitstore.EdgeFile,
+) bool {
 	anyChange := false
 	branchSet := make(map[string]map[string]bool)
 	for _, edge := range edges {
@@ -525,7 +535,10 @@ func extractEntityTypesFromMetadata(ctx context.Context) []string {
 // Read Path
 // =========================================================================
 
-func (s *CartographerServer) ExecuteCypher(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+func (s *CartographerServer) ExecuteCypher(
+	ctx context.Context,
+	req *flowv1.ExecuteCypherRequest,
+) (*flowv1.ExecuteCypherResponse, error) {
 	// Authoritative type-specific capability checking per SPEC R2/R3.
 	// When the SDK parses the Cypher query, it annotates gRPC metadata with
 	// entity type labels via "x-flow-entity-types". Check each extracted
@@ -585,7 +598,10 @@ func rowsToTuples(rows []map[string]any) []*flowv1.FlatTuple {
 	return result
 }
 
-func (s *CartographerServer) SearchNeighbors(ctx context.Context, req *flowv1.SearchNeighborsRequest) (*flowv1.SearchNeighborsResponse, error) {
+func (s *CartographerServer) SearchNeighbors(
+	ctx context.Context,
+	req *flowv1.SearchNeighborsRequest,
+) (*flowv1.SearchNeighborsResponse, error) {
 	entityType := req.EntityType
 	if entityType == "" {
 		if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
@@ -625,7 +641,10 @@ func (s *CartographerServer) SearchNeighbors(ctx context.Context, req *flowv1.Se
 	return &flowv1.SearchNeighborsResponse{Results: proto}, nil
 }
 
-func (s *CartographerServer) FullTextSearch(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+func (s *CartographerServer) FullTextSearch(
+	ctx context.Context,
+	req *flowv1.FullTextSearchRequest,
+) (*flowv1.FullTextSearchResponse, error) {
 	if req.EntityType == "" {
 		if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
 			return nil, err
@@ -659,7 +678,10 @@ func (s *CartographerServer) FullTextSearch(ctx context.Context, req *flowv1.Ful
 	return &flowv1.FullTextSearchResponse{Results: proto}, nil
 }
 
-func (s *CartographerServer) ListEntities(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+func (s *CartographerServer) ListEntities(
+	ctx context.Context,
+	req *flowv1.ListEntitiesRequest,
+) (*flowv1.ListEntitiesResponse, error) {
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
@@ -681,7 +703,9 @@ func (s *CartographerServer) ListEntities(ctx context.Context, req *flowv1.ListE
 	if pageSize > 1000 {
 		return nil, errInvalidPageSize(pageSize)
 	}
-	entities, nextToken, err := s.store.ListEntities(ctx, req.EntityType, pageSize, req.PageToken, s.resolveBranch(req.TransactionId))
+	entities, nextToken, err := s.store.ListEntities(
+		ctx, req.EntityType, pageSize, req.PageToken, s.resolveBranch(req.TransactionId),
+	)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -698,7 +722,10 @@ func (s *CartographerServer) ListEntities(ctx context.Context, req *flowv1.ListE
 // Write Path
 // =========================================================================
 
-func (s *CartographerServer) CreateEntity(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
+func (s *CartographerServer) CreateEntity(
+	ctx context.Context,
+	req *flowv1.CreateEntityRequest,
+) (*flowv1.CreateEntityResponse, error) {
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
@@ -741,7 +768,10 @@ func (s *CartographerServer) CreateEntity(ctx context.Context, req *flowv1.Creat
 	}, nil
 }
 
-func (s *CartographerServer) UpdateEntity(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
+func (s *CartographerServer) UpdateEntity(
+	ctx context.Context,
+	req *flowv1.UpdateEntityRequest,
+) (*flowv1.UpdateEntityResponse, error) {
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "entity ID is required")
 	}
@@ -795,7 +825,10 @@ func (s *CartographerServer) UpdateEntity(ctx context.Context, req *flowv1.Updat
 	}, nil
 }
 
-func (s *CartographerServer) DeleteEntity(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
+func (s *CartographerServer) DeleteEntity(
+	ctx context.Context,
+	req *flowv1.DeleteEntityRequest,
+) (*flowv1.DeleteEntityResponse, error) {
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "entity ID is required")
 	}
@@ -850,7 +883,10 @@ func (s *CartographerServer) DeleteEntity(ctx context.Context, req *flowv1.Delet
 	}, nil
 }
 
-func (s *CartographerServer) CreateEdge(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
+func (s *CartographerServer) CreateEdge(
+	ctx context.Context,
+	req *flowv1.CreateEdgeRequest,
+) (*flowv1.CreateEdgeResponse, error) {
 	if req.EdgeType == "" {
 		return nil, status.Error(codes.InvalidArgument, "edge type is required")
 	}
@@ -903,7 +939,10 @@ func (s *CartographerServer) CreateEdge(ctx context.Context, req *flowv1.CreateE
 	}, nil
 }
 
-func (s *CartographerServer) DeleteEdge(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error) {
+func (s *CartographerServer) DeleteEdge(
+	ctx context.Context,
+	req *flowv1.DeleteEdgeRequest,
+) (*flowv1.DeleteEdgeResponse, error) {
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "edge ID is required")
 	}
@@ -966,7 +1005,10 @@ func (s *CartographerServer) DeleteEdge(ctx context.Context, req *flowv1.DeleteE
 // Transaction Path
 // =========================================================================
 
-func (s *CartographerServer) BeginTransaction(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+func (s *CartographerServer) BeginTransaction(
+	ctx context.Context,
+	req *flowv1.BeginTransactionRequest,
+) (*flowv1.BeginTransactionResponse, error) {
 	if err := s.checkTxCap(ctx, "WRITE:graph/tx"); err != nil {
 		return nil, err
 	}
@@ -1022,7 +1064,10 @@ func (s *CartographerServer) BeginTransaction(ctx context.Context, req *flowv1.B
 	}, nil
 }
 
-func (s *CartographerServer) CommitTransaction(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error) {
+func (s *CartographerServer) CommitTransaction(
+	ctx context.Context,
+	req *flowv1.CommitTransactionRequest,
+) (*flowv1.CommitTransactionResponse, error) {
 	if err := s.checkTxCap(ctx, "WRITE:graph/tx"); err != nil {
 		return nil, err
 	}
@@ -1154,7 +1199,10 @@ func (s *CartographerServer) CommitTransaction(ctx context.Context, req *flowv1.
 	return &flowv1.CommitTransactionResponse{}, nil
 }
 
-func (s *CartographerServer) RollbackTransaction(ctx context.Context, req *flowv1.RollbackTransactionRequest) (*flowv1.RollbackTransactionResponse, error) {
+func (s *CartographerServer) RollbackTransaction(
+	ctx context.Context,
+	req *flowv1.RollbackTransactionRequest,
+) (*flowv1.RollbackTransactionResponse, error) {
 	if err := s.checkTxCap(ctx, "WRITE:graph/tx"); err != nil {
 		return nil, err
 	}
@@ -1170,7 +1218,10 @@ func (s *CartographerServer) RollbackTransaction(ctx context.Context, req *flowv
 	return &flowv1.RollbackTransactionResponse{}, nil
 }
 
-func (s *CartographerServer) RefreshTransaction(ctx context.Context, req *flowv1.RefreshTransactionRequest) (*flowv1.RefreshTransactionResponse, error) {
+func (s *CartographerServer) RefreshTransaction(
+	ctx context.Context,
+	req *flowv1.RefreshTransactionRequest,
+) (*flowv1.RefreshTransactionResponse, error) {
 	if err := s.checkTxCap(ctx, "WRITE:graph/tx"); err != nil {
 		return nil, err
 	}
@@ -1226,7 +1277,9 @@ func (s *CartographerServer) RefreshTransaction(ctx context.Context, req *flowv1
 	for _, entry := range state.ChangeLog.Entries() {
 		switch entry.Kind {
 		case gitstore.ChangeAddEntity:
-			_, err := s.store.CreateEntity(ctx, entry.Type, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, req.TransactionId)
+			_, err := s.store.CreateEntity(
+				ctx, entry.Type, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, req.TransactionId,
+			)
 			if err != nil {
 				if errors.Is(err, store.ErrEntityAlreadyExists) || errors.Is(err, store.ErrEmbeddingDimension) {
 					return nil, errRefreshConflict(req.TransactionId)
@@ -1247,7 +1300,9 @@ func (s *CartographerServer) RefreshTransaction(ctx context.Context, req *flowv1
 				return nil, mapStoreError(err)
 			}
 		case gitstore.ChangeAddEdge:
-			_, err := s.store.CreateEdge(ctx, entry.Type, entry.Edge.FromEntityID, entry.Edge.ToEntityID, entry.Edge.Properties, req.TransactionId)
+			_, err := s.store.CreateEdge(
+				ctx, entry.Type, entry.Edge.FromEntityID, entry.Edge.ToEntityID, entry.Edge.Properties, req.TransactionId,
+			)
 			if err != nil {
 				if errors.Is(err, store.ErrSourceOrTargetNotFound) || errors.Is(err, store.ErrEmbeddingDimension) {
 					return nil, errRefreshConflict(req.TransactionId)
@@ -1264,7 +1319,10 @@ func (s *CartographerServer) RefreshTransaction(ctx context.Context, req *flowv1
 	return &flowv1.RefreshTransactionResponse{}, nil
 }
 
-func (s *CartographerServer) GetTransactionDiff(ctx context.Context, req *flowv1.GetTransactionDiffRequest) (*flowv1.GetTransactionDiffResponse, error) {
+func (s *CartographerServer) GetTransactionDiff(
+	ctx context.Context,
+	req *flowv1.GetTransactionDiffRequest,
+) (*flowv1.GetTransactionDiffResponse, error) {
 	if err := s.checkTxCap(ctx, "READ:graph/tx"); err != nil {
 		return nil, err
 	}
@@ -1305,7 +1363,10 @@ func (s *CartographerServer) GetTransactionDiff(ctx context.Context, req *flowv1
 	return resp, nil
 }
 
-func (s *CartographerServer) ExtendTimeout(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error) {
+func (s *CartographerServer) ExtendTimeout(
+	ctx context.Context,
+	req *flowv1.ExtendTimeoutRequest,
+) (*flowv1.ExtendTimeoutResponse, error) {
 	if err := s.checkTxCap(ctx, "WRITE:graph/tx"); err != nil {
 		return nil, err
 	}
@@ -1326,7 +1387,9 @@ func (s *CartographerServer) ExtendTimeout(ctx context.Context, req *flowv1.Exte
 // Service-Facing RPCs
 // =========================================================================
 
-func (s *CartographerServer) ApplySchema(ctx context.Context, req *flowv1.ApplySchemaRequest) (*flowv1.ApplySchemaResponse, error) {
+func (s *CartographerServer) ApplySchema(
+	ctx context.Context, req *flowv1.ApplySchemaRequest,
+) (*flowv1.ApplySchemaResponse, error) {
 	if !s.dbReady.Load() {
 		return nil, errApplySchemaBeforeDBReady()
 	}
@@ -1337,7 +1400,9 @@ func (s *CartographerServer) ApplySchema(ctx context.Context, req *flowv1.ApplyS
 	return &flowv1.ApplySchemaResponse{}, nil
 }
 
-func (s *CartographerServer) WipeGraph(ctx context.Context, req *flowv1.WipeGraphRequest) (*flowv1.WipeGraphResponse, error) {
+func (s *CartographerServer) WipeGraph(
+	ctx context.Context, req *flowv1.WipeGraphRequest,
+) (*flowv1.WipeGraphResponse, error) {
 	var wipeErr error
 	_ = s.withGitLock(func() error {
 		if s.txManager.HasActive() {
@@ -1371,7 +1436,9 @@ func (s *CartographerServer) WipeGraph(ctx context.Context, req *flowv1.WipeGrap
 	return &flowv1.WipeGraphResponse{}, nil
 }
 
-func (s *CartographerServer) HealthCheck(ctx context.Context, req *flowv1.HealthCheckRequest) (*flowv1.HealthCheckResponse, error) {
+func (s *CartographerServer) HealthCheck(
+	ctx context.Context, req *flowv1.HealthCheckRequest,
+) (*flowv1.HealthCheckResponse, error) {
 	health, err := s.store.Health(ctx)
 	if err != nil {
 		return &flowv1.HealthCheckResponse{
@@ -1387,7 +1454,9 @@ func (s *CartographerServer) HealthCheck(ctx context.Context, req *flowv1.Health
 // Administrative Path
 // =========================================================================
 
-func (s *CartographerServer) PullFromRemote(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error) {
+func (s *CartographerServer) PullFromRemote(
+	ctx context.Context, req *flowv1.PullFromRemoteRequest,
+) (*flowv1.PullFromRemoteResponse, error) {
 	if err := s.verifier.CheckCapability(ctx, "WRITE:graph/entity/*"); err != nil {
 		return nil, err
 	}
@@ -1422,7 +1491,10 @@ func (s *CartographerServer) PullFromRemote(ctx context.Context, req *flowv1.Pul
 }
 
 // ExportGraph streams the serialised graph.
-func (s *CartographerServer) ExportGraph(req *flowv1.ExportGraphRequest, stream grpc.ServerStreamingServer[flowv1.ExportGraphResponse]) error {
+func (s *CartographerServer) ExportGraph(
+	req *flowv1.ExportGraphRequest,
+	stream grpc.ServerStreamingServer[flowv1.ExportGraphResponse],
+) error {
 	ctx := stream.Context()
 	if err := s.verifier.CheckCapability(ctx, "READ:graph/entity/*"); err != nil {
 		return err

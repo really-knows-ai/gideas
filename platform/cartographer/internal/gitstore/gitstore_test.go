@@ -75,7 +75,7 @@ func createDirWithGitkeep(wt *git.Worktree, fs billy.Filesystem, name string) er
 	if err != nil {
 		return err
 	}
-	f.Close()
+	_ = f.Close()
 	if _, err := wt.Add(keep); err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func TestInitNewRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
-	defer gs.Close()
+	defer func() { _ = gs.Close() }()
 
 	// Verify .git is initialised
 	gitPath := filepath.Join(tmpDir, "graph-repo", ".git")
@@ -160,13 +160,13 @@ func TestInitExistingRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first New failed: %v", err)
 	}
-	gs1.Close()
+	_ = gs1.Close()
 
 	gs2, err := New(tmpDir)
 	if err != nil {
 		t.Fatalf("second New failed: %v", err)
 	}
-	gs2.Close()
+	_ = gs2.Close()
 }
 
 func TestInitBadPath(t *testing.T) {
@@ -898,7 +898,7 @@ func TestHardResetToBranch(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		f.Close()
+		_ = f.Close()
 
 		// Hard reset to main
 		if err := gs.HardResetToBranch(ctx(), "main"); err != nil {
@@ -1150,7 +1150,7 @@ func TestCleanUntracked(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		f.Close()
+		_ = f.Close()
 
 		if err := gs.CleanUntracked(ctx()); err != nil {
 			return err
@@ -1808,7 +1808,7 @@ func TestSetRemoteInvalidScheme(t *testing.T) {
 func TestIsEmpty(t *testing.T) {
 	t.Run("fresh init returns true", func(t *testing.T) {
 		gs := setupTestStore(t)
-		gs.WithGitLock(func() error {
+		_ = gs.WithGitLock(func() error {
 			empty, err := gs.IsEmpty(ctx())
 			if err != nil {
 				return err
@@ -1822,7 +1822,7 @@ func TestIsEmpty(t *testing.T) {
 
 	t.Run("with data commit returns false", func(t *testing.T) {
 		gs := setupTestStore(t)
-		gs.WithGitLock(func() error {
+		_ = gs.WithGitLock(func() error {
 			now := time.Now().UTC().Round(time.Millisecond)
 			e1ID := validUUID()
 
@@ -1982,7 +1982,7 @@ func TestPullAlreadyUpToDate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer gs.Close()
+	defer func() { _ = gs.Close() }()
 
 	err = gs.WithGitLock(func() error {
 		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", nil); err != nil {
@@ -2418,7 +2418,7 @@ func TestRemotePushPull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	gs := store.(*gitStore)
 
@@ -2508,7 +2508,7 @@ func TestPullFromRemote(t *testing.T) {
 	if seedErr != nil {
 		t.Fatalf("create seed file: %v", seedErr)
 	}
-	seedFile.Close()
+	_ = seedFile.Close()
 	if _, err := wt.Add("seed.txt"); err != nil {
 		t.Fatalf("add seed: %v", err)
 	}
@@ -2545,7 +2545,7 @@ func TestPullFromRemote(t *testing.T) {
 	if cloneErr != nil {
 		t.Fatalf("create file: %v", cloneErr)
 	}
-	cloneFile.Close()
+	_ = cloneFile.Close()
 	if _, err := clonedWT.Add("initial.txt"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -2603,7 +2603,7 @@ func TestPullFromRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create another: %v", err)
 	}
-	cloneFile2.Close()
+	_ = cloneFile2.Close()
 	if _, err := clonedWT.Add("another.txt"); err != nil {
 		t.Fatalf("add another: %v", err)
 	}
@@ -2669,7 +2669,7 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create data: %v", err)
 	}
-	sf.Close()
+	_ = sf.Close()
 	if _, err := srcWT.Add("data.txt"); err != nil {
 		t.Fatalf("add data: %v", err)
 	}
@@ -2694,7 +2694,7 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local: %v", err)
 	}
-	defer localStore.Close()
+	defer func() { _ = localStore.Close() }()
 
 	gs := localStore.(*gitStore)
 
@@ -2951,7 +2951,7 @@ func TestFetchRemoteSuccess(t *testing.T) {
 		t.Fatalf("work worktree: %v", err)
 	}
 	initFile, _ := workWT.Filesystem.Create("init.txt")
-	initFile.Close()
+	_ = initFile.Close()
 	if _, err := workWT.Add("init.txt"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -2979,7 +2979,7 @@ func TestFetchRemoteSuccess(t *testing.T) {
 
 	// Make a new commit on the remote via work repo
 	newFile, _ := workWT.Filesystem.Create("new.txt")
-	newFile.Close()
+	_ = newFile.Close()
 	if _, err := workWT.Add("new.txt"); err != nil {
 		t.Fatalf("add new: %v", err)
 	}
@@ -3075,7 +3075,7 @@ func TestPushAlreadyUpToDate(t *testing.T) {
 		t.Fatalf("work worktree: %v", err)
 	}
 	initFile, _ := workWT.Filesystem.Create("init.txt")
-	initFile.Close()
+	_ = initFile.Close()
 	if _, err := workWT.Add("init.txt"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -3147,7 +3147,7 @@ func TestPullAlreadyUpToDate2(t *testing.T) {
 		t.Fatalf("work worktree: %v", err)
 	}
 	initFile, _ := workWT.Filesystem.Create("init.txt")
-	initFile.Close()
+	_ = initFile.Close()
 	if _, err := workWT.Add("init.txt"); err != nil {
 		t.Fatalf("add: %v", err)
 	}

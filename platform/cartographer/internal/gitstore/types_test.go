@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const testComponentType = "Component"
+
 func TestEntityJSONRoundTrip(t *testing.T) {
 	id := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
 	now := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
@@ -35,7 +37,7 @@ func TestEntityJSONRoundTrip(t *testing.T) {
 	if got.ID != id {
 		t.Fatalf("expected ID %v, got %v", id, got.ID)
 	}
-	if got.Type != "Component" {
+	if got.Type != testComponentType {
 		t.Fatalf("expected Type 'Component', got %q", got.Type)
 	}
 	if got.Properties["name"] != "auth-service" {
@@ -65,7 +67,7 @@ func TestEntityJSONNullProperties(t *testing.T) {
 	id := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
 	ej := EntityJSON{
 		ID:   id,
-		Type: "Component",
+		Type: testComponentType,
 	}
 
 	data, err := json.Marshal(ej)
@@ -90,7 +92,7 @@ func TestEntityJSONNullEmbedding(t *testing.T) {
 	id := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
 	ej := EntityJSON{
 		ID:         id,
-		Type:       "Component",
+		Type:       testComponentType,
 		Properties: map[string]string{"name": "test"},
 		Embedding:  nil,
 	}
@@ -115,7 +117,7 @@ func TestEntityJSONEmptyEmbedding(t *testing.T) {
 	emb := []float32{}
 	ej := EntityJSON{
 		ID:         id,
-		Type:       "Component",
+		Type:       testComponentType,
 		Properties: map[string]string{"name": "test"},
 		Embedding:  &emb,
 	}

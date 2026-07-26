@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // PublisherRoleSpec defines a publisher authority role for a federation member.
@@ -108,5 +109,9 @@ type FederationMemberList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&FederationMember{}, &FederationMemberList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &FederationMember{}, &FederationMemberList{})
+		metav1.AddToGroupVersion(s, GroupVersion)
+		return nil
+	})
 }

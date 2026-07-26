@@ -62,7 +62,7 @@ func handleListQueue(qm QueueManager) http.HandlerFunc {
 		if items == nil {
 			items = []QueueItem{}
 		}
-		writeJSON(w, http.StatusOK, items)
+		writeJSON(w, items)
 	}
 }
 
@@ -75,7 +75,7 @@ func handleGetItem(qm QueueManager) http.HandlerFunc {
 			writeQueueError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, item)
+		writeJSON(w, item)
 	}
 }
 
@@ -88,7 +88,7 @@ func handleClaim(qm QueueManager) http.HandlerFunc {
 			writeQueueError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, item)
+		writeJSON(w, item)
 	}
 }
 
@@ -117,7 +117,7 @@ func handleDecide(qm QueueManager) http.HandlerFunc {
 			writeQueueError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]bool{"acknowledged": true})
+		writeJSON(w, map[string]bool{"acknowledged": true})
 	}
 }
 
@@ -130,7 +130,7 @@ func handleRelease(qm QueueManager) http.HandlerFunc {
 			writeQueueError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, item)
+		writeJSON(w, item)
 	}
 }
 
@@ -159,11 +159,8 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-// writeJSON writes a JSON response with the given status code.
-//
-//nolint:unparam // status is always 200 today but the API may grow.
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
 }

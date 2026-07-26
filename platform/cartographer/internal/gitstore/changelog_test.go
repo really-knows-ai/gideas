@@ -7,7 +7,7 @@ import (
 
 func TestChangeLogAddEntity(t *testing.T) {
 	cl := NewChangeLog()
-	if err := cl.AddEntity("id-1", "Component", map[string]string{"name": "x"}, nil); err != nil {
+	if err := cl.AddEntity("id-1", testComponentType, map[string]string{"name": "x"}, nil); err != nil {
 		t.Fatalf("AddEntity failed: %v", err)
 	}
 	if cl.Len() != 1 {
@@ -16,14 +16,14 @@ func TestChangeLogAddEntity(t *testing.T) {
 	if len(cl.AddedEntities) != 1 {
 		t.Fatalf("expected 1 AddedEntity, got %d", len(cl.AddedEntities))
 	}
-	if cl.AddedEntities["id-1"].Type != "Component" {
+	if cl.AddedEntities["id-1"].Type != testComponentType {
 		t.Fatalf("expected type Component, got %q", cl.AddedEntities["id-1"].Type)
 	}
 }
 
 func TestChangeLogModifyEntity(t *testing.T) {
 	cl := NewChangeLog()
-	if err := cl.ModifyEntity("id-1", "Component", map[string]string{"name": "updated"}, nil); err != nil {
+	if err := cl.ModifyEntity("id-1", testComponentType, map[string]string{"name": "updated"}, nil); err != nil {
 		t.Fatalf("ModifyEntity failed: %v", err)
 	}
 	if cl.Len() != 1 {
@@ -36,7 +36,7 @@ func TestChangeLogModifyEntity(t *testing.T) {
 
 func TestChangeLogDeleteEntity(t *testing.T) {
 	cl := NewChangeLog()
-	if err := cl.DeleteEntity("id-1", "Component"); err != nil {
+	if err := cl.DeleteEntity("id-1", testComponentType); err != nil {
 		t.Fatalf("DeleteEntity failed: %v", err)
 	}
 	if cl.Len() != 1 {
@@ -45,7 +45,7 @@ func TestChangeLogDeleteEntity(t *testing.T) {
 	if len(cl.DeletedEntities) != 1 {
 		t.Fatalf("expected 1 DeletedEntity, got %d", len(cl.DeletedEntities))
 	}
-	if cl.DeletedEntities["id-1"].Type != "Component" {
+	if cl.DeletedEntities["id-1"].Type != testComponentType {
 		t.Fatalf("expected DeletedEntities type Component, got %q", cl.DeletedEntities["id-1"].Type)
 	}
 	if cl.DeletedEntities["id-1"].Suspected {
@@ -90,13 +90,13 @@ func TestChangeLogDeleteEdge(t *testing.T) {
 
 func TestChangeLogMixed(t *testing.T) {
 	cl := NewChangeLog()
-	if err := cl.AddEntity("e1", "Component", nil, nil); err != nil {
+	if err := cl.AddEntity("e1", testComponentType, nil, nil); err != nil {
 		t.Fatalf("AddEntity failed: %v", err)
 	}
-	if err := cl.ModifyEntity("e2", "Component", map[string]string{"name": "x"}, nil); err != nil {
+	if err := cl.ModifyEntity("e2", testComponentType, map[string]string{"name": "x"}, nil); err != nil {
 		t.Fatalf("ModifyEntity failed: %v", err)
 	}
-	if err := cl.DeleteEntity("e3", "Component"); err != nil {
+	if err := cl.DeleteEntity("e3", testComponentType); err != nil {
 		t.Fatalf("DeleteEntity failed: %v", err)
 	}
 	if err := cl.AddEdge("e4", "DEPENDS_ON", "a", "b", nil); err != nil {
@@ -137,7 +137,7 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 
 	// Add 100K entries (the cap)
 	for i := range 100000 {
-		if err := cl.AddEntity(formatIntID(i), "Component", nil, nil); err != nil {
+		if err := cl.AddEntity(formatIntID(i), testComponentType, nil, nil); err != nil {
 			t.Fatalf("AddEntity %d failed: %v", i, err)
 		}
 	}
@@ -146,7 +146,7 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	}
 
 	// One more should fail
-	if err := cl.AddEntity("overflow", "Component", nil, nil); err != ErrChangeLogFull {
+	if err := cl.AddEntity("overflow", testComponentType, nil, nil); err != ErrChangeLogFull {
 		t.Fatalf("expected ErrChangeLogFull, got %v", err)
 	}
 	if cl.Len() != 100000 {
@@ -156,15 +156,15 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	// Verify each typed method enforces the cap
 	cl2 := NewChangeLog()
 	for i := range 100000 {
-		_ = cl2.AddEntity(formatIntID(i), "Component", nil, nil)
+		_ = cl2.AddEntity(formatIntID(i), testComponentType, nil, nil)
 	}
-	if err := cl2.AddEntity("x", "Component", nil, nil); err != ErrChangeLogFull {
+	if err := cl2.AddEntity("x", testComponentType, nil, nil); err != ErrChangeLogFull {
 		t.Fatalf("AddEntity cap: expected ErrChangeLogFull, got %v", err)
 	}
-	if err := cl2.ModifyEntity("x", "Component", nil, nil); err != ErrChangeLogFull {
+	if err := cl2.ModifyEntity("x", testComponentType, nil, nil); err != ErrChangeLogFull {
 		t.Fatalf("ModifyEntity cap: expected ErrChangeLogFull, got %v", err)
 	}
-	if err := cl2.DeleteEntity("x", "Component"); err != ErrChangeLogFull {
+	if err := cl2.DeleteEntity("x", testComponentType); err != ErrChangeLogFull {
 		t.Fatalf("DeleteEntity cap: expected ErrChangeLogFull, got %v", err)
 	}
 	if err := cl2.AddEdge("x", "DEPENDS_ON", "a", "b", nil); err != ErrChangeLogFull {
@@ -180,18 +180,18 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 		_ = cl3.Add(ChangeLogEntry{
 			Kind: ChangeAddEntity,
 			ID:   formatIntID(i),
-			Type: "Component",
+			Type: testComponentType,
 		})
 	}
-	if err := cl3.Add(ChangeLogEntry{Kind: ChangeAddEntity, ID: "x", Type: "Component"}); err != ErrChangeLogFull {
+	if err := cl3.Add(ChangeLogEntry{Kind: ChangeAddEntity, ID: "x", Type: testComponentType}); err != ErrChangeLogFull {
 		t.Fatalf("Add cap: expected ErrChangeLogFull, got %v", err)
 	}
 }
 
 func TestChangeLogClear(t *testing.T) {
 	cl := NewChangeLog()
-	_ = cl.AddEntity("e1", "Component", nil, nil)
-	_ = cl.AddEntity("e2", "Component", nil, nil)
+	_ = cl.AddEntity("e1", testComponentType, nil, nil)
+	_ = cl.AddEntity("e2", testComponentType, nil, nil)
 	_ = cl.AddEdge("e3", "DEPENDS_ON", "a", "b", nil)
 
 	if cl.Len() != 3 {
@@ -229,7 +229,7 @@ func TestChangeLogConcurrent(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			id := formatIntID(n)
-			if err := cl.AddEntity(id, "Component", nil, nil); err != nil {
+			if err := cl.AddEntity(id, testComponentType, nil, nil); err != nil {
 				t.Errorf("AddEntity failed: %v", err)
 			}
 		}(i)
@@ -253,10 +253,10 @@ func TestChangeLogGenericAdd(t *testing.T) {
 	entry := ChangeLogEntry{
 		Kind: ChangeAddEntity,
 		ID:   "e1",
-		Type: "Component",
+		Type: testComponentType,
 		Entity: &EntityEntry{
 			ID:         "e1",
-			Type:       "Component",
+			Type:       testComponentType,
 			Properties: map[string]string{"name": "test"},
 		},
 	}

@@ -11,7 +11,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const embassyTestWorkitemID = "wi-1"
+const (
+	embassyTestWorkitemID = "wi-1"
+	embassyTestTxID       = "tx-1"
+)
 
 type embassyHandlerSpy struct {
 	lastPreflight *flowv1.PreflightManifestRequest
@@ -75,12 +78,12 @@ func TestEmbassyServerDelegatesToHandler(t *testing.T) {
 	client := setupEmbassyServerClient(t, handler)
 
 	preflightResp, err := client.PreflightManifest(context.Background(), &flowv1.PreflightManifestRequest{
-		Manifest: &flowv1.TransferManifest{ImportType: "law-petition", TransferId: "tx-1"},
+		Manifest: &flowv1.TransferManifest{ImportType: "law-petition", TransferId: embassyTestTxID},
 	})
 	if err != nil {
 		t.Fatalf("PreflightManifest() returned error: %v", err)
 	}
-	if !preflightResp.GetAccepted() || handler.lastPreflight.GetManifest().GetTransferId() != "tx-1" {
+	if !preflightResp.GetAccepted() || handler.lastPreflight.GetManifest().GetTransferId() != embassyTestTxID {
 		t.Fatal("expected preflight call to be delegated to handler")
 	}
 
