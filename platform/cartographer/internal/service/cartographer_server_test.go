@@ -1277,6 +1277,32 @@ func TestPullFromRemote_AuthConfigMissing(t *testing.T) {
 	}
 }
 
+func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Only READ capabilities, no WRITE:graph/entity/*.
+	mdCtx := capabilityContext("READ:graph/entity/*,READ:graph/tx", scPriv, "sidecar")
+	verifiedCtx, err := srv.verifier.verify(mdCtx)
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+
+	_, err = srv.PullFromRemote(verifiedCtx, &flowv1.PullFromRemoteRequest{})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for missing WRITE capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
 // =========================================================================
 // 12. CommitTransaction error-path tests
 // =========================================================================
@@ -2262,8 +2288,12 @@ func TestExportGraph_MidStreamFailure(t *testing.T) {
 	applyTestSchema(applySchemaCtx, t, srv.store)
 	_, _ = srv.store.CreateEntity(applySchemaCtx, "Component", "", map[string]string{"name": "a"}, nil, "")
 
-	// Must provide a context with proper capabilities so CheckCapability passes.
-	capCtx := capabilityContext("READ:graph/entity/*", scPriv, "sidecar")
+	// Must provide a context with proper capabilities so checkWildcardEntityCap passes.
+	mdCtx := capabilityContext("READ:graph/entity/*", scPriv, "sidecar")
+	capCtx, vErr := srv.verifier.verify(mdCtx)
+	if vErr != nil {
+		t.Fatalf("verify failed: %v", vErr)
+	}
 	stream := &mockExportStream{ctx: capCtx, sendErr: fmt.Errorf("stream send failure")}
 	err := srv.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
 	if err == nil {
@@ -2287,7 +2317,11 @@ func TestExportGraph_BufferAllocationFailure(t *testing.T) {
 	// Wrap store to panic on ListMainEntityTypes, simulating an OOM.
 	srv.store = &panicStore{Store: st}
 
-	capCtx := capabilityContext("READ:graph/entity/*", scPriv, "sidecar")
+	mdCtx := capabilityContext("READ:graph/entity/*", scPriv, "sidecar")
+	capCtx, vErr := srv.verifier.verify(mdCtx)
+	if vErr != nil {
+		t.Fatalf("verify failed: %v", vErr)
+	}
 	stream := &mockExportStream{ctx: capCtx}
 	err := srv.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
 	if err == nil {

@@ -383,6 +383,7 @@ func TestTransaction_InheritsMapSnapshot(t *testing.T) {
 // Capability annotation tests (Transaction write methods with unknown entity IDs)
 // ---------------------------------------------------------------------------
 
+//nolint:dupl // Transaction and Graph wildcard metadata tests share structure.
 func TestTxUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
@@ -391,11 +392,11 @@ func TestTxUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 			if !ok {
 				t.Fatal("no outgoing metadata")
 			}
-			vals := md.Get("x-flow-entity-type")
+			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
 				t.Fatal("no x-flow-entity-type metadata")
 			}
-			capturedKey = "x-flow-entity-type"
+			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
 			return &flowv1.UpdateEntityResponse{EntityId: req.GetId(), EntityType: "Component"}, nil
 		},
@@ -406,7 +407,7 @@ func TestTxUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
-	if capturedKey != "x-flow-entity-type" {
+	if capturedKey != metadataEntityTypeKey {
 		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
@@ -422,11 +423,11 @@ func TestTxDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 			if !ok {
 				t.Fatal("no outgoing metadata")
 			}
-			vals := md.Get("x-flow-entity-type")
+			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
 				t.Fatal("no x-flow-entity-type metadata")
 			}
-			capturedKey = "x-flow-entity-type"
+			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
 			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
 		},
@@ -437,7 +438,7 @@ func TestTxDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
-	if capturedKey != "x-flow-entity-type" {
+	if capturedKey != metadataEntityTypeKey {
 		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
@@ -453,11 +454,11 @@ func TestTxCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 			if !ok {
 				t.Fatal("no outgoing metadata")
 			}
-			vals := md.Get("x-flow-entity-type")
+			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
 				t.Fatal("no x-flow-entity-type metadata")
 			}
-			capturedKey = "x-flow-entity-type"
+			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
 			return &flowv1.CreateEdgeResponse{
 				EdgeId: "edge-1", FromEntityId: req.GetFromEntityId(), ToEntityId: req.GetToEntityId(),
@@ -470,7 +471,7 @@ func TestTxCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
-	if capturedKey != "x-flow-entity-type" {
+	if capturedKey != metadataEntityTypeKey {
 		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
@@ -486,11 +487,11 @@ func TestTxDeleteEdge_SendsKeyAndWildcard(t *testing.T) {
 			if !ok {
 				t.Fatal("no outgoing metadata")
 			}
-			vals := md.Get("x-flow-entity-type")
+			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
 				t.Fatal("no x-flow-entity-type metadata")
 			}
-			capturedKey = "x-flow-entity-type"
+			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
 			return &flowv1.DeleteEdgeResponse{
 				EdgeId: req.GetId(), EdgeType: "DEPENDS_ON",
@@ -502,7 +503,7 @@ func TestTxDeleteEdge_SendsKeyAndWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}
-	if capturedKey != "x-flow-entity-type" {
+	if capturedKey != metadataEntityTypeKey {
 		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {

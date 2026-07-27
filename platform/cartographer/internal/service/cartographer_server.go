@@ -504,8 +504,7 @@ func (s *CartographerServer) checkTxCap(ctx context.Context, required string) er
 
 // checkWildcardEntityCap checks that the caller holds the wildcard entity
 // capability (<prefix>:graph/entity/*). It uses already-verified capabilities
-// from the context, avoiding the full Ed25519 signature re-verification that
-// CheckCapability performs.
+// from the context (stored by the ingress interceptor verify()).
 func (s *CartographerServer) checkWildcardEntityCap(ctx context.Context, prefix string) error {
 	caps, err := ExtractCapabilities(ctx)
 	if err != nil {
@@ -1449,7 +1448,7 @@ func (s *CartographerServer) HealthCheck(
 func (s *CartographerServer) PullFromRemote(
 	ctx context.Context, req *flowv1.PullFromRemoteRequest,
 ) (*flowv1.PullFromRemoteResponse, error) {
-	if err := s.verifier.CheckCapability(ctx, "WRITE:graph/entity/*"); err != nil {
+	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
 		return nil, err
 	}
 	if s.remoteURL == "" {
@@ -1488,7 +1487,7 @@ func (s *CartographerServer) ExportGraph(
 	stream grpc.ServerStreamingServer[flowv1.ExportGraphResponse],
 ) error {
 	ctx := stream.Context()
-	if err := s.verifier.CheckCapability(ctx, "READ:graph/entity/*"); err != nil {
+	if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
 		return err
 	}
 
