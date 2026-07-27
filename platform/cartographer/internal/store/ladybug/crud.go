@@ -555,7 +555,7 @@ func findEntityByID(conn *lbug.Connection, typeDefs map[string]*store.EntityType
 // ponytail: O(#edge_types) scan. Upgrade path: maintain a global ID→edge type index.
 func findEdgeByID(conn *lbug.Connection, typeDefs map[string]*store.EdgeTypeDef, id string) (*store.Edge, error) {
 	for typeName := range typeDefs {
-		q := fmt.Sprintf("MATCH ()-[r:%s {id: $id}]->(a) RETURN a.id, r;", quoteID(typeName))
+		q := fmt.Sprintf("MATCH (s)-[r:%s {id: $id}]->(t) RETURN s.id, t.id, r;", quoteID(typeName))
 		stmt, err := conn.Prepare(q)
 		if err != nil {
 			continue
@@ -577,12 +577,12 @@ func findEdgeByID(conn *lbug.Connection, typeDefs map[string]*store.EdgeTypeDef,
 			if err != nil {
 				continue
 			}
-			toID := fmt.Sprintf("%v", m["a.id"])
+			fromID := fmt.Sprintf("%v", m["s.id"])
+			toID := fmt.Sprintf("%v", m["t.id"])
 			rel, ok := m["r"].(lbug.Relationship)
 			if !ok {
 				continue
 			}
-			fromID := fmt.Sprintf("%v", rel.SourceID)
 			return edgeFromRel(rel, typeName, fromID, toID), nil
 		}
 		result.Close()
