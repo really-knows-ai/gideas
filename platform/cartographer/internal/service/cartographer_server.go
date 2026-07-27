@@ -1064,18 +1064,31 @@ func (s *CartographerServer) CommitTransaction(
 	if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
 		return nil, err
 	}
-	state, _ := s.txManager.Lookup(req.TransactionId)
+	// Read state under txManager.mu to serialise against concurrent
+	// RefreshTransaction (which writes MainHeadAtLastSync under the lock)
+	// and to prevent TOCTOU between zero-mutation detection and deletion.
+	s.txManager.mu.Lock()
+	state := s.txManager.active[req.TransactionId]
+	mainHeadAtLastSync := state.MainHeadAtLastSync
 
 	// Zero-mutation check.
 	if state.ChangeLog.Len() == 0 {
-		s.txManager.Delete(req.TransactionId)
-		_ = s.store.DropBranchDB(req.TransactionId)
-		_ = s.gitstore.WithGitLock(func() error {
-			_ = s.gitstore.DeleteBranch(ctx, req.TransactionId)
+		delete(s.txManager.active, req.TransactionId)
+		s.txManager.mu.Unlock()
+		if err := s.store.DropBranchDB(req.TransactionId); err != nil {
+			return nil, mapStoreError(err)
+		}
+		if err := s.gitstore.WithGitLock(func() error {
+			if err := s.gitstore.DeleteBranch(ctx, req.TransactionId); err != nil {
+				return err
+			}
 			return s.gitstore.RestoreMain(ctx)
-		})
+		}); err != nil {
+			return nil, mapGitError(err)
+		}
 		return &flowv1.CommitTransactionResponse{}, nil
 	}
+	s.txManager.mu.Unlock()
 
 	// Schema compatibility check.
 	currentHash := computeSchemaHash(s.store.EntityTypeNames(), s.store.EdgeTypeNames())
@@ -1122,8 +1135,12 @@ func (s *CartographerServer) CommitTransaction(
 		}
 		// Divergence check: verify main has not advanced since last sync
 		// (SPEC serialisation flow step 5 — must precede step 6 git add+commit).
-		curHead, _ := s.gitstore.BranchHEAD(ctx, "main")
-		if curHead != state.MainHeadAtLastSync && state.MainHeadAtLastSync != "" {
+		curHead, err := s.gitstore.BranchHEAD(ctx, "main")
+		if err != nil {
+			commitErr = fmt.Errorf("branch head: %w", err)
+			return nil
+		}
+		if curHead != mainHeadAtLastSync && mainHeadAtLastSync != "" {
 			commitErr = errCommitNotUpToDate()
 			return nil
 		}
@@ -1148,11 +1165,12 @@ func (s *CartographerServer) CommitTransaction(
 				commitErr = fmt.Errorf("rehydrate main from files: %w", err)
 				return nil
 			}
-		}
-		if err := s.store.RehydrateFromBranch(ctx, req.TransactionId); err != nil {
-			s.writeLock.Unlock()
-			commitErr = fmt.Errorf("rehydrate from branch: %w", err)
-			return nil
+		} else {
+			if err := s.store.RehydrateFromBranch(ctx, req.TransactionId); err != nil {
+				s.writeLock.Unlock()
+				commitErr = fmt.Errorf("rehydrate from branch: %w", err)
+				return nil
+			}
 		}
 		// SPEC step 9: Release write lock.
 		s.writeLock.Unlock()
@@ -1237,11 +1255,13 @@ func (s *CartographerServer) RefreshTransaction(
 		return &flowv1.RefreshTransactionResponse{}, nil
 	}
 
+	var mainHash string
 	if err := s.withGitLock(func() error {
 		if err := s.gitstore.Checkout(ctx, req.TransactionId); err != nil {
 			return err
 		}
-		mainHash, err := s.gitstore.BranchHEAD(ctx, "main")
+		var err error
+		mainHash, err = s.gitstore.BranchHEAD(ctx, "main")
 		if err != nil {
 			return err
 		}
@@ -1251,9 +1271,6 @@ func (s *CartographerServer) RefreshTransaction(
 		if err := s.gitstore.CleanUntracked(ctx); err != nil {
 			return err
 		}
-		s.txManager.mu.Lock()
-		state.MainHeadAtLastSync = mainHash
-		s.txManager.mu.Unlock()
 		return nil
 	}); err != nil {
 		return nil, mapGitError(err)
@@ -1307,6 +1324,12 @@ func (s *CartographerServer) RefreshTransaction(
 			}
 		}
 	}
+	// Update MainHeadAtLastSync only after successful re-application
+	// to prevent CommitTransaction from observing a sync point that
+	// was never validated.
+	s.txManager.mu.Lock()
+	state.MainHeadAtLastSync = mainHash
+	s.txManager.mu.Unlock()
 	return &flowv1.RefreshTransactionResponse{}, nil
 }
 
@@ -1329,6 +1352,7 @@ func (s *CartographerServer) GetTransactionDiff(
 		de := &flowv1.DiffEntry{
 			Id: entry.ID, Type: entry.Type,
 		}
+		de.Suspected = entry.Suspected
 		if entry.Entity != nil {
 			de.Properties = entry.Entity.Properties
 			de.Embedding = entry.Entity.Embedding

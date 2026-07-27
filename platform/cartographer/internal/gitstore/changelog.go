@@ -2,7 +2,6 @@ package gitstore
 
 import (
 	"sort"
-	"time"
 )
 
 // NewChangeLog creates a new ChangeLog with all maps initialised.
@@ -86,119 +85,6 @@ func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 		return ErrUnknownChangeKind
 	}
 
-	return nil
-}
-
-// AddEntity adds an entity creation to the ChangeLog.
-// Returns ErrChangeLogFull if the 100K cap would be exceeded.
-func (cl *ChangeLog) AddEntity(id, entityType string, props map[string]string, embedding []float32) error {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	if cl.count >= 100000 {
-		return ErrChangeLogFull
-	}
-
-	if _, exists := cl.AddedEntities[id]; !exists {
-		cl.count++
-	}
-	cl.AddedEntities[id] = &EntityEntry{
-		ID:         id,
-		Type:       entityType,
-		Properties: props,
-		Embedding:  embedding,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-	return nil
-}
-
-// ModifyEntity adds an entity modification to the ChangeLog.
-// Returns ErrChangeLogFull if the 100K cap would be exceeded.
-func (cl *ChangeLog) ModifyEntity(id, entityType string, props map[string]string, embedding []float32) error {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	if cl.count >= 100000 {
-		return ErrChangeLogFull
-	}
-
-	if _, exists := cl.ModifiedEntities[id]; !exists {
-		cl.count++
-	}
-	cl.ModifiedEntities[id] = &EntityEntry{
-		ID:         id,
-		Type:       entityType,
-		Properties: props,
-		Embedding:  embedding,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-	return nil
-}
-
-// DeleteEntity adds a non-suspected entity deletion to the ChangeLog.
-// Returns ErrChangeLogFull if the 100K cap would be exceeded.
-func (cl *ChangeLog) DeleteEntity(id, entityType string) error {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	if cl.count >= 100000 {
-		return ErrChangeLogFull
-	}
-
-	if _, exists := cl.DeletedEntities[id]; !exists {
-		cl.count++
-	}
-	cl.DeletedEntities[id] = &DeletionInfo{
-		Type:      entityType,
-		Suspected: false,
-	}
-	return nil
-}
-
-// AddEdge adds an edge creation to the ChangeLog.
-// Returns ErrChangeLogFull if the 100K cap would be exceeded.
-func (cl *ChangeLog) AddEdge(id, edgeType, fromID, toID string, props map[string]string) error {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	if cl.count >= 100000 {
-		return ErrChangeLogFull
-	}
-
-	if _, exists := cl.AddedEdges[id]; !exists {
-		cl.count++
-	}
-	cl.AddedEdges[id] = &EdgeEntry{
-		ID:           id,
-		Type:         edgeType,
-		FromEntityID: fromID,
-		ToEntityID:   toID,
-		Properties:   props,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-	}
-	return nil
-}
-
-// DeleteEdge adds a non-suspected edge deletion to the ChangeLog.
-// Returns ErrChangeLogFull if the 100K cap would be exceeded.
-func (cl *ChangeLog) DeleteEdge(id, edgeType string) error {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	if cl.count >= 100000 {
-		return ErrChangeLogFull
-	}
-
-	if _, exists := cl.DeletedEdges[id]; !exists {
-		cl.count++
-	}
-	cl.DeletedEdges[id] = &DeletionInfo{
-		Type:      edgeType,
-		Suspected: false,
-	}
 	return nil
 }
 
