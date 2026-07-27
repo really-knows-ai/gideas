@@ -1051,6 +1051,7 @@ func (s *CartographerServer) BeginTransaction(
 	}, nil
 }
 
+//nolint:gocyclo
 func (s *CartographerServer) CommitTransaction(
 	ctx context.Context,
 	req *flowv1.CommitTransactionRequest,

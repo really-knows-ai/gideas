@@ -1280,6 +1280,7 @@ func TestPullFromRemote_NoAuthProceedsPastAuth(t *testing.T) {
 	}
 }
 
+//nolint:dupl // PullFromRemote negative tests share setup structure.
 func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
@@ -1307,6 +1308,7 @@ func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
 	}
 }
 
+//nolint:dupl // PullFromRemote negative tests share setup structure.
 func TestPullFromRemote_NoRemote(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
@@ -2809,5 +2811,93 @@ func TestSearchNeighbors_NaNBeforeTypeCheck(t *testing.T) {
 	// Verify the error message mentions NaN/Inf, not "unknown entity type".
 	if msg := err.Error(); strings.Contains(msg, "unknown entity type") {
 		t.Fatalf("expected error about NaN/Inf, got unknown-entity-type message: %q", msg)
+	}
+}
+
+// =========================================================================
+// 25. SearchNeighbors empty embedding test
+// =========================================================================
+
+func TestSearchNeighbors_EmptyEmbedding(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+
+	_, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  nil,
+		EntityType: "Component",
+		TopK:       5,
+	})
+	if err == nil {
+		t.Fatal("expected error for empty embedding, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
+// =========================================================================
+// 26. ListEntities pagination test
+// =========================================================================
+
+func TestListEntities_Pagination(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+
+	// Create exactly 10 entities (enough for 2 pages of 5).
+	const total = 10
+	for i := range total {
+		_, err := srv.store.CreateEntity(ctx, "Component", "",
+			map[string]string{"name": fmt.Sprintf("entity-%d", i)}, nil, "")
+		if err != nil {
+			t.Fatalf("CreateEntity %d: %v", i, err)
+		}
+	}
+
+	// First page: PageSize=5.
+	resp, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{
+		EntityType: "Component",
+		PageSize:   5,
+	})
+	if err != nil {
+		t.Fatalf("ListEntities page 1 failed: %v", err)
+	}
+	if len(resp.Entities) != 5 {
+		t.Fatalf("page 1 expected 5 entities, got %d", len(resp.Entities))
+	}
+	if resp.NextPageToken == "" {
+		t.Fatal("page 1 expected non-empty NextPageToken")
+	}
+
+	// Collect first page IDs for dedup check.
+	page1IDs := make(map[string]bool)
+	for _, e := range resp.Entities {
+		page1IDs[e.EntityId] = true
+	}
+
+	// Second page: use the token from the first page.
+	resp2, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{
+		EntityType: "Component",
+		PageSize:   5,
+		PageToken:  resp.NextPageToken,
+	})
+	if err != nil {
+		t.Fatalf("ListEntities page 2 failed: %v", err)
+	}
+	if len(resp2.Entities) != 5 {
+		t.Fatalf("page 2 expected 5 entities, got %d", len(resp2.Entities))
+	}
+	if resp2.NextPageToken != "" {
+		t.Fatal("page 2 expected empty NextPageToken (no more entities)")
+	}
+
+	// Verify no overlap between pages.
+	for _, e := range resp2.Entities {
+		if page1IDs[e.EntityId] {
+			t.Fatalf("entity %q appears in both pages", e.EntityId)
+		}
 	}
 }

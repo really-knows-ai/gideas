@@ -143,7 +143,11 @@ func TestChangeLogMixed(t *testing.T) {
 	}
 	if err := cl.Add(ChangeLogEntry{
 		Kind: ChangeModEntity, ID: "e2", Type: testComponentType,
-		Entity: &EntityEntry{ID: "e2", Type: testComponentType, Properties: map[string]string{"name": "x"}, UpdatedAt: time.Now()},
+		Entity: &EntityEntry{
+			ID: "e2", Type: testComponentType,
+			Properties: map[string]string{"name": "x"},
+			UpdatedAt:  time.Now(),
+		},
 	}); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
@@ -154,7 +158,11 @@ func TestChangeLogMixed(t *testing.T) {
 	}
 	if err := cl.Add(ChangeLogEntry{
 		Kind: ChangeAddEdge, ID: "e4", Type: "DEPENDS_ON",
-		Edge: &EdgeEntry{ID: "e4", Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b", CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		Edge: &EdgeEntry{
+			ID: "e4", Type: "DEPENDS_ON",
+			FromEntityID: "a", ToEntityID: "b",
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		},
 	}); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
