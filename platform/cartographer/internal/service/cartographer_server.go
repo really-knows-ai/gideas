@@ -1162,7 +1162,11 @@ func (s *CartographerServer) CommitTransaction(
 				return nil
 			}
 		}
-		_ = s.store.RehydrateFromBranch(ctx, req.TransactionId)
+		if err := s.store.RehydrateFromBranch(ctx, req.TransactionId); err != nil {
+			s.writeLock.Unlock()
+			commitErr = fmt.Errorf("rehydrate from branch: %w", err)
+			return nil
+		}
 		// SPEC step 9: Release write lock.
 		s.writeLock.Unlock()
 

@@ -18,6 +18,7 @@ import (
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/foundry/flow/cartographer/internal/service"
 	"github.com/foundry/flow/cartographer/internal/store"
+	"github.com/foundry/flow/cartographer/internal/store/ladybug"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/pkg/eventbus"
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -70,7 +71,7 @@ func main() {
 	// -----------------------------------------------------------------------
 	// 2. Open LadybugDB database at <path>/main.lbug
 	// -----------------------------------------------------------------------
-	dbStore, dbErr := store.Open(ladybugDBPath)
+	dbStore, dbErr := ladybug.Open(ladybugDBPath)
 
 	// -----------------------------------------------------------------------
 	// 3. Initialise gitstore at <path>/graph-repo/
@@ -103,14 +104,14 @@ func main() {
 		}
 
 		if empty {
-			dbStore, dbErr = store.Open(ladybugDBPath)
+			dbStore, dbErr = ladybug.Open(ladybugDBPath)
 			if dbErr != nil {
 				slog.Error("Failed to create fresh database after recovery", "error", dbErr)
 				os.Exit(1)
 			}
 			slog.Info("Recovery: created fresh database (empty git repo)")
 		} else {
-			dbStore, dbErr = store.Open(ladybugDBPath)
+			dbStore, dbErr = ladybug.Open(ladybugDBPath)
 			if dbErr != nil {
 				slog.Error("Failed to open database for re-hydration", "error", dbErr)
 				os.Exit(1)

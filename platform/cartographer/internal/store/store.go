@@ -79,7 +79,6 @@ type Store interface {
 
 	// Wipe
 	WipeAll(ctx context.Context) error
-	HasOpenTransactions() bool
 
 	// Health
 	Health(ctx context.Context) (*HealthResult, error)
