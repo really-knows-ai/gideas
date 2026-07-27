@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2582,5 +2583,166 @@ func TestTelemetry_TransactionGC(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected telemetry event 'cartographer.transaction_gc'")
+	}
+}
+
+// =========================================================================
+// 30. Service check-order fix tests (Phase 2)
+// =========================================================================
+
+// narrowCtx returns a context with specific (non-wildcard) capabilities.
+func narrowCtx(caps ...string) context.Context {
+	initTestKey()
+	capsStr := ""
+	for i, c := range caps {
+		if i > 0 {
+			capsStr += ","
+		}
+		capsStr += c
+	}
+	sig, signedAt := signCapabilities(capsStr, testSidecarPriv)
+	md := metadata.Pairs(
+		MetadataKeyCapabilities, capsStr,
+		MetadataKeyCapabilitiesSignature, sig,
+		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
+		MetadataKeyCapabilitiesSignedBy, "sidecar",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	c := &Capabilities{
+		Caps:     caps,
+		SignedBy: "sidecar",
+	}
+	return StoreCapabilitiesInContext(ctx, c)
+}
+
+// noReadCtx returns a context with WRITE capabilities but no READ capabilities.
+func noReadCtx() context.Context {
+	return narrowCtx("WRITE:graph/entity/*", "WRITE:graph/tx")
+}
+
+// TestCreateEdge_SourceNotFound_CapCheckOrder verifies that CreateEdge returns
+// NOT_FOUND when the source entity does not exist, even when the caller lacks
+// wildcard WRITE capability (which would have caused PERMISSION_DENIED in the
+// old code where capability was checked before entity existence).
+func TestCreateEdge_SourceNotFound_CapCheckOrder(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Service")
+
+	applyTestSchema(ctx, t, srv.store)
+
+	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:     "DEPENDS_ON",
+		FromEntityId: "11111111-1111-4111-8111-111111111111",
+		ToEntityId:   "22222222-2222-4222-8222-222222222222",
+	})
+	if err == nil {
+		t.Fatal("expected error for not-found source, got nil")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", status.Code(err))
+	}
+}
+
+// TestDeleteEdge_NotFound_CapCheckOrder verifies that DeleteEdge returns
+// NOT_FOUND when the edge does not exist, even when the caller lacks wildcard
+// WRITE capability.
+func TestDeleteEdge_NotFound_CapCheckOrder(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Service")
+
+	applyTestSchema(ctx, t, srv.store)
+
+	_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{
+		Id: "11111111-1111-4111-8111-111111111111",
+	})
+	if err == nil {
+		t.Fatal("expected error for not-found edge, got nil")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", status.Code(err))
+	}
+}
+
+// TestUpdateEntity_NotFound_CapCheckOrder verifies that UpdateEntity returns
+// NOT_FOUND when the entity does not exist, even when the caller lacks wildcard
+// WRITE capability.
+func TestUpdateEntity_NotFound_CapCheckOrder(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Component")
+
+	applyTestSchema(ctx, t, srv.store)
+
+	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id:         "11111111-1111-4111-8111-111111111111",
+		Properties: map[string]string{"name": "x"},
+	})
+	if err == nil {
+		t.Fatal("expected error for not-found entity, got nil")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", status.Code(err))
+	}
+}
+
+// TestDeleteEntity_NotFound_CapCheckOrder verifies that DeleteEntity returns
+// NOT_FOUND when the entity does not exist, even when the caller lacks wildcard
+// WRITE capability.
+func TestDeleteEntity_NotFound_CapCheckOrder(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Component")
+
+	applyTestSchema(ctx, t, srv.store)
+
+	_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: "11111111-1111-4111-8111-111111111111",
+	})
+	if err == nil {
+		t.Fatal("expected error for not-found entity, got nil")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", status.Code(err))
+	}
+}
+
+// TestListEntities_MissingCapBeforeTypeCheck verifies that ListEntities returns
+// PERMISSION_DENIED when the caller lacks READ capability, even when the entity
+// type does not exist (proving capability check happens before TableExists).
+func TestListEntities_MissingCapBeforeTypeCheck(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := noReadCtx()
+
+	_, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{
+		EntityType: "NonExistentType",
+		PageSize:   10,
+	})
+	if err == nil {
+		t.Fatal("expected error for missing READ capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// TestSearchNeighbors_NaNBeforeTypeCheck verifies that SearchNeighbors returns
+// INVALID_ARGUMENT for NaN embedding before checking TableExists, so a NaN
+// embedding with an unknown entity type returns "NaN" error not "unknown type".
+func TestSearchNeighbors_NaNBeforeTypeCheck(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	_, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  []float32{float32(math.NaN()), 0.0, 0.0},
+		EntityType: "NonExistentType",
+		TopK:       5,
+	})
+	if err == nil {
+		t.Fatal("expected error for NaN embedding, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+	// Verify the error message mentions NaN/Inf, not "unknown entity type".
+	if msg := err.Error(); strings.Contains(msg, "unknown entity type") {
+		t.Fatalf("expected error about NaN/Inf, got unknown-entity-type message: %q", msg)
 	}
 }

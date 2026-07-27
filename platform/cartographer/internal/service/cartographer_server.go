@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -624,6 +625,14 @@ func (s *CartographerServer) SearchNeighbors(
 			return nil, err
 		}
 	}
+	if len(req.Embedding) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "embedding is required")
+	}
+	for _, v := range req.Embedding {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return nil, status.Error(codes.InvalidArgument, "embedding contains NaN or Inf")
+		}
+	}
 	if entityType != "" && !s.store.TableExists(entityType) {
 		return nil, errUnknownEntityType(entityType)
 	}
@@ -682,11 +691,11 @@ func (s *CartographerServer) ListEntities(
 	ctx context.Context,
 	req *flowv1.ListEntitiesRequest,
 ) (*flowv1.ListEntitiesResponse, error) {
-	if !s.store.TableExists(req.EntityType) {
-		return nil, errUnknownEntityType(req.EntityType)
-	}
 	if err := s.checkEntityCap(ctx, "READ", req.EntityType); err != nil {
 		return nil, err
+	}
+	if !s.store.TableExists(req.EntityType) {
+		return nil, errUnknownEntityType(req.EntityType)
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
@@ -781,15 +790,11 @@ func (s *CartographerServer) UpdateEntity(
 	// Resolve entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
-	if resolveErr == nil {
-		if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
-			return nil, err
-		}
-	} else {
-		// Fall back to wildcard if type resolution fails.
-		if err := s.verifier.CheckCapability(ctx, "WRITE:graph/entity/*"); err != nil {
-			return nil, err
-		}
+	if resolveErr != nil {
+		return nil, mapStoreError(resolveErr)
+	}
+	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
+		return nil, err
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
@@ -838,15 +843,11 @@ func (s *CartographerServer) DeleteEntity(
 	// Resolve entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
-	if resolveErr == nil {
-		if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
-			return nil, err
-		}
-	} else {
-		// Fall back to wildcard if type resolution fails.
-		if err := s.verifier.CheckCapability(ctx, "WRITE:graph/entity/*"); err != nil {
-			return nil, err
-		}
+	if resolveErr != nil {
+		return nil, mapStoreError(resolveErr)
+	}
+	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
+		return nil, err
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
@@ -893,15 +894,11 @@ func (s *CartographerServer) CreateEdge(
 	// Resolve source entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	sourceType, resolveErr := s.store.ResolveEntityType(ctx, req.FromEntityId, branch)
-	if resolveErr == nil {
-		if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
-			return nil, err
-		}
-	} else {
-		// Fall back to wildcard if type resolution fails.
-		if err := s.verifier.CheckCapability(ctx, "WRITE:graph/entity/*"); err != nil {
-			return nil, err
-		}
+	if resolveErr != nil {
+		return nil, mapStoreError(resolveErr)
+	}
+	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
+		return nil, err
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
@@ -952,24 +949,15 @@ func (s *CartographerServer) DeleteEdge(
 	// Resolve source entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	existingEdge, edgeErr := s.store.GetEdge(ctx, req.Id, branch)
-	if edgeErr == nil {
-		sourceType, resolveErr := s.store.ResolveEntityType(ctx, existingEdge.FromEntityID, branch)
-		if resolveErr == nil {
-			if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
-				return nil, err
-			}
-		} else {
-			// Fall back to wildcard if type resolution fails.
-			if err := s.verifier.CheckCapability(ctx, "WRITE:graph/entity/*"); err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		// Edge not found — let the handler proceed (error will be returned by store).
-		// Check wildcard as a reasonable fallback.
-		if err := s.verifier.CheckCapability(ctx, "WRITE:graph/entity/*"); err != nil {
-			return nil, err
-		}
+	if edgeErr != nil {
+		return nil, mapStoreError(edgeErr)
+	}
+	sourceType, resolveErr := s.store.ResolveEntityType(ctx, existingEdge.FromEntityID, branch)
+	if resolveErr != nil {
+		return nil, mapStoreError(resolveErr)
+	}
+	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
+		return nil, err
 	}
 	if req.TransactionId != "" {
 		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {

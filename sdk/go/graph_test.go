@@ -10,6 +10,7 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // ---------------------------------------------------------------------------
@@ -667,6 +668,158 @@ func TestDeleteEntity_RemovesFromMap(t *testing.T) {
 	_, ok := g.idTypeMap.resolve("e1")
 	if ok {
 		t.Error("expected e1 to be removed from map")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolveOrWildcard tests
+// ---------------------------------------------------------------------------
+
+func TestIDTypeMap_ResolveOrWildcard_Found(t *testing.T) {
+	m := newIDTypeMap()
+	m.store("id-1", "Component")
+	typ := m.resolveOrWildcard("id-1")
+	if typ != "Component" {
+		t.Errorf("expected Component, got %q", typ)
+	}
+}
+
+func TestIDTypeMap_ResolveOrWildcard_NotFound(t *testing.T) {
+	m := newIDTypeMap()
+	typ := m.resolveOrWildcard("unknown")
+	if typ != "*" {
+		t.Errorf("expected wildcard *, got %q", typ)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Capability annotation tests (Graph write methods with unknown entity IDs)
+// ---------------------------------------------------------------------------
+
+func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get("x-flow-entity-type")
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-type metadata")
+			}
+			capturedKey = "x-flow-entity-type"
+			capturedValue = vals[0]
+			return &flowv1.UpdateEntityResponse{EntityId: req.GetId(), EntityType: "Component"}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	// entity-1 is NOT in the map -> should produce wildcard
+	_, err := g.UpdateEntity("entity-1", nil, nil)
+	if err != nil {
+		t.Fatalf("UpdateEntity returned error: %v", err)
+	}
+	if capturedKey != "x-flow-entity-type" {
+		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+	}
+	if capturedValue != "*" {
+		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+func TestGraphDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get("x-flow-entity-type")
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-type metadata")
+			}
+			capturedKey = "x-flow-entity-type"
+			capturedValue = vals[0]
+			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	// entity-1 is NOT in the map -> should produce wildcard
+	_, err := g.DeleteEntity("entity-1")
+	if err != nil {
+		t.Fatalf("DeleteEntity returned error: %v", err)
+	}
+	if capturedKey != "x-flow-entity-type" {
+		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+	}
+	if capturedValue != "*" {
+		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get("x-flow-entity-type")
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-type metadata")
+			}
+			capturedKey = "x-flow-entity-type"
+			capturedValue = vals[0]
+			return &flowv1.CreateEdgeResponse{
+				EdgeId: "edge-1", FromEntityId: req.GetFromEntityId(), ToEntityId: req.GetToEntityId(),
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	// from-1 is NOT in the map -> should produce wildcard
+	_, err := g.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	if err != nil {
+		t.Fatalf("CreateEdge returned error: %v", err)
+	}
+	if capturedKey != "x-flow-entity-type" {
+		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+	}
+	if capturedValue != "*" {
+		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+func TestGraphDeleteEdge_SendsWildcardAndKey(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		deleteEdge: func(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get("x-flow-entity-type")
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-type metadata")
+			}
+			capturedKey = "x-flow-entity-type"
+			capturedValue = vals[0]
+			return &flowv1.DeleteEdgeResponse{
+				EdgeId: req.GetId(), EdgeType: "DEPENDS_ON",
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.DeleteEdge("edge-1")
+	if err != nil {
+		t.Fatalf("DeleteEdge returned error: %v", err)
+	}
+	if capturedKey != "x-flow-entity-type" {
+		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+	}
+	if capturedValue != "*" {
+		t.Errorf("expected wildcard *, got %q", capturedValue)
 	}
 }
 

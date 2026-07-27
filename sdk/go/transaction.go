@@ -271,7 +271,7 @@ func (tx *Transaction) UpdateEntity(id string, properties map[string]string, emb
 		TransactionId: tx.id,
 	}
 
-	entityType, _ := tx.idTypeMap.resolve(id)
+	entityType := tx.idTypeMap.resolveOrWildcard(id)
 
 	var resp *flowv1.UpdateEntityResponse
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
@@ -306,7 +306,7 @@ func (tx *Transaction) DeleteEntity(id string) (*Entity, error) {
 		TransactionId: tx.id,
 	}
 
-	entityType, _ := tx.idTypeMap.resolve(id)
+	entityType := tx.idTypeMap.resolveOrWildcard(id)
 
 	var resp *flowv1.DeleteEntityResponse
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
@@ -342,7 +342,7 @@ func (tx *Transaction) CreateEdge(
 		TransactionId: tx.id,
 	}
 
-	sourceType, _ := tx.idTypeMap.resolve(fromEntityID)
+	sourceType := tx.idTypeMap.resolveOrWildcard(fromEntityID)
 
 	var resp *flowv1.CreateEdgeResponse
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
@@ -379,7 +379,7 @@ func (tx *Transaction) DeleteEdge(id string) (*Edge, error) {
 		var callErr error
 		resp, callErr = tx.session.Cartographer.DeleteEdge(ctx, req)
 		return callErr
-	}, "", "*")
+	}, "x-flow-entity-type", "*")
 	if err != nil {
 		return nil, err
 	}

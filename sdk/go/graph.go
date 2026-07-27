@@ -129,6 +129,17 @@ func (m *idTypeMap) resolve(id string) (string, bool) {
 	return t, ok
 }
 
+// resolveOrWildcard returns the entity type for the given ID if present in the
+// map, or "*" if not. This ensures capability annotation falls back to the
+// wildcard rather than annotating with an empty type (which fails resolution).
+func (m *idTypeMap) resolveOrWildcard(id string) string {
+	t, ok := m.resolve(id)
+	if !ok {
+		return "*"
+	}
+	return t
+}
+
 func (m *idTypeMap) remove(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -436,7 +447,7 @@ func (g *Graph) UpdateEntity(id string, properties map[string]string, embedding 
 	}
 
 	// Resolve entity type from local map for capability annotation.
-	entityType, _ := g.idTypeMap.resolve(id)
+	entityType := g.idTypeMap.resolveOrWildcard(id)
 
 	var resp *flowv1.UpdateEntityResponse
 	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
@@ -472,7 +483,7 @@ func (g *Graph) DeleteEntity(id string) (*Entity, error) {
 	}
 
 	// Resolve entity type from local map for capability annotation.
-	entityType, _ := g.idTypeMap.resolve(id)
+	entityType := g.idTypeMap.resolveOrWildcard(id)
 
 	var resp *flowv1.DeleteEntityResponse
 	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
@@ -506,7 +517,7 @@ func (g *Graph) CreateEdge(edgeType, fromEntityID, toEntityID string, properties
 	}
 
 	// Resolve source entity type for capability annotation.
-	sourceType, _ := g.idTypeMap.resolve(fromEntityID)
+	sourceType := g.idTypeMap.resolveOrWildcard(fromEntityID)
 
 	var resp *flowv1.CreateEdgeResponse
 	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
