@@ -2005,8 +2005,14 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		err := gs.CloneSingleBranch(ctx(), "https://example.com/repo.git", "main")
-		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		// After Phase 6, nil auth (anonymous) is allowed through resolveAuth.
+		// The clone should proceed past the auth check and fail on the actual
+		// fetch (network/protocol error), not ErrAuthConfigMissing.
+		if errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected clone to proceed past auth, got ErrAuthConfigMissing")
+		}
+		if err == nil {
+			return fmt.Errorf("expected error from fetch, got nil")
 		}
 		return nil
 	})

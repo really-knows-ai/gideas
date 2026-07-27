@@ -1472,11 +1472,11 @@ func (s *CartographerServer) HealthCheck(
 func (s *CartographerServer) PullFromRemote(
 	ctx context.Context, req *flowv1.PullFromRemoteRequest,
 ) (*flowv1.PullFromRemoteResponse, error) {
-	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
-		return nil, err
-	}
 	if s.remoteURL == "" {
 		return nil, errRemoteNotConfigured()
+	}
+	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
+		return nil, err
 	}
 	if err := s.withGitLock(func() error {
 		empty, err := s.gitstore.IsEmpty(ctx)

@@ -1255,14 +1255,15 @@ func TestPullFromRemote_RemoteNotConfigured(t *testing.T) {
 	}
 }
 
-func TestPullFromRemote_AuthConfigMissing(t *testing.T) {
+func TestPullFromRemote_NoAuthProceedsPastAuth(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub := initTestKey() // matches testSidecarPriv used by testCtx()
 	st, _ := ladybug.OpenInMemory()
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
-	// remoteURL is set but gitstore has no remote configured and default
-	// authFn returns ErrAuthConfigMissing.
+	// remoteURL is set but authFn is nil. After Phase 6, nil auth is allowed
+	// through (anonymous), so the clone proceeds past auth and fails on the
+	// actual fetch attempt.
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil,
 		"https://example.com/repo.git", 30*time.Second, "test-ns",
 		30*time.Minute, 100000)
@@ -1270,10 +1271,12 @@ func TestPullFromRemote_AuthConfigMissing(t *testing.T) {
 
 	_, err := srv.PullFromRemote(ctx, &flowv1.PullFromRemoteRequest{})
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal("expected error from anonymous clone attempt, got nil")
 	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
+	// Must NOT return FailedPrecondition (which would indicate auth config
+	// was rejected before the fetch).
+	if status.Code(err) == codes.FailedPrecondition {
+		t.Fatal("expected non-FailedPrecondition error after anonymous auth bypass, got FailedPrecondition")
 	}
 }
 
@@ -1283,8 +1286,9 @@ func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
 	st, _ := ladybug.OpenInMemory()
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
-	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
-		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil,
+		"https://example.com/repo.git", 30*time.Second, "test-ns",
+		30*time.Minute, 100000)
 	srv.MarkDBReady()
 
 	// Only READ capabilities, no WRITE:graph/entity/*.
@@ -1300,6 +1304,33 @@ func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
 	}
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+func TestPullFromRemote_NoRemote(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	// remoteURL is empty — should fail with FailedPrecondition BEFORE
+	// checking capabilities.
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	mdCtx := capabilityContext("WRITE:graph/entity/*,READ:graph/entity/*", scPriv, "sidecar")
+	verifiedCtx, err := srv.verifier.verify(mdCtx)
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+
+	_, err = srv.PullFromRemote(verifiedCtx, &flowv1.PullFromRemoteRequest{})
+	if err == nil {
+		t.Fatal("expected FailedPrecondition for no remote, got nil")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
 	}
 }
 

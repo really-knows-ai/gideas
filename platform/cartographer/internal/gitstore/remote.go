@@ -198,14 +198,19 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, url, branch string) er
 	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "ssh://") {
 		return ErrUnsupportedURLScheme
 	}
-	if g.authFn == nil {
-		return ErrAuthConfigMissing
-	}
 
-	auth, err := g.resolveAuth()
-	if err != nil {
-		return err
+	// Resolve auth: nil authFn or nil return means anonymous access to public
+	// remotes.  Unlike FetchRemote/PushRemote/PullAndFastForward, this path
+	// explicitly allows anonymous clone for the initial remote bootstrap.
+	var auth transport.AuthMethod
+	var err error
+	if g.authFn != nil {
+		auth, err = g.authFn()
+		if err != nil {
+			return ErrRemoteAuthResolutionFailed
+		}
 	}
+	// nil auth is OK for anonymous public remotes
 
 	// Ensure remote exists
 	_, err = g.repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{url}})
