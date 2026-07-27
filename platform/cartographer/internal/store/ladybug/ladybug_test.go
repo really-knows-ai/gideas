@@ -3,6 +3,8 @@ package ladybug
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -1556,5 +1558,114 @@ func TestFTSIndex_Search(t *testing.T) {
 	}
 	if len(results) == 0 {
 		t.Error("expected FTS results")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RehydrateMainFromFiles — Phase 5 regression tests
+// ---------------------------------------------------------------------------
+
+func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	entitiesDir := t.TempDir()
+	compDir := filepath.Join(entitiesDir, "Component")
+	if err := os.MkdirAll(compDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"id":"00000000-0000-4000-a000-000000000001","type":"Component","properties":{"name":"test"}}`
+	if err := os.WriteFile(filepath.Join(compDir, "comp1.json"), []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// edgesDir is a non-existent path — should error because entities dir exists.
+	edgesDir := filepath.Join(t.TempDir(), "nonexistent")
+
+	ctx := context.Background()
+	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	if err == nil {
+		t.Fatal("expected error when entitiesDir exists but edgesDir does not")
+	}
+	if !errors.Is(err, store.ErrInvalidEdgeDir) {
+		t.Errorf("expected ErrInvalidEdgeDir, got %v", err)
+	}
+}
+
+func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	// Both directories absent — empty graph, no error.
+	entitiesDir := filepath.Join(t.TempDir(), "no-entities")
+	edgesDir := filepath.Join(t.TempDir(), "no-edges")
+
+	ctx := context.Background()
+	if err := s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("expected no error for both missing, got %v", err)
+	}
+}
+
+func TestRehydrateMainFromFiles_UnreadableTypeDir_ReturnsError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	entitiesDir := t.TempDir()
+	compDir := filepath.Join(entitiesDir, "Component")
+	if err := os.MkdirAll(compDir, 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(compDir, 0755) }) // restore for cleanup
+
+	edgesDir := t.TempDir()
+
+	ctx := context.Background()
+	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	if err == nil {
+		t.Fatal("expected error when type subdirectory is unreadable")
+	}
+}
+
+func TestRehydrateMainFromFiles_UnreadableFile_ReturnsError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	entitiesDir := t.TempDir()
+	compDir := filepath.Join(entitiesDir, "Component")
+	if err := os.MkdirAll(compDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	fpath := filepath.Join(compDir, "comp1.json")
+	data := `{"id":"00000000-0000-4000-a000-000000000001","type":"Component","properties":{"name":"test"}}`
+	if err := os.WriteFile(fpath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(fpath, 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(fpath, 0644) }) // restore for cleanup
+
+	edgesDir := t.TempDir()
+
+	ctx := context.Background()
+	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	if err == nil {
+		t.Fatal("expected error when file is unreadable")
 	}
 }

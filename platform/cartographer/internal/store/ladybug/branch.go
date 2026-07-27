@@ -278,6 +278,12 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	if err := db.loadEntitiesFromDir(entitiesDir, entDefs); err != nil {
 		return err
 	}
+	// Fail if entities dir exists but edges dir does not (partial wipe).
+	if _, entErr := os.Stat(entitiesDir); entErr == nil {
+		if _, edgeErr := os.Stat(edgesDir); os.IsNotExist(edgeErr) {
+			return fmt.Errorf("%w: edges directory does not exist but entities directory exists", store.ErrInvalidEdgeDir)
+		}
+	}
 	// Read edges from JSON files.
 	if err := db.loadEdgesFromDir(edgesDir, edgeDefs); err != nil {
 		return err
@@ -551,7 +557,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 		typeDir := filepath.Join(dir, typeName)
 		files, err := os.ReadDir(typeDir)
 		if err != nil {
-			continue // ponytail: swallow error
+			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
 		}
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
@@ -559,7 +565,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 			}
 			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
 			if err != nil {
-				continue // ponytail: swallow error
+				return fmt.Errorf("read entity file %q: %w", filepath.Join(typeDir, f.Name()), err)
 			}
 			var je struct {
 				ID         string            `json:"id"`
@@ -619,7 +625,7 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 		typeDir := filepath.Join(dir, typeName)
 		files, err := os.ReadDir(typeDir)
 		if err != nil {
-			continue
+			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
 		}
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
@@ -627,7 +633,7 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 			}
 			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
 			if err != nil {
-				continue
+				return fmt.Errorf("read edge file %q: %w", filepath.Join(typeDir, f.Name()), err)
 			}
 			var je struct {
 				ID         string            `json:"id"`
@@ -692,7 +698,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 		typeDir := filepath.Join(dir, typeName)
 		files, err := os.ReadDir(typeDir)
 		if err != nil {
-			continue
+			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
 		}
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
@@ -700,7 +706,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			}
 			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
 			if err != nil {
-				continue
+				return fmt.Errorf("read entity file %q: %w", filepath.Join(typeDir, f.Name()), err)
 			}
 			var je struct {
 				ID         string            `json:"id"`
@@ -761,7 +767,7 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 		typeDir := filepath.Join(dir, typeName)
 		files, err := os.ReadDir(typeDir)
 		if err != nil {
-			continue
+			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
 		}
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
@@ -769,7 +775,7 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			}
 			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
 			if err != nil {
-				continue
+				return fmt.Errorf("read edge file %q: %w", filepath.Join(typeDir, f.Name()), err)
 			}
 			var je struct {
 				ID         string            `json:"id"`
