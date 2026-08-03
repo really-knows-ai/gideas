@@ -4085,6 +4085,62 @@ func TestPullFromRemote_NoRemote(t *testing.T) {
 }
 
 // =========================================================================
+// 11b. PushToRemote error-path tests
+// =========================================================================
+
+func TestPushToRemote_RemoteNotConfigured(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	_, err := srv.PushToRemote(ctx, &flowv1.PushToRemoteRequest{})
+	if err == nil {
+		t.Fatal("expected error for no remote configured, got nil")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
+	}
+}
+
+func TestPushToRemote_MissingWriteCapability(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil,
+		"https://example.com/repo.git", 30*time.Second, "test-ns",
+		30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Only READ capabilities, no WRITE:graph/entity/*.
+	ctx := capabilityContext("READ:graph/entity/*,READ:graph/tx", scPriv, "sidecar")
+	_, err := srv.PushToRemote(ctx, &flowv1.PushToRemoteRequest{})
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != "capability denied: WRITE:graph/entity/*" {
+		t.Fatalf("expected missing-WRITE PermissionDenied, got %v", err)
+	}
+}
+
+func TestPushToRemote_NoRemote(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	// remoteURL is empty — should fail with FailedPrecondition BEFORE
+	// checking capabilities.
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	ctx := capabilityContext("WRITE:graph/entity/*,READ:graph/entity/*", scPriv, "sidecar")
+	_, err := srv.PushToRemote(ctx, &flowv1.PushToRemoteRequest{})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
+	}
+}
+
+// =========================================================================
 // 12. CommitTransaction error-path tests
 // =========================================================================
 

@@ -572,6 +572,24 @@ func TestPullFromRemote(t *testing.T) {
 	}
 }
 
+func TestPushToRemote(t *testing.T) {
+	called := false
+	mock := &mockCartographerClient{
+		pushToRemote: func(ctx context.Context, req *flowv1.PushToRemoteRequest) (*flowv1.PushToRemoteResponse, error) {
+			called = true
+			return &flowv1.PushToRemoteResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	err := g.PushToRemote()
+	if err != nil {
+		t.Fatalf("PushToRemote returned error: %v", err)
+	}
+	if !called {
+		t.Error("expected PushToRemote to be called")
+	}
+}
+
 func TestExportGraph_NilSession(t *testing.T) {
 	g := &Graph{}
 	_, err := g.ExportGraph("json")
@@ -637,6 +655,7 @@ func TestGraphMethodsWithNilSession(t *testing.T) {
 		{"DeleteEdge", func() error { _, err := g.DeleteEdge(""); return err }},
 		{"BeginTransaction", func() error { _, err := g.BeginTransaction(); return err }},
 		{"PullFromRemote", func() error { return g.PullFromRemote() }},
+		{"PushToRemote", func() error { return g.PushToRemote() }},
 		{"ExportGraph", func() error { _, err := g.ExportGraph("json"); return err }},
 	}
 	for _, tt := range tests {
