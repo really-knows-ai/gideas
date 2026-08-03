@@ -215,8 +215,11 @@ func (s *CartographerServer) preflightTransactionChange(ctx context.Context, txI
 func (s *CartographerServer) rejectFullChangeLog(ctx context.Context, txID string, capErr error) error {
 	state, lookupErr := s.txManager.Lookup(txID)
 	if lookupErr != nil {
-		return status.Errorf(codes.ResourceExhausted,
-			"%v; transaction rollback failed: %v", capErr, lookupErr)
+		return &ChangeLogFullError{
+			CapError:   capErr,
+			RollbackOK: false,
+			CleanupErr: lookupErr,
+		}
 	}
 	state.RollbackOnly = true
 	persistErr := s.persistTransactionState(state)
@@ -225,24 +228,13 @@ func (s *CartographerServer) rejectFullChangeLog(ctx context.Context, txID strin
 		invalidateErr = s.store.InvalidateBranchState(txID)
 	}
 	cleanupErr := s.cleanupTransaction(ctx, state)
-	if cleanupErr == nil {
-		if persistErr != nil {
-			return status.Errorf(codes.ResourceExhausted,
-				"%v; persist rollback-only state failed: %v; transaction rolled back", capErr, persistErr)
-		}
-		return mapGitError(capErr)
+	return &ChangeLogFullError{
+		CapError:      capErr,
+		RollbackOK:    cleanupErr == nil,
+		PersistErr:    persistErr,
+		InvalidateErr: invalidateErr,
+		CleanupErr:    cleanupErr,
 	}
-	if persistErr != nil {
-		if invalidateErr != nil {
-			return status.Errorf(codes.ResourceExhausted,
-				"%v; persist rollback-only state failed: %v; fail-closed invalidation failed: %v; "+
-					"transaction rollback failed: %v", capErr, persistErr, invalidateErr, cleanupErr)
-		}
-		return status.Errorf(codes.ResourceExhausted,
-			"%v; persist rollback-only state failed: %v; transaction rollback failed: %v",
-			capErr, persistErr, cleanupErr)
-	}
-	return status.Errorf(codes.ResourceExhausted, "%v; transaction rollback failed: %v", capErr, cleanupErr)
 }
 
 func durableTransactionState(state *TransactionState) store.BranchTransactionState {

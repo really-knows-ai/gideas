@@ -11,6 +11,7 @@ import (
 
 	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/store"
+	"github.com/foundry/flow/cartographer/internal/uuidutil"
 	"github.com/google/uuid"
 )
 
@@ -687,8 +688,7 @@ func edgeFromRel(rel lbug.Relationship, edgeType, fromID, toID string) *store.Ed
 
 // validateUUID checks that the given string is a valid UUID v4.
 func validateUUID(id string) error {
-	u, err := uuid.Parse(id)
-	if err != nil || u.Version() != 4 {
+	if err := uuidutil.Validate(id); err != nil {
 		return fmt.Errorf("%w: %q", store.ErrInvalidIDFormat, id)
 	}
 	return nil

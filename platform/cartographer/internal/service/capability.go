@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/foundry/flow/cartographer/internal/uuidutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -210,40 +211,8 @@ func (v *CapabilityVerifier) CheckWildcard(caps *Capabilities, requiredCapPrefix
 	return errWildcardMissing
 }
 
-// isValidUUID returns true if s looks like a UUID v4 (basic format check).
-// ponytail: Only validates hex characters and dash positions — does not verify
-// the UUID v4 version nibble (position 14 must be '4') or variant bits
-// (position 19 must be 8/9/a/b). Non-v4 UUIDs (v1, v2, v3, v5) pass
-// validation. Consequences: (1) SPEC violation — non-v4 UUIDs are accepted
-// despite SPEC requiring "valid UUID v4" for entity, edge, and transaction IDs
-// (INVALID_ARGUMENT per SPEC error table). (2) v1 UUIDs encode creation
-// timestamps, leaking temporal information about ID generation; v3/v5 UUIDs
-// are deterministic from namespace/name inputs, enabling inference of inputs
-// by enumerating observed IDs. (3) Per-version uniqueness and collision
-// characteristics differ — while collision probability is negligible for all
-// UUID versions, environments that audit or validate for v4 compliance would
-// report false positives on accepted non-v4 IDs. Deployment-context risk:
-// caller-supplied entity/edge IDs and proxy-forwarded transaction IDs are the
-// primary external source; the Cartographer's own auto-generation produces
-// correct UUID v4. Upgrade path: add s[14] == '4' version nibble check and
-// s[19] variant check accepting '8','9','a','A','b','B' (both cases — the
-// hex check accepts A-F).
 func isValidUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, c := range s {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-		} else {
-			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-				return false
-			}
-		}
-	}
-	return true
+	return uuidutil.Validate(s) == nil
 }
 
 // validateTxID checks that txID is a valid UUID v4 if non-empty.

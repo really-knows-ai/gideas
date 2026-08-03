@@ -2,12 +2,67 @@ package service
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
+	"github.com/foundry/flow/cartographer/internal/schemaerrors"
 	"github.com/foundry/flow/cartographer/internal/store"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// ChangeLogFullError carries the outcome of a change-log capacity rollback.
+type ChangeLogFullError struct {
+	CapError      error
+	RollbackOK    bool
+	PersistErr    error
+	InvalidateErr error
+	CleanupErr    error
+}
+
+func (e *ChangeLogFullError) Error() string {
+	if e.RollbackOK {
+		if e.PersistErr != nil {
+			return fmt.Sprintf("%v; persist rollback-only state failed: %v; transaction rolled back", e.CapError, e.PersistErr)
+		}
+		return e.CapError.Error()
+	}
+	if e.PersistErr != nil && e.InvalidateErr != nil {
+		return fmt.Sprintf(
+			"%v; persist rollback-only state failed: %v; fail-closed invalidation failed: %v; transaction rollback failed: %v",
+			e.CapError, e.PersistErr, e.InvalidateErr, e.CleanupErr,
+		)
+	}
+	if e.PersistErr != nil {
+		return fmt.Sprintf(
+			"%v; persist rollback-only state failed: %v; transaction rollback failed: %v",
+			e.CapError, e.PersistErr, e.CleanupErr,
+		)
+	}
+	return fmt.Sprintf("%v; transaction rollback failed: %v", e.CapError, e.CleanupErr)
+}
+
+func (e *ChangeLogFullError) GRPCStatus() *status.Status {
+	st := status.New(codes.ResourceExhausted, e.Error())
+	st, _ = st.WithDetails(&errdetails.ErrorInfo{
+		Reason: "change_log_full",
+		Metadata: map[string]string{
+			"rollback_ok":    fmt.Sprintf("%t", e.RollbackOK),
+			"persist_err":    errOrEmpty(e.PersistErr),
+			"invalidate_err": errOrEmpty(e.InvalidateErr),
+			"cleanup_err":    errOrEmpty(e.CleanupErr),
+		},
+	})
+	return st
+}
+
+func errOrEmpty(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
 
 // errWildcardMissing is an internal sentinel used for handler branching only.
 // Handlers MUST NOT return it through the gRPC boundary.
@@ -114,8 +169,6 @@ func mapGitError(err error) error {
 		return status.Error(codes.FailedPrecondition, "remote pull would diverge")
 	case errors.Is(err, gitstore.ErrMergeDiverged):
 		return status.Error(codes.Aborted, "merge would diverge")
-	case errors.Is(err, gitstore.ErrChangeLogFull):
-		return status.Error(codes.ResourceExhausted, "change log full (100K cap)")
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
@@ -125,30 +178,14 @@ func isSchemaError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// ponytail: string-prefix matching against error messages is fragile. Any
-	// change in the schema package's error formatting will silently break this
-	// mapping. The alternative would be importing the schema package directly
-	// for sentinel comparisons, but that creates a cycle (store -> schema <-
-	// service). Upgrade path: extract schema error sentinels into a shared
-	// package importable by both store and service, or use numeric error codes
-	// embedded in the error chain.
-	msg := err.Error()
-	schemaPrefixes := []string{
-		"duplicate type name",
-		"duplicate property name",
-		"invalid name format",
-		"name is a reserved word",
-		"property name collides with",
-		"property type must be 'string'",
-		"rule entry has empty",
-		"rule references undeclared type",
-	}
-	for _, p := range schemaPrefixes {
-		if len(msg) >= len(p) && msg[:len(p)] == p {
-			return true
-		}
-	}
-	return false
+	return errors.Is(err, schemaerrors.ErrDuplicateTypeName) ||
+		errors.Is(err, schemaerrors.ErrDuplicatePropertyName) ||
+		errors.Is(err, schemaerrors.ErrInvalidName) ||
+		errors.Is(err, schemaerrors.ErrReservedWord) ||
+		errors.Is(err, schemaerrors.ErrImplicitColumnCollision) ||
+		errors.Is(err, schemaerrors.ErrInvalidPropertyType) ||
+		errors.Is(err, schemaerrors.ErrEmptyRuleList) ||
+		errors.Is(err, schemaerrors.ErrUndeclaredTypeRef)
 }
 
 // Convenience constructors matching the SPEC error table.
@@ -210,8 +247,8 @@ func errPullFromRemoteRehydrationFailed(detail string) error {
 	return status.Errorf(codes.Internal, "pull from remote re-hydration failed: %s", detail)
 }
 
-func errUnsupportedExportFormat(fmt string) error {
-	return status.Errorf(codes.InvalidArgument, "unsupported export format: %q", fmt)
+func errUnsupportedExportFormat(format string) error {
+	return status.Errorf(codes.InvalidArgument, "unsupported export format: %q", format)
 }
 
 func errExportGraphMidStream(detail string) error {
