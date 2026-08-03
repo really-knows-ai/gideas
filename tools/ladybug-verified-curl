@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+output=
+want_output=false
+for arg in "$@"; do
+	if $want_output; then
+		output=$arg
+		want_output=false
+	elif [ "$arg" = -o ]; then
+		want_output=true
+	fi
+done
+
+[ -n "$output" ] || { echo "ladybug download did not specify an output file" >&2; exit 1; }
+"$LADYBUG_REAL_CURL" "$@"
+
+if command -v sha256sum >/dev/null 2>&1; then
+	actual=$(sha256sum "$output")
+else
+	actual=$(shasum -a 256 "$output")
+fi
+actual=${actual%% *}
+[ "$actual" = "$LADYBUG_ARCHIVE_SHA256" ] || {
+	echo "checksum mismatch for $LADYBUG_ARCHIVE: got $actual" >&2
+	exit 1
+}

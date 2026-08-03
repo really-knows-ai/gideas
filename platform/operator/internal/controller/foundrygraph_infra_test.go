@@ -17,10 +17,16 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
@@ -100,6 +106,59 @@ func TestCartographerServiceName(t *testing.T) {
 	name := r.cartographerServiceName(fg)
 	if name != "cartographer-flow-graph" {
 		t.Errorf("expected cartographer-flow-graph, got %q", name)
+	}
+}
+
+func TestCartographerPodSecurityContext(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-graph",
+			Namespace: "test-ns",
+		},
+	}
+
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
+	r := &FoundryGraphReconciler{
+		Client:            fakeCli,
+		Scheme:            s,
+		CartographerPort:  50051,
+		CartographerImage: "flow-cartographer:latest",
+	}
+
+	ctx := context.Background()
+	if err := r.reconcileDeployment(ctx, fg); err != nil {
+		t.Fatalf("reconcileDeployment: %v", err)
+	}
+
+	var deploy appsv1.Deployment
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph", Namespace: "test-ns"}, &deploy); err != nil {
+		t.Fatalf("get Deployment: %v", err)
+	}
+
+	psc := deploy.Spec.Template.Spec.SecurityContext
+	if psc == nil {
+		t.Fatal("PodSecurityContext is nil")
+	}
+
+	if psc.FSGroup == nil {
+		t.Fatal("FSGroup is nil — root-owned PVC will not be writable by UID 65532")
+	}
+	if *psc.FSGroup != 65532 {
+		t.Errorf("expected FSGroup=65532, got %d", *psc.FSGroup)
+	}
+	if psc.RunAsUser == nil || *psc.RunAsUser != 65532 {
+		t.Errorf("expected RunAsUser=65532, got %v", psc.RunAsUser)
+	}
+	if psc.RunAsGroup == nil || *psc.RunAsGroup != 65532 {
+		t.Errorf("expected RunAsGroup=65532, got %v", psc.RunAsGroup)
+	}
+	if psc.FSGroupChangePolicy == nil || *psc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+		t.Errorf("expected FSGroupChangePolicy=OnRootMismatch, got %v", psc.FSGroupChangePolicy)
 	}
 }
 

@@ -67,6 +67,10 @@ type GitStore interface {
 
 	// Lifecycle
 	Close() error
+
+	// InitDir creates a directory with a .gitkeep file and stages it.
+	// Used by WipeGraph to recreate tracked root directories.
+	InitDir(ctx context.Context, name string) error
 }
 
 // gitStore is the concrete implementation of GitStore.
@@ -97,6 +101,11 @@ func initDir(wt *git.Worktree, fs billy.Filesystem, name string) error {
 		return err
 	}
 	return nil
+}
+
+// InitDir creates a directory with a .gitkeep file and stages it.
+func (g *gitStore) InitDir(ctx context.Context, name string) error {
+	return initDir(g.wt, g.fs, name)
 }
 
 // compile-time interface check

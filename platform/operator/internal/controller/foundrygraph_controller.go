@@ -38,22 +38,22 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	flowv1 "github.com/foundry/flow/operator/api/v1"
 	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 // FoundryGraphReconciler reconciles a FoundryGraph object.
 type FoundryGraphReconciler struct {
 	client.Client
-	Scheme                  *runtime.Scheme
-	OperatorNamespace       string
-	CartographerPort        int32
-	ReadinessTimeout        time.Duration
-	CartographerImage       string
-	EventBusAddress         string
+	Scheme                    *runtime.Scheme
+	OperatorNamespace         string
+	CartographerPort          int32
+	ReadinessTimeout          time.Duration
+	CartographerImage         string
+	EventBusAddress           string
 	CapabilityStalenessWindow string
-	ProxyRoutingTable       *ProxyRoutingTable
-	CartographerDialer      func(ctx context.Context, endpoint string) (CartographerClient, error)
+	ProxyRoutingTable         *ProxyRoutingTable
+	CartographerDialer        func(ctx context.Context, endpoint string) (CartographerClient, error)
 }
 
 // +kubebuilder:rbac:groups=flow.foundry.io,resources=foundrygraphs,verbs=get;list;watch;create;update;patch;delete
@@ -138,12 +138,13 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	currentSpec := *fg.Spec.DeepCopy()
 
 	// Branching logic for spec changes (see PHASE_05.md D1 branching pseudocode).
-	if diffResult == SchemaDiffDestructive {
+	switch diffResult {
+	case SchemaDiffDestructive:
 		// Destructive: HealthCheck -> WipeGraph -> ApplySchema on existing pod.
 		if err := r.applySchemaOnExisting(ctx, &fg, true); err != nil {
 			return r.setBlockedCondition(ctx, &fg, err)
 		}
-	} else if diffResult == SchemaDiffNonDestructive {
+	case SchemaDiffNonDestructive:
 		// Non-destructive: HealthCheck -> ApplySchema on existing pod.
 		if err := r.applySchemaOnExisting(ctx, &fg, false); err != nil {
 			return r.setFailedCondition(ctx, &fg, err)
@@ -452,5 +453,3 @@ func (r *FoundryGraphReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("foundrygraph").
 		Complete(r)
 }
-
-

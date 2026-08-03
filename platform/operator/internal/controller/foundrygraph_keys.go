@@ -33,7 +33,7 @@ import (
 
 const (
 	operatorSigningKeySecretName = "cartographer-operator-signing-key" // operator's own namespace
-	sidecarSigningKeySecretName  = "cartographer-sidecar-signing-key" // operator's own namespace
+	sidecarSigningKeySecretName  = "cartographer-sidecar-signing-key"  // operator's own namespace
 	operatorKeySecretName        = "cartographer-operator-key"         // per namespace
 	sidecarKeySecretName         = "cartographer-sidecar-key"          // per namespace
 )
@@ -239,5 +239,3 @@ func readOperatorSigningKey(ctx context.Context, c client.Client, operatorNamesp
 	}
 	return privKey, nil
 }
-
-

@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
+
+var errCommitFound = errors.New("transaction commit found")
 
 // AddAll stages all changes under the given path (equivalent to git add).
 // When path is ".", stages everything in the worktree.
@@ -93,9 +96,9 @@ func (g *gitStore) Commit(ctx context.Context, message string) error {
 }
 
 // CommitExistsOnBranch scans the commit log of the currently checked-out
-// branch for a commit whose message starts with "transaction:<txID>".
+// branch for a commit whose first message line equals "transaction:<txID>".
 func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool, error) {
-	prefix := "transaction:" + txID
+	message := "transaction:" + txID
 	log, err := g.repo.Log(&git.LogOptions{})
 	if err != nil {
 		return false, fmt.Errorf("log: %w", err)
@@ -103,12 +106,13 @@ func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool,
 	defer log.Close()
 
 	if err := log.ForEach(func(commit *object.Commit) error {
-		if strings.HasPrefix(commit.Message, prefix) {
-			return fmt.Errorf("FOUND") // break iteration with sentinel
+		firstLine, _, _ := strings.Cut(commit.Message, "\n")
+		if firstLine == message {
+			return errCommitFound
 		}
 		return nil
 	}); err != nil {
-		if err.Error() == "FOUND" {
+		if errors.Is(err, errCommitFound) {
 			return true, nil
 		}
 		return false, fmt.Errorf("iterate log: %w", err)

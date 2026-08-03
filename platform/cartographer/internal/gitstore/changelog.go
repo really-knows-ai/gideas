@@ -4,14 +4,26 @@ import (
 	"sort"
 )
 
+const defaultChangeLogCap = 100000
+
 // NewChangeLog creates a new ChangeLog with all maps initialised.
 func NewChangeLog() *ChangeLog {
+	return newChangeLog(defaultChangeLogCap)
+}
+
+// NewChangeLogWithCap creates a ChangeLog with an explicit admission cap.
+func NewChangeLogWithCap(capacity int) *ChangeLog {
+	return newChangeLog(capacity)
+}
+
+func newChangeLog(capacity int) *ChangeLog {
 	return &ChangeLog{
 		AddedEntities:    make(map[string]*EntityEntry),
 		ModifiedEntities: make(map[string]*EntityEntry),
 		DeletedEntities:  make(map[string]*DeletionInfo),
 		AddedEdges:       make(map[string]*EdgeEntry),
 		DeletedEdges:     make(map[string]*DeletionInfo),
+		cap:              capacity,
 	}
 }
 
@@ -22,11 +34,22 @@ func (cl *ChangeLog) Add(entry ChangeLogEntry) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
-	if cl.count >= 100000 {
+	if cl.count >= cl.cap {
 		return ErrChangeLogFull
 	}
 
 	return cl.add(entry)
+}
+
+// CheckCapacity reports whether another mutation can be admitted. Transaction
+// lifecycle locking serialises this preflight with the subsequent Add call.
+func (cl *ChangeLog) CheckCapacity() error {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.count >= cl.cap {
+		return ErrChangeLogFull
+	}
+	return nil
 }
 
 // AddEntry adds a ChangeLogEntry to the ChangeLog without checking the 100K cap.

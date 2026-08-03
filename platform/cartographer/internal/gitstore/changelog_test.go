@@ -386,6 +386,29 @@ func TestChangeLogGenericAdd(t *testing.T) {
 	}
 }
 
+func TestChangeLogAddPreservesCallerTimestamps(t *testing.T) {
+	cl := NewChangeLog()
+	created := time.Unix(100, 0).UTC()
+	updated := time.Unix(200, 0).UTC()
+	if err := cl.Add(ChangeLogEntry{
+		Kind: ChangeAddEntity,
+		ID:   "e1",
+		Type: testComponentType,
+		Entity: &EntityEntry{
+			ID: "e1", Type: testComponentType, CreatedAt: created, UpdatedAt: updated,
+		},
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	entries := cl.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected one entry, got %d", len(entries))
+	}
+	if !entries[0].Entity.CreatedAt.Equal(created) || !entries[0].Entity.UpdatedAt.Equal(updated) {
+		t.Fatalf("timestamps changed: %+v", entries[0].Entity)
+	}
+}
+
 // formatIntID formats an int as a padded string ID for test use.
 func formatIntID(n int) string {
 	s := ""

@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"k8s.io/utils/ptr"
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
@@ -313,8 +312,12 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 			Spec: corev1.PodSpec{
 				// ponytail: PSa "restricted"-level SecurityContext
 				SecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot:   ptr.To(true),
-					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					RunAsNonRoot:        new(true),
+					RunAsUser:           new(int64(65532)),
+					RunAsGroup:          new(int64(65532)),
+					FSGroup:             new(int64(65532)),
+					FSGroupChangePolicy: fsGroupChangePolicyPtr(corev1.FSGroupChangeOnRootMismatch),
+					SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 				},
 				ServiceAccountName: "cartographer-" + fg.Name,
 				Containers: []corev1.Container{{
@@ -323,8 +326,8 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					// ponytail: restricted SecurityContext
 					SecurityContext: &corev1.SecurityContext{
-						ReadOnlyRootFilesystem:   ptr.To(true),
-						AllowPrivilegeEscalation: ptr.To(false),
+						ReadOnlyRootFilesystem:   new(true),
+						AllowPrivilegeEscalation: new(false),
 						Capabilities: &corev1.Capabilities{
 							Drop: []corev1.Capability{"ALL"},
 						},
@@ -403,4 +406,11 @@ func (r *FoundryGraphReconciler) reconcileService(ctx context.Context, fg *flowv
 		return fmt.Errorf("reconcile Service: %w", err)
 	}
 	return nil
+}
+
+// fsGroupChangePolicyPtr returns a pointer to a PodFSGroupChangePolicy value.
+//
+//go:fix inline
+func fsGroupChangePolicyPtr(p corev1.PodFSGroupChangePolicy) *corev1.PodFSGroupChangePolicy {
+	return new(p)
 }

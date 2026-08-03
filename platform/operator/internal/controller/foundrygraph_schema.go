@@ -26,9 +26,9 @@ import (
 type SchemaDiffResult int
 
 const (
-	SchemaDiffNone            SchemaDiffResult = iota // no schema change
-	SchemaDiffNonDestructive                          // additive-only: new types, new properties, rule changes, enableVectorIndex false->true
-	SchemaDiffDestructive                             // removed types, removed/changed properties, enableVectorIndex true->false
+	SchemaDiffNone           SchemaDiffResult = iota // no schema change
+	SchemaDiffNonDestructive                         // additive-only: new types, new properties, rule changes, enableVectorIndex false->true
+	SchemaDiffDestructive                            // removed types, removed/changed properties, enableVectorIndex true->false
 )
 
 // diffSchema compares old and new FoundryGraphSpec and returns the type of schema change.
@@ -272,5 +272,3 @@ func specSemanticallyEqual(a, b *flowv1.FoundryGraphSpec) bool {
 
 	return diffSchema(a, b) == SchemaDiffNone
 }
-
-

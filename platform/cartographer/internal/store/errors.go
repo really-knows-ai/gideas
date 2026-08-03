@@ -8,8 +8,9 @@ import "errors"
 
 // Schema errors
 var (
-	ErrTableStructureMismatch = errors.New("table structure mismatch")
-	ErrDatabaseNotReady       = errors.New("database not ready")
+	ErrTableStructureMismatch  = errors.New("table structure mismatch")
+	ErrDatabaseNotReady        = errors.New("database not ready")
+	ErrDestructiveSchemaChange = errors.New("destructive schema change: wipe required before applying")
 )
 
 // Entity CRUD errors
@@ -54,6 +55,7 @@ var (
 // Branch errors
 var (
 	ErrBranchAlreadyExists = errors.New("branch already exists")
+	ErrBranchNotFound      = errors.New("branch not found")
 )
 
 // Rehydration errors

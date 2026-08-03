@@ -20,6 +20,13 @@ type ladybugDB struct {
 	db     *lbug.Database
 	conn   *lbug.Connection
 	closed bool
+	failed bool
+
+	stageMetadata     func(string, schemaMetadata) (string, error)
+	publishMetadata   func(string, string) error
+	writeMetadata     func(string, schemaMetadata) error
+	createVectorIndex func(*lbug.Connection, string) error
+	readDir           func(string) ([]os.DirEntry, error)
 
 	// Schema cache (rebuilt from catalog on Open)
 	entityTypeDefs map[string]*store.EntityTypeDef
@@ -33,7 +40,8 @@ type ladybugDB struct {
 	edgePairs map[string][]fromToPair
 
 	// Branches (txID -> branchDB)
-	branches map[string]*branchDB
+	branches     map[string]*branchDB
+	branchStates map[string]store.BranchTransactionState
 }
 
 // branchDB holds a real LadybugDB connection for an isolated branch.
@@ -43,6 +51,7 @@ type branchDB struct {
 	conn           *lbug.Connection
 	entityTypeDefs map[string]*store.EntityTypeDef
 	edgeTypeDefs   map[string]*store.EdgeTypeDef
+	failed         bool
 }
 
 // Compile-time interface check.
@@ -53,6 +62,9 @@ var _ store.Store = (*ladybugDB)(nil)
 func Open(path string) (store.Store, error) {
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "branches"), 0755); err != nil {
+		return nil, fmt.Errorf("create branches dir: %w", err)
 	}
 
 	dbPath := filepath.Join(path, "main.lbug")
@@ -68,14 +80,20 @@ func Open(path string) (store.Store, error) {
 	}
 
 	ldb := &ladybugDB{
-		path:           path,
-		db:             database,
-		conn:           conn,
-		entityTypeDefs: make(map[string]*store.EntityTypeDef),
-		edgeTypeDefs:   make(map[string]*store.EdgeTypeDef),
-		ruleIndex:      make(map[string][]*flowv1.ConnectionRule),
-		edgePairs:      make(map[string][]fromToPair),
-		branches:       make(map[string]*branchDB),
+		path:              path,
+		db:                database,
+		conn:              conn,
+		entityTypeDefs:    make(map[string]*store.EntityTypeDef),
+		edgeTypeDefs:      make(map[string]*store.EdgeTypeDef),
+		ruleIndex:         make(map[string][]*flowv1.ConnectionRule),
+		edgePairs:         make(map[string][]fromToPair),
+		branches:          make(map[string]*branchDB),
+		branchStates:      make(map[string]store.BranchTransactionState),
+		stageMetadata:     stageSchemaMetadata,
+		publishMetadata:   publishSchemaMetadata,
+		writeMetadata:     writeSchemaMetadata,
+		createVectorIndex: createVectorIndexOnConn,
+		readDir:           os.ReadDir,
 	}
 
 	if err := ldb.loadExtensions(); err != nil {
@@ -86,6 +104,13 @@ func Open(path string) (store.Store, error) {
 	if err := ldb.rebuildSchemaCache(); err != nil {
 		_ = ldb.Close()
 		return nil, fmt.Errorf("rebuild schema cache: %w", err)
+	}
+	ldb.mu.Lock()
+	err = ldb.restoreMainSchemaMetadataLocked()
+	ldb.mu.Unlock()
+	if err != nil {
+		_ = ldb.Close()
+		return nil, fmt.Errorf("restore schema metadata: %w", err)
 	}
 
 	return ldb, nil
@@ -105,13 +130,19 @@ func OpenInMemory() (store.Store, error) {
 	}
 
 	ldb := &ladybugDB{
-		db:             database,
-		conn:           conn,
-		entityTypeDefs: make(map[string]*store.EntityTypeDef),
-		edgeTypeDefs:   make(map[string]*store.EdgeTypeDef),
-		ruleIndex:      make(map[string][]*flowv1.ConnectionRule),
-		edgePairs:      make(map[string][]fromToPair),
-		branches:       make(map[string]*branchDB),
+		db:                database,
+		conn:              conn,
+		entityTypeDefs:    make(map[string]*store.EntityTypeDef),
+		edgeTypeDefs:      make(map[string]*store.EdgeTypeDef),
+		ruleIndex:         make(map[string][]*flowv1.ConnectionRule),
+		edgePairs:         make(map[string][]fromToPair),
+		branches:          make(map[string]*branchDB),
+		branchStates:      make(map[string]store.BranchTransactionState),
+		stageMetadata:     stageSchemaMetadata,
+		publishMetadata:   publishSchemaMetadata,
+		writeMetadata:     writeSchemaMetadata,
+		createVectorIndex: createVectorIndexOnConn,
+		readDir:           os.ReadDir,
 	}
 
 	if err := ldb.loadExtensions(); err != nil {
@@ -137,6 +168,17 @@ func (db *ladybugDB) Close() error {
 	}
 	db.closed = true
 
+	for id, branch := range db.branches {
+		branch.mu.Lock()
+		if branch.conn != nil {
+			branch.conn.Close()
+		}
+		if branch.db != nil {
+			branch.db.Close()
+		}
+		branch.mu.Unlock()
+		delete(db.branches, id)
+	}
 	if db.conn != nil {
 		db.conn.Close()
 	}

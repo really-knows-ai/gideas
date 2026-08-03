@@ -66,6 +66,8 @@ func mapStoreError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrTableStructureMismatch):
 		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, store.ErrDestructiveSchemaChange):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrDatabaseNotReady):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrBranchAlreadyExists):
@@ -181,6 +183,11 @@ func errTransactionTimedOut(txID string) error {
 
 func errTransactionNotFound(txID string) error {
 	return status.Errorf(codes.NotFound, "transaction %q not found", txID)
+}
+
+func errTransactionRollbackOnly(txID string) error {
+	return status.Errorf(codes.FailedPrecondition,
+		"transaction %q is rollback-only; retry RollbackTransaction to finish cleanup", txID)
 }
 
 func errInvalidTransactionIDFormat(txID string) error {

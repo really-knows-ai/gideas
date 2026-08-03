@@ -180,7 +180,10 @@ func main() {
 	// 6. Optional remote pull on init
 	// -----------------------------------------------------------------------
 	if remotePullOnInit && remoteURL != "" {
-		tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn)
+		if err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn); err != nil {
+			slog.Error("Pre-flight auth config failure", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -284,9 +287,12 @@ func tryRemotePullOnInit(
 	remoteURL string,
 	remoteAuthSecretRef string,
 	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
-) {
+) error {
 	authFn := func() error {
-		if remoteAuthSecretRef == "" || readSecretFn == nil {
+		if remoteAuthSecretRef == "" {
+			return nil
+		}
+		if readSecretFn == nil {
 			return gitstore.ErrAuthConfigMissing
 		}
 		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
@@ -312,8 +318,7 @@ func tryRemotePullOnInit(
 		return nil
 	}
 	if authErr := authFn(); authErr != nil {
-		slog.Error("Pre-flight auth config failure", "error", authErr)
-		os.Exit(1)
+		return authErr
 	}
 	empty, err := gs.IsEmpty(context.Background())
 	if err == nil && empty {
@@ -326,6 +331,7 @@ func tryRemotePullOnInit(
 			slog.Info("Initial clone from remote succeeded")
 		}
 	}
+	return nil
 }
 
 func buildResolveAuthFn(
@@ -360,7 +366,7 @@ func buildResolveAuthFn(
 				signer.HostKeyCallback = gossh.InsecureIgnoreHostKey()
 				return signer, nil
 			}
-			return nil, nil
+			return nil, gitstore.ErrAuthConfigMissing
 		case "https":
 			httpsUser := parsedURL.User.Username()
 			if httpsUser == "" {
@@ -369,7 +375,7 @@ func buildResolveAuthFn(
 			if password, hasPW := data["password"]; hasPW && password != "" {
 				return &http.BasicAuth{Username: httpsUser, Password: password}, nil
 			}
-			return nil, nil
+			return nil, gitstore.ErrAuthConfigMissing
 		default:
 			return nil, gitstore.ErrUnsupportedURLScheme
 		}

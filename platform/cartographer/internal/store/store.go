@@ -70,6 +70,9 @@ type Store interface {
 	// Transaction (branch DB management)
 	CreateBranchDB(txID string) error
 	DropBranchDB(txID string) error
+	SaveBranchTransactionState(txID string, state BranchTransactionState) error
+	LoadBranchTransactionState(txID string) (BranchTransactionState, error)
+	InvalidateBranchState(txID string) error
 	ReplicateSchemaToBranch(txID string) error
 	RehydrateFromBranch(ctx context.Context, txID string) error
 	RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error
@@ -79,6 +82,7 @@ type Store interface {
 
 	// Wipe
 	WipeAll(ctx context.Context) error
+	WipeSchema(ctx context.Context) error
 
 	// Health
 	Health(ctx context.Context) (*HealthResult, error)

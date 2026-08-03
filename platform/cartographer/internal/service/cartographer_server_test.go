@@ -5,8 +5,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/foundry/flow/cartographer/internal/store"
 	"github.com/foundry/flow/cartographer/internal/store/ladybug"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -26,6 +31,8 @@ import (
 // capability metadata in tests. It is lazily initialized by the first
 // call to testCtx.
 var testSidecarPriv ed25519.PrivateKey
+
+const testMutationEntityID = "11111111-1111-4111-8111-111111111111"
 
 // =========================================================================
 // Test utilities
@@ -50,7 +57,12 @@ func signCapabilities(caps string, priv ed25519.PrivateKey) (sig string, unixTim
 // capabilityContext returns a context with signed capability metadata.
 // The signedBy parameter must be "operator" or "sidecar".
 func capabilityContext(caps string, priv ed25519.PrivateKey, signedBy string) context.Context {
-	sig, signedAt := signCapabilities(caps, priv)
+	return capabilityContextAt(caps, priv, signedBy, time.Now().Unix())
+}
+
+func capabilityContextAt(caps string, priv ed25519.PrivateKey, signedBy string, signedAt int64) context.Context {
+	payload := fmt.Sprintf("%s|%d", caps, signedAt)
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(payload)))
 	md := metadata.Pairs(
 		MetadataKeyCapabilities, caps,
 		MetadataKeyCapabilitiesSignature, sig,
@@ -84,6 +96,26 @@ type fakeTicker struct{ ch chan time.Time }
 func (f *fakeTicker) C() <-chan time.Time { return f.ch }
 func (f *fakeTicker) Stop()               {}
 
+type testSchemaProvider struct {
+	entityNames []string
+	edgeNames   []string
+	entities    map[string]*store.EntityTypeDef
+	edges       map[string]*store.EdgeTypeDef
+}
+
+func (s testSchemaProvider) EntityTypeNames() []string {
+	return append([]string(nil), s.entityNames...)
+}
+func (s testSchemaProvider) EdgeTypeNames() []string { return append([]string(nil), s.edgeNames...) }
+func (s testSchemaProvider) EntityType(name string) (*store.EntityTypeDef, bool) {
+	def, ok := s.entities[name]
+	return def, ok
+}
+func (s testSchemaProvider) EdgeType(name string) (*store.EdgeTypeDef, bool) {
+	def, ok := s.edges[name]
+	return def, ok
+}
+
 type mockTelemetryPublisher struct {
 	mu     sync.Mutex
 	events []*flowv1.PublishRequest
@@ -106,14 +138,14 @@ func (m *mockTelemetryPublisher) Events() []*flowv1.PublishRequest {
 // Helper wrappers for testing error paths
 // =========================================================================
 
-// wipeFailingStore fails on every call to WipeAll, used to test mid-wipe
+// wipeFailingStore fails on every call to WipeSchema, used to test mid-wipe
 // error handling in WipeGraph.
 type wipeFailingStore struct {
 	store.Store
 }
 
-func (w *wipeFailingStore) WipeAll(ctx context.Context) error {
-	return fmt.Errorf("simulated WipeAll failure")
+func (w *wipeFailingStore) WipeSchema(ctx context.Context) error {
+	return fmt.Errorf("simulated WipeSchema failure")
 }
 
 // failOnCreateBranchDBStore fails on CreateBranchDB, used to test
@@ -126,6 +158,47 @@ func (f *failOnCreateBranchDBStore) CreateBranchDB(txID string) error {
 	return fmt.Errorf("simulated CreateBranchDB failure")
 }
 
+type beginSetupBlockingStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *beginSetupBlockingStore) CreateBranchDB(txID string) error {
+	close(s.entered)
+	<-s.release
+	return s.Store.CreateBranchDB(txID)
+}
+
+type wipeBlockingStore struct {
+	store.Store
+	mu            sync.Mutex
+	entered       chan struct{}
+	release       chan struct{}
+	wipeCompleted bool
+	branchSetup   chan bool
+}
+
+func (s *wipeBlockingStore) WipeSchema(ctx context.Context) error {
+	close(s.entered)
+	<-s.release
+	err := s.Store.WipeSchema(ctx)
+	s.mu.Lock()
+	s.wipeCompleted = true
+	s.mu.Unlock()
+	return err
+}
+
+func (s *wipeBlockingStore) CreateBranchDB(txID string) error {
+	if s.branchSetup != nil {
+		s.mu.Lock()
+		wipeCompleted := s.wipeCompleted
+		s.mu.Unlock()
+		s.branchSetup <- wipeCompleted
+	}
+	return s.Store.CreateBranchDB(txID)
+}
+
 // panicStore panics on ListMainEntityTypes to simulate a buffer allocation
 // panic inside collectExportData.
 type panicStore struct {
@@ -136,16 +209,362 @@ func (p *panicStore) ListMainEntityTypes() ([]string, error) {
 	panic("simulated OOM in export data collection")
 }
 
+type mutationBlockingStore struct {
+	store.Store
+	wrote   chan struct{}
+	release chan struct{}
+}
+
+type deleteEntityFailingStore struct {
+	store.Store
+}
+
+func (s *deleteEntityFailingStore) DeleteEntity(context.Context, string, string) (*store.Entity, error) {
+	return nil, errors.New("simulated DeleteEntity failure")
+}
+
+func (s *mutationBlockingStore) CreateEntity(
+	ctx context.Context, entityType, id string, properties map[string]string, embedding []float32, branch string,
+) (*store.Entity, error) {
+	entity, err := s.Store.CreateEntity(ctx, entityType, id, properties, embedding, branch)
+	if branch != "" && err == nil {
+		close(s.wrote)
+		<-s.release
+	}
+	return entity, err
+}
+
+type hydrationBlockingStore struct {
+	store.Store
+	calls   int
+	blocked chan struct{}
+	release chan struct{}
+	fail    bool
+}
+
+func (s *hydrationBlockingStore) HydrateBranchFromFiles(
+	ctx context.Context, txID, entitiesDir, edgesDir string,
+) error {
+	s.calls++
+	err := s.Store.HydrateBranchFromFiles(ctx, txID, entitiesDir, edgesDir)
+	if s.calls == 2 {
+		close(s.blocked)
+		<-s.release
+		if s.fail {
+			return fmt.Errorf("simulated hydration failure")
+		}
+	}
+	return err
+}
+
+type hydrationCountingStore struct {
+	store.Store
+	fromFiles  int
+	fromBranch int
+}
+
+func (s *hydrationCountingStore) RehydrateMainFromFiles(context.Context, string, string) error {
+	s.fromFiles++
+	return nil
+}
+
+func (s *hydrationCountingStore) RehydrateFromBranch(context.Context, string) error {
+	s.fromBranch++
+	return nil
+}
+
+type dropFailingStore struct {
+	store.Store
+	failDrop bool
+}
+
+type markerFailingStore struct {
+	store.Store
+	failMark bool
+	failDrop bool
+}
+
+type transactionStateFailingStore struct {
+	store.Store
+	fail   func(store.BranchTransactionState) bool
+	failed bool
+}
+
+func (s *transactionStateFailingStore) SaveBranchTransactionState(
+	txID string, state store.BranchTransactionState,
+) error {
+	if !s.failed && s.fail(state) {
+		s.failed = true
+		return errors.New("simulated transaction state write failure")
+	}
+	return s.Store.SaveBranchTransactionState(txID, state)
+}
+
+func (s *markerFailingStore) SaveBranchTransactionState(
+	txID string, state store.BranchTransactionState,
+) error {
+	if s.failMark && state.RollbackOnly {
+		s.failMark = false
+		return errors.New("simulated rollback-only marker failure")
+	}
+	return s.Store.SaveBranchTransactionState(txID, state)
+}
+
+func (s *markerFailingStore) DropBranchDB(txID string) error {
+	if s.failDrop {
+		s.failDrop = false
+		return errors.New("simulated marker cleanup drop failure")
+	}
+	return s.Store.DropBranchDB(txID)
+}
+
+type gcBlockingStore struct {
+	store.Store
+	wipeEntered chan struct{}
+	releaseWipe chan struct{}
+}
+
+func (s *gcBlockingStore) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
+	close(s.wipeEntered)
+	<-s.releaseWipe
+	return s.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+}
+
+func (s *dropFailingStore) DropBranchDB(txID string) error {
+	if s.failDrop {
+		s.failDrop = false
+		return fmt.Errorf("simulated DropBranchDB failure")
+	}
+	return s.Store.DropBranchDB(txID)
+}
+
+type mergeFailingGitStore struct {
+	gitstore.GitStore
+	failMerge bool
+}
+
+type commitCountingGitStore struct {
+	gitstore.GitStore
+	commits int
+}
+
+type commitErrorGitStore struct {
+	gitstore.GitStore
+	failBefore bool
+	failAfter  bool
+	commits    int
+}
+
+func (s *commitErrorGitStore) Commit(ctx context.Context, message string) error {
+	s.commits++
+	if s.failBefore {
+		s.failBefore = false
+		return errors.New("simulated commit failure")
+	}
+	if err := s.GitStore.Commit(ctx, message); err != nil {
+		return err
+	}
+	if s.failAfter {
+		s.failAfter = false
+		return errors.New("simulated error after commit")
+	}
+	return nil
+}
+
+func (s *commitCountingGitStore) Commit(ctx context.Context, message string) error {
+	s.commits++
+	return s.GitStore.Commit(ctx, message)
+}
+
+type cleanupAfterMergeFailingGitStore struct {
+	gitstore.GitStore
+	failRestore bool
+	commits     int
+	merges      int
+}
+
+type recoveryFailingGitStore struct {
+	gitstore.GitStore
+	fail      string
+	lockCalls int
+}
+
+func (s *recoveryFailingGitStore) failOnce(operation string) error {
+	if s.fail == operation {
+		s.fail = ""
+		return fmt.Errorf("simulated %s failure", operation)
+	}
+	return nil
+}
+
+func (s *recoveryFailingGitStore) WithGitLock(fn func() error) error {
+	s.lockCalls++
+	if s.fail == "lookup lock" && s.lockCalls == 2 {
+		s.fail = ""
+		return errors.New("simulated lookup lock failure")
+	}
+	if err := s.failOnce("lock"); err != nil {
+		return err
+	}
+	return s.GitStore.WithGitLock(fn)
+}
+
+func (s *recoveryFailingGitStore) RestoreMain(ctx context.Context) error {
+	if err := s.failOnce("restore"); err != nil {
+		return err
+	}
+	return s.GitStore.RestoreMain(ctx)
+}
+
+func (s *recoveryFailingGitStore) CleanUntracked(ctx context.Context) error {
+	if err := s.failOnce("clean"); err != nil {
+		return err
+	}
+	return s.GitStore.CleanUntracked(ctx)
+}
+
+func (s *recoveryFailingGitStore) DeleteBranch(ctx context.Context, txID string) error {
+	if err := s.failOnce("delete"); err != nil {
+		return err
+	}
+	return s.GitStore.DeleteBranch(ctx, txID)
+}
+
+func (s *recoveryFailingGitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
+	if err := s.failOnce("list entities"); err != nil {
+		return nil, err
+	}
+	return s.GitStore.ListEntityTypes(ctx)
+}
+
+func (s *recoveryFailingGitStore) ReadAllEntityFiles(
+	ctx context.Context, entityType string,
+) ([]gitstore.EntityFile, error) {
+	if err := s.failOnce("read entities"); err != nil {
+		return nil, err
+	}
+	return s.GitStore.ReadAllEntityFiles(ctx, entityType)
+}
+
+func (s *recoveryFailingGitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
+	if err := s.failOnce("list edges"); err != nil {
+		return nil, err
+	}
+	return s.GitStore.ListEdgeTypes(ctx)
+}
+
+func (s *recoveryFailingGitStore) ReadAllEdgeFiles(
+	ctx context.Context, edgeType string,
+) ([]gitstore.EdgeFile, error) {
+	if err := s.failOnce("read edges"); err != nil {
+		return nil, err
+	}
+	return s.GitStore.ReadAllEdgeFiles(ctx, edgeType)
+}
+
+func (s *cleanupAfterMergeFailingGitStore) Commit(ctx context.Context, message string) error {
+	s.commits++
+	return s.GitStore.Commit(ctx, message)
+}
+
+func (s *cleanupAfterMergeFailingGitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
+	s.merges++
+	return s.GitStore.FastForwardMerge(ctx, branch, into)
+}
+
+func (s *cleanupAfterMergeFailingGitStore) RestoreMain(ctx context.Context) error {
+	if s.failRestore {
+		s.failRestore = false
+		return fmt.Errorf("simulated post-merge restore failure")
+	}
+	return s.GitStore.RestoreMain(ctx)
+}
+
+type rehydrateFailingStore struct {
+	store.Store
+	fail bool
+}
+
+func (s *rehydrateFailingStore) RehydrateMainFromFiles(
+	ctx context.Context, entitiesDir, edgesDir string,
+) error {
+	if s.fail {
+		s.fail = false
+		return fmt.Errorf("simulated rehydration failure")
+	}
+	return s.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+}
+
+func (s *mergeFailingGitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
+	if s.failMerge {
+		s.failMerge = false
+		return fmt.Errorf("simulated merge failure")
+	}
+	return s.GitStore.FastForwardMerge(ctx, branch, into)
+}
+
+type gitAttemptStore struct {
+	gitstore.GitStore
+	mu        sync.Mutex
+	attempted chan struct{}
+}
+
+type pullGitStore struct {
+	gitAttemptStore
+}
+
+func (s *pullGitStore) IsEmpty(context.Context) (bool, error)    { return false, nil }
+func (s *pullGitStore) PullAndFastForward(context.Context) error { return nil }
+
+type pullHydrationBlockingStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *pullHydrationBlockingStore) RehydrateMainFromFiles(
+	ctx context.Context, entitiesDir, edgesDir string,
+) error {
+	close(s.entered)
+	<-s.release
+	return s.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+}
+
+func (s *gitAttemptStore) setAttempted(attempted chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attempted = attempted
+}
+
+func (s *gitAttemptStore) WithGitLock(fn func() error) error {
+	s.mu.Lock()
+	attempted := s.attempted
+	s.attempted = nil
+	s.mu.Unlock()
+	if attempted != nil {
+		close(attempted)
+	}
+	return s.GitStore.WithGitLock(fn)
+}
+
 // mockExportStream implements grpc.ServerStreamingServer[flowv1.ExportGraphResponse]
-// for testing ExportGraph error paths.
+// for testing ExportGraph through the stream interceptor.
 type mockExportStream struct {
-	ctx       context.Context
-	sendErr   error
-	sendCount int
+	ctx          context.Context
+	sendErr      error
+	sendCount    int
+	data         []byte
+	verifiedCaps *Capabilities
 }
 
 func (m *mockExportStream) Send(resp *flowv1.ExportGraphResponse) error {
+	return m.SendMsg(resp)
+}
+func (m *mockExportStream) SendMsg(msg any) error {
 	m.sendCount++
+	if resp, ok := msg.(*flowv1.ExportGraphResponse); ok {
+		m.data = append(m.data, resp.Chunk...)
+	}
 	return m.sendErr
 }
 func (m *mockExportStream) Context() context.Context        { return m.ctx }
@@ -153,7 +572,43 @@ func (m *mockExportStream) SetTrailer(md metadata.MD)       {}
 func (m *mockExportStream) SendHeader(md metadata.MD) error { return nil }
 func (m *mockExportStream) SetHeader(md metadata.MD) error  { return nil }
 func (m *mockExportStream) RecvMsg(any) error               { return nil }
-func (m *mockExportStream) SendMsg(any) error               { return nil }
+
+func invokePullFromRemote(
+	srv *CartographerServer, ctx context.Context,
+) (handlerInvoked bool, verifiedCaps *Capabilities, err error) {
+	_, err = srv.verifier.VerifyInterceptor(
+		ctx,
+		&flowv1.PullFromRemoteRequest{},
+		&grpc.UnaryServerInfo{Server: srv, FullMethod: flowv1.CartographerService_PullFromRemote_FullMethodName},
+		func(ctx context.Context, req any) (any, error) {
+			handlerInvoked = true
+			verifiedCaps, _ = ExtractCapabilities(ctx)
+			return srv.PullFromRemote(ctx, req.(*flowv1.PullFromRemoteRequest))
+		},
+	)
+	return handlerInvoked, verifiedCaps, err
+}
+
+func invokeExportGraph(
+	srv *CartographerServer, req *flowv1.ExportGraphRequest, stream *mockExportStream,
+) (handlerInvoked bool, err error) {
+	err = srv.verifier.VerifyStreamInterceptor(
+		srv,
+		stream,
+		&grpc.StreamServerInfo{
+			FullMethod:     flowv1.CartographerService_ExportGraph_FullMethodName,
+			IsServerStream: true,
+		},
+		func(_ any, intercepted grpc.ServerStream) error {
+			handlerInvoked = true
+			stream.verifiedCaps, _ = ExtractCapabilities(intercepted.Context())
+			return srv.ExportGraph(req, &grpc.GenericServerStream[
+				flowv1.ExportGraphRequest, flowv1.ExportGraphResponse,
+			]{ServerStream: intercepted})
+		},
+	)
+	return handlerInvoked, err
+}
 
 // initTestKey generates the shared test key pair once and returns the public key.
 func initTestKey() ed25519.PublicKey {
@@ -238,6 +693,113 @@ func applyTestSchema(ctx context.Context, t *testing.T, st store.Store) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema: %v", err)
 	}
+}
+
+func commitGitEntity(ctx context.Context, t *testing.T, gs gitstore.GitStore, id, name string) {
+	t.Helper()
+	if err := gs.WithGitLock(func() error {
+		if err := gs.RestoreMain(ctx); err != nil {
+			return err
+		}
+		if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{{
+			ID: id, Type: "Component", Properties: map[string]string{"name": name},
+		}}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx, "entities"); err != nil {
+			return err
+		}
+		return gs.Commit(ctx, "advance main")
+	}); err != nil {
+		t.Fatalf("advance main: %v", err)
+	}
+}
+
+func TestComputeSchemaHashCompleteAndDeterministic(t *testing.T) {
+	base := testSchemaProvider{
+		entityNames: []string{"Service", "Component"},
+		edgeNames:   []string{"DEPENDS_ON"},
+		entities: map[string]*store.EntityTypeDef{
+			"Service": {
+				Name: "Service", EnableVectorIndex: true,
+				Properties: []store.PropertyDef{
+					{Name: "version", Type: "string"}, {Name: "name", Type: "string", Required: true},
+				},
+				Rules: []store.ConnectionRuleDef{{
+					CanConnectTo: []string{"Service", "Component"}, Using: []string{"CALLS", "DEPENDS_ON"},
+				}},
+			},
+			"Component": {Name: "Component"},
+		},
+		edges: map[string]*store.EdgeTypeDef{
+			"DEPENDS_ON": {Name: "DEPENDS_ON", Properties: []store.PropertyDef{{Name: "weight", Type: "string"}}},
+		},
+	}
+	reordered := testSchemaProvider{
+		entityNames: []string{"Component", "Service"}, edgeNames: []string{"DEPENDS_ON"},
+		entities: map[string]*store.EntityTypeDef{
+			"Component": {Name: "Component"},
+			"Service": {
+				Name: "Service", EnableVectorIndex: true,
+				Properties: []store.PropertyDef{
+					{Name: "name", Type: "string", Required: true}, {Name: "version", Type: "string"},
+				},
+				Rules: []store.ConnectionRuleDef{{
+					CanConnectTo: []string{"Component", "Service"}, Using: []string{"DEPENDS_ON", "CALLS"},
+				}},
+			},
+		},
+		edges: base.edges,
+	}
+	baseline := computeSchemaHash(base)
+	if got := computeSchemaHash(reordered); got != baseline {
+		t.Fatalf("hash changed with ordering: %q != %q", got, baseline)
+	}
+
+	mutations := []struct {
+		name   string
+		mutate func(testSchemaProvider)
+	}{
+		{"required", func(s testSchemaProvider) { s.entities["Service"].Properties[0].Required = true }},
+		{"vector", func(s testSchemaProvider) { s.entities["Service"].EnableVectorIndex = false }},
+		{"rule", func(s testSchemaProvider) { s.entities["Service"].Rules[0].Using = []string{"CALLS"} }},
+		{"property", func(s testSchemaProvider) { s.edges["DEPENDS_ON"].Properties[0].Type = "integer" }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			copyProvider := cloneTestSchemaProvider(base)
+			mutation.mutate(copyProvider)
+			if got := computeSchemaHash(copyProvider); got == baseline {
+				t.Fatalf("hash did not change for %s mutation", mutation.name)
+			}
+		})
+	}
+}
+
+func cloneTestSchemaProvider(source testSchemaProvider) testSchemaProvider {
+	clone := testSchemaProvider{
+		entityNames: append([]string(nil), source.entityNames...),
+		edgeNames:   append([]string(nil), source.edgeNames...),
+		entities:    make(map[string]*store.EntityTypeDef, len(source.entities)),
+		edges:       make(map[string]*store.EdgeTypeDef, len(source.edges)),
+	}
+	for name, def := range source.entities {
+		copyDef := *def
+		copyDef.Properties = append([]store.PropertyDef(nil), def.Properties...)
+		copyDef.Rules = make([]store.ConnectionRuleDef, len(def.Rules))
+		for i, rule := range def.Rules {
+			copyDef.Rules[i] = store.ConnectionRuleDef{
+				CanConnectTo: append([]string(nil), rule.CanConnectTo...), Using: append([]string(nil), rule.Using...),
+			}
+		}
+		clone.entities[name] = &copyDef
+	}
+	for name, def := range source.edges {
+		copyDef := *def
+		copyDef.Properties = append([]store.PropertyDef(nil), def.Properties...)
+		clone.edges[name] = &copyDef
+	}
+	return clone
 }
 
 // =========================================================================
@@ -336,31 +898,35 @@ func TestCapability_UnrecognizedSigner(t *testing.T) {
 	}
 }
 
-func TestCapability_StaleCapability(t *testing.T) {
-	opPub, _ := generateTestKey()
-	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
-	t.Cleanup(func() { _ = st.Close() })
-	gs, _ := gitstore.New(t.TempDir())
-	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
-
-	// Sign with a past timestamp (older than 30s staleness window).
-	pastTime := time.Now().Add(-2 * time.Minute).Unix()
-	payload := fmt.Sprintf("READ:graph/entity/Component|%d", pastTime)
-	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
-	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", pastTime),
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+func TestCapability_StaleCapability_UnaryInterceptorRejectsBeforeHandler(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := capabilityContextAt(
+		"WRITE:graph/entity/*", testSidecarPriv, "sidecar", time.Now().Add(-2*time.Minute).Unix(),
 	)
-	ctx := metadata.NewIncomingContext(context.Background(), md)
-	_, err := srv.verifier.verify(ctx)
-	if err == nil {
-		t.Fatal("expected error for stale capability, got nil")
+
+	handlerInvoked, _, err := invokePullFromRemote(srv, ctx)
+	if handlerInvoked {
+		t.Fatal("unary handler ran for stale capability")
 	}
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != "stale capability (anti-replay)" {
+		t.Fatalf("expected stale-capability PermissionDenied, got %v", err)
+	}
+}
+
+func TestCapability_StaleCapability_StreamInterceptorRejectsBeforeHandler(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := capabilityContextAt(
+		"READ:graph/entity/*", testSidecarPriv, "sidecar", time.Now().Add(-2*time.Minute).Unix(),
+	)
+
+	handlerInvoked, err := invokeExportGraph(
+		srv, &flowv1.ExportGraphRequest{Format: "json"}, &mockExportStream{ctx: ctx},
+	)
+	if handlerInvoked {
+		t.Fatal("stream handler ran for stale capability")
+	}
+	if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != "stale capability (anti-replay)" {
+		t.Fatalf("expected stale-capability PermissionDenied, got %v", err)
 	}
 }
 
@@ -663,19 +1229,12 @@ func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	// "name" is required (with Required:true in the schema above) but not provided.
-	// The real LadybugDB does not enforce required properties at the DB level —
-	// the column simply gets a NULL value. This verifies that the entity is
-	// still created without error.
-	resp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType: "Component",
 		Properties: map[string]string{},
 	})
-	if err != nil {
-		t.Fatalf("CreateEntity without required property should succeed: %v", err)
-	}
-	if resp.EntityId == "" {
-		t.Fatal("expected non-empty entity ID")
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "missing required property") {
+		t.Fatalf("CreateEntity without required property should fail: %v", err)
 	}
 }
 
@@ -914,6 +1473,404 @@ func TestTransaction_BeginRollback(t *testing.T) {
 	}
 }
 
+func TestTransaction_ChangeLogAdmissionFailureRollsBackEveryMutationFamily(t *testing.T) {
+	type mutationCase struct {
+		name  string
+		setup func(context.Context, *testing.T, store.Store, string)
+		first func(context.Context, *CartographerServer, string) error
+		over  func(context.Context, *CartographerServer, string) error
+	}
+	ids := []string{
+		testMutationEntityID,
+		"22222222-2222-4222-8222-222222222222",
+		"33333333-3333-4333-8333-333333333333",
+		"44444444-4444-4444-8444-444444444444",
+	}
+	seedEntities := func(ctx context.Context, t *testing.T, st store.Store, branch string) {
+		t.Helper()
+		for i, id := range ids {
+			entityType := "Component"
+			if i < 2 {
+				entityType = "Service"
+			}
+			_, err := st.CreateEntity(
+				ctx, entityType, id, map[string]string{"name": fmt.Sprintf("entity-%d", i)}, nil, branch,
+			)
+			if err != nil {
+				t.Fatalf("seed entity %s on %q: %v", id, branch, err)
+			}
+		}
+	}
+	seedEdges := func(ctx context.Context, t *testing.T, st store.Store, branch string) {
+		t.Helper()
+		seedEntities(ctx, t, st, branch)
+		for i := range 2 {
+			_, err := st.CreateEdge(
+				ctx, "DEPENDS_ON", ids[i], ids[i+2], map[string]string{"weight": fmt.Sprintf("%d", i)}, branch,
+			)
+			if err != nil {
+				t.Fatalf("seed edge on %q: %v", branch, err)
+			}
+		}
+	}
+	createEntity := func(name string) func(context.Context, *CartographerServer, string) error {
+		return func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": name}, TransactionId: txID,
+			})
+			return err
+		}
+	}
+	updateEntity := func(id, version string) func(context.Context, *CartographerServer, string) error {
+		return func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+				Id: id, Properties: map[string]string{"version": version}, TransactionId: txID,
+			})
+			return err
+		}
+	}
+	deleteEntity := func(id string) func(context.Context, *CartographerServer, string) error {
+		return func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: id, TransactionId: txID})
+			return err
+		}
+	}
+	createEdge := func(from, to string) func(context.Context, *CartographerServer, string) error {
+		return func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+				EdgeType: "DEPENDS_ON", FromEntityId: from, ToEntityId: to, TransactionId: txID,
+			})
+			return err
+		}
+	}
+
+	cases := []mutationCase{
+		{name: "CreateEntity", first: createEntity("first"), over: createEntity("overflow")},
+		{name: "UpdateEntity", setup: seedEntities,
+			first: updateEntity(ids[2], "first"), over: updateEntity(ids[3], "overflow")},
+		{name: "DeleteEntity", setup: seedEntities, first: deleteEntity(ids[2]), over: deleteEntity(ids[3])},
+		{name: "CreateEdge", setup: seedEntities, first: createEdge(ids[0], ids[2]), over: createEdge(ids[1], ids[3])},
+		{name: "DeleteEdge", setup: seedEdges,
+			first: func(ctx context.Context, srv *CartographerServer, txID string) error {
+				edges, err := srv.store.ListEdgesOfType(ctx, "DEPENDS_ON", txID)
+				if err != nil {
+					return err
+				}
+				_, err = srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: edges[0].Id, TransactionId: txID})
+				return err
+			},
+			over: func(ctx context.Context, srv *CartographerServer, txID string) error {
+				edges, err := srv.store.ListEdgesOfType(ctx, "DEPENDS_ON", txID)
+				if err != nil {
+					return err
+				}
+				_, err = srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: edges[0].Id, TransactionId: txID})
+				return err
+			}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, base := newTestServer(t)
+			srv.txManager.changeLogCap = 1
+			ctx := testCtx()
+			applyTestSchema(ctx, t, base)
+			begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err != nil {
+				t.Fatalf("BeginTransaction: %v", err)
+			}
+			if tc.setup != nil {
+				tc.setup(ctx, t, base, "main")
+				tc.setup(ctx, t, base, begin.TransactionId)
+			}
+			mainEntitiesBefore, _, err := base.ListEntities(ctx, "Component", 100, "", "main")
+			if err != nil {
+				t.Fatalf("snapshot main components: %v", err)
+			}
+			mainServicesBefore, _, err := base.ListEntities(ctx, "Service", 100, "", "main")
+			if err != nil {
+				t.Fatalf("snapshot main services: %v", err)
+			}
+			mainEdgesBefore, err := base.ListEdgesOfType(ctx, "DEPENDS_ON", "main")
+			if err != nil {
+				t.Fatalf("snapshot main edges: %v", err)
+			}
+
+			if err := tc.first(ctx, srv, begin.TransactionId); err != nil {
+				t.Fatalf("first mutation: %v", err)
+			}
+			if err := tc.over(ctx, srv, begin.TransactionId); status.Code(err) != codes.ResourceExhausted {
+				t.Fatalf("overflow mutation error = %v, want ResourceExhausted", err)
+			}
+			if _, err := srv.txManager.Lookup(begin.TransactionId); err == nil {
+				t.Fatal("overflow transaction remained active")
+			}
+			exists, err := srv.gitstore.BranchExists(ctx, begin.TransactionId)
+			if err != nil || exists {
+				t.Fatalf("git branch cleanup: exists=%v err=%v", exists, err)
+			}
+			if _, err := base.DumpAllEntities(ctx, begin.TransactionId); !errors.Is(err, store.ErrBranchNotFound) {
+				t.Fatalf("branch DB remained: %v", err)
+			}
+			mainEntitiesAfter, _, err := base.ListEntities(ctx, "Component", 100, "", "main")
+			if err != nil {
+				t.Fatalf("read main components after rejection: %v", err)
+			}
+			mainServicesAfter, _, err := base.ListEntities(ctx, "Service", 100, "", "main")
+			if err != nil {
+				t.Fatalf("read main services after rejection: %v", err)
+			}
+			mainEdgesAfter, err := base.ListEdgesOfType(ctx, "DEPENDS_ON", "main")
+			if err != nil {
+				t.Fatalf("read main edges after rejection: %v", err)
+			}
+			if !reflect.DeepEqual(mainEntitiesAfter, mainEntitiesBefore) ||
+				!reflect.DeepEqual(mainServicesAfter, mainServicesBefore) ||
+				!reflect.DeepEqual(mainEdgesAfter, mainEdgesBefore) {
+				t.Fatal("main changed after rejected transaction mutation")
+			}
+		})
+	}
+}
+
+func TestDeleteEntity_StoreFailureDoesNotAddChangeLogEntry(t *testing.T) {
+	srv, base := newTestServer(t)
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	id := testMutationEntityID
+	if _, err := base.CreateEntity(
+		ctx, "Component", id, map[string]string{"name": "kept"}, nil, begin.TransactionId,
+	); err != nil {
+		t.Fatalf("seed branch entity: %v", err)
+	}
+	srv.store = &deleteEntityFailingStore{Store: base}
+	_, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: id, TransactionId: begin.TransactionId})
+	if err == nil || !strings.Contains(err.Error(), "simulated DeleteEntity failure") {
+		t.Fatalf("DeleteEntity error = %v", err)
+	}
+	state, err := srv.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if state.ChangeLog.Len() != 0 {
+		t.Fatalf("change log contains failed deletion: %+v", state.ChangeLog.Entries())
+	}
+	if _, err := base.GetEntity(ctx, id, begin.TransactionId); err != nil {
+		t.Fatalf("failed deletion removed entity: %v", err)
+	}
+}
+
+func TestTransaction_ChangeLogRollbackFailureIsExplicitAndRetryable(t *testing.T) {
+	srv, base := newTestServer(t)
+	failing := &dropFailingStore{Store: base, failDrop: true}
+	srv.store = failing
+	srv.txManager.changeLogCap = 1
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	for i := range 2 {
+		_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+			EntityType: "Component", Properties: map[string]string{"name": fmt.Sprintf("entity-%d", i)},
+			TransactionId: begin.TransactionId,
+		})
+		if i == 0 && err != nil {
+			t.Fatalf("first CreateEntity: %v", err)
+		}
+	}
+	if status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "transaction rollback failed") ||
+		!strings.Contains(err.Error(), "simulated DropBranchDB failure") {
+		t.Fatalf("overflow cleanup error = %v", err)
+	}
+	state, err := srv.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("transaction not retained for cleanup retry: %v", err)
+	}
+	if !state.RollbackOnly {
+		t.Fatal("transaction was not marked rollback-only")
+	}
+	if _, err := base.DumpAllEntities(ctx, begin.TransactionId); err != nil {
+		t.Fatalf("branch DB not retained after failed drop: %v", err)
+	}
+	exists, err := srv.gitstore.BranchExists(ctx, begin.TransactionId)
+	if err != nil || !exists {
+		t.Fatalf("Git recovery anchor not retained: exists=%v err=%v", exists, err)
+	}
+	assertTerminal := func(name string, call func() error) {
+		t.Helper()
+		if err := call(); status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "rollback-only") {
+			t.Fatalf("%s error = %v, want rollback-only FailedPrecondition", name, err)
+		}
+	}
+	assertTerminal("read", func() error {
+		_, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{
+			EntityType: "Component", TransactionId: begin.TransactionId,
+		})
+		return err
+	})
+	assertTerminal("mutation", func() error {
+		_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+			EntityType: "Component", Properties: map[string]string{"name": "rejected"},
+			TransactionId: begin.TransactionId,
+		})
+		return err
+	})
+	assertTerminal("diff", func() error {
+		_, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+		return err
+	})
+	assertTerminal("commit", func() error {
+		_, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+		return err
+	})
+	opPub, _ := generateTestKey()
+	restarted := NewCartographerServer(
+		base, srv.gitstore, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 1,
+	)
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions after failed cleanup: %v", err)
+	}
+	recovered, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil || !recovered.RollbackOnly {
+		t.Fatalf("recovered transaction was not rollback-only: state=%+v err=%v", recovered, err)
+	}
+	_, err = restarted.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("retry RollbackTransaction: %v", err)
+	}
+	if _, err := restarted.txManager.Lookup(begin.TransactionId); err == nil {
+		t.Fatal("transaction remained after cleanup retry")
+	}
+	if _, err := base.DumpAllEntities(ctx, begin.TransactionId); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("branch DB remained after cleanup retry: %v", err)
+	}
+}
+
+func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "partial"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err == nil {
+		t.Fatal("expected merge failure")
+	} else if !strings.Contains(err.Error(), "simulated merge failure") {
+		t.Fatalf("commit failed before merge: %v", err)
+	}
+	if _, err = base.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("partial commit did not rehydrate main before merge failure: %v", err)
+	}
+	state, err := srv.txManager.Lookup(begin.TransactionId)
+	if err != nil || !state.MainRehydrated {
+		t.Fatalf("partial commit state not recorded: state=%+v error=%v", state, err)
+	}
+	_, err = srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("RollbackTransaction: %v", err)
+	}
+	if _, err = base.GetEntity(ctx, created.EntityId, "main"); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("transaction entity remained visible after rollback: %v", err)
+	}
+}
+
+func TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.gitstore = &mergeFailingGitStore{GitStore: srv.gitstore, failMerge: true}
+	ctx := testCtx()
+	applyTestSchema(ctx, t, srv.store)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "partial"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err == nil {
+		t.Fatal("expected merge failure")
+	}
+	_, err = srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: begin.TransactionId})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition without LADYBUG_DB_PATH, got %v", err)
+	}
+	if err = srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+		t.Fatalf("transaction was deregistered after explicit restoration failure: %v", err)
+	}
+}
+
+func TestRollbackTransaction_WaitsForUnrelatedGitActivity(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	attempting := &gitAttemptStore{GitStore: srv.gitstore}
+	srv.gitstore = attempting
+	gitHeld := make(chan struct{})
+	releaseGit := make(chan struct{})
+	unrelatedDone := make(chan error, 1)
+	go func() {
+		unrelatedDone <- srv.withGitLock(func() error {
+			close(gitHeld)
+			<-releaseGit
+			return nil
+		})
+	}()
+	<-gitHeld
+	attempted := make(chan struct{})
+	attempting.setAttempted(attempted)
+	rollbackDone := make(chan error, 1)
+	go func() {
+		_, rollbackErr := srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+			TransactionId: begin.TransactionId,
+		})
+		rollbackDone <- rollbackErr
+	}()
+	<-attempted
+	close(releaseGit)
+	if err := <-unrelatedDone; err != nil {
+		t.Fatalf("unrelated Git activity: %v", err)
+	}
+	if err := <-rollbackDone; err != nil {
+		t.Fatalf("RollbackTransaction: %v", err)
+	}
+}
+
 func TestTransaction_ExtendTimeout(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
@@ -1038,6 +1995,729 @@ func TestEmptyTransaction_RollbackNoOp(t *testing.T) {
 	}
 }
 
+func TestEmptyTransaction_CommitWaitsForMutationCompletion(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	blocking := &mutationBlockingStore{Store: base, wrote: make(chan struct{}), release: make(chan struct{})}
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+
+	mutationDone := make(chan error, 1)
+	go func() {
+		_, mutationErr := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+			EntityType: "Component", Properties: map[string]string{"name": "racing"}, TransactionId: begin.TransactionId,
+		})
+		mutationDone <- mutationErr
+	}()
+	<-blocking.wrote
+
+	commitAtLifecycleLock := make(chan struct{})
+	srv.txManager.beforeLifecycleLock = func(string) { close(commitAtLifecycleLock) }
+	commitDone := make(chan error, 1)
+	go func() {
+		_, commitErr := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+		commitDone <- commitErr
+	}()
+	<-commitAtLifecycleLock
+	srv.txManager.beforeLifecycleLock = nil
+	close(blocking.release)
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := <-commitDone; err != nil {
+		t.Fatalf("CommitTransaction: %v", err)
+	}
+	entities, _, err := base.ListEntities(ctx, "Component", 10, "", "main")
+	if err != nil {
+		t.Fatalf("ListEntities: %v", err)
+	}
+	if len(entities) != 1 {
+		t.Fatalf("expected committed mutation on main, got %d entities", len(entities))
+	}
+}
+
+func TestEmptyTransaction_CommitCleanupFailureRemainsRetryable(t *testing.T) {
+	srv, base := newTestServer(t)
+	wrapped := &dropFailingStore{Store: base, failDrop: true}
+	srv.store = wrapped
+	ctx := testCtx()
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err == nil {
+		t.Fatal("expected cleanup failure")
+	}
+	if err = srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+		t.Fatalf("transaction was not retryable after cleanup failure: %v", err)
+	}
+	if err = srv.gitstore.WithGitLock(func() error {
+		exists, branchErr := srv.gitstore.BranchExists(ctx, begin.TransactionId)
+		if branchErr != nil {
+			return branchErr
+		}
+		if !exists {
+			return fmt.Errorf("transaction Git branch was deleted before branch DB cleanup")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("retry CommitTransaction: %v", err)
+	}
+}
+
+func TestCommitTransaction_FileRehydrationUsesExactlyOnePath(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	counting := &hydrationCountingStore{Store: base}
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		counting, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(t.TempDir()),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "hydrate"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("CommitTransaction: %v", err)
+	}
+	if counting.fromFiles != 1 || counting.fromBranch != 0 {
+		t.Fatalf(
+			"expected one file hydration and no branch hydration, got files=%d branch=%d",
+			counting.fromFiles, counting.fromBranch,
+		)
+	}
+}
+
+func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	countingGit := &commitCountingGitStore{GitStore: gs}
+	failingStore := &rehydrateFailingStore{Store: base, fail: true}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		failingStore, countingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "retry"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err == nil {
+		t.Fatal("expected post-commit rehydration failure")
+	}
+	state, lookupErr := srv.txManager.Lookup(begin.TransactionId)
+	if lookupErr != nil || !state.CommitCreated || state.MergeCompleted {
+		t.Fatalf("unexpected retry state: state=%+v error=%v", state, lookupErr)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "late"}, TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected mutation rejection after commit creation, got %v", err)
+	}
+	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected refresh rejection after commit creation, got %v", err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("retry CommitTransaction: %v", err)
+	}
+	if countingGit.commits != 1 {
+		t.Fatalf("expected one transaction commit, got %d", countingGit.commits)
+	}
+}
+
+func TestCommitTransaction_CommitFailureWithoutCommitAllowsRefreshAndRetry(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingGit := &commitErrorGitStore{GitStore: gs, failBefore: true}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "retry"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil {
+		t.Fatal("expected commit failure")
+	}
+	state, lookupErr := srv.txManager.Lookup(begin.TransactionId)
+	if lookupErr != nil || state.CommitStarted || state.CommitCreated {
+		t.Fatalf("commit failure remained irreversible: state=%+v error=%v", state, lookupErr)
+	}
+	commitGitEntity(ctx, t, gs, "22222222-2222-4222-8222-222222222222", "concurrent")
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction after failed commit: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("retry CommitTransaction: %v", err)
+	}
+	if failingGit.commits != 2 {
+		t.Fatalf("expected two transaction commit attempts, got %d", failingGit.commits)
+	}
+}
+
+func TestCommitTransaction_ErrorAfterCommitRetainsResumableState(t *testing.T) {
+	ladybugPath := t.TempDir()
+	base, err := ladybug.Open(ladybugPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingGit := &commitErrorGitStore{GitStore: gs, failAfter: true}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "resume"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil {
+		t.Fatal("expected error after commit creation")
+	}
+	if err = base.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	reopened, err := ladybug.Open(ladybugPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	countingGit := &commitCountingGitStore{GitStore: reopenedGit}
+	restarted := NewCartographerServer(
+		reopened, countingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	restarted.MarkDBReady()
+	if err = restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	state, lookupErr := restarted.txManager.Lookup(begin.TransactionId)
+	if lookupErr != nil || !state.CommitStarted || !state.CommitCreated {
+		t.Fatalf("created commit was not retained: state=%+v error=%v", state, lookupErr)
+	}
+	if _, err = restarted.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "late"},
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected mutation rejection after commit creation, got %v", err)
+	}
+	if _, err = restarted.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected refresh rejection after commit creation, got %v", err)
+	}
+	if _, err = restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("retry CommitTransaction: %v", err)
+	}
+	if failingGit.commits != 1 || countingGit.commits != 0 {
+		t.Fatalf("expected no duplicate transaction commit, before restart=%d after restart=%d",
+			failingGit.commits, countingGit.commits)
+	}
+	if err = reopenedGit.WithGitLock(func() error {
+		if err := reopenedGit.RestoreMain(ctx); err != nil {
+			return err
+		}
+		logs, logErr := reopenedGit.GitLogOneline(ctx, "transaction:"+begin.TransactionId)
+		if logErr != nil {
+			return logErr
+		}
+		if len(logs) != 1 {
+			return fmt.Errorf("expected one transaction commit, got %d", len(logs))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRollbackTransaction_AfterReconciledCommitError(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		failBefore bool
+		failAfter  bool
+	}{
+		{name: "no commit created", failBefore: true},
+		{name: "commit created", failAfter: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, err := ladybug.OpenInMemory()
+			if err != nil {
+				t.Fatalf("OpenInMemory: %v", err)
+			}
+			t.Cleanup(func() { _ = base.Close() })
+			gs, err := gitstore.New(t.TempDir())
+			if err != nil {
+				t.Fatalf("gitstore.New: %v", err)
+			}
+			failingGit := &commitErrorGitStore{
+				GitStore: gs, failBefore: tc.failBefore, failAfter: tc.failAfter,
+			}
+			opPub, _ := generateTestKey()
+			srv := NewCartographerServer(
+				base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
+				"test-ns", 30*time.Minute, 100000,
+			)
+			srv.MarkDBReady()
+			ctx := testCtx()
+			applyTestSchema(ctx, t, base)
+			begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err != nil {
+				t.Fatalf("BeginTransaction: %v", err)
+			}
+			if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": "rollback"},
+				TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("CreateEntity: %v", err)
+			}
+			if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+				TransactionId: begin.TransactionId,
+			}); err == nil {
+				t.Fatal("expected commit error")
+			}
+			if _, err = srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+				TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("RollbackTransaction: %v", err)
+			}
+			if _, err = srv.txManager.Lookup(begin.TransactionId); err == nil {
+				t.Fatal("rolled-back transaction remains registered")
+			}
+		})
+	}
+}
+
+func TestCommitTransaction_StateWriteFailureRemainsDiscoverableAndRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		fail          func(store.BranchTransactionState) bool
+		commitCreated bool
+	}{
+		{
+			name: "before commit",
+			fail: func(state store.BranchTransactionState) bool {
+				return state.CommitStarted && !state.CommitCreated
+			},
+		},
+		{
+			name: "after commit",
+			fail: func(state store.BranchTransactionState) bool {
+				return state.CommitCreated
+			},
+			commitCreated: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, err := ladybug.OpenInMemory()
+			if err != nil {
+				t.Fatalf("OpenInMemory: %v", err)
+			}
+			t.Cleanup(func() { _ = base.Close() })
+			failingStore := &transactionStateFailingStore{Store: base, fail: tc.fail}
+			ladybugPath := t.TempDir()
+			gs, err := gitstore.New(ladybugPath)
+			if err != nil {
+				t.Fatalf("gitstore.New: %v", err)
+			}
+			countingGit := &commitCountingGitStore{GitStore: gs}
+			opPub, _ := generateTestKey()
+			srv := NewCartographerServer(
+				failingStore, countingGit, opPub, initTestKey(), nil, "", 30*time.Second,
+				"test-ns", 30*time.Minute, 100000, WithLadybugPath(ladybugPath),
+			)
+			srv.MarkDBReady()
+			ctx := testCtx()
+			applyTestSchema(ctx, t, base)
+			begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err != nil {
+				t.Fatalf("BeginTransaction: %v", err)
+			}
+			if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": "retry"},
+				TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("CreateEntity: %v", err)
+			}
+			if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+				TransactionId: begin.TransactionId,
+			}); err == nil || !strings.Contains(err.Error(), "state write failure") {
+				t.Fatalf("CommitTransaction error=%v", err)
+			}
+			state, err := srv.txManager.Lookup(begin.TransactionId)
+			if err != nil || state.CommitCreated != tc.commitCreated {
+				t.Fatalf("reconciled state=%+v err=%v", state, err)
+			}
+			_, refreshErr := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+				TransactionId: begin.TransactionId,
+			})
+			if tc.commitCreated && status.Code(refreshErr) != codes.FailedPrecondition {
+				t.Fatalf("refresh after created commit error=%v", refreshErr)
+			}
+			if !tc.commitCreated && refreshErr != nil {
+				t.Fatalf("refresh after pre-commit failure: %v", refreshErr)
+			}
+			if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+				TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("retry CommitTransaction: %v", err)
+			}
+			if countingGit.commits != 1 {
+				t.Fatalf("expected one Git commit, got %d", countingGit.commits)
+			}
+		})
+	}
+}
+
+func TestRollbackTransaction_AfterRestartDuringMainRehydrationRestoresMain(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+	base, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	srv := NewCartographerServer(
+		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 100000, WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "unmerged"},
+		TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil {
+		t.Fatal("expected merge failure")
+	}
+	if err = base.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 100000, WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err = restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	state, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil || !state.MainRehydrated || !state.CommitCreated {
+		t.Fatalf("recovered partial commit state=%+v err=%v", state, err)
+	}
+	if _, err = restarted.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RollbackTransaction: %v", err)
+	}
+	if _, err = reopened.GetEntity(ctx, created.EntityId, "main"); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("unmerged transaction entity survived rollback: %v", err)
+	}
+}
+
+func TestRecoverOpenTransactionsPreservesDivergenceAndSchemaBaselines(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		advanceMain   bool
+		advanceSchema bool
+		wantMessage   string
+	}{
+		{name: "main advanced", advanceMain: true, wantMessage: "main has advanced"},
+		{name: "schema advanced", advanceSchema: true, wantMessage: "schema changed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testCtx()
+			dataPath := t.TempDir()
+			opPub, _ := generateTestKey()
+			base, err := ladybug.Open(dataPath)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			gs, err := gitstore.New(dataPath)
+			if err != nil {
+				t.Fatalf("gitstore.New: %v", err)
+			}
+			srv := NewCartographerServer(
+				base, gs, opPub, initTestKey(), nil, "", 30*time.Second,
+				"test-ns", 30*time.Minute, 100000, WithLadybugPath(dataPath),
+			)
+			srv.MarkDBReady()
+			applyTestSchema(ctx, t, base)
+			begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err != nil {
+				t.Fatalf("BeginTransaction: %v", err)
+			}
+			if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": "pending"},
+				TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("CreateEntity: %v", err)
+			}
+			original, err := srv.txManager.Lookup(begin.TransactionId)
+			if err != nil {
+				t.Fatalf("Lookup: %v", err)
+			}
+			originalHead, originalSchema := original.MainHeadAtLastSync, original.SchemaHash
+			if tc.advanceMain {
+				commitGitEntity(ctx, t, gs, "66666666-6666-4666-8666-666666666666", "advanced")
+			}
+			if tc.advanceSchema {
+				if err = base.ApplySchema(ctx, &flowv1.Schema{
+					EntityTypes: []*flowv1.EntityType{
+						{Name: "Component", Properties: []*flowv1.Property{
+							{Name: "name", Type: "string", Required: true},
+							{Name: "version", Type: "string"},
+						}},
+						{
+							Name: "Service", Properties: []*flowv1.Property{
+								{Name: "name", Type: "string", Required: true},
+							},
+							Rules: []*flowv1.ConnectionRule{{
+								CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"},
+							}},
+						},
+						{Name: "Added", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+					},
+					EdgeTypes: []*flowv1.EdgeType{{
+						Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}},
+					}},
+				}); err != nil {
+					t.Fatalf("advance schema: %v", err)
+				}
+			}
+			if err = base.Close(); err != nil {
+				t.Fatalf("close store: %v", err)
+			}
+			reopened, err := ladybug.Open(dataPath)
+			if err != nil {
+				t.Fatalf("reopen store: %v", err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			reopenedGit, err := gitstore.New(dataPath)
+			if err != nil {
+				t.Fatalf("reopen git store: %v", err)
+			}
+			restarted := NewCartographerServer(
+				reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second,
+				"test-ns", 30*time.Minute, 100000, WithLadybugPath(dataPath),
+			)
+			restarted.MarkDBReady()
+			if err = restarted.RecoverOpenTransactions(ctx); err != nil {
+				t.Fatalf("RecoverOpenTransactions: %v", err)
+			}
+			recovered, err := restarted.txManager.Lookup(begin.TransactionId)
+			if err != nil {
+				t.Fatalf("Lookup recovered: %v", err)
+			}
+			if recovered.MainHeadAtLastSync != originalHead || recovered.SchemaHash != originalSchema {
+				t.Fatalf("baselines changed: got head=%q schema=%q want head=%q schema=%q",
+					recovered.MainHeadAtLastSync, recovered.SchemaHash, originalHead, originalSchema)
+			}
+			if _, err = restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+				TransactionId: begin.TransactionId,
+			}); status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("CommitTransaction error=%v, want %q", err, tc.wantMessage)
+			}
+			if _, err = restarted.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+				TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("RollbackTransaction: %v", err)
+			}
+		})
+	}
+}
+
+func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingGit := &cleanupAfterMergeFailingGitStore{GitStore: gs}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "merged"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	failingGit.failRestore = true
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err == nil {
+		t.Fatal("expected post-merge cleanup failure")
+	}
+	state, lookupErr := srv.txManager.Lookup(begin.TransactionId)
+	if lookupErr != nil || !state.MergeCompleted {
+		t.Fatalf("merge completion was not retained: state=%+v error=%v", state, lookupErr)
+	}
+	_, err = srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: begin.TransactionId})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected rollback rejection after merge, got %v", err)
+	}
+	if _, err = base.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("committed entity was removed by rejected rollback: %v", err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("cleanup retry: %v", err)
+	}
+	if failingGit.commits != 1 || failingGit.merges != 1 {
+		t.Fatalf("retry repeated irreversible work: commits=%d merges=%d", failingGit.commits, failingGit.merges)
+	}
+	if err := gs.WithGitLock(func() error {
+		exists, err := gs.BranchExists(ctx, begin.TransactionId)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("transaction Git branch still exists after cleanup")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // =========================================================================
 // 7. Concurrent access tests
 // =========================================================================
@@ -1079,11 +2759,13 @@ func TestConcurrentNonTxWrites(t *testing.T) {
 
 func TestExportGraph_UnsupportedFormat(t *testing.T) {
 	srv, _ := newTestServer(t)
-	ctx := testCtx()
+	ctx := capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")
 
-	_, err := collectExportData(srv, ctx, "unsupported")
-	if err == nil {
-		t.Fatal("expected error for unsupported format, got nil")
+	handlerInvoked, err := invokeExportGraph(
+		srv, &flowv1.ExportGraphRequest{Format: "unsupported"}, &mockExportStream{ctx: ctx},
+	)
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
@@ -1092,33 +2774,41 @@ func TestExportGraph_UnsupportedFormat(t *testing.T) {
 
 func TestExportGraph_JSON(t *testing.T) {
 	srv, _ := newTestServer(t)
-	ctx := testCtx()
+	ctx := context.Background()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "a"}, nil, "")
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "b"}, nil, "")
 
-	data, err := collectExportData(srv, ctx, "json")
+	stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")}
+	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)
 	if err != nil {
 		t.Fatalf("export JSON failed: %v", err)
 	}
-	if len(data) == 0 {
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
+	}
+	if len(stream.data) == 0 {
 		t.Fatal("expected non-empty export data")
 	}
 }
 
 func TestExportGraph_GraphML(t *testing.T) {
 	srv, _ := newTestServer(t)
-	ctx := testCtx()
+	ctx := context.Background()
 
 	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
 
-	data, err := collectExportData(srv, ctx, "graphml")
+	stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")}
+	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "graphml"}, stream)
 	if err != nil {
 		t.Fatalf("export GraphML failed: %v", err)
 	}
-	if len(data) == 0 {
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
+	}
+	if len(stream.data) == 0 {
 		t.Fatal("expected non-empty export data")
 	}
 }
@@ -1176,6 +2866,858 @@ func TestRefreshTransaction_NoConflicts(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("RefreshTransaction failed: %v", err)
+	}
+}
+
+func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	blocking := &hydrationBlockingStore{Store: base, blocked: make(chan struct{}), release: make(chan struct{})}
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	attemptingGit := &gitAttemptStore{GitStore: gs}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, attemptingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	mainEntityID := "11111111-1111-4111-8111-111111111111"
+	commitGitEntity(ctx, t, gs, mainEntityID, "main")
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, refreshErr := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
+		refreshDone <- refreshErr
+	}()
+	<-blocking.blocked
+	gitAttempted := make(chan struct{})
+	attemptingGit.setAttempted(gitAttempted)
+	unrelatedDone := make(chan error, 1)
+	go func() { unrelatedDone <- srv.withGitLock(func() error { return nil }) }()
+	<-gitAttempted
+	commitAtLifecycleLock := make(chan struct{})
+	srv.txManager.beforeLifecycleLock = func(string) { close(commitAtLifecycleLock) }
+	commitDone := make(chan error, 1)
+	go func() {
+		_, commitErr := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+		commitDone <- commitErr
+	}()
+	<-commitAtLifecycleLock
+	srv.txManager.beforeLifecycleLock = nil
+	close(blocking.release)
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("RefreshTransaction: %v", err)
+	}
+	if err := <-unrelatedDone; err != nil {
+		t.Fatalf("unrelated Git checkout: %v", err)
+	}
+	if err := <-commitDone; err != nil {
+		t.Fatalf("CommitTransaction: %v", err)
+	}
+	if _, err := base.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("committed entity missing from main: %v", err)
+	}
+	if _, err := base.GetEntity(ctx, mainEntityID, "main"); err != nil {
+		t.Fatalf("advanced main entity missing after refresh/commit: %v", err)
+	}
+}
+
+func TestRefreshTransaction_HydrationFailureDoesNotAdvanceSyncHead(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	release := make(chan struct{})
+	close(release)
+	blocking := &hydrationBlockingStore{
+		Store: base, blocked: make(chan struct{}), release: release, fail: true,
+	}
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	state, err := srv.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	oldHead := state.MainHeadAtLastSync
+	commitGitEntity(ctx, t, gs, "11111111-1111-4111-8111-111111111111", "main")
+
+	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
+	if err == nil {
+		t.Fatal("expected hydration failure")
+	}
+	if state.MainHeadAtLastSync != oldHead {
+		t.Fatalf("sync head advanced after failed hydration: got %q want %q", state.MainHeadAtLastSync, oldHead)
+	}
+}
+
+func TestRefreshTransaction_ConflictLeavesCleanRefreshedBranch(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	first, err := base.CreateEntity(ctx, "Component", "", map[string]string{"name": "one"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create first main entity: %v", err)
+	}
+	second, err := base.CreateEntity(ctx, "Component", "", map[string]string{"name": "two"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create second main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, first.Id, "one")
+	commitGitEntity(ctx, t, gs, second.Id, "two")
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: first.Id, Properties: map[string]string{"name": "tx-one"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("update first transaction entity: %v", err)
+	}
+	if _, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: second.Id, Properties: map[string]string{"name": "tx-two"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("update second transaction entity: %v", err)
+	}
+	if _, err = base.UpdateEntity(ctx, second.Id, map[string]string{"name": "main-two"}, nil, "main"); err != nil {
+		t.Fatalf("update second main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, second.Id, "main-two")
+
+	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("expected refresh conflict, got %v", err)
+	}
+	firstAfter, err := base.GetEntity(ctx, first.Id, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("get first refreshed entity: %v", err)
+	}
+	secondAfter, err := base.GetEntity(ctx, second.Id, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("get second refreshed entity: %v", err)
+	}
+	if firstAfter.Properties["name"] != "one" || secondAfter.Properties["name"] != "main-two" {
+		t.Fatalf("conflicted refresh partially reapplied changes: first=%+v second=%+v", firstAfter, secondAfter)
+	}
+}
+
+func TestRecoveryDiffPropagatesSuspectedDeletions(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+	txID := "11111111-1111-4111-8111-111111111111"
+	state, err := srv.txManager.Create(txID, time.Minute, "")
+	if err != nil {
+		t.Fatalf("Create transaction: %v", err)
+	}
+	srv.recoverEntityChanges(state.ChangeLog, nil, map[string]map[string]gitstore.EntityFile{
+		"Component": {"entity": {ID: "entity", Type: "Component"}},
+	})
+	srv.recoverEdgeChanges(state.ChangeLog, nil, map[string]map[string]gitstore.EdgeFile{
+		"DEPENDS_ON": {"edge": {ID: "edge", Type: "DEPENDS_ON"}},
+	})
+
+	diff, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff: %v", err)
+	}
+	if len(diff.DeletedEntities) != 1 || !diff.DeletedEntities[0].Suspected {
+		t.Fatalf("expected suspected recovered entity deletion, got %+v", diff.DeletedEntities)
+	}
+	if len(diff.DeletedEdges) != 1 || !diff.DeletedEdges[0].Suspected {
+		t.Fatalf("expected suspected recovered edge deletion, got %+v", diff.DeletedEdges)
+	}
+}
+
+//nolint:gocyclo
+func TestRecoverOpenTransactionsAfterStoreRestart(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	modified, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "before"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create modified entity: %v", err)
+	}
+	deleted, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "deleted"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create deleted entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, modified.Id, "before")
+	commitGitEntity(ctx, t, gs, deleted.Id, "deleted")
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	if _, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: modified.Id, Properties: map[string]string{"name": "after"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("update transaction entity: %v", err)
+	}
+	if _, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: deleted.Id, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("delete transaction entity: %v", err)
+	}
+	branchPath := filepath.Join(dataPath, "branches", begin.TransactionId+".lbug")
+	branchMetadataPath := filepath.Join(dataPath, "branches", begin.TransactionId+".schema.json")
+	if _, err := os.Stat(branchPath); err != nil {
+		t.Fatalf("stat persisted branch: %v", err)
+	}
+	if _, err := os.Stat(branchMetadataPath); err != nil {
+		t.Fatalf("stat persisted branch schema metadata: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("recover transactions: %v", err)
+	}
+	state, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("lookup recovered transaction: %v", err)
+	}
+	if state.MainHeadAtLastSync == "" {
+		t.Fatal("recovered transaction has no main HEAD baseline")
+	}
+	if state.SchemaHash == "" {
+		t.Fatal("recovered transaction has no schema baseline")
+	}
+
+	diff, err := restarted.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("get recovered diff: %v", err)
+	}
+	if len(diff.ModifiedEntities) != 1 || diff.ModifiedEntities[0].Id != modified.Id ||
+		diff.ModifiedEntities[0].Properties["name"] != "after" {
+		t.Fatalf("unexpected recovered modifications: %+v", diff.ModifiedEntities)
+	}
+	if len(diff.DeletedEntities) != 1 || diff.DeletedEntities[0].Id != deleted.Id ||
+		!diff.DeletedEntities[0].Suspected {
+		t.Fatalf("unexpected recovered deletions: %+v", diff.DeletedEntities)
+	}
+	if _, err := os.Stat(branchPath); err != nil {
+		t.Fatalf("recovery removed open transaction branch: %v", err)
+	}
+	if _, err := restarted.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{}, TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "missing required property") {
+		t.Fatalf("recovered branch accepted missing required property: %v", err)
+	}
+	commitGitEntity(ctx, t, reopenedGit, "55555555-5555-4555-8555-555555555555", "advanced")
+	if _, err := restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("commit after main advancement should require refresh: %v", err)
+	}
+	if _, err := restarted.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("refresh recovered transaction: %v", err)
+	}
+	if _, err := restarted.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "after-recovery"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("mutate recovered transaction after refresh: %v", err)
+	}
+	if _, err := restarted.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("roll back recovered transaction: %v", err)
+	}
+	if _, err := os.Stat(branchPath); !os.IsNotExist(err) {
+		t.Fatalf("rollback did not remove persisted branch: %v", err)
+	}
+	if _, err := os.Stat(branchMetadataPath); !os.IsNotExist(err) {
+		t.Fatalf("rollback did not remove branch schema metadata: %v", err)
+	}
+}
+
+func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	failing := &dropFailingStore{Store: st, failDrop: true}
+	srv := NewCartographerServer(
+		failing, gs, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
+	)
+	applyTestSchema(ctx, t, st)
+	mainEntity, err := st.CreateEntity(
+		ctx, "Component", "", map[string]string{"name": "before"}, nil, "main",
+	)
+	if err != nil {
+		t.Fatalf("create main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainEntity.Id, "before")
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	for i, version := range []string{"first", "rejected"} {
+		_, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+			Id: mainEntity.Id, Properties: map[string]string{"version": version}, TransactionId: begin.TransactionId,
+		})
+		if i == 0 && err != nil {
+			t.Fatalf("first update: %v", err)
+		}
+	}
+	if status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "rollback failed") {
+		t.Fatalf("rejected update error = %v", err)
+	}
+	markerPath := filepath.Join(dataPath, "branches", begin.TransactionId+".state.json")
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("rollback-only marker was not persisted: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
+	)
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("recover rollback-only transaction: %v", err)
+	}
+	state, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil || !state.RollbackOnly || state.ChangeLog.Len() != 1 {
+		t.Fatalf("recovered state = %+v, err=%v", state, err)
+	}
+	if _, err := restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("commit rollback-only transaction: %v", err)
+	}
+	if _, err := restarted.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: mainEntity.Id, Properties: map[string]string{"version": "late"}, TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("mutate rollback-only transaction: %v", err)
+	}
+	if _, err := restarted.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("rollback recovered transaction: %v", err)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("rollback-only marker remained after cleanup: %v", err)
+	}
+}
+
+func TestChangeLogMarkerFailureStillCleansRejectedTransaction(t *testing.T) {
+	srv, base := newTestServer(t)
+	srv.store = &markerFailingStore{Store: base, failMark: true}
+	srv.txManager.changeLogCap = 1
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "first"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("first CreateEntity: %v", err)
+	}
+	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "rejected"}, TransactionId: begin.TransactionId,
+	})
+	if status.Code(err) != codes.ResourceExhausted ||
+		!strings.Contains(err.Error(), "simulated rollback-only marker failure") {
+		t.Fatalf("cap rejection error = %v", err)
+	}
+	if _, err := srv.txManager.Lookup(begin.TransactionId); err == nil {
+		t.Fatal("transaction remained after successful cleanup")
+	}
+	if _, err := base.DumpAllEntities(ctx, begin.TransactionId); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("branch DB remained after cleanup: %v", err)
+	}
+	exists, err := srv.gitstore.BranchExists(ctx, begin.TransactionId)
+	if err != nil || exists {
+		t.Fatalf("Git branch remained after cleanup: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	failing := &markerFailingStore{Store: st, failMark: true, failDrop: true}
+	srv := NewCartographerServer(
+		failing, gs, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
+	)
+	applyTestSchema(ctx, t, st)
+	mainEntity, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "before"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainEntity.Id, "before")
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: mainEntity.Id, Properties: map[string]string{"version": "first"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+	_, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: mainEntity.Id, Properties: map[string]string{"version": "rejected"}, TransactionId: begin.TransactionId,
+	})
+	if status.Code(err) != codes.ResourceExhausted ||
+		!strings.Contains(err.Error(), "simulated rollback-only marker failure") ||
+		!strings.Contains(err.Error(), "simulated marker cleanup drop failure") {
+		t.Fatalf("combined failure error = %v", err)
+	}
+	branchEntity, err := st.GetEntity(ctx, mainEntity.Id, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("read branch entity: %v", err)
+	}
+	if branchEntity.Properties["version"] != "first" {
+		t.Fatalf("rejected mutation reached branch: %+v", branchEntity.Properties)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
+	)
+	if err := restarted.RecoverOpenTransactions(ctx); err == nil || !strings.Contains(err.Error(), "branch state") {
+		t.Fatalf("restart did not fail closed: %v", err)
+	}
+	if _, err := restarted.txManager.Lookup(begin.TransactionId); err == nil {
+		t.Fatal("failed-closed transaction was registered as active")
+	}
+}
+
+func TestRecoverOpenTransactionsRestoresSchemaBaseline(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "persisted"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("create transaction entity: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("recover transactions: %v", err)
+	}
+	if err := reopened.ApplySchema(ctx, &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", Properties: []*flowv1.Property{
+				{Name: "name", Type: "string", Required: true},
+				{Name: "version", Type: "string", Required: true},
+			}},
+			{
+				Name: "Service", Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}},
+				Rules: []*flowv1.ConnectionRule{{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}}},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{
+			Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}},
+		}},
+	}); err != nil {
+		t.Fatalf("change schema: %v", err)
+	}
+	if _, err := restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "schema changed") {
+		t.Fatalf("commit with changed schema should fail: %v", err)
+	}
+}
+
+func TestRecoverOpenTransactionsRetainsCorruptBranch(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	t.Cleanup(func() { _ = gs.Close() })
+	txID := "33333333-3333-4333-8333-333333333333"
+	if err := gs.WithGitLock(func() error { return gs.CreateBranch(ctx, txID) }); err != nil {
+		t.Fatalf("create git branch: %v", err)
+	}
+	branchPath := filepath.Join(dataPath, "branches", txID+".lbug")
+	if err := os.WriteFile(branchPath, []byte("not a ladybug database"), 0600); err != nil {
+		t.Fatalf("write corrupt branch: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	if err := srv.RecoverOpenTransactions(ctx); err == nil {
+		t.Fatal("expected corrupt branch recovery to fail")
+	}
+	if _, err := os.Stat(branchPath); err != nil {
+		t.Fatalf("corrupt branch was removed: %v", err)
+	}
+	if err := gs.WithGitLock(func() error {
+		exists, err := gs.BranchExists(ctx, txID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errors.New("git branch was removed")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoverOpenTransactionsMissingBranchRestoresMain(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dataPath, "branches", begin.TransactionId+".lbug")); err != nil {
+		t.Fatalf("remove branch DB: %v", err)
+	}
+
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("recover transactions: %v", err)
+	}
+	if _, err := restarted.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{}); err != nil {
+		t.Fatalf("begin transaction after missing-branch cleanup: %v", err)
+	}
+}
+
+func TestRecoverOpenTransactionsMainLookupFailuresAbort(t *testing.T) {
+	for _, operation := range []string{
+		"lookup lock", "restore", "clean", "list entities", "read entities", "list edges", "read edges",
+	} {
+		t.Run(operation, func(t *testing.T) {
+			ctx := testCtx()
+			st, err := ladybug.OpenInMemory()
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			gs, err := gitstore.New(t.TempDir())
+			if err != nil {
+				t.Fatalf("open git store: %v", err)
+			}
+			t.Cleanup(func() { _ = gs.Close() })
+			opPub, _ := generateTestKey()
+			setup := NewCartographerServer(
+				st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+			)
+			applyTestSchema(ctx, t, st)
+			if err := gs.WithGitLock(func() error {
+				if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{{
+					ID: "11111111-1111-4111-8111-111111111111", Type: "Component",
+					Properties: map[string]string{"name": "main"},
+				}}); err != nil {
+					return err
+				}
+				if err := gs.WriteEdgeFiles(ctx, "DEPENDS_ON", []gitstore.Edge{{
+					ID: "22222222-2222-4222-8222-222222222222", Type: "DEPENDS_ON",
+					FromEntityID: "33333333-3333-4333-8333-333333333333",
+					ToEntityID:   "44444444-4444-4444-8444-444444444444",
+				}}); err != nil {
+					return err
+				}
+				if err := gs.AddAll(ctx, "."); err != nil {
+					return err
+				}
+				return gs.Commit(ctx, "recovery fixtures")
+			}); err != nil {
+				t.Fatalf("write git fixtures: %v", err)
+			}
+			begin, err := setup.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err != nil {
+				t.Fatalf("begin transaction: %v", err)
+			}
+			failing := &recoveryFailingGitStore{GitStore: gs, fail: operation}
+			restarted := NewCartographerServer(
+				st, failing, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+			)
+			if err := restarted.RecoverOpenTransactions(ctx); err == nil {
+				t.Fatalf("expected %s failure", operation)
+			}
+			if err := restarted.txManager.ValidateActive(begin.TransactionId); status.Code(err) != codes.NotFound {
+				t.Fatalf("recovery registered transaction after lookup failure: %v", err)
+			}
+		})
+	}
+}
+
+func TestRecoverOpenTransactionsIdenticalCleanupIsRetryable(t *testing.T) {
+	for _, operation := range []string{"restore", "clean", "drop", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			ctx := testCtx()
+			st, err := ladybug.OpenInMemory()
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			gs, err := gitstore.New(t.TempDir())
+			if err != nil {
+				t.Fatalf("open git store: %v", err)
+			}
+			t.Cleanup(func() { _ = gs.Close() })
+			opPub, _ := generateTestKey()
+			setup := NewCartographerServer(
+				st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+			)
+			begin, err := setup.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err != nil {
+				t.Fatalf("begin transaction: %v", err)
+			}
+			failingGit := &recoveryFailingGitStore{GitStore: gs}
+			var recoveryStore = st
+			if operation == "drop" {
+				recoveryStore = &dropFailingStore{Store: st, failDrop: true}
+			} else {
+				failingGit.fail = operation
+			}
+			restarted := NewCartographerServer(
+				recoveryStore, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
+				"test-ns", 30*time.Minute, 100000,
+			)
+			if err := restarted.RecoverOpenTransactions(ctx); err == nil {
+				t.Fatalf("expected %s cleanup failure", operation)
+			}
+			if operation == "drop" {
+				exists, branchErr := gs.BranchExists(ctx, begin.TransactionId)
+				if branchErr != nil || !exists {
+					t.Fatalf("drop failure lost recovery anchor: exists=%v err=%v", exists, branchErr)
+				}
+				restarted = NewCartographerServer(
+					st, gs, opPub, initTestKey(), nil, "", 30*time.Second,
+					"test-ns", 30*time.Minute, 100000,
+				)
+			}
+			if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+				t.Fatalf("retry cleanup after %s failure: %v", operation, err)
+			}
+			if err := gs.WithGitLock(func() error {
+				exists, err := gs.BranchExists(ctx, begin.TransactionId)
+				if err != nil {
+					return err
+				}
+				if exists {
+					return errors.New("transaction branch still exists")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -1238,6 +3780,115 @@ func TestWipeGraph_Clean(t *testing.T) {
 	}
 }
 
+func TestWipeGraph_WaitsForBeginSetupAndSeesRegisteredTransaction(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	blocking := &beginSetupBlockingStore{Store: base, entered: make(chan struct{}), release: make(chan struct{})}
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	beginDone := make(chan *flowv1.BeginTransactionResponse, 1)
+	beginErr := make(chan error, 1)
+	go func() {
+		response, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+		beginDone <- response
+		beginErr <- err
+	}()
+	<-blocking.entered
+	if srv.txAdmission.TryLock() {
+		srv.txAdmission.Unlock()
+		t.Fatal("WipeGraph admission unexpectedly succeeded during BeginTransaction setup")
+	}
+	wipeDone := make(chan error, 1)
+	wipeStarted := make(chan struct{})
+	go func() {
+		close(wipeStarted)
+		_, err := srv.WipeGraph(context.Background(), &flowv1.WipeGraphRequest{})
+		wipeDone <- err
+	}()
+	<-wipeStarted
+	close(blocking.release)
+	begin := <-beginDone
+	if err := <-beginErr; err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if err := <-wipeDone; status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected WipeGraph to observe registered transaction, got %v", err)
+	}
+	if _, err := srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RollbackTransaction: %v", err)
+	}
+}
+
+func TestBeginTransaction_WaitsUntilWipeGraphCompletes(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	blocking := &wipeBlockingStore{
+		Store: base, entered: make(chan struct{}), release: make(chan struct{}), branchSetup: make(chan bool, 1),
+	}
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+	)
+	srv.MarkDBReady()
+	wipeDone := make(chan error, 1)
+	go func() {
+		_, err := srv.WipeGraph(context.Background(), &flowv1.WipeGraphRequest{})
+		wipeDone <- err
+	}()
+	<-blocking.entered
+	if srv.txAdmission.TryRLock() {
+		srv.txAdmission.RUnlock()
+		t.Fatal("BeginTransaction admission unexpectedly succeeded during WipeGraph")
+	}
+	beginDone := make(chan *flowv1.BeginTransactionResponse, 1)
+	beginErr := make(chan error, 1)
+	beginStarted := make(chan struct{})
+	ctx := testCtx()
+	go func() {
+		close(beginStarted)
+		response, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+		beginDone <- response
+		beginErr <- err
+	}()
+	<-beginStarted
+	close(blocking.release)
+	if err := <-wipeDone; err != nil {
+		t.Fatalf("WipeGraph: %v", err)
+	}
+	if wipeCompleted := <-blocking.branchSetup; !wipeCompleted {
+		t.Fatal("BeginTransaction reached branch setup before WipeGraph completed its store wipe")
+	}
+	begin := <-beginDone
+	if err := <-beginErr; err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RollbackTransaction: %v", err)
+	}
+}
+
 // =========================================================================
 // 11. PullFromRemote error-path tests
 // =========================================================================
@@ -1255,28 +3906,44 @@ func TestPullFromRemote_RemoteNotConfigured(t *testing.T) {
 	}
 }
 
-func TestPullFromRemote_NoAuthProceedsPastAuth(t *testing.T) {
-	opPub, _ := generateTestKey()
-	scPub := initTestKey() // matches testSidecarPriv used by testCtx()
-	st, _ := ladybug.OpenInMemory()
-	t.Cleanup(func() { _ = st.Close() })
-	gs, _ := gitstore.New(t.TempDir())
-	// remoteURL is set but authFn is nil. After Phase 6, nil auth is allowed
-	// through (anonymous), so the clone proceeds past auth and fails on the
-	// actual fetch attempt.
-	srv := NewCartographerServer(st, gs, opPub, scPub, nil,
-		"https://example.com/repo.git", 30*time.Second, "test-ns",
-		30*time.Minute, 100000)
-	ctx := testCtx()
-
-	_, err := srv.PullFromRemote(ctx, &flowv1.PullFromRemoteRequest{})
-	if err == nil {
-		t.Fatal("expected error from anonymous clone attempt, got nil")
+func TestPullFromRemote_HoldsGitLockThroughHydration(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
 	}
-	// Must NOT return FailedPrecondition (which would indicate auth config
-	// was rejected before the fetch).
-	if status.Code(err) == codes.FailedPrecondition {
-		t.Fatal("expected non-FailedPrecondition error after anonymous auth bypass, got FailedPrecondition")
+	t.Cleanup(func() { _ = base.Close() })
+	blocking := &pullHydrationBlockingStore{Store: base, entered: make(chan struct{}), release: make(chan struct{})}
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	pullGit := &pullGitStore{gitAttemptStore: gitAttemptStore{GitStore: gs}}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, pullGit, opPub, initTestKey(), nil, "https://example.invalid/repo.git",
+		30*time.Second, "test-ns", 30*time.Minute, 100000, WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	pullDone := make(chan error, 1)
+	go func() {
+		_, pullErr := srv.PullFromRemote(ctx, &flowv1.PullFromRemoteRequest{})
+		pullDone <- pullErr
+	}()
+	<-blocking.entered
+	attempted := make(chan struct{})
+	pullGit.setAttempted(attempted)
+	unrelatedDone := make(chan error, 1)
+	go func() { unrelatedDone <- srv.withGitLock(func() error { return nil }) }()
+	<-attempted
+	close(blocking.release)
+	if err := <-pullDone; err != nil {
+		t.Fatalf("PullFromRemote: %v", err)
+	}
+	if err := <-unrelatedDone; err != nil {
+		t.Fatalf("unrelated Git checkout: %v", err)
 	}
 }
 
@@ -1293,18 +3960,18 @@ func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
 	srv.MarkDBReady()
 
 	// Only READ capabilities, no WRITE:graph/entity/*.
-	mdCtx := capabilityContext("READ:graph/entity/*,READ:graph/tx", scPriv, "sidecar")
-	verifiedCtx, err := srv.verifier.verify(mdCtx)
-	if err != nil {
-		t.Fatalf("verify failed: %v", err)
+	ctx := capabilityContext("READ:graph/entity/*,READ:graph/tx", scPriv, "sidecar")
+	handlerInvoked, verifiedCaps, err := invokePullFromRemote(srv, ctx)
+	if !handlerInvoked {
+		t.Fatal("unary interceptor did not invoke PullFromRemote")
 	}
-
-	_, err = srv.PullFromRemote(verifiedCtx, &flowv1.PullFromRemoteRequest{})
-	if err == nil {
-		t.Fatal("expected PermissionDenied for missing WRITE capability, got nil")
+	if verifiedCaps == nil || len(verifiedCaps.Caps) != 2 ||
+		verifiedCaps.Caps[0] != "READ:graph/entity/*" || verifiedCaps.Caps[1] != "READ:graph/tx" {
+		t.Fatalf("handler did not receive interceptor-verified READ capabilities: %+v", verifiedCaps)
 	}
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != "capability denied: WRITE:graph/entity/*" {
+		t.Fatalf("expected missing-WRITE PermissionDenied, got %v", err)
 	}
 }
 
@@ -1321,15 +3988,10 @@ func TestPullFromRemote_NoRemote(t *testing.T) {
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
 	srv.MarkDBReady()
 
-	mdCtx := capabilityContext("WRITE:graph/entity/*,READ:graph/entity/*", scPriv, "sidecar")
-	verifiedCtx, err := srv.verifier.verify(mdCtx)
-	if err != nil {
-		t.Fatalf("verify failed: %v", err)
-	}
-
-	_, err = srv.PullFromRemote(verifiedCtx, &flowv1.PullFromRemoteRequest{})
-	if err == nil {
-		t.Fatal("expected FailedPrecondition for no remote, got nil")
+	ctx := capabilityContext("WRITE:graph/entity/*,READ:graph/entity/*", scPriv, "sidecar")
+	handlerInvoked, _, err := invokePullFromRemote(srv, ctx)
+	if !handlerInvoked {
+		t.Fatal("unary interceptor did not invoke PullFromRemote")
 	}
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
@@ -1568,6 +4230,269 @@ func TestBeginTransaction_ResourceExhausted(t *testing.T) {
 	}
 	if status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("expected ResourceExhausted, got %v", status.Code(err))
+	}
+}
+
+// cleanupFailingStore fails on CreateBranchDB and on DropBranchDB to test
+// that cleanup failures during BeginTransaction are surfaced.
+type cleanupFailingStore struct {
+	store.Store
+	failDrop bool
+}
+
+func (s *cleanupFailingStore) CreateBranchDB(txID string) error {
+	return fmt.Errorf("simulated CreateBranchDB failure")
+}
+
+func (s *cleanupFailingStore) DropBranchDB(txID string) error {
+	if s.failDrop {
+		return fmt.Errorf("simulated DropBranchDB failure")
+	}
+	return s.Store.DropBranchDB(txID)
+}
+
+// cleanupFailingGitStore fails on specified git operations to test
+// that cleanup failures during BeginTransaction are surfaced.
+type cleanupFailingGitStore struct {
+	gitstore.GitStore
+	failRestore bool
+	failClean   bool
+	failDelete  bool
+}
+
+func (s *cleanupFailingGitStore) RestoreMain(ctx context.Context) error {
+	if s.failRestore {
+		return fmt.Errorf("simulated RestoreMain failure")
+	}
+	return s.GitStore.RestoreMain(ctx)
+}
+
+func (s *cleanupFailingGitStore) CleanUntracked(ctx context.Context) error {
+	if s.failClean {
+		return fmt.Errorf("simulated CleanUntracked failure")
+	}
+	return s.GitStore.CleanUntracked(ctx)
+}
+
+func (s *cleanupFailingGitStore) DeleteBranch(ctx context.Context, txID string) error {
+	if s.failDelete {
+		return fmt.Errorf("simulated DeleteBranch failure")
+	}
+	return s.GitStore.DeleteBranch(ctx, txID)
+}
+
+func TestBeginTransaction_SurfacesDropBranchDBFailure(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub := initTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	srv.store = &cleanupFailingStore{Store: st, failDrop: true}
+
+	ctx := testCtx()
+	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted, got %v", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "simulated CreateBranchDB failure") {
+		t.Fatalf("error should contain original failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated DropBranchDB failure") {
+		t.Fatalf("error should surface DropBranchDB cleanup failure, got: %v", err)
+	}
+}
+
+func TestBeginTransaction_SurfacesCleanupFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		failField string // "restore", "clean", "delete"
+		wantMsg   string
+	}{
+		{"RestoreMain", "restore", "simulated RestoreMain failure"},
+		{"CleanUntracked", "clean", "simulated CleanUntracked failure"},
+		{"DeleteBranch", "delete", "simulated DeleteBranch failure"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opPub, _ := generateTestKey()
+			scPub := initTestKey()
+			st, _ := ladybug.OpenInMemory()
+			t.Cleanup(func() { _ = st.Close() })
+			gs, _ := gitstore.New(t.TempDir())
+			srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+				30*time.Second, "test-ns", 30*time.Minute, 100000)
+			srv.MarkDBReady()
+
+			srv.store = &cleanupFailingStore{Store: st}
+			srv.gitstore = &cleanupFailingGitStore{GitStore: gs,
+				failRestore: tt.failField == "restore",
+				failClean:   tt.failField == "clean",
+				failDelete:  tt.failField == "delete",
+			}
+
+			ctx := testCtx()
+			_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if status.Code(err) != codes.ResourceExhausted {
+				t.Fatalf("expected ResourceExhausted, got %v", status.Code(err))
+			}
+			if !strings.Contains(err.Error(), "simulated CreateBranchDB failure") {
+				t.Fatalf("error should contain original failure, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Fatalf("error should surface %s cleanup failure, got: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+func TestBeginTransaction_SurfacesMultipleCleanupFailures(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub := initTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	srv.store = &cleanupFailingStore{Store: st, failDrop: true}
+	srv.gitstore = &cleanupFailingGitStore{GitStore: gs, failRestore: true, failClean: true, failDelete: true}
+
+	ctx := testCtx()
+	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted, got %v", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "simulated CreateBranchDB failure") {
+		t.Fatalf("error should contain original failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated DropBranchDB failure") {
+		t.Fatalf("error should surface DropBranchDB cleanup failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated RestoreMain failure") {
+		t.Fatalf("error should surface RestoreMain cleanup failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated CleanUntracked failure") {
+		t.Fatalf("error should surface CleanUntracked cleanup failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated DeleteBranch failure") {
+		t.Fatalf("error should surface DeleteBranch cleanup failure, got: %v", err)
+	}
+}
+
+func TestBeginTransaction_SurfacesTxManagerCreateCleanupFailures(t *testing.T) {
+	// When txManager.Create fails, BeginTransaction attempts to clean up
+	// the git branch and branch DB. This test verifies those cleanup
+	// failures are surfaced by pre-registering the txID in the manager.
+	opPub, _ := generateTestKey()
+	scPub := initTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Pre-register a txID so txManager.Create fails with "already exists".
+	fixedID := "00000000-0000-4000-8000-000000000001"
+	srv.txManager.active[fixedID] = &TransactionState{ID: fixedID}
+	srv.newIDFn = func() string { return fixedID }
+
+	srv.gitstore = &cleanupFailingGitStore{GitStore: gs, failDelete: true}
+
+	ctx := testCtx()
+	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted, got %v", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "simulated DeleteBranch failure") {
+		t.Fatalf("error should surface DeleteBranch cleanup failure, got: %v", err)
+	}
+}
+
+func TestBeginTransaction_PersistStateFailure_CleanupSuccess(t *testing.T) {
+	// Path C1: persistTransactionState fails, cleanupTransaction succeeds.
+	// Only the persist error should be returned.
+	opPub, _ := generateTestKey()
+	scPub := initTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Fail on the first SaveBranchTransactionState call.
+	srv.store = &transactionStateFailingStore{
+		Store: st,
+		fail:  func(store.BranchTransactionState) bool { return true },
+	}
+
+	ctx := testCtx()
+	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted, got %v", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "persist transaction state") {
+		t.Fatalf("error should contain persist failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "cleanup") {
+		t.Fatalf("error should NOT contain cleanup failure when cleanup succeeds, got: %v", err)
+	}
+}
+
+func TestBeginTransaction_PersistStateFailure_CleanupFails(t *testing.T) {
+	// Path C2: persistTransactionState fails, cleanupTransaction also fails.
+	// Both errors should be aggregated.
+	opPub, _ := generateTestKey()
+	scPub := initTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Fail on the first SaveBranchTransactionState call.
+	failingStore := &transactionStateFailingStore{
+		Store: st,
+		fail:  func(store.BranchTransactionState) bool { return true },
+	}
+	// Also make DropBranchDB fail so cleanupTransaction fails.
+	srv.store = &dropFailingStore{Store: failingStore, failDrop: true}
+
+	ctx := testCtx()
+	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted, got %v", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "persist transaction state") {
+		t.Fatalf("error should contain persist failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cleanup") {
+		t.Fatalf("error should contain cleanup failure when cleanup fails, got: %v", err)
 	}
 }
 
@@ -2195,7 +5120,7 @@ func TestWipeGraph_MidWipeFailure(t *testing.T) {
 // =========================================================================
 
 func TestApplySchema_DestructiveChange(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st := newTestServer(t)
 	ctx := context.Background()
 
 	// Apply initial schema.
@@ -2212,8 +5137,6 @@ func TestApplySchema_DestructiveChange(t *testing.T) {
 	}
 
 	// Re-apply schema with a property removed (destructive).
-	// The real LadybugDB's CREATE NODE TABLE IF NOT EXISTS is a no-op for
-	// existing tables, so the toremove column is silently preserved.
 	destructive := &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
 			{Name: "Component", Properties: []*flowv1.Property{
@@ -2221,8 +5144,33 @@ func TestApplySchema_DestructiveChange(t *testing.T) {
 			}},
 		},
 	}
+	_, err := srv.ApplySchema(ctx, &flowv1.ApplySchemaRequest{Schema: destructive})
+	if err == nil {
+		t.Fatal("expected error for destructive schema change, got nil")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "destructive") {
+		t.Fatalf("expected destructive schema change error, got %v", err)
+	}
+
+	// After WipeGraph, destructive change should succeed.
+	if _, err := srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{}); err != nil {
+		t.Fatalf("WipeGraph failed: %v", err)
+	}
 	if _, err := srv.ApplySchema(ctx, &flowv1.ApplySchemaRequest{Schema: destructive}); err != nil {
-		t.Fatalf("re-applying schema with removed property should not error: %v", err)
+		t.Fatalf("ApplySchema after WipeGraph failed: %v", err)
+	}
+
+	// Verify the new schema is applied.
+	if !st.TableExists("Component") {
+		t.Fatal("Component table should exist after ApplySchema")
+	}
+	// Create an entity with the new schema (no toremove property).
+	_, err = st.CreateEntity(ctx, "Component", "", map[string]string{"name": "test"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity after wipe+apply failed: %v", err)
 	}
 }
 
@@ -2294,15 +5242,17 @@ func TestApplySchema_AdditiveChange(t *testing.T) {
 
 func TestExportGraph_EmptyGraph(t *testing.T) {
 	srv, _ := newTestServer(t)
-	ctx := testCtx()
 
 	// No data in the graph — export should succeed with an empty result.
-	data, err := collectExportData(srv, ctx, "json")
+	stream := &mockExportStream{
+		ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar"),
+	}
+	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)
 	if err != nil {
 		t.Fatalf("export empty graph failed: %v", err)
 	}
-	if data == nil {
-		t.Fatal("expected non-nil export data for empty graph")
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
 	}
 }
 
@@ -2321,14 +5271,14 @@ func TestExportGraph_MidStreamFailure(t *testing.T) {
 	applyTestSchema(applySchemaCtx, t, srv.store)
 	_, _ = srv.store.CreateEntity(applySchemaCtx, "Component", "", map[string]string{"name": "a"}, nil, "")
 
-	// Must provide a context with proper capabilities so checkWildcardEntityCap passes.
-	mdCtx := capabilityContext("READ:graph/entity/*", scPriv, "sidecar")
-	capCtx, vErr := srv.verifier.verify(mdCtx)
-	if vErr != nil {
-		t.Fatalf("verify failed: %v", vErr)
+	stream := &mockExportStream{
+		ctx:     capabilityContext("READ:graph/entity/*", scPriv, "sidecar"),
+		sendErr: fmt.Errorf("stream send failure"),
 	}
-	stream := &mockExportStream{ctx: capCtx, sendErr: fmt.Errorf("stream send failure")}
-	err := srv.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
+	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
+	}
 	if err == nil {
 		t.Fatal("expected error for mid-stream failure, got nil")
 	}
@@ -2350,13 +5300,11 @@ func TestExportGraph_BufferAllocationFailure(t *testing.T) {
 	// Wrap store to panic on ListMainEntityTypes, simulating an OOM.
 	srv.store = &panicStore{Store: st}
 
-	mdCtx := capabilityContext("READ:graph/entity/*", scPriv, "sidecar")
-	capCtx, vErr := srv.verifier.verify(mdCtx)
-	if vErr != nil {
-		t.Fatalf("verify failed: %v", vErr)
+	stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", scPriv, "sidecar")}
+	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
 	}
-	stream := &mockExportStream{ctx: capCtx}
-	err := srv.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
 	if err == nil {
 		t.Fatal("expected error for buffer allocation failure, got nil")
 	}
@@ -2450,13 +5398,21 @@ func TestExportGraph_MissingReadCapability(t *testing.T) {
 
 	// Only WRITE capabilities, no READ:graph/entity/*.
 	ctx := capabilityContext("WRITE:graph/entity/*,WRITE:graph/tx", scPriv, "sidecar")
+	stream := &mockExportStream{ctx: ctx}
 
-	err := srv.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, &mockExportStream{ctx: ctx})
-	if err == nil {
-		t.Fatal("expected PermissionDenied for missing READ capability, got nil")
+	handlerInvoked, err := invokeExportGraph(
+		srv, &flowv1.ExportGraphRequest{Format: "json"}, stream,
+	)
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
 	}
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	if stream.verifiedCaps == nil || len(stream.verifiedCaps.Caps) != 2 ||
+		stream.verifiedCaps.Caps[0] != "WRITE:graph/entity/*" || stream.verifiedCaps.Caps[1] != "WRITE:graph/tx" {
+		t.Fatalf("handler did not receive interceptor-verified WRITE capabilities: %+v", stream.verifiedCaps)
+	}
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != "capability denied: READ:graph/entity/*" {
+		t.Fatalf("expected missing-READ PermissionDenied, got %v", err)
 	}
 }
 
@@ -2617,6 +5573,67 @@ func TestGitLockSerialization(t *testing.T) {
 // =========================================================================
 // 10. Telemetry tests
 // =========================================================================
+
+func TestTransactionGC_ExcludesConcurrentMainWriteDuringRehydration(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	blocking := &gcBlockingStore{Store: base, wipeEntered: make(chan struct{}), releaseWipe: make(chan struct{})}
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	attemptingGit := &gitAttemptStore{GitStore: gs}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, attemptingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	fc := newFakeClock(time.Now())
+	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+	_, err = srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{Timeout: durationpb.New(time.Minute)})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	fc.Advance(2 * time.Minute)
+	gcDone := make(chan struct{})
+	go func() {
+		srv.gcTick()
+		close(gcDone)
+	}()
+	<-blocking.wipeEntered
+	gitAttempted := make(chan struct{})
+	attemptingGit.setAttempted(gitAttempted)
+	unrelatedDone := make(chan error, 1)
+	go func() { unrelatedDone <- srv.withGitLock(func() error { return nil }) }()
+	<-gitAttempted
+
+	mainWriteAtLock := make(chan struct{})
+	srv.beforeWriteLock = func() { close(mainWriteAtLock) }
+	writeDone := make(chan error, 1)
+	go func() {
+		_, writeErr := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+			EntityType: "Component", Properties: map[string]string{"name": "concurrent"},
+		})
+		writeDone <- writeErr
+	}()
+	<-mainWriteAtLock
+	srv.beforeWriteLock = nil
+	close(blocking.releaseWipe)
+	<-gcDone
+	if err := <-unrelatedDone; err != nil {
+		t.Fatalf("unrelated Git checkout: %v", err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+}
 
 func TestTelemetry_TransactionGC(t *testing.T) {
 	opPub, _ := generateTestKey()
@@ -2834,6 +5851,9 @@ func TestSearchNeighbors_EmptyEmbedding(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+	if msg := status.Convert(err).Message(); msg != "embedding is required" {
+		t.Fatalf("expected missing-embedding error, got %q", msg)
 	}
 }
 

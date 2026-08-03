@@ -21,18 +21,18 @@ import (
 	"io"
 	"testing"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	flowv1 "github.com/foundry/flow/operator/api/v1"
 	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
 func TestFoundryGraphReconciler_CartographerServiceName(t *testing.T) {
@@ -181,9 +181,9 @@ func (m *mockCartographerClient) Close() error {
 type mockExportGraphClient struct{}
 
 func (mockExportGraphClient) Recv() (*flowv1gen.ExportGraphResponse, error) { return nil, io.EOF }
-func (mockExportGraphClient) Context() context.Context                       { return context.Background() }
-func (mockExportGraphClient) Header() (metadata.MD, error)                   { return nil, nil }
-func (mockExportGraphClient) Trailer() metadata.MD                           { return nil }
-func (mockExportGraphClient) CloseSend() error                               { return nil }
-func (mockExportGraphClient) SendMsg(interface{}) error                      { return nil }
-func (mockExportGraphClient) RecvMsg(interface{}) error                      { return nil }
+func (mockExportGraphClient) Context() context.Context                      { return context.Background() }
+func (mockExportGraphClient) Header() (metadata.MD, error)                  { return nil, nil }
+func (mockExportGraphClient) Trailer() metadata.MD                          { return nil }
+func (mockExportGraphClient) CloseSend() error                              { return nil }
+func (mockExportGraphClient) SendMsg(any) error                             { return nil }
+func (mockExportGraphClient) RecvMsg(any) error                             { return nil }

@@ -20,16 +20,38 @@ import (
 // Branch lifecycle
 // --------------------------------------------------------------------------
 
-// CreateBranchDB opens a new LadybugDB (in-memory) for the given txID.
+// CreateBranchDB opens a new LadybugDB for the given txID. File-backed stores
+// persist branches under branches/<txID>.lbug; in-memory stores remain ephemeral.
 func (db *ladybugDB) CreateBranchDB(txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	if db.closed || db.failed {
+		return store.ErrDatabaseNotReady
+	}
 	if _, ok := db.branches[txID]; ok {
 		return fmt.Errorf("%w: branch for tx %q", store.ErrBranchAlreadyExists, txID)
 	}
 
-	database, err := lbug.OpenInMemoryDatabase(lbug.DefaultSystemConfig())
+	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
+		return fmt.Errorf("invalid branch ID %q", txID)
+	}
+	var (
+		database *lbug.Database
+		err      error
+		path     string
+	)
+	if db.path == "" {
+		database, err = lbug.OpenInMemoryDatabase(lbug.DefaultSystemConfig())
+	} else {
+		path = db.branchPath(txID)
+		if _, statErr := os.Stat(path); statErr == nil {
+			return fmt.Errorf("%w: branch for tx %q", store.ErrBranchAlreadyExists, txID)
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("stat branch database: %w", statErr)
+		}
+		database, err = lbug.OpenDatabase(path, lbug.DefaultSystemConfig())
+	}
 	if err != nil {
 		return fmt.Errorf("open branch database: %w", err)
 	}
@@ -37,6 +59,9 @@ func (db *ladybugDB) CreateBranchDB(txID string) error {
 	conn, err := lbug.OpenConnection(database)
 	if err != nil {
 		database.Close()
+		if path != "" {
+			_ = os.RemoveAll(path)
+		}
 		return fmt.Errorf("open branch connection: %w", err)
 	}
 
@@ -47,14 +72,13 @@ func (db *ladybugDB) CreateBranchDB(txID string) error {
 		edgeTypeDefs:   make(map[string]*store.EdgeTypeDef),
 	}
 
-	// Load extensions on the branch.
-	for _, ext := range []string{"vector", "fts"} {
-		_, _ = conn.Query("INSTALL " + ext + ";")
-		if _, err := conn.Query("LOAD " + ext + ";"); err != nil {
-			conn.Close()
-			database.Close()
-			return fmt.Errorf("load extension %q on branch: %w", ext, err)
+	if err := loadBranchExtensions(conn); err != nil {
+		conn.Close()
+		database.Close()
+		if path != "" {
+			_ = os.RemoveAll(path)
 		}
+		return err
 	}
 
 	db.branches[txID] = br
@@ -65,65 +89,266 @@ func (db *ladybugDB) CreateBranchDB(txID string) error {
 func (db *ladybugDB) DropBranchDB(txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
+		return fmt.Errorf("invalid branch ID %q", txID)
+	}
 
 	br, ok := db.branches[txID]
-	if !ok {
-		return nil // idempotent — no error for non-existent
+	if ok {
+		br.mu.Lock()
+		if br.conn != nil {
+			br.conn.Close()
+		}
+		if br.db != nil {
+			br.db.Close()
+		}
+		br.mu.Unlock()
+		delete(db.branches, txID)
 	}
-	if br.conn != nil {
-		br.conn.Close()
+	if db.path != "" {
+		if err := os.RemoveAll(db.branchPath(txID)); err != nil {
+			return fmt.Errorf("remove branch database: %w", err)
+		}
+		if err := os.Remove(db.branchMetadataPath(txID)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove branch schema metadata: %w", err)
+		}
+		if err := os.Remove(db.branchStatePath(txID)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove branch state: %w", err)
+		}
+		if err := syncDirectory(filepath.Join(db.path, "branches")); err != nil {
+			return fmt.Errorf("sync branch cleanup: %w", err)
+		}
 	}
-	if br.db != nil {
-		br.db.Close()
-	}
-	delete(db.branches, txID)
+	delete(db.branchStates, txID)
 	return nil
+}
+
+func (db *ladybugDB) branchPath(txID string) string {
+	return filepath.Join(db.path, "branches", txID+".lbug")
+}
+
+// branchLocked returns a branch while db.mu is held, lazily reopening a
+// persisted branch after process restart.
+func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
+	if db.closed || db.failed {
+		return nil, store.ErrDatabaseNotReady
+	}
+	if br, ok := db.branches[txID]; ok {
+		br.mu.Lock()
+		failed := br.failed
+		br.mu.Unlock()
+		if failed {
+			return nil, store.ErrDatabaseNotReady
+		}
+		return br, nil
+	}
+	if db.path == "" {
+		return nil, fmt.Errorf("%w: branch for tx %q", store.ErrBranchNotFound, txID)
+	}
+	path := db.branchPath(txID)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: branch for tx %q", store.ErrBranchNotFound, txID)
+		}
+		return nil, fmt.Errorf("stat branch database: %w", err)
+	}
+	database, err := lbug.OpenDatabase(path, lbug.DefaultSystemConfig())
+	if err != nil {
+		return nil, fmt.Errorf("open persisted branch %q: %w", txID, err)
+	}
+	conn, err := lbug.OpenConnection(database)
+	if err != nil {
+		database.Close()
+		return nil, fmt.Errorf("open persisted branch connection %q: %w", txID, err)
+	}
+	br := &branchDB{db: database, conn: conn}
+	if err := loadBranchExtensions(conn); err != nil {
+		conn.Close()
+		database.Close()
+		return nil, err
+	}
+	catalogEntities, catalogEdges, err := rebuildBranchSchemaCache(conn)
+	if err != nil {
+		conn.Close()
+		database.Close()
+		return nil, fmt.Errorf("rebuild persisted branch schema %q: %w", txID, err)
+	}
+	br.entityTypeDefs, br.edgeTypeDefs, err = restoreBranchSchemaMetadata(
+		conn, db.branchMetadataPath(txID), catalogEntities, catalogEdges,
+	)
+	if err != nil {
+		conn.Close()
+		database.Close()
+		return nil, fmt.Errorf("restore persisted branch schema %q: %w", txID, err)
+	}
+	db.branches[txID] = br
+	return br, nil
+}
+
+func loadBranchExtensions(conn *lbug.Connection) error {
+	for _, ext := range []string{"vector", "fts"} {
+		_, _ = conn.Query("INSTALL " + ext + ";")
+		if _, err := conn.Query("LOAD " + ext + ";"); err != nil {
+			return fmt.Errorf("load extension %q on branch: %w", ext, err)
+		}
+	}
+	return nil
+}
+
+func rebuildBranchSchemaCache(conn *lbug.Connection) (
+	map[string]*store.EntityTypeDef, map[string]*store.EdgeTypeDef, error,
+) {
+	entities := make(map[string]*store.EntityTypeDef)
+	edges := make(map[string]*store.EdgeTypeDef)
+	vectorIndexes, err := vectorIndexesOnConn(conn)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := conn.Query("CALL show_tables() RETURN *;")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer result.Close()
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return nil, nil, err
+		}
+		values, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(values) < 3 {
+			continue
+		}
+		name, kind := fmt.Sprint(values[1]), strings.ToUpper(fmt.Sprint(values[2]))
+		properties, err := tablePropertiesOnConn(conn, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch kind {
+		case "NODE":
+			entities[name] = &store.EntityTypeDef{
+				Name: name, Properties: properties, EnableVectorIndex: vectorIndexes[name],
+			}
+		case "REL":
+			edges[name] = &store.EdgeTypeDef{Name: name, Properties: properties}
+		}
+	}
+	return entities, edges, nil
+}
+
+func vectorIndexesOnConn(conn *lbug.Connection) (map[string]bool, error) {
+	indexes := make(map[string]bool)
+	result, err := conn.Query("CALL show_indexes() RETURN *;")
+	if err != nil {
+		return indexes, nil
+	}
+	defer result.Close()
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return nil, err
+		}
+		values, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(values) >= 3 && strings.EqualFold(fmt.Sprint(values[2]), "hnsw") {
+			indexes[fmt.Sprint(values[0])] = true
+		}
+	}
+	return indexes, nil
+}
+
+func tablePropertiesOnConn(conn *lbug.Connection, table string) ([]store.PropertyDef, error) {
+	result, err := conn.Query(fmt.Sprintf("CALL table_info('%s') RETURN *;", table))
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	skip := map[string]bool{"id": true, "_properties": true, "embedding": true, "from": true, "to": true, "type": true}
+	properties := []store.PropertyDef{}
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return nil, err
+		}
+		values, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(values) >= 3 && !skip[fmt.Sprint(values[1])] {
+			properties = append(properties, store.PropertyDef{Name: fmt.Sprint(values[1]), Type: fmt.Sprint(values[2])})
+		}
+	}
+	return properties, nil
 }
 
 // ReplicateSchemaToBranch applies the main DB's schema DDL to the branch.
 func (db *ladybugDB) ReplicateSchemaToBranch(txID string) error {
 	db.mu.Lock()
-	br, ok := db.branches[txID]
-	if !ok {
-		db.mu.Unlock()
-		return fmt.Errorf("branch for tx %q not found", txID)
+	defer db.mu.Unlock()
+	br, err := db.branchLocked(txID)
+	if err != nil {
+		return err
+	}
+	br.mu.Lock()
+	defer br.mu.Unlock()
+	if br.failed {
+		return store.ErrDatabaseNotReady
 	}
 	// Copy type definitions.
 	for name, def := range db.entityTypeDefs {
-		clone := &store.EntityTypeDef{
-			Name:              def.Name,
-			EnableVectorIndex: def.EnableVectorIndex,
-			Properties:        append([]store.PropertyDef{}, def.Properties...),
-		}
+		cloned := cloneEntityTypeDef(def)
+		clone := &cloned
 		br.entityTypeDefs[name] = clone
 	}
 	for name, def := range db.edgeTypeDefs {
-		clone := &store.EdgeTypeDef{
-			Name:       def.Name,
-			Properties: append([]store.PropertyDef{}, def.Properties...),
-		}
+		cloned := cloneEdgeTypeDef(def)
+		clone := &cloned
 		br.edgeTypeDefs[name] = clone
 	}
-	db.mu.Unlock()
-
 	// Replay DDL on the branch connection.
 	// Get DDL from main's table definitions.
 	// We need to recreate the node and rel tables.
 	for _, name := range sortedKeys(db.entityTypeDefs) {
-		db.mu.Lock()
 		def := db.entityTypeDefs[name]
-		db.mu.Unlock()
+		dimension := getEmbeddingDimension(db.conn, name)
 		if err := createNodeTableOnConn(br.conn, name, def.Properties); err != nil {
 			return fmt.Errorf("replicate node table %q: %w", name, err)
 		}
+		if dimension > 0 {
+			alterDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(name), dimension)
+			if _, err := br.conn.Query(alterDDL); err != nil {
+				return fmt.Errorf("replicate embedding column %q: %w", name, err)
+			}
+			if err := db.createVectorIndex(br.conn, name); err != nil {
+				br.failed = true
+				return fmt.Errorf("replicate vector index %q: %w", name, err)
+			}
+		}
 	}
 	for _, name := range sortedKeys(db.edgeTypeDefs) {
-		db.mu.Lock()
 		def := db.edgeTypeDefs[name]
 		pairs := db.edgePairs[name]
-		db.mu.Unlock()
 		if err := createRelTableOnConn(br.conn, name, def.Properties, pairs); err != nil {
 			return fmt.Errorf("replicate edge table %q: %w", name, err)
+		}
+	}
+	if db.path != "" {
+		metadata := metadataFromDefinitions(br.entityTypeDefs, br.edgeTypeDefs)
+		metadata, err = captureVectorState(br.conn, metadata)
+		if err != nil {
+			br.failed = true
+			return fmt.Errorf("capture branch vector state: %w", err)
+		}
+		if err := db.writeMetadata(db.branchMetadataPath(txID), metadata); err != nil {
+			br.failed = true
+			return fmt.Errorf("persist branch schema metadata: %w", err)
 		}
 	}
 	return nil
@@ -133,53 +358,27 @@ func (db *ladybugDB) ReplicateSchemaToBranch(txID string) error {
 // For in-memory mode we wipe main and bulk-insert from branch queries.
 func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error {
 	db.mu.Lock()
-	br, ok := db.branches[txID]
-	if !ok {
-		db.mu.Unlock()
-		return fmt.Errorf("branch for tx %q not found", txID)
+	defer db.mu.Unlock()
+	br, err := db.branchLocked(txID)
+	if err != nil {
+		return err
+	}
+	br.mu.Lock()
+	defer br.mu.Unlock()
+	if br.failed {
+		return store.ErrDatabaseNotReady
 	}
 	// Snapshot entity/edge defs before releasing lock for branch work.
 	entDefs := make(map[string]*store.EntityTypeDef)
 	maps.Copy(entDefs, br.entityTypeDefs)
 	edgeDefs := make(map[string]*store.EdgeTypeDef)
 	maps.Copy(edgeDefs, br.edgeTypeDefs)
-	db.mu.Unlock()
-
 	// Wipe all data from main.
-	if err := db.WipeAll(ctx); err != nil {
+	result, err := db.conn.Query("MATCH (n) DETACH DELETE n;")
+	if err != nil {
 		return fmt.Errorf("wipe main: %w", err)
 	}
-
-	// Re-apply schema to main (by replaying DDL from the branch's cache).
-	db.mu.Lock()
-	maps.Copy(db.entityTypeDefs, entDefs)
-	maps.Copy(db.edgeTypeDefs, edgeDefs)
-	db.mu.Unlock()
-
-	// Create tables on main conn.
-	for name, def := range entDefs {
-		if err := createNodeTableOnConn(db.conn, name, def.Properties); err != nil {
-			return fmt.Errorf("recreate node table %q: %w", name, err)
-		}
-	}
-	for name := range edgeDefs {
-		var props []store.PropertyDef
-		if def, ok := edgeDefs[name]; ok {
-			props = def.Properties
-		}
-		var pairs []fromToPair
-		if ep, ok := db.edgePairs[name]; ok {
-			pairs = ep
-		}
-		if err := createRelTableOnConn(db.conn, name, props, pairs); err != nil {
-			return fmt.Errorf("recreate edge table %q: %w", name, err)
-		}
-	}
-
-	// Rebuild schema cache.
-	if err := db.rebuildSchemaCache(); err != nil {
-		return fmt.Errorf("rebuild schema cache: %w", err)
-	}
+	result.Close()
 
 	// Copy all entities from branch to main.
 	for _, name := range sortedKeys(entDefs) {
@@ -234,45 +433,27 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 }
 
 // RehydrateMainFromFiles loads entities/edges from JSON files into main.
+// It holds db.mu for the entire wipe-and-load cycle so that concurrent reads
+// never observe partially reconstructed state.
 func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
-	// Close and re-open main? For in-memory, just clear.
-	// For file-backed, the caller should handle this via branch flow.
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	// Wipe everything.
-	if err := db.WipeAll(ctx); err != nil {
-		return err
+	if db.closed || db.failed {
+		return store.ErrDatabaseNotReady
 	}
 
-	// Re-apply schema from cache.
-	db.mu.Lock()
 	entDefs := make(map[string]*store.EntityTypeDef)
 	maps.Copy(entDefs, db.entityTypeDefs)
 	edgeDefs := make(map[string]*store.EdgeTypeDef)
 	maps.Copy(edgeDefs, db.edgeTypeDefs)
-	db.mu.Unlock()
 
-	for name, def := range entDefs {
-		if err := createNodeTableOnConn(db.conn, name, def.Properties); err != nil {
-			return fmt.Errorf("create node table %q: %w", name, err)
-		}
+	// Wipe everything — use db.conn directly since we hold db.mu.
+	result, err := db.conn.Query("MATCH (n) DETACH DELETE n;")
+	if err != nil {
+		return fmt.Errorf("delete graph data: %w", err)
 	}
-	for name := range edgeDefs {
-		var props []store.PropertyDef
-		if def, ok := edgeDefs[name]; ok {
-			props = def.Properties
-		}
-		var pairs []fromToPair
-		if ep, ok := db.edgePairs[name]; ok {
-			pairs = ep
-		}
-		if err := createRelTableOnConn(db.conn, name, props, pairs); err != nil {
-			return fmt.Errorf("create edge table %q: %w", name, err)
-		}
-	}
-
-	if err := db.rebuildSchemaCache(); err != nil {
-		return fmt.Errorf("rebuild schema cache: %w", err)
-	}
+	result.Close()
 
 	// Read entities from JSON files.
 	if err := db.loadEntitiesFromDir(entitiesDir, entDefs); err != nil {
@@ -294,14 +475,17 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 // HydrateBranchFromFiles loads entities/edges from JSON files into a branch.
 func (db *ladybugDB) HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error {
 	db.mu.Lock()
-	br, ok := db.branches[txID]
-	if !ok {
+	br, err := db.branchLocked(txID)
+	if err != nil {
 		db.mu.Unlock()
-		return fmt.Errorf("branch for tx %q not found", txID)
+		return err
 	}
 	br.mu.Lock()
 	db.mu.Unlock()
 	defer br.mu.Unlock()
+	if br.failed {
+		return store.ErrDatabaseNotReady
+	}
 
 	// Load from files into branch.
 	if err := db.loadEntitiesFromDirOnConn(br.conn, entitiesDir, br.entityTypeDefs); err != nil {
@@ -326,7 +510,7 @@ func (db *ladybugDB) DumpAllEntities(ctx context.Context, txID string) ([]store.
 		q := fmt.Sprintf("MATCH (n:%s) RETURN n;", quoteID(name))
 		result, err := conn.Query(q)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("query entity type %q: %w", name, err)
 		}
 		for result.HasNext() {
 			tuple, err := result.Next()
@@ -366,7 +550,7 @@ func (db *ladybugDB) DumpAllEdges(ctx context.Context, txID string) ([]store.Edg
 	for _, name := range sortedKeys(typeDefs.edgeTypeDefs) {
 		edges, err := listEdgesOnConn(conn, name)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("query edge type %q: %w", name, err)
 		}
 		results = append(results, edges...)
 	}
@@ -397,8 +581,11 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 	cols = append(cols, "id STRING PRIMARY KEY")
 	stringProps := make([]string, 0, len(properties))
 	for _, p := range properties {
-		cols = append(cols, quoteID(p.Name)+" STRING")
-		stringProps = append(stringProps, p.Name)
+		propertyType := ladybugType(p.Type)
+		cols = append(cols, quoteID(p.Name)+" "+propertyType)
+		if propertyType == colTypeString || propertyType == "STRING[]" {
+			stringProps = append(stringProps, p.Name)
+		}
 	}
 	cols = append(cols, "_properties STRING")
 	// ponytail: embedding column and vector index are bootstrapped lazily
@@ -435,7 +622,7 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 	cols = append(cols, strings.Join(clauses, ", "))
 	cols = append(cols, "id STRING")
 	for _, p := range properties {
-		cols = append(cols, quoteID(p.Name)+" STRING")
+		cols = append(cols, quoteID(p.Name)+" "+ladybugType(p.Type))
 	}
 	cols = append(cols, "_properties STRING")
 	ddl := fmt.Sprintf("CREATE REL TABLE IF NOT EXISTS %s (%s);", quoteID(name), strings.Join(cols, ", "))
@@ -542,7 +729,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEntityDir, dir)
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := db.readDir(dir)
 	if err != nil {
 		return err
 	}
@@ -555,7 +742,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
-		files, err := os.ReadDir(typeDir)
+		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
 		}
@@ -571,6 +758,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 				ID         string            `json:"id"`
 				Type       string            `json:"type"`
 				Properties map[string]string `json:"properties"`
+				Embedding  []float32         `json:"embedding"`
 			}
 			if err := json.Unmarshal(data, &je); err != nil {
 				return fmt.Errorf("%w: unparseable entity file %q: %v",
@@ -589,6 +777,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 			}
 			entity := &store.Entity{
 				Id: je.ID, Type: je.Type, Properties: props,
+				Embedding: je.Embedding,
 				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 			}
 			if err := insertEntityOnConn(db.conn, typeName, entity); err != nil {
@@ -610,7 +799,7 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEdgeDir, dir)
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := db.readDir(dir)
 	if err != nil {
 		return err
 	}
@@ -623,7 +812,7 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
-		files, err := os.ReadDir(typeDir)
+		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
 		}
@@ -683,7 +872,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEntityDir, dir)
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := db.readDir(dir)
 	if err != nil {
 		return err
 	}
@@ -696,7 +885,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
-		files, err := os.ReadDir(typeDir)
+		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
 		}
@@ -712,6 +901,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 				ID         string            `json:"id"`
 				Type       string            `json:"type"`
 				Properties map[string]string `json:"properties"`
+				Embedding  []float32         `json:"embedding"`
 			}
 			if err := json.Unmarshal(data, &je); err != nil {
 				return fmt.Errorf("%w: unparseable entity file %q: %v",
@@ -730,6 +920,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			}
 			entity := &store.Entity{
 				Id: je.ID, Type: je.Type, Properties: props,
+				Embedding: je.Embedding,
 				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 			}
 			if err := insertEntityOnConn(conn, typeName, entity); err != nil {
@@ -752,7 +943,7 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEdgeDir, dir)
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := db.readDir(dir)
 	if err != nil {
 		return err
 	}
@@ -765,7 +956,7 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
-		files, err := os.ReadDir(typeDir)
+		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
 		}

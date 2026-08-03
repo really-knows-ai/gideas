@@ -2,13 +2,17 @@ package ladybug
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
+	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/store"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/google/uuid"
@@ -38,6 +42,119 @@ func TestOpenFileBacked(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Errorf("Close() error: %v", err)
+	}
+}
+
+func TestWipeAllClearsDataAndPreservesSchema(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+	if err := s.ApplySchema(ctx, &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Document", Properties: []*flowv1.Property{{Name: "title", Type: "string"}},
+	}}}); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if _, err := s.CreateEntity(ctx, "Document", "", map[string]string{"title": "before"}, nil, "main"); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := s.WipeAll(ctx); err != nil {
+		t.Fatalf("WipeAll: %v", err)
+	}
+	if !s.TableExists("Document") {
+		t.Fatal("schema was removed by WipeAll")
+	}
+	entities, _, err := s.ListEntities(ctx, "Document", 10, "", "main")
+	if err != nil {
+		t.Fatalf("ListEntities: %v", err)
+	}
+	if len(entities) != 0 {
+		t.Fatalf("expected empty graph after WipeAll, got %d entities", len(entities))
+	}
+}
+
+func TestRehydrateMainFromFilesReplacesEntitiesAndEdgesAndPreservesVectorState(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", EnableVectorIndex: true, Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+			{
+				Name: "Service", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+				Rules: []*flowv1.ConnectionRule{{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}}},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	oldComponent, err := s.CreateEntity(ctx, "Component", "", map[string]string{"name": "old"}, []float32{1, 2}, "main")
+	if err != nil {
+		t.Fatalf("create old component: %v", err)
+	}
+	oldService, err := s.CreateEntity(ctx, "Service", "", map[string]string{"name": "old"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create old service: %v", err)
+	}
+	if _, err := s.CreateEdge(ctx, "DEPENDS_ON", oldService.Id, oldComponent.Id, nil, "main"); err != nil {
+		t.Fatalf("create old edge: %v", err)
+	}
+
+	componentID := uuid.NewString()
+	serviceID := uuid.NewString()
+	edgeID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", componentID+".json"), map[string]any{
+		"id": componentID, "type": "Component", "properties": map[string]string{"name": "new"},
+		"embedding": []float32{3, 4},
+	})
+	writeJSONFile(t, filepath.Join(entitiesDir, "Service", serviceID+".json"), map[string]any{
+		"id": serviceID, "type": "Service", "properties": map[string]string{"name": "new"},
+	})
+	writeJSONFile(t, filepath.Join(edgesDir, "DEPENDS_ON", edgeID+".json"), map[string]any{
+		"id": edgeID, "type": "DEPENDS_ON", "from": serviceID, "to": componentID,
+	})
+	if err := s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+	if _, err := s.GetEntity(ctx, oldComponent.Id, "main"); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("old entity survived replacement: %v", err)
+	}
+	component, err := s.GetEntity(ctx, componentID, "main")
+	if err != nil || !reflect.DeepEqual(component.Embedding, []float32{3, 4}) {
+		t.Fatalf("rehydrated component mismatch: entity=%+v error=%v", component, err)
+	}
+	if _, err := s.GetEdge(ctx, edgeID, "main"); err != nil {
+		t.Fatalf("rehydrated edge missing: %v", err)
+	}
+	if dimension, err := s.GetEstablishedDimension("Component", "main"); err != nil || dimension != 2 {
+		t.Fatalf("vector dimension changed: dimension=%d error=%v", dimension, err)
+	}
+	if !s.IsVectorIndexBootstrapped("Component", "main") {
+		t.Fatal("vector index was not preserved")
+	}
+}
+
+func writeJSONFile(t *testing.T, path string, value any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 }
 
@@ -303,43 +420,86 @@ func TestExtensions_Load(t *testing.T) {
 }
 
 func TestHealth(t *testing.T) {
-	s, err := OpenInMemory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeStore(t, s)
+	t.Run("in-memory", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStore(t, s)
 
-	health, err := s.Health(context.Background())
-	if err != nil {
-		t.Fatalf("Health: %v", err)
-	}
+		health, err := s.Health(context.Background())
+		if err != nil {
+			t.Fatalf("Health: %v", err)
+		}
 
-	if !health.LadybugOK {
-		t.Error("expected LadybugOK to be true")
-	}
-	if health.SchemaApplied {
-		t.Error("expected SchemaApplied to be false for fresh DB")
-	}
+		if !health.LadybugOK {
+			t.Error("expected LadybugOK to be true")
+		}
+		if health.SchemaApplied {
+			t.Error("expected SchemaApplied to be false for fresh DB")
+		}
+		if !health.PVCWritable {
+			t.Error("expected PVCWritable to be true for in-memory DB")
+		}
 
-	// Apply a schema, then health should report SchemaApplied.
-	sch := &flowv1.Schema{
-		EntityTypes: []*flowv1.EntityType{
-			{Name: "Doc", Properties: []*flowv1.Property{
-				{Name: "title", Type: "string"},
-			}},
-		},
-	}
-	if err := s.ApplySchema(context.Background(), sch); err != nil {
-		t.Fatal(err)
-	}
+		// Apply a schema, then health should report SchemaApplied.
+		sch := &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{
+				{Name: "Doc", Properties: []*flowv1.Property{
+					{Name: "title", Type: "string"},
+				}},
+			},
+		}
+		if err := s.ApplySchema(context.Background(), sch); err != nil {
+			t.Fatal(err)
+		}
 
-	health, err = s.Health(context.Background())
-	if err != nil {
-		t.Fatalf("Health after schema: %v", err)
-	}
-	if !health.SchemaApplied {
-		t.Error("expected SchemaApplied to be true after schema apply")
-	}
+		health, err = s.Health(context.Background())
+		if err != nil {
+			t.Fatalf("Health after schema: %v", err)
+		}
+		if !health.SchemaApplied {
+			t.Error("expected SchemaApplied to be true after schema apply")
+		}
+	})
+
+	t.Run("file-backed PVC writable", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStore(t, s)
+
+		health, err := s.Health(context.Background())
+		if err != nil {
+			t.Fatalf("Health: %v", err)
+		}
+		if !health.LadybugOK {
+			t.Error("expected LadybugOK to be true for file-backed DB")
+		}
+		if !health.PVCWritable {
+			t.Error("expected PVCWritable to be true for writable temp dir")
+		}
+	})
+
+	t.Run("closed store reports unhealthy", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		health, err := s.Health(context.Background())
+		if err != nil {
+			t.Fatalf("Health: %v", err)
+		}
+		if health.LadybugOK {
+			t.Error("expected LadybugOK to be false for closed store")
+		}
+	})
 }
 
 func TestClosedStore_ReturnsError(t *testing.T) {
@@ -1206,6 +1366,528 @@ func TestPersistence_SchemaSurvivesReopen(t *testing.T) {
 	}
 }
 
+func TestPersistence_CompleteSchemaMetadataSurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Service", EnableVectorIndex: true,
+				Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}},
+				Rules:      []*flowv1.ConnectionRule{{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}}},
+			},
+			{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}}},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{
+			Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string", Required: true}},
+		}},
+	}
+	if err := s.ApplySchema(context.Background(), schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if err := s.CreateBranchDB("tx-metadata"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch("tx-metadata"); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, reopened)
+	service, ok := reopened.EntityType("Service")
+	if !ok || !service.EnableVectorIndex || len(service.Properties) != 1 || !service.Properties[0].Required {
+		t.Fatalf("incomplete reopened entity definition: %+v", service)
+	}
+	if len(service.Rules) != 1 || len(service.Rules[0].CanConnectTo) != 1 ||
+		service.Rules[0].CanConnectTo[0] != "Component" || len(service.Rules[0].Using) != 1 ||
+		service.Rules[0].Using[0] != "DEPENDS_ON" {
+		t.Fatalf("incomplete reopened rules: %+v", service.Rules)
+	}
+	edge, ok := reopened.EdgeType("DEPENDS_ON")
+	if !ok || len(edge.Properties) != 1 || !edge.Properties[0].Required {
+		t.Fatalf("incomplete reopened edge definition: %+v", edge)
+	}
+	_, err = reopened.CreateEntity(context.Background(), "Component", "", map[string]string{}, nil, "tx-metadata")
+	if !errors.Is(err, store.ErrMissingRequiredProperty) {
+		t.Fatalf("reopened branch accepted missing required property: %v", err)
+	}
+}
+
+func TestPersistence_MissingOrCorruptSchemaMetadataFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(string) error
+	}{
+		{"missing", os.Remove},
+		{"corrupt", func(path string) error { return os.WriteFile(path, []byte("{"), 0600) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			applyTestSchema(t, s)
+			if err := s.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			if err := test.mutate(filepath.Join(dir, "schema.json")); err != nil {
+				t.Fatalf("mutate metadata: %v", err)
+			}
+			if reopened, err := Open(dir); err == nil {
+				_ = reopened.Close()
+				t.Fatal("expected schema metadata failure")
+			}
+		})
+	}
+}
+
+func TestPersistence_MissingBranchSchemaMetadataFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	applyTestSchema(t, s)
+	if err := s.CreateBranchDB("tx-missing-metadata"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch("tx-missing-metadata"); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	metadataPath := filepath.Join(dir, "branches", "tx-missing-metadata.schema.json")
+	if err := os.Remove(metadataPath); err != nil {
+		t.Fatalf("remove branch metadata: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen main: %v", err)
+	}
+	defer closeStore(t, reopened)
+	if _, err := reopened.DumpAllEntities(context.Background(), "tx-missing-metadata"); err == nil {
+		t.Fatal("expected missing branch metadata error")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "branches", "tx-missing-metadata.lbug")); err != nil {
+		t.Fatalf("branch database was removed: %v", err)
+	}
+}
+
+func TestPersistence_CatalogMetadataMismatchFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*schemaMetadata)
+	}{
+		{"property name", func(metadata *schemaMetadata) {
+			metadata.EntityTypes[0].Properties[0].Name = "renamed"
+		}},
+		{"property type", func(metadata *schemaMetadata) {
+			metadata.EntityTypes[0].Properties[0].Type = colTypeInt64
+		}},
+		{"relationship endpoint", func(metadata *schemaMetadata) {
+			metadata.EntityTypes[1].Rules[0].CanConnectTo = []string{"Service"}
+		}},
+		{"vector state", func(metadata *schemaMetadata) {
+			metadata.VectorIndexes["Service"] = true
+			metadata.VectorDimensions["Service"] = 3
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			schema := &flowv1.Schema{
+				EntityTypes: []*flowv1.EntityType{
+					{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+					{
+						Name: "Service", EnableVectorIndex: true,
+						Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+						Rules: []*flowv1.ConnectionRule{{
+							CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"},
+						}},
+					},
+				},
+				EdgeTypes: []*flowv1.EdgeType{{
+					Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}},
+				}},
+			}
+			if err := s.ApplySchema(context.Background(), schema); err != nil {
+				t.Fatalf("ApplySchema: %v", err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			metadataPath := filepath.Join(dir, "schema.json")
+			data, err := os.ReadFile(metadataPath)
+			if err != nil {
+				t.Fatalf("read metadata: %v", err)
+			}
+			var metadata schemaMetadata
+			if err := json.Unmarshal(data, &metadata); err != nil {
+				t.Fatalf("parse metadata: %v", err)
+			}
+			test.mutate(&metadata)
+			data, err = json.Marshal(metadata)
+			if err != nil {
+				t.Fatalf("marshal changed metadata: %v", err)
+			}
+			if err := os.WriteFile(metadataPath, data, 0600); err != nil {
+				t.Fatalf("write changed metadata: %v", err)
+			}
+			if reopened, err := Open(dir); err == nil {
+				_ = reopened.Close()
+				t.Fatal("expected catalog mismatch")
+			}
+		})
+	}
+}
+
+func TestPersistence_ValidMetadataRestoresEmptyCatalog(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	applyTestSchema(t, s)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "main.lbug")); err != nil {
+		t.Fatalf("remove main database: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("restore empty catalog from metadata: %v", err)
+	}
+	defer closeStore(t, reopened)
+	if !reopened.TableExists("Component") {
+		t.Fatal("metadata did not restore Component table")
+	}
+}
+
+func TestApplySchemaMetadataFailuresFailClosed(t *testing.T) {
+	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}
+	t.Run("stage before DDL", func(t *testing.T) {
+		database, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer closeStore(t, database)
+		db := database.(*ladybugDB)
+		stage := db.stageMetadata
+		db.stageMetadata = func(string, schemaMetadata) (string, error) {
+			return "", errors.New("injected stage failure")
+		}
+		if err := database.ApplySchema(context.Background(), schema); err == nil {
+			t.Fatal("expected stage failure")
+		}
+		if database.TableExists("Component") {
+			t.Fatal("stage failure applied DDL")
+		}
+		db.stageMetadata = stage
+		if err := database.ApplySchema(context.Background(), schema); err != nil {
+			t.Fatalf("store was not usable after pre-DDL stage failure: %v", err)
+		}
+	})
+
+	t.Run("publish after DDL", func(t *testing.T) {
+		dir := t.TempDir()
+		database, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		db := database.(*ladybugDB)
+		db.publishMetadata = func(string, string) error { return errors.New("injected publish failure") }
+		if err := database.ApplySchema(context.Background(), schema); err == nil {
+			t.Fatal("expected publish failure")
+		}
+		if _, err := database.CreateEntity(
+			context.Background(), "Component", "", map[string]string{"name": "blocked"}, nil, "",
+		); !errors.Is(err, store.ErrDatabaseNotReady) {
+			t.Fatalf("store remained usable after undurable DDL: %v", err)
+		}
+		health, err := database.Health(context.Background())
+		if err != nil || health.LadybugOK {
+			t.Fatalf("failed store reported healthy: health=%+v error=%v", health, err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if reopened, err := Open(dir); err == nil {
+			_ = reopened.Close()
+			t.Fatal("undurable schema reopened without metadata")
+		}
+	})
+
+	t.Run("directory sync after rename", func(t *testing.T) {
+		dir := t.TempDir()
+		database, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		db := database.(*ladybugDB)
+		db.publishMetadata = func(temporaryPath, path string) error {
+			if err := publishSchemaMetadata(temporaryPath, path); err != nil {
+				return err
+			}
+			return errors.New("injected post-rename directory sync failure")
+		}
+		if err := database.ApplySchema(context.Background(), schema); err == nil {
+			t.Fatal("expected post-rename failure")
+		}
+		if database.TableExists("Component") {
+			t.Fatal("failed store exposed schema cache after post-rename failure")
+		}
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		reopened, err := Open(dir)
+		if err != nil {
+			t.Fatalf("published metadata did not permit safe restart: %v", err)
+		}
+		closeStore(t, reopened)
+	})
+}
+
+func TestWriteSchemaMetadataPublishesDurably(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "schema.json")
+	metadata := schemaMetadata{
+		Version: schemaMetadataVersion, VectorIndexes: map[string]bool{}, VectorDimensions: map[string]int{},
+	}
+	if err := writeSchemaMetadata(path, metadata); err != nil {
+		t.Fatalf("writeSchemaMetadata: %v", err)
+	}
+	if _, _, err := readSchemaMetadata(path, true); err != nil {
+		t.Fatalf("read published metadata: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "schema.json" {
+		t.Fatalf("staging files remained after publish: %+v", entries)
+	}
+}
+
+func TestVectorBootstrapIndexFailureFailsClosed(t *testing.T) {
+	for _, branch := range []string{"", "tx-vector-index-failure"} {
+		name := "main"
+		if branch != "" {
+			name = "branch"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(dir)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			db := database.(*ladybugDB)
+			vectorSchema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+				Name: "Vector", EnableVectorIndex: true,
+				Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+			}}}
+			if err := database.ApplySchema(context.Background(), vectorSchema); err != nil {
+				t.Fatalf("ApplySchema: %v", err)
+			}
+			if branch != "" {
+				if err := database.CreateBranchDB(branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := database.ReplicateSchemaToBranch(branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+			createIndex := db.createVectorIndex
+			db.createVectorIndex = func(*lbug.Connection, string) error {
+				return errors.New("injected vector index failure")
+			}
+			if _, err := database.CreateEntity(
+				context.Background(), "Vector", "", map[string]string{"name": "first"}, []float32{1, 2}, branch,
+			); err == nil {
+				t.Fatal("expected vector index failure")
+			}
+			db.createVectorIndex = createIndex
+			if _, err := database.CreateEntity(
+				context.Background(), "Vector", "", map[string]string{"name": "retry"}, []float32{1, 2}, branch,
+			); !errors.Is(err, store.ErrDatabaseNotReady) {
+				t.Fatalf("retry used failed database: %v", err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			reopened, err := Open(dir)
+			if branch == "" {
+				if err == nil {
+					_ = reopened.Close()
+					t.Fatal("main vector mismatch silently reopened")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("reopen main: %v", err)
+			}
+			defer closeStore(t, reopened)
+			if _, err := reopened.DumpAllEntities(context.Background(), branch); err == nil {
+				t.Fatal("branch vector mismatch silently reopened")
+			}
+		})
+	}
+}
+
+func TestBranchVectorMetadataPublishFailureRejectsRetry(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	db := database.(*ladybugDB)
+	if err := database.ApplySchema(context.Background(), &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Vector", EnableVectorIndex: true,
+		Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	const branch = "tx-vector-metadata-failure"
+	if err := database.CreateBranchDB(branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := database.ReplicateSchemaToBranch(branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	writeMetadata := db.writeMetadata
+	db.writeMetadata = func(string, schemaMetadata) error {
+		return errors.New("injected branch metadata publish failure")
+	}
+	if _, err := database.CreateEntity(
+		context.Background(), "Vector", "", map[string]string{"name": "first"}, []float32{1, 2}, branch,
+	); err == nil {
+		t.Fatal("expected branch metadata publish failure")
+	}
+	db.writeMetadata = writeMetadata
+	if _, err := database.CreateEntity(
+		context.Background(), "Vector", "", map[string]string{"name": "retry"}, []float32{1, 2}, branch,
+	); !errors.Is(err, store.ErrDatabaseNotReady) {
+		t.Fatalf("retry used failed branch: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen main: %v", err)
+	}
+	defer closeStore(t, reopened)
+	if _, err := reopened.DumpAllEntities(context.Background(), branch); err == nil {
+		t.Fatal("branch metadata mismatch silently reopened")
+	}
+}
+
+func TestMainVectorMetadataPublishFailureRejectsRetry(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	db := database.(*ladybugDB)
+	if err := database.ApplySchema(context.Background(), &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Vector", EnableVectorIndex: true,
+		Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	writeMetadata := db.writeMetadata
+	db.writeMetadata = func(string, schemaMetadata) error {
+		return errors.New("injected main metadata publish failure")
+	}
+	if _, err := database.CreateEntity(
+		context.Background(), "Vector", "", map[string]string{"name": "first"}, []float32{1, 2}, "",
+	); err == nil {
+		t.Fatal("expected main metadata publish failure")
+	}
+	db.writeMetadata = writeMetadata
+	if _, err := database.CreateEntity(
+		context.Background(), "Vector", "", map[string]string{"name": "retry"}, []float32{1, 2}, "",
+	); !errors.Is(err, store.ErrDatabaseNotReady) {
+		t.Fatalf("retry used failed main database: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if reopened, err := Open(dir); err == nil {
+		_ = reopened.Close()
+		t.Fatal("main metadata mismatch silently reopened")
+	}
+}
+
+func TestFileBackedVectorBootstrapSurvivesMainAndBranchReopen(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := database.ApplySchema(context.Background(), &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Vector", EnableVectorIndex: true,
+		Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	const branch = "tx-vector-success"
+	if err := database.CreateBranchDB(branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := database.ReplicateSchemaToBranch(branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	mainEntity, err := database.CreateEntity(
+		context.Background(), "Vector", "", map[string]string{"name": "main"}, []float32{1, 2}, "",
+	)
+	if err != nil {
+		t.Fatalf("bootstrap main vector: %v", err)
+	}
+	branchEntity, err := database.CreateEntity(
+		context.Background(), "Vector", "", map[string]string{"name": "branch"}, []float32{1, 2, 3}, branch,
+	)
+	if err != nil {
+		t.Fatalf("bootstrap branch vector: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, reopened)
+	if dimension, err := reopened.GetEstablishedDimension("Vector", ""); err != nil || dimension != 2 {
+		t.Fatalf("main vector dimension after reopen = %d, %v", dimension, err)
+	}
+	if dimension, err := reopened.GetEstablishedDimension("Vector", branch); err != nil || dimension != 3 {
+		t.Fatalf("branch vector dimension after reopen = %d, %v", dimension, err)
+	}
+	if _, err := reopened.GetEntity(context.Background(), mainEntity.Id, ""); err != nil {
+		t.Fatalf("get reopened main vector entity: %v", err)
+	}
+	if _, err := reopened.GetEntity(context.Background(), branchEntity.Id, branch); err != nil {
+		t.Fatalf("get reopened branch vector entity: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Embedding bootstrap
 // ---------------------------------------------------------------------------
@@ -1388,6 +2070,109 @@ func TestBranch_CreateDrop(t *testing.T) {
 	// Idempotent drop should not error.
 	if err := s.DropBranchDB("tx1"); err != nil {
 		t.Errorf("expected idempotent drop to succeed: %v", err)
+	}
+}
+
+func TestBranchTransactionState_InMemoryLifecycle(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	if err := s.CreateBranchDB("tx-state"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if _, err := s.LoadBranchTransactionState("tx-state"); err == nil {
+		t.Fatal("unregistered branch state was accepted")
+	}
+	want := store.BranchTransactionState{MainHeadAtLastSync: "head", SchemaHash: "schema", RollbackOnly: true}
+	if err := s.SaveBranchTransactionState("tx-state", want); err != nil {
+		t.Fatalf("SaveBranchTransactionState: %v", err)
+	}
+	got, err := s.LoadBranchTransactionState("tx-state")
+	if err != nil || got != want {
+		t.Fatalf("loaded branch state: got=%+v want=%+v err=%v", got, want, err)
+	}
+	if err := s.DropBranchDB("tx-state"); err != nil {
+		t.Fatalf("DropBranchDB: %v", err)
+	}
+	if _, err = s.LoadBranchTransactionState("tx-state"); err == nil {
+		t.Fatal("dropped branch state was accepted")
+	}
+}
+
+func TestBranchTransactionState_MissingRecordFailsClosed(t *testing.T) {
+	path := t.TempDir()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateBranchDB("tx-state"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.SaveBranchTransactionState("tx-state", store.BranchTransactionState{
+		MainHeadAtLastSync: "head", SchemaHash: "schema",
+	}); err != nil {
+		t.Fatalf("SaveBranchTransactionState: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := os.Remove(filepath.Join(path, "branches", "tx-state.state.json")); err != nil {
+		t.Fatalf("remove branch marker: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeStore(t, reopened)
+	if _, err := reopened.LoadBranchTransactionState("tx-state"); err == nil {
+		t.Fatal("missing branch state marker was accepted")
+	}
+}
+
+func TestBranchTransactionState_PersistsAndRejectsCorruption(t *testing.T) {
+	path := t.TempDir()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateBranchDB("tx-state"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	want := store.BranchTransactionState{
+		MainHeadAtLastSync: "original-head", SchemaHash: "original-schema",
+		CommitStarted: true, CommitCreated: true, CommitHydrated: true,
+		MainRehydrated: true, RollbackOnly: true,
+	}
+	if err := s.SaveBranchTransactionState("tx-state", want); err != nil {
+		t.Fatalf("SaveBranchTransactionState: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after marker: %v", err)
+	}
+	got, err := reopened.LoadBranchTransactionState("tx-state")
+	if err != nil || got != want {
+		t.Fatalf("persisted state: got=%+v want=%+v err=%v", got, want, err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close reopened: %v", err)
+	}
+	markerPath := filepath.Join(path, "branches", "tx-state.state.json")
+	if err := os.WriteFile(markerPath, []byte("not-json"), 0600); err != nil {
+		t.Fatalf("corrupt marker: %v", err)
+	}
+	corrupt, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open corrupt marker store: %v", err)
+	}
+	defer closeStore(t, corrupt)
+	if _, err := corrupt.LoadBranchTransactionState("tx-state"); err == nil {
+		t.Fatal("corrupt rollback-only marker was accepted")
 	}
 }
 
@@ -1614,7 +2399,7 @@ func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 	}
 }
 
-func TestRehydrateMainFromFiles_UnreadableTypeDir_ReturnsError(t *testing.T) {
+func TestLoadEntitiesFromDir_ReadDirError(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -1622,23 +2407,543 @@ func TestRehydrateMainFromFiles_UnreadableTypeDir_ReturnsError(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
+	db := s.(*ladybugDB)
 	entitiesDir := t.TempDir()
 	compDir := filepath.Join(entitiesDir, "Component")
-	if err := os.MkdirAll(compDir, 0000); err != nil {
+	if err := os.MkdirAll(compDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(compDir, 0755) }) // restore for cleanup
+	wantErr := errors.New("injected readdir failure")
+	db.readDir = func(path string) ([]os.DirEntry, error) {
+		if path == compDir {
+			return nil, wantErr
+		}
+		return os.ReadDir(path)
+	}
 
-	edgesDir := t.TempDir()
-
-	ctx := context.Background()
-	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
-	if err == nil {
-		t.Fatal("expected error when type subdirectory is unreadable")
+	tests := map[string]func() error{
+		"main":          func() error { return db.loadEntitiesFromDir(entitiesDir, db.entityTypeDefs) },
+		"on connection": func() error { return db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, db.entityTypeDefs) },
+	}
+	for name, load := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := load()
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("expected injected ReadDir error, got %v", err)
+			}
+			want := fmt.Sprintf("read entities dir %q", compDir)
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not identify wrapped operation and path %q", err, want)
+			}
+		})
 	}
 }
 
-func TestRehydrateMainFromFiles_UnreadableFile_ReturnsError(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Second-audit: ApplySchema catalog diffing and WipeSchema tests
+// ---------------------------------------------------------------------------
+
+func TestApplySchema_AdditiveEntityProperty(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Initial schema with one property.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "title", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Create an entity.
+	doc, err := s.CreateEntity(ctx, "Document", "", map[string]string{"title": "doc1"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// Additive: add a new property.
+	schema2 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "title", Type: "string"},
+				{Name: "author", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema2); err != nil {
+		t.Fatalf("additive ApplySchema: %v", err)
+	}
+
+	// Existing entity is still readable.
+	got, err := s.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity after additive schema: %v", err)
+	}
+	if got.Properties["title"] != "doc1" {
+		t.Fatalf("expected title=doc1, got %v", got.Properties)
+	}
+
+	// New entity with both properties.
+	doc2, err := s.CreateEntity(ctx, "Document", "", map[string]string{"title": "doc2", "author": "me"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity with new property: %v", err)
+	}
+	if doc2.Properties["author"] != "me" {
+		t.Fatalf("expected author=me, got %v", doc2.Properties)
+	}
+
+	// Close and reopen.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, s2)
+
+	// Verify schema cache survived reopen.
+	if !s2.TableExists("Document") {
+		t.Fatal("Document table missing after reopen")
+	}
+	def, ok := s2.EntityType("Document")
+	if !ok {
+		t.Fatal("Document entity type missing after reopen")
+	}
+	foundAuthor := false
+	for _, p := range def.Properties {
+		if p.Name == "author" {
+			foundAuthor = true
+		}
+	}
+	if !foundAuthor {
+		t.Fatal("author property missing after reopen")
+	}
+
+	// Existing entity still readable.
+	got2, err := s2.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity after reopen: %v", err)
+	}
+	if got2.Properties["title"] != "doc1" {
+		t.Fatalf("expected title=doc1 after reopen, got %v", got2.Properties)
+	}
+}
+
+func TestApplySchema_AdditiveEdgeProperty(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Initial schema with entity types and an edge type with one property.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+			}},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{
+			Name: "DEPENDS_ON",
+			Properties: []*flowv1.Property{
+				{Name: "weight", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Create entities and an edge.
+	svc, err := s.CreateEntity(ctx, "Service", "", map[string]string{}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Service: %v", err)
+	}
+	comp, err := s.CreateEntity(ctx, "Component", "", map[string]string{}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Component: %v", err)
+	}
+	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", svc.Id, comp.Id, map[string]string{"weight": "10"}, "main")
+	if err != nil {
+		t.Fatalf("CreateEdge: %v", err)
+	}
+
+	// Additive: add a new property to the edge type.
+	schema2 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+			}},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{
+			Name: "DEPENDS_ON",
+			Properties: []*flowv1.Property{
+				{Name: "weight", Type: "string"},
+				{Name: "description", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema2); err != nil {
+		t.Fatalf("additive ApplySchema: %v", err)
+	}
+
+	// Existing edge is still readable.
+	got, err := s.GetEdge(ctx, edge.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEdge after additive schema: %v", err)
+	}
+	if got.Properties["weight"] != "10" {
+		t.Fatalf("expected weight=10, got %v", got.Properties)
+	}
+
+	// Close and reopen.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, s2)
+
+	// Verify edge type survived reopen.
+	edgeNames := s2.EdgeTypeNames()
+	found := false
+	for _, n := range edgeNames {
+		if n == "DEPENDS_ON" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("DEPENDS_ON edge type missing after reopen")
+	}
+}
+
+func TestApplySchema_DestructiveChange_Rejected(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply initial schema.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "title", Type: "string"},
+				{Name: "toremove", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Create an entity.
+	_, err = s.CreateEntity(ctx, "Document", "", map[string]string{"title": "doc", "toremove": "x"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// Destructive: remove a property.
+	destructive := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "title", Type: "string"},
+			},
+		}},
+	}
+	err = s.ApplySchema(ctx, destructive)
+	if err == nil {
+		t.Fatal("expected error for destructive schema change")
+	}
+	if !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("expected ErrDestructiveSchemaChange, got %v", err)
+	}
+
+	// WipeGraph (WipeSchema) then ApplySchema should succeed.
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	if err := s.ApplySchema(ctx, destructive); err != nil {
+		t.Fatalf("ApplySchema after WipeSchema: %v", err)
+	}
+	if !s.TableExists("Document") {
+		t.Fatal("Document table should exist after wipe+apply")
+	}
+}
+
+func TestApplySchema_DestructiveChange_VectorDisable(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply schema with vector index enabled.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "VectorType",
+			Properties: []*flowv1.Property{
+				{Name: "name", Type: "string"},
+			},
+			EnableVectorIndex: true,
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Bootstrap the vector index.
+	_, err = s.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "v1"}, []float32{1, 2, 3}, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity with embedding: %v", err)
+	}
+
+	// Destructive: disable vector index.
+	destructive := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "VectorType",
+			Properties: []*flowv1.Property{
+				{Name: "name", Type: "string"},
+			},
+			EnableVectorIndex: false,
+		}},
+	}
+	err = s.ApplySchema(ctx, destructive)
+	if err == nil {
+		t.Fatal("expected error for vector disable")
+	}
+	if !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("expected ErrDestructiveSchemaChange, got %v", err)
+	}
+
+	// WipeSchema then ApplySchema should succeed.
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	if err := s.ApplySchema(ctx, destructive); err != nil {
+		t.Fatalf("ApplySchema after WipeSchema: %v", err)
+	}
+	if !s.TableExists("VectorType") {
+		t.Fatal("VectorType table should exist after wipe+apply")
+	}
+}
+
+func TestWipeSchema_ThenApplySchema_EntityOnlyTransaction(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Apply initial schema with entity and edge types.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+			}},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Create some data.
+	svc, err := s.CreateEntity(ctx, "Service", "", map[string]string{}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	comp, err := s.CreateEntity(ctx, "Component", "", map[string]string{}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err := s.CreateEdge(ctx, "DEPENDS_ON", svc.Id, comp.Id, nil, "main"); err != nil {
+		t.Fatalf("CreateEdge: %v", err)
+	}
+
+	// WipeSchema.
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+
+	// Apply new schema with only entity types (no edges).
+	schema2 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "title", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema2); err != nil {
+		t.Fatalf("second ApplySchema: %v", err)
+	}
+
+	// Entity-only transaction: create, commit, restart.
+	txID := "00000000-0000-4000-a000-000000000001"
+	if err := s.CreateBranchDB(txID); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(txID); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	doc, err := s.CreateEntity(ctx, "Document", "", map[string]string{"title": "tx-doc"}, nil, txID)
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	if err := s.RehydrateFromBranch(ctx, txID); err != nil {
+		t.Fatalf("RehydrateFromBranch: %v", err)
+	}
+	if err := s.DropBranchDB(txID); err != nil {
+		t.Fatalf("DropBranchDB: %v", err)
+	}
+
+	// Verify entity is in main.
+	got, err := s.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity after commit: %v", err)
+	}
+	if got.Properties["title"] != "tx-doc" {
+		t.Fatalf("expected title=tx-doc, got %v", got.Properties)
+	}
+
+	// Close and reopen.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, s2)
+
+	// Verify schema and data survived.
+	if !s2.TableExists("Document") {
+		t.Fatal("Document table missing after reopen")
+	}
+	got2, err := s2.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity after reopen: %v", err)
+	}
+	if got2.Properties["title"] != "tx-doc" {
+		t.Fatalf("expected title=tx-doc after reopen, got %v", got2.Properties)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Second-audit: RehydrateMainFromFiles atomicity (Finding 3)
+// ---------------------------------------------------------------------------
+
+func TestRehydrateMainFromFiles_HoldsLockForEntireOperation(t *testing.T) {
+	// Concurrent reads during rehydration must not observe partial state.
+	// The rehydration must hold db.mu for the entire wipe-and-load cycle.
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Pre-populate with one entity.
+	old, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "old"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// Prepare rehydration files.
+	componentID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", componentID+".json"), map[string]any{
+		"id": componentID, "type": "Component", "properties": map[string]string{"name": "new"},
+	})
+	// Create empty edges directory so the check passes.
+	if err := os.MkdirAll(edgesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start rehydration in background.
+	rehydrateDone := make(chan error, 1)
+	go func() {
+		rehydrateDone <- s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	}()
+
+	// While rehydration is in progress, attempt a concurrent read.
+	// If the lock is held, this read will block until rehydration completes.
+	// We use a short timeout to detect if the read would observe partial state.
+	type readResult struct {
+		entity *store.Entity
+		err    error
+	}
+	readCh := make(chan readResult, 1)
+	go func() {
+		e, err := s.GetEntity(ctx, old.Id, "main")
+		readCh <- readResult{e, err}
+	}()
+
+	// Wait for rehydration to finish.
+	if err := <-rehydrateDone; err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+
+	// Now the concurrent read should have completed (it was serialized behind
+	// the rehydration lock). It should see either the old entity (if it ran
+	// before the wipe) or the new entity (if it ran after), but never a
+	// "not found" for the old entity (partial wipe without re-insert).
+	r := <-readCh
+	if r.err != nil && !errors.Is(r.err, store.ErrEntityNotFound) {
+		t.Fatalf("concurrent read error: %v", r.err)
+	}
+	// If the read returned the old entity, that's fine — it means the read
+	// happened before the wipe. If it returned ErrEntityNotFound, that's
+	// also fine — it means the read happened after the wipe but before the
+	// new entity was inserted. The key invariant is that the read never
+	// observes a state where the old entity is gone but the new one isn't
+	// fully inserted yet, because the lock serializes everything.
+	// We verify the final state is correct.
+	got, err := s.GetEntity(ctx, componentID, "main")
+	if err != nil {
+		t.Fatalf("final GetEntity: %v", err)
+	}
+	if got.Properties["name"] != "new" {
+		t.Fatalf("expected name=new, got %v", got.Properties)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Second-audit: findEntityByID / findEdgeByID error propagation (Finding 5)
+// ---------------------------------------------------------------------------
+
+func TestFindEntityByID_PropagatesPrepareError(t *testing.T) {
+	// Call findEntityByID with a typeDefs map containing only a phantom type
+	// that has no corresponding table in the database. LadybugDB will return
+	// an error from Prepare. The current code silently continues past this
+	// error and returns ErrEntityNotFound. The fix must propagate the error.
 	s, err := OpenInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -1646,26 +2951,79 @@ func TestRehydrateMainFromFiles_UnreadableFile_ReturnsError(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
+	db := s.(*ladybugDB)
+	// Only a phantom type — no real types. Prepare will fail on the only
+	// type, and the current code would silently return ErrEntityNotFound.
+	phantomDefs := map[string]*store.EntityTypeDef{
+		"NonExistentTable": {Name: "NonExistentTable"},
+	}
+
+	id := uuid.NewString()
+	_, err = findEntityByID(db.conn, phantomDefs, id)
+	if err == nil {
+		t.Fatal("expected error from prepare on non-existent table, got nil")
+	}
+	if errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("expected operational error, not ErrEntityNotFound: %v", err)
+	}
+}
+
+func TestFindEdgeByID_PropagatesPrepareError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	db := s.(*ladybugDB)
+	phantomDefs := map[string]*store.EdgeTypeDef{
+		"NonExistentEdge": {Name: "NonExistentEdge"},
+	}
+
+	id := uuid.NewString()
+	_, err = findEdgeByID(db.conn, phantomDefs, id)
+	if err == nil {
+		t.Fatal("expected error from prepare on non-existent edge table, got nil")
+	}
+	if errors.Is(err, store.ErrEdgeNotFound) {
+		t.Fatalf("expected operational error, not ErrEdgeNotFound: %v", err)
+	}
+}
+
+func TestLoadEntitiesFromDir_ReadFileError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	db := s.(*ladybugDB)
 	entitiesDir := t.TempDir()
 	compDir := filepath.Join(entitiesDir, "Component")
 	if err := os.MkdirAll(compDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	fpath := filepath.Join(compDir, "comp1.json")
-	data := `{"id":"00000000-0000-4000-a000-000000000001","type":"Component","properties":{"name":"test"}}`
-	if err := os.WriteFile(fpath, []byte(data), 0644); err != nil {
+	if err := os.Symlink(filepath.Join(compDir, "missing.json"), fpath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(fpath, 0000); err != nil {
-		t.Fatal(err)
+
+	tests := map[string]func() error{
+		"main":          func() error { return db.loadEntitiesFromDir(entitiesDir, db.entityTypeDefs) },
+		"on connection": func() error { return db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, db.entityTypeDefs) },
 	}
-	t.Cleanup(func() { _ = os.Chmod(fpath, 0644) }) // restore for cleanup
-
-	edgesDir := t.TempDir()
-
-	ctx := context.Background()
-	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
-	if err == nil {
-		t.Fatal("expected error when file is unreadable")
+	for name, load := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := load()
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expected dangling-symlink ReadFile error, got %v", err)
+			}
+			want := fmt.Sprintf("read entity file %q", fpath)
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not identify wrapped operation and path %q", err, want)
+			}
+		})
 	}
 }

@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,9 +22,62 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/client"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/google/uuid"
 )
+
+var protocolMu sync.Mutex
+
+func pushGraphUpdate(t *testing.T, tmpDir, remoteDir, content string) plumbing.Hash {
+	t.Helper()
+	writer, err := git.PlainClone(filepath.Join(tmpDir, "writer"), false,
+		&git.CloneOptions{URL: "file://" + remoteDir})
+	if err != nil {
+		t.Fatalf("clone remote writer: %v", err)
+	}
+	writerWT, err := writer.Worktree()
+	if err != nil {
+		t.Fatalf("writer worktree: %v", err)
+	}
+	if err := writerWT.Filesystem.Remove("graph.json"); err != nil {
+		t.Fatalf("remove old graph file: %v", err)
+	}
+	updatedGraph, err := writerWT.Filesystem.Create("graph.json")
+	if err != nil {
+		t.Fatalf("create updated graph file: %v", err)
+	}
+	if _, err := updatedGraph.Write([]byte(content)); err != nil {
+		t.Fatalf("write updated graph file: %v", err)
+	}
+	if err := updatedGraph.Close(); err != nil {
+		t.Fatalf("close updated graph file: %v", err)
+	}
+	if _, err := writerWT.Add("graph.json"); err != nil {
+		t.Fatalf("add updated graph file: %v", err)
+	}
+	updatedHash, err := writerWT.Commit("update graph", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	})
+	if err != nil {
+		t.Fatalf("commit updated graph file: %v", err)
+	}
+	if err := writer.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("push updated graph: %v", err)
+	}
+	return updatedHash
+}
+
+func configureAnonymousRemote(t *testing.T, gs *gitStore, remoteURL string) {
+	t.Helper()
+	if err := gs.SetRemote(ctx(), remoteURL, func() (transport.AuthMethod, error) { return nil, nil }); err != nil {
+		t.Fatalf("SetRemote: %v", err)
+	}
+	if err := gs.FetchRemote(ctx()); err != nil {
+		t.Fatalf("anonymous FetchRemote: %v", err)
+	}
+}
 
 // setupTestStore creates a gitStore with in-memory storage and memfs,
 // initialised with a main branch and entities/ + edges/ directories.
@@ -1335,6 +1393,35 @@ func TestCommitExistsOnBranch(t *testing.T) {
 	}
 }
 
+func TestCommitExistsOnBranchRequiresExactFirstLine(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		txID := validUUID()
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{{
+			ID: validUUID(), Type: "Component",
+		}}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "transaction:"+txID+"-suffix\nbody"); err != nil {
+			return err
+		}
+		found, err := gs.CommitExistsOnBranch(ctx(), txID)
+		if err != nil {
+			return err
+		}
+		if found {
+			return errors.New("prefix-only transaction commit matched")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CommitExistsOnBranch exact match: %v", err)
+	}
+}
+
 func TestCommitExistsOnBranchScopedToBranch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -2002,22 +2089,142 @@ func TestPullAlreadyUpToDate(t *testing.T) {
 }
 
 func TestCloneSingleBranchNoAuth(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		err := gs.CloneSingleBranch(ctx(), "https://example.com/repo.git", "main")
-		// After Phase 6, nil auth (anonymous) is allowed through resolveAuth.
-		// The clone should proceed past the auth check and fail on the actual
-		// fetch (network/protocol error), not ErrAuthConfigMissing.
-		if errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected clone to proceed past auth, got ErrAuthConfigMissing")
+	protocolMu.Lock()
+	t.Cleanup(protocolMu.Unlock)
+
+	tmpDir := t.TempDir()
+	sourceDir := filepath.Join(tmpDir, "source")
+	source, err := git.PlainInitWithOptions(sourceDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("init source: %v", err)
+	}
+	sourceWT, err := source.Worktree()
+	if err != nil {
+		t.Fatalf("source worktree: %v", err)
+	}
+	const graphContent = `{"graph":"controlled"}`
+	graphFile, err := sourceWT.Filesystem.Create("graph.json")
+	if err != nil {
+		t.Fatalf("create graph file: %v", err)
+	}
+	if _, err := graphFile.Write([]byte(graphContent)); err != nil {
+		t.Fatalf("write graph file: %v", err)
+	}
+	if err := graphFile.Close(); err != nil {
+		t.Fatalf("close graph file: %v", err)
+	}
+	if _, err := sourceWT.Add("graph.json"); err != nil {
+		t.Fatalf("add graph file: %v", err)
+	}
+	sourceHash, err := sourceWT.Commit("main graph", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	})
+	if err != nil {
+		t.Fatalf("commit graph file: %v", err)
+	}
+
+	remoteDir := filepath.Join(tmpDir, "remote.git")
+	if _, err := git.PlainClone(remoteDir, true, &git.CloneOptions{URL: "file://" + sourceDir}); err != nil {
+		t.Fatalf("create bare remote: %v", err)
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git executable required for smart HTTP test server: %v", err)
+	}
+	server := httptest.NewTLSServer(&cgi.Handler{
+		Path: gitPath,
+		Args: []string{"http-backend"},
+		Env: []string{
+			"GIT_PROJECT_ROOT=" + tmpDir,
+			"GIT_HTTP_EXPORT_ALL=1",
+		},
+	})
+	t.Cleanup(server.Close)
+
+	originalHTTPS, hadHTTPS := client.Protocols["https"]
+	client.InstallProtocol("https", githttp.NewClient(server.Client()))
+	t.Cleanup(func() {
+		if hadHTTPS {
+			client.InstallProtocol("https", originalHTTPS)
+		} else {
+			delete(client.Protocols, "https")
 		}
-		if err == nil {
-			return fmt.Errorf("expected error from fetch, got nil")
-		}
-		return nil
+	})
+
+	store, err := New(filepath.Join(tmpDir, "local"))
+	if err != nil {
+		t.Fatalf("new local store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	gs := store.(*gitStore)
+	if gs.authFn != nil {
+		t.Fatal("expected nil auth provider")
+	}
+	err = store.WithGitLock(func() error {
+		return gs.CloneSingleBranch(ctx(), server.URL+"/remote.git", "main")
 	})
 	if err != nil {
 		t.Fatalf("CloneSingleBranchNoAuth: %v", err)
+	}
+
+	mainRef, err := gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	if err != nil {
+		t.Fatalf("main ref: %v", err)
+	}
+	if mainRef.Hash() != sourceHash {
+		t.Fatalf("main ref = %s, want %s", mainRef.Hash(), sourceHash)
+	}
+	head, err := gs.repo.Head()
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	if head.Name() != plumbing.NewBranchReferenceName("main") || head.Hash() != sourceHash {
+		t.Fatalf("HEAD = %s at %s, want main at %s", head.Name(), head.Hash(), sourceHash)
+	}
+	clonedGraph, err := gs.fs.Open("graph.json")
+	if err != nil {
+		t.Fatalf("open checked-out graph file: %v", err)
+	}
+	got, err := io.ReadAll(clonedGraph)
+	_ = clonedGraph.Close()
+	if err != nil {
+		t.Fatalf("read checked-out graph file: %v", err)
+	}
+	if string(got) != graphContent {
+		t.Fatalf("graph content = %q, want %q", got, graphContent)
+	}
+	status, err := gs.wt.Status()
+	if err != nil {
+		t.Fatalf("worktree status: %v", err)
+	}
+	if !status.IsClean() {
+		t.Fatalf("expected clean checked-out worktree, got %s", status)
+	}
+
+	// A configured resolver returning nil explicitly selects anonymous access.
+	configureAnonymousRemote(t, gs, server.URL+"/remote.git")
+
+	const updatedGraphContent = `{"graph":"updated"}`
+	updatedHash := pushGraphUpdate(t, tmpDir, remoteDir, updatedGraphContent)
+
+	if err := gs.PullAndFastForward(ctx()); err != nil {
+		t.Fatalf("anonymous PullAndFastForward: %v", err)
+	}
+	mainRef, err = gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	if err != nil {
+		t.Fatalf("updated main ref: %v", err)
+	}
+	if mainRef.Hash() != updatedHash {
+		t.Fatalf("updated main ref = %s, want %s", mainRef.Hash(), updatedHash)
+	}
+	got, err = os.ReadFile(filepath.Join(tmpDir, "local", "graph-repo", "graph.json"))
+	if err != nil {
+		t.Fatalf("read updated worktree graph: %v", err)
+	}
+	if string(got) != updatedGraphContent {
+		t.Fatalf("updated graph content = %q, want %q", got, updatedGraphContent)
 	}
 }
 
@@ -2207,11 +2414,15 @@ func TestEnsureRemoteExists(t *testing.T) {
 			return nil, nil
 		}
 
-		// ensureRemoteExists should create the remote since it doesn't exist
-		// and then FetchRemote proceeds to resolveAuth -> nil auth -> ErrAuthConfigMissing
-		err := gs.FetchRemote(ctx())
-		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		if err := gs.ensureRemoteExists(); err != nil {
+			return err
+		}
+		remote, err := gs.repo.Remote("origin")
+		if err != nil {
+			return fmt.Errorf("get recreated remote: %w", err)
+		}
+		if got := remote.Config().URLs; len(got) != 1 || got[0] != gs.remoteURL {
+			return fmt.Errorf("recreated remote URLs = %v, want [%s]", got, gs.remoteURL)
 		}
 
 		return nil
@@ -2710,7 +2921,7 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 			return noopAuth{}, nil
 		}
 
-		auth, err := gs.resolveAuth()
+		auth, err := gs.resolveAuth(false)
 		if err != nil {
 			return fmt.Errorf("resolve auth: %w", err)
 		}

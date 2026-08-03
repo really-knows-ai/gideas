@@ -22,7 +22,7 @@ import (
 
 // ProxyRoutingTable is a thread-safe map of namespace/name to gRPC endpoint.
 type ProxyRoutingTable struct {
-	mu   sync.RWMutex
+	mu     sync.RWMutex
 	routes map[string]string // key: "namespace/name", value: endpoint
 }
 

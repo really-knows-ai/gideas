@@ -54,6 +54,12 @@ type EntityTypeDef struct {
 	Name              string
 	Properties        []PropertyDef
 	EnableVectorIndex bool
+	Rules             []ConnectionRuleDef
+}
+
+type ConnectionRuleDef struct {
+	CanConnectTo []string
+	Using        []string
 }
 
 // EdgeTypeDef describes a known edge type in the graph schema.
@@ -84,4 +90,17 @@ type HealthResult struct {
 	LadybugOK     bool
 	SchemaApplied bool
 	PVCWritable   bool
+}
+
+// BranchTransactionState is the durable transaction lifecycle record owned by
+// the branch store. Missing or unsupported records make recovery fail closed.
+type BranchTransactionState struct {
+	MainHeadAtLastSync string `json:"main_head_at_last_sync"`
+	SchemaHash         string `json:"schema_hash"`
+	CommitStarted      bool   `json:"commit_started"`
+	CommitCreated      bool   `json:"commit_created"`
+	CommitHydrated     bool   `json:"commit_hydrated"`
+	MainRehydrated     bool   `json:"main_rehydrated"`
+	MergeCompleted     bool   `json:"merge_completed"`
+	RollbackOnly       bool   `json:"rollback_only"`
 }

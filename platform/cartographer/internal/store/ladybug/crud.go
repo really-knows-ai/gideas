@@ -18,6 +18,9 @@ import (
 // Entity CRUD
 // --------------------------------------------------------------------------
 
+const mainBranch = "main"
+
+//nolint:gocyclo
 func (db *ladybugDB) CreateEntity(
 	ctx context.Context, entityType, id string,
 	properties map[string]string, embedding []float32, branch string,
@@ -50,6 +53,13 @@ func (db *ladybugDB) CreateEntity(
 			return nil, fmt.Errorf("%w: %q for entity type %q", store.ErrUnknownProperty, key, entityType)
 		}
 	}
+	for _, property := range def.Properties {
+		if _, ok := properties[property.Name]; property.Required && !ok {
+			return nil, fmt.Errorf(
+				"%w: %q for entity type %q", store.ErrMissingRequiredProperty, property.Name, entityType,
+			)
+		}
+	}
 
 	// Validate embedding (dimension check requires bootstrapped column).
 	if err := validateEmbeddingForCreate(embedding, def); err != nil {
@@ -66,15 +76,25 @@ func (db *ladybugDB) CreateEntity(
 			if _, err := conn.Query(altDDL); err != nil {
 				return nil, fmt.Errorf("bootstrap embedding column: %w", err)
 			}
-			idxDDL := fmt.Sprintf("CALL CREATE_VECTOR_INDEX('%s', '%s_vec', 'embedding', metric := 'cosine');",
-				entityType, entityType)
-			if _, err := conn.Query(idxDDL); err != nil {
+			if err := db.createVectorIndex(conn, entityType); err != nil {
+				typeDefs.markFailed()
 				return nil, fmt.Errorf("bootstrap vector index: %w", err)
 			}
-			// Rebuild schema cache so subsequent SearchNeighbors sees the vector index.
-			// This is safe only when we're on main (conn == db.conn), where db.mu is held.
-			if conn == db.conn {
-				_ = db.rebuildSchemaCacheLocked()
+			if db.path != "" {
+				metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs)
+				metadata, err = captureVectorState(conn, metadata)
+				if err != nil {
+					typeDefs.markFailed()
+					return nil, fmt.Errorf("capture vector schema metadata: %w", err)
+				}
+				path := db.mainMetadataPath()
+				if branch != "" && branch != mainBranch {
+					path = db.branchMetadataPath(branch)
+				}
+				if err := db.writeMetadata(path, metadata); err != nil {
+					typeDefs.markFailed()
+					return nil, fmt.Errorf("persist vector schema metadata: %w", err)
+				}
 			}
 		} else if len(embedding) != dim {
 			return nil, fmt.Errorf("%w: expected dimension %d, got %d", store.ErrEmbeddingDimension, dim, len(embedding))
@@ -450,7 +470,13 @@ func (db *ladybugDB) ListEdgesOfType(
 func (db *ladybugDB) ValidateEdgeRules(sourceType, targetType, edgeType string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	return db.validateEdgeRulesFor(&branchDBCache{db.entityTypeDefs, db.edgeTypeDefs},
+	if db.closed || db.failed {
+		return store.ErrDatabaseNotReady
+	}
+	return db.validateEdgeRulesFor(&branchDBCache{
+		entityTypeDefs: db.entityTypeDefs,
+		edgeTypeDefs:   db.edgeTypeDefs,
+	},
 		sourceType, targetType, edgeType)
 }
 
@@ -479,23 +505,35 @@ func (db *ladybugDB) ResolveEntityType(ctx context.Context, entityID, branch str
 // lockForRead returns the connection and type defs for a branch (or main),
 // holding the appropriate read lock. Callers must call the returned unlock func.
 func (db *ladybugDB) lockForRead(branch string) (*lbug.Connection, *branchDBCache, func(), error) {
-	if branch == "" || branch == "main" {
+	if branch == "" || branch == mainBranch {
 		db.mu.Lock()
-		if db.closed {
+		if db.closed || db.failed {
 			db.mu.Unlock()
 			return nil, nil, nil, store.ErrDatabaseNotReady
 		}
-		return db.conn, &branchDBCache{db.entityTypeDefs, db.edgeTypeDefs}, db.mu.Unlock, nil
+		return db.conn, &branchDBCache{
+			entityTypeDefs: db.entityTypeDefs,
+			edgeTypeDefs:   db.edgeTypeDefs,
+			markFailed:     func() { db.failed = true },
+		}, db.mu.Unlock, nil
 	}
 	db.mu.Lock()
-	br, ok := db.branches[branch]
-	if !ok {
+	br, err := db.branchLocked(branch)
+	if err != nil {
 		db.mu.Unlock()
-		return nil, nil, nil, fmt.Errorf("branch %q not found", branch)
+		return nil, nil, nil, err
 	}
 	br.mu.Lock()
 	db.mu.Unlock()
-	return br.conn, &branchDBCache{br.entityTypeDefs, br.edgeTypeDefs}, br.mu.Unlock, nil
+	if br.failed {
+		br.mu.Unlock()
+		return nil, nil, nil, store.ErrDatabaseNotReady
+	}
+	return br.conn, &branchDBCache{
+		entityTypeDefs: br.entityTypeDefs,
+		edgeTypeDefs:   br.edgeTypeDefs,
+		markFailed:     func() { br.failed = true },
+	}, br.mu.Unlock, nil
 }
 
 // lockForWrite returns the connection and type defs for write operations.
@@ -512,6 +550,14 @@ func (db *ladybugDB) lockForWrite(branch string) (*lbug.Connection, *branchDBCac
 type branchDBCache struct {
 	entityTypeDefs map[string]*store.EntityTypeDef
 	edgeTypeDefs   map[string]*store.EdgeTypeDef
+	markFailed     func()
+}
+
+func createVectorIndexOnConn(conn *lbug.Connection, entityType string) error {
+	ddl := fmt.Sprintf("CALL CREATE_VECTOR_INDEX('%s', '%s_vec', 'embedding', metric := 'cosine');",
+		entityType, entityType)
+	_, err := conn.Query(ddl)
+	return err
 }
 
 // findEntityByID probes each entity type table looking for the given ID.
@@ -521,28 +567,28 @@ func findEntityByID(conn *lbug.Connection, typeDefs map[string]*store.EntityType
 		q := fmt.Sprintf("MATCH (n:%s {id: $id}) RETURN n;", quoteID(typeName))
 		stmt, err := conn.Prepare(q)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("prepare entity query for %q: %w", typeName, err)
 		}
 		result, err := conn.Execute(stmt, map[string]any{"id": id})
 		stmt.Close()
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("execute entity query for %q: %w", typeName, err)
 		}
 		if result.HasNext() {
 			tuple, err := result.Next()
 			if err != nil {
 				result.Close()
-				continue
+				return nil, fmt.Errorf("read entity row for %q: %w", typeName, err)
 			}
 			m, err := tuple.GetAsMap()
 			tuple.Close()
 			result.Close()
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("parse entity row for %q: %w", typeName, err)
 			}
 			node, ok := m["n"].(lbug.Node)
 			if !ok {
-				continue
+				return nil, fmt.Errorf("unexpected type in entity result for %q: got %T, expected Node", typeName, m["n"])
 			}
 			return entityFromNode(node, typeName), nil
 		}
@@ -558,30 +604,30 @@ func findEdgeByID(conn *lbug.Connection, typeDefs map[string]*store.EdgeTypeDef,
 		q := fmt.Sprintf("MATCH (s)-[r:%s {id: $id}]->(t) RETURN s.id, t.id, r;", quoteID(typeName))
 		stmt, err := conn.Prepare(q)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("prepare edge query for %q: %w", typeName, err)
 		}
 		result, err := conn.Execute(stmt, map[string]any{"id": id})
 		stmt.Close()
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("execute edge query for %q: %w", typeName, err)
 		}
 		if result.HasNext() {
 			tuple, err := result.Next()
 			if err != nil {
 				result.Close()
-				continue
+				return nil, fmt.Errorf("read edge row for %q: %w", typeName, err)
 			}
 			m, err := tuple.GetAsMap()
 			tuple.Close()
 			result.Close()
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("parse edge row for %q: %w", typeName, err)
 			}
 			fromID := fmt.Sprintf("%v", m["s.id"])
 			toID := fmt.Sprintf("%v", m["t.id"])
 			rel, ok := m["r"].(lbug.Relationship)
 			if !ok {
-				continue
+				return nil, fmt.Errorf("unexpected type in edge result for %q: got %T, expected Relationship", typeName, m["r"])
 			}
 			return edgeFromRel(rel, typeName, fromID, toID), nil
 		}

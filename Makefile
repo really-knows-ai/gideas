@@ -15,26 +15,8 @@ help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 .PHONY: ladybug-lib
-ladybug-lib: ## Download LadybugDB C library for CGo linking (one-time setup).
-	@set -e; \
-	modcache=$$(go env GOMODCACHE); \
-	libdir="$$modcache/github.com/LadybugDB/go-ladybug@v0.17.0/lib"; \
-	lib="$$libdir/liblbug.a"; \
-	local="/tmp/go-ladybug/lib/liblbug.a"; \
-	if [ -f "$$lib" ]; then \
-		echo "ladybug C library already installed at $$lib"; \
-		exit 0; \
-	elif [ -f "$$local" ]; then \
-		echo "ladybug C library at $$local (local replace)"; \
-		echo "  For Docker/production, copy into module cache:"; \
-		echo "    mkdir -p \"$$libdir\""; \
-		echo "    cp \"$$local\" \"$$libdir/\""; \
-		exit 0; \
-	else \
-		echo "ERROR: ladybug C library (liblbug.a) not found."; \
-		echo "  Run: cd /tmp/go-ladybug && bash download_lbug.sh"; \
-		exit 1; \
-	fi
+ladybug-lib: ## Provision the LadybugDB C library and headers for CGo linking.
+	@tools/setup-ladybug.sh
 
 # ---------------------------------------------------------------------------
 ##@ Testing
@@ -59,7 +41,9 @@ test-flowctl: ## Run flowctl unit tests.
 	go test -v ./tools/flowctl/...
 
 $(foreach srv,$(CGO_TEST_SERVICES),$(eval .PHONY: test-$(srv)))
-$(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; CGO_ENABLED=1 go test -v ./platform/$(srv)/...))
+$(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; $(if $(filter cartographer,$(srv)),GOWORK="$(CURDIR)/.cache/ladybug/go.work" )CGO_ENABLED=1 go test -v ./platform/$(srv)/...))
+
+test-cartographer: ladybug-lib
 
 .PHONY: test-nodes
 test-nodes: ## Run Node unit tests across the shared nodes module.
@@ -101,7 +85,11 @@ $(foreach bin,$(CGO_NODE_BINS),$(eval .PHONY: build-$(bin)))
 $(foreach bin,$(CGO_NODE_BINS),$(eval build-$(bin): ; CGO_ENABLED=1 go build -o bin/$(bin) ./nodes/$(bin)))
 
 $(foreach bin,$(CGO_PLATFORM_BINS),$(eval .PHONY: build-$(bin)))
-$(foreach bin,$(CGO_PLATFORM_BINS),$(eval build-$(bin): ; CGO_ENABLED=1 go build -o bin/$(bin) ./platform/$(bin)/cmd))
+$(foreach bin,$(CGO_PLATFORM_BINS),$(eval build-$(bin): ; $(if $(filter cartographer,$(bin)),GOWORK="$(CURDIR)/.cache/ladybug/go.work" )CGO_ENABLED=1 go build -o bin/$(bin) ./platform/$(bin)/cmd))
+
+build-cartographer: ladybug-lib
+
+vet lint lint-fix: ladybug-lib
 
 .PHONY: build-operator
 build-operator: ## Build the Operator binary (delegates to operator/Makefile).
@@ -133,15 +121,15 @@ fmt: ## Run go fmt across the workspace.
 
 .PHONY: vet
 vet: ## Run go vet across the workspace.
-	go vet ./...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" go vet ./...
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
-	"$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint with auto-fix (excludes operator).
-	"$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint-operator
 lint-operator: ## Run golangci-lint for the operator (delegates to operator/Makefile).

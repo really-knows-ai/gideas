@@ -85,10 +85,10 @@ func main() {
 	flag.StringVar(&eventBusAddr, "event-bus-address", "",
 		"The address of the Event Bus gRPC server for audit publishing (empty = disabled).")
 	var (
-		proxyAddr                string
-		readinessTimeoutStr      string
-		cartographerPortStr      string
-		cartographerImage        string
+		proxyAddr                 string
+		readinessTimeoutStr       string
+		cartographerPortStr       string
+		cartographerImage         string
 		capabilityStalenessWindow string
 	)
 	flag.StringVar(&proxyAddr, "proxy-bind-address", "",
@@ -476,16 +476,16 @@ func main() {
 
 	// Create and register the FoundryGraph reconciler with all fields.
 	if err := (&controller.FoundryGraphReconciler{
-		Client:                   mgr.GetClient(),
-		Scheme:                   mgr.GetScheme(),
-		OperatorNamespace:        operatorNamespace,
-		CartographerPort:         cartographerPort,
-		ReadinessTimeout:         readinessTimeout,
-		CartographerImage:        cartographerImage,
-		EventBusAddress:          ebAddr,
+		Client:                    mgr.GetClient(),
+		Scheme:                    mgr.GetScheme(),
+		OperatorNamespace:         operatorNamespace,
+		CartographerPort:          cartographerPort,
+		ReadinessTimeout:          readinessTimeout,
+		CartographerImage:         cartographerImage,
+		EventBusAddress:           ebAddr,
 		CapabilityStalenessWindow: capabilityStalenessWindow,
-		ProxyRoutingTable:        proxyRoutingTable,
-		CartographerDialer:       controller.DialCartographer,
+		ProxyRoutingTable:         proxyRoutingTable,
+		CartographerDialer:        controller.DialCartographer,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "FoundryGraph")
 		os.Exit(1)

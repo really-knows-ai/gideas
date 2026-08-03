@@ -3,8 +3,11 @@ package ladybug
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/foundry/flow/cartographer/internal/store"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // IsVectorIndexBootstrapped returns true if the entity type has a non-null
@@ -70,29 +73,104 @@ func (db *ladybugDB) GetEstablishedDimension(entityType, branch string) (int, er
 	return dim, nil
 }
 
-// WipeAll drops all node and rel tables (resetting the database).
+// WipeAll removes all graph data while preserving schema and indexes.
 func (db *ladybugDB) WipeAll(ctx context.Context) error {
-	conn, typeDefs, unlock, err := db.lockForWrite("")
+	conn, _, unlock, err := db.lockForWrite("")
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
-	// Drop all rel tables first (must drop before their referenced node tables).
-	for name := range typeDefs.edgeTypeDefs {
-		q := fmt.Sprintf("DROP TABLE %s;", quoteID(name))
-		// Ignore errors — table may not exist or already be dropped.
-		_, _ = conn.Query(q)
+	result, err := conn.Query("MATCH (n) DETACH DELETE n;")
+	if err != nil {
+		return fmt.Errorf("delete graph data: %w", err)
 	}
-	// Drop all node tables.
-	for name := range typeDefs.entityTypeDefs {
-		q := fmt.Sprintf("DROP TABLE %s;", quoteID(name))
-		_, _ = conn.Query(q)
+	result.Close()
+	return nil
+}
+
+// WipeSchema drops all schema tables, indexes, and metadata, leaving the
+// database empty for a fresh ApplySchema. Used by WipeGraph before applying
+// a destructive schema change.
+func (db *ladybugDB) WipeSchema(ctx context.Context) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.closed || db.failed {
+		return store.ErrDatabaseNotReady
 	}
 
-	// Rebuild cache (will be empty). Lock already held from lockForWrite.
+	// Collect all table names to drop, separated by type.
+	// LadybugDB requires dropping REL tables before NODE tables.
+	var relTables, nodeTables []string
+	result, err := db.conn.Query("CALL show_tables() RETURN *;")
+	if err != nil {
+		return fmt.Errorf("list tables for wipe: %w", err)
+	}
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			result.Close()
+			return fmt.Errorf("read table row: %w", err)
+		}
+		vals, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			result.Close()
+			return fmt.Errorf("get table values: %w", err)
+		}
+		if len(vals) >= 3 {
+			name := fmt.Sprintf("%v", vals[1])
+			kind := fmt.Sprintf("%v", vals[2])
+			switch strings.ToUpper(kind) {
+			case tableTypeRel:
+				relTables = append(relTables, name)
+			case tableTypeNode:
+				nodeTables = append(nodeTables, name)
+			}
+		}
+	}
+	result.Close()
+
+	// Drop indexes first, then REL tables, then NODE tables.
+	dropTable := func(name string) error {
+		// Drop vector index first if it exists (non-fatal; may not exist).
+		_, _ = db.conn.Query(fmt.Sprintf("CALL DROP_VECTOR_INDEX('%s', '%s_vec');", name, name))
+		// Drop FTS index if it exists (non-fatal; may not exist).
+		_, _ = db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", name, name))
+		if _, err := db.conn.Query(fmt.Sprintf("DROP TABLE %s;", quoteID(name))); err != nil {
+			return fmt.Errorf("drop table %q: %w", name, err)
+		}
+		return nil
+	}
+	for _, name := range relTables {
+		if name == untypedTableName {
+			continue
+		}
+		if err := dropTable(name); err != nil {
+			return err
+		}
+	}
+	for _, name := range nodeTables {
+		if name == untypedTableName {
+			continue
+		}
+		if err := dropTable(name); err != nil {
+			return err
+		}
+	}
+
+	// Clear in-memory schema cache.
 	db.entityTypeDefs = make(map[string]*store.EntityTypeDef)
 	db.edgeTypeDefs = make(map[string]*store.EdgeTypeDef)
+	db.ruleIndex = make(map[string][]*flowv1.ConnectionRule)
+	db.edgePairs = make(map[string][]fromToPair)
 
+	// Remove persisted schema metadata.
+	if db.path != "" {
+		if err := os.Remove(db.mainMetadataPath()); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove schema metadata: %w", err)
+		}
+	}
 	return nil
 }

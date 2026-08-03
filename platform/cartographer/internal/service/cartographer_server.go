@@ -5,13 +5,16 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,9 +46,11 @@ type CartographerServer struct {
 	verifier    *CapabilityVerifier
 	ladybugPath string
 
-	txManager *TransactionManager
+	txManager   *TransactionManager
+	txAdmission sync.RWMutex
 
-	writeLock sync.Mutex
+	writeLock       sync.Mutex
+	beforeWriteLock func() // test barrier; nil in production
 
 	schemaApplied atomic.Bool
 	dbReady       atomic.Bool
@@ -59,8 +64,6 @@ type CartographerServer struct {
 	defaultTimeout time.Duration
 
 	gcStop chan struct{}
-
-	gitLockHeld atomic.Bool
 }
 
 // NewCartographerServer creates a new CartographerServer.
@@ -152,23 +155,171 @@ func (s *CartographerServer) ReadSecret(ctx context.Context, name string) (map[s
 }
 
 func (s *CartographerServer) withGitLock(fn func() error) error {
-	s.gitLockHeld.Store(true)
-	defer s.gitLockHeld.Store(false)
 	return s.gitstore.WithGitLock(fn)
 }
 
-func (s *CartographerServer) rollbackTransaction(ctx context.Context, txID string) error {
-	if s.gitLockHeld.Load() {
-		return status.Error(codes.Internal, "rollbackTransaction called while holding git lock")
+func (s *CartographerServer) lockMainStore() {
+	if s.beforeWriteLock != nil {
+		s.beforeWriteLock()
 	}
-	return s.withGitLock(func() error {
-		_ = s.gitstore.DeleteBranch(ctx, txID)
-		_ = s.gitstore.RestoreMain(ctx)
-		_ = s.gitstore.CleanUntracked(ctx)
-		s.txManager.Delete(txID)
-		_ = s.store.DropBranchDB(txID)
+	s.writeLock.Lock()
+}
+
+func (s *CartographerServer) lockTransaction(txID string) (func(), error) {
+	if txID == "" {
+		return func() {}, nil
+	}
+	_, unlock, err := s.txManager.LockActive(txID)
+	return unlock, err
+}
+
+func (s *CartographerServer) lockTransactionMutation(txID string) (func(), error) {
+	if txID == "" {
+		return func() {}, nil
+	}
+	state, unlock, err := s.txManager.LockActive(txID)
+	if err != nil {
+		return nil, err
+	}
+	if state.CommitStarted {
+		unlock()
+		return nil, status.Error(codes.FailedPrecondition, "transaction commit is already in progress")
+	}
+	return unlock, nil
+}
+
+// addTransactionChange records a completed branch mutation. A capacity rejection
+// invalidates the entire transaction, so its branch resources are rolled back
+// while the caller still holds the transaction lifecycle lock.
+func (s *CartographerServer) addTransactionChange(
+	ctx context.Context, txID string, entry gitstore.ChangeLogEntry,
+) error {
+	err := s.txManager.AddChangeLogEntry(txID, entry)
+	if !errors.Is(err, gitstore.ErrChangeLogFull) {
+		return mapGitError(err)
+	}
+	return s.rejectFullChangeLog(ctx, txID, err)
+}
+
+func (s *CartographerServer) preflightTransactionChange(ctx context.Context, txID string) error {
+	state, lookupErr := s.txManager.Lookup(txID)
+	if lookupErr != nil {
+		return errTransactionNotFound(txID)
+	}
+	if err := state.ChangeLog.CheckCapacity(); err != nil {
+		return s.rejectFullChangeLog(ctx, txID, err)
+	}
+	return nil
+}
+
+func (s *CartographerServer) rejectFullChangeLog(ctx context.Context, txID string, capErr error) error {
+	state, lookupErr := s.txManager.Lookup(txID)
+	if lookupErr != nil {
+		return status.Errorf(codes.ResourceExhausted,
+			"%v; transaction rollback failed: %v", capErr, lookupErr)
+	}
+	state.RollbackOnly = true
+	persistErr := s.persistTransactionState(state)
+	var invalidateErr error
+	if persistErr != nil {
+		invalidateErr = s.store.InvalidateBranchState(txID)
+	}
+	cleanupErr := s.cleanupTransaction(ctx, state)
+	if cleanupErr == nil {
+		if persistErr != nil {
+			return status.Errorf(codes.ResourceExhausted,
+				"%v; persist rollback-only state failed: %v; transaction rolled back", capErr, persistErr)
+		}
+		return mapGitError(capErr)
+	}
+	if persistErr != nil {
+		if invalidateErr != nil {
+			return status.Errorf(codes.ResourceExhausted,
+				"%v; persist rollback-only state failed: %v; fail-closed invalidation failed: %v; "+
+					"transaction rollback failed: %v", capErr, persistErr, invalidateErr, cleanupErr)
+		}
+		return status.Errorf(codes.ResourceExhausted,
+			"%v; persist rollback-only state failed: %v; transaction rollback failed: %v",
+			capErr, persistErr, cleanupErr)
+	}
+	return status.Errorf(codes.ResourceExhausted, "%v; transaction rollback failed: %v", capErr, cleanupErr)
+}
+
+func durableTransactionState(state *TransactionState) store.BranchTransactionState {
+	return store.BranchTransactionState{
+		MainHeadAtLastSync: state.MainHeadAtLastSync,
+		SchemaHash:         state.SchemaHash,
+		CommitStarted:      state.CommitStarted,
+		CommitCreated:      state.CommitCreated,
+		CommitHydrated:     state.CommitHydrated,
+		MainRehydrated:     state.MainRehydrated,
+		MergeCompleted:     state.MergeCompleted,
+		RollbackOnly:       state.RollbackOnly,
+	}
+}
+
+func (s *CartographerServer) persistTransactionState(state *TransactionState) error {
+	return s.store.SaveBranchTransactionState(state.ID, durableTransactionState(state))
+}
+
+// cleanupTransaction removes transaction resources in retry-safe order. The
+// caller must hold the transaction lifecycle lock.
+func (s *CartographerServer) cleanupTransaction(ctx context.Context, state *TransactionState) error {
+	if err := s.withGitLock(func() error { return s.cleanupTransactionGitLocked(ctx, state) }); err != nil {
+		return fmt.Errorf("clean transaction git state: %w", err)
+	}
+	return s.finishTransactionCleanup(ctx, state)
+}
+
+func (s *CartographerServer) cleanupTransactionGitLocked(ctx context.Context, state *TransactionState) error {
+	if err := s.gitstore.RestoreMain(ctx); err != nil {
+		return err
+	}
+	if err := s.gitstore.CleanUntracked(ctx); err != nil {
+		return err
+	}
+	if state.MainRehydrated {
+		if s.ladybugPath == "" {
+			return status.Error(codes.FailedPrecondition,
+				"cannot restore main store after partial commit without LADYBUG_DB_PATH")
+		}
+		s.lockMainStore()
+		err := s.store.RehydrateMainFromFiles(ctx,
+			filepath.Join(s.ladybugPath, "graph-repo/entities"),
+			filepath.Join(s.ladybugPath, "graph-repo/edges"))
+		s.writeLock.Unlock()
+		if err != nil {
+			return fmt.Errorf("restore main store: %w", err)
+		}
+		state.MainRehydrated = false
+	}
+	return nil
+}
+
+func (s *CartographerServer) finishTransactionCleanup(ctx context.Context, state *TransactionState) error {
+	if err := s.store.DropBranchDB(state.ID); err != nil {
+		return fmt.Errorf("drop transaction branch DB: %w", err)
+	}
+	if err := s.withGitLock(func() error {
+		if err := s.gitstore.RestoreMain(ctx); err != nil {
+			return err
+		}
+		if err := s.gitstore.CleanUntracked(ctx); err != nil {
+			return err
+		}
+		exists, err := s.gitstore.BranchExists(ctx, state.ID)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return s.gitstore.DeleteBranch(ctx, state.ID)
+		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("delete transaction git branch: %w", err)
+	}
+	s.txManager.Delete(state.ID)
+	return nil
 }
 
 // RecoverOpenTransactions recovers transactions from a previous crash.
@@ -179,8 +330,12 @@ func (s *CartographerServer) rollbackTransaction(ctx context.Context, txID strin
 //  3. If the branch DB content is identical to main for every entity and edge
 //     (diff is empty), the transaction was already committed — clean up and skip.
 func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error {
-	branches, err := s.gitstore.ListBranches(ctx)
-	if err != nil {
+	var branches []string
+	if err := s.gitstore.WithGitLock(func() error {
+		var err error
+		branches, err = s.gitstore.ListBranches(ctx)
+		return err
+	}); err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
 	for _, branch := range branches {
@@ -189,18 +344,29 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		}
 		txID := branch
 		entities, dumpErr := s.store.DumpAllEntities(ctx, txID)
-		edges, _ := s.store.DumpAllEdges(ctx, txID)
-		hasBranchDB := dumpErr == nil
-		if !hasBranchDB {
-			_ = s.gitstore.WithGitLock(func() error {
-				return s.gitstore.DeleteBranch(ctx, txID)
-			})
+		if errors.Is(dumpErr, store.ErrBranchNotFound) {
+			if err := s.cleanupMissingRecoveryBranch(ctx, txID); err != nil {
+				return fmt.Errorf("roll back transaction with missing branch DB %q: %w", txID, err)
+			}
 			slog.Warn("RecoverOpenTransactions: deleted orphaned git branch", "tx_id", txID)
 			continue
 		}
+		if dumpErr != nil {
+			return fmt.Errorf("open transaction branch DB %q: %w", txID, dumpErr)
+		}
+		durableState, stateErr := s.store.LoadBranchTransactionState(txID)
+		if stateErr != nil {
+			return fmt.Errorf("read transaction state %q: %w", txID, stateErr)
+		}
+		edges, dumpErr := s.store.DumpAllEdges(ctx, txID)
+		if dumpErr != nil {
+			return fmt.Errorf("read transaction branch DB %q: %w", txID, dumpErr)
+		}
 
-		mainEntities, mainEdges := s.buildMainFileLookups(ctx)
-
+		mainEntities, mainEdges, _, err := s.buildMainFileLookups(ctx)
+		if err != nil {
+			return fmt.Errorf("read main graph for transaction %q: %w", txID, err)
+		}
 		cl := gitstore.NewChangeLog()
 		entityChanged := s.recoverEntityChanges(cl, entities, mainEntities)
 		edgeChanged := s.recoverEdgeChanges(cl, edges, mainEdges)
@@ -208,12 +374,9 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		// SPEC recovery step 5: If the diff is empty (branch DB identical to main),
 		// the transaction was already committed — clean up and do not recover.
 		if !entityChanged && !edgeChanged {
-			_ = s.gitstore.WithGitLock(func() error {
-				_ = s.gitstore.RestoreMain(ctx)
-				_ = s.gitstore.DeleteBranch(ctx, txID)
-				return nil
-			})
-			_ = s.store.DropBranchDB(txID)
+			if err := s.cleanupIdenticalRecoveryBranch(ctx, txID); err != nil {
+				return fmt.Errorf("clean already-committed transaction %q: %w", txID, err)
+			}
 			slog.Info("RecoverOpenTransactions: already committed, deleted", "tx_id", txID)
 			continue
 		}
@@ -225,16 +388,29 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		// with a shorter duration. Upgrade path: persist the requested timeout alongside
 		// the branch DB (e.g. a metadata file in the git branch or a sidecar record)
 		// and read it back here instead of using the hard maximum.
-		state, err := s.txManager.Create(txID, 7*24*time.Hour, "")
+		state, err := s.txManager.Create(txID, 7*24*time.Hour, durableState.MainHeadAtLastSync)
 		if err != nil {
-			_ = s.gitstore.WithGitLock(func() error { _ = s.gitstore.DeleteBranch(ctx, txID); return nil })
-			_ = s.store.DropBranchDB(txID)
-			continue
+			return fmt.Errorf("register recovered transaction %q: %w", txID, err)
 		}
 		state.ChangeLog = cl
+		state.RollbackOnly = durableState.RollbackOnly
+		state.SchemaHash = durableState.SchemaHash
+		state.CommitStarted = durableState.CommitStarted
+		state.CommitCreated = durableState.CommitCreated
+		state.CommitHydrated = durableState.CommitHydrated
+		state.MainRehydrated = durableState.MainRehydrated
+		state.MergeCompleted = durableState.MergeCompleted
 		slog.Info("RecoverOpenTransactions: recovered", "tx_id", txID)
 	}
 	return nil
+}
+
+func (s *CartographerServer) cleanupMissingRecoveryBranch(ctx context.Context, txID string) error {
+	return s.cleanupTransaction(ctx, &TransactionState{ID: txID})
+}
+
+func (s *CartographerServer) cleanupIdenticalRecoveryBranch(ctx context.Context, txID string) error {
+	return s.cleanupTransaction(ctx, &TransactionState{ID: txID})
 }
 
 // buildMainFileLookups reads all entity and edge files from main's git working
@@ -242,24 +418,48 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (
 	map[string]map[string]gitstore.EntityFile,
 	map[string]map[string]gitstore.EdgeFile,
+	string,
+	error,
 ) {
 	mainEntities := make(map[string]map[string]gitstore.EntityFile)
 	mainEdges := make(map[string]map[string]gitstore.EdgeFile)
-	_ = s.gitstore.WithGitLock(func() error {
-		_ = s.gitstore.RestoreMain(ctx)
-		_ = s.gitstore.CleanUntracked(ctx)
-		mainEntityTypes, _ := s.gitstore.ListEntityTypes(ctx)
+	var mainHead string
+	err := s.gitstore.WithGitLock(func() error {
+		if err := s.gitstore.RestoreMain(ctx); err != nil {
+			return err
+		}
+		if err := s.gitstore.CleanUntracked(ctx); err != nil {
+			return err
+		}
+		var err error
+		mainHead, err = s.gitstore.BranchHEAD(ctx, "main")
+		if err != nil {
+			return err
+		}
+		mainEntityTypes, err := s.gitstore.ListEntityTypes(ctx)
+		if err != nil {
+			return err
+		}
 		for _, et := range mainEntityTypes {
-			files, _ := s.gitstore.ReadAllEntityFiles(ctx, et)
+			files, err := s.gitstore.ReadAllEntityFiles(ctx, et)
+			if err != nil {
+				return err
+			}
 			byID := make(map[string]gitstore.EntityFile, len(files))
 			for _, f := range files {
 				byID[f.ID] = f
 			}
 			mainEntities[et] = byID
 		}
-		mainEdgeTypes, _ := s.gitstore.ListEdgeTypes(ctx)
+		mainEdgeTypes, err := s.gitstore.ListEdgeTypes(ctx)
+		if err != nil {
+			return err
+		}
 		for _, et := range mainEdgeTypes {
-			files, _ := s.gitstore.ReadAllEdgeFiles(ctx, et)
+			files, err := s.gitstore.ReadAllEdgeFiles(ctx, et)
+			if err != nil {
+				return err
+			}
 			byID := make(map[string]gitstore.EdgeFile, len(files))
 			for _, f := range files {
 				byID[f.ID] = f
@@ -268,7 +468,10 @@ func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (
 		}
 		return nil
 	})
-	return mainEntities, mainEdges
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return mainEntities, mainEdges, mainHead, nil
 }
 
 // recoverEntityChanges classifies branch DB entities against main files and
@@ -407,57 +610,122 @@ func (s *CartographerServer) gcTick() {
 		return
 	}
 	for _, txID := range expiredTxIDs {
-		state, err := s.txManager.Lookup(txID)
-		if err != nil {
+		state, unlockTx, ok := s.txManager.lockRegistered(txID)
+		if !ok {
 			continue
 		}
 		if !now.After(state.ExpiresAt.Add(30 * time.Second)) {
+			unlockTx()
 			continue
 		}
 		var merged bool
-		_ = s.withGitLock(func() error {
-			_ = s.gitstore.RestoreMain(ctx)
-			_ = s.gitstore.CleanUntracked(ctx)
-			logs, _ := s.gitstore.GitLogOneline(ctx, "transaction:"+txID)
+		if err := s.withGitLock(func() error {
+			if err := s.gitstore.RestoreMain(ctx); err != nil {
+				return err
+			}
+			if err := s.gitstore.CleanUntracked(ctx); err != nil {
+				return err
+			}
+			logs, err := s.gitstore.GitLogOneline(ctx, "transaction:"+txID)
+			if err != nil {
+				return err
+			}
 			merged = len(logs) > 0
-			_ = s.gitstore.DeleteBranch(ctx, txID)
-			return nil
-		})
-		// ponytail: When ladybugPath is empty (default in-memory config), the
-		// !merged re-hydration path is silently skipped. This means expired
-		// transactions whose branch was never merged into main leave the in-memory
-		// store unchanged — their data persists until the process restarts. This
-		// is correct for the dev/stub store (no persistence) but risks stale
-		// branch data accumulating in production LadybugDB deployments that
-		// neglect to set ladybugPath. Upgrade path: require ladybugPath in
-		// production configs and return an error if re-hydration is needed but
-		// the path is empty.
-		if !merged && s.ladybugPath != "" {
-			_ = s.store.WipeAll(ctx)
-			_ = s.store.RehydrateMainFromFiles(ctx,
-				filepath.Join(s.ladybugPath, "graph-repo/entities"),
-				filepath.Join(s.ladybugPath, "graph-repo/edges"))
+			if !merged && s.ladybugPath != "" {
+				s.lockMainStore()
+				err := s.store.RehydrateMainFromFiles(ctx,
+					filepath.Join(s.ladybugPath, "graph-repo/entities"),
+					filepath.Join(s.ladybugPath, "graph-repo/edges"))
+				s.writeLock.Unlock()
+				if err != nil {
+					return err
+				}
+				state.MainRehydrated = false
+			}
+			return s.cleanupTransactionGitLocked(ctx, state)
+		}); err != nil {
+			unlockTx()
+			continue
 		}
-		s.txManager.Delete(txID)
-		_ = s.store.DropBranchDB(txID)
+		if err := s.finishTransactionCleanup(ctx, state); err != nil {
+			unlockTx()
+			continue
+		}
+		unlockTx()
 		s.publishTelemetry("cartographer.transaction_gc", map[string]string{"tx_id": txID, "reason": "timeout"})
 	}
 }
 
-// computeSchemaHash computes a hash of schema type names.
-func computeSchemaHash(entityTypes, edgeTypes []string) string {
-	h := sha256.New()
-	sort.Strings(entityTypes)
-	sort.Strings(edgeTypes)
-	for _, et := range entityTypes {
-		h.Write([]byte(et))
-		h.Write([]byte{0})
+// computeSchemaHash hashes all compatibility-relevant application schema data.
+func computeSchemaHash(schema store.SchemaProvider) string {
+	type canonicalRule struct {
+		CanConnectTo []string
+		Using        []string
 	}
-	for _, et := range edgeTypes {
-		h.Write([]byte(et))
-		h.Write([]byte{0})
+	type canonicalEntity struct {
+		Name              string
+		Properties        []store.PropertyDef
+		EnableVectorIndex bool
+		Rules             []canonicalRule
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	type canonicalEdge struct {
+		Name       string
+		Properties []store.PropertyDef
+	}
+	canonical := struct {
+		Entities []canonicalEntity
+		Edges    []canonicalEdge
+	}{}
+	for _, name := range sortedCopy(schema.EntityTypeNames()) {
+		def, ok := schema.EntityType(name)
+		if !ok {
+			continue
+		}
+		entity := canonicalEntity{
+			Name: name, Properties: sortedProperties(def.Properties), EnableVectorIndex: def.EnableVectorIndex,
+		}
+		for _, rule := range def.Rules {
+			entity.Rules = append(entity.Rules, canonicalRule{
+				CanConnectTo: sortedCopy(rule.CanConnectTo), Using: sortedCopy(rule.Using),
+			})
+		}
+		sort.Slice(entity.Rules, func(i, j int) bool {
+			left, _ := json.Marshal(entity.Rules[i])
+			right, _ := json.Marshal(entity.Rules[j])
+			return string(left) < string(right)
+		})
+		canonical.Entities = append(canonical.Entities, entity)
+	}
+	for _, name := range sortedCopy(schema.EdgeTypeNames()) {
+		def, ok := schema.EdgeType(name)
+		if !ok {
+			continue
+		}
+		canonical.Edges = append(canonical.Edges, canonicalEdge{Name: name, Properties: sortedProperties(def.Properties)})
+	}
+	encoded, _ := json.Marshal(canonical)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func sortedCopy(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	return result
+}
+
+func sortedProperties(properties []store.PropertyDef) []store.PropertyDef {
+	result := append([]store.PropertyDef(nil), properties...)
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name != result[j].Name {
+			return result[i].Name < result[j].Name
+		}
+		if result[i].Type != result[j].Type {
+			return result[i].Type < result[j].Type
+		}
+		return !result[i].Required && result[j].Required
+	})
+	return result
 }
 
 func (s *CartographerServer) resolveBranch(txID string) string {
@@ -559,11 +827,11 @@ func (s *CartographerServer) ExecuteCypher(
 	if req.Cypher == "" {
 		return nil, errEmptyExecuteCypherQuery()
 	}
-	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
-			return nil, err
-		}
+	unlockTx, err := s.lockTransaction(req.TransactionId)
+	if err != nil {
+		return nil, err
 	}
+	defer unlockTx()
 	var params map[string]any
 	if req.Params != nil {
 		if s := req.Params.GetStructValue(); s != nil {
@@ -619,11 +887,11 @@ func (s *CartographerServer) SearchNeighbors(
 	if topK == 0 {
 		topK = 10
 	}
-	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
-			return nil, err
-		}
+	unlockTx, err := s.lockTransaction(req.TransactionId)
+	if err != nil {
+		return nil, err
 	}
+	defer unlockTx()
 	if len(req.Embedding) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "embedding is required")
 	}
@@ -665,11 +933,11 @@ func (s *CartographerServer) FullTextSearch(
 	if req.Query == "" {
 		return nil, errEmptyFullTextSearchQuery()
 	}
-	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
-			return nil, err
-		}
+	unlockTx, err := s.lockTransaction(req.TransactionId)
+	if err != nil {
+		return nil, err
 	}
+	defer unlockTx()
 	if req.EntityType != "" && !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
@@ -696,11 +964,11 @@ func (s *CartographerServer) ListEntities(
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
-	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
-			return nil, err
-		}
+	unlockTx, err := s.lockTransaction(req.TransactionId)
+	if err != nil {
+		return nil, err
 	}
+	defer unlockTx()
 	pageSize := int(req.PageSize)
 	if pageSize < 0 {
 		return nil, errInvalidPageSize(pageSize)
@@ -740,21 +1008,23 @@ func (s *CartographerServer) CreateEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", req.EntityType); err != nil {
 		return nil, err
 	}
-	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
-			return nil, err
-		}
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
 	}
+	defer unlockTx()
 	branch := s.resolveBranch(req.TransactionId)
 
 	var ent *store.Entity
-	var err error
 	if req.TransactionId != "" {
+		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+			return nil, err
+		}
 		ent, err = s.store.CreateEntity(ctx, req.EntityType, req.Id, req.Properties, req.Embedding, branch)
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeAddEntity, ID: ent.Id, Type: ent.Type,
 			Entity: &gitstore.EntityEntry{
 				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
@@ -764,7 +1034,7 @@ func (s *CartographerServer) CreateEntity(
 			return nil, mapGitError(err)
 		}
 	} else {
-		s.writeLock.Lock()
+		s.lockMainStore()
 		ent, err = s.store.CreateEntity(ctx, req.EntityType, req.Id, req.Properties, req.Embedding, branch)
 		s.writeLock.Unlock()
 		if err != nil {
@@ -786,6 +1056,11 @@ func (s *CartographerServer) UpdateEntity(
 	if !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
 	}
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	// Resolve entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
@@ -795,19 +1070,16 @@ func (s *CartographerServer) UpdateEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
 		return nil, err
 	}
+	var ent *store.Entity
 	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
 			return nil, err
 		}
-	}
-	var ent *store.Entity
-	var err error
-	if req.TransactionId != "" {
 		ent, err = s.store.UpdateEntity(ctx, req.Id, req.Properties, req.Embedding, branch)
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeModEntity, ID: ent.Id, Type: ent.Type,
 			Entity: &gitstore.EntityEntry{
 				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
@@ -817,7 +1089,7 @@ func (s *CartographerServer) UpdateEntity(
 			return nil, mapGitError(err)
 		}
 	} else {
-		s.writeLock.Lock()
+		s.lockMainStore()
 		ent, err = s.store.UpdateEntity(ctx, req.Id, req.Properties, req.Embedding, branch)
 		s.writeLock.Unlock()
 		if err != nil {
@@ -839,6 +1111,11 @@ func (s *CartographerServer) DeleteEntity(
 	if !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
 	}
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	// Resolve entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
@@ -848,30 +1125,22 @@ func (s *CartographerServer) DeleteEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
 		return nil, err
 	}
-	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
-			return nil, err
-		}
-	}
-
 	var ent *store.Entity
-	var err error
 	if req.TransactionId != "" {
-		existing, lookupErr := s.store.GetEntity(ctx, req.Id, branch)
-		if lookupErr != nil {
-			return nil, mapStoreError(lookupErr)
-		}
-		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
-			Kind: gitstore.ChangeDelEntity, ID: existing.Id, Type: existing.Type,
-		}); err != nil {
-			return nil, mapGitError(err)
+		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+			return nil, err
 		}
 		ent, err = s.store.DeleteEntity(ctx, req.Id, branch)
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
+		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+			Kind: gitstore.ChangeDelEntity, ID: ent.Id, Type: ent.Type,
+		}); err != nil {
+			return nil, err
+		}
 	} else {
-		s.writeLock.Lock()
+		s.lockMainStore()
 		ent, err = s.store.DeleteEntity(ctx, req.Id, branch)
 		s.writeLock.Unlock()
 		if err != nil {
@@ -890,6 +1159,11 @@ func (s *CartographerServer) CreateEdge(
 	if req.EdgeType == "" {
 		return nil, status.Error(codes.InvalidArgument, "edge type is required")
 	}
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	// Resolve source entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	sourceType, resolveErr := s.store.ResolveEntityType(ctx, req.FromEntityId, branch)
@@ -899,19 +1173,16 @@ func (s *CartographerServer) CreateEdge(
 	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
 		return nil, err
 	}
+	var edge *store.Edge
 	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
 			return nil, err
 		}
-	}
-	var edge *store.Edge
-	var err error
-	if req.TransactionId != "" {
 		edge, err = s.store.CreateEdge(ctx, req.EdgeType, req.FromEntityId, req.ToEntityId, req.Properties, branch)
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeAddEdge, ID: edge.Id, Type: edge.Type,
 			Edge: &gitstore.EdgeEntry{
 				ID: edge.Id, Type: edge.Type,
@@ -922,7 +1193,7 @@ func (s *CartographerServer) CreateEdge(
 			return nil, mapGitError(err)
 		}
 	} else {
-		s.writeLock.Lock()
+		s.lockMainStore()
 		edge, err = s.store.CreateEdge(ctx, req.EdgeType, req.FromEntityId, req.ToEntityId, req.Properties, branch)
 		s.writeLock.Unlock()
 		if err != nil {
@@ -945,6 +1216,11 @@ func (s *CartographerServer) DeleteEdge(
 	if !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid edge ID format")
 	}
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	// Resolve source entity type for capability check.
 	branch := s.resolveBranch(req.TransactionId)
 	existingEdge, edgeErr := s.store.GetEdge(ctx, req.Id, branch)
@@ -958,25 +1234,22 @@ func (s *CartographerServer) DeleteEdge(
 	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
 		return nil, err
 	}
+	var edge *store.Edge
 	if req.TransactionId != "" {
-		if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
 			return nil, err
 		}
-	}
-	var edge *store.Edge
-	var err error
-	if req.TransactionId != "" {
 		edge, err = s.store.DeleteEdge(ctx, req.Id, branch)
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
-		if err := s.txManager.AddChangeLogEntry(req.TransactionId, gitstore.ChangeLogEntry{
+		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeDelEdge, ID: edge.Id, Type: edge.Type,
 		}); err != nil {
 			return nil, mapGitError(err)
 		}
 	} else {
-		s.writeLock.Lock()
+		s.lockMainStore()
 		edge, err = s.store.DeleteEdge(ctx, req.Id, branch)
 		s.writeLock.Unlock()
 		if err != nil {
@@ -999,12 +1272,15 @@ func (s *CartographerServer) BeginTransaction(
 	if err := s.checkTxCap(ctx, "WRITE:graph/tx"); err != nil {
 		return nil, err
 	}
+	s.txAdmission.RLock()
+	defer s.txAdmission.RUnlock()
 	txID := s.newIDFn()
 	requestedTimeout := s.defaultTimeout
 	if req.Timeout != nil {
 		requestedTimeout = req.Timeout.AsDuration()
 	}
 	var mainHead string
+	var branchStoreErr error
 	if err := s.withGitLock(func() error {
 		var err error
 		mainHead, err = s.gitstore.BranchHEAD(ctx, "main")
@@ -1017,35 +1293,71 @@ func (s *CartographerServer) BeginTransaction(
 		if err := s.gitstore.HardResetToBranch(ctx, txID); err != nil {
 			return fmt.Errorf("hard reset: %w", err)
 		}
+		if err := s.store.CreateBranchDB(txID); err != nil {
+			branchStoreErr = fmt.Errorf("create branch DB: %w", err)
+		} else if err := s.store.ReplicateSchemaToBranch(txID); err != nil {
+			branchStoreErr = fmt.Errorf("replicate branch schema: %w", err)
+		} else if s.ladybugPath != "" {
+			branchStoreErr = s.store.HydrateBranchFromFiles(ctx, txID,
+				filepath.Join(s.ladybugPath, "graph-repo/entities"),
+				filepath.Join(s.ladybugPath, "graph-repo/edges"))
+		}
+		if branchStoreErr != nil {
+			var cleanups []string
+			if err := s.store.DropBranchDB(txID); err != nil {
+				cleanups = append(cleanups, fmt.Sprintf("drop branch DB: %v", err))
+			}
+			if err := s.gitstore.RestoreMain(ctx); err != nil {
+				cleanups = append(cleanups, fmt.Sprintf("restore main: %v", err))
+			}
+			if err := s.gitstore.CleanUntracked(ctx); err != nil {
+				cleanups = append(cleanups, fmt.Sprintf("clean untracked: %v", err))
+			}
+			if err := s.gitstore.DeleteBranch(ctx, txID); err != nil {
+				cleanups = append(cleanups, fmt.Sprintf("delete branch: %v", err))
+			}
+			if len(cleanups) > 0 {
+				branchStoreErr = fmt.Errorf("%v; cleanup failures: [%s]",
+					branchStoreErr, strings.Join(cleanups, "; "))
+			}
+		}
 		return nil
 	}); err != nil {
 		return nil, mapGitError(err)
 	}
-	if err := s.store.CreateBranchDB(txID); err != nil {
-		_ = s.gitstore.WithGitLock(func() error {
-			_ = s.gitstore.DeleteBranch(ctx, txID)
-			_ = s.gitstore.RestoreMain(ctx)
-			return nil
-		})
-		return nil, errBeginTransactionResourceExhausted(fmt.Sprintf("create branch DB: %v", err))
-	}
-	_ = s.store.ReplicateSchemaToBranch(txID)
-	if s.ladybugPath != "" {
-		_ = s.store.HydrateBranchFromFiles(ctx, txID,
-			filepath.Join(s.ladybugPath, "graph-repo/entities"),
-			filepath.Join(s.ladybugPath, "graph-repo/edges"))
+	if branchStoreErr != nil {
+		return nil, errBeginTransactionResourceExhausted(branchStoreErr.Error())
 	}
 	state, err := s.txManager.Create(txID, requestedTimeout, mainHead)
 	if err != nil {
+		var cleanups []string
 		_ = s.gitstore.WithGitLock(func() error {
-			_ = s.gitstore.DeleteBranch(ctx, txID)
-			_ = s.gitstore.RestoreMain(ctx)
+			if err := s.gitstore.DeleteBranch(ctx, txID); err != nil {
+				cleanups = append(cleanups, fmt.Sprintf("delete branch: %v", err))
+			}
+			if err := s.gitstore.RestoreMain(ctx); err != nil {
+				cleanups = append(cleanups, fmt.Sprintf("restore main: %v", err))
+			}
 			return nil
 		})
-		_ = s.store.DropBranchDB(txID)
-		return nil, errBeginTransactionResourceExhausted(fmt.Sprintf("register tx: %v", err))
+		if err := s.store.DropBranchDB(txID); err != nil {
+			cleanups = append(cleanups, fmt.Sprintf("drop branch DB: %v", err))
+		}
+		msg := fmt.Sprintf("register tx: %v", err)
+		if len(cleanups) > 0 {
+			msg = fmt.Sprintf("%s; cleanup failures: [%s]", msg, strings.Join(cleanups, "; "))
+		}
+		return nil, errBeginTransactionResourceExhausted(msg)
 	}
-	state.SchemaHash = computeSchemaHash(s.store.EntityTypeNames(), s.store.EdgeTypeNames())
+	state.SchemaHash = computeSchemaHash(s.store)
+	if err := s.persistTransactionState(state); err != nil {
+		cleanupErr := s.cleanupTransaction(ctx, state)
+		if cleanupErr != nil {
+			return nil, errBeginTransactionResourceExhausted(fmt.Sprintf(
+				"persist transaction state: %v; cleanup: %v", err, cleanupErr))
+		}
+		return nil, errBeginTransactionResourceExhausted(fmt.Sprintf("persist transaction state: %v", err))
+	}
 	return &flowv1.BeginTransactionResponse{
 		TransactionId: txID, AppliedTimeout: durationpb.New(state.AppliedTimeout),
 	}, nil
@@ -1062,76 +1374,111 @@ func (s *CartographerServer) CommitTransaction(
 	if err := validateTxID(req.TransactionId); err != nil {
 		return nil, err
 	}
-	if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+	state, unlockTx, err := s.txManager.LockActive(req.TransactionId)
+	if err != nil {
 		return nil, err
 	}
-	// Read state under txManager.mu to serialise against concurrent
-	// RefreshTransaction (which writes MainHeadAtLastSync under the lock)
-	// and to prevent TOCTOU between zero-mutation detection and deletion.
-	s.txManager.mu.Lock()
-	state := s.txManager.active[req.TransactionId]
+	defer unlockTx()
 	mainHeadAtLastSync := state.MainHeadAtLastSync
-
-	// Zero-mutation check.
-	if state.ChangeLog.Len() == 0 {
-		delete(s.txManager.active, req.TransactionId)
-		s.txManager.mu.Unlock()
-		if err := s.store.DropBranchDB(req.TransactionId); err != nil {
-			return nil, mapStoreError(err)
-		}
-		if err := s.gitstore.WithGitLock(func() error {
-			if err := s.gitstore.DeleteBranch(ctx, req.TransactionId); err != nil {
-				return err
-			}
-			return s.gitstore.RestoreMain(ctx)
-		}); err != nil {
+	if state.MergeCompleted {
+		if err := s.cleanupTransaction(ctx, state); err != nil {
 			return nil, mapGitError(err)
 		}
 		return &flowv1.CommitTransactionResponse{}, nil
 	}
-	s.txManager.mu.Unlock()
+
+	// Zero-mutation check.
+	if state.ChangeLog.Len() == 0 {
+		if err := s.cleanupTransaction(ctx, state); err != nil {
+			return nil, mapGitError(err)
+		}
+		return &flowv1.CommitTransactionResponse{}, nil
+	}
 
 	// Schema compatibility check.
-	currentHash := computeSchemaHash(s.store.EntityTypeNames(), s.store.EdgeTypeNames())
+	currentHash := computeSchemaHash(s.store)
 	if state.SchemaHash != "" && state.SchemaHash != currentHash {
 		return nil, errSchemaChangedIncompatibly("schema changed since tx began")
 	}
 
 	var commitErr error
-	_ = s.withGitLock(func() error {
+	lockErr := s.withGitLock(func() error {
+		defer func() {
+			if commitErr == nil {
+				return
+			}
+			if reconcileErr := s.reconcileFailedCommitGitLocked(ctx, state); reconcileErr != nil {
+				commitErr = fmt.Errorf("%v; reconcile failed commit: %w", commitErr, reconcileErr)
+			}
+		}()
 		if err := s.gitstore.Checkout(ctx, req.TransactionId); err != nil {
 			commitErr = fmt.Errorf("checkout: %w", err)
 			return nil
 		}
-		tc := groupChanges(state.ChangeLog)
-		for et, entries := range tc.addedEntities {
-			if err := s.gitstore.WriteEntityFiles(ctx, et, toGitEntities(entries)); err != nil {
-				commitErr = fmt.Errorf("write entity files: %w", err)
+		commitExists, err := s.gitstore.CommitExistsOnBranch(ctx, req.TransactionId)
+		if err != nil {
+			commitErr = fmt.Errorf("detect transaction commit: %w", err)
+			return nil
+		}
+		if commitExists && !state.CommitCreated {
+			state.CommitCreated = true
+			state.CommitStarted = true
+			if err := s.persistTransactionState(state); err != nil {
+				commitErr = fmt.Errorf("persist detected commit: %w", err)
 				return nil
 			}
 		}
-		for et, entries := range tc.modifiedEntities {
-			if err := s.gitstore.WriteEntityFiles(ctx, et, toGitEntities(entries)); err != nil {
-				commitErr = fmt.Errorf("write modified entity files: %w", err)
+		if state.CommitCreated {
+			txHead, txErr := s.gitstore.BranchHEAD(ctx, req.TransactionId)
+			mainHead, mainErr := s.gitstore.BranchHEAD(ctx, "main")
+			if txErr != nil || mainErr != nil {
+				commitErr = fmt.Errorf("detect transaction merge: tx=%v main=%v", txErr, mainErr)
+				return nil
+			}
+			if txHead == mainHead {
+				state.MergeCompleted = true
+				state.MainRehydrated = false
+				if err := s.persistTransactionState(state); err != nil {
+					commitErr = fmt.Errorf("persist detected merge: %w", err)
+					return nil
+				}
+				if err := s.cleanupTransactionGitLocked(ctx, state); err != nil {
+					commitErr = err
+				}
 				return nil
 			}
 		}
-		for et, ids := range tc.deletedEntities {
-			if err := s.gitstore.RemoveEntityFiles(ctx, et, ids); err != nil {
-				commitErr = fmt.Errorf("remove entity files: %w", err)
-				return nil
+		if !state.CommitCreated {
+			tc := groupChanges(state.ChangeLog)
+			for et, entries := range tc.addedEntities {
+				if err := s.gitstore.WriteEntityFiles(ctx, et, toGitEntities(entries)); err != nil {
+					commitErr = fmt.Errorf("write entity files: %w", err)
+					return nil
+				}
 			}
-		}
-		for et, entries := range tc.addedEdges {
-			if err := s.gitstore.WriteEdgeFiles(ctx, et, toGitEdges(entries)); err != nil {
-				commitErr = fmt.Errorf("write edge files: %w", err)
-				return nil
+			for et, entries := range tc.modifiedEntities {
+				if err := s.gitstore.WriteEntityFiles(ctx, et, toGitEntities(entries)); err != nil {
+					commitErr = fmt.Errorf("write modified entity files: %w", err)
+					return nil
+				}
 			}
-		}
-		for et, ids := range tc.deletedEdges {
-			if err := s.gitstore.RemoveEdgeFiles(ctx, et, ids); err != nil {
-				commitErr = fmt.Errorf("remove edge files: %w", err)
-				return nil
+			for et, ids := range tc.deletedEntities {
+				if err := s.gitstore.RemoveEntityFiles(ctx, et, ids); err != nil {
+					commitErr = fmt.Errorf("remove entity files: %w", err)
+					return nil
+				}
+			}
+			for et, entries := range tc.addedEdges {
+				if err := s.gitstore.WriteEdgeFiles(ctx, et, toGitEdges(entries)); err != nil {
+					commitErr = fmt.Errorf("write edge files: %w", err)
+					return nil
+				}
+			}
+			for et, ids := range tc.deletedEdges {
+				if err := s.gitstore.RemoveEdgeFiles(ctx, et, ids); err != nil {
+					commitErr = fmt.Errorf("remove edge files: %w", err)
+					return nil
+				}
 			}
 		}
 		// Divergence check: verify main has not advanced since last sync
@@ -1145,48 +1492,90 @@ func (s *CartographerServer) CommitTransaction(
 			commitErr = errCommitNotUpToDate()
 			return nil
 		}
-		_ = s.gitstore.AddAll(ctx, "entities")
-		_ = s.gitstore.AddAll(ctx, "edges")
-		if err := s.gitstore.Commit(ctx, fmt.Sprintf("transaction:%s", req.TransactionId)); err != nil {
-			commitErr = fmt.Errorf("commit: %w", err)
-			return nil
+		if !state.CommitCreated {
+			if err := s.gitstore.AddAll(ctx, "entities"); err != nil {
+				commitErr = fmt.Errorf("add entity files: %w", err)
+				return nil
+			}
+			if err := s.gitstore.AddAll(ctx, "edges"); err != nil {
+				commitErr = fmt.Errorf("add edge files: %w", err)
+				return nil
+			}
+			state.CommitStarted = true
+			if err := s.persistTransactionState(state); err != nil {
+				commitErr = fmt.Errorf("persist commit start: %w", err)
+				return nil
+			}
+			if err := s.gitstore.Commit(ctx, fmt.Sprintf("transaction:%s", req.TransactionId)); err != nil {
+				commitErr = fmt.Errorf("commit: %w", err)
+				return nil
+			}
+			state.CommitCreated = true
+			if err := s.persistTransactionState(state); err != nil {
+				commitErr = fmt.Errorf("persist created commit: %w", err)
+				return nil
+			}
 		}
-		// SPEC steps 7-8: Acquire write lock, wipe + rehydrate main DB.
-		s.writeLock.Lock()
-		if err := s.store.WipeAll(ctx); err != nil {
+		if !state.CommitHydrated {
+			// SPEC steps 7-8: git lock is outer; main write lock is inner.
+			s.lockMainStore()
+			state.MainRehydrated = true
+			if err := s.persistTransactionState(state); err != nil {
+				state.MainRehydrated = false
+				s.writeLock.Unlock()
+				commitErr = fmt.Errorf("persist main rehydration start: %w", err)
+				return nil
+			}
+			if s.ladybugPath != "" {
+				err = s.store.RehydrateMainFromFiles(ctx,
+					filepath.Join(s.ladybugPath, "graph-repo/entities"),
+					filepath.Join(s.ladybugPath, "graph-repo/edges"))
+			} else {
+				err = s.store.RehydrateFromBranch(ctx, req.TransactionId)
+			}
 			s.writeLock.Unlock()
-			commitErr = fmt.Errorf("wipe main store: %w", err)
-			return nil
-		}
-		if s.ladybugPath != "" {
-			if err := s.store.RehydrateMainFromFiles(ctx,
-				filepath.Join(s.ladybugPath, "graph-repo/entities"),
-				filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
-				s.writeLock.Unlock()
-				commitErr = fmt.Errorf("rehydrate main from files: %w", err)
+			if err != nil {
+				commitErr = fmt.Errorf("rehydrate main: %w", err)
 				return nil
 			}
-		} else {
-			if err := s.store.RehydrateFromBranch(ctx, req.TransactionId); err != nil {
-				s.writeLock.Unlock()
-				commitErr = fmt.Errorf("rehydrate from branch: %w", err)
+			state.CommitHydrated = true
+			if err := s.persistTransactionState(state); err != nil {
+				state.CommitHydrated = false
+				commitErr = fmt.Errorf("persist completed main rehydration: %w", err)
 				return nil
 			}
 		}
-		// SPEC step 9: Release write lock.
-		s.writeLock.Unlock()
 
 		// SPEC step 10: Fast-forward merge to main.
 		if err := s.gitstore.FastForwardMerge(ctx, req.TransactionId, "main"); err != nil {
-			commitErr = fmt.Errorf("merge: %w", err)
+			txHead, txErr := s.gitstore.BranchHEAD(ctx, req.TransactionId)
+			mainHead, mainErr := s.gitstore.BranchHEAD(ctx, "main")
+			if txErr != nil || mainErr != nil || txHead != mainHead {
+				commitErr = fmt.Errorf("merge: %w", err)
+				return nil
+			}
+		}
+		state.MergeCompleted = true
+		state.MainRehydrated = false
+		if err := s.persistTransactionState(state); err != nil {
+			commitErr = fmt.Errorf("persist completed merge: %w", err)
 			return nil
 		}
-		// SPEC step 11: Restore main in the working tree.
-		_ = s.gitstore.RestoreMain(ctx)
-		_ = s.gitstore.CleanUntracked(ctx)
+		if err := s.cleanupTransactionGitLocked(ctx, state); err != nil {
+			commitErr = err
+		}
 		return nil
 	})
 
+	if lockErr != nil {
+		return nil, mapGitError(lockErr)
+	}
+	if commitErr != nil {
+		return nil, mapGitError(commitErr)
+	}
+	if err := s.finishTransactionCleanup(ctx, state); err != nil {
+		return nil, mapStoreError(err)
+	}
 	// Fire-and-forget push (outside git lock to avoid nested lock acquisition).
 	if s.remoteURL != "" {
 		go func() {
@@ -1200,13 +1589,42 @@ func (s *CartographerServer) CommitTransaction(
 			}
 		}()
 	}
-
-	if commitErr != nil {
-		return nil, mapGitError(commitErr)
-	}
-	s.txManager.Delete(req.TransactionId)
-	_ = s.store.DropBranchDB(req.TransactionId)
 	return &flowv1.CommitTransactionResponse{}, nil
+}
+
+// reconcileFailedCommitGitLocked resolves the only ambiguous commit milestone
+// from Git before returning an error. The caller holds the Git lock.
+func (s *CartographerServer) reconcileFailedCommitGitLocked(
+	ctx context.Context, state *TransactionState,
+) error {
+	if err := s.gitstore.Checkout(ctx, state.ID); err != nil {
+		return fmt.Errorf("checkout transaction branch: %w", err)
+	}
+	commitExists, err := s.gitstore.CommitExistsOnBranch(ctx, state.ID)
+	if err != nil {
+		return fmt.Errorf("detect transaction commit: %w", err)
+	}
+	if commitExists {
+		state.CommitStarted = true
+		state.CommitCreated = true
+		return s.persistTransactionState(state)
+	}
+	if err := s.gitstore.HardResetToBranch(ctx, state.ID); err != nil {
+		return fmt.Errorf("clean transaction branch: %w", err)
+	}
+	previous := durableTransactionState(state)
+	state.CommitStarted = false
+	state.CommitCreated = false
+	state.CommitHydrated = false
+	state.MainRehydrated = false
+	if err := s.persistTransactionState(state); err != nil {
+		state.CommitStarted = previous.CommitStarted
+		state.CommitCreated = previous.CommitCreated
+		state.CommitHydrated = previous.CommitHydrated
+		state.MainRehydrated = previous.MainRehydrated
+		return fmt.Errorf("persist cleared commit state: %w", err)
+	}
+	return nil
 }
 
 func (s *CartographerServer) RollbackTransaction(
@@ -1219,13 +1637,186 @@ func (s *CartographerServer) RollbackTransaction(
 	if err := validateTxID(req.TransactionId); err != nil {
 		return nil, err
 	}
-	if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+	state, unlockTx, err := s.txManager.LockCleanup(req.TransactionId)
+	if err != nil {
 		return nil, err
 	}
-	if err := s.rollbackTransaction(ctx, req.TransactionId); err != nil {
-		return nil, err
+	defer unlockTx()
+	if state.MergeCompleted {
+		return nil, status.Error(codes.FailedPrecondition,
+			"transaction is already committed; retry CommitTransaction to finish cleanup")
+	}
+	if err := s.cleanupTransaction(ctx, state); err != nil {
+		return nil, mapGitError(err)
 	}
 	return &flowv1.RollbackTransactionResponse{}, nil
+}
+
+func (s *CartographerServer) refreshEmptyTransactionHead(
+	ctx context.Context, state *TransactionState,
+) error {
+	var mainHead string
+	if err := s.withGitLock(func() error {
+		var err error
+		mainHead, err = s.gitstore.BranchHEAD(ctx, "main")
+		return err
+	}); err != nil {
+		return err
+	}
+	oldMainHead := state.MainHeadAtLastSync
+	state.MainHeadAtLastSync = mainHead
+	if err := s.persistTransactionState(state); err != nil {
+		state.MainHeadAtLastSync = oldMainHead
+		return fmt.Errorf("persist refreshed transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *CartographerServer) reapplyTransactionChanges(
+	ctx context.Context, txID string, changeLog *gitstore.ChangeLog,
+) error {
+	for _, entry := range changeLog.Entries() {
+		switch entry.Kind {
+		case gitstore.ChangeAddEntity:
+			_, err := s.store.CreateEntity(
+				ctx, entry.Type, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, txID,
+			)
+			if err != nil {
+				if errors.Is(err, store.ErrEntityAlreadyExists) || errors.Is(err, store.ErrEmbeddingDimension) {
+					return errRefreshConflict(txID)
+				}
+				return mapStoreError(err)
+			}
+		case gitstore.ChangeModEntity:
+			_, err := s.store.UpdateEntity(ctx, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, txID)
+			if err != nil {
+				if errors.Is(err, store.ErrEntityNotFound) || errors.Is(err, store.ErrEmbeddingDimension) {
+					return errRefreshConflict(txID)
+				}
+				return mapStoreError(err)
+			}
+		case gitstore.ChangeDelEntity:
+			_, err := s.store.DeleteEntity(ctx, entry.ID, txID)
+			if err != nil && !errors.Is(err, store.ErrEntityNotFound) {
+				return mapStoreError(err)
+			}
+		case gitstore.ChangeAddEdge:
+			_, err := s.store.CreateEdge(
+				ctx, entry.Type, entry.Edge.FromEntityID, entry.Edge.ToEntityID, entry.Edge.Properties, txID,
+			)
+			if err != nil {
+				if errors.Is(err, store.ErrSourceOrTargetNotFound) || errors.Is(err, store.ErrEmbeddingDimension) {
+					return errRefreshConflict(txID)
+				}
+				return mapStoreError(err)
+			}
+		case gitstore.ChangeDelEdge:
+			_, err := s.store.DeleteEdge(ctx, entry.ID, txID)
+			if err != nil && !errors.Is(err, store.ErrEdgeNotFound) {
+				return mapStoreError(err)
+			}
+		}
+	}
+	return nil
+}
+
+type gitGraphSnapshot struct {
+	entities map[string]gitstore.EntityFile
+	edges    map[string]gitstore.EdgeFile
+}
+
+func (s *CartographerServer) snapshotWorkingTree(ctx context.Context) (gitGraphSnapshot, error) {
+	snapshot := gitGraphSnapshot{
+		entities: make(map[string]gitstore.EntityFile),
+		edges:    make(map[string]gitstore.EdgeFile),
+	}
+	entityTypes, err := s.gitstore.ListEntityTypes(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	for _, entityType := range entityTypes {
+		files, err := s.gitstore.ReadAllEntityFiles(ctx, entityType)
+		if err != nil {
+			return snapshot, err
+		}
+		for _, file := range files {
+			snapshot.entities[file.ID] = file
+		}
+	}
+	edgeTypes, err := s.gitstore.ListEdgeTypes(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	for _, edgeType := range edgeTypes {
+		files, err := s.gitstore.ReadAllEdgeFiles(ctx, edgeType)
+		if err != nil {
+			return snapshot, err
+		}
+		for _, file := range files {
+			snapshot.edges[file.ID] = file
+		}
+	}
+	return snapshot, nil
+}
+
+func (s *CartographerServer) validateRefresh(
+	state *TransactionState, before, current gitGraphSnapshot,
+) error {
+	for _, entry := range state.ChangeLog.Entries() {
+		switch entry.Kind {
+		case gitstore.ChangeAddEntity:
+			if _, exists := current.entities[entry.ID]; exists {
+				return errRefreshConflict(state.ID)
+			}
+		case gitstore.ChangeModEntity, gitstore.ChangeDelEntity:
+			oldFile, existed := before.entities[entry.ID]
+			newFile, exists := current.entities[entry.ID]
+			if !existed || !exists || !reflect.DeepEqual(oldFile, newFile) {
+				return errRefreshConflict(state.ID)
+			}
+		case gitstore.ChangeAddEdge:
+			if _, exists := current.edges[entry.ID]; exists {
+				return errRefreshConflict(state.ID)
+			}
+		case gitstore.ChangeDelEdge:
+			oldFile, existed := before.edges[entry.ID]
+			newFile, exists := current.edges[entry.ID]
+			if !existed || !exists || !reflect.DeepEqual(oldFile, newFile) {
+				return errRefreshConflict(state.ID)
+			}
+		}
+		if entry.Entity != nil && len(entry.Entity.Embedding) > 0 {
+			dimension, err := s.store.GetEstablishedDimension(entry.Type, "main")
+			if err != nil {
+				return mapStoreError(err)
+			}
+			if dimension > 0 && dimension != len(entry.Entity.Embedding) {
+				return errRefreshConflict(state.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context, txID string) error {
+	if s.ladybugPath == "" {
+		return status.Error(codes.FailedPrecondition, "refresh requires LADYBUG_DB_PATH")
+	}
+	if err := s.store.DropBranchDB(txID); err != nil {
+		return mapStoreError(err)
+	}
+	if err := s.store.CreateBranchDB(txID); err != nil {
+		return mapStoreError(err)
+	}
+	if err := s.store.ReplicateSchemaToBranch(txID); err != nil {
+		return mapStoreError(err)
+	}
+	if err := s.store.HydrateBranchFromFiles(ctx, txID,
+		filepath.Join(s.ladybugPath, "graph-repo/entities"),
+		filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
+		return mapStoreError(err)
+	}
+	return nil
 }
 
 func (s *CartographerServer) RefreshTransaction(
@@ -1238,30 +1829,41 @@ func (s *CartographerServer) RefreshTransaction(
 	if err := validateTxID(req.TransactionId); err != nil {
 		return nil, err
 	}
-	if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+	state, unlockTx, err := s.txManager.LockActive(req.TransactionId)
+	if err != nil {
 		return nil, err
 	}
-	state, _ := s.txManager.Lookup(req.TransactionId)
+	defer unlockTx()
+	if state.CommitStarted {
+		return nil, status.Error(codes.FailedPrecondition, "transaction commit is already in progress")
+	}
 
 	if state.ChangeLog.Len() == 0 {
-		var mainHead string
-		_ = s.gitstore.WithGitLock(func() error {
-			var err error
-			mainHead, err = s.gitstore.BranchHEAD(ctx, "main")
-			return err
-		})
-		s.txManager.mu.Lock()
-		state.MainHeadAtLastSync = mainHead
-		s.txManager.mu.Unlock()
+		if err := s.refreshEmptyTransactionHead(ctx, state); err != nil {
+			return nil, mapGitError(err)
+		}
 		return &flowv1.RefreshTransactionResponse{}, nil
 	}
 
 	var mainHash string
 	if err := s.withGitLock(func() error {
-		if err := s.gitstore.Checkout(ctx, req.TransactionId); err != nil {
+		if err := s.gitstore.HardResetToBranch(ctx, req.TransactionId); err != nil {
 			return err
 		}
-		var err error
+		before, err := s.snapshotWorkingTree(ctx)
+		if err != nil {
+			return err
+		}
+		if err := s.gitstore.RestoreMain(ctx); err != nil {
+			return err
+		}
+		if err := s.gitstore.CleanUntracked(ctx); err != nil {
+			return err
+		}
+		current, err := s.snapshotWorkingTree(ctx)
+		if err != nil {
+			return err
+		}
 		mainHash, err = s.gitstore.BranchHEAD(ctx, "main")
 		if err != nil {
 			return err
@@ -1269,68 +1871,31 @@ func (s *CartographerServer) RefreshTransaction(
 		if err := s.gitstore.SetBranchRef(ctx, req.TransactionId, mainHash); err != nil {
 			return err
 		}
-		if err := s.gitstore.CleanUntracked(ctx); err != nil {
+		if err := s.gitstore.HardResetToBranch(ctx, req.TransactionId); err != nil {
 			return err
+		}
+		if err := s.resetBranchStoreFromWorkingTree(ctx, req.TransactionId); err != nil {
+			return err
+		}
+		if err := s.validateRefresh(state, before, current); err != nil {
+			return err
+		}
+		if err := s.reapplyTransactionChanges(ctx, req.TransactionId, state.ChangeLog); err != nil {
+			if resetErr := s.resetBranchStoreFromWorkingTree(ctx, req.TransactionId); resetErr != nil {
+				return fmt.Errorf("reapply transaction: %v; restore refreshed branch: %w", err, resetErr)
+			}
+			return err
+		}
+		oldMainHead := state.MainHeadAtLastSync
+		state.MainHeadAtLastSync = mainHash
+		if err := s.persistTransactionState(state); err != nil {
+			state.MainHeadAtLastSync = oldMainHead
+			return fmt.Errorf("persist refreshed transaction: %w", err)
 		}
 		return nil
 	}); err != nil {
 		return nil, mapGitError(err)
 	}
-
-	if s.ladybugPath != "" {
-		_ = s.store.HydrateBranchFromFiles(ctx, req.TransactionId,
-			filepath.Join(s.ladybugPath, "graph-repo/entities"),
-			filepath.Join(s.ladybugPath, "graph-repo/edges"))
-	}
-	// SPEC R9 refresh flow steps 3-5: validate against main and re-apply changes.
-	for _, entry := range state.ChangeLog.Entries() {
-		switch entry.Kind {
-		case gitstore.ChangeAddEntity:
-			_, err := s.store.CreateEntity(
-				ctx, entry.Type, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, req.TransactionId,
-			)
-			if err != nil {
-				if errors.Is(err, store.ErrEntityAlreadyExists) || errors.Is(err, store.ErrEmbeddingDimension) {
-					return nil, errRefreshConflict(req.TransactionId)
-				}
-				return nil, mapStoreError(err)
-			}
-		case gitstore.ChangeModEntity:
-			_, err := s.store.UpdateEntity(ctx, entry.ID, entry.Entity.Properties, entry.Entity.Embedding, req.TransactionId)
-			if err != nil {
-				if errors.Is(err, store.ErrEntityNotFound) || errors.Is(err, store.ErrEmbeddingDimension) {
-					return nil, errRefreshConflict(req.TransactionId)
-				}
-				return nil, mapStoreError(err)
-			}
-		case gitstore.ChangeDelEntity:
-			_, err := s.store.DeleteEntity(ctx, entry.ID, req.TransactionId)
-			if err != nil && !errors.Is(err, store.ErrEntityNotFound) {
-				return nil, mapStoreError(err)
-			}
-		case gitstore.ChangeAddEdge:
-			_, err := s.store.CreateEdge(
-				ctx, entry.Type, entry.Edge.FromEntityID, entry.Edge.ToEntityID, entry.Edge.Properties, req.TransactionId,
-			)
-			if err != nil {
-				if errors.Is(err, store.ErrSourceOrTargetNotFound) || errors.Is(err, store.ErrEmbeddingDimension) {
-					return nil, errRefreshConflict(req.TransactionId)
-				}
-				return nil, mapStoreError(err)
-			}
-		case gitstore.ChangeDelEdge:
-			_, err := s.store.DeleteEdge(ctx, entry.ID, req.TransactionId)
-			if err != nil && !errors.Is(err, store.ErrEdgeNotFound) {
-				return nil, mapStoreError(err)
-			}
-		}
-	}
-	// Update MainHeadAtLastSync only after successful re-application
-	// to prevent CommitTransaction from observing a sync point that
-	// was never validated.
-	s.txManager.mu.Lock()
-	state.MainHeadAtLastSync = mainHash
-	s.txManager.mu.Unlock()
 	return &flowv1.RefreshTransactionResponse{}, nil
 }
 
@@ -1344,10 +1909,11 @@ func (s *CartographerServer) GetTransactionDiff(
 	if err := validateTxID(req.TransactionId); err != nil {
 		return nil, err
 	}
-	if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+	state, unlockTx, err := s.txManager.LockActive(req.TransactionId)
+	if err != nil {
 		return nil, err
 	}
-	state, _ := s.txManager.Lookup(req.TransactionId)
+	defer unlockTx()
 	resp := &flowv1.GetTransactionDiffResponse{}
 	for _, entry := range state.ChangeLog.Entries() {
 		de := &flowv1.DiffEntry{
@@ -1389,9 +1955,11 @@ func (s *CartographerServer) ExtendTimeout(
 	if err := validateTxID(req.TransactionId); err != nil {
 		return nil, err
 	}
-	if err := s.txManager.ValidateActive(req.TransactionId); err != nil {
+	_, unlockTx, err := s.txManager.LockActive(req.TransactionId)
+	if err != nil {
 		return nil, err
 	}
+	defer unlockTx()
 	duration := req.Duration.AsDuration()
 	if err := s.txManager.ExtendTimeout(req.TransactionId, duration); err != nil {
 		return nil, err
@@ -1419,6 +1987,8 @@ func (s *CartographerServer) ApplySchema(
 func (s *CartographerServer) WipeGraph(
 	ctx context.Context, req *flowv1.WipeGraphRequest,
 ) (*flowv1.WipeGraphResponse, error) {
+	s.txAdmission.Lock()
+	defer s.txAdmission.Unlock()
 	var wipeErr error
 	_ = s.withGitLock(func() error {
 		if s.txManager.HasActive() {
@@ -1438,13 +2008,27 @@ func (s *CartographerServer) WipeGraph(
 			return nil
 		}
 		_ = s.gitstore.CleanUntracked(ctx)
+		// Recreate tracked root directories so an entity-only graph is valid
+		// and absence does not masquerade as corruption.
+		if err := s.gitstore.InitDir(ctx, "entities"); err != nil {
+			wipeErr = fmt.Errorf("recreate entities dir: %w", err)
+			return nil
+		}
+		if err := s.gitstore.InitDir(ctx, "edges"); err != nil {
+			wipeErr = fmt.Errorf("recreate edges dir: %w", err)
+			return nil
+		}
+		if err := s.gitstore.Commit(ctx, "recreate roots"); err != nil {
+			wipeErr = err
+			return nil
+		}
 		return nil
 	})
 	if wipeErr != nil {
 		return nil, wipeErr
 	}
-	s.writeLock.Lock()
-	if err := s.store.WipeAll(ctx); err != nil {
+	s.lockMainStore()
+	if err := s.store.WipeSchema(ctx); err != nil {
 		s.writeLock.Unlock()
 		return nil, errWipeGraphMidWipe(err.Error())
 	}
@@ -1462,7 +2046,7 @@ func (s *CartographerServer) HealthCheck(
 		}, nil
 	}
 	return &flowv1.HealthCheckResponse{
-		LadybugOk: health.LadybugOK, SchemaApplied: s.schemaApplied.Load(), PvcWritable: health.PVCWritable,
+		LadybugOk: health.LadybugOK, SchemaApplied: health.SchemaApplied, PvcWritable: health.PVCWritable,
 	}, nil
 }
 
@@ -1479,29 +2063,32 @@ func (s *CartographerServer) PullFromRemote(
 	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
 		return nil, err
 	}
+	var hydrationErr error
 	if err := s.withGitLock(func() error {
 		empty, err := s.gitstore.IsEmpty(ctx)
 		if err != nil {
 			return err
 		}
 		if empty {
-			return s.gitstore.CloneSingleBranch(ctx, s.remoteURL, "main")
+			if err := s.gitstore.CloneSingleBranch(ctx, s.remoteURL, "main"); err != nil {
+				return err
+			}
+		} else if err := s.gitstore.PullAndFastForward(ctx); err != nil {
+			return err
 		}
-		return s.gitstore.PullAndFastForward(ctx)
+		if s.ladybugPath != "" {
+			s.lockMainStore()
+			hydrationErr = s.store.RehydrateMainFromFiles(ctx,
+				filepath.Join(s.ladybugPath, "graph-repo/entities"),
+				filepath.Join(s.ladybugPath, "graph-repo/edges"))
+			s.writeLock.Unlock()
+		}
+		return nil
 	}); err != nil {
 		return nil, mapGitError(err)
 	}
-	s.writeLock.Lock()
-	defer s.writeLock.Unlock()
-	if err := s.store.WipeAll(ctx); err != nil {
-		return nil, errPullFromRemoteRehydrationFailed(err.Error())
-	}
-	if s.ladybugPath != "" {
-		if err := s.store.RehydrateMainFromFiles(ctx,
-			filepath.Join(s.ladybugPath, "graph-repo/entities"),
-			filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
-			return nil, errPullFromRemoteRehydrationFailed(err.Error())
-		}
+	if hydrationErr != nil {
+		return nil, errPullFromRemoteRehydrationFailed(hydrationErr.Error())
 	}
 	return &flowv1.PullFromRemoteResponse{}, nil
 }

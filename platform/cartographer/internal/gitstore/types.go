@@ -138,6 +138,7 @@ type ChangeLog struct {
 	DeletedEdges     map[string]*DeletionInfo // edgeID -> deletion info (type + suspected flag)
 	mu               sync.Mutex
 	count            int // total tracked changes
+	cap              int
 }
 
 // Sentinel errors used across the gitstore package.

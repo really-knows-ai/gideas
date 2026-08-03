@@ -3,6 +3,7 @@ package ladybug
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -132,12 +133,16 @@ func quoteID(s string) string {
 // ---------------------------------------------------------------------------
 
 // ApplySchema validates the schema, translates it to LadybugDB DDL, and
-// applies it to the database.
+// applies it to the database. Additive changes (new types, new properties on
+// existing types, rule modifications) are applied via ALTER DDL. Destructive
+// changes (removed types, removed/changed properties, vector disable, type
+// incompatibility) return ErrDestructiveSchemaChange — the caller must
+// WipeGraph first.
 func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if db.closed {
+	if db.closed || db.failed {
 		return store.ErrDatabaseNotReady
 	}
 
@@ -146,82 +151,199 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 		return err
 	}
 
-	// Collect FROM/TO pairs for each edge type from entity-type rules.
-	edgePairs := collectFromToPairs(s)
-	db.edgePairs = edgePairs
-
-	// Apply entity types.
-	for _, et := range s.EntityTypes {
-		if err := db.createNodeTable(et); err != nil {
-			return fmt.Errorf("create node table %q: %w", et.Name, err)
-		}
-	}
-
-	// Build rule index from entity types.
-	db.ruleIndex = make(map[string][]*flowv1.ConnectionRule)
-	vectorEnabled := make(map[string]bool)             // track which types have vector index enabled
-	entityRequired := make(map[string]map[string]bool) // entityType -> propName -> required
-	edgeRequired := make(map[string]map[string]bool)   // edgeType -> propName -> required
-	for _, et := range s.EntityTypes {
-		db.ruleIndex[et.Name] = et.Rules
-		if et.EnableVectorIndex {
-			vectorEnabled[et.Name] = true
-		}
-		for _, p := range et.Properties {
-			if p.Required {
-				if entityRequired[et.Name] == nil {
-					entityRequired[et.Name] = make(map[string]bool)
-				}
-				entityRequired[et.Name][p.Name] = true
-			}
-		}
-	}
-	for _, et := range s.EdgeTypes {
-		for _, p := range et.Properties {
-			if p.Required {
-				if edgeRequired[et.Name] == nil {
-					edgeRequired[et.Name] = make(map[string]bool)
-				}
-				edgeRequired[et.Name][p.Name] = true
-			}
-		}
-	}
-
-	// Apply edge types.
-	for _, et := range s.EdgeTypes {
-		if err := db.createRelTable(et, edgePairs[et.Name]); err != nil {
-			return fmt.Errorf("create rel table %q: %w", et.Name, err)
-		}
-	}
-
-	// Rebuild cache (the cache gets EnableVectorIndex from the catalog, which
-	// is false since we defer index creation to first entity bootstrap).
-	// Patch it with the proto schema's EnableVectorIndex and Required values.
-	if err := db.rebuildSchemaCacheLocked(); err != nil {
+	// Diff against existing catalog to detect destructive changes.
+	if err := db.diffSchemaAgainstCatalog(s); err != nil {
 		return err
 	}
-	for name := range vectorEnabled {
-		if def, ok := db.entityTypeDefs[name]; ok {
-			def.EnableVectorIndex = true
+
+	// Collect FROM/TO pairs for each edge type from entity-type rules.
+	edgePairs := collectFromToPairs(s)
+	metadata := metadataFromSchema(s)
+	var stagedMetadata string
+	if db.path != "" {
+		var err error
+		metadata, err = captureVectorState(db.conn, metadata)
+		if err != nil {
+			return fmt.Errorf("capture schema vector state: %w", err)
 		}
+		stagedMetadata, err = db.stageMetadata(db.mainMetadataPath(), metadata)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = os.Remove(stagedMetadata) }()
 	}
-	// Patch Required flags from the proto schema (not captured by catalog).
-	for typeName, reqMap := range entityRequired {
-		if def, ok := db.entityTypeDefs[typeName]; ok {
-			for i := range def.Properties {
-				if reqMap[def.Properties[i].Name] {
-					def.Properties[i].Required = true
-				}
+
+	// Apply entity types — new tables or additive ALTER.
+	for _, et := range s.EntityTypes {
+		if existing, exists := db.entityTypeDefs[et.Name]; exists {
+			if err := db.alterNodeTable(et, existing); err != nil {
+				db.failed = true
+				return fmt.Errorf("alter node table %q: %w", et.Name, err)
+			}
+		} else {
+			if err := db.createNodeTable(et); err != nil {
+				db.failed = true
+				return fmt.Errorf("create node table %q: %w", et.Name, err)
 			}
 		}
 	}
-	for typeName, reqMap := range edgeRequired {
-		if def, ok := db.edgeTypeDefs[typeName]; ok {
-			for i := range def.Properties {
-				if reqMap[def.Properties[i].Name] {
-					def.Properties[i].Required = true
-				}
+
+	// Apply edge types — new tables or additive ALTER.
+	for _, et := range s.EdgeTypes {
+		if existing, exists := db.edgeTypeDefs[et.Name]; exists {
+			if err := db.alterRelTable(et, existing, edgePairs[et.Name]); err != nil {
+				db.failed = true
+				return fmt.Errorf("alter rel table %q: %w", et.Name, err)
 			}
+		} else {
+			if err := db.createRelTable(et, edgePairs[et.Name]); err != nil {
+				db.failed = true
+				return fmt.Errorf("create rel table %q: %w", et.Name, err)
+			}
+		}
+	}
+
+	if db.path != "" {
+		if err := db.publishMetadata(stagedMetadata, db.mainMetadataPath()); err != nil {
+			db.failed = true
+			return fmt.Errorf("publish schema metadata: %w", err)
+		}
+	}
+	db.entityTypeDefs, db.edgeTypeDefs, db.ruleIndex, db.edgePairs = applySchemaMetadata(metadata)
+	return nil
+}
+
+// diffSchemaAgainstCatalog checks the requested schema against the current
+// catalog for destructive changes. Returns ErrDestructiveSchemaChange if any
+// destructive change is detected.
+func (db *ladybugDB) diffSchemaAgainstCatalog(s *flowv1.Schema) error {
+	// Check for removed entity types.
+	requestedEntities := make(map[string]*flowv1.EntityType, len(s.EntityTypes))
+	for _, et := range s.EntityTypes {
+		requestedEntities[et.Name] = et
+	}
+	for name := range db.entityTypeDefs {
+		if _, ok := requestedEntities[name]; !ok {
+			return fmt.Errorf("%w: entity type %q would be removed", store.ErrDestructiveSchemaChange, name)
+		}
+	}
+
+	// Check for removed edge types.
+	requestedEdges := make(map[string]*flowv1.EdgeType, len(s.EdgeTypes))
+	for _, et := range s.EdgeTypes {
+		requestedEdges[et.Name] = et
+	}
+	for name := range db.edgeTypeDefs {
+		if _, ok := requestedEdges[name]; !ok {
+			return fmt.Errorf("%w: edge type %q would be removed", store.ErrDestructiveSchemaChange, name)
+		}
+	}
+
+	// Check entity type property changes.
+	for _, et := range s.EntityTypes {
+		existing, exists := db.entityTypeDefs[et.Name]
+		if !exists {
+			continue
+		}
+		existingProps := make(map[string]store.PropertyDef, len(existing.Properties))
+		for _, p := range existing.Properties {
+			existingProps[p.Name] = p
+		}
+		requestedProps := make(map[string]*flowv1.Property, len(et.Properties))
+		for _, p := range et.Properties {
+			requestedProps[p.Name] = p
+		}
+		// Check for removed or changed properties.
+		for _, existingProp := range existing.Properties {
+			requested, ok := requestedProps[existingProp.Name]
+			if !ok {
+				return fmt.Errorf("%w: entity type %q property %q would be removed",
+					store.ErrDestructiveSchemaChange, et.Name, existingProp.Name)
+			}
+			// Check type compatibility (compare mapped DB types).
+			if ladybugType(requested.Type) != ladybugType(existingProp.Type) {
+				return fmt.Errorf("%w: entity type %q property %q type change from %q to %q",
+					store.ErrDestructiveSchemaChange, et.Name, existingProp.Name, existingProp.Type, ladybugType(requested.Type))
+			}
+		}
+		// Check vector index disable.
+		if existing.EnableVectorIndex && !et.EnableVectorIndex {
+			return fmt.Errorf("%w: entity type %q vector index would be disabled",
+				store.ErrDestructiveSchemaChange, et.Name)
+		}
+	}
+
+	// Check edge type property changes.
+	for _, et := range s.EdgeTypes {
+		existing, exists := db.edgeTypeDefs[et.Name]
+		if !exists {
+			continue
+		}
+		existingProps := make(map[string]store.PropertyDef, len(existing.Properties))
+		for _, p := range existing.Properties {
+			existingProps[p.Name] = p
+		}
+		requestedProps := make(map[string]*flowv1.Property, len(et.Properties))
+		for _, p := range et.Properties {
+			requestedProps[p.Name] = p
+		}
+		for _, existingProp := range existing.Properties {
+			requested, ok := requestedProps[existingProp.Name]
+			if !ok {
+				return fmt.Errorf("%w: edge type %q property %q would be removed",
+					store.ErrDestructiveSchemaChange, et.Name, existingProp.Name)
+			}
+			if ladybugType(requested.Type) != ladybugType(existingProp.Type) {
+				return fmt.Errorf("%w: edge type %q property %q type change from %q to %q",
+					store.ErrDestructiveSchemaChange, et.Name, existingProp.Name, existingProp.Type, ladybugType(requested.Type))
+			}
+		}
+	}
+
+	return nil
+}
+
+// alterNodeTable applies additive ALTER DDL for new properties on an existing
+// node table. It does not handle destructive changes (those are rejected by
+// diffSchemaAgainstCatalog).
+func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.EntityTypeDef) error {
+	existingProps := make(map[string]bool, len(existing.Properties))
+	for _, p := range existing.Properties {
+		existingProps[p.Name] = true
+	}
+	for _, p := range et.Properties {
+		if existingProps[p.Name] {
+			continue
+		}
+		ddl := fmt.Sprintf("ALTER TABLE %s ADD %s %s;", quoteID(et.Name), quoteID(p.Name), ladybugType(p.Type))
+		if _, err := db.conn.Query(ddl); err != nil {
+			return fmt.Errorf("add column %q: %w", p.Name, err)
+		}
+		// Rebuild FTS index if this is a string property.
+		if ladybugType(p.Type) == colTypeString {
+			ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', ['%s'], stemmer := 'porter');",
+				et.Name, et.Name, p.Name)
+			_, _ = db.conn.Query(ftsDDL) // non-fatal
+		}
+	}
+	return nil
+}
+
+// alterRelTable applies additive ALTER DDL for new properties on an existing
+// rel table. ponytail: FROM/TO pair changes are not supported via ALTER;
+// changing endpoints requires a destructive schema change (WipeGraph).
+func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType, existing *store.EdgeTypeDef, _ []fromToPair) error {
+	existingProps := make(map[string]bool, len(existing.Properties))
+	for _, p := range existing.Properties {
+		existingProps[p.Name] = true
+	}
+	for _, p := range et.Properties {
+		if existingProps[p.Name] {
+			continue
+		}
+		ddl := fmt.Sprintf("ALTER TABLE %s ADD %s %s;", quoteID(et.Name), quoteID(p.Name), ladybugType(p.Type))
+		if _, err := db.conn.Query(ddl); err != nil {
+			return fmt.Errorf("add column %q: %w", p.Name, err)
 		}
 	}
 	return nil
@@ -266,13 +388,13 @@ func (db *ladybugDB) rebuildSchemaCacheLocked() error {
 		}
 
 		switch strings.ToUpper(tableType) {
-		case "NODE":
+		case tableTypeNode:
 			newEntity[tableName] = &store.EntityTypeDef{
 				Name:              tableName,
 				Properties:        props,
 				EnableVectorIndex: hasVectorIdx[tableName],
 			}
-		case "REL":
+		case tableTypeRel:
 			newEdge[tableName] = &store.EdgeTypeDef{
 				Name:       tableName,
 				Properties: props,
@@ -389,7 +511,13 @@ func collectFromToPairs(s *flowv1.Schema) map[string][]fromToPair {
 	return pairs
 }
 
-const colTypeString = "STRING"
+const (
+	colTypeString    = "STRING"
+	colTypeInt64     = "INT64"
+	untypedTableName = "_untyped"
+	tableTypeNode    = "NODE"
+	tableTypeRel     = "REL"
+)
 
 // ladybugType maps the proto property type string to a LadybugDB column type.
 // ponytail: Currently all user properties are "string"; if richer types are
@@ -398,8 +526,8 @@ func ladybugType(protoType string) string {
 	switch strings.ToUpper(protoType) {
 	case colTypeString, "":
 		return colTypeString
-	case "INT64":
-		return "INT64"
+	case colTypeInt64:
+		return colTypeInt64
 	case "FLOAT", "DOUBLE":
 		return "DOUBLE"
 	case "BOOL":
@@ -416,6 +544,9 @@ func ladybugType(protoType string) string {
 func (db *ladybugDB) EntityTypeNames() []string {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if db.failed {
+		return nil
+	}
 
 	names := make([]string, 0, len(db.entityTypeDefs))
 	for name := range db.entityTypeDefs {
@@ -428,6 +559,9 @@ func (db *ladybugDB) EntityTypeNames() []string {
 func (db *ladybugDB) EdgeTypeNames() []string {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if db.failed {
+		return nil
+	}
 
 	names := make([]string, 0, len(db.edgeTypeDefs))
 	for name := range db.edgeTypeDefs {
@@ -442,7 +576,7 @@ func (db *ladybugDB) EntityType(name string) (*store.EntityTypeDef, bool) {
 	defer db.mu.Unlock()
 
 	def, ok := db.entityTypeDefs[name]
-	if !ok {
+	if db.failed || !ok {
 		return nil, false
 	}
 	return def, true
@@ -453,7 +587,7 @@ func (db *ladybugDB) EdgeType(name string) (*store.EdgeTypeDef, bool) {
 	defer db.mu.Unlock()
 
 	def, ok := db.edgeTypeDefs[name]
-	if !ok {
+	if db.failed || !ok {
 		return nil, false
 	}
 	return def, true
@@ -476,11 +610,47 @@ func (db *ladybugDB) Health(_ context.Context) (*store.HealthResult, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result := &store.HealthResult{
-		LadybugOK:     !db.closed,
-		SchemaApplied: len(db.entityTypeDefs) > 0 || len(db.edgeTypeDefs) > 0,
-		PVCWritable:   true, // ponytail: PVC writable is not checked at this layer
+	// Bounded database probe: run a simple query to verify the connection
+	// is alive and usable, not just that the in-memory flags say so.
+	ladybugOK := !db.closed && !db.failed
+	if ladybugOK && db.conn != nil {
+		if _, err := db.conn.Query("RETURN 1;"); err != nil {
+			ladybugOK = false
+		}
 	}
 
-	return result, nil
+	// PVC writability probe: atomic temp-file write/sync/remove in the
+	// configured data directory. For in-memory databases (path == "") there
+	// is no PVC to check, so we report true.
+	pvcWritable := true
+	if db.path != "" {
+		pvcWritable = probePVCWritable(db.path)
+	}
+
+	return &store.HealthResult{
+		LadybugOK:     ladybugOK,
+		SchemaApplied: len(db.entityTypeDefs) > 0 || len(db.edgeTypeDefs) > 0,
+		PVCWritable:   pvcWritable,
+	}, nil
+}
+
+// probePVCWritable tests whether the directory at path is writable by
+// creating a temporary file, writing to it, syncing, and removing it.
+func probePVCWritable(path string) bool {
+	f, err := os.CreateTemp(path, "health-*.tmp")
+	if err != nil {
+		return false
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+
+	if _, err := f.Write([]byte("health")); err != nil {
+		return false
+	}
+	if err := f.Sync(); err != nil {
+		return false
+	}
+	if err := f.Close(); err != nil {
+		return false
+	}
+	return true
 }

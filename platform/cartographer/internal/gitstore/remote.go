@@ -16,7 +16,9 @@ import (
 // SetRemote configures the remote URL and auth provider for push/pull/fetch/clone.
 // Validates the URL scheme (must be https:// or ssh://) and returns
 // ErrUnsupportedURLScheme otherwise. authFn is called on each remote operation
-// so credentials can be refreshed on every call.
+// so credentials can be refreshed on every call. A configured authFn returning
+// nil credentials explicitly selects anonymous access for fetch and pull;
+// a nil authFn means auth was not configured.
 func (g *gitStore) SetRemote(ctx context.Context, url string, authFn func() (transport.AuthMethod, error)) error {
 	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "ssh://") {
 		return ErrUnsupportedURLScheme
@@ -33,8 +35,8 @@ func (g *gitStore) SetRemote(ctx context.Context, url string, authFn func() (tra
 
 // FetchRemote fetches the main branch from the remote origin.
 // Returns ErrNoRemote if no remote is configured, ErrAuthConfigMissing
-// if no auth provider is configured, and typed errors for auth and
-// network failures.
+// if no auth provider is configured, and typed errors for auth and network
+// failures. A configured provider may return nil for an anonymous public remote.
 func (g *gitStore) FetchRemote(ctx context.Context) error {
 	if g.remoteURL == "" {
 		return ErrNoRemote
@@ -47,7 +49,7 @@ func (g *gitStore) FetchRemote(ctx context.Context) error {
 		return err
 	}
 
-	auth, err := g.resolveAuth()
+	auth, err := g.resolveAuth(true)
 	if err != nil {
 		return err
 	}
@@ -93,7 +95,7 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 		return err
 	}
 
-	auth, err := g.resolveAuth()
+	auth, err := g.resolveAuth(false)
 	if err != nil {
 		return err
 	}
@@ -129,8 +131,9 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 
 // PullAndFastForward pulls from the remote origin and performs a
 // fast-forward merge. Returns ErrNoRemote if no remote is configured,
-// ErrAuthConfigMissing if no auth provider is configured, and typed
-// errors for auth, network, and divergence failures.
+// ErrAuthConfigMissing if no auth provider is configured, and typed errors for
+// auth, network, and divergence failures. A configured provider may return nil
+// for an anonymous public remote.
 func (g *gitStore) PullAndFastForward(ctx context.Context) error {
 	if g.remoteURL == "" {
 		return ErrNoRemote
@@ -143,7 +146,7 @@ func (g *gitStore) PullAndFastForward(ctx context.Context) error {
 		return err
 	}
 
-	auth, err := g.resolveAuth()
+	auth, err := g.resolveAuth(true)
 	if err != nil {
 		return err
 	}
@@ -340,13 +343,17 @@ func (g *gitStore) ensureRemoteExists() error {
 	return nil
 }
 
-// resolveAuth calls the auth provider and returns typed errors.
-func (g *gitStore) resolveAuth() (transport.AuthMethod, error) {
+// resolveAuth calls the configured auth provider and returns typed errors.
+// allowAnonymous only permits an explicit nil result, not a missing provider.
+func (g *gitStore) resolveAuth(allowAnonymous bool) (transport.AuthMethod, error) {
 	auth, err := g.authFn()
 	if err != nil {
+		if errors.Is(err, ErrAuthConfigMissing) {
+			return nil, err
+		}
 		return nil, ErrRemoteAuthResolutionFailed
 	}
-	if auth == nil {
+	if auth == nil && !allowAnonymous {
 		return nil, ErrAuthConfigMissing
 	}
 	return auth, nil
