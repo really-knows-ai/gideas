@@ -269,7 +269,7 @@ func tablePropertiesOnConn(conn *lbug.Connection, table string) ([]store.Propert
 		return nil, err
 	}
 	defer result.Close()
-	skip := map[string]bool{"id": true, "_properties": true, "embedding": true, "from": true, "to": true, "type": true}
+	skip := map[string]bool{"id": true, "embedding": true, "from": true, "to": true, "type": true}
 	properties := []store.PropertyDef{}
 	for result.HasNext() {
 		tuple, err := result.Next()
@@ -587,7 +587,6 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 			stringProps = append(stringProps, p.Name)
 		}
 	}
-	cols = append(cols, "_properties STRING")
 	// ponytail: embedding column and vector index are bootstrapped lazily
 	// on first CreateEntity with an embedding; no FLOAT[n] column or index
 	// is created at table creation time.
@@ -614,7 +613,7 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 		}
 	} else {
 		// Need at least one FROM/TO pair; create a placeholder _untyped node table.
-		_, _ = conn.Query("CREATE NODE TABLE IF NOT EXISTS _untyped (id STRING PRIMARY KEY, _properties STRING);")
+		_, _ = conn.Query("CREATE NODE TABLE IF NOT EXISTS _untyped (id STRING PRIMARY KEY);")
 		clauses = append(clauses, "FROM _untyped TO _untyped")
 	}
 
@@ -624,7 +623,6 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 	for _, p := range properties {
 		cols = append(cols, quoteID(p.Name)+" "+ladybugType(p.Type))
 	}
-	cols = append(cols, "_properties STRING")
 	ddl := fmt.Sprintf("CREATE REL TABLE IF NOT EXISTS %s (%s);", quoteID(name), strings.Join(cols, ", "))
 	_, err := conn.Query(ddl)
 	return err

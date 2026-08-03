@@ -25,6 +25,7 @@ type Entity struct {
 	Type       string
 	Properties map[string]string
 	Embedding  []float32
+	Suspected  bool
 }
 
 // Edge represents a directed edge between two entities.
@@ -34,6 +35,7 @@ type Edge struct {
 	FromEntityID string
 	ToEntityID   string
 	Properties   map[string]string
+	Suspected    bool
 }
 
 // SearchResult is a single result from a vector similarity search.
@@ -52,10 +54,10 @@ type EntityPage struct {
 type TransactionDiff struct {
 	AddedEntities    []Entity
 	ModifiedEntities []Entity
-	DeletedEntities  []string
+	DeletedEntities  []Entity
 	AddedEdges       []Edge
 	ModifiedEdges    []Edge
-	DeletedEdges     []string
+	DeletedEdges     []Edge
 }
 
 // GraphChunk is a segment of serialised graph data yielded by ExportGraph.

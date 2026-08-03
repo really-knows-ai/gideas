@@ -244,7 +244,7 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		"x-flow-capabilities-signature", caps.signature,
 	)
 
-	dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dialCtx, cancel := context.WithTimeout(stream.Context(), 10*time.Second)
 	defer cancel()
 
 	client, err := s.dialer(dialCtx, endpoint)

@@ -23,7 +23,7 @@ func (g *initPullGitStore) CloneSingleBranch(context.Context, string, string) er
 
 func TestTryRemotePullOnInitAnonymous(t *testing.T) {
 	gs := &initPullGitStore{}
-	if err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil); err != nil {
+	if err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil); err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
 	}
 	if gs.cloneCalls != 1 {
@@ -35,7 +35,7 @@ func TestTryRemotePullOnInitConfiguredSecretFailure(t *testing.T) {
 	gs := &initPullGitStore{}
 	secretErr := errors.New("secret unavailable")
 	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
-		func(context.Context, string) (map[string]string, error) { return nil, secretErr })
+		func(context.Context, string) (map[string]string, error) { return nil, secretErr }, nil)
 	if !errors.Is(err, secretErr) {
 		t.Fatalf("tryRemotePullOnInit error = %v, want wrapped secret error", err)
 	}
@@ -49,7 +49,7 @@ func TestTryRemotePullOnInitPrivateRemoteAuthFailureIsNonBlocking(t *testing.T) 
 	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "expired"}, nil
-		})
+		}, nil)
 	if err != nil {
 		t.Fatalf("runtime clone failure blocked startup: %v", err)
 	}

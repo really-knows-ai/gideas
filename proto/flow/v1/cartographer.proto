@@ -10,53 +10,33 @@ import "google/protobuf/duration.proto";
 // and a git-backed versioning system.
 service CartographerService {
   // --- Read Path (Node-Facing) ---
-  // Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when parser fails)
   rpc ExecuteCypher(ExecuteCypherRequest) returns (ExecuteCypherResponse);
-  // Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when type omitted)
   rpc SearchNeighbors(SearchNeighborsRequest) returns (SearchNeighborsResponse);
-  // Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when type omitted)
   rpc FullTextSearch(FullTextSearchRequest) returns (FullTextSearchResponse);
-  // Required capability: READ:graph/entity/<type>
   rpc ListEntities(ListEntitiesRequest) returns (ListEntitiesResponse);
 
   // --- Write Path (Node-Facing) ---
-  // Required capability: WRITE:graph/entity/<type>
   rpc CreateEntity(CreateEntityRequest) returns (CreateEntityResponse);
-  // Required capability: WRITE:graph/entity/<type> (or WRITE:graph/entity/* when type unknown)
   rpc UpdateEntity(UpdateEntityRequest) returns (UpdateEntityResponse);
-  // Required capability: WRITE:graph/entity/<type> (authoritative Cartographer check)
   rpc DeleteEntity(DeleteEntityRequest) returns (DeleteEntityResponse);
-  // Required capability: WRITE:graph/entity/<source-type> (or WRITE:graph/entity/* when type unknown)
   rpc CreateEdge(CreateEdgeRequest) returns (CreateEdgeResponse);
-  // Required capability: WRITE:graph/entity/<source-type> (authoritative Cartographer check)
   rpc DeleteEdge(DeleteEdgeRequest) returns (DeleteEdgeResponse);
 
   // --- Transaction Path (Node-Facing) ---
-  // Required capability: WRITE:graph/tx
   rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse);
-  // Required capability: WRITE:graph/tx
   rpc CommitTransaction(CommitTransactionRequest) returns (CommitTransactionResponse);
-  // Required capability: WRITE:graph/tx
   rpc RollbackTransaction(RollbackTransactionRequest) returns (RollbackTransactionResponse);
-  // Required capability: WRITE:graph/tx
   rpc RefreshTransaction(RefreshTransactionRequest) returns (RefreshTransactionResponse);
-  // Required capability: READ:graph/tx
   rpc GetTransactionDiff(GetTransactionDiffRequest) returns (GetTransactionDiffResponse);
-  // Required capability: WRITE:graph/tx
   rpc ExtendTimeout(ExtendTimeoutRequest) returns (ExtendTimeoutResponse);
 
   // --- Service-Facing (Operator -> Cartographer) ---
-  // No node-facing capability required (Operator calls directly)
   rpc ApplySchema(ApplySchemaRequest) returns (ApplySchemaResponse);
-  // No node-facing capability required (Operator calls directly)
   rpc WipeGraph(WipeGraphRequest) returns (WipeGraphResponse);
-  // No node-facing capability required (health probe)
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 
   // --- Administrative Path (Node-Facing) ---
-  // Required capability: WRITE:graph/entity/*
   rpc PullFromRemote(PullFromRemoteRequest) returns (PullFromRemoteResponse);
-  // Required capability: READ:graph/entity/*
   rpc ExportGraph(ExportGraphRequest) returns (stream ExportGraphResponse);
 }
 

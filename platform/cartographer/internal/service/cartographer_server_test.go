@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"math"
@@ -1290,6 +1291,20 @@ func TestDeleteEntity_NotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteEntity_InvalidUUID(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: "not-a-uuid"})
+	if err == nil {
+		t.Fatal("expected error for invalid UUID, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
 func TestDeleteEntity_Valid(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
@@ -1379,6 +1394,20 @@ func TestDeleteEdge_NotFound(t *testing.T) {
 	}
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound, got %v", status.Code(err))
+	}
+}
+
+func TestDeleteEdge_InvalidUUID(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: "not-a-uuid"})
+	if err == nil {
+		t.Fatal("expected error for invalid UUID, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
 	}
 }
 
@@ -2798,7 +2827,7 @@ func TestExportGraph_GraphML(t *testing.T) {
 	ctx := context.Background()
 
 	applyTestSchema(ctx, t, srv.store)
-	_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
+	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
 
 	stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")}
 	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "graphml"}, stream)
@@ -2810,6 +2839,59 @@ func TestExportGraph_GraphML(t *testing.T) {
 	}
 	if len(stream.data) == 0 {
 		t.Fatal("expected non-empty export data")
+	}
+
+	// Validate XML structure.
+	type graphmlKey struct {
+		ID       string `xml:"id,attr"`
+		For      string `xml:"for,attr"`
+		AttrName string `xml:"attr.name,attr"`
+		AttrType string `xml:"attr.type,attr"`
+	}
+	type graphmlNode struct {
+		ID string `xml:"id,attr"`
+	}
+	type graphmlEdge struct {
+		ID     string `xml:"id,attr"`
+		Source string `xml:"source,attr"`
+		Target string `xml:"target,attr"`
+	}
+	type graphmlGraph struct {
+		ID          string        `xml:"id,attr"`
+		EdgeDefault string        `xml:"edgedefault,attr"`
+		Nodes       []graphmlNode `xml:"node"`
+		Edges       []graphmlEdge `xml:"edge"`
+	}
+	type graphmlRoot struct {
+		XMLName struct{}     `xml:"graphml"`
+		Keys    []graphmlKey `xml:"key"`
+		Graph   graphmlGraph `xml:"graph"`
+	}
+
+	var root graphmlRoot
+	if err := xml.Unmarshal(stream.data, &root); err != nil {
+		t.Fatalf("invalid GraphML XML: %v", err)
+	}
+	if root.Graph.ID != "G" {
+		t.Errorf("expected graph id G, got %q", root.Graph.ID)
+	}
+	if root.Graph.EdgeDefault != "directed" {
+		t.Errorf("expected edgedefault directed, got %q", root.Graph.EdgeDefault)
+	}
+	if len(root.Graph.Nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(root.Graph.Nodes))
+	}
+	if root.Graph.Nodes[0].ID != ent.Id {
+		t.Errorf("expected node id %q, got %q", ent.Id, root.Graph.Nodes[0].ID)
+	}
+	foundNameKey := false
+	for _, k := range root.Keys {
+		if k.ID == "name" && k.For == "node" && k.AttrName == "name" && k.AttrType == "string" {
+			foundNameKey = true
+		}
+	}
+	if !foundNameKey {
+		t.Error("expected <key> declaration for property 'name' on nodes")
 	}
 }
 

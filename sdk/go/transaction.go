@@ -419,7 +419,7 @@ func (tx *Transaction) Diff() (*TransactionDiff, error) {
 		diff.ModifiedEntities = append(diff.ModifiedEntities, diffEntryToEntity(e))
 	}
 	for _, e := range resp.GetDeletedEntities() {
-		diff.DeletedEntities = append(diff.DeletedEntities, e.GetId())
+		diff.DeletedEntities = append(diff.DeletedEntities, diffEntryToEntity(e))
 	}
 	for _, e := range resp.GetAddedEdges() {
 		diff.AddedEdges = append(diff.AddedEdges, diffEntryToEdge(e))
@@ -428,7 +428,7 @@ func (tx *Transaction) Diff() (*TransactionDiff, error) {
 		diff.ModifiedEdges = append(diff.ModifiedEdges, diffEntryToEdge(e))
 	}
 	for _, e := range resp.GetDeletedEdges() {
-		diff.DeletedEdges = append(diff.DeletedEdges, e.GetId())
+		diff.DeletedEdges = append(diff.DeletedEdges, diffEntryToEdge(e))
 	}
 
 	return diff, nil

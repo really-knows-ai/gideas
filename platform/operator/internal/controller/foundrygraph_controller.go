@@ -125,12 +125,6 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if oldSpec != nil {
 		if !specSemanticallyEqual(oldSpec, &fg.Spec) {
 			diffResult = diffSchema(oldSpec, &fg.Spec)
-			if diffResult == SchemaDiffNone {
-				// Non-schema field changed; set diffResult to indicate no schema change.
-				// We use a special internal detection: since diffSchema returned None but
-				// semantic equality says they differ, it's a non-schema change.
-				diffResult = SchemaDiffNone
-			}
 		}
 	}
 
@@ -176,16 +170,9 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("readiness: %w", err)
 	}
 
-	// Step 10: ApplySchema on new pod if spec changed.
-	if diffResult != SchemaDiffNone {
-		if err := r.applySchema(ctx, &fg); err != nil {
-			return r.setFailedCondition(ctx, &fg, err)
-		}
-	} else if oldSpec == nil {
-		// First reconcile — always apply schema.
-		if err := r.applySchema(ctx, &fg); err != nil {
-			return r.setFailedCondition(ctx, &fg, err)
-		}
+	// Step 10: ApplySchema on new pod. Idempotent — no-op if schema already applied.
+	if err := r.applySchema(ctx, &fg); err != nil {
+		return r.setFailedCondition(ctx, &fg, err)
 	}
 
 	// Step 11: Update status.

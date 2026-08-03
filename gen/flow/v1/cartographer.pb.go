@@ -2026,9 +2026,15 @@ type EntityType struct {
 	Name              string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Properties        []*Property            `protobuf:"bytes,2,rep,name=properties,proto3" json:"properties,omitempty"`
 	EnableVectorIndex bool                   `protobuf:"varint,3,opt,name=enable_vector_index,json=enableVectorIndex,proto3" json:"enable_vector_index,omitempty"`
-	Rules             []*ConnectionRule      `protobuf:"bytes,4,rep,name=rules,proto3" json:"rules,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Connection rules governing edges from this entity type.
+	// Multiple rules are OR-ed — if *any* rule permits the connection, the edge
+	// is allowed. Within a single rule, see ConnectionRule documentation for
+	// the AND semantics between can_connect_to and using.
+	// An empty or omitted rules list means this entity type permits no edges
+	// (every CreateEdge from this source is rejected with PERMISSION_DENIED).
+	Rules         []*ConnectionRule `protobuf:"bytes,4,rep,name=rules,proto3" json:"rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EntityType) Reset() {
@@ -2201,10 +2207,26 @@ func (x *Property) GetRequired() bool {
 	return false
 }
 
+// ConnectionRule defines a single rule entry in an entity type's connection policy.
+// Rule composition semantics (from FoundryGraph CRD spec R1):
+//   - Multiple entries in the parent `rules` list are OR-ed: if *any* rule permits
+//     the connection, the edge is allowed.
+//   - Within a single rule, BOTH `can_connect_to` AND `using` must be satisfied
+//     (AND semantics between the two lists).
+//   - Within each list, matching is by membership (implicit OR) — the target matches
+//     if it equals any entry in the list.
+//   - An empty `can_connect_to` or `using` list makes this rule permanently
+//     unsatisfiable (rejected at ApplySchema time).
+//   - Only the source entity type's rules are evaluated; the target's rules play
+//     no role in edge authorization.
 type ConnectionRule struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CanConnectTo  []string               `protobuf:"bytes,1,rep,name=can_connect_to,json=canConnectTo,proto3" json:"can_connect_to,omitempty"`
-	Using         []string               `protobuf:"bytes,2,rep,name=using,proto3" json:"using,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Target entity types that the source entity type may connect to.
+	// Membership check (implicit OR): the edge's target type must match any entry.
+	CanConnectTo []string `protobuf:"bytes,1,rep,name=can_connect_to,json=canConnectTo,proto3" json:"can_connect_to,omitempty"`
+	// Edge types that may be used for the connection.
+	// Membership check (implicit OR): the edge's type must match any entry.
+	Using         []string `protobuf:"bytes,2,rep,name=using,proto3" json:"using,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

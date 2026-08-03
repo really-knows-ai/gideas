@@ -11,6 +11,7 @@ import (
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const metadataEntityTypeKey = "x-flow-entity-type"
@@ -570,6 +571,46 @@ func TestExportGraph_NilSession(t *testing.T) {
 	}
 }
 
+func TestExportGraph_Success(t *testing.T) {
+	mock := &mockCartographerClient{
+		exportGraph: func(ctx context.Context, req *flowv1.ExportGraphRequest,
+		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
+			if req.GetFormat() != "json" {
+				t.Errorf("expected format json, got %q", req.GetFormat())
+			}
+			return &mockStream{
+				chunks: []*flowv1.ExportGraphResponse{
+					{Chunk: []byte(`{"nodes":`)},
+					{Chunk: []byte(`[{"id":"1"}]`)},
+					{Chunk: []byte(`}`)},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	stream, err := g.ExportGraph("json")
+	if err != nil {
+		t.Fatalf("ExportGraph returned error: %v", err)
+	}
+	defer stream.Stop()
+
+	var got []byte
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Recv returned error: %v", err)
+		}
+		got = append(got, chunk.Data...)
+	}
+	expected := `{"nodes":[{"id":"1"}]}`
+	if string(got) != expected {
+		t.Errorf("expected %q, got %q", expected, string(got))
+	}
+}
+
 func TestGraphMethodsWithNilSession(t *testing.T) {
 	g := &Graph{}
 	tests := []struct {
@@ -922,5 +963,35 @@ func TestWithTxTimeout(t *testing.T) {
 	opt(cfg)
 	if cfg.timeout != 48*time.Hour {
 		t.Errorf("expected 48h timeout, got %v", cfg.timeout)
+	}
+}
+
+func TestBeginTransaction_WithTxTimeout(t *testing.T) {
+	var captured *durationpb.Duration
+	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			captured = req.GetTimeout()
+			return &flowv1.BeginTransactionResponse{
+				TransactionId:  "11111111-1111-4111-8111-111111111111",
+				AppliedTimeout: durationpb.New(48 * time.Hour),
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	tx, err := g.BeginTransaction(WithTxTimeout(48 * time.Hour))
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	if tx == nil {
+		t.Fatal("expected non-nil transaction")
+	}
+	if captured == nil {
+		t.Fatal("expected timeout to be set on request")
+	}
+	if captured.AsDuration() != 48*time.Hour {
+		t.Errorf("expected timeout 48h, got %v", captured.AsDuration())
+	}
+	if tx.ID() != "11111111-1111-4111-8111-111111111111" {
+		t.Errorf("expected tx ID %q, got %q", "11111111-1111-4111-8111-111111111111", tx.ID())
 	}
 }

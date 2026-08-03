@@ -50,49 +50,29 @@ const (
 // and a git-backed versioning system.
 type CartographerServiceClient interface {
 	// --- Read Path (Node-Facing) ---
-	// Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when parser fails)
 	ExecuteCypher(ctx context.Context, in *ExecuteCypherRequest, opts ...grpc.CallOption) (*ExecuteCypherResponse, error)
-	// Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when type omitted)
 	SearchNeighbors(ctx context.Context, in *SearchNeighborsRequest, opts ...grpc.CallOption) (*SearchNeighborsResponse, error)
-	// Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when type omitted)
 	FullTextSearch(ctx context.Context, in *FullTextSearchRequest, opts ...grpc.CallOption) (*FullTextSearchResponse, error)
-	// Required capability: READ:graph/entity/<type>
 	ListEntities(ctx context.Context, in *ListEntitiesRequest, opts ...grpc.CallOption) (*ListEntitiesResponse, error)
 	// --- Write Path (Node-Facing) ---
-	// Required capability: WRITE:graph/entity/<type>
 	CreateEntity(ctx context.Context, in *CreateEntityRequest, opts ...grpc.CallOption) (*CreateEntityResponse, error)
-	// Required capability: WRITE:graph/entity/<type> (or WRITE:graph/entity/* when type unknown)
 	UpdateEntity(ctx context.Context, in *UpdateEntityRequest, opts ...grpc.CallOption) (*UpdateEntityResponse, error)
-	// Required capability: WRITE:graph/entity/<type> (authoritative Cartographer check)
 	DeleteEntity(ctx context.Context, in *DeleteEntityRequest, opts ...grpc.CallOption) (*DeleteEntityResponse, error)
-	// Required capability: WRITE:graph/entity/<source-type> (or WRITE:graph/entity/* when type unknown)
 	CreateEdge(ctx context.Context, in *CreateEdgeRequest, opts ...grpc.CallOption) (*CreateEdgeResponse, error)
-	// Required capability: WRITE:graph/entity/<source-type> (authoritative Cartographer check)
 	DeleteEdge(ctx context.Context, in *DeleteEdgeRequest, opts ...grpc.CallOption) (*DeleteEdgeResponse, error)
 	// --- Transaction Path (Node-Facing) ---
-	// Required capability: WRITE:graph/tx
 	BeginTransaction(ctx context.Context, in *BeginTransactionRequest, opts ...grpc.CallOption) (*BeginTransactionResponse, error)
-	// Required capability: WRITE:graph/tx
 	CommitTransaction(ctx context.Context, in *CommitTransactionRequest, opts ...grpc.CallOption) (*CommitTransactionResponse, error)
-	// Required capability: WRITE:graph/tx
 	RollbackTransaction(ctx context.Context, in *RollbackTransactionRequest, opts ...grpc.CallOption) (*RollbackTransactionResponse, error)
-	// Required capability: WRITE:graph/tx
 	RefreshTransaction(ctx context.Context, in *RefreshTransactionRequest, opts ...grpc.CallOption) (*RefreshTransactionResponse, error)
-	// Required capability: READ:graph/tx
 	GetTransactionDiff(ctx context.Context, in *GetTransactionDiffRequest, opts ...grpc.CallOption) (*GetTransactionDiffResponse, error)
-	// Required capability: WRITE:graph/tx
 	ExtendTimeout(ctx context.Context, in *ExtendTimeoutRequest, opts ...grpc.CallOption) (*ExtendTimeoutResponse, error)
 	// --- Service-Facing (Operator -> Cartographer) ---
-	// No node-facing capability required (Operator calls directly)
 	ApplySchema(ctx context.Context, in *ApplySchemaRequest, opts ...grpc.CallOption) (*ApplySchemaResponse, error)
-	// No node-facing capability required (Operator calls directly)
 	WipeGraph(ctx context.Context, in *WipeGraphRequest, opts ...grpc.CallOption) (*WipeGraphResponse, error)
-	// No node-facing capability required (health probe)
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 	// --- Administrative Path (Node-Facing) ---
-	// Required capability: WRITE:graph/entity/*
 	PullFromRemote(ctx context.Context, in *PullFromRemoteRequest, opts ...grpc.CallOption) (*PullFromRemoteResponse, error)
-	// Required capability: READ:graph/entity/*
 	ExportGraph(ctx context.Context, in *ExportGraphRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportGraphResponse], error)
 }
 
@@ -322,49 +302,29 @@ type CartographerService_ExportGraphClient = grpc.ServerStreamingClient[ExportGr
 // and a git-backed versioning system.
 type CartographerServiceServer interface {
 	// --- Read Path (Node-Facing) ---
-	// Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when parser fails)
 	ExecuteCypher(context.Context, *ExecuteCypherRequest) (*ExecuteCypherResponse, error)
-	// Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when type omitted)
 	SearchNeighbors(context.Context, *SearchNeighborsRequest) (*SearchNeighborsResponse, error)
-	// Required capability: READ:graph/entity/<type> (or READ:graph/entity/* when type omitted)
 	FullTextSearch(context.Context, *FullTextSearchRequest) (*FullTextSearchResponse, error)
-	// Required capability: READ:graph/entity/<type>
 	ListEntities(context.Context, *ListEntitiesRequest) (*ListEntitiesResponse, error)
 	// --- Write Path (Node-Facing) ---
-	// Required capability: WRITE:graph/entity/<type>
 	CreateEntity(context.Context, *CreateEntityRequest) (*CreateEntityResponse, error)
-	// Required capability: WRITE:graph/entity/<type> (or WRITE:graph/entity/* when type unknown)
 	UpdateEntity(context.Context, *UpdateEntityRequest) (*UpdateEntityResponse, error)
-	// Required capability: WRITE:graph/entity/<type> (authoritative Cartographer check)
 	DeleteEntity(context.Context, *DeleteEntityRequest) (*DeleteEntityResponse, error)
-	// Required capability: WRITE:graph/entity/<source-type> (or WRITE:graph/entity/* when type unknown)
 	CreateEdge(context.Context, *CreateEdgeRequest) (*CreateEdgeResponse, error)
-	// Required capability: WRITE:graph/entity/<source-type> (authoritative Cartographer check)
 	DeleteEdge(context.Context, *DeleteEdgeRequest) (*DeleteEdgeResponse, error)
 	// --- Transaction Path (Node-Facing) ---
-	// Required capability: WRITE:graph/tx
 	BeginTransaction(context.Context, *BeginTransactionRequest) (*BeginTransactionResponse, error)
-	// Required capability: WRITE:graph/tx
 	CommitTransaction(context.Context, *CommitTransactionRequest) (*CommitTransactionResponse, error)
-	// Required capability: WRITE:graph/tx
 	RollbackTransaction(context.Context, *RollbackTransactionRequest) (*RollbackTransactionResponse, error)
-	// Required capability: WRITE:graph/tx
 	RefreshTransaction(context.Context, *RefreshTransactionRequest) (*RefreshTransactionResponse, error)
-	// Required capability: READ:graph/tx
 	GetTransactionDiff(context.Context, *GetTransactionDiffRequest) (*GetTransactionDiffResponse, error)
-	// Required capability: WRITE:graph/tx
 	ExtendTimeout(context.Context, *ExtendTimeoutRequest) (*ExtendTimeoutResponse, error)
 	// --- Service-Facing (Operator -> Cartographer) ---
-	// No node-facing capability required (Operator calls directly)
 	ApplySchema(context.Context, *ApplySchemaRequest) (*ApplySchemaResponse, error)
-	// No node-facing capability required (Operator calls directly)
 	WipeGraph(context.Context, *WipeGraphRequest) (*WipeGraphResponse, error)
-	// No node-facing capability required (health probe)
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	// --- Administrative Path (Node-Facing) ---
-	// Required capability: WRITE:graph/entity/*
 	PullFromRemote(context.Context, *PullFromRemoteRequest) (*PullFromRemoteResponse, error)
-	// Required capability: READ:graph/entity/*
 	ExportGraph(*ExportGraphRequest, grpc.ServerStreamingServer[ExportGraphResponse]) error
 	mustEmbedUnimplementedCartographerServiceServer()
 }

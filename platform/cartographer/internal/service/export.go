@@ -6,9 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"maps"
 	"sort"
 
 	"github.com/foundry/flow/cartographer/internal/store"
+)
+
+const (
+	ExportFormatJSON    = "json"
+	ExportFormatGraphML = "graphml"
 )
 
 type graphNode struct {
@@ -73,16 +79,11 @@ func collectExportData(s *CartographerServer, acceptCtx context.Context, format 
 }
 
 // serializeGraph serialises entities and edges into the requested format.
-// ponytail: format strings "json" and "graphml" are bare literals because the
-// SPEC (R11) defines exactly these two formats and Go has no compile-time
-// exhaustiveness for string switches. Adding a format requires updating both
-// this switch and adding a matching serialize* function — there is no third
-// call site that would benefit from a shared constant today.
 func serializeGraph(format string, entities []store.Entity, edges []store.Edge) ([]byte, error) {
 	switch format {
-	case "json":
+	case ExportFormatJSON:
 		return serializeJSON(entities, edges)
-	case "graphml":
+	case ExportFormatGraphML:
 		return serializeGraphML(entities, edges)
 	default:
 		return nil, errUnsupportedExportFormat(format)
@@ -93,21 +94,17 @@ func serializeJSON(entities []store.Entity, edges []store.Edge) ([]byte, error) 
 	g := graphJSON{}
 	for _, e := range entities {
 		node := graphNode{ID: e.Id, Type: e.Type}
-		// ponytail: aliases e.Properties to avoid allocation-per-entity.
-		// Safe because the caller (collectExportData) discards entities
-		// after serialization. If a future caller retains entities after
-		// serializeGraph, this aliasing could cause data races or mutation;
-		// copy the map in that case.
 		if len(e.Properties) > 0 {
-			node.Properties = e.Properties
+			node.Properties = make(map[string]string, len(e.Properties))
+			maps.Copy(node.Properties, e.Properties)
 		}
 		g.Nodes = append(g.Nodes, node)
 	}
 	for _, e := range edges {
 		edge := graphEdge{ID: e.Id, Type: e.Type, From: e.FromEntityID, To: e.ToEntityID}
-		// ponytail: same aliasing rationale as the entity block above.
 		if len(e.Properties) > 0 {
-			edge.Properties = e.Properties
+			edge.Properties = make(map[string]string, len(e.Properties))
+			maps.Copy(edge.Properties, e.Properties)
 		}
 		g.Edges = append(g.Edges, edge)
 	}

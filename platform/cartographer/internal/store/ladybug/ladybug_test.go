@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -717,6 +718,36 @@ func TestCreateEntity_InvalidUUID(t *testing.T) {
 	}
 }
 
+func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+
+	reqSchema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Component",
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string", Required: true},
+				},
+			},
+		},
+	}
+	if err := s.ApplySchema(context.Background(), reqSchema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+
+	_, err = s.CreateEntity(context.Background(), "Component", "", map[string]string{}, nil, "")
+	if err == nil {
+		t.Fatal("expected error for missing required property")
+	}
+	if !errors.Is(err, store.ErrMissingRequiredProperty) {
+		t.Errorf("expected ErrMissingRequiredProperty, got %v", err)
+	}
+}
+
 func TestGetEntity_Found(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -896,6 +927,53 @@ func TestCreateEdge_Valid(t *testing.T) {
 	}
 	if edge.Properties["strength"] != "strong" {
 		t.Errorf("strength = %q, want %q", edge.Properties["strength"], "strong")
+	}
+}
+
+func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+
+	reqSchema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Component",
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string"},
+				},
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"Component"}, Using: []string{"DependsOn"}},
+				},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "DependsOn", Properties: []*flowv1.Property{
+				{Name: "weight", Type: "string", Required: true},
+			}},
+		},
+	}
+	if err := s.ApplySchema(context.Background(), reqSchema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+
+	src, err := s.CreateEntity(context.Background(), "Component", "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity src: %v", err)
+	}
+	tgt, err := s.CreateEntity(context.Background(), "Component", "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity tgt: %v", err)
+	}
+
+	_, err = s.CreateEdge(context.Background(), "DependsOn", src.Id, tgt.Id, nil, "")
+	if err == nil {
+		t.Fatal("expected error for missing required edge property")
+	}
+	if !errors.Is(err, store.ErrMissingRequiredProperty) {
+		t.Errorf("expected ErrMissingRequiredProperty, got %v", err)
 	}
 }
 
@@ -1250,6 +1328,48 @@ func TestSearchNeighbors_EmptyEmbedding(t *testing.T) {
 	}
 	if !errors.Is(err, store.ErrEmbeddingRequired) {
 		t.Errorf("expected ErrEmbeddingRequired, got %v", err)
+	}
+}
+
+func TestSearchNeighbors_NegativeTopK(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	_, err = s.SearchNeighbors(context.Background(), []float32{1, 2, 3}, "VectorType", -1, "")
+	if err == nil {
+		t.Fatal("expected error for negative topK")
+	}
+	if !errors.Is(err, store.ErrInvalidTopK) {
+		t.Errorf("expected ErrInvalidTopK, got %v", err)
+	}
+}
+
+func TestSearchNeighbors_DimensionMismatch(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	// Bootstrap dimension to 3.
+	_, err = s.CreateEntity(context.Background(), "VectorType", "",
+		map[string]string{"name": "v1"}, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// Search with mismatched dimension.
+	_, err = s.SearchNeighbors(context.Background(), []float32{1, 2, 3, 4}, "VectorType", 10, "")
+	if err == nil {
+		t.Fatal("expected error for dimension mismatch")
+	}
+	if !errors.Is(err, store.ErrEmbeddingDimension) {
+		t.Errorf("expected ErrEmbeddingDimension, got %v", err)
 	}
 }
 
@@ -1966,6 +2086,24 @@ func TestEmbeddingBootstrap_FirstEntityNoEmbedding(t *testing.T) {
 	}
 	if !errors.Is(err, store.ErrVectorBootstrap) {
 		t.Errorf("expected ErrVectorBootstrap, got %v", err)
+	}
+}
+
+func TestCreateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	_, err = s.CreateEntity(context.Background(), "Document", "",
+		map[string]string{"title": "test"}, []float32{float32(math.NaN())}, "")
+	if err == nil {
+		t.Fatal("expected error for NaN embedding on non-indexed type")
+	}
+	if !errors.Is(err, store.ErrNaNOrInfEmbedding) {
+		t.Errorf("expected ErrNaNOrInfEmbedding, got %v", err)
 	}
 }
 

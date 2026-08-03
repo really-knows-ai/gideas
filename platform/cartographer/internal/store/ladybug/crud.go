@@ -644,7 +644,7 @@ func entityFromNode(node lbug.Node, entityType string) *store.Entity {
 		Properties: make(map[string]string),
 	}
 	for k, v := range node.Properties {
-		if k == "id" || k == "_properties" || k == "embedding" {
+		if k == "id" || k == "embedding" {
 			continue
 		}
 		e.Properties[k] = fmt.Sprintf("%v", v)
@@ -677,7 +677,7 @@ func edgeFromRel(rel lbug.Relationship, edgeType, fromID, toID string) *store.Ed
 		Properties:   make(map[string]string),
 	}
 	for k, v := range rel.Properties {
-		if k == "id" || k == "_properties" {
+		if k == "id" {
 			continue
 		}
 		e.Properties[k] = fmt.Sprintf("%v", v)

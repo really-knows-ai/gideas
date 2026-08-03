@@ -157,4 +157,6 @@ var (
 	ErrMergeDiverged              = errors.New("merge would diverge")
 	ErrChangeLogFull              = errors.New("change log full (100K cap)")
 	ErrUnknownChangeKind          = errors.New("unknown change kind")
+	ErrEntityTypeMismatch         = errors.New("entity type mismatch")
+	ErrEdgeTypeMismatch           = errors.New("edge type mismatch")
 )

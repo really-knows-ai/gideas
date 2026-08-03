@@ -88,7 +88,7 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 		}
 
 		// 5. Implicit-column collision (entities)
-		if p.Name == "id" || p.Name == "_properties" {
+		if p.Name == "id" {
 			return fmt.Errorf("%w: property %q in entity type %q collides with reserved column",
 				ErrImplicitColumnCollision, p.Name, et.Name)
 		}
@@ -137,7 +137,7 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 		}
 
 		// 6. Implicit-column collision (edges)
-		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" || p.Name == "_properties" {
+		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" {
 			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column",
 				ErrImplicitColumnCollision, p.Name, et.Name)
 		}

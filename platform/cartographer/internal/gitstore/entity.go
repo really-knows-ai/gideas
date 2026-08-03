@@ -56,27 +56,31 @@ func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([
 		if fi.IsDir() || !strings.HasSuffix(fi.Name(), ".json") {
 			continue
 		}
-		f, err := g.fs.Open(filepath.Join(dir, fi.Name()))
+		ef, err := func() (EntityFile, error) {
+			f, err := g.fs.Open(filepath.Join(dir, fi.Name()))
+			if err != nil {
+				return EntityFile{}, fmt.Errorf("open entity file %s: %w", fi.Name(), err)
+			}
+			defer func() { _ = f.Close() }()
+			var ej EntityJSON
+			if err := json.NewDecoder(f).Decode(&ej); err != nil {
+				return EntityFile{}, fmt.Errorf("decode entity file %s: %w", fi.Name(), err)
+			}
+			ef := EntityFile{
+				ID:         ej.ID.String(),
+				Type:       ej.Type,
+				Properties: ej.Properties,
+				CreatedAt:  ej.CreatedAt,
+				UpdatedAt:  ej.UpdatedAt,
+				Path:       filepath.Join(dir, fi.Name()),
+			}
+			if ej.Embedding != nil {
+				ef.Embedding = *ej.Embedding
+			}
+			return ef, nil
+		}()
 		if err != nil {
-			return nil, fmt.Errorf("open entity file %s: %w", fi.Name(), err)
-		}
-		var ej EntityJSON
-		if err := json.NewDecoder(f).Decode(&ej); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("decode entity file %s: %w", fi.Name(), err)
-		}
-		_ = f.Close()
-
-		ef := EntityFile{
-			ID:         ej.ID.String(),
-			Type:       ej.Type,
-			Properties: ej.Properties,
-			CreatedAt:  ej.CreatedAt,
-			UpdatedAt:  ej.UpdatedAt,
-			Path:       filepath.Join(dir, fi.Name()),
-		}
-		if ej.Embedding != nil {
-			ef.Embedding = *ej.Embedding
+			return nil, err
 		}
 		files = append(files, ef)
 	}
@@ -100,7 +104,7 @@ func (g *gitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
 // to indented JSON.
 func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 	if entityType != ent.Type {
-		return fmt.Errorf("entity type mismatch: %q != %q", entityType, ent.Type)
+		return fmt.Errorf("%w: %q != %q", ErrEntityTypeMismatch, entityType, ent.Type)
 	}
 
 	uid, err := uuid.Parse(ent.ID)
@@ -180,7 +184,7 @@ func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 		if !fi.IsDir() {
 			continue
 		}
-		subEntries, err := fs.ReadDir(baseDir + "/" + fi.Name())
+		subEntries, err := fs.ReadDir(filepath.Join(baseDir, fi.Name()))
 		if err != nil {
 			continue
 		}

@@ -172,7 +172,7 @@ func TestValidate_EntityPropertyCollidesWithProperties(t *testing.T) {
 			{
 				Name: "Component",
 				Properties: []*flowv1.Property{
-					{Name: "_properties", Type: "string"},
+					{Name: "id", Type: "string"},
 				},
 			},
 		},
@@ -286,7 +286,7 @@ func TestValidate_EdgePropertyCollidesWithProperties(t *testing.T) {
 			{
 				Name: "DEPENDS_ON",
 				Properties: []*flowv1.Property{
-					{Name: "_properties", Type: "string"},
+					{Name: "id", Type: "string"},
 				},
 			},
 		},

@@ -107,6 +107,7 @@ func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool,
 
 	if err := log.ForEach(func(commit *object.Commit) error {
 		firstLine, _, _ := strings.Cut(commit.Message, "\n")
+		firstLine = strings.TrimRight(firstLine, "\r")
 		if firstLine == message {
 			return errCommitFound
 		}

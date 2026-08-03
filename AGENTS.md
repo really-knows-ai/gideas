@@ -97,6 +97,7 @@ Fix root cause, not symptom. A report names a symptom. Grep every caller of the 
 - Deletion over addition. Boring over clever. Fewest files possible.
 - Shortest working diff wins, but only once you understand the problem. The smallest change in the wrong place isn't lazy — it's a second bug.
 - Mark intentional simplifications with a `ponytail:` comment. If the short-cut has a known ceiling (global lock, O(n²) scan, naive heuristic), the comment names the ceiling and the upgrade path.
+- **`ponytail:` is not a deferral mechanism.** A ponytail documents a trade-off that is genuinely justified — the simplification is correct and the ceiling is acceptable for the foreseeable future. If the "fix" is straightforward (add a constant, copy a map, use a proper error type) and the only reason not to do it is laziness, it is not a ponytail — it is a deferred fix. Deferred fixes get `[FIX]` in reviews, not `[PONYTAIL]`. The question to ask: "Would I accept this code if the ponytail comment were deleted?" If the answer is no, it is not a ponytail.
 - Non-trivial logic leaves ONE runnable check behind — the smallest thing that fails if the logic breaks (an assert-based self-check or one small test file; no frameworks, no fixtures). Trivial one-liners need no test.
 
 ### Never Negotiable

@@ -47,6 +47,11 @@ func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
 // Checkout checks out the named branch. If the branch does not exist, it
 // creates it from HEAD and checks it out. Uses Force: true to handle dirty
 // working trees.
+// ponytail: The create-on-missing fallback (line 54) is test-only infrastructure.
+// The SPEC flow (R9 hydration) uses HardResetToBranch which creates the branch
+// via SetBranchRef before checkout, so this path is never reached in production.
+// RestoreMain always checks out "main" which exists. Only tests exercise the
+// create-on-missing path.
 func (g *gitStore) Checkout(ctx context.Context, branch string) error {
 	ref := plumbing.ReferenceName("refs/heads/" + branch)
 	err := g.wt.Checkout(&git.CheckoutOptions{Branch: ref, Force: true})

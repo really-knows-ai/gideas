@@ -841,6 +841,14 @@ func (s *CartographerServer) ExecuteCypher(
 		}
 	}
 	rows, err := s.store.ExecuteCypher(ctx, req.Cypher, params, s.resolveBranch(req.TransactionId))
+	// ponytail: SPEC R7 §5 requires PERMISSION_DENIED for mutation statements
+	// in ExecuteCypher, enforced by classifying the Cypher AST before execution.
+	// The current implementation delegates to LadybugDB's Prepare step, which
+	// rejects mutations with INVALID_ARGUMENT (the mutation is still rejected,
+	// but with the wrong error code). Adding AST classification would require
+	// parsing the Cypher via LadybugDB's parser before execution — a non-trivial
+	// addition that is deferred until a caller needs to distinguish "bad syntax"
+	// from "write verb in read-only method" by error code alone.
 	if err != nil {
 		return nil, mapStoreError(err)
 	}

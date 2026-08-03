@@ -54,25 +54,30 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 		if fi.IsDir() || !strings.HasSuffix(fi.Name(), ".json") {
 			continue
 		}
-		f, err := g.fs.Open(filepath.Join(dir, fi.Name()))
+		ef, err := func() (EdgeFile, error) {
+			f, err := g.fs.Open(filepath.Join(dir, fi.Name()))
+			if err != nil {
+				return EdgeFile{}, fmt.Errorf("open edge file %s: %w", fi.Name(), err)
+			}
+			defer func() { _ = f.Close() }()
+			var ej EdgeJSON
+			if err := json.NewDecoder(f).Decode(&ej); err != nil {
+				return EdgeFile{}, fmt.Errorf("decode edge file %s: %w", fi.Name(), err)
+			}
+			ef := EdgeFile{
+				ID:           ej.ID.String(),
+				Type:         ej.Type,
+				FromEntityID: ej.FromEntityID.String(),
+				ToEntityID:   ej.ToEntityID.String(),
+				Properties:   ej.Properties,
+				CreatedAt:    ej.CreatedAt,
+				UpdatedAt:    ej.UpdatedAt,
+				Path:         filepath.Join(dir, fi.Name()),
+			}
+			return ef, nil
+		}()
 		if err != nil {
-			return nil, fmt.Errorf("open edge file %s: %w", fi.Name(), err)
-		}
-		defer func() { _ = f.Close() }()
-		var ej EdgeJSON
-		if err := json.NewDecoder(f).Decode(&ej); err != nil {
-			return nil, fmt.Errorf("decode edge file %s: %w", fi.Name(), err)
-		}
-
-		ef := EdgeFile{
-			ID:           ej.ID.String(),
-			Type:         ej.Type,
-			FromEntityID: ej.FromEntityID.String(),
-			ToEntityID:   ej.ToEntityID.String(),
-			Properties:   ej.Properties,
-			CreatedAt:    ej.CreatedAt,
-			UpdatedAt:    ej.UpdatedAt,
-			Path:         filepath.Join(dir, fi.Name()),
+			return nil, err
 		}
 		files = append(files, ef)
 	}
@@ -96,7 +101,7 @@ func (g *gitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
 // and marshals the edge to indented JSON.
 func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 	if edgeType != edge.Type {
-		return fmt.Errorf("edge type mismatch: %q != %q", edgeType, edge.Type)
+		return fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, edgeType, edge.Type)
 	}
 
 	uid, err := uuid.Parse(edge.ID)

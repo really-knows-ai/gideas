@@ -177,17 +177,7 @@ func main() {
 	}
 
 	// -----------------------------------------------------------------------
-	// 6. Optional remote pull on init
-	// -----------------------------------------------------------------------
-	if remotePullOnInit && remoteURL != "" {
-		if err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn); err != nil {
-			slog.Error("Pre-flight auth config failure", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	// -----------------------------------------------------------------------
-	// 7. Connect to Event Bus
+	// 6. Connect to Event Bus
 	// -----------------------------------------------------------------------
 	var auditPub *eventbus.AsyncPublisher
 	var eventBusCloser func() error
@@ -204,6 +194,16 @@ func main() {
 		slog.Info("Event Bus connected for telemetry", "address", eventBusAddress)
 	} else {
 		slog.Info("Event Bus not configured, telemetry publishing disabled")
+	}
+
+	// -----------------------------------------------------------------------
+	// 7. Optional remote pull on init
+	// -----------------------------------------------------------------------
+	if remotePullOnInit && remoteURL != "" {
+		if err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn, auditPub); err != nil {
+			slog.Error("Pre-flight auth config failure", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -287,6 +287,7 @@ func tryRemotePullOnInit(
 	remoteURL string,
 	remoteAuthSecretRef string,
 	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
+	auditPub *eventbus.AsyncPublisher,
 ) error {
 	authFn := func() error {
 		if remoteAuthSecretRef == "" {
@@ -327,6 +328,17 @@ func tryRemotePullOnInit(
 			return gs.CloneSingleBranch(context.Background(), remoteURL, "main")
 		}); err != nil {
 			slog.Warn("Initial clone failed (non-blocking)", "error", err)
+			if auditPub != nil {
+				auditPub.Submit(&flowv1.PublishRequest{
+					Channel: "telemetry",
+					Event: &flowv1.FlowEvent{
+						EventId:    fmt.Sprintf("cartographer-clone-%d", time.Now().UnixNano()),
+						EventType:  "cartographer.clone_failed",
+						NodeId:     "cartographer",
+						Attributes: map[string]string{"error": err.Error(), "url": remoteURL},
+					},
+				})
+			}
 		} else {
 			slog.Info("Initial clone from remote succeeded")
 		}

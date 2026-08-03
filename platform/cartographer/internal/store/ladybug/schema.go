@@ -77,12 +77,11 @@ func (db *ladybugDB) getTableProperties(tableName string) ([]store.PropertyDef, 
 
 	// Skip implicit/self-managed columns that we don't expose as user properties.
 	skip := map[string]bool{
-		"id":          true,
-		"_properties": true,
-		"embedding":   true,
-		"from":        true,
-		"to":          true,
-		"type":        true,
+		"id":        true,
+		"embedding": true,
+		"from":      true,
+		"to":        true,
+		"type":      true,
 	}
 
 	var props []store.PropertyDef
@@ -422,7 +421,6 @@ func (db *ladybugDB) createNodeTable(et *flowv1.EntityType) error {
 			stringProps = append(stringProps, p.Name)
 		}
 	}
-	cols = append(cols, "_properties STRING")
 
 	ddl := fmt.Sprintf("CREATE NODE TABLE IF NOT EXISTS %s (%s);",
 		quoteID(et.Name), strings.Join(cols, ", "))
@@ -469,8 +467,6 @@ func (db *ladybugDB) createRelTable(et *flowv1.EdgeType, pairs []fromToPair) err
 		ddl.WriteString(" ")
 		ddl.WriteString(ladybugType(p.Type))
 	}
-	ddl.WriteString(", _properties STRING")
-
 	ddl.WriteString(");")
 
 	_, err := db.conn.Query(ddl.String())

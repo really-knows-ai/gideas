@@ -115,10 +115,11 @@ func setupTestStore(t *testing.T) *gitStore {
 	}
 
 	gs := &gitStore{
-		repo:    repo,
-		wt:      wt,
-		fs:      fs,
-		backend: storer,
+		repo:     repo,
+		wt:       wt,
+		fs:       fs,
+		backend:  storer,
+		basePath: t.TempDir(),
 	}
 	return gs
 }

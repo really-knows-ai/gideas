@@ -63,6 +63,40 @@ func TestEntityJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEntityJSONEmptyEmbeddingSlice(t *testing.T) {
+	id := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+	emb := []float32{}
+	ej := EntityJSON{
+		ID:        id,
+		Type:      testComponentType,
+		Embedding: &emb,
+	}
+
+	data, err := json.Marshal(ej)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map failed: %v", err)
+	}
+	if _, ok := raw["embedding"]; !ok {
+		t.Fatal("expected 'embedding' key in JSON output for empty non-nil slice")
+	}
+
+	var got EntityJSON
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if got.Embedding == nil {
+		t.Fatal("expected non-nil Embedding after round-trip")
+	}
+	if len(*got.Embedding) != 0 {
+		t.Fatalf("expected 0 embedding values, got %d", len(*got.Embedding))
+	}
+}
+
 func TestEntityJSONNullProperties(t *testing.T) {
 	id := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
 	ej := EntityJSON{
