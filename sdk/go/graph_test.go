@@ -49,7 +49,8 @@ type mockCartographerClient struct {
 	extendTimeout func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error)
 	exportGraph   func(ctx context.Context, req *flowv1.ExportGraphRequest,
 	) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error)
-	pullFromRemote func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error)
+	pullFromRemote  func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error)
+	pushToRemote    func(ctx context.Context, req *flowv1.PushToRemoteRequest) (*flowv1.PushToRemoteResponse, error)
 }
 
 func (m *mockCartographerClient) ExecuteCypher(
@@ -202,6 +203,14 @@ func (m *mockCartographerClient) PullFromRemote(
 		return m.pullFromRemote(ctx, req)
 	}
 	return &flowv1.PullFromRemoteResponse{}, nil
+}
+func (m *mockCartographerClient) PushToRemote(
+	ctx context.Context, req *flowv1.PushToRemoteRequest, opts ...grpc.CallOption,
+) (*flowv1.PushToRemoteResponse, error) {
+	if m.pushToRemote != nil {
+		return m.pushToRemote(ctx, req)
+	}
+	return &flowv1.PushToRemoteResponse{}, nil
 }
 
 // ---------------------------------------------------------------------------

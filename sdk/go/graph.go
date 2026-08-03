@@ -621,6 +621,15 @@ func (g *Graph) PullFromRemote() error {
 	return err
 }
 
+// PushToRemote pushes local commits to the configured remote repository.
+func (g *Graph) PushToRemote() error {
+	if g.session == nil {
+		return fmt.Errorf("flow sdk: graph not initialised")
+	}
+	_, err := g.session.Cartographer.PushToRemote(g.session.ctx, &flowv1.PushToRemoteRequest{})
+	return err
+}
+
 // ExportGraph starts a server-streaming export of the full graph.
 func (g *Graph) ExportGraph(format string) (*ExportStream, error) {
 	if g.session == nil {

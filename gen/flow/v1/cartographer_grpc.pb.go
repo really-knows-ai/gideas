@@ -38,6 +38,7 @@ const (
 	CartographerService_WipeGraph_FullMethodName           = "/flow.v1.CartographerService/WipeGraph"
 	CartographerService_HealthCheck_FullMethodName         = "/flow.v1.CartographerService/HealthCheck"
 	CartographerService_PullFromRemote_FullMethodName      = "/flow.v1.CartographerService/PullFromRemote"
+	CartographerService_PushToRemote_FullMethodName        = "/flow.v1.CartographerService/PushToRemote"
 	CartographerService_ExportGraph_FullMethodName         = "/flow.v1.CartographerService/ExportGraph"
 )
 
@@ -73,6 +74,7 @@ type CartographerServiceClient interface {
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 	// --- Administrative Path (Node-Facing) ---
 	PullFromRemote(ctx context.Context, in *PullFromRemoteRequest, opts ...grpc.CallOption) (*PullFromRemoteResponse, error)
+	PushToRemote(ctx context.Context, in *PushToRemoteRequest, opts ...grpc.CallOption) (*PushToRemoteResponse, error)
 	ExportGraph(ctx context.Context, in *ExportGraphRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportGraphResponse], error)
 }
 
@@ -274,6 +276,16 @@ func (c *cartographerServiceClient) PullFromRemote(ctx context.Context, in *Pull
 	return out, nil
 }
 
+func (c *cartographerServiceClient) PushToRemote(ctx context.Context, in *PushToRemoteRequest, opts ...grpc.CallOption) (*PushToRemoteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushToRemoteResponse)
+	err := c.cc.Invoke(ctx, CartographerService_PushToRemote_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *cartographerServiceClient) ExportGraph(ctx context.Context, in *ExportGraphRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportGraphResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &CartographerService_ServiceDesc.Streams[0], CartographerService_ExportGraph_FullMethodName, cOpts...)
@@ -325,6 +337,7 @@ type CartographerServiceServer interface {
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	// --- Administrative Path (Node-Facing) ---
 	PullFromRemote(context.Context, *PullFromRemoteRequest) (*PullFromRemoteResponse, error)
+	PushToRemote(context.Context, *PushToRemoteRequest) (*PushToRemoteResponse, error)
 	ExportGraph(*ExportGraphRequest, grpc.ServerStreamingServer[ExportGraphResponse]) error
 	mustEmbedUnimplementedCartographerServiceServer()
 }
@@ -392,6 +405,9 @@ func (UnimplementedCartographerServiceServer) HealthCheck(context.Context, *Heal
 }
 func (UnimplementedCartographerServiceServer) PullFromRemote(context.Context, *PullFromRemoteRequest) (*PullFromRemoteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PullFromRemote not implemented")
+}
+func (UnimplementedCartographerServiceServer) PushToRemote(context.Context, *PushToRemoteRequest) (*PushToRemoteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PushToRemote not implemented")
 }
 func (UnimplementedCartographerServiceServer) ExportGraph(*ExportGraphRequest, grpc.ServerStreamingServer[ExportGraphResponse]) error {
 	return status.Error(codes.Unimplemented, "method ExportGraph not implemented")
@@ -759,6 +775,24 @@ func _CartographerService_PullFromRemote_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CartographerService_PushToRemote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PushToRemoteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CartographerServiceServer).PushToRemote(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CartographerService_PushToRemote_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CartographerServiceServer).PushToRemote(ctx, req.(*PushToRemoteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CartographerService_ExportGraph_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ExportGraphRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -852,6 +886,10 @@ var CartographerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PullFromRemote",
 			Handler:    _CartographerService_PullFromRemote_Handler,
+		},
+		{
+			MethodName: "PushToRemote",
+			Handler:    _CartographerService_PushToRemote_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

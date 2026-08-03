@@ -2104,6 +2104,27 @@ func (s *CartographerServer) PullFromRemote(
 	return &flowv1.PullFromRemoteResponse{}, nil
 }
 
+// PushToRemote pushes local commits to the configured remote repository.
+func (s *CartographerServer) PushToRemote(
+	ctx context.Context, req *flowv1.PushToRemoteRequest,
+) (*flowv1.PushToRemoteResponse, error) {
+	if s.remoteURL == "" {
+		return nil, errRemoteNotConfigured()
+	}
+	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
+		return nil, err
+	}
+	if err := s.withGitLock(func() error {
+		if _, err := s.gitstore.FetchAndMerge(ctx, "origin", "main"); err != nil {
+			return err
+		}
+		return s.gitstore.PushRemote(ctx)
+	}); err != nil {
+		return nil, mapGitError(err)
+	}
+	return &flowv1.PushToRemoteResponse{}, nil
+}
+
 // ExportGraph streams the serialised graph.
 func (s *CartographerServer) ExportGraph(
 	req *flowv1.ExportGraphRequest,
