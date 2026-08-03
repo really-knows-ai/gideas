@@ -1584,12 +1584,15 @@ func (s *CartographerServer) CommitTransaction(
 	if err := s.finishTransactionCleanup(ctx, state); err != nil {
 		return nil, mapStoreError(err)
 	}
-	// Fire-and-forget push (outside git lock to avoid nested lock acquisition).
+	// Pull-before-push (inside git lock to ensure atomic fetch+merge+push).
 	if s.remoteURL != "" {
 		go func() {
 			pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := s.gitstore.WithGitLock(func() error {
+				if _, err := s.gitstore.FetchAndMerge(pushCtx, "origin", "main"); err != nil {
+					return err
+				}
 				return s.gitstore.PushRemote(pushCtx)
 			}); err != nil {
 				slog.Warn("commit: remote push failed", "error", err.Error())
@@ -2081,7 +2084,7 @@ func (s *CartographerServer) PullFromRemote(
 			if err := s.gitstore.CloneSingleBranch(ctx, s.remoteURL, "main"); err != nil {
 				return err
 			}
-		} else if err := s.gitstore.PullAndFastForward(ctx); err != nil {
+		} else if _, err := s.gitstore.FetchAndMerge(ctx, "origin", "main"); err != nil {
 			return err
 		}
 		if s.ladybugPath != "" {

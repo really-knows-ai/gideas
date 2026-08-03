@@ -58,6 +58,7 @@ type GitStore interface {
 	FetchRemote(ctx context.Context) error
 	PushRemote(ctx context.Context) error
 	PullAndFastForward(ctx context.Context) error
+	FetchAndMerge(ctx context.Context, remoteName, branch string) (plumbing.Hash, error)
 	HasRemote(ctx context.Context) (bool, error)
 	CloneSingleBranch(ctx context.Context, url, branch string) error
 	IsEmpty(ctx context.Context) (bool, error)

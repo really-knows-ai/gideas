@@ -21,6 +21,7 @@ import (
 	"github.com/foundry/flow/cartographer/internal/store"
 	"github.com/foundry/flow/cartographer/internal/store/ladybug"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/go-git/go-git/v5/plumbing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -516,6 +517,9 @@ type pullGitStore struct {
 
 func (s *pullGitStore) IsEmpty(context.Context) (bool, error)    { return false, nil }
 func (s *pullGitStore) PullAndFastForward(context.Context) error { return nil }
+func (s *pullGitStore) FetchAndMerge(context.Context, string, string) (plumbing.Hash, error) {
+	return plumbing.ZeroHash, nil
+}
 
 type pullHydrationBlockingStore struct {
 	store.Store
