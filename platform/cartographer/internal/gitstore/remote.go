@@ -101,12 +101,12 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 		return plumbing.ZeroHash, err
 	}
 
-	// Fetch from remote
+	// Fetch from remote into remote tracking refs (not local branch)
 	err = g.repo.FetchContext(ctx, &git.FetchOptions{
 		RemoteName: remoteName,
 		Auth:       auth,
 		Force:      false,
-		RefSpecs:   []config.RefSpec{"refs/heads/main:refs/heads/main"},
+		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/heads/main:refs/remotes/" + remoteName + "/main")},
 	})
 	if err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {

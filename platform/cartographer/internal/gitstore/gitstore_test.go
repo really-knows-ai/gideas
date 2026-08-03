@@ -3344,6 +3344,416 @@ func TestPushAlreadyUpToDate(t *testing.T) {
 	}
 }
 
+// TestFetchAndMerge_AlreadyUpToDate tests that FetchAndMerge when both
+// sides are identical returns no error and the HEAD hash is unchanged.
+func TestFetchAndMerge_AlreadyUpToDate(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	// Create a bare remote with a commit
+	workDir := filepath.Join(tmpDir, "work")
+	workRepo, err := git.PlainInitWithOptions(workDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("init work: %v", err)
+	}
+	workWT, err := workRepo.Worktree()
+	if err != nil {
+		t.Fatalf("work worktree: %v", err)
+	}
+	initFile, _ := workWT.Filesystem.Create("init.txt")
+	_ = initFile.Close()
+	if _, err := workWT.Add("init.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := workWT.Commit("initial", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
+		URL: "file://" + workDir,
+	})
+	if err != nil {
+		t.Fatalf("clone bare: %v", err)
+	}
+
+	// Clone from bare to create local repo
+	localDir := filepath.Join(tmpDir, "local")
+	clonedRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone local: %v", err)
+	}
+	clonedWT, err := clonedRepo.Worktree()
+	if err != nil {
+		t.Fatalf("get worktree: %v", err)
+	}
+
+	gs := &gitStore{
+		repo:    clonedRepo,
+		wt:      clonedWT,
+		fs:      clonedWT.Filesystem,
+		backend: clonedRepo.Storer,
+	}
+
+	// Capture the initial HEAD hash
+	initialRef, err := clonedRepo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+	if err != nil {
+		t.Fatalf("get initial ref: %v", err)
+	}
+	initialHash := initialRef.Hash()
+
+	err = gs.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		// FetchAndMerge — should be no-op (already up-to-date)
+		newHash, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if err != nil {
+			return fmt.Errorf("FetchAndMerge: %w", err)
+		}
+
+		// Verify HEAD hash is unchanged
+		if newHash != initialHash {
+			return fmt.Errorf("expected hash %s, got %s", initialHash, newHash)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_AlreadyUpToDate: %v", err)
+	}
+}
+
+// TestFetchAndMerge_FastForward tests that FetchAndMerge advances the local
+// HEAD when the remote has new commits (fast-forward).
+func TestFetchAndMerge_FastForward(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	// Create a non-bare working repo first, make a commit, then clone as bare
+	workDir := filepath.Join(tmpDir, "work")
+	workRepo, err := git.PlainInitWithOptions(workDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("init work repo: %v", err)
+	}
+	wt, err := workRepo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+
+	// Make initial commit in work repo
+	seedFile, seedErr := wt.Filesystem.Create("seed.txt")
+	if seedErr != nil {
+		t.Fatalf("create seed file: %v", seedErr)
+	}
+	_ = seedFile.Close()
+	if _, err := wt.Add("seed.txt"); err != nil {
+		t.Fatalf("add seed: %v", err)
+	}
+	if _, err := wt.Commit("seed commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+
+	// Clone work repo as bare to create the "remote"
+	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
+		URL: "file://" + workDir,
+	})
+	if err != nil {
+		t.Fatalf("clone bare: %v", err)
+	}
+
+	// Clone the bare remote, make a commit, and push back
+	cloneDir := filepath.Join(tmpDir, "clone")
+	cloned, err := git.PlainClone(cloneDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+
+	clonedWT, err := cloned.Worktree()
+	if err != nil {
+		t.Fatalf("cloned worktree: %v", err)
+	}
+
+	// Make a commit on the clone
+	cloneFile, cloneErr := clonedWT.Filesystem.Create("initial.txt")
+	if cloneErr != nil {
+		t.Fatalf("create file: %v", cloneErr)
+	}
+	_ = cloneFile.Close()
+	if _, err := clonedWT.Add("initial.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := clonedWT.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := cloned.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	// Now create local repo by cloning from remote
+	localDir := filepath.Join(tmpDir, "local")
+	clonedLocalRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone local: %v", err)
+	}
+
+	clonedLocalWT, err := clonedLocalRepo.Worktree()
+	if err != nil {
+		t.Fatalf("cloned worktree: %v", err)
+	}
+
+	// Create a gitStore from the cloned repo
+	gs := &gitStore{
+		repo:    clonedLocalRepo,
+		wt:      clonedLocalWT,
+		fs:      clonedLocalWT.Filesystem,
+		backend: clonedLocalRepo.Storer,
+	}
+
+	// Capture the remote's new commit hash before pulling
+	remoteRepo, err := git.PlainOpen(bareDir)
+	if err != nil {
+		t.Fatalf("open remote: %v", err)
+	}
+	remoteRef, err := remoteRepo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+	if err != nil {
+		t.Fatalf("remote ref: %v", err)
+	}
+	remoteHash := remoteRef.Hash()
+
+	err = gs.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		// FetchAndMerge — should fast-forward to remote's commit
+		newHash, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if err != nil {
+			return fmt.Errorf("FetchAndMerge: %w", err)
+		}
+
+		// Verify HEAD advanced to remote's commit
+		if newHash != remoteHash {
+			return fmt.Errorf("expected hash %s, got %s", remoteHash, newHash)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_FastForward: %v", err)
+	}
+}
+
+// TestFetchAndMerge_MergeCommit tests that FetchAndMerge creates a merge
+// commit when local and remote have diverged.
+func TestFetchAndMerge_MergeCommit(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	// Create a non-bare working repo first, make a commit, then clone as bare
+	workDir := filepath.Join(tmpDir, "work")
+	workRepo, err := git.PlainInitWithOptions(workDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("init work repo: %v", err)
+	}
+	wt, err := workRepo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+
+	// Make initial commit in work repo
+	seedFile, seedErr := wt.Filesystem.Create("seed.txt")
+	if seedErr != nil {
+		t.Fatalf("create seed file: %v", seedErr)
+	}
+	_ = seedFile.Close()
+	if _, err := wt.Add("seed.txt"); err != nil {
+		t.Fatalf("add seed: %v", err)
+	}
+	if _, err := wt.Commit("seed commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+
+	// Clone work repo as bare to create the "remote"
+	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
+		URL: "file://" + workDir,
+	})
+	if err != nil {
+		t.Fatalf("clone bare: %v", err)
+	}
+
+	// Clone the bare remote to create a "writer" that will push to remote
+	writerDir := filepath.Join(tmpDir, "writer")
+	writer, err := git.PlainClone(writerDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone writer: %v", err)
+	}
+	writerWT, err := writer.Worktree()
+	if err != nil {
+		t.Fatalf("writer worktree: %v", err)
+	}
+
+	// Now create local repo by cloning from remote
+	localDir := filepath.Join(tmpDir, "local")
+	clonedLocalRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone local: %v", err)
+	}
+
+	clonedLocalWT, err := clonedLocalRepo.Worktree()
+	if err != nil {
+		t.Fatalf("cloned worktree: %v", err)
+	}
+
+	// Create a gitStore from the cloned repo
+	gs := &gitStore{
+		repo:    clonedLocalRepo,
+		wt:      clonedLocalWT,
+		fs:      clonedLocalWT.Filesystem,
+		backend: clonedLocalRepo.Storer,
+	}
+
+	// Make a local commit (diverging from remote)
+	localFile, err := clonedLocalWT.Filesystem.Create("local.txt")
+	if err != nil {
+		t.Fatalf("create local file: %v", err)
+	}
+	_, _ = localFile.Write([]byte("local content"))
+	_ = localFile.Close()
+	if _, err := clonedLocalWT.Add("local.txt"); err != nil {
+		t.Fatalf("add local: %v", err)
+	}
+	localCommitHash, err := clonedLocalWT.Commit("local commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	})
+	if err != nil {
+		t.Fatalf("local commit: %v", err)
+	}
+
+	// Make a different commit on the remote (push from writer)
+	remoteFile, err := writerWT.Filesystem.Create("remote.txt")
+	if err != nil {
+		t.Fatalf("create remote file: %v", err)
+	}
+	_, _ = remoteFile.Write([]byte("remote content"))
+	_ = remoteFile.Close()
+	if _, err := writerWT.Add("remote.txt"); err != nil {
+		t.Fatalf("add remote: %v", err)
+	}
+	if _, err := writerWT.Commit("remote commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("remote commit: %v", err)
+	}
+	if err := writer.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("push remote: %v", err)
+	}
+
+	// Get the remote's new hash
+	remoteRepo, err := git.PlainOpen(bareDir)
+	if err != nil {
+		t.Fatalf("open remote: %v", err)
+	}
+	remoteRef, err := remoteRepo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+	if err != nil {
+		t.Fatalf("remote ref: %v", err)
+	}
+	remoteHash := remoteRef.Hash()
+
+	err = gs.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		// FetchAndMerge — should create a merge commit
+		mergeHash, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if err != nil {
+			return fmt.Errorf("FetchAndMerge: %w", err)
+		}
+
+		// Verify a merge commit was created (different from both parents)
+		if mergeHash == localCommitHash {
+			return fmt.Errorf("merge hash should differ from local commit hash")
+		}
+		if mergeHash == remoteHash {
+			return fmt.Errorf("merge hash should differ from remote commit hash")
+		}
+
+		// Verify the merge commit has two parents
+		mergeCommit, err := gs.repo.CommitObject(mergeHash)
+		if err != nil {
+			return fmt.Errorf("get merge commit: %w", err)
+		}
+		if len(mergeCommit.ParentHashes) != 2 {
+			return fmt.Errorf("expected 2 parents, got %d", len(mergeCommit.ParentHashes))
+		}
+
+		// Verify parent hashes are the local and remote commits
+		hasLocal := mergeCommit.ParentHashes[0] == localCommitHash || mergeCommit.ParentHashes[1] == localCommitHash
+		hasRemote := mergeCommit.ParentHashes[0] == remoteHash || mergeCommit.ParentHashes[1] == remoteHash
+		if !hasLocal {
+			return fmt.Errorf("merge commit should have local commit as parent")
+		}
+		if !hasRemote {
+			return fmt.Errorf("merge commit should have remote commit as parent")
+		}
+
+		// Verify the merge commit message
+		expectedMsg := "merge: sync from remote file://" + bareDir
+		if mergeCommit.Message != expectedMsg {
+			return fmt.Errorf("expected message %q, got %q", expectedMsg, mergeCommit.Message)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_MergeCommit: %v", err)
+	}
+
+	// Verify the working tree has the remote's files (simplified merge uses remote tree)
+	_, err = clonedLocalWT.Filesystem.Stat("remote.txt")
+	if err != nil {
+		t.Fatalf("remote.txt should exist in working tree: %v", err)
+	}
+	_, err = clonedLocalWT.Filesystem.Stat("seed.txt")
+	if err != nil {
+		t.Fatalf("seed.txt should exist in working tree: %v", err)
+	}
+}
+
 // TestPullAlreadyUpToDate2 tests that pulling when already up-to-date
 // returns no error.
 func TestPullAlreadyUpToDate2(t *testing.T) {
