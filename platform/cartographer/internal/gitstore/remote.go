@@ -84,6 +84,95 @@ func (g *gitStore) FetchRemote(ctx context.Context) error {
 // pointing at the remote tracking ref. If fast-forward is possible, the local
 // ref is advanced. Otherwise a merge commit is created with two parents.
 // Returns the new HEAD hash.
+// mapFetchError converts common fetch errors to typed sentinels.
+func mapFetchError(err error) error {
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	if errors.Is(err, transport.ErrAuthenticationRequired) ||
+		strings.Contains(err.Error(), "authentication") {
+		return ErrAuthFailed
+	}
+	if strings.Contains(err.Error(), "no such host") ||
+		strings.Contains(err.Error(), "connection refused") ||
+		strings.Contains(err.Error(), "i/o timeout") ||
+		strings.Contains(err.Error(), "dial tcp") {
+		return ErrRemoteUnreachable
+	}
+	return fmt.Errorf("fetch: %w", err)
+}
+
+// createMergeCommit builds a merge commit with the given parents using the
+// remote tree, stores it, and updates the local branch ref.
+// (ponytail: this is a simplified merge that uses the remote tree as the
+// merge result. A full 3-way merge would require resolving conflicts
+// between local, remote, and merge-base trees. The upgrade path is to use
+// go-git's merge functionality or an external merge driver.)
+func (g *gitStore) createMergeCommit(branch string, localHash, remoteHash plumbing.Hash) (plumbing.Hash, error) {
+	remoteCommit, err := g.repo.CommitObject(remoteHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("get remote commit: %w", err)
+	}
+	mergeTree, err := remoteCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("get remote tree: %w", err)
+	}
+
+	mergeCommit := &object.Commit{
+		Author: object.Signature{
+			Name:  "cartographer",
+			Email: "cartographer@foundry.flow",
+		},
+		Committer: object.Signature{
+			Name:  "cartographer",
+			Email: "cartographer@foundry.flow",
+		},
+		Message:      "merge: sync from remote " + g.remoteURL,
+		TreeHash:     mergeTree.Hash,
+		ParentHashes: []plumbing.Hash{localHash, remoteHash},
+	}
+
+	obj := g.backend.NewEncodedObject()
+	if err := mergeCommit.EncodeWithoutSignature(obj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("encode merge commit: %w", err)
+	}
+	mergeHash, err := g.backend.SetEncodedObject(obj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("store merge commit: %w", err)
+	}
+
+	newRef := plumbing.NewHashReference(
+		plumbing.ReferenceName("refs/heads/"+branch),
+		mergeHash,
+	)
+	if err := g.backend.SetReference(newRef); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("set merge ref: %w", err)
+	}
+	if err := g.wt.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.ReferenceName("refs/heads/" + branch),
+		Force:  true,
+	}); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("checkout after merge: %w", err)
+	}
+	return mergeHash, nil
+}
+
+// setLocalRefAndCheckout sets the local branch ref to the given hash and
+// checks out the branch.
+func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) error {
+	newRef := plumbing.NewHashReference(
+		plumbing.ReferenceName("refs/heads/"+branch),
+		hash,
+	)
+	if err := g.backend.SetReference(newRef); err != nil {
+		return fmt.Errorf("set ref: %w", err)
+	}
+	return g.wt.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.ReferenceName("refs/heads/" + branch),
+		Force:  true,
+	})
+}
+
 func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string) (plumbing.Hash, error) {
 	if g.remoteURL == "" {
 		return plumbing.ZeroHash, ErrNoRemote
@@ -101,7 +190,6 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 		return plumbing.ZeroHash, err
 	}
 
-	// Fetch from remote into remote tracking refs (not local branch)
 	err = g.repo.FetchContext(ctx, &git.FetchOptions{
 		RemoteName: remoteName,
 		Auth:       auth,
@@ -110,52 +198,27 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 	})
 	if err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			// Already up-to-date; resolve and return current HEAD
 			ref, refErr := g.repo.Reference(plumbing.ReferenceName("refs/heads/"+branch), true)
 			if refErr != nil {
 				return plumbing.ZeroHash, fmt.Errorf("resolve local ref: %w", refErr)
 			}
 			return ref.Hash(), nil
 		}
-		if errors.Is(err, transport.ErrAuthenticationRequired) ||
-			strings.Contains(err.Error(), "authentication") {
-			return plumbing.ZeroHash, ErrAuthFailed
-		}
-		if strings.Contains(err.Error(), "no such host") ||
-			strings.Contains(err.Error(), "connection refused") ||
-			strings.Contains(err.Error(), "i/o timeout") ||
-			strings.Contains(err.Error(), "dial tcp") {
-			return plumbing.ZeroHash, ErrRemoteUnreachable
-		}
-		return plumbing.ZeroHash, fmt.Errorf("fetch: %w", err)
+		return plumbing.ZeroHash, mapFetchError(err)
 	}
 
-	// Resolve remote tracking ref
 	remoteRef, err := g.repo.Reference(
 		plumbing.ReferenceName("refs/remotes/"+remoteName+"/"+branch), true)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("resolve remote ref: %w", err)
 	}
 
-	// Resolve local branch ref
 	localRef, err := g.repo.Reference(
 		plumbing.ReferenceName("refs/heads/"+branch), true)
 	if err != nil {
-		// Local branch doesn't exist — set it to remote tracking ref
 		if err == plumbing.ErrReferenceNotFound {
-			newRef := plumbing.NewHashReference(
-				plumbing.ReferenceName("refs/heads/"+branch),
-				remoteRef.Hash(),
-			)
-			if err := g.backend.SetReference(newRef); err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("set local ref: %w", err)
-			}
-			// Checkout the branch
-			if err := g.wt.Checkout(&git.CheckoutOptions{
-				Branch: plumbing.ReferenceName("refs/heads/" + branch),
-				Force:  true,
-			}); err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("checkout: %w", err)
+			if err := g.setLocalRefAndCheckout(branch, remoteRef.Hash()); err != nil {
+				return plumbing.ZeroHash, err
 			}
 			return remoteRef.Hash(), nil
 		}
@@ -165,12 +228,10 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 	localHash := localRef.Hash()
 	remoteHash := remoteRef.Hash()
 
-	// Already at the same commit
 	if localHash == remoteHash {
 		return localHash, nil
 	}
 
-	// Check if fast-forward is possible: local is an ancestor of remote
 	localCommit, err := g.repo.CommitObject(localHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("get local commit: %w", err)
@@ -185,75 +246,13 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 		return plumbing.ZeroHash, fmt.Errorf("check ancestor: %w", err)
 	}
 	if isAncestor {
-		// Fast-forward: advance local ref to remote
-		newRef := plumbing.NewHashReference(
-			plumbing.ReferenceName("refs/heads/"+branch),
-			remoteHash,
-		)
-		if err := g.backend.SetReference(newRef); err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("fast-forward set ref: %w", err)
-		}
-		if err := g.wt.Checkout(&git.CheckoutOptions{
-			Branch: plumbing.ReferenceName("refs/heads/" + branch),
-			Force:  true,
-		}); err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("checkout after ff: %w", err)
+		if err := g.setLocalRefAndCheckout(branch, remoteHash); err != nil {
+			return plumbing.ZeroHash, err
 		}
 		return remoteHash, nil
 	}
 
-	// Not fast-forward: create a merge commit using the remote tree
-	// (ponytail: this is a simplified merge that uses the remote tree as the
-	// merge result. A full 3-way merge would require resolving conflicts
-	// between local, remote, and merge-base trees. The upgrade path is to use
-	// go-git's merge functionality or an external merge driver.)
-	mergeTree, err := remoteCommit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("get remote tree: %w", err)
-	}
-
-	// Build the merge commit object directly via the storer
-	mergeCommit := &object.Commit{
-		Author: object.Signature{
-			Name:  "cartographer",
-			Email: "cartographer@foundry.flow",
-		},
-		Committer: object.Signature{
-			Name:  "cartographer",
-			Email: "cartographer@foundry.flow",
-		},
-		Message:      "merge: sync from remote " + g.remoteURL,
-		TreeHash:     mergeTree.Hash,
-		ParentHashes: []plumbing.Hash{localHash, remoteHash},
-	}
-
-	// Encode and store the commit object
-	obj := g.backend.NewEncodedObject()
-	if err := mergeCommit.EncodeWithoutSignature(obj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("encode merge commit: %w", err)
-	}
-	mergeHash, err := g.backend.SetEncodedObject(obj)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("store merge commit: %w", err)
-	}
-
-	// Update local ref to the merge commit
-	newRef := plumbing.NewHashReference(
-		plumbing.ReferenceName("refs/heads/"+branch),
-		mergeHash,
-	)
-	if err := g.backend.SetReference(newRef); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("set merge ref: %w", err)
-	}
-
-	if err := g.wt.Checkout(&git.CheckoutOptions{
-		Branch: plumbing.ReferenceName("refs/heads/" + branch),
-		Force:  true,
-	}); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("checkout after merge: %w", err)
-	}
-
-	return mergeHash, nil
+	return g.createMergeCommit(branch, localHash, remoteHash)
 }
 
 // PushRemote pushes the main branch to the remote origin.

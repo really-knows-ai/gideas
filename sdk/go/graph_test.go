@@ -49,8 +49,8 @@ type mockCartographerClient struct {
 	extendTimeout func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error)
 	exportGraph   func(ctx context.Context, req *flowv1.ExportGraphRequest,
 	) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error)
-	pullFromRemote  func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error)
-	pushToRemote    func(ctx context.Context, req *flowv1.PushToRemoteRequest) (*flowv1.PushToRemoteResponse, error)
+	pullFromRemote func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error)
+	pushToRemote   func(ctx context.Context, req *flowv1.PushToRemoteRequest) (*flowv1.PushToRemoteResponse, error)
 }
 
 func (m *mockCartographerClient) ExecuteCypher(
