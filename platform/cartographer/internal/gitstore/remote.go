@@ -27,8 +27,28 @@ func (g *gitStore) SetRemote(ctx context.Context, url string, authFn func() (tra
 	g.authFn = authFn
 
 	_, err := g.repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{url}})
-	if err != nil && !errors.Is(err, git.ErrRemoteExists) {
-		return fmt.Errorf("create remote: %w", err)
+	if err != nil {
+		if errors.Is(err, git.ErrRemoteExists) {
+			// Remote already exists; update its URL
+			remote, remErr := g.repo.Remote("origin")
+			if remErr != nil {
+				return fmt.Errorf("get existing remote: %w", remErr)
+			}
+			if remote.Config().URLs[0] != url {
+				// ponytail: this deletes and recreates the remote because go-git's
+				// RemoteConfig is immutable after creation. The upgrade path is to
+				// use a lower-level config API if performance becomes a concern.
+				if err := g.repo.DeleteRemote("origin"); err != nil {
+					return fmt.Errorf("delete remote: %w", err)
+				}
+				_, err = g.repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{url}})
+				if err != nil {
+					return fmt.Errorf("recreate remote: %w", err)
+				}
+			}
+		} else {
+			return fmt.Errorf("create remote: %w", err)
+		}
 	}
 	return nil
 }
@@ -461,6 +481,16 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, url, branch string) er
 	g.wt = wt
 	g.fs = wt.Filesystem
 
+	// Ensure entities/ and edges/ directories exist in the working tree.
+	// The remote repository may not contain these directories, but downstream
+	// re-hydration (WriteEntityFiles, WriteEdgeFiles) requires them.
+	if err := g.fs.MkdirAll("entities", 0755); err != nil {
+		return fmt.Errorf("create entities dir: %w", err)
+	}
+	if err := g.fs.MkdirAll("edges", 0755); err != nil {
+		return fmt.Errorf("create edges dir: %w", err)
+	}
+
 	return nil
 }
 
@@ -485,12 +515,12 @@ func (g *gitStore) IsEmpty(ctx context.Context) (bool, error) {
 	err = log.ForEach(func(commit *object.Commit) error {
 		if commit.Message != "init" {
 			// Found a non-init commit
-			return fmt.Errorf("HAS_DATA")
+			return ErrHasData
 		}
 		return nil
 	})
 	if err != nil {
-		if err.Error() == "HAS_DATA" {
+		if errors.Is(err, ErrHasData) {
 			return false, nil
 		}
 		return false, fmt.Errorf("iterate log: %w", err)
@@ -500,9 +530,10 @@ func (g *gitStore) IsEmpty(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// ensureRemoteExists creates the "origin" remote if it does not already exist.
+// ensureRemoteExists creates the "origin" remote if it does not already exist,
+// or updates its URL if it has changed.
 func (g *gitStore) ensureRemoteExists() error {
-	_, err := g.repo.Remote("origin")
+	remote, err := g.repo.Remote("origin")
 	if err != nil {
 		if errors.Is(err, git.ErrRemoteNotFound) {
 			_, err = g.repo.CreateRemote(&config.RemoteConfig{
@@ -515,6 +546,22 @@ func (g *gitStore) ensureRemoteExists() error {
 			return nil
 		}
 		return fmt.Errorf("check remote: %w", err)
+	}
+	// Remote exists; update URL if it has changed
+	if len(remote.Config().URLs) == 0 || remote.Config().URLs[0] != g.remoteURL {
+		// ponytail: this deletes and recreates the remote because go-git's
+		// RemoteConfig is immutable after creation. The upgrade path is to
+		// use a lower-level config API if performance becomes a concern.
+		if err := g.repo.DeleteRemote("origin"); err != nil {
+			return fmt.Errorf("delete remote: %w", err)
+		}
+		_, err = g.repo.CreateRemote(&config.RemoteConfig{
+			Name: "origin",
+			URLs: []string{g.remoteURL},
+		})
+		if err != nil {
+			return fmt.Errorf("recreate remote: %w", err)
+		}
 	}
 	return nil
 }

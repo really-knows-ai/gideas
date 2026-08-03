@@ -2845,7 +2845,7 @@ func TestPullFromRemote(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		log.Close()
+		defer log.Close()
 
 		if err := log.ForEach(func(c *object.Commit) error {
 			if strings.HasPrefix(c.Message, "second commit") {
@@ -3622,6 +3622,13 @@ func TestFetchAndMerge_MergeCommit(t *testing.T) {
 	_, err = gs.wt.Filesystem.Stat("init.txt")
 	if err != nil {
 		t.Fatalf("init.txt should exist in working tree: %v", err)
+	}
+
+	// local.txt was created locally but the simplified merge uses the remote tree,
+	// so local-only files are lost.
+	_, err = gs.wt.Filesystem.Stat("local.txt")
+	if err == nil {
+		t.Fatal("local.txt should NOT exist in working tree after simplified merge")
 	}
 }
 

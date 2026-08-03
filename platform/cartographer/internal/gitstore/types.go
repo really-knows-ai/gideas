@@ -159,4 +159,5 @@ var (
 	ErrUnknownChangeKind          = errors.New("unknown change kind")
 	ErrEntityTypeMismatch         = errors.New("entity type mismatch")
 	ErrEdgeTypeMismatch           = errors.New("edge type mismatch")
+	ErrHasData                    = errors.New("has data")
 )
