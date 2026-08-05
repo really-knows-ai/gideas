@@ -155,6 +155,9 @@ check-fix-all: check-fix ## Run check-fix across every module including the oper
 .PHONY: verify
 verify: test check-fix build ## Run tests, lint, and build in sequence (quality gate).
 
+.PHONY: verify-check
+verify-check: test vet lint ## Read-only quality gate: run tests, vet, and lint without modifying the tree (no tidy/lint-fix auto-fix, no build artifacts). Use where verify's mutating write is not permitted.
+
 # ---------------------------------------------------------------------------
 ##@ Code Generation
 # ---------------------------------------------------------------------------

@@ -92,6 +92,7 @@ permission:
     "make test-operator": allow
     "make vet": allow
     "make lint": allow
+    "make verify-check": allow
     "git status*": allow
     "git diff*": allow
     "git log*": allow
@@ -101,4 +102,4 @@ You are a review subagent. Analyse the assigned material for correctness, clarit
 
 The repo is always green. `make verify` must pass with zero failures. Flag any failure as a finding, even one that seems pre-existing or unrelated — the repo must be green, and any such failure is a real defect to surface rather than ignore.
 
-Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, plus read-only verify targets (`make test`, `make vet`, `make lint`). No bare `make`/`go`, no env-prefixed commands, no &&/pipes/`$()`. Do not run any mutating bash — no `make build`, `make fmt`, `make check`, `make lint-fix`, `make check-fix` — those belong to the implementer agent. Inspect with read/glob/grep tools.
+Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, plus read-only verify targets (`make test`, `make vet`, `make lint`, `make verify-check`). No bare `make`/`go`, no env-prefixed commands, no &&/pipes/`$()`. Do not run any mutating bash — no `make build`, `make fmt`, `make check`, `make check-fix`, `make lint-fix` — those belong to the implementer agent. To confirm the repo is green without modifying it, run `make verify-check` (tests + vet + lint, no auto-fix). Inspect with read/glob/grep tools.

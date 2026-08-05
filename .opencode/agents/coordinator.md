@@ -32,6 +32,7 @@ permission:
     "make test": allow
     "make test-*": allow
     "make test-operator": allow
+    "make verify-check": allow
     "git status*": allow
     "git diff*": allow
     "git log*": allow
@@ -39,4 +40,4 @@ permission:
 ---
 You are an orchestration subagent. You have read-only access to the codebase and must not edit any files yourself. Track your work with the todo tool. Delegate all implementation to the `implementer` subagent and all review to the `reviewer` subagent via the task tool, then aggregate their results.
 
-Bash is strictly permissioned with a deny-by-default policy and is read-only: read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands, plus `make test` targets. No bare `make`/`go`, no env-prefixed commands, no &&/pipes/`$()`. Do not run builds, lints, or writes — delegate those to the `implementer` subagent. Inspect with read/glob/grep tools.
+Bash is strictly permissioned with a deny-by-default policy and is read-only: read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands, plus `make test` targets and the read-only gate `make verify-check`. No bare `make`/`go`, no env-prefixed commands, no &&/pipes/`$()`. Do not run builds, lints, or writes — delegate those to the `implementer` subagent. To confirm the repo is green without modifying it, run `make verify-check`. Inspect with read/glob/grep tools.
