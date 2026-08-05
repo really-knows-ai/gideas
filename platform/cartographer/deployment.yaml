@@ -63,9 +63,16 @@ spec:
           # in the readinessProbe, and in the ClusterIP Service targetPort. Changing
           # CARTOGRAPHER_PORT alone orphans the probe and Service ports, so probes start
           # failing and traffic silently misroutes until all four are updated together.
-          # Ceiling: one more hardcoded value every time the port is retyped. Upgrade
-          # path: derive probe/Service ports from a single source (e.g. ProcessOpen
-          # grafana-style port constant or a values param) once the port must vary.
+          # In production the Operator renders the real Deployment from the FoundryGraph
+          # CRD (SPEC R6 step 3), so a port change also requires the Operator's
+          # Deployment template to update all four surfaces (containerPort,
+          # CARTOGRAPHER_PORT env, readinessProbe port, and Service targetPort);
+          # the drift surface is wider than the four hand-written values in this
+          # template alone. Ceiling: one more hardcoded value every time the port is
+          # retyped, across both this template and the Operator's rendered Deployment.
+          # Upgrade path: derive probe/Service ports from a single source (e.g.
+          # ProcessOpen grafana-style port constant or a values param) once the port
+          # must vary.
           env:
             - name: LADYBUG_DB_PATH
               value: /data

@@ -26,11 +26,15 @@ ladybug-lib: ## Provision the LadybugDB C library and headers for CGo linking.
 CGO_TEST_SERVICES = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: test
-test: test-sdk test-sidecar test-flowctl $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
+test: test-sdk test-sdk-ladybug test-sidecar test-flowctl $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
 	CGO_ENABLED=1 go test -v ./sdk/go/...
+
+.PHONY: test-sdk-ladybug
+test-sdk-ladybug: ladybug-lib ## Run SDK unit tests with LadybugDB parser (validates R3 fallback).
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" CGO_ENABLED=1 go test -v -tags ladybug ./sdk/go/...
 
 .PHONY: test-sidecar
 test-sidecar: ## Run Sidecar unit tests.

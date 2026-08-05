@@ -469,6 +469,66 @@ func TestValidate_ReservedWordCaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestValidate_ReservedWordNewlyAdded verifies that keywords added to close
+// the gap between the hand-maintained list and the engine's reserved words
+// are now rejected at validation time (SPEC R1, error-table row "Name is a
+// LadybugDB reserved word" → INVALID_ARGUMENT), not at table-creation time
+// (FAILED_PRECONDITION).
+func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
+	newlyAdded := []string{
+		"CONSTRAINT", "COUNT", "CYPHER", "EXPLAIN", "FILTER",
+		"FROM", "NODE", "NONE", "PROFILE", "REDUCE", "SHOW", "UNIQUE",
+	}
+	for _, kw := range newlyAdded {
+		t.Run("entity type/"+kw, func(t *testing.T) {
+			s := &flowv1.Schema{
+				EntityTypes: []*flowv1.EntityType{{Name: kw}},
+			}
+			if err := Validate(s); err == nil {
+				t.Fatalf("expected ErrReservedWord for %q, got nil", kw)
+			} else if !errors.Is(err, ErrReservedWord) {
+				t.Fatalf("expected ErrReservedWord for %q, got: %v", kw, err)
+			}
+		})
+		t.Run("entity property/"+kw, func(t *testing.T) {
+			s := &flowv1.Schema{
+				EntityTypes: []*flowv1.EntityType{{
+					Name:       "Component",
+					Properties: []*flowv1.Property{{Name: kw, Type: "string"}},
+				}},
+			}
+			if err := Validate(s); err == nil {
+				t.Fatalf("expected ErrReservedWord for property %q, got nil", kw)
+			} else if !errors.Is(err, ErrReservedWord) {
+				t.Fatalf("expected ErrReservedWord for property %q, got: %v", kw, err)
+			}
+		})
+		t.Run("edge type/"+kw, func(t *testing.T) {
+			s := &flowv1.Schema{
+				EdgeTypes: []*flowv1.EdgeType{{Name: kw}},
+			}
+			if err := Validate(s); err == nil {
+				t.Fatalf("expected ErrReservedWord for edge type %q, got nil", kw)
+			} else if !errors.Is(err, ErrReservedWord) {
+				t.Fatalf("expected ErrReservedWord for edge type %q, got: %v", kw, err)
+			}
+		})
+		t.Run("edge property/"+kw, func(t *testing.T) {
+			s := &flowv1.Schema{
+				EdgeTypes: []*flowv1.EdgeType{{
+					Name:       "DEPENDS_ON",
+					Properties: []*flowv1.Property{{Name: kw, Type: "string"}},
+				}},
+			}
+			if err := Validate(s); err == nil {
+				t.Fatalf("expected ErrReservedWord for edge property %q, got nil", kw)
+			} else if !errors.Is(err, ErrReservedWord) {
+				t.Fatalf("expected ErrReservedWord for edge property %q, got: %v", kw, err)
+			}
+		})
+	}
+}
+
 func TestValidate_CypherIdentifierBoundaryCases(t *testing.T) {
 	tests := []struct {
 		name     string

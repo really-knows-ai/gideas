@@ -924,6 +924,53 @@ func TestUpdateEntity_Partial(t *testing.T) {
 	}
 }
 
+// TestUpdateEntity_OmitsRequiredProperty_Succeeds verifies SPEC R6
+// "forward-only" property guarantee: UpdateEntity omitting a Required:true
+// property must succeed because updates are partial — only the supplied
+// properties are SET. The Required constraint applies only at create time.
+func TestUpdateEntity_OmitsRequiredProperty_Succeeds(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+
+	reqSchema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Component",
+			Properties: []*flowv1.Property{
+				{Name: "name", Type: "string", Required: true},
+				{Name: "version", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(context.Background(), reqSchema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	ctx := context.Background()
+
+	// Create entity with the required property.
+	e, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "comp", "version": "1"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// Update omitting the Required property — must succeed (forward-only).
+	updated, err := s.UpdateEntity(ctx, e.Id,
+		map[string]string{"version": "2"}, nil, "")
+	if err != nil {
+		t.Fatalf("UpdateEntity omitting Required property must succeed: %v", err)
+	}
+	if updated.Properties["version"] != "2" {
+		t.Errorf("version = %q, want %q", updated.Properties["version"], "2")
+	}
+	// Required property must remain unchanged.
+	if updated.Properties["name"] != "comp" {
+		t.Errorf("name = %q, want %q", updated.Properties["name"], "comp")
+	}
+}
+
 func TestDeleteEntity_Valid(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -4547,6 +4594,109 @@ func TestSearchNeighbors_ZeroTopKDefaults(t *testing.T) {
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result with default topK, got %d", len(results))
+	}
+}
+
+// TestBranch_DropBranchDB_LeavesMainUnbootstrapped verifies SPEC R7 "branch
+// scope": a vector dimension bootstrapped by a transaction branch, then rolled
+// back via DropBranchDB, leaves main un-bootstrapped (GetEstablishedDimension
+// == 0). The bootstrap DDL (ALTER TABLE ADD embedding + CREATE_VECTOR_INDEX)
+// runs on the branch's own connection; dropping the branch must not leak that
+// side-effect into main.
+func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	if s.IsVectorIndexBootstrapped("VectorType", "") {
+		t.Fatal("expected VectorType not bootstrapped on main before branch")
+	}
+
+	const branch = "tx-drop-bootstrap"
+	if err := s.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	// Bootstrap the vector dimension inside the branch.
+	if _, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "v"}, []float32{1, 2, 3}, branch); err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	if !s.IsVectorIndexBootstrapped("VectorType", branch) {
+		t.Fatal("expected VectorType bootstrapped on branch")
+	}
+
+	// Rollback: drop the branch.
+	if err := s.DropBranchDB(ctx, branch); err != nil {
+		t.Fatalf("DropBranchDB: %v", err)
+	}
+
+	// Main must remain un-bootstrapped (SPEC R7 branch scope).
+	if s.IsVectorIndexBootstrapped("VectorType", "") {
+		t.Fatal("main must not be bootstrapped after branch rollback")
+	}
+	dim, err := s.GetEstablishedDimension("VectorType", "")
+	if err != nil {
+		t.Fatalf("GetEstablishedDimension: %v", err)
+	}
+	if dim != 0 {
+		t.Fatalf("expected main dimension 0 after branch rollback, got %d", dim)
+	}
+}
+
+// TestBranch_InheritsMainVectorDimension_RejectsConflict verifies that a
+// branch opened over a pre-bootstrapped main inherits main's established
+// vector dimension (via ReplicateSchemaToBranch copying the FLOAT[n] column
+// and HNSW index) and rejects a CreateEntity whose embedding dimension
+// conflicts. This is the store-layer path that surfaces the ABORTED Refresh
+// conflict of SPEC R7 when the branch's dimension disagrees with main's.
+func TestBranch_InheritsMainVectorDimension_RejectsConflict(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Bootstrap main to dimension 3.
+	if _, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "main-v"}, []float32{1, 2, 3}, ""); err != nil {
+		t.Fatalf("bootstrap main vector: %v", err)
+	}
+	if dim, err := s.GetEstablishedDimension("VectorType", ""); err != nil || dim != 3 {
+		t.Fatalf("main dimension = %d, err = %v", dim, err)
+	}
+
+	const branch = "tx-inherit-dim"
+	if err := s.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	// Matching dimension on branch — should succeed.
+	if _, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "branch-v"}, []float32{4, 5, 6}, branch); err != nil {
+		t.Fatalf("CreateEntity on branch with matching dimension: %v", err)
+	}
+
+	// Conflicting dimension on branch — must fail with ErrEmbeddingDimension.
+	_, err = s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "conflict"}, []float32{1, 2, 3, 4, 5}, branch)
+	if err == nil {
+		t.Fatal("expected dimension mismatch error on branch")
+	}
+	if !errors.Is(err, store.ErrEmbeddingDimension) {
+		t.Errorf("expected ErrEmbeddingDimension, got %v", err)
 	}
 }
 

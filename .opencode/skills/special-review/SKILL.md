@@ -398,8 +398,12 @@ Examples:
 | Observation: "no existing codebase uses mTLS" | "Plan introduces mTLS without accounting for first-use cost" | No — observation, not a rule |
 | Known Deviation: "ExtendTimeout strict `>` is correct" | "Line 90 uses `>` instead of `>=`" | Yes — intentional deviation, prune |
 
-When in doubt, KEEP the finding.  The consolidation audit (step 5a) will
-catch false negatives.
+When in doubt whether a finding is covered by a LEARNINGS.md Known
+Deviation / observation, KEEP it at this stage — removing a live finding
+from the digest is worse than the audit catching a false positive.  The
+consolidation audit (step 5a) catches those.  This "keep" applies only to
+the learning-coverage pass; it is separate from impact-sizing in step 5c,
+where Tier-3 items are pruned.
 
 After pruning, check whether any learning was matched multiple times.
 If so, consider tightening its wording — a learning that catches many
@@ -423,40 +427,73 @@ review remain as-is — they are still open and unaddressed.
 ### 5c. Consider impact and prune items not worth fixing (consolidation only)
 
 The fresh reviewers must NOT make this judgement — they produce a flat list
-of every divergence with no severity.  **Impact-sizing happens here, at
+of every divergence with no ranking.  **Value-sizing happens here, at
 consolidation, in the main agent only.**  The question at this step is:
-*given everything this review surfaced, is each item worth the cost of
-fixing it?*
+*for every valid finding, is the cost of fixing it worth the benefit?*
 
-This is a judgement about **value, not validity**.  An item is a candidate
-for impact-pruning only when it is technically valid (a real divergence
-from criteria) but fixing it would cost more than it is worth — e.g. a
-fossilised formatting nit in generated code nobody reads, a doc-comment
-style inconsistency in an untouched file, or a speculative concern about a
-codepath that is provably unreachable in practice.
+This is a judgement about **value, not validity**.  A finding is valid if
+it is a true divergence from criteria.  It may still be not worth fixing:
+the cost (code churn, test surface, review effort, risk of regression)
+exceeds the benefit (removed dead code, a marginal regression-safety test,
+a doc nit nobody reads).  Such findings must be pruned, not kept open.
 
-**Rule of thumb — prune on impact only when ALL of the following hold:**
+**Tier every valid finding (reviewers don't — you do), then prune the
+low-return tier.**
 
-- The finding is a true, verified divergence (do not impact-prune a finding
-  that is actually covered by a learning — that is a false positive handled
-  in step 5a).
-- The affected code/file is low-traffic or the issue has bounded blast
-  radius.
-- The fix is not load-bearing: no trust-boundary, data-loss, security, or
-  accessibility implication.  Those are never prunable by impact.
-- No downstream behaviour depends on the fix for correctness.
+Assign each finding a tier:
 
-Pruning by impact is a **last resort** and must be deliberate.  When in
-doubt, KEEP the item — the implementer can still mark it `[~]` wont-fix
-with a justification, which is the normal and preferred path for an
-unworthy-while-valid item.  Impact-pruning is only for items the
-consolidator is confident should not even surface as open work.
+- **Tier 1 — must fix (always keep).** The fix is load-bearing or a
+  concrete defect:
+  - A real bug: behaviour is wrong, a CLI/API is broken, a spec-mandated
+    error code or check-order is surfaced incorrectly, data can be lost or
+    corrupted.
+  - A security / trust-boundary / data-loss / accessibility implication.
+  - A missing test for a **behaviourally significant, likely-to-regress**
+    SPEC branch (e.g. a divergence guard, a conflict resolution path, an
+    error-table row that a refactor could silently flip).
+  - A finding whose resolution changes observable behaviour.
+  Tier 1 items are never pruned.
+
+- **Tier 2 — worth fixing (keep).** A genuine divergence whose fix is
+  bounded and low-risk. This covers most ordinary coverage gaps, small
+  deletions, and correctness-blocking annotations: the fix pays for its
+  churn. Tier 2 items are kept.
+
+- **Tier 3 — should be pruned (prune).** The finding is technically valid
+  but the cost of fixing it outweighs the benefit. A "nice-to-have" that
+  the repo does not need, created when its cost is only real churn.
+  Typical Tier 3 forms:
+  - A doc/SPEC wording mismatch or layering note with no behaviour change.
+  - Re-flagging a trade-off that already carries a `ponytail:` (the finding
+    just restates the ponytail).
+  - A speculative concern about a codepath that is provably unreachable.
+  - A niche/edge-case test that nobody will run or that protects a branch
+    with no plausible regression.
+  - A cosmetic/style nit in an untouched file.
+  Tier 3 items are pruned, not kept on the board by default.
+
+The vast majority of a flat reviewer list is Tier 2 (a reviewer flags
+genuine divergences); Tier 3 is the minority. But Tier 3 items **must be
+pruned** — the default posture is that an item which does not pull its
+weight is removed at consolidation.
+
+**Prune exactly the Tier 3 items.** Remove them from the open-items list
+and record each one verbatim in the `## Pruned by Impact` header section
+with a one-line reason — the user can veto and restore it.
+
+**When in doubt between Tier 2 and Tier 3, prune.** A finding kept only
+because "I might regress it someday", whose fix is real churn, is Tier 3.
+If you cannot defend an item's value, prune it. This is the opposite of
+the old "when in doubt, KEEP" default that let nice-to-haves pile up.
+
+**Never prune:** a real bug, ANY security / trust-boundary / data-loss /
+accessibility item, a spec-mandated error code or check-order issued by
+wrong code, and a missing test for a behaviour the criteria explicitly
+names. Those are Tier 1 regardless of how small.
 
 **Transparency is mandatory.** Every item pruned here MUST be reported
 verbatim to the user in step 7 and recorded in the header as a
-pruned-by-impact list.  The report must make it unmistakably clear what
-was chosen to prune and why — this decision is exactly the kind of thing
-the user wants to see and veto.
+pruned-by-impact list, so the user can veto any of them.
 
 ### 5a. Consolidation audit
 
@@ -570,11 +607,12 @@ the review date, files/criteria reviewed, and summary counts:
 |-------|-------|
 | `[ ]` Open | <count> |
 | `[!]` Re-opened | <count> |
+| pruned-by-impact (Tier 3) | <count> |
 
 ## Pruned by Impact (consolidation decision)
 
 The following items were valid findings but were pruned at consolidation
-as not worth the cost of fixing.  Review and veto if you disagree.
+as Tier-3 — not worth the cost of fixing.  Review and veto if you disagree.
 
 - <file>:<line> — <verbatim description of the pruned item>
   - Pruned by impact: <why it was not worth fixing>

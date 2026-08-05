@@ -25,7 +25,12 @@ import (
 // build without the `ladybug` tag to use the pure-Go regex fallback in
 // cypher.go instead. The in-memory database is ephemeral and incurs a
 // one-time allocation per call; for hot paths, the database could be
-// reused across calls.
+// reused across calls. The LadybugDB Prepare step is best-effort syntax
+// validation — it falls through to regex extraction on failure (including
+// when schema is not yet applied), because Prepare requires both valid
+// syntax AND existing tables. The regex extraction then handles the actual
+// label extraction, and any genuinely invalid Cypher that happens to
+// pattern-match is bounded by Cartographer re-authorization on ingress.
 func extractEntityTypes(cypher string) []string {
 	if cypher == "" {
 		return nil
@@ -42,34 +47,33 @@ func extractEntityTypes(cypher string) []string {
 		conn, connErr := lbug.OpenConnection(db)
 		if connErr == nil {
 			stmt, prepErr := conn.Prepare(cypher)
-			if prepErr != nil {
-				// Invalid Cypher — return nil for wildcard fallback.
-				// ponytail: Close errors are silently discarded because db is
-				// an ephemeral in-memory instance created solely to validate
-				// Cypher syntax; close failures release nothing durable and
-				// cannot lose committed data. The handles are garbage-collected
-				// regardless. If the database were ever shared or durable, the
-				// Close errors would need to be propagated.
-				conn.Close()
-				db.Close()
-				return nil
+			if prepErr == nil {
+				// The statement parsed successfully. Parsing here only validates
+				// syntax; label extraction (below) is what determines the annotated
+				// entity types. If that extraction yields no labels — a label-less
+				// read such as "MATCH (n) RETURN n", or labels that fail the regex —
+				// extractEntityTypes returns nil and the ExecuteCypher caller
+				// collapses to the READ:graph/entity/* wildcard.
+				// Deviation from R3's literal "fallback only on parser failure": a
+				// successfully-parsed label-less read also collapses to the wildcard.
+				// This is correct for a cross-type read, which genuinely spans all
+				// entity types, and is low impact because the Cartographer
+				// re-authorizes on ingress (defence-in-depth per Capability
+				// Authorisation Chain). Mutation read/write enforcement is likewise
+				// authoritative at the Cartographer (R7); the SDK never rejects based
+				// on IsReadOnly here, so a mutation still yields its specific entity
+				// types rather than collapsing to the read wildcard.
+				stmt.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant
 			}
-			// The statement parsed successfully. Parsing here only validates
-			// syntax; label extraction (below) is what determines the annotated
-			// entity types. If that extraction yields no labels — a label-less
-			// read such as "MATCH (n) RETURN n", or labels that fail the regex —
-			// extractEntityTypes returns nil and the ExecuteCypher caller
-			// collapses to the READ:graph/entity/* wildcard.
-			// Deviation from R3's literal "fallback only on parser failure": a
-			// successfully-parsed label-less read also collapses to the wildcard.
-			// This is correct for a cross-type read, which genuinely spans all
-			// entity types, and is low impact because the Cartographer
-			// re-authorizes on ingress (defence-in-depth per Capability
-			// Authorisation Chain). Mutation read/write enforcement is likewise
-			// authoritative at the Cartographer (R7); the SDK never rejects based
-			// on IsReadOnly here, so a mutation still yields its specific entity
-			// types rather than collapsing to the read wildcard.
-			stmt.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant
+			// ponytail: When Prepare fails (schema not yet applied, or genuinely
+			// invalid syntax), we fall through to regex extraction rather than
+			// returning nil. LadybugDB's Prepare requires schema to succeed, so a
+			// Prepare failure on a valid-but-unresolvable MATCH does NOT mean the
+			// Cypher is invalid — it may simply be a valid read on a not-yet-bootstrapped
+			// graph. The regex extraction below handles this correctly: valid MATCH
+			// patterns extract their labels, label-less reads yield nil (wildcard),
+			// and genuinely invalid Cypher that happens to pattern-match still
+			// produces at worst a typed annotation (bounded by Cartographer re-auth).
 			conn.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant
 		}
 		db.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant

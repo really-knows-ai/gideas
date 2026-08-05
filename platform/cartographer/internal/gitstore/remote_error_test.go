@@ -2,12 +2,15 @@ package gitstore
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 )
+
+const testRemoteURL = "https://example.com/repo.git"
 
 // TestClassifyRemoteError locks the type-based remote error classification:
 // outcomes are assigned by typed sentinels (go-git's transit sentinels and the
@@ -90,6 +93,75 @@ func TestMapFetchError(t *testing.T) {
 	}
 	if !errors.Is(got, boom) {
 		t.Fatalf("mapFetchError(other) = %v, want the original error to be reachable via Unwrap", got)
+	}
+}
+
+// TestFetchAndMergeAuthConfigMissing verifies that FetchAndMerge with a nil
+// authFn returns ErrAuthConfigMissing — the SPEC error-table row "Remote auth
+// config missing (PullFromRemote)". The divergent path is covered by
+// TestFetchAndMerge_Diverged; this pins the pre-fetch auth-guard branch.
+func TestFetchAndMergeAuthConfigMissing(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		// Configure remote but leave authFn nil
+		gs.remoteURL = testRemoteURL
+		_, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMergeAuthConfigMissing: %v", err)
+	}
+}
+
+// TestFetchAndMergeAuthResolutionFailure verifies that FetchAndMerge surfaces
+// ErrRemoteAuthResolutionFailed when the configured authFn returns a generic
+// (non-sentinel) error — the SPEC error-table row "Remote auth resolution
+// failed (PullFromRemote)". This is distinct from ErrAuthConfigMissing
+// (nil authFn) and ErrAuthFailed (typed transport sentinel from the server).
+func TestFetchAndMergeAuthResolutionFailure(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		gs.remoteURL = testRemoteURL
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return nil, fmt.Errorf("vault: credential lookup failed")
+		}
+		_, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if !errors.Is(err, ErrRemoteAuthResolutionFailed) {
+			return fmt.Errorf("expected ErrRemoteAuthResolutionFailed, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMergeAuthResolutionFailure: %v", err)
+	}
+}
+
+// TestFetchAndMergeAuthConfigMissingFromFn verifies that FetchAndMerge preserves
+// the ErrAuthConfigMissing sentinel returned by the authFn itself (resolveAuth
+// at remote.go:594) instead of collapsing it into ErrRemoteAuthResolutionFailed.
+// This is the SPEC error-table row "Remote auth config missing (PullFromRemote)"
+// on the authFn-returns-sentinel path.
+func TestFetchAndMergeAuthConfigMissingFromFn(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		gs.remoteURL = testRemoteURL
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return nil, ErrAuthConfigMissing
+		}
+		_, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		}
+		if errors.Is(err, ErrRemoteAuthResolutionFailed) {
+			return fmt.Errorf("expected not ErrRemoteAuthResolutionFailed, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMergeAuthConfigMissingFromFn: %v", err)
 	}
 }
 

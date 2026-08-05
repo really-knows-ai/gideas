@@ -2253,6 +2253,54 @@ func TestIsEmpty(t *testing.T) {
 			return nil
 		})
 	})
+
+	t.Run("wiped-but-committed returns false", func(t *testing.T) {
+		gs := setupTestStore(t)
+		_ = gs.WithGitLock(func() error {
+			// Commit a "wipe" message on top of init — simulates WipeGraph
+			if err := gs.AddAll(ctx(), "."); err != nil {
+				return err
+			}
+			if err := gs.Commit(ctx(), "wipe"); err != nil {
+				return err
+			}
+
+			empty, err := gs.IsEmpty(ctx())
+			if err != nil {
+				return err
+			}
+			if empty {
+				return fmt.Errorf("expected non-empty after wipe commit")
+			}
+			return nil
+		})
+	})
+
+	t.Run("remote init commit with different author returns false", func(t *testing.T) {
+		gs := setupTestStore(t)
+		_ = gs.WithGitLock(func() error {
+			// Simulate a commit whose message is "init" but from a different
+			// author (e.g. a cloned remote's initial commit). This must NOT
+			// be treated as New()'s init commit.
+			if _, err := gs.wt.Commit("init", &git.CommitOptions{
+				Author: &object.Signature{
+					Name:  "developer",
+					Email: "dev@remote.example",
+				},
+			}); err != nil {
+				return err
+			}
+
+			empty, err := gs.IsEmpty(ctx())
+			if err != nil {
+				return err
+			}
+			if empty {
+				return fmt.Errorf("expected non-empty for remote init commit with different author")
+			}
+			return nil
+		})
+	})
 }
 
 func TestPushRemoteNoRemote(t *testing.T) {
@@ -2609,6 +2657,29 @@ func TestCloneSingleAuthConfigMissing(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CloneSingleAuthConfigMissing: %v", err)
+	}
+}
+
+// TestCloneSingleAuthConfigMissingHTTPS verifies the authenticated-URL
+// pre-flight rejection for an https:// URL with an embedded user (basic
+// auth) and no configured auth provider — the https counterpart of
+// TestCloneSingleAuthConfigMissing (which covers ssh://). This pins the
+// requiresAuth URL-scheme branch for https-with-embedded-user at the
+// CloneSingleBranch level (remote.go:416).
+func TestCloneSingleAuthConfigMissingHTTPS(t *testing.T) {
+	gs := setupTestStore(t)
+	if gs.authFn != nil {
+		t.Fatal("expected nil auth provider")
+	}
+	err := gs.WithGitLock(func() error {
+		err := gs.CloneSingleBranch(ctx(), "https://user@example.com/repo.git", "main")
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestCloneSingleAuthConfigMissingHTTPS: %v", err)
 	}
 }
 
@@ -3984,6 +4055,121 @@ func remoteHEAD(t *testing.T, bareDir string) plumbing.Hash {
 	return remoteRef.Hash()
 }
 
+// TestFetchAndMerge_BootstrapFromInitOnly exercises the SPEC R10
+// clone-vs-pull bootstrap path: an init-only local repo (created by New())
+// pulls from a remote that shares the same init commit and has additional
+// history. FetchAndMerge must fast-forward local main from the init commit
+// to the remote's HEAD without returning ErrPullDiverged.
+func TestFetchAndMerge_BootstrapFromInitOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	// Create the "seed" repo whose init commit will be shared between local
+	// and remote. This is the same init commit that New() produces: a single
+	// commit with message "init" containing entities/ + edges/ dirs.
+	seedDir := filepath.Join(tmpDir, "seed")
+	seedStore, err := New(seedDir)
+	if err != nil {
+		t.Fatalf("New seed: %v", err)
+	}
+	_ = seedStore.Close()
+
+	// Clone the seed as a bare remote — the bare remote now has the same
+	// "init" commit as the local will have.
+	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
+		URL: "file://" + filepath.Join(seedDir, "graph-repo"),
+	})
+	if err != nil {
+		t.Fatalf("clone bare: %v", err)
+	}
+
+	// Advance the remote by one commit (simulating a remote with history).
+	workDir := filepath.Join(tmpDir, "work")
+	workRepo, err := git.PlainClone(workDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone work: %v", err)
+	}
+	workWT, err := workRepo.Worktree()
+	if err != nil {
+		t.Fatalf("work worktree: %v", err)
+	}
+	f, err := workWT.Filesystem.Create("remote-data.txt")
+	if err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	_, _ = f.Write([]byte("remote content"))
+	_ = f.Close()
+	if _, err := workWT.Add("remote-data.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	remoteHash, err := workWT.Commit("remote data commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := workRepo.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	// Create a fresh local repo via New() — this produces the same "init"
+	// commit as the seed, so local main IS an ancestor of remote main.
+	localDir := filepath.Join(tmpDir, "local")
+	localStore, err := New(localDir)
+	if err != nil {
+		t.Fatalf("New local: %v", err)
+	}
+	defer func() { _ = localStore.Close() }()
+
+	gs := localStore.(*gitStore)
+
+	err = localStore.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		// Verify local is empty (init-only) before pull
+		empty, emptyErr := gs.IsEmpty(ctx())
+		if emptyErr != nil {
+			return fmt.Errorf("IsEmpty: %w", emptyErr)
+		}
+		if !empty {
+			return fmt.Errorf("expected empty init-only repo")
+		}
+
+		// FetchAndMerge must fast-forward from init to remote HEAD
+		newHash, pullErr := gs.FetchAndMerge(ctx(), "origin", "main")
+		if pullErr != nil {
+			return fmt.Errorf("FetchAndMerge bootstrap: %w", pullErr)
+		}
+		if newHash != remoteHash {
+			return fmt.Errorf("expected hash %s, got %s", remoteHash, newHash)
+		}
+
+		// Local main must now point at remote HEAD
+		mainRef, refErr := gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+		if refErr != nil {
+			return fmt.Errorf("main ref: %w", refErr)
+		}
+		if mainRef.Hash() != remoteHash {
+			return fmt.Errorf("main ref = %s, want %s", mainRef.Hash(), remoteHash)
+		}
+
+		// Remote data must be visible in the working tree
+		if _, statErr := gs.fs.Stat("remote-data.txt"); statErr != nil {
+			return fmt.Errorf("remote data file missing after bootstrap: %w", statErr)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_BootstrapFromInitOnly: %v", err)
+	}
+}
+
 // TestFetchAndMerge_AlreadyUpToDate tests that FetchAndMerge when both
 // sides are identical returns no error and the HEAD hash is unchanged.
 func TestFetchAndMerge_AlreadyUpToDate(t *testing.T) {
@@ -4253,6 +4439,146 @@ func TestFetchAndMerge_NonMainBranch(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("TestFetchAndMerge_NonMainBranch: %v", err)
+	}
+}
+
+// TestFetchAndMerge_PullAfterWipe exercises the pull-after-wipe fast-forward
+// path: the remote has a "wipe" commit that removed data, the local was
+// cloned before the wipe and has stale untracked files from a pre-wipe type.
+// After FetchAndMerge fast-forwards local main to the remote's wipe commit,
+// the Force:true checkout replaces tracked files and the explicit
+// wt.Clean removes stale untracked files — the working tree must exactly
+// match the remote state.
+func TestFetchAndMerge_PullAfterWipe(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	// Create a seed repo with a data commit.
+	seedDir := filepath.Join(tmpDir, "seed")
+	seedRepo, err := git.PlainInitWithOptions(seedDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("init seed: %v", err)
+	}
+	seedWT, err := seedRepo.Worktree()
+	if err != nil {
+		t.Fatalf("seed worktree: %v", err)
+	}
+	sf, err := seedWT.Filesystem.Create("data.txt")
+	if err != nil {
+		t.Fatalf("create data: %v", err)
+	}
+	_, _ = sf.Write([]byte("initial data"))
+	_ = sf.Close()
+	if _, err := seedWT.Add("data.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := seedWT.Commit("data commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("commit data: %v", err)
+	}
+
+	// Clone as bare remote.
+	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
+		URL: "file://" + seedDir,
+	})
+	if err != nil {
+		t.Fatalf("clone bare: %v", err)
+	}
+
+	// Clone local from the bare remote (local now has data.txt).
+	localDir := filepath.Join(tmpDir, "local")
+	localRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone local: %v", err)
+	}
+	localWT, err := localRepo.Worktree()
+	if err != nil {
+		t.Fatalf("local worktree: %v", err)
+	}
+
+	// Create a stale untracked file in the local working tree — simulates
+	// a previously wiped type's leftover files.
+	if err := localWT.Filesystem.MkdirAll("entities/OldType", 0755); err != nil {
+		t.Fatalf("mkdir stale dir: %v", err)
+	}
+	stale, err := localWT.Filesystem.Create("entities/OldType/stale.json")
+	if err != nil {
+		t.Fatalf("create stale file: %v", err)
+	}
+	_ = stale.Close()
+
+	gs := &gitStore{
+		repo:     localRepo,
+		wt:       localWT,
+		fs:       localWT.Filesystem,
+		backend:  localRepo.Storer,
+		basePath: t.TempDir(),
+	}
+
+	// Push a "wipe" commit to the remote that removes data.txt.
+	workDir := filepath.Join(tmpDir, "work")
+	workRepo, err := git.PlainClone(workDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone work: %v", err)
+	}
+	workWT, err := workRepo.Worktree()
+	if err != nil {
+		t.Fatalf("work worktree: %v", err)
+	}
+	if _, err := workWT.Remove("data.txt"); err != nil {
+		t.Fatalf("remove data: %v", err)
+	}
+	if _, err := workWT.Commit("wipe", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("commit wipe: %v", err)
+	}
+	wipeHash, err := workRepo.Head()
+	if err != nil {
+		t.Fatalf("work head: %v", err)
+	}
+	if err := workRepo.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("push wipe: %v", err)
+	}
+
+	err = gs.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		// Fast-forward from data to wipe
+		newHash, pullErr := gs.FetchAndMerge(ctx(), "origin", "main")
+		if pullErr != nil {
+			return fmt.Errorf("FetchAndMerge: %w", pullErr)
+		}
+		if newHash != wipeHash.Hash() {
+			return fmt.Errorf("expected wipe hash %s, got %s", wipeHash.Hash(), newHash)
+		}
+
+		// data.txt must be gone (tracked file removed by wipe commit)
+		if _, statErr := gs.fs.Stat("data.txt"); statErr == nil {
+			return fmt.Errorf("data.txt should be removed after wipe fast-forward")
+		}
+
+		// Stale untracked file must be cleaned by the post-checkout wt.Clean
+		if _, statErr := gs.fs.Stat("entities/OldType/stale.json"); statErr == nil {
+			return fmt.Errorf("stale untracked file should be cleaned after pull-after-wipe fast-forward")
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_PullAfterWipe: %v", err)
 	}
 }
 

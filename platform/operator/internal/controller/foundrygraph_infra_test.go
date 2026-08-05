@@ -82,6 +82,73 @@ func TestDeploymentEnvVars(t *testing.T) {
 	}
 }
 
+// TestDeploymentEnvVarsRemoteAuthSecretRef exercises the REMOTE_AUTH_SECRET_REF env var
+// branch (foundrygraph_infra.go:300-302): when secretRef is set on the remote auth
+// config, the env var must be populated with the secret name.
+func TestDeploymentEnvVarsRemoteAuthSecretRef(t *testing.T) {
+	r := &FoundryGraphReconciler{
+		CartographerPort:          50051,
+		CartographerImage:         "flow-cartographer:latest",
+		CapabilityStalenessWindow: "30s",
+	}
+
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph"},
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{
+					URL: "https://github.com/org/repo.git",
+					Auth: &flowv1.RemoteAuth{
+						SecretRef: "remote-creds",
+					},
+				},
+			},
+		},
+	}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	// Verify REMOTE_AUTH_SECRET_REF is set when secretRef is non-empty.
+	if e, ok := envMap["REMOTE_AUTH_SECRET_REF"]; !ok || e.Value != "remote-creds" {
+		t.Errorf("expected REMOTE_AUTH_SECRET_REF=remote-creds, got %+v (present=%v)", e, ok)
+	}
+}
+
+// TestDeploymentEnvVarsNoRemoteAuthSecretRef verifies that REMOTE_AUTH_SECRET_REF is
+// absent when secretRef is empty or absent (the default path).
+func TestDeploymentEnvVarsNoRemoteAuthSecretRef(t *testing.T) {
+	r := &FoundryGraphReconciler{
+		CartographerPort:          50051,
+		CapabilityStalenessWindow: "30s",
+	}
+
+	// No auth config at all.
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph"},
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{
+					URL: "https://github.com/org/repo.git",
+				},
+			},
+		},
+	}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	if _, ok := envMap["REMOTE_AUTH_SECRET_REF"]; ok {
+		t.Error("REMOTE_AUTH_SECRET_REF must not be set when secretRef is absent")
+	}
+}
+
 func TestLabelsForCartographer(t *testing.T) {
 	r := &FoundryGraphReconciler{}
 	fg := &flowv1.FoundryGraph{}
@@ -169,6 +236,29 @@ func TestCartographerPodSecurityContext(t *testing.T) {
 	}
 	if psc.FSGroupChangePolicy == nil || *psc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
 		t.Errorf("expected FSGroupChangePolicy=OnRootMismatch, got %v", psc.FSGroupChangePolicy)
+	}
+
+	// SPEC R6 step 3: readiness probe must be gRPC HealthCheck on CARTOGRAPHER_PORT
+	// with InitialDelaySeconds=5 and PeriodSeconds=10.
+	containers := deploy.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(containers))
+	}
+	probe := containers[0].ReadinessProbe
+	if probe == nil {
+		t.Fatal("expected readiness probe to be set")
+	}
+	if probe.GRPC == nil {
+		t.Fatal("expected readiness probe to use gRPC action (grpc.health.v1.Health/Check)")
+	}
+	if probe.GRPC.Port != 50051 {
+		t.Errorf("expected readiness probe gRPC port=CARTOGRAPHER_PORT (50051), got %d", probe.GRPC.Port)
+	}
+	if probe.InitialDelaySeconds != 5 {
+		t.Errorf("expected readiness probe InitialDelaySeconds=5, got %d", probe.InitialDelaySeconds)
+	}
+	if probe.PeriodSeconds != 10 {
+		t.Errorf("expected readiness probe PeriodSeconds=10, got %d", probe.PeriodSeconds)
 	}
 }
 

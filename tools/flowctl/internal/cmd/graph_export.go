@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	operatorLabelSelector = "app.kubernetes.io/name=flow-operator"
+	operatorLabelSelector = "app.kubernetes.io/name=operator"
 	defaultGraphName      = "flow-graph"
 	operatorProxyPort     = 50053
 
@@ -57,6 +57,11 @@ func resolveOperatorProxyPort() (int, error) {
 		return port, nil
 	}
 	return operatorProxyPort, nil
+}
+
+// newGraphExporterFn returns the graph exporter factory. Overridable in tests.
+var newGraphExporterFn func() (graphExporter, error) = func() (graphExporter, error) {
+	return newGraphExporter()
 }
 
 func newGraphExportCmd() *cobra.Command {
@@ -94,7 +99,7 @@ func runGraphExport(cmd *cobra.Command, args []string) error {
 
 	ctx := cmd.Context()
 
-	exporter, err := newGraphExporter()
+	exporter, err := newGraphExporterFn()
 	if err != nil {
 		return err
 	}

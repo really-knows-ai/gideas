@@ -7,7 +7,15 @@
 // (ErrChangeLogFull). The service-layer TransactionManager holds the ChangeLog
 // and routes mutation entries to it. The Store has no awareness of the change
 // log; implementers adding transaction-scoped features must use
-// TransactionManager.AddChangeLogEntry and gitstore.ChangeLog directly.
+// TransactionManager.AddChangeEntry and gitstore.ChangeLog directly.
+//
+// SPEC divergence note (~839): SPEC.md describes the 100K change-log cap
+// (ErrChangeLogFull → RESOURCE_EXHAUSTED) as "a hard-coded constant in the
+// Cartographer store layer." In the implementation the constant, sentinel, and
+// enforcement live in the gitstore package (gitstore/changelog.go) and the
+// service-layer TransactionManager (cartographer_server.go), not in this Store
+// layer. The Store has no awareness of the change log — this is the intended
+// design boundary, not a defect.
 package store
 
 import (
@@ -36,6 +44,14 @@ type Store interface {
 	EdgeType(name string) (*EdgeTypeDef, bool)
 
 	// Entity CRUD
+	//
+	// Property values are map[string]string — the schema property model is
+	// type: string only (SPEC). The SPEC error-table row "Non-string property
+	// value → INVALID_ARGUMENT" (R7 enforcement points 1-2) is therefore not
+	// directly testable at the store layer: a non-string value is
+	// unrepresentable in this signature. That check lives materially at the
+	// proto/service coercion layer. This is a layering consequence of the
+	// string-only property model, not a defect.
 	CreateEntity(ctx context.Context, entityType, id string,
 		properties map[string]string, embedding []float32, branch string,
 	) (*Entity, error)

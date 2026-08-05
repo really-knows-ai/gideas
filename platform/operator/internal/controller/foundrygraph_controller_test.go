@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -901,10 +902,13 @@ func TestReconcileBlockedRecoversToReady(t *testing.T) {
 	if _, ok := successR.ProxyRoutingTable.Lookup(ns, "flow-graph"); !ok {
 		t.Error("expected proxy route to be registered after successful reconcile")
 	}
-	// Step 4: Service must exist.
+	// Step 4: Service must exist and be ClusterIP (SPEC R6 step 4).
 	var svc corev1.Service
 	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "cartographer-flow-graph", Namespace: ns}, &svc); err != nil {
 		t.Errorf("expected Service to exist after successful reconcile: %v", err)
+	}
+	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("expected Service type ClusterIP (SPEC R6 step 4), got %v", svc.Spec.Type)
 	}
 	// Step 3: Deployment must exist.
 	var deployment appsv1.Deployment
@@ -1022,6 +1026,143 @@ func TestReconcileNonDestructiveSuccessReachesReady(t *testing.T) {
 	if _, ok := got.Annotations[lastAppliedSpecAnnotation]; !ok {
 		t.Error("expected last-applied-spec annotation written by updateStatus")
 	}
+}
+
+// TestReconcileCombinedSchemaAndStorageChange pins SPEC R6's combined-change sequencing:
+// a single Reconcile carrying BOTH a schema diff (non-destructive) AND a non-schema change
+// (storage.size) must first apply the schema to the existing pod, then redeploy (infra),
+// then re-apply the schema after readiness. Schema-only and storage-only tests exist; this
+// pins the combined ordering end-to-end.
+func TestReconcileCombinedSchemaAndStorageChange(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := "test-ns"
+	// Old spec: Widget with property "a" and storage 1Gi. Build it as a real struct and
+	// marshal to JSON so resource.Quantity serialises correctly (the canonical JSON form,
+	// not the internal struct representation).
+	oldSpec := flowv1.FoundryGraphSpec{
+		EntityTypes: []flowv1.EntityTypeSpec{{
+			Name:       "Widget",
+			Properties: []flowv1.PropertySpec{{Name: "a"}},
+		}},
+		Storage: &flowv1.StorageSpec{Size: resourcePtr("1Gi")},
+	}
+	oldSpecJSON, err := json.Marshal(oldSpec)
+	if err != nil {
+		t.Fatalf("marshal old spec: %v", err)
+	}
+
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-graph",
+			Namespace: ns,
+			Annotations: map[string]string{
+				lastAppliedSpecAnnotation: string(oldSpecJSON),
+			},
+		},
+		Spec: flowv1.FoundryGraphSpec{
+			EntityTypes: []flowv1.EntityTypeSpec{{
+				Name: "Widget",
+				Properties: []flowv1.PropertySpec{
+					{Name: "a"},
+					{Name: "b"},
+				},
+			}},
+			Storage: &flowv1.StorageSpec{
+				Size: resourcePtr("4Gi"),
+			},
+		},
+	}
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+
+	// A ready Deployment so waitForReadiness returns immediately.
+	replicas := int32(1)
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
+	ctx := context.Background()
+	nn := types.NamespacedName{Name: "flow-graph", Namespace: ns}
+
+	// Track RPC calls to verify sequencing: schema applied on existing pod BEFORE
+	// redeployment, then re-applied on the new pod after readiness.
+	var order []string
+	r := &FoundryGraphReconciler{
+		Client:            fakeClient,
+		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				healthCheckFn: func(context.Context, *flowv1gen.HealthCheckRequest) (*flowv1gen.HealthCheckResponse, error) {
+					order = append(order, "health")
+					return &flowv1gen.HealthCheckResponse{}, nil
+				},
+				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+					order = append(order, "apply")
+					return &flowv1gen.ApplySchemaResponse{}, nil
+				},
+				wipeGraphFn: func(context.Context, *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
+					order = append(order, "wipe")
+					return &flowv1gen.WipeGraphResponse{}, nil
+				},
+			}, nil
+		},
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err != nil {
+		t.Fatalf("unexpected error on combined schema+storage reconcile: %v", err)
+	}
+
+	// The RPC order must show: health+apply (schema on existing pod), then after infra
+	// redeployment, health+apply again (schema on new pod). WipeGraph must never be called
+	// (non-destructive). The first apply must precede the infra steps (Deployment update).
+	if len(order) < 4 {
+		t.Fatalf("expected at least 4 RPC calls (schema-on-existing + schema-on-new), got %v", order)
+	}
+	// First pair: health+apply on existing pod.
+	if order[0] != "health" || order[1] != "apply" {
+		t.Errorf("expected first RPC pair [health, apply] on existing pod, got %v", order[:2])
+	}
+	// Second pair: health+apply on new pod (step 10).
+	if order[2] != "health" || order[3] != "apply" {
+		t.Errorf("expected second RPC pair [health, apply] on new pod, got %v", order[2:4])
+	}
+	// WipeGraph must never be called for non-destructive combined change.
+	for _, call := range order {
+		if call == "wipe" {
+			t.Fatalf("non-destructive combined change must never call WipeGraph, got order %v", order)
+		}
+	}
+
+	// Verify the reconcile reached Ready.
+	var got flowv1.FoundryGraph
+	if err := fakeClient.Get(ctx, nn, &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != "Reconciled" {
+		t.Errorf("expected Ready=True/Reconciled, got %v", ready)
+	}
+}
+
+// resourcePtr returns a pointer to a resource.Quantity parsed from the given string.
+func resourcePtr(s string) *resource.Quantity {
+	q := resource.MustParse(s)
+	return &q
 }
 
 // TestReconcileStep10ApplySchemaFailure (item 3) drives the final-step ApplySchema failure

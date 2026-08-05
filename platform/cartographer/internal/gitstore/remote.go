@@ -154,7 +154,11 @@ func isRemoteUnreachable(err error) bool {
 }
 
 // setLocalRefAndCheckout sets the local branch ref to the given hash and
-// checks out the branch.
+// checks out the branch. After the forced checkout, untracked files are
+// cleaned to ensure the working tree exactly matches the target commit —
+// without this, stale untracked files from a previously wiped type would
+// persist after a pull-after-wipe fast-forward (matching HardResetToBranch's
+// cleanup pattern).
 func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) error {
 	newRef := plumbing.NewHashReference(
 		plumbing.ReferenceName("refs/heads/"+branch),
@@ -163,10 +167,16 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 	if err := g.backend.SetReference(newRef); err != nil {
 		return fmt.Errorf("set ref: %w", err)
 	}
-	return g.wt.Checkout(&git.CheckoutOptions{
+	if err := g.wt.Checkout(&git.CheckoutOptions{
 		Branch: plumbing.ReferenceName("refs/heads/" + branch),
 		Force:  true,
-	})
+	}); err != nil {
+		return fmt.Errorf("checkout %s: %w", branch, err)
+	}
+	if err := g.wt.Clean(&git.CleanOptions{Dir: true}); err != nil {
+		return fmt.Errorf("clean %s: %w", branch, err)
+	}
+	return nil
 }
 
 // FetchAndMerge is used on two distinct paths, distinguished by which branch
@@ -516,6 +526,11 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 
 // IsEmpty returns true if the repository has no graph-data commits on main.
 // A repo with only the init commit (produced by New()) is considered empty.
+// The check verifies both the commit message ("init") and the author
+// (cartographer) to distinguish New()'s init commit from a cloned remote
+// whose initial commit coincidentally uses the same message — without this,
+// a repo whose only commit is "init" from another remote would be misread
+// as empty, breaking the SPEC R10 clone-vs-pull decision.
 func (g *gitStore) IsEmpty(ctx context.Context) (bool, error) {
 	mainRef, err := g.repo.Reference(
 		plumbing.ReferenceName("refs/heads/main"), true)
@@ -533,7 +548,7 @@ func (g *gitStore) IsEmpty(ctx context.Context) (bool, error) {
 	defer log.Close()
 
 	err = log.ForEach(func(commit *object.Commit) error {
-		if commit.Message != "init" {
+		if !isInitCommit(commit) {
 			// Found a non-init commit
 			return errHasData
 		}
@@ -548,6 +563,18 @@ func (g *gitStore) IsEmpty(ctx context.Context) (bool, error) {
 
 	// Only init commit(s) found
 	return true, nil
+}
+
+// isInitCommit reports whether a commit was produced by New()'s initial
+// setup: message "init" authored by "cartographer <cartographer@foundry.flow>".
+// A commit with message "init" from a different author (e.g. a cloned remote
+// whose initial commit coincidentally used the same message) is not
+// considered an init commit — the repo has real data and must not be treated
+// as empty for the SPEC R10 clone-vs-pull decision.
+func isInitCommit(commit *object.Commit) bool {
+	return commit.Message == "init" &&
+		commit.Author.Name == "cartographer" &&
+		commit.Author.Email == "cartographer@foundry.flow"
 }
 
 // ensureRemoteExists creates the "origin" remote if it does not already exist,

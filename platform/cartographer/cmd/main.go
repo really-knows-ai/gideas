@@ -146,6 +146,23 @@ func main() {
 	if remoteURL != "" {
 		resolveAuthFn := buildResolveAuthFn(remoteAuthSecretRef, readSecretFn, remoteURL)
 		if err := gs.SetRemote(context.Background(), remoteURL, resolveAuthFn); err != nil {
+			// ponytail: a misconfigured remote (unsupported or erroneous URL
+			// scheme, parse failure, or missing host) is warn-logged but not
+			// fatal at startup. SetRemote validates the URL scheme and returns
+			// ErrUnsupportedURLScheme for non-https/ssh schemes, but the failure
+			// is only surfaced here; the scheme is never re-validated until the
+			// next runtime PullFromRemote (error-table "Unsupported remote URL
+			// scheme" → INVALID_ARGUMENT). Consequence: when pullOnInit is false
+			// (the common default), a broken remote URL silently degrades — the
+			// operator sees only a Warn log at startup and an INVALID_ARGUMENT
+			// on the first pull/push, with no init-time signal for the
+			// misconfiguration. The SPEC only mandates scheme validation at
+			// pull/push time (R10), so this is spec-compliant but the
+			// silent-degradation seam is wider than a one-shot startup check.
+			// Upgrade path: fail startup (os.Exit) on SetRemote error when
+			// remoteURL is explicitly set, since an operator who configures a
+			// remote URL intends it to work; revisit if silent degradation for
+			// optional remotes becomes a product requirement.
 			slog.Warn("Failed to configure remote", "error", err)
 		} else {
 			slog.Info("Remote configured", "url", remoteURL)

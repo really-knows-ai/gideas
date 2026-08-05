@@ -125,10 +125,24 @@ Handle them in the order listed below.
     - Apply the minimum fix that resolves the divergence, respecting Prior
       learnings and the classification tag.
     - Report: "Item N [TAG] — Fixed: <what you changed and why.>"
-5. If you disagree with the claim:
+5. If you disagree with the claim, or the claim is valid but is a
+   "Tier-3" not-worth-fixing nice-to-have:
     - Do not change any code for that item.
-    - Report: "Item N — Wont-fix: <clear explanation with evidence — file
-      paths, line numbers, spec sections.>"
+    - Report: "Item N [~] — Wont-fix: <clear explanation with the evidence
+      — file paths, line numbers, spec sections.>"
+    - **Wont-fix on cost-benefit is allowed only for a Tier-3 item** — a
+      doc/SPEC wording mismatch or layering note with no behaviour change,
+      a re-flag of a trade-off that already carries a `ponytail:`, a
+      speculative concern about a provably unreachable path, a niche
+      edge-case test protecting a branch with no plausible regression, or
+      a cosmetic nit in an untouched file. Your justification must state
+      the cost-benefit grounds.
+    - For a **Tier-1/Tier-2 item** (a real bug; a broken CLI/API; a
+      spec-mandated error code or check-order surfaced wrong; a security /
+      trust-boundary / data-loss / accessibility implication; or a missing
+      test for a behaviourally significant likely-to-regress SPEC branch),
+      wont-fix on cost-benefit grounds is NOT allowed. You must cite
+      evidence that the claim is wrong or that the spec contradicts it.
 6. If two items conflict (e.g., one adds a method, another removes it), do
     not guess.  Report both as `conflict` with an explanation.
 7. If an item references additional files outside your primary file, read
@@ -197,13 +211,47 @@ An implementer marks an item `[~]` when:
 - **The claim is correct but fixing it would cause harm.**  The reviewer
   says "use sync.Map" but the code is in a hot path where sync.Map's
   overhead matters.  Evidence: benchmark output or documented invariant.
-- **The claim is a style preference mislabeled as a divergence.**  The
-  reviewer says "use named returns" but the code uses explicit returns —
-  both are valid, neither contradicts any criteria.
+- **The claim is a style preference mislabeled as a divergence.**  A
+  reviewer flags a named return, but explicit returns are equally valid.
+  Both compile; neither contradicts the criteria.
 - **The reviewer re-opened with `[!]` but the implementer still disagrees.**
   The implementer reads the re-opening reason, re-evaluates, and either
   concedes (fix it → `[x]`) or holds the line (`[~]` with updated
   justification that addresses the re-opening reason).
+- **The claim is a Tier-3, not-worth-fixing finding.**  The reviewer kept an
+  item whose true valid divergence is real but whose fix cost exceeds its
+  benefit.  The implementer is authorized — even expected — to wont-fix it,
+  using the same cost/value tiers `special-review` uses at consolidation to
+  decide its own pruning.  Mark it `[~]` with the cost-benefit
+  justification.
+
+### Applying special-review's tiers when wont-fixing
+
+`special-review` prunes a class of findings at Step 5c as **Tier 3** (not
+worth fixing).  A `[~]` wont-fix by the implementer is the same decision
+reached a step later, and should use the same tiers:
+
+- **Tier 1 — must fix (do NOT wont-fix).**  A real bug, a broken CLI/API, a
+  spec-mandated error code or check-order surfaced incorrectly, a
+  security / trust-boundary / data-loss / accessibility implication, a
+  missing test for a behaviourally significant likely-to-regress SPEC
+  branch, or anything whose resolution changes observable behaviour.  Mark
+  these fixed (`[x]`).  Wont-fixing a Tier 1 item requires a concrete
+  contradiction of the claim or of the spec, not cost-benefit.
+- **Tier 2 — worth fixing (fix).**  A genuine divergence whose fix is
+  bounded and low-risk: ordinary coverage gaps, small deletions, needed
+  annotations.  Default to fixing these.
+- **Tier 3 — not worth fixing (may wontfix).**  The finding is a
+  "nice-to-have" the repo does not need: a doc/SPEC wording mismatch or
+  layering note with no behaviour change; re-flagging a trade-off that
+  already carries a `ponytail:`; a speculative concern about a provably
+  unreachable path; a niche edge-case test protecting a branch with no
+  plausible regression; a cosmetic nit in an untouched file. These may be
+  marked `[~]` with a one-line cost-benefit justification.
+
+The key rule of thumb: **only wont-fix a Tier 3 item on cost-benefit
+grounds.**  Tier 1 and Tier 2 items still need the usual evidence-based
+wont-fix (claim wrong, spec contradicts, or fixing causes harm).
 
 ## Hard Rules
 
