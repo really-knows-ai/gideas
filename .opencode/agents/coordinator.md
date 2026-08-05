@@ -10,8 +10,7 @@ permission:
     "*": allow
   grep:
     "*": allow
-  todowrite:
-    "*": allow
+  todowrite: allow
   task:
     "implementer": allow
     "reviewer": allow
