@@ -4,13 +4,16 @@ mode: primary
 permission:
   read:
     "*": allow
+    ".opencode/**": allow
   edit:
     "*": deny
     "plans/**": allow
   glob:
     "*": allow
+    ".opencode/**": allow
   grep:
     "*": allow
+    ".opencode/**": allow
   todowrite: allow
   task:
     "*": deny

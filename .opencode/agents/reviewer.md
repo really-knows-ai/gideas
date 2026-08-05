@@ -5,23 +5,72 @@ hidden: true
 permission:
   read:
     "*": deny
+    ".opencode/**": allow
+    "Makefile": allow
+    "go.work": allow
+    "go.work.sum": allow
+    "buf.gen.yaml": allow
+    "buf.yaml": allow
+    "AGENTS.md": allow
+    ".golangci.yml": allow
+    "isoflow.json": allow
+    "cmd/**": allow
     "platform/**": allow
     "plans/**": allow
+    "sdk/**": allow
+    "nodes/**": allow
+    "gen/**": allow
+    "proto/**": allow
+    "charts/**": allow
+    "tools/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   edit:
     "*": deny
+    ".opencode/**": deny
     "plans/**": allow
   glob:
     "*": deny
+    ".opencode/**": allow
+    "Makefile": allow
+    "go.work": allow
+    "go.work.sum": allow
+    "buf.gen.yaml": allow
+    "buf.yaml": allow
+    "AGENTS.md": allow
+    ".golangci.yml": allow
+    "isoflow.json": allow
+    "cmd/**": allow
     "platform/**": allow
     "plans/**": allow
+    "sdk/**": allow
+    "nodes/**": allow
+    "gen/**": allow
+    "proto/**": allow
+    "charts/**": allow
+    "tools/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   grep:
     "*": deny
+    ".opencode/**": allow
+    "Makefile": allow
+    "go.work": allow
+    "go.work.sum": allow
+    "buf.gen.yaml": allow
+    "buf.yaml": allow
+    "AGENTS.md": allow
+    ".golangci.yml": allow
+    "isoflow.json": allow
+    "cmd/**": allow
     "platform/**": allow
     "plans/**": allow
+    "sdk/**": allow
+    "nodes/**": allow
+    "gen/**": allow
+    "proto/**": allow
+    "charts/**": allow
+    "tools/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   external_directory:
