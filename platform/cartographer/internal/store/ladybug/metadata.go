@@ -299,6 +299,31 @@ func (db *ladybugDB) mainMetadataPath() string {
 	return filepath.Join(db.path, "schema.json")
 }
 
+// persistMainVectorMetadataLocked rewrites main's schema metadata from the
+// current in-memory type definitions, capturing the live vector state from the
+// catalog, and persists it to the main metadata file when file-backed. It is
+// used by re-hydration paths (RehydrateFromBranch, RehydrateMainFromFiles) that
+// may promote an embedding column/vector index to main outside ApplySchema: a
+// branch-driven or file-driven bootstrap leaves the catalog carrying a vector
+// index and dimension that main's previously-written schema.json does not
+// record (VectorIndexes=false/VectorDimensions=0), which would otherwise cause
+// validateMetadataAgainstCatalog to brick the next Open. Callers must hold
+// db.mu and must already have merged the promoted defs into db.entityTypeDefs.
+func (db *ladybugDB) persistMainVectorMetadataLocked() error {
+	if db.path == "" {
+		return nil
+	}
+	metadata := metadataFromDefinitions(db.entityTypeDefs, db.edgeTypeDefs)
+	metadata, err := captureVectorState(db.conn, metadata)
+	if err != nil {
+		return fmt.Errorf("capture main vector schema metadata: %w", err)
+	}
+	if err := db.writeMetadata(db.mainMetadataPath(), metadata); err != nil {
+		return fmt.Errorf("persist main schema metadata: %w", err)
+	}
+	return nil
+}
+
 func (db *ladybugDB) branchMetadataPath(txID string) string {
 	return filepath.Join(db.path, "branches", txID+".schema.json")
 }

@@ -72,6 +72,19 @@ spec:
             - name: CARTOGRAPHER_PORT
               value: "50051"
             - name: TRANSACTION_TIMEOUT
+              # ponytail: "30m" here is one of three copies of the transaction-
+              # timeout default that must stay in sync: (1) this Deployment env,
+              # (2) the main.go getEnv("TRANSACTION_TIMEOUT", "30m") fallback
+              # (platform/cartographer/cmd/main.go), and (3) the SPEC R5 default
+              # `versioning.transactionTimeout: 30m` (plans/cartographer/SPEC.md).
+              # Changing the default in any one place silently diverges the others:
+              # a manual deploy of this template that edits only the SPEC or only
+              # main.go ends up enforcing a different timeout than documented, and
+              # a deployment that omits this env silently falls back to main.go's
+              # hardcoded default. Ceiling: three typed literals with no single
+              # source of truth or compile-time guard. Upgrade path: hoist the
+              # default to one shared constant (e.g. versioning config) read by
+              # all three, so a change is one edit, not three.
               value: "30m"
             - name: POD_NAMESPACE
               valueFrom:
@@ -96,6 +109,19 @@ spec:
             #   value: ""
             # - name: CAPABILITY_STALENESS_WINDOW
             #   value: "30s"
+            # - name: REMOTE_PULL_ON_INIT
+            #   value: "false"
+            #   # ponytail: REMOTE_PULL_ON_INIT is a CRD-owned knob (SPEC R6 step 3
+            #   # sets it from `versioning.remote.pullOnInit`, default false) and
+            #   # read via parseBoolEnv (cmd/main.go). This template omits it on
+            #   # purpose because the Operator renders the real Deployment from the
+            #   # CRD; but a *manual* deploy of this file that wants pull-on-init
+            #   # cannot turn it on here and silently falls back to main.go's default
+            #   # of false (no REMOTE clone/catch-up on init). Ceiling: three copies
+            #   # of the default (SPEC R5, main.go parseBoolEnv default, this note)
+            #   # that must stay in sync. Upgrade path: uncomment this entry with the
+            #   # desired value when manually deploying, or let the Operator render
+            #   # it from the CRD so there is a single source of truth.
           volumeMounts:
             - name: data
               mountPath: /data

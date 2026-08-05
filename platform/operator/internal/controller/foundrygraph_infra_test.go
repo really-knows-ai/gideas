@@ -465,3 +465,102 @@ func TestReconcileRBACRemoteAuthSecretChanged(t *testing.T) {
 		t.Errorf("remote-auth RoleBinding RoleRef changed unexpectedly: %q", gotRB.RoleRef.Name)
 	}
 }
+
+// TestDeploymentStorageSizeForcesRollout pins the SPEC R6 requirement that a storage.size
+// change redeploys the Cartographer (so the readiness → re-apply-schema sequence runs on
+// the new pod) rather than only patching the PVC in place. The desired storage size is
+// encoded in the pod template, so a size increase changes the template and thus the
+// Deployment rollout hash, while an unchanged size leaves the template stable.
+func TestDeploymentStorageSizeForcesRollout(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	ns := "test-ns"
+	small := resource.MustParse("1Gi")
+	large := resource.MustParse("4Gi")
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		Spec:       flowv1.FoundryGraphSpec{Storage: &flowv1.StorageSpec{Size: &small}},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
+	r := &FoundryGraphReconciler{
+		Client:            fakeCli,
+		Scheme:            s,
+		CartographerPort:  50051,
+		CartographerImage: "flow-cartographer:latest",
+	}
+
+	ctx := context.Background()
+	if err := r.reconcileDeployment(ctx, fg); err != nil {
+		t.Fatalf("reconcileDeployment (first): %v", err)
+	}
+	var deploy appsv1.Deployment
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph", Namespace: ns}, &deploy); err != nil {
+		t.Fatalf("get Deployment: %v", err)
+	}
+	first := deploy.Spec.Template.Annotations[cartographerStorageSizeAnnotation]
+	if first == "" {
+		t.Fatal("expected the storage-size pod-template annotation to be set")
+	}
+
+	// Increase spec.storage.size → the pod template's storage annotation must change,
+	// which is what rolls a new Deployment pod (SPEC R6 redeploy on non-schema change).
+	fg.Spec.Storage.Size = &large
+	if err := r.reconcileDeployment(ctx, fg); err != nil {
+		t.Fatalf("reconcileDeployment (second): %v", err)
+	}
+	if err := fakeCli.Get(ctx, client.ObjectKey{Namespace: ns, Name: "cartographer-flow-graph"}, &deploy); err != nil {
+		t.Fatalf("get Deployment after resize: %v", err)
+	}
+	second := deploy.Spec.Template.Annotations[cartographerStorageSizeAnnotation]
+	if second == first {
+		t.Errorf("expected the storage template annotation to change after storage.size increase, got %q", second)
+	}
+
+	// A subsequent reconcile with the same size must leave the template (and rollout hash)
+	// unchanged — i.e. the annotation is stable when storage.size is stable.
+	if err := r.reconcileDeployment(ctx, fg); err != nil {
+		t.Fatalf("reconcileDeployment (third, unchanged): %v", err)
+	}
+	if err := fakeCli.Get(ctx, client.ObjectKey{Namespace: ns, Name: "cartographer-flow-graph"}, &deploy); err != nil {
+		t.Fatalf("get Deployment after stable reconcile: %v", err)
+	}
+	if got := deploy.Spec.Template.Annotations[cartographerStorageSizeAnnotation]; got != second {
+		t.Errorf("expected stable storage template annotation across unchanged reconciles, got %q, want %q", got, second)
+	}
+}
+
+// TestApplySchemaReFetchNotFoundSurfacesError pins the item's SPEC-R6 fix for the
+// applySchema re-fetch: an IsNotFound on the re-fetch must NOT be swallowed. A
+// concurrently-deleted CR must not flow through as a zero-valued object whose empty schema
+// gets dialed and applied against a live Cartographer. The re-fetch error must surface so
+// the schema-apply aborts; the next reconcile's initial Get drops the now-absent request.
+func TestApplySchemaReFetchNotFoundSurfacesError(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	// No FoundryGraph object is seeded, so the re-fetch inside applySchema returns NotFound.
+	fakeCli := fake.NewClientBuilder().WithScheme(s).Build()
+	dialed := false
+	r := &FoundryGraphReconciler{
+		Client: fakeCli,
+		Scheme: s,
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			dialed = true
+			return &mockCartographerClient{}, nil
+		},
+	}
+
+	// The in-memory zero-valued object stands in for the stale object the reconciler holds.
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	err := r.applySchema(context.Background(), fg)
+	if err == nil {
+		t.Fatal("expected applySchema to surface the NotFound re-fetch, got nil")
+	}
+	if dialed {
+		t.Fatal("applySchema must not dial a Cartographer when the re-fetch CR is absent")
+	}
+}

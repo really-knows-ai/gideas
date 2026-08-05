@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/foundry/flow/cartographer/internal/store"
@@ -178,13 +179,44 @@ func (db *ladybugDB) WipeSchema(ctx context.Context) error {
 	db.edgeTypeDefs = make(map[string]*store.EdgeTypeDef)
 	db.ruleIndex = make(map[string][]*flowv1.ConnectionRule)
 	db.edgePairs = make(map[string][]fromToPair)
-	db.branchStates = make(map[string]store.BranchTransactionState)
 	db.schemaApplied = false
 
-	// Remove persisted schema metadata.
+	// Drop every open branch connection and its persisted records. A branch's
+	// LadybugDB caches the tables dropped above, so leaving the connection open
+	// would let a stale branch reference dropped tables (subsequent branch ops
+	// error on a vanished schema). And a persisted branches/<txID>.state.json
+	// would let SaveBranchTransactionState re-register a branch whose database
+	// and schema no longer exist. Enforcing the wipe at the store primitive —
+	// closing the branch connections and removing the persisted records — is the
+	// defense-in-depth behind the service-layer FAILED_PRECONDITION (SPEC row 915),
+	// which only fires for a live transaction; a wipe still must not leave a stale
+	// branch dangling.
+	for id, br := range db.branches {
+		br.mu.Lock()
+		if br.conn != nil {
+			br.conn.Close()
+		}
+		if br.db != nil {
+			br.db.Close()
+		}
+		br.mu.Unlock()
+		delete(db.branches, id)
+	}
+	db.branchStates = make(map[string]store.BranchTransactionState)
+
+	// Remove persisted metadata, including the branch durable records.
 	if db.path != "" {
 		if err := os.Remove(db.mainMetadataPath()); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove schema metadata: %w", err)
+		}
+		if err := os.RemoveAll(filepath.Join(db.path, "branches")); err != nil {
+			return fmt.Errorf("remove branch records: %w", err)
+		}
+		// Keep the branches container directory so a subsequent CreateBranchDB
+		// (which stats/open the branch db file directly) can still create files
+		// under it without the prior wipe leaving the path missing.
+		if err := os.MkdirAll(filepath.Join(db.path, "branches"), 0o755); err != nil {
+			return fmt.Errorf("recreate branches dir: %w", err)
 		}
 	}
 	return nil

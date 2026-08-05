@@ -410,7 +410,13 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 // (ErrDestructiveSchemaChange) requiring WipeGraph, diverging from SPEC's
 // plain-rule wording: an added node type carrying a brand-new rel type is still
 // additive (that path uses createRelTable), only a change to an existing rel
-// type's endpoint set triggers the destructive classification. Upgrade path: if
+// type's endpoint set triggers the destructive classification. Operator-visible
+// behaviour of this divergence: ErrDestructiveSchemaChange maps to
+// FAILED_PRECONDITION at the gRPC boundary (mapStoreError) and ApplySchema
+// refuses the WipeGraph-until-applied request, so an operator applying a
+// non-destructive rules change (e.g. adding a canConnect to a new target type
+// on an existing edge type) sees FAILED_PRECONDITION and must issue WipeGraph
+// first — the failure mode is loud, never a silent partial apply. Upgrade path: if
 // LadybugDB gains endpoint ALTER support, or the rel model is rebuilt around
 // runtime FROM/TO enforcement instead of CREATE-time clauses, this check can be
 // lifted and rule modifications become non-destructive in the store as well.

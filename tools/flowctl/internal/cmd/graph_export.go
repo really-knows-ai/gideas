@@ -26,7 +26,24 @@ const (
 	operatorLabelSelector = "app.kubernetes.io/name=flow-operator"
 	defaultGraphName      = "flow-graph"
 	operatorProxyPort     = 50053
+
+	// supportedExportFormats matches the Cartographer's accepted formats
+	// (see platform/cartographer/internal/service/export.go). The format is a
+	// plain string on the wire, so the CLI must mirror the server's set to fail
+	// fast instead of burning the whole port-forward/gRPC flow.
+	formatJSON    = "json"
+	formatGraphML = "graphml"
 )
+
+func validateExportFormat(format string) error {
+	switch format {
+	case formatJSON, formatGraphML:
+		return nil
+	default:
+		return fmt.Errorf("invalid export format %q: supported formats are %q or %q",
+			format, formatJSON, formatGraphML)
+	}
+}
 
 // resolveOperatorProxyPort returns the operator gRPC proxy port to port-forward.
 // It mirrors the operator's own override behaviour (OPERATOR_PROXY_PORT, default
@@ -155,6 +172,13 @@ type graphExporter interface {
 // descriptive error for each failure stage. Writing goes to out; callers that
 // buffer or own a file are responsible for flushing, closing, and cleanup.
 func runGraphExportWith(ctx context.Context, exporter graphExporter, params graphExportParams, out io.Writer) error {
+	// Reject an unsupported format before any Kubernetes or gRPC work so a
+	// format typo fails fast in every call path (the CLI and any programmatic
+	// driver), instead of burning the whole port-forward/gRPC flow only to
+	// fail with INVALID_ARGUMENT from the Cartographer.
+	if err := validateExportFormat(params.format); err != nil {
+		return err
+	}
 	if err := exporter.checkConnectivity(ctx); err != nil {
 		return err
 	}

@@ -269,9 +269,13 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 
 // applySchema applies the schema to a (newly-ready) Cartographer pod.
 func (r *FoundryGraphReconciler) applySchema(ctx context.Context, fg *flowv1.FoundryGraph) error {
-	// Re-fetch the CR to get the latest spec.
+	// Re-fetch the CR to get the latest spec. A concurrently-deleted CR must not fall
+	// through as a zero-valued object and have an empty schema dialed+applied against a
+	// live Cartographer (SPEC R6 step 6: ApplySchema runs only on the CR this reconciler
+	// owns). Surface any re-fetch error — IsNotFound included — so the schema-apply
+	// aborts and the next reconcile's initial Get drops the now-absent request.
 	if err := r.Get(ctx, client.ObjectKeyFromObject(fg), fg); err != nil {
-		return client.IgnoreNotFound(err)
+		return fmt.Errorf("re-fetch FoundryGraph before ApplySchema: %w", err)
 	}
 
 	endpoint := fmt.Sprintf("%s.%s.svc.cluster.local:%d", r.cartographerServiceName(fg), fg.Namespace, r.CartographerPort)

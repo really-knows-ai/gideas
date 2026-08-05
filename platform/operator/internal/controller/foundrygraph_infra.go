@@ -46,6 +46,30 @@ const cartographerStorageSize = "1Gi"
 // kubelet SIGKILL; 100s matches the cartographer deployment.yaml reference template.
 const cartographerTerminationGraceSecs = int64(100)
 
+// cartographerStorageSizeAnnotation marks the effective desired PVC data size on the
+// Cartographer Deployment pod template. Encoding the size into the pod template makes a
+// storage.size-only spec change produce a pod-template delta (forcing a Deployment
+// rollout) rather than silently patching only the PVC — SPEC R6 requires a storage change
+// to redeploy the pod so the readiness → re-apply-schema sequence runs on the new pod.
+const cartographerStorageSizeAnnotation = "flow.foundry.io/cartographer-storage-size"
+
+// desiredStorageSize returns the effective desired PVC data size for a FoundryGraph:
+// defaulted to cartographerStorageSize when unset and clamped to a 1Mi minimum (SPEC R6
+// step 1). It does not apply reconcilePVC's never-shrink retention (that needs the live
+// PVC), so callers combine it against the current PVC when they must preserve a larger size.
+func desiredStorageSize(fg *flowv1.FoundryGraph) resource.Quantity {
+	var qty resource.Quantity
+	if fg.Spec.Storage == nil || fg.Spec.Storage.Size == nil || fg.Spec.Storage.Size.IsZero() {
+		qty = resource.MustParse(cartographerStorageSize)
+	} else {
+		qty = *fg.Spec.Storage.Size
+	}
+	if qty.Cmp(resource.MustParse("1Mi")) < 0 {
+		qty = resource.MustParse("1Mi")
+	}
+	return qty
+}
+
 // labelsForCartographer returns the standard labels for Cartographer resources.
 func (r *FoundryGraphReconciler) labelsForCartographer(fg *flowv1.FoundryGraph) map[string]string {
 	return map[string]string{
@@ -71,16 +95,7 @@ func (r *FoundryGraphReconciler) reconcilePVC(ctx context.Context, fg *flowv1.Fo
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pvc, func() error {
-		var qty resource.Quantity
-		if fg.Spec.Storage == nil || fg.Spec.Storage.Size == nil || fg.Spec.Storage.Size.IsZero() {
-			qty = resource.MustParse(cartographerStorageSize)
-		} else {
-			qty = *fg.Spec.Storage.Size
-		}
-		// Clamp minimum to 1Mi.
-		if qty.Value() < 1*1024*1024 {
-			qty = resource.MustParse("1Mi")
-		}
+		qty := desiredStorageSize(fg)
 		// Only increase, never shrink.
 		current := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 		if qty.Cmp(current) < 0 {
@@ -302,6 +317,10 @@ func (r *FoundryGraphReconciler) deploymentEnvVars(fg *flowv1.FoundryGraph) []co
 func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	replicas := int32(1)
 	termGrace := cartographerTerminationGraceSecs
+	// resource.Quantity is a value type; assign to an addressable local before calling the
+	// pointer-receiver String() method.
+	storageSizeQty := desiredStorageSize(fg)
+	storageSizeString := storageSizeQty.String()
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cartographer-" + fg.Name,
@@ -314,7 +333,17 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 		deploy.Spec.Replicas = &replicas
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		deploy.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: labels,
+				// The desired storage size is part of the pod template so a storage.size
+				// change (SPEC R6: non-schema fields like storage.size trigger redeployment)
+				// alters the template hash and rolls a new pod, driving the readiness →
+				// re-apply-schema sequence the SPEC requires, rather than only patching the
+				// PVC in place.
+				Annotations: map[string]string{
+					cartographerStorageSizeAnnotation: storageSizeString,
+				},
+			},
 			Spec: corev1.PodSpec{
 				// ponytail: PSa "restricted"-level SecurityContext
 				SecurityContext: &corev1.PodSecurityContext{

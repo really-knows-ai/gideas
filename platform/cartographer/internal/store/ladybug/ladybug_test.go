@@ -1056,6 +1056,71 @@ func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
 	}
 }
 
+// TestCreateEdge_StructuralErrorBeforeEntityExistence asserts the SPEC RPC
+// check-order (CreateEdge: structural → entity existence): a request that
+// carries BOTH a missing source entity AND a structurally invalid edge property
+// surfaces the structural error (unknown/missing required property →
+// INVALID_ARGUMENT) rather than the existence NOT_FOUND masking it.
+func TestCreateEdge_StructuralErrorBeforeEntityExistence(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+
+	reqSchema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Component",
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string"},
+				},
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"Component"}, Using: []string{"DependsOn"}},
+				},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "DependsOn", Properties: []*flowv1.Property{
+				{Name: "weight", Type: "string", Required: true},
+			}},
+		},
+	}
+	if err := s.ApplySchema(context.Background(), reqSchema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+
+	missing := uuid.New().String()
+	existingTarget, err := s.CreateEntity(context.Background(), "Component", "",
+		map[string]string{"name": "tgt"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity target: %v", err)
+	}
+
+	// Missing required property + missing source → ErrMissingRequiredProperty
+	// (structural) takes precedence over ErrSourceOrTargetNotFound.
+	_, err = s.CreateEdge(context.Background(), "DependsOn", missing, existingTarget.Id, nil, "")
+	if !errors.Is(err, store.ErrMissingRequiredProperty) {
+		t.Errorf("expected ErrMissingRequiredProperty to take precedence over missing source, got %v", err)
+	}
+
+	// Unknown property + missing source → ErrUnknownProperty (structural) takes
+	// precedence over ErrSourceOrTargetNotFound.
+	_, err = s.CreateEdge(context.Background(), "DependsOn", missing, existingTarget.Id,
+		map[string]string{"weight": "x", "bogus": "y"}, "")
+	if !errors.Is(err, store.ErrUnknownProperty) {
+		t.Errorf("expected ErrUnknownProperty to take precedence over missing source, got %v", err)
+	}
+
+	// Well-formed property values + missing source → ErrSourceOrTargetNotFound
+	// (entity existence, the next check, still fires when structure is valid).
+	_, err = s.CreateEdge(context.Background(), "DependsOn", missing, existingTarget.Id,
+		map[string]string{"weight": "heavy"}, "")
+	if !errors.Is(err, store.ErrSourceOrTargetNotFound) {
+		t.Errorf("expected ErrSourceOrTargetNotFound for structurally-valid missing source, got %v", err)
+	}
+}
+
 func TestCreateEdge_SourceNotFound(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -2432,6 +2497,71 @@ func TestFileBackedVectorBootstrapSurvivesMainAndBranchReopen(t *testing.T) {
 	}
 }
 
+// TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen asserts that a
+// branch-only (bootstrap-first) vector type — declared on main with
+// EnableVectorIndex but only bootstrapped inside a branch — has its promoted
+// vector index/dimension persisted into main's schema.json by RehydrateFromBranch
+// so a reopen's validateMetadataAgainstCatalog does not fail closed. Without the
+// persistence, main's catalog carries the promoted embedding column/index while
+// main's metadata still records VectorIndexes=false/VectorDimensions=0 and the
+// reopen bricks startup.
+func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Declare the vector type on main (Additive EnableVectorIndex) but do NOT
+	// bootstrap the embedding column/index on main — that happens only on the
+	// branch's first embedding write.
+	if err := database.ApplySchema(context.Background(), &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Vector", EnableVectorIndex: true,
+		Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if database.IsVectorIndexBootstrapped("Vector", "") {
+		t.Fatal("expected Vector not bootstrapped on main before branch write")
+	}
+
+	const branch = "tx-bootstrap-first"
+	if err := database.CreateBranchDB(context.Background(), branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := database.ReplicateSchemaToBranch(context.Background(), branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	// The first embedding write happens on the branch, bootstrapping the
+	// dimension only there.
+	if _, err := database.CreateEntity(context.Background(), "Vector", "",
+		map[string]string{"name": "branch"}, []float32{1, 2, 3}, branch); err != nil {
+		t.Fatalf("bootstrap vector on branch: %v", err)
+	}
+
+	// Commit path: promote branch data (and the bootstrapped vector schema) to
+	// main via RehydrateFromBranch.
+	if err := database.RehydrateFromBranch(context.Background(), branch); err != nil {
+		t.Fatalf("RehydrateFromBranch: %v", err)
+	}
+	if !database.IsVectorIndexBootstrapped("Vector", "") {
+		t.Fatal("expected vector index promoted to main after rehydrate")
+	}
+
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen must validate cleanly against persisted main metadata.
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen after rehydrate: %v", err)
+	}
+	defer closeStore(t, reopened)
+	if dimension, derr := reopened.GetEstablishedDimension("Vector", ""); derr != nil || dimension != 3 {
+		t.Fatalf("main vector dimension after reopen = %d, error = %v, want 3", dimension, derr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Embedding bootstrap
 // ---------------------------------------------------------------------------
@@ -3587,6 +3717,151 @@ func TestApplySchema_DestructiveChange_VectorDisable(t *testing.T) {
 	}
 	if !s.TableExists("VectorType") {
 		t.Fatal("VectorType table should exist after wipe+apply")
+	}
+}
+
+// SPEC R2 (line ~197) and R6 (line ~386): changing enableVectorIndex from
+// false to true on an existing entity type is non-destructive (adds the
+// embedding column via ALTER TABLE ADD COLUMN). Unlike the destructive
+// true→false transition (TestApplySchema_DestructiveChange_VectorDisable),
+// the false→true transition must be applied additively with no error, must
+// then allow an embedding CreateEntity to lazily bootstrap the dimension, and
+// a close/reopen must restore the lazy vector index from the persisted schema.
+func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Apply schema with the vector index disabled: the Document table is created
+	// without an embedding column (lazy bootstrap never fires without an
+	// embedding write and EnableVectorIndex is false).
+	disabled := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Document", EnableVectorIndex: false,
+		Properties: []*flowv1.Property{{Name: "title", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(ctx, disabled); err != nil {
+		t.Fatalf("first ApplySchema (vector disabled): %v", err)
+	}
+	if _, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "doc"}, []float32{1, 2, 3}, "main"); err != nil {
+		t.Fatalf("CreateEntity on non-vector type should accept (and discard) an embedding: %v", err)
+	}
+	if s.IsVectorIndexBootstrapped("Document", "main") {
+		t.Fatal("vector index must not be bootstrapped while EnableVectorIndex is false")
+	}
+
+	// Re-apply the same entity type with EnableVectorIndex true. Per SPEC R2/R6
+	// this is additive (the embedding column is added via ALTER) and must NOT
+	// surface ErrDestructiveSchemaChange.
+	enabled := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Document", EnableVectorIndex: true,
+		Properties: []*flowv1.Property{{Name: "title", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(ctx, enabled); err != nil {
+		t.Fatalf("false→true ApplySchema must be non-destructive, got %v", err)
+	}
+	if s.IsVectorIndexBootstrapped("Document", "main") {
+		t.Fatal("the false→true transition must stay lazy — no entity written yet")
+	}
+
+	// A first embedding write now bootstraps the dimension (SPEC R7 lazy).
+	if _, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "vec"}, []float32{1, 2, 3}, "main"); err != nil {
+		t.Fatalf("CreateEntity with embedding after enable: %v", err)
+	}
+	if !s.IsVectorIndexBootstrapped("Document", "main") {
+		t.Fatal("expected vector index bootstrapped after first embedding write")
+	}
+	if dim, derr := s.GetEstablishedDimension("Document", "main"); derr != nil || dim != 3 {
+		t.Fatalf("dimension after enable = %d, error = %v, want 3", dim, derr)
+	}
+
+	// Reopen: the lazy vector index must be restored from persisted schema.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, s2)
+	if !s2.IsVectorIndexBootstrapped("Document", "main") {
+		t.Fatal("lazy vector index was not restored on reopen")
+	}
+	if dim, derr := s2.GetEstablishedDimension("Document", "main"); derr != nil || dim != 3 {
+		t.Fatalf("restored dimension = %d, error = %v, want 3", dim, derr)
+	}
+}
+
+// WipeSchema drops every schema table and clears the in-memory schema cache,
+// but a store primitive must not leave stale branch connections or persisted
+// branch records dangling: an open branch connection cached the dropped tables
+// (a later branch op would error on a vanished schema), and a persisted
+// branches/<txID>.state.json would let SaveBranchTransactionState re-register a
+// branch whose database and schema are gone. The store primitive must drop them
+// itself — defense-in-depth behind the service-layer FAILED_PRECONDITION
+// (SPEC row ~915) which only guards a live transaction.
+func TestWipeSchema_ClosesOpenBranchesAndRemovesPersistedState(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	const txID = "00000000-0000-4000-a000-000000000001"
+	if err := s.CreateBranchDB(ctx, txID); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, txID); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	if err := s.SaveBranchTransactionState(ctx, txID, store.BranchTransactionState{
+		MainHeadAtLastSync: "head", SchemaHash: "schema",
+	}); err != nil {
+		t.Fatalf("SaveBranchTransactionState: %v", err)
+	}
+	// Confirm the durable branch state file and open connection exist pre-wipe.
+	if _, err := os.Stat(filepath.Join(dir, "branches", txID+".state.json")); err != nil {
+		t.Fatalf("expected persisted branch state before wipe: %v", err)
+	}
+	ldb := s.(*ladybugDB)
+	if _, ok := ldb.branches[txID]; !ok {
+		t.Fatal("expected branch connection registered before wipe")
+	}
+
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	// The open branch connection was closed and removed from the registry.
+	if _, ok := ldb.branches[txID]; ok {
+		t.Fatal("open branch survived WipeSchema")
+	}
+	// The durable branch state and database records were removed.
+	if _, err := os.Stat(filepath.Join(dir, "branches", txID+".state.json")); !os.IsNotExist(err) {
+		t.Fatalf("persisted branch state survived WipeSchema: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "branches", txID+".lbug")); !os.IsNotExist(err) {
+		t.Fatalf("persisted branch database survived WipeSchema: %v", err)
+	}
+	// A post-wipe branch operation can no longer be issued against the stale
+	// branch (previously it would operate against dropped tables).
+	if err := s.ReplicateSchemaToBranch(ctx, txID); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("expected ErrBranchNotFound after wipe, got %v", err)
+	}
+	// SaveBranchTransactionState can no longer re-register the stale branch.
+	if err := s.SaveBranchTransactionState(ctx, txID, store.BranchTransactionState{
+		MainHeadAtLastSync: "head", SchemaHash: "schema",
+	}); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("expected ErrBranchNotFound re-registering wiped branch state, got %v", err)
 	}
 }
 

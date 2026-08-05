@@ -373,17 +373,13 @@ func (db *ladybugDB) CreateEdge(
 		return nil, fmt.Errorf("%w: %q", store.ErrUnknownEdgeType, edgeType)
 	}
 
-	// Verify source/target entities exist and get their types.
-	src, err := findEntityByID(conn, typeDefs.entityTypeDefs, fromID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: source entity %q not found", store.ErrSourceOrTargetNotFound, fromID)
-	}
-	tgt, err := findEntityByID(conn, typeDefs.entityTypeDefs, toID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: target entity %q not found", store.ErrSourceOrTargetNotFound, toID)
-	}
-
-	// Validate edge properties (including required).
+	// Structural validation runs before the source/target entity-existence
+	// check (SPEC RPC check-order: CreateEdge: structural → entity existence →
+	// capability → edge-rule auth). An unknown or missing-required edge
+	// property is therefore reported as INVALID_ARGUMENT even when the source
+	// or target entity does not exist — the NOT_FOUND must never mask the
+	// structural error (SPEC error table: unknown/missing edge property →
+	// INVALID_ARGUMENT).
 	propDefs := make(map[string]bool)
 	for _, p := range edef.Properties {
 		propDefs[p.Name] = true
@@ -397,6 +393,16 @@ func (db *ladybugDB) CreateEdge(
 		if !propDefs[key] {
 			return nil, fmt.Errorf("%w: %q for edge type %q", store.ErrUnknownProperty, key, edgeType)
 		}
+	}
+
+	// Verify source/target entities exist and get their types.
+	src, err := findEntityByID(conn, typeDefs.entityTypeDefs, fromID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: source entity %q not found", store.ErrSourceOrTargetNotFound, fromID)
+	}
+	tgt, err := findEntityByID(conn, typeDefs.entityTypeDefs, toID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: target entity %q not found", store.ErrSourceOrTargetNotFound, toID)
 	}
 
 	// Validate edge rules.

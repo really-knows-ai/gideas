@@ -177,6 +177,11 @@ func validateRules(rules []*flowv1.ConnectionRule, entityTypeNames,
 }
 
 func validateName(name string) error {
+	// Length check uses len() (bytes), not utf8.RuneCountInString. Because the
+	// Cypher identifier regex is ASCII-only, any name passing it is single-byte
+	// (bytes == runes), so the 255-char limit is equivalent. A multi-byte name
+	// fails the regex below regardless, so it is never rejected over-length;
+	// only its diagnostic reports bytes. This is acceptable, so no rune counting.
 	if len(name) == 0 || len(name) > maxNameLength {
 		return fmt.Errorf("%w: %q (length %d)", ErrInvalidName, name, len(name))
 	}

@@ -449,6 +449,18 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 		}
 	}
 
+	// Persist main's schema metadata (capturing the vector index/dimension the
+	// copy path promoted to main above) so a reopen's
+	// validateMetadataAgainstCatalog does not fail closed. A branch that
+	// bootstrapped the embedding column/vector index on its first write (SPEC
+	// R7 lazy bootstrap) promoted that vector state to main's catalog here, but
+	// main's schema.json (written at the original ApplySchema) still records
+	// VectorIndexes=false/VectorDimensions=0 for the type; without rewriting
+	// it, restart bricks startup with a catalog/metadata mismatch.
+	if err := db.persistMainVectorMetadataLocked(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -495,6 +507,12 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	// above, so this merge also carries the pre-existing compiled defs back.
 	db.entityTypeDefs = entDefs
 	db.edgeTypeDefs = edgeDefs
+	// Persist main's schema metadata (capturing the vector index/dimension the
+	// file-load path promoted above), so a reopen's validateMetadataAgainstCatalog
+	// does not fail closed with a catalog/metadata vector mismatch.
+	if err := db.persistMainVectorMetadataLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 

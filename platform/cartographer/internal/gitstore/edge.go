@@ -64,6 +64,18 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf("decode edge file %s: %w", fi.Name(), err)
 			}
+			// Guard against the embedded id conflicting with the filename. A
+			// well-formed file writes <id>.json whose embedded id equals the
+			// filename base (writeEdgeFile); a file whose embedded id differs
+			// (external corruption) would otherwise be loaded under an id that
+			// was never written to that path, hiding the intended-UUID file
+			// during R8 re-hydration. Compare parsed UUIDs so a case-only
+			// filename/body variation is not treated as corruption.
+			fileID, fileErr := uuid.Parse(strings.TrimSuffix(fi.Name(), ".json"))
+			if fileErr != nil || fileID != ej.ID {
+				_ = f.Close()
+				return EdgeFile{}, fmt.Errorf("edge file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
+			}
 			// A Close error signals an I/O problem reading the file; propagating it
 			// prevents a clean-but-corrupt read from silently passing.
 			if err := f.Close(); err != nil {

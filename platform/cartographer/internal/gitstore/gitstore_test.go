@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -556,8 +557,56 @@ func TestReadAllEntityFilesCorrupt(t *testing.T) {
 	}
 }
 
-// TestWriteEntityFilesTypeMismatch asserts that writing an entity whose Type
-// differs from the batch type returns ErrEntityTypeMismatch (entity.go:111).
+// TestReadAllEntityFilesIDFilenameConflict: a JSON entity file whose embedded id
+// differs from its filename (external corruption) must surface an error, not be
+// silently loaded under the conflicting id (SPEC R8 corruption recovery). Without
+// the guard, R8 re-hydration would load the entity under a never-written id while
+// the intended-UUID file disappears from view.
+func TestReadAllEntityFilesIDFilenameConflict(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+		eID := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: eID, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		// Rewrite the file's embedded id to a different (still valid) UUID under
+		// the original filename, simulating filename/body divergence.
+		otherID := validUUID(t)
+		path := "entities/Component/" + eID + ".json"
+		ej := struct {
+			ID         uuid.UUID         `json:"id"`
+			Type       string            `json:"type"`
+			Properties map[string]string `json:"properties,omitempty"`
+			CreatedAt  time.Time         `json:"created_at"`
+			UpdatedAt  time.Time         `json:"updated_at"`
+		}{ID: uuid.MustParse(otherID), Type: "Component", CreatedAt: now, UpdatedAt: now}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate conflicting entity file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write conflicting entity file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close conflicting entity file: %w", err)
+		}
+		if _, err := gs.ReadAllEntityFiles(ctx(), "Component"); err == nil {
+			return fmt.Errorf("expected error for conflicting entity id, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEntityFilesIDFilenameConflict: %v", err)
+	}
+}
 func TestWriteEntityFilesTypeMismatch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -845,6 +894,66 @@ func TestReadAllEdgeFilesCorrupt(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("ReadAllEdgeFilesCorrupt: %v", err)
+	}
+}
+
+// TestReadAllEdgeFilesIDFilenameConflict: a JSON edge file whose embedded id
+// differs from its filename (external corruption) must surface an error, not be
+// silently loaded under the conflicting id (SPEC R8 corruption recovery).
+func TestReadAllEdgeFilesIDFilenameConflict(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		eID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		now := time.Now().UTC().Round(time.Millisecond)
+		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{ID: eID, Type: "DEPENDS_ON", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		// Rewrite the file's embedded id to a different (still valid) UUID under
+		// the original filename, simulating filename/body divergence.
+		otherID := validUUID(t)
+		path := "edges/DEPENDS_ON/" + eID + ".json"
+		ej := struct {
+			ID           uuid.UUID         `json:"id"`
+			Type         string            `json:"type"`
+			FromEntityID uuid.UUID         `json:"from_entity_id"`
+			ToEntityID   uuid.UUID         `json:"to_entity_id"`
+			Properties   map[string]string `json:"properties,omitempty"`
+			CreatedAt    time.Time         `json:"created_at"`
+			UpdatedAt    time.Time         `json:"updated_at"`
+		}{
+			ID:           uuid.MustParse(otherID),
+			Type:         "DEPENDS_ON",
+			FromEntityID: uuid.MustParse(fromID),
+			ToEntityID:   uuid.MustParse(toID),
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate conflicting edge file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write conflicting edge file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close conflicting edge file: %w", err)
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); err == nil {
+			return fmt.Errorf("expected error for conflicting edge id, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEdgeFilesIDFilenameConflict: %v", err)
 	}
 }
 
@@ -2503,6 +2612,32 @@ func TestCloneSingleAuthConfigMissing(t *testing.T) {
 	}
 }
 
+// TestCloneSingleAuthSentinelPreserved verifies that CloneSingleBranch preserves
+// a genuine ErrAuthConfigMissing returned by a configured authFn (remote.go:486)
+// instead of collapsing it into ErrRemoteAuthResolutionFailed. CloneSingleBranch
+// is the PullFromRemote empty-repo path, so a missing credential must surface as
+// ErrAuthConfigMissing for mapGitError to return FAILED_PRECONDITION (SPEC error
+// row "Remote auth config missing (PullFromRemote)", line 929).
+func TestCloneSingleAuthSentinelPreserved(t *testing.T) {
+	gs := setupTestStore(t)
+	gs.authFn = func() (transport.AuthMethod, error) {
+		return nil, ErrAuthConfigMissing
+	}
+	err := gs.WithGitLock(func() error {
+		err := gs.CloneSingleBranch(ctx(), "ssh://git@example.com/repo.git", "main")
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		}
+		if errors.Is(err, ErrRemoteAuthResolutionFailed) {
+			return fmt.Errorf("expected not ErrRemoteAuthResolutionFailed, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CloneSingleAuthSentinelPreserved: %v", err)
+	}
+}
+
 // TestPushRejectedSentinel guards the exported ErrPushRejected sentinel that
 // PushRemote maps from git.ErrNonFastForwardUpdate (remote.go:379). It cannot
 // be reached deterministically through a genuine push (go-git's receive-pack
@@ -3939,15 +4074,13 @@ func TestFetchAndMerge_FastForward(t *testing.T) {
 	}
 }
 
-// TestFetchAndMerge_MergeCommit tests that FetchAndMerge creates a merge
-// commit when local and remote have diverged. This is the delivered divergence
-// behavior of the explicit PullFromRemote path: because the service pulls via
-// FetchAndMerge (never PullAndFastForward), a divergent pull produces a merge
-// commit and must NOT surface ErrPullDiverged. SPEC R10's divergent
-// "FAILED_PRECONDITION" (error table line 926) is therefore unreachable in
-// production and is here pinned as intentionally set-aside (see remote.go
-// FetchAndMerge docs).
-func TestFetchAndMerge_MergeCommit(t *testing.T) {
+// TestFetchAndMerge_Diverged asserts that FetchAndMerge fails with
+// ErrPullDiverged when local main and the remote have diverged (neither side
+// is an ancestor of the other) and leaves the local main ref unchanged. This
+// is the delivered divergence behavior of the explicit PullFromRemote path:
+// service mapGitError maps ErrPullDiverged to FAILED_PRECONDITION, matching
+// SPEC R10 / error-table row "Remote pull diverged" (line 926).
+func TestFetchAndMerge_Diverged(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -4004,81 +4137,123 @@ func TestFetchAndMerge_MergeCommit(t *testing.T) {
 		t.Fatalf("push remote: %v", err)
 	}
 
-	remoteHash := remoteHEAD(t, bareDir)
-
 	err = gs.WithGitLock(func() error {
 		gs.remoteURL = "file://" + bareDir
 		gs.authFn = func() (transport.AuthMethod, error) {
 			return noopAuth{}, nil
 		}
 
-		mergeHash, err := gs.FetchAndMerge(ctx(), "origin", "main")
-		if err != nil {
-			return fmt.Errorf("FetchAndMerge: %w", err)
+		_, err = gs.FetchAndMerge(ctx(), "origin", "main")
+		if !errors.Is(err, ErrPullDiverged) {
+			if err == nil {
+				return fmt.Errorf("expected ErrPullDiverged, got nil")
+			}
+			return fmt.Errorf("expected ErrPullDiverged, got %v", err)
 		}
 
-		if mergeHash == localCommitHash {
-			return fmt.Errorf("merge hash should differ from local commit hash")
+		// The local main ref must be left unchanged on divergence.
+		localRef, refErr := gs.repo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+		if refErr != nil {
+			return fmt.Errorf("resolve local ref: %w", refErr)
 		}
-		if mergeHash == remoteHash {
-			return fmt.Errorf("merge hash should differ from remote commit hash")
+		if localRef.Hash() != localCommitHash {
+			return fmt.Errorf("local main ref changed on divergence: got %s, want %s", localRef.Hash(), localCommitHash)
 		}
-
-		mergeCommit, err := gs.repo.CommitObject(mergeHash)
-		if err != nil {
-			return fmt.Errorf("get merge commit: %w", err)
-		}
-		if len(mergeCommit.ParentHashes) != 2 {
-			return fmt.Errorf("expected 2 parents, got %d", len(mergeCommit.ParentHashes))
-		}
-
-		hasLocal := mergeCommit.ParentHashes[0] == localCommitHash || mergeCommit.ParentHashes[1] == localCommitHash
-		hasRemote := mergeCommit.ParentHashes[0] == remoteHash || mergeCommit.ParentHashes[1] == remoteHash
-		if !hasLocal {
-			return fmt.Errorf("merge commit should have local commit as parent")
-		}
-		if !hasRemote {
-			return fmt.Errorf("merge commit should have remote commit as parent")
-		}
-
-		expectedMsg := "merge: sync from remote file://" + bareDir
-		if mergeCommit.Message != expectedMsg {
-			return fmt.Errorf("expected message %q, got %q", expectedMsg, mergeCommit.Message)
-		}
-
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("TestFetchAndMerge_MergeCommit: %v", err)
+		t.Fatalf("TestFetchAndMerge_Diverged: %v", err)
 	}
+}
 
-	// Verify the working tree has the remote's files (simplified merge uses remote tree)
-	_, err = gs.wt.Filesystem.Stat("remote.txt")
+// TestFetchAndMerge_NonMainBranch asserts that FetchAndMerge honors its branch
+// parameter: it fetches the given branch's refspec and reads the matching
+// tracking ref, so a non-"main" branch is pulled correctly. Previously the
+// fetch refspec was hardwired to "refs/heads/main", so for a non-main branch
+// the tracking-ref read at "refs/remotes/<remote>/<branch>" was stale/absent.
+func TestFetchAndMerge_NonMainBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	setupBareRemote(t, tmpDir, bareDir)
+
+	// Clone the bare remote to get a local repo that only knows main.
+	gs := cloneFromBare(t, tmpDir, bareDir)
+
+	// Clone the bare remote again as a "writer", commit a new commit, and push
+	// it as a non-main "feature" branch so it appears on the remote AFTER the
+	// local repo was created (the local repo must not already have the feature
+	// tracking ref, otherwise the pull would be a no-op).
+	writerDir := filepath.Join(tmpDir, "writer")
+	writer, err := git.PlainClone(writerDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
 	if err != nil {
-		t.Fatalf("remote.txt should exist in working tree: %v", err)
+		t.Fatalf("clone writer: %v", err)
 	}
-	_, err = gs.wt.Filesystem.Stat("init.txt")
+	writerWT, err := writer.Worktree()
 	if err != nil {
-		t.Fatalf("init.txt should exist in working tree: %v", err)
+		t.Fatalf("writer worktree: %v", err)
+	}
+	featureFile, err := writerWT.Filesystem.Create("feature.txt")
+	if err != nil {
+		t.Fatalf("create feature file: %v", err)
+	}
+	_, _ = featureFile.Write([]byte("feature content"))
+	_ = featureFile.Close()
+	if _, err := writerWT.Add("feature.txt"); err != nil {
+		t.Fatalf("add feature: %v", err)
+	}
+	if _, err := writerWT.Commit("feature commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("feature commit: %v", err)
+	}
+	if err := writer.Push(&git.PushOptions{
+		RefSpecs: []config.RefSpec{config.RefSpec("refs/heads/main:refs/heads/feature")},
+	}); err != nil {
+		t.Fatalf("push feature branch: %v", err)
 	}
 
-	// local.txt was created locally but the simplified merge uses the remote tree,
-	// so local-only files are lost.
-	_, err = gs.wt.Filesystem.Stat("local.txt")
-	if err == nil {
-		t.Fatal("local.txt should NOT exist in working tree after simplified merge")
+	// The feature branch's tip hash on the remote.
+	remoteRepo, err := git.PlainOpen(bareDir)
+	if err != nil {
+		t.Fatalf("open remote: %v", err)
 	}
+	featureRef, err := remoteRepo.Reference(plumbing.ReferenceName("refs/heads/feature"), true)
+	if err != nil {
+		t.Fatalf("remote feature ref: %v", err)
+	}
+	featureHash := featureRef.Hash()
 
-	// Note on entities/ and edges/: this test's repo is a plain clone of a bare
-	// remote containing only init.txt, so it never had New()-created entities/
-	// and edges/ dirs to lose. The simplified merge (remote.go:129 createMergeCommit)
-	// checks out the remote tree, so if a New()-initialised repo were merged against
-	// a remote whose tree lacks entities/ and edges/, those dirs would be dropped
-	// from the merge commit and removed from the working tree — the same intentional
-	// loss documented for local.txt and the ponytail at remote.go:125-128. The
-	// remote-bootstrap path (CloneSingleBranch) recreates them explicitly
-	// (remote.go:468-476); the merge path relies on re-hydration (R8) or a remote
-	// that already contains the dirs.
+	// Local repo starts on main; FetchAndMerge the non-main "feature" branch.
+	err = gs.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		newHash, err := gs.FetchAndMerge(ctx(), "origin", "feature")
+		if err != nil {
+			return fmt.Errorf("FetchAndMerge(feature): %w", err)
+		}
+		if newHash != featureHash {
+			return fmt.Errorf("expected feature hash %s, got %s", featureHash, newHash)
+		}
+
+		// The local branch must point at the feature tip.
+		localRef, refErr := gs.repo.Reference(plumbing.ReferenceName("refs/heads/feature"), true)
+		if refErr != nil {
+			return fmt.Errorf("resolve local feature ref: %w", refErr)
+		}
+		if localRef.Hash() != featureHash {
+			return fmt.Errorf("local feature ref: got %s, want %s", localRef.Hash(), featureHash)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_NonMainBranch: %v", err)
+	}
 }
 
 // TestPullAlreadyUpToDate2 tests that pulling when already up-to-date

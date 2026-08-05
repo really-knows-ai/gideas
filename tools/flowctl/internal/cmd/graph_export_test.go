@@ -113,6 +113,31 @@ func testParams() graphExportParams {
 	return graphExportParams{namespace: "flow-system", graphName: "flow-graph", format: "json"}
 }
 
+// ─── Format pre-validation ──────────────────────────────────────────────────
+
+func TestValidateExportFormat(t *testing.T) {
+	for _, ok := range []string{"json", "graphml"} {
+		if err := validateExportFormat(ok); err != nil {
+			t.Errorf("expected %q to be valid, got: %v", ok, err)
+		}
+	}
+	if err := validateExportFormat("xml"); err == nil {
+		t.Error("expected unsupported format to be rejected, got nil")
+	}
+}
+
+func TestRunGraphExport_UnsupportedFormatRejected(t *testing.T) {
+	params := testParams()
+	params.format = "xml"
+	err := runGraphExportWith(context.Background(), successExporter(), params, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected format rejection error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid export format") {
+		t.Errorf("expected error to mention invalid format, got: %v", err)
+	}
+}
+
 // ─── FoundryGraph validation ───────────────────────────────────────────────
 
 func TestRunGraphExport_FoundryGraphNotFound_FailedPrecondition(t *testing.T) {

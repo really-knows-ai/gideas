@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"syscall"
 	"testing"
@@ -139,6 +140,42 @@ func TestTryRemotePullOnInitConfiguredSecretFailure(t *testing.T) {
 	}
 	if gs.cloneCalls != 0 {
 		t.Fatalf("clone calls after secret failure = %d, want 0", gs.cloneCalls)
+	}
+}
+
+// TestTryRemotePullOnInitSSHEmptyKeyFailsClosed verifies the ssh-empty-key
+// branch of tryRemotePullOnInit's pre-flight auth resolver: a present-but-empty
+// ssh-privatekey Secret is equivalent to an absent one and fail-closes with
+// gitstore.ErrAuthConfigMissing before any git operation is attempted.
+func TestTryRemotePullOnInitSSHEmptyKeyFailsClosed(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	err := tryRemotePullOnInit(gs, "ssh://git@github.com/org/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return map[string]string{"ssh-privatekey": ""}, nil
+		}, nil, nil)
+	if !errors.Is(err, gitstore.ErrAuthConfigMissing) {
+		t.Fatalf("ssh-empty-key pre-flight error = %v, want ErrAuthConfigMissing", err)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls after ssh-empty-key rejection = %d, want 0", gs.cloneCalls)
+	}
+}
+
+// TestTryRemotePullOnInitUnsupportedSchemeFailsClosed verifies the
+// unsupported-scheme branch of tryRemotePullOnInit's pre-flight auth resolver:
+// a remote URL with a scheme url.Parse accepts but the resolver does not
+// support returns gitstore.ErrUnsupportedURLScheme before any git operation.
+func TestTryRemotePullOnInitUnsupportedSchemeFailsClosed(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	err := tryRemotePullOnInit(gs, "ftp://example.com/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return map[string]string{"username": "user", "password": "pass"}, nil
+		}, nil, nil)
+	if !errors.Is(err, gitstore.ErrUnsupportedURLScheme) {
+		t.Fatalf("unsupported-scheme pre-auth error = %v, want ErrUnsupportedURLScheme", err)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls after unsupported-scheme rejection = %d, want 0", gs.cloneCalls)
 	}
 }
 
@@ -477,6 +514,40 @@ func TestBuildResolveAuthFnSSHUserDefaultsToGit(t *testing.T) {
 	}
 	if signer.User != tSSHUser {
 		t.Fatalf("ssh user default = %q, want %q", signer.User, tSSHUser)
+	}
+}
+
+// TestBuildResolveAuthFnParseURLFailure verifies the url.Parse error branch of
+// buildResolveAuthFn (main.go:461-463): a remote URL the parser rejects must
+// surface the parse error (never a sentinel, never a nil auth) and stay in the
+// error branch, so a malformed remote URL cannot silently fall through to
+// anonymous/unauthenticated access.
+func TestBuildResolveAuthFnURLParseFailure(t *testing.T) {
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"username": tSecretUsername, "password": tSecretPassword}, nil
+	}
+	// malformedURL contains a NUL control character, which url.Parse rejects
+	// ("net/url: invalid control character in URL").
+	malformedURL := "https://host/%zz"
+	// Guard the fixture: this must actually be a URL url.Parse rejects, or the
+	// test is asserting the wrong branch.
+	//nolint:staticcheck // the fixture is intentionally an invalid URL so the
+	// parse-error branch of buildResolveAuthFn is exercised; the guard asserts
+	// that url.Parse genuinely rejects it (see the test comment above).
+	if _, err := url.Parse(malformedURL); err == nil {
+		t.Fatalf("test fixture %q unexpectedly parses; pick a URL url.Parse rejects", malformedURL)
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, malformedURL)
+	auth, err := fn()
+	if auth != nil {
+		t.Fatalf("expected nil auth for malformed URL, got %v", auth)
+	}
+	if err == nil {
+		t.Fatal("expected a url.Parse error for malformed URL, got nil")
+	}
+	var parseErr *url.Error
+	if !errors.As(err, &parseErr) {
+		t.Fatalf("expected a *url.Error from the parse branch, got %T: %v", err, err)
 	}
 }
 

@@ -1205,6 +1205,33 @@ func TestExecuteCypher_EmptyQuery(t *testing.T) {
 	}
 }
 
+// TestExecuteCypher_ParamsNotAStruct asserts the errCypherParamsNotAStruct
+// branch: when req.Params is present but not a *structpb.StructValue (a JSON
+// object), ExecuteCypher rejects the request with INVALID_ARGUMENT. Per SPEC
+// R2 the params must decode from a JSON object; a list/unset-wrapped value is
+// the untested divergence from that contract.
+func TestExecuteCypher_ParamsNotAStruct(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	// Wrap a list in Params: GetStructValue() is nil for a list, hitting the
+	// not-a-struct branch rather than an absent-Params fast path.
+	nonStructParams := structpb.NewListValue(&structpb.ListValue{})
+	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "MATCH (n:Component) RETURN n",
+		Params: nonStructParams,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-struct params, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	if got, want := status.Convert(err).Message(), "cypher query parameters must be a JSON object"; got != want {
+		t.Fatalf("expected message %q, got %q", want, got)
+	}
+}
+
 func TestExecuteCypher_ValidQuery(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
@@ -3703,7 +3730,7 @@ func TestRefreshTransaction_EmbeddingDimensionConflict(t *testing.T) {
 	}
 
 	// A transaction whose change log records a 2-dim embedding add.
-	txID := "11111111-1111-4111-8111-111111111111"
+	txID := testMutationEntityID
 	state, err := srv.txManager.Create(txID, time.Minute, "head")
 	if err != nil {
 		t.Fatalf("Create transaction: %v", err)
@@ -3733,7 +3760,7 @@ func TestRefreshTransaction_EmbeddingDimensionConflict(t *testing.T) {
 func TestRecoveryDiffPropagatesSuspectedDeletions(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
-	txID := "11111111-1111-4111-8111-111111111111"
+	txID := testMutationEntityID
 	state, err := srv.txManager.Create(txID, time.Minute, "")
 	if err != nil {
 		t.Fatalf("Create transaction: %v", err)
@@ -5713,6 +5740,72 @@ func TestCreateEdge_UnknownProperty(t *testing.T) {
 	}
 }
 
+// TestCreateEdge_StructuralErrorBeforeEntityExistence asserts the SPEC RPC
+// check-order (CreateEdge: structural → entity existence): a request carrying
+// BOTH a missing source entity AND a structurally invalid edge property surfaces
+// INVALID_ARGUMENT (structural), not the NOT_FOUND the entity-existence probe
+// would otherwise return.
+func TestCreateEdge_StructuralErrorBeforeEntityExistence(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:       "Source",
+				Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}},
+			},
+			{
+				Name:       "Target",
+				Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}},
+				Rules:      []*flowv1.ConnectionRule{{CanConnectTo: []string{"Source"}, Using: []string{"LINKED"}}},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "LINKED", Properties: []*flowv1.Property{{Name: "label", Type: "string", Required: true}}},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	tgt, _ := srv.store.CreateEntity(ctx, "Target", "", map[string]string{"name": "tgt"}, nil, "")
+
+	missingSource := "11111111-1111-4111-8111-111111111111"
+
+	// Missing required property + missing source → INVALID_ARGUMENT, not NOT_FOUND.
+	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:     "LINKED",
+		FromEntityId: missingSource,
+		ToEntityId:   tgt.Id,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for missing required property + missing source, got %v", status.Code(err))
+	}
+
+	// Unknown property + missing source → INVALID_ARGUMENT, not NOT_FOUND.
+	_, err = srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:     "LINKED",
+		FromEntityId: missingSource,
+		ToEntityId:   tgt.Id,
+		Properties:   map[string]string{"label": "x", "bogus": "y"},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for unknown property + missing source, got %v", status.Code(err))
+	}
+
+	// Structurally valid + missing source → NOT_FOUND (entity existence is the
+	// next check in order).
+	_, err = srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:     "LINKED",
+		FromEntityId: missingSource,
+		ToEntityId:   tgt.Id,
+		Properties:   map[string]string{"label": "x"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for structurally-valid missing source, got %v", status.Code(err))
+	}
+}
+
 func TestCreateEdge_InvalidIDFormat(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
@@ -6865,6 +6958,16 @@ func TestPullFromRemote_MapGitErrorRows(t *testing.T) {
 		{
 			name:       "remote auth config missing",
 			empty:      false,
+			err:        gitstore.ErrAuthConfigMissing,
+			wantCode:   codes.FailedPrecondition,
+			wantSubstr: "auth configuration missing",
+		},
+		{
+			// The empty-repo PullFromRemote path routes through CloneSingleBranch;
+			// a missing credential must still map to FAILED_PRECONDITION (SPEC error
+			// row "Remote auth config missing (PullFromRemote)").
+			name:       "remote auth config missing (empty repo clone path)",
+			empty:      true,
 			err:        gitstore.ErrAuthConfigMissing,
 			wantCode:   codes.FailedPrecondition,
 			wantSubstr: "auth configuration missing",

@@ -240,13 +240,19 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		return err
 	}
 
+	// Authorize BEFORE the routing-table lookup (SPEC Graph Export Flow step 3 precedes step 4).
+	// authorize needs only the namespace/name/verb, never the routing endpoint, so it can run
+	// safely ahead of Lookup. This closes an existence oracle: if the lookup ran first, an
+	// unauthenticated/unprivileged caller could distinguish "no such (namespace, graph-name)"
+	// (Unavailable) from "registered" (proceed to auth). With auth-first, an unauthorized caller
+	// gets Unauthenticated/PermissionDenied regardless of whether the graph is registered.
+	if err := s.authorize(stream.Context(), ns, name, "get"); err != nil {
+		return err
+	}
+
 	endpoint, ok := s.routingTable.Lookup(ns, name)
 	if !ok {
 		return status.Error(codes.Unavailable, "graph "+ns+"/"+name+" unavailable")
-	}
-
-	if err := s.authorize(stream.Context(), ns, name, "get"); err != nil {
-		return err
 	}
 
 	// Inject capability metadata signed by the operator.

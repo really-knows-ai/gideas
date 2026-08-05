@@ -801,10 +801,13 @@ func TestExportGraphSignsAndInjectsCapabilityMetadata(t *testing.T) {
 }
 
 // TestExportGraphRouteNotRegistered (item 11) verifies the "route not registered" path
-// returns codes.Unavailable and never forwards.
+// returns codes.Unavailable and never forwards. Authorization runs first (SPEC Graph Export
+// Flow step 3 precedes step 4), so an authorized caller who asks for an unregistered graph
+// reaches the Lookup branch and gets Unavailable.
 func TestExportGraphRouteNotRegistered(t *testing.T) {
 	s := &ProxyServer{
 		routingTable: NewProxyRoutingTable(), // empty → Lookup fails
+		k8sClient:    authProxyClient(t, true, true),
 		authCache:    newAuthCache(30 * time.Second),
 	}
 	stream := &mockExportStream{}
@@ -821,6 +824,67 @@ func TestExportGraphRouteNotRegistered(t *testing.T) {
 	}
 	if len(stream.sends) != 0 {
 		t.Error("expected no chunks forwarded for unregistered route")
+	}
+}
+
+// TestExportGraphAuthorizesBeforeRouteLookup (item 11) pins the SPEC Graph Export Flow ordering
+// (step 3 TokenReview+SAR precedes step 4 routing-table forward): an unauthorized caller hitting a
+// *registered* route must get the auth error (PermissionDenied / Unauthenticated), never an
+// Unavailable that would reveal the graph is registered, and must never reach the forward path.
+func TestExportGraphAuthorizesBeforeRouteLookup(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051") // registered
+
+	var dialCalled bool
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, false), // authenticated but NOT authorized
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			dialCalled = true
+			return nil, errors.New("must not dial")
+		},
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer unprivileged",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err := s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if err == nil {
+		t.Fatal("expected an auth error for an unprivileged caller")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied (auth-first), got %v", status.Code(err))
+	}
+	if dialCalled {
+		t.Error("unprivileged caller must not reach the forward/dial path")
+	}
+	if len(stream.sends) != 0 {
+		t.Error("expected no chunks forwarded for an unprivileged caller")
+	}
+
+	// Same shape with an invalid token: the auth-first order surfaces Unauthenticated
+	// rather than an existence-revealing Unavailable.
+	s2 := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, false, false), // token not authenticated
+		authCache:    newAuthCache(30 * time.Second),
+	}
+	stream2 := &mockExportStream{}
+	md2 := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer bad-token",
+	)
+	stream2.ctx = metadata.NewIncomingContext(context.Background(), md2)
+	err2 := s2.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream2)
+	if status.Code(err2) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated (auth-first), got %v", status.Code(err2))
 	}
 }
 

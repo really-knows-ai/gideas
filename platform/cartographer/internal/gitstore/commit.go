@@ -101,6 +101,14 @@ func (g *gitStore) Commit(ctx context.Context, message string) error {
 // "transaction:<txID>". Prefix matching (per SPEC Commit retry, which
 // inspects git log for the transaction:<tx-id> prefix) is consistent with
 // GitLogOneline.
+//
+// PRECONDITION: the caller MUST have checked the relevant branch out before
+// calling this method. The scan walks HEAD's log (git log without a ref), so
+// it only detects commits reachable from the currently checked-out branch. If
+// the transaction branch has not been checked out first, a commit made on that
+// branch will not be visible and this method silently returns false (the
+// production caller, the Commit retry path, checks the transaction branch out
+// first — see cartographer_server.go).
 func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool, error) {
 	message := "transaction:" + txID
 	log, err := g.repo.Log(&git.LogOptions{})

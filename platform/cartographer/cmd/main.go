@@ -547,6 +547,26 @@ func waitForShutdown(
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
+		// ponytail: the 30s GracefulStop budget is hardcoded and coupled to the
+		// Deployment's `terminationGracePeriodSeconds: 100` (deployment.yaml).
+		// GracefulStop is allowed at most this long; immediately after this
+		// select the durability teardown runs (StopGC, dbStore.Close, git
+		// RestoreMain/CleanUntracked) and *consumes the same process budget* —
+		// it has roughly 100s - 30s = ~70s left before kubelet SIGKILLs the pod.
+		// Failure mode: if the teardown (a slow dbStore.Close flushing the branch
+		// connections + main handle, or a slow git lock acquisition + RestoreMain
+		// + CleanUntracked) exceeds that leftover ~70s window, the process is
+		// SIGKILLed mid-write — the tail of durable non-transactional writes is
+		// lost and git is left on a stranded transaction branch that the next
+		// startup's R8 re-hydration must reconcile. If deployment.yaml's grace
+		// period is ever lowered below this 30s budget, a slow drain consumes the
+		// whole window and the durability steps never run at all. Ceiling: the
+		// budget number lives only on each side (code 30s / manifest 100s) with no
+		// single source of truth or guard that one stays below the other — the 70s
+		// headroom silently shrinks whenever one is changed without the other.
+		// Upgrade path: derive both from one shared constant, or make the teardown
+		// independently bounded and surface (log) when it approaches the grace
+		// window so operators can size terminationGracePeriodSeconds from evidence.
 		grpcServer.Stop()
 	}
 

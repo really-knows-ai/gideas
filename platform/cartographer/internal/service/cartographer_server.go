@@ -1246,9 +1246,18 @@ func (s *CartographerServer) CreateEdge(
 	// entity-existence and capability checks, so an unknown edge type yields
 	// INVALID_ARGUMENT even when the caller lacks write capability.
 	branch := req.TransactionId
-	if _, ok := s.store.EdgeType(req.EdgeType); !ok {
+	edef, ok := s.store.EdgeType(req.EdgeType)
+	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument,
 			"unknown edge type: %q", req.EdgeType)
+	}
+	// Structural edge-property validation precedes the entity-existence probe
+	// (SPEC RPC check-order: CreateEdge: structural → entity existence →
+	// capability → edge-rule auth), so an unknown or missing-required edge
+	// property yields INVALID_ARGUMENT even when the source entity is missing —
+	// the existence probe's NOT_FOUND must not mask the structural error.
+	if err := validateEdgePropsForCreate(edef, req.Properties); err != nil {
+		return nil, err
 	}
 	// Resolve source entity type for capability check.
 	sourceType, resolveErr := s.store.ResolveEntityType(ctx, req.FromEntityId, branch)
@@ -1289,6 +1298,30 @@ func (s *CartographerServer) CreateEdge(
 		EdgeId: edge.Id, EdgeType: edge.Type,
 		FromEntityId: edge.FromEntityID, ToEntityId: edge.ToEntityID, Properties: edge.Properties,
 	}, nil
+}
+
+// validateEdgePropsForCreate mirrors the store's structural edge-property
+// validation (SPEC R6 error table: unknown edge property / missing required
+// edge property → INVALID_ARGUMENT). It is surfaced at the service boundary
+// before the source/target entity-existence probe so a structurally invalid
+// edge property yields INVALID_ARGUMENT rather than a NOT_FOUND-masked
+// existence error (SPEC RPC check-order: structural → entity existence).
+func validateEdgePropsForCreate(edef *store.EdgeTypeDef, properties map[string]string) error {
+	declared := make(map[string]bool, len(edef.Properties))
+	for _, p := range edef.Properties {
+		declared[p.Name] = true
+		if p.Required {
+			if _, ok := properties[p.Name]; !ok {
+				return status.Errorf(codes.InvalidArgument, "missing required property: %q for edge type %q", p.Name, edef.Name)
+			}
+		}
+	}
+	for key := range properties {
+		if !declared[key] {
+			return status.Errorf(codes.InvalidArgument, "unknown property: %q for edge type %q", key, edef.Name)
+		}
+	}
+	return nil
 }
 
 func (s *CartographerServer) DeleteEdge(
