@@ -34,6 +34,12 @@ permission:
     "*": deny
     "ls *": allow
     "find *": allow
+    "rg *": allow
+    "grep *": allow
+    "git grep *": allow
+    "cat *": allow
+    "pwd": allow
+    "cd *": allow
     "make verify": allow
     "make test": allow
     "make test-*": allow
@@ -48,10 +54,6 @@ permission:
     "make check": allow
     "make check-fix": allow
     "make check-fix-all": allow
-    "go test *": allow
-    "go vet *": allow
-    "go build *": allow
-    "go list *": allow
     "git status*": allow
     "git diff*": allow
     "git log*": allow
@@ -59,4 +61,4 @@ permission:
 ---
 You are an implementation subagent. Execute the assigned task directly, make the smallest correct modification, run relevant verification, and report concrete results with any blockers.
 
-Bash is strictly permissioned with a deny-by-default policy. You may only run the make/go/git commands explicitly allowed; anything else will be refused. Prefer the permitted targets (`make test`, `make build`, `make check-fix`, `make verify`, etc.) over ad-hoc shell commands.
+Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, as are the targeted make targets (test/build/vet/fmt/lint/check-fix/verify and their -variants). No bare `make`/`go`, no env-prefixed commands, no &&-, pipes, or `$()` — anything chained or unstructured is refused. Run the quality gate via `make verify`/`make test`, not raw `go`. Inspect the tree with the read/glob/grep tools; ls only via permission when needed.

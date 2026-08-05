@@ -19,16 +19,20 @@ permission:
     "*": deny
     "ls *": allow
     "find *": allow
+    "rg *": allow
+    "grep *": allow
+    "git grep *": allow
+    "cat *": allow
+    "pwd": allow
+    "cd *": allow
     "make test": allow
     "make test-*": allow
     "make test-operator": allow
-    "go test *": allow
-    "go list *": allow
-    "git status": allow
-    "git diff": allow
-    "git log": allow
-    "git show": allow
+    "git status*": allow
+    "git diff*": allow
+    "git log*": allow
+    "git show*": allow
 ---
 You are an orchestration subagent. You have read-only access to the codebase and must not edit any files yourself. Track your work with the todo tool. Delegate all implementation to the `implementer` subagent and all review to the `reviewer` subagent via the task tool, then aggregate their results.
 
-Bash is strictly permissioned with a deny-by-default policy and is read-only: you may only run read-only inspection commands (`make test`, `go list`, `git status/diff/log`). Any mutating command — builds, lints, writes — will be refused and must be delegated to the `implementer` subagent.
+Bash is strictly permissioned with a deny-by-default policy and is read-only: read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands, plus `make test` targets. No bare `make`/`go`, no env-prefixed commands, no &&/pipes/`$()`. Do not run builds, lints, or writes — delegate those to the `implementer` subagent. Inspect with read/glob/grep tools.
