@@ -1,6 +1,7 @@
 package ladybug
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,7 +23,9 @@ func (db *ladybugDB) branchStatePath(txID string) string {
 
 // SaveBranchTransactionState atomically replaces the branch's sole durable
 // transaction lifecycle record.
-func (db *ladybugDB) SaveBranchTransactionState(txID string, state store.BranchTransactionState) error {
+func (db *ladybugDB) SaveBranchTransactionState(
+	_ context.Context, txID string, state store.BranchTransactionState,
+) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
@@ -49,7 +52,7 @@ func (db *ladybugDB) SaveBranchTransactionState(txID string, state store.BranchT
 
 // LoadBranchTransactionState loads the versioned lifecycle record. Missing,
 // malformed, and unsupported records fail closed.
-func (db *ladybugDB) LoadBranchTransactionState(txID string) (store.BranchTransactionState, error) {
+func (db *ladybugDB) LoadBranchTransactionState(_ context.Context, txID string) (store.BranchTransactionState, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if state, ok := db.branchStates[txID]; ok {
@@ -97,7 +100,7 @@ func validateBranchTransactionState(state store.BranchTransactionState) error {
 
 // InvalidateBranchState removes the sole lifecycle record. Recovery treats the
 // missing record as unsafe and refuses to register the branch.
-func (db *ladybugDB) InvalidateBranchState(txID string) error {
+func (db *ladybugDB) InvalidateBranchState(_ context.Context, txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.path != "" {

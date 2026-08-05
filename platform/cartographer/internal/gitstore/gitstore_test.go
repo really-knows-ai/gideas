@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -30,6 +29,13 @@ import (
 
 var protocolMu sync.Mutex
 
+// bg is the shared background context for all test operations.
+var bg = context.Background()
+
+// errStop is a typed sentinel used to terminate commit-log iteration once the
+// target commit is found, instead of matching on an error message string.
+var errStop = errors.New("stop")
+
 func pushGraphUpdate(t *testing.T, tmpDir, remoteDir, content string) plumbing.Hash {
 	t.Helper()
 	writer, err := git.PlainClone(filepath.Join(tmpDir, "writer"), false,
@@ -41,23 +47,23 @@ func pushGraphUpdate(t *testing.T, tmpDir, remoteDir, content string) plumbing.H
 	if err != nil {
 		t.Fatalf("writer worktree: %v", err)
 	}
-	if err := writerWT.Filesystem.Remove("graph.json"); err != nil {
-		t.Fatalf("remove old graph file: %v", err)
+	if err := writerWT.Filesystem.Remove("data.txt"); err != nil {
+		t.Fatalf("remove old payload file: %v", err)
 	}
-	updatedGraph, err := writerWT.Filesystem.Create("graph.json")
+	updatedGraph, err := writerWT.Filesystem.Create("data.txt")
 	if err != nil {
-		t.Fatalf("create updated graph file: %v", err)
+		t.Fatalf("create updated payload file: %v", err)
 	}
 	if _, err := updatedGraph.Write([]byte(content)); err != nil {
-		t.Fatalf("write updated graph file: %v", err)
+		t.Fatalf("write updated payload file: %v", err)
 	}
 	if err := updatedGraph.Close(); err != nil {
-		t.Fatalf("close updated graph file: %v", err)
+		t.Fatalf("close updated payload file: %v", err)
 	}
-	if _, err := writerWT.Add("graph.json"); err != nil {
-		t.Fatalf("add updated graph file: %v", err)
+	if _, err := writerWT.Add("data.txt"); err != nil {
+		t.Fatalf("add updated payload file: %v", err)
 	}
-	updatedHash, err := writerWT.Commit("update graph", &git.CommitOptions{
+	updatedHash, err := writerWT.Commit("update data", &git.CommitOptions{
 		Author: &object.Signature{Name: "test", Email: "test@test"},
 	})
 	if err != nil {
@@ -69,6 +75,10 @@ func pushGraphUpdate(t *testing.T, tmpDir, remoteDir, content string) plumbing.H
 	return updatedHash
 }
 
+// configureAnonymousRemote configures the remote on an already-cloned gitStore.
+// It is only valid after a successful clone of the remote's main branch: the
+// local main already points at the remote's HEAD, so the FetchRemote call is a
+// no-op (up-to-date). It is not meant to seed an empty local repo.
 func configureAnonymousRemote(t *testing.T, gs *gitStore, remoteURL string) {
 	t.Helper()
 	if err := gs.SetRemote(ctx(), remoteURL, func() (transport.AuthMethod, error) { return nil, nil }); err != nil {
@@ -81,6 +91,10 @@ func configureAnonymousRemote(t *testing.T, gs *gitStore, remoteURL string) {
 
 // setupTestStore creates a gitStore with in-memory storage and memfs,
 // initialised with a main branch and entities/ + edges/ directories.
+// ponytail: these tests use in-memory storage and memfs, so filesystem-level
+// error paths (disk full, permission denied, I/O failures) mandated by SPEC R8
+// corruption recovery are not exercised here. Disk-backed error-path coverage is
+// a SPEC-coverage gap, not tested by this helper.
 func setupTestStore(t *testing.T) *gitStore {
 	t.Helper()
 	fs := memfs.New()
@@ -97,10 +111,10 @@ func setupTestStore(t *testing.T) *gitStore {
 		t.Fatalf("Worktree: %v", err)
 	}
 
-	if err := createDirWithGitkeep(wt, fs, "entities"); err != nil {
+	if err := initDir(wt, fs, "entities"); err != nil {
 		t.Fatalf("create entities dir: %v", err)
 	}
-	if err := createDirWithGitkeep(wt, fs, "edges"); err != nil {
+	if err := initDir(wt, fs, "edges"); err != nil {
 		t.Fatalf("create edges dir: %v", err)
 	}
 
@@ -124,30 +138,19 @@ func setupTestStore(t *testing.T) *gitStore {
 	return gs
 }
 
-// createDirWithGitkeep creates a directory with a .gitkeep file so go-git can stage it.
-func createDirWithGitkeep(wt *git.Worktree, fs billy.Filesystem, name string) error {
-	if err := fs.MkdirAll(name, 0755); err != nil {
-		return err
-	}
-	keep := name + "/.gitkeep"
-	f, err := fs.Create(keep)
+// validUUID returns a valid UUID v4 string, failing the test if generation
+// fails (rather than panicking).
+func validUUID(t *testing.T) string {
+	t.Helper()
+	id, err := uuid.NewRandom()
 	if err != nil {
-		return err
+		t.Fatalf("generate uuid: %v", err)
 	}
-	_ = f.Close()
-	if _, err := wt.Add(keep); err != nil {
-		return err
-	}
-	return nil
-}
-
-// validUUID returns a valid UUID v4 string.
-func validUUID() string {
-	return uuid.Must(uuid.NewRandom()).String()
+	return id.String()
 }
 
 func ctx() context.Context {
-	return context.Background()
+	return bg
 }
 
 // ============================================================================
@@ -169,8 +172,12 @@ func TestInitNewRepo(t *testing.T) {
 	}
 
 	// Verify initial commit "init" is present
+	gsImpl, ok := gs.(*gitStore)
+	if !ok {
+		t.Fatalf("expected *gitStore, got %T", gs)
+	}
 	err = gs.WithGitLock(func() error {
-		log, err := gs.(*gitStore).repo.Log(&git.LogOptions{})
+		log, err := gsImpl.repo.Log(&git.LogOptions{})
 		if err != nil {
 			return err
 		}
@@ -180,10 +187,10 @@ func TestInitNewRepo(t *testing.T) {
 		if err := log.ForEach(func(c *object.Commit) error {
 			if c.Message == "init" {
 				found = true
-				return fmt.Errorf("STOP")
+				return errStop
 			}
 			return nil
-		}); err != nil && err.Error() != "STOP" {
+		}); err != nil && !errors.Is(err, errStop) {
 			return err
 		}
 		if !found {
@@ -197,7 +204,7 @@ func TestInitNewRepo(t *testing.T) {
 
 	// Verify entities/ and edges/ directories exist in worktree
 	err = gs.WithGitLock(func() error {
-		fs := gs.(*gitStore).fs
+		fs := gsImpl.fs
 		info, err := fs.Stat("entities")
 		if err != nil || !info.IsDir() {
 			return fmt.Errorf("entities dir missing: %v", err)
@@ -213,6 +220,27 @@ func TestInitNewRepo(t *testing.T) {
 	}
 }
 
+// TestHydrationDirs asserts HydrationDirs points into the graph-repo working
+// tree used by the service layer for main re-hydration.
+func TestHydrationDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	gs, err := New(tmpDir)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gs.Close() }()
+	entitiesDir, edgesDir := gs.HydrationDirs()
+	wantEntities := filepath.Join(tmpDir, "graph-repo", "entities")
+	wantEdges := filepath.Join(tmpDir, "graph-repo", "edges")
+	if entitiesDir != wantEntities {
+		t.Errorf("entitiesDir = %q, want %q", entitiesDir, wantEntities)
+	}
+	if edgesDir != wantEdges {
+		t.Errorf("edgesDir = %q, want %q", edgesDir, wantEdges)
+	}
+}
+
+// TestInitExistingRepo opens an existing repository on disk.
 func TestInitExistingRepo(t *testing.T) {
 	tmpDir := t.TempDir()
 	gs1, err := New(tmpDir)
@@ -237,6 +265,31 @@ func TestInitBadPath(t *testing.T) {
 	}
 }
 
+func TestInitNonDirectoryGit(t *testing.T) {
+	// A .git path that exists as a regular file must yield a clear error,
+	// not the misleading "stat .git: %!w(<nil>)" from a nil stat error.
+	tmpDir := t.TempDir()
+	repoPath := filepath.Join(tmpDir, "graph-repo")
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("mkdir repo path: %v", err)
+	}
+	gitPath := filepath.Join(repoPath, ".git")
+	if err := os.WriteFile(gitPath, []byte("not a repo"), 0644); err != nil {
+		t.Fatalf("write .git file: %v", err)
+	}
+
+	_, err := New(tmpDir)
+	if err == nil {
+		t.Fatal("expected error for non-directory .git, got nil")
+	}
+	if strings.Contains(err.Error(), "%!w(<nil>)") || err.Error() == "stat .git: " {
+		t.Fatalf("expected clear non-directory .git error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("expected descriptive error mentioning non-directory, got: %v", err)
+	}
+}
+
 // ============================================================================
 // T2: Entity file operations
 // ============================================================================
@@ -244,8 +297,8 @@ func TestInitBadPath(t *testing.T) {
 func TestWriteEntityFiles(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
-		e2ID := validUUID()
+		e1ID := validUUID(t)
+		e2ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		entities := []Entity{
@@ -300,7 +353,7 @@ func TestWriteEntityFiles(t *testing.T) {
 func TestWriteEntityFilesWithEmbedding(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		entities := []Entity{
@@ -351,8 +404,8 @@ func TestWriteEntityFilesEmpty(t *testing.T) {
 func TestRemoveEntityFiles(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
-		e2ID := validUUID()
+		e1ID := validUUID(t)
+		e2ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		entities := []Entity{
@@ -390,7 +443,7 @@ func TestRemoveEntityFilesNonExistent(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		// Removing non-existent file should not error
-		return gs.RemoveEntityFiles(ctx(), "Component", []string{validUUID()})
+		return gs.RemoveEntityFiles(ctx(), "Component", []string{validUUID(t)})
 	})
 	if err != nil {
 		t.Fatalf("RemoveEntityFiles non-existent: %v", err)
@@ -400,8 +453,8 @@ func TestRemoveEntityFilesNonExistent(t *testing.T) {
 func TestReadAllEntityFiles(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
-		e2ID := validUUID()
+		e1ID := validUUID(t)
+		e2ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		entities := []Entity{
@@ -475,10 +528,10 @@ func TestListEntityTypes(t *testing.T) {
 
 		// Write entities for two types
 		entitiesA := []Entity{
-			{ID: validUUID(), Type: "Component", CreatedAt: now, UpdatedAt: now},
+			{ID: validUUID(t), Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}
 		entitiesB := []Entity{
-			{ID: validUUID(), Type: "Service", CreatedAt: now, UpdatedAt: now},
+			{ID: validUUID(t), Type: "Service", CreatedAt: now, UpdatedAt: now},
 		}
 
 		if err := gs.WriteEntityFiles(ctx(), "Component", entitiesA); err != nil {
@@ -552,10 +605,10 @@ func TestListEntityTypesEmptyTypeDir(t *testing.T) {
 func TestWriteEdgeFiles(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
-		e2ID := validUUID()
-		fromID := validUUID()
-		toID := validUUID()
+		e1ID := validUUID(t)
+		e2ID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		edges := []Edge{
@@ -609,19 +662,19 @@ func TestWriteEdgeFilesEmpty(t *testing.T) {
 func TestRemoveEdgeFiles(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
-		e2ID := validUUID()
+		e1ID := validUUID(t)
+		e2ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		edges := []Edge{
 			{
 				ID: e1ID, Type: "DEPENDS_ON",
-				FromEntityID: validUUID(), ToEntityID: validUUID(),
+				FromEntityID: validUUID(t), ToEntityID: validUUID(t),
 				CreatedAt: now, UpdatedAt: now,
 			},
 			{
 				ID: e2ID, Type: "DEPENDS_ON",
-				FromEntityID: validUUID(), ToEntityID: validUUID(),
+				FromEntityID: validUUID(t), ToEntityID: validUUID(t),
 				CreatedAt: now, UpdatedAt: now,
 			},
 		}
@@ -649,7 +702,7 @@ func TestRemoveEdgeFiles(t *testing.T) {
 func TestRemoveEdgeFilesNonExistent(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		return gs.RemoveEdgeFiles(ctx(), "DEPENDS_ON", []string{validUUID()})
+		return gs.RemoveEdgeFiles(ctx(), "DEPENDS_ON", []string{validUUID(t)})
 	})
 	if err != nil {
 		t.Fatalf("RemoveEdgeFiles non-existent: %v", err)
@@ -659,10 +712,10 @@ func TestRemoveEdgeFilesNonExistent(t *testing.T) {
 func TestReadAllEdgeFiles(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
-		fromID := validUUID()
-		toID := validUUID()
+		fromID := validUUID(t)
+		toID := validUUID(t)
 
 		edges := []Edge{
 			{
@@ -705,14 +758,14 @@ func TestListEdgeTypes(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		now := time.Now().UTC().Round(time.Millisecond)
-		fromID := validUUID()
-		toID := validUUID()
+		fromID := validUUID(t)
+		toID := validUUID(t)
 
 		edgesA := []Edge{
-			{ID: validUUID(), Type: "DEPENDS_ON", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
+			{ID: validUUID(t), Type: "DEPENDS_ON", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
 		}
 		edgesB := []Edge{
-			{ID: validUUID(), Type: "CONNECTS_TO", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
+			{ID: validUUID(t), Type: "CONNECTS_TO", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
 		}
 
 		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", edgesA); err != nil {
@@ -781,7 +834,7 @@ func TestListEdgeTypesEmptyTypeDir(t *testing.T) {
 func TestCreateBranch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -819,7 +872,7 @@ func TestCreateBranchInvalidUUID(t *testing.T) {
 func TestCreateBranchDuplicate(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -841,7 +894,7 @@ func TestCheckout(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		now := time.Now().UTC().Round(time.Millisecond)
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 
 		// Write entity on main and commit
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
@@ -857,7 +910,7 @@ func TestCheckout(t *testing.T) {
 		}
 
 		// Create and checkout a new branch
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -871,7 +924,7 @@ func TestCheckout(t *testing.T) {
 		}
 
 		// Write another entity on branch
-		e2ID := validUUID()
+		e2ID := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e2ID, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -925,7 +978,7 @@ func TestHardResetToBranch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		now := time.Now().UTC().Round(time.Millisecond)
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 
 		// Write entity on main and commit
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
@@ -941,7 +994,7 @@ func TestHardResetToBranch(t *testing.T) {
 		}
 
 		// Create branch, modify working tree
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -984,7 +1037,7 @@ func TestHardResetToBranch(t *testing.T) {
 func TestRestoreMain(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -1012,7 +1065,7 @@ func TestRestoreMain(t *testing.T) {
 func TestBranchExists(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 
 		// Non-existent
 		exists, err := gs.BranchExists(ctx(), txID)
@@ -1045,7 +1098,7 @@ func TestBranchExists(t *testing.T) {
 func TestBranchHEAD(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -1083,7 +1136,7 @@ func TestBranchHEADDivergenceCheck(t *testing.T) {
 		}
 
 		// Make a commit on main
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e1ID, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1116,7 +1169,7 @@ func TestBranchHEADDivergenceCheck(t *testing.T) {
 func TestSetBranchRef(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -1169,7 +1222,7 @@ func TestSetBranchRefInvalidHash(t *testing.T) {
 func TestDeleteBranch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -1230,8 +1283,8 @@ func TestCleanUntracked(t *testing.T) {
 func TestListBranches(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		tx1 := validUUID()
-		tx2 := validUUID()
+		tx1 := validUUID(t)
+		tx2 := validUUID(t)
 
 		if err := gs.CreateBranch(ctx(), tx1); err != nil {
 			return err
@@ -1276,7 +1329,7 @@ func TestAddAllAndCommit(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		now := time.Now().UTC().Round(time.Millisecond)
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e1ID, Type: "Component", CreatedAt: now, UpdatedAt: now},
@@ -1302,10 +1355,10 @@ func TestAddAllAndCommit(t *testing.T) {
 		if err := log.ForEach(func(c *object.Commit) error {
 			if c.Message == "test commit" {
 				found = true
-				return fmt.Errorf("STOP")
+				return errStop
 			}
 			return nil
-		}); err != nil && err.Error() != "STOP" {
+		}); err != nil && !errors.Is(err, errStop) {
 			return err
 		}
 		if !found {
@@ -1353,11 +1406,11 @@ func TestCommitEmpty(t *testing.T) {
 func TestCommitExistsOnBranch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		// Write and commit with transaction prefix
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e1ID, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1378,8 +1431,8 @@ func TestCommitExistsOnBranch(t *testing.T) {
 			return fmt.Errorf("expected commit to exist")
 		}
 
-		// Non-existent txID should return false
-		found, err = gs.CommitExistsOnBranch(ctx(), "nonexistent-tx-id")
+		// Non-existent txID should return false (a valid UUID with no matching commit)
+		found, err = gs.CommitExistsOnBranch(ctx(), validUUID(t))
 		if err != nil {
 			return err
 		}
@@ -1394,12 +1447,12 @@ func TestCommitExistsOnBranch(t *testing.T) {
 	}
 }
 
-func TestCommitExistsOnBranchRequiresExactFirstLine(t *testing.T) {
+func TestCommitExistsOnBranchMatchesPrefix(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{{
-			ID: validUUID(), Type: "Component",
+			ID: validUUID(t), Type: "Component",
 		}}); err != nil {
 			return err
 		}
@@ -1413,21 +1466,21 @@ func TestCommitExistsOnBranchRequiresExactFirstLine(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if found {
-			return errors.New("prefix-only transaction commit matched")
+		if !found {
+			return errors.New("prefix-only transaction commit not matched")
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("CommitExistsOnBranch exact match: %v", err)
+		t.Fatalf("CommitExistsOnBranch prefix match: %v", err)
 	}
 }
 
 func TestCommitExistsOnBranchScopedToBranch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txA := validUUID()
-		txB := validUUID()
+		txA := validUUID(t)
+		txB := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		// Create branch A and commit with message "transaction:a"
@@ -1437,7 +1490,7 @@ func TestCommitExistsOnBranchScopedToBranch(t *testing.T) {
 		if err := gs.Checkout(ctx(), txA); err != nil {
 			return err
 		}
-		eA := validUUID()
+		eA := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eA, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1457,7 +1510,7 @@ func TestCommitExistsOnBranchScopedToBranch(t *testing.T) {
 		if err := gs.Checkout(ctx(), txB); err != nil {
 			return err
 		}
-		eB := validUUID()
+		eB := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eB, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1502,7 +1555,7 @@ func TestGitRm(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		now := time.Now().UTC().Round(time.Millisecond)
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 
 		// Write entity and commit
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
@@ -1527,6 +1580,15 @@ func TestGitRm(t *testing.T) {
 			return fmt.Errorf("file should be removed by GitRm")
 		}
 
+		// Verify the deletion is staged in the index (wt.Remove stages it)
+		status, err := gs.wt.Status()
+		if err != nil {
+			return err
+		}
+		if entry, ok := status["entities/Component/"+e1ID+".json"]; !ok || entry.Staging != git.Deleted {
+			return fmt.Errorf("expected staged deletion, got %v", entry)
+		}
+
 		// AddAll and commit the deletion
 		if err := gs.AddAll(ctx(), "."); err != nil {
 			return err
@@ -1546,8 +1608,8 @@ func TestGitRmDirectory(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		now := time.Now().UTC().Round(time.Millisecond)
-		e1ID := validUUID()
-		e2ID := validUUID()
+		e1ID := validUUID(t)
+		e2ID := validUUID(t)
 
 		// Write entities for two types and commit
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
@@ -1578,6 +1640,18 @@ func TestGitRmDirectory(t *testing.T) {
 		}
 		if _, err := gs.fs.Stat("entities/Service/" + e2ID + ".json"); err == nil {
 			return fmt.Errorf("Service file should be removed")
+		}
+
+		// Verify the deletions are staged in the index
+		status, err := gs.wt.Status()
+		if err != nil {
+			return err
+		}
+		if entry, ok := status["entities/Component/"+e1ID+".json"]; !ok || entry.Staging != git.Deleted {
+			return fmt.Errorf("expected staged deletion for Component file, got %v", entry)
+		}
+		if entry, ok := status["entities/Service/"+e2ID+".json"]; !ok || entry.Staging != git.Deleted {
+			return fmt.Errorf("expected staged deletion for Service file, got %v", entry)
 		}
 
 		return nil
@@ -1612,7 +1686,7 @@ func TestFastForwardMerge(t *testing.T) {
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		// Create entity A on main and commit
-		eA := validUUID()
+		eA := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eA, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1626,7 +1700,7 @@ func TestFastForwardMerge(t *testing.T) {
 		}
 
 		// Create branch and add entity B, commit
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -1634,7 +1708,7 @@ func TestFastForwardMerge(t *testing.T) {
 			return err
 		}
 
-		eB := validUUID()
+		eB := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eB, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1682,7 +1756,7 @@ func TestFastForwardMergeDiverged(t *testing.T) {
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		// Entity A on main
-		eA := validUUID()
+		eA := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eA, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1696,14 +1770,14 @@ func TestFastForwardMergeDiverged(t *testing.T) {
 		}
 
 		// Create branch, add entity B
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
 		if err := gs.Checkout(ctx(), txID); err != nil {
 			return err
 		}
-		eB := validUUID()
+		eB := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eB, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1720,7 +1794,7 @@ func TestFastForwardMergeDiverged(t *testing.T) {
 		if err := gs.RestoreMain(ctx()); err != nil {
 			return err
 		}
-		eC := validUUID()
+		eC := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eC, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1752,7 +1826,7 @@ func TestFastForwardMergeDiverged(t *testing.T) {
 func TestFastForwardMergeEmptyBranch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		txID := validUUID()
+		txID := validUUID(t)
 
 		// Create branch without any commits (same HEAD as main)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
@@ -1777,14 +1851,14 @@ func TestFastForwardMergeNonDefaultInto(t *testing.T) {
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		// Create branch A with entity
-		branchA := validUUID()
+		branchA := validUUID(t)
 		if err := gs.CreateBranch(ctx(), branchA); err != nil {
 			return err
 		}
 		if err := gs.Checkout(ctx(), branchA); err != nil {
 			return err
 		}
-		eA := validUUID()
+		eA := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eA, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1798,14 +1872,14 @@ func TestFastForwardMergeNonDefaultInto(t *testing.T) {
 		}
 
 		// Create branch B (from branch A) with another entity
-		branchB := validUUID()
+		branchB := validUUID(t)
 		if err := gs.CreateBranch(ctx(), branchB); err != nil {
 			return err
 		}
 		if err := gs.Checkout(ctx(), branchB); err != nil {
 			return err
 		}
-		eB := validUUID()
+		eB := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: eB, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -1912,7 +1986,7 @@ func TestIsEmpty(t *testing.T) {
 		gs := setupTestStore(t)
 		_ = gs.WithGitLock(func() error {
 			now := time.Now().UTC().Round(time.Millisecond)
-			e1ID := validUUID()
+			e1ID := validUUID(t)
 
 			if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 				{ID: e1ID, Type: "Component", CreatedAt: now, UpdatedAt: now},
@@ -2061,9 +2135,9 @@ func TestPullWithAuth(t *testing.T) {
 	}
 }
 
-// TestPullAlreadyUpToDate verifies that pulling when already up-to-date
-// returns no error.
-func TestPullAlreadyUpToDate(t *testing.T) {
+// TestPullAndFastForwardAuthConfigMissing verifies that pulling with a nil
+// auth provider (authFn) returns ErrAuthConfigMissing.
+func TestPullAndFastForwardAuthConfigMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	gs, err := New(tmpDir)
@@ -2085,7 +2159,7 @@ func TestPullAlreadyUpToDate(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("PullAlreadyUpToDate: %v", err)
+		t.Fatalf("TestPullAndFastForwardAuthConfigMissing: %v", err)
 	}
 }
 
@@ -2106,18 +2180,18 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 		t.Fatalf("source worktree: %v", err)
 	}
 	const graphContent = `{"graph":"controlled"}`
-	graphFile, err := sourceWT.Filesystem.Create("graph.json")
+	graphFile, err := sourceWT.Filesystem.Create("data.txt")
 	if err != nil {
-		t.Fatalf("create graph file: %v", err)
+		t.Fatalf("create payload file: %v", err)
 	}
 	if _, err := graphFile.Write([]byte(graphContent)); err != nil {
-		t.Fatalf("write graph file: %v", err)
+		t.Fatalf("write payload file: %v", err)
 	}
 	if err := graphFile.Close(); err != nil {
-		t.Fatalf("close graph file: %v", err)
+		t.Fatalf("close payload file: %v", err)
 	}
-	if _, err := sourceWT.Add("graph.json"); err != nil {
-		t.Fatalf("add graph file: %v", err)
+	if _, err := sourceWT.Add("data.txt"); err != nil {
+		t.Fatalf("add payload file: %v", err)
 	}
 	sourceHash, err := sourceWT.Commit("main graph", &git.CommitOptions{
 		Author: &object.Signature{Name: "test", Email: "test@test"},
@@ -2134,6 +2208,12 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git executable required for smart HTTP test server: %v", err)
 	}
+	// ponytail: this test depends on the external git binary (smart HTTP backend)
+	// to serve an https:// URL, which conflicts with SPEC R5's "pure Go, no external
+	// git binary" policy. It cannot be converted to file:// because CloneSingleBranch's
+	// URL validation (remote.go validateRemoteURL) only accepts https:// and ssh://.
+	// The upgrade path is to relax CloneSingleBranch to accept file:// in tests (a
+	// SPEC/URL-validation change), then drive this test over file:// without git.
 	server := httptest.NewTLSServer(&cgi.Handler{
 		Path: gitPath,
 		Args: []string{"http-backend"},
@@ -2184,9 +2264,9 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	if head.Name() != plumbing.NewBranchReferenceName("main") || head.Hash() != sourceHash {
 		t.Fatalf("HEAD = %s at %s, want main at %s", head.Name(), head.Hash(), sourceHash)
 	}
-	clonedGraph, err := gs.fs.Open("graph.json")
+	clonedGraph, err := gs.fs.Open("data.txt")
 	if err != nil {
-		t.Fatalf("open checked-out graph file: %v", err)
+		t.Fatalf("open checked-out payload file: %v", err)
 	}
 	got, err := io.ReadAll(clonedGraph)
 	_ = clonedGraph.Close()
@@ -2220,12 +2300,12 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	if mainRef.Hash() != updatedHash {
 		t.Fatalf("updated main ref = %s, want %s", mainRef.Hash(), updatedHash)
 	}
-	got, err = os.ReadFile(filepath.Join(tmpDir, "local", "graph-repo", "graph.json"))
+	got, err = os.ReadFile(filepath.Join(tmpDir, "local", "graph-repo", "data.txt"))
 	if err != nil {
-		t.Fatalf("read updated worktree graph: %v", err)
+		t.Fatalf("read updated worktree payload: %v", err)
 	}
 	if string(got) != updatedGraphContent {
-		t.Fatalf("updated graph content = %q, want %q", got, updatedGraphContent)
+		t.Fatalf("updated payload content = %q, want %q", got, updatedGraphContent)
 	}
 }
 
@@ -2253,7 +2333,7 @@ func TestGitLogOneline(t *testing.T) {
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		// Make commits with known prefixes
-		e1 := validUUID()
+		e1 := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e1, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -2266,7 +2346,7 @@ func TestGitLogOneline(t *testing.T) {
 			return err
 		}
 
-		e2 := validUUID()
+		e2 := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e2, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -2325,7 +2405,7 @@ func TestFullWriteAddCommitReadBack(t *testing.T) {
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		// Write entity
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{
 				ID:         e1ID,
@@ -2339,9 +2419,9 @@ func TestFullWriteAddCommitReadBack(t *testing.T) {
 		}
 
 		// Write edge
-		edgeID := validUUID()
-		fromID := validUUID()
-		toID := validUUID()
+		edgeID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
 		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
 			{
 				ID:           edgeID,
@@ -2409,15 +2489,14 @@ func TestFullWriteAddCommitReadBack(t *testing.T) {
 func TestEnsureRemoteExists(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		// Set remote URL and authFn directly without calling SetRemote
-		gs.remoteURL = "https://example.com/repo.git"
-		gs.authFn = func() (transport.AuthMethod, error) {
+		// Configure the remote via SetRemote, which validates the URL scheme
+		// and creates the "origin" remote.
+		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", func() (transport.AuthMethod, error) {
 			return nil, nil
-		}
-
-		if err := gs.ensureRemoteExists(); err != nil {
+		}); err != nil {
 			return err
 		}
+
 		remote, err := gs.repo.Remote("origin")
 		if err != nil {
 			return fmt.Errorf("get recreated remote: %w", err)
@@ -2445,7 +2524,7 @@ func TestFastForwardMergeBranchNotFound(t *testing.T) {
 		}
 
 		// Non-existent target
-		txID := validUUID()
+		txID := validUUID(t)
 		if err := gs.CreateBranch(ctx(), txID); err != nil {
 			return err
 		}
@@ -2466,7 +2545,7 @@ func TestGitRmSingleFile(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		now := time.Now().UTC().Round(time.Millisecond)
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e1ID, Type: "Component", CreatedAt: now, UpdatedAt: now},
@@ -2520,25 +2599,6 @@ func TestEmptyEdgeWriteAndRead(t *testing.T) {
 	}
 }
 
-// TestHasRemoteError verifies that HasRemote returns (false, err) on error.
-func TestHasRemoteError(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		// Fresh repo with no remote — should return (false, nil)
-		has, err := gs.HasRemote(ctx())
-		if err != nil {
-			return err
-		}
-		if has {
-			return fmt.Errorf("expected false for no remote")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("TestHasRemoteError: %v", err)
-	}
-}
-
 // TestWriteEntityInvalidUUID verifies ErrInvalidUUID is returned.
 func TestWriteEntityInvalidUUID(t *testing.T) {
 	gs := setupTestStore(t)
@@ -2566,7 +2626,7 @@ func TestWriteEdgeInvalidUUID(t *testing.T) {
 		edges := []Edge{
 			{
 				ID: "not-a-uuid", Type: "DEPENDS_ON",
-				FromEntityID: validUUID(), ToEntityID: validUUID(),
+				FromEntityID: validUUID(t), ToEntityID: validUUID(t),
 				CreatedAt: now, UpdatedAt: now,
 			},
 		}
@@ -2600,11 +2660,14 @@ func TestBranchHEADNotFound(t *testing.T) {
 // branches without panicking (may succeed or error depending on storage backend).
 func TestDeleteBranchNonExistent(t *testing.T) {
 	gs := setupTestStore(t)
-	_ = gs.WithGitLock(func() error {
-		// Should not panic — may return nil or an error depending on storage
-		_ = gs.DeleteBranch(ctx(), "nonexistent")
-		return nil
+	err := gs.WithGitLock(func() error {
+		// The in-memory backend removes a missing branch ref without error, so
+		// deleting a non-existent branch is a documented no-op here.
+		return gs.DeleteBranch(ctx(), "nonexistent")
 	})
+	if err != nil {
+		t.Fatalf("DeleteBranch(nonexistent): %v", err)
+	}
 }
 
 // noopAuth is a transport.AuthMethod that does nothing — used for file:// URLs.
@@ -2658,7 +2721,7 @@ func TestRemotePushPull(t *testing.T) {
 
 		// Make a commit on local
 		now := time.Now().UTC().Round(time.Millisecond)
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
 			{ID: e1ID, Type: "Component", CreatedAt: now, UpdatedAt: now},
 		}); err != nil {
@@ -2792,10 +2855,11 @@ func TestPullFromRemote(t *testing.T) {
 
 	// Create a gitStore from the cloned repo
 	gs := &gitStore{
-		repo:    clonedLocalRepo,
-		wt:      clonedLocalWT,
-		fs:      clonedLocalWT.Filesystem,
-		backend: clonedLocalRepo.Storer,
+		repo:     clonedLocalRepo,
+		wt:       clonedLocalWT,
+		fs:       clonedLocalWT.Filesystem,
+		backend:  clonedLocalRepo.Storer,
+		basePath: t.TempDir(),
 	}
 
 	err = gs.WithGitLock(func() error {
@@ -2863,7 +2927,147 @@ func TestPullFromRemote(t *testing.T) {
 	}
 }
 
-// TestCloneSingleBranchFromRemote tests clone from a remote via internal operations
+// TestPullAndFastForwardDiverged verifies the ErrPullDiverged branch directly:
+// a genuinely diverged pull (local main and remote main have each advanced past
+// a common ancestor, so a fast-forward is impossible) surfaces git's
+// ErrNonFastForwardUpdate from worktree.Pull, which PullAndFastForward maps to
+// ErrPullDiverged. This is the direct unit-tested coverage for that branch,
+// which is contractually unreachable in production because the service pulls via
+// FetchAndMerge (merge-commit semantics), never PullAndFastForward.
+func TestPullAndFastForwardDiverged(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Seed repo with a base commit.
+	seedDir := filepath.Join(tmpDir, "seed")
+	seedRepo, err := git.PlainInitWithOptions(seedDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("init seed: %v", err)
+	}
+	seedWT, err := seedRepo.Worktree()
+	if err != nil {
+		t.Fatalf("seed worktree: %v", err)
+	}
+	seedFile, err := seedWT.Filesystem.Create("seed.txt")
+	if err != nil {
+		t.Fatalf("create seed: %v", err)
+	}
+	_ = seedFile.Close()
+	if _, err := seedWT.Add("seed.txt"); err != nil {
+		t.Fatalf("add seed: %v", err)
+	}
+	if _, err := seedWT.Commit("base", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("base commit: %v", err)
+	}
+
+	// Create a bare remote from the seed.
+	bareDir := filepath.Join(tmpDir, "remote.git")
+	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{URL: "file://" + seedDir})
+	if err != nil {
+		t.Fatalf("clone bare remote: %v", err)
+	}
+
+	// Peer clone: owns the remote for advancing it and for pushing the "remote"
+	// fresh commits.
+	peerDir := filepath.Join(tmpDir, "peer")
+	peer, err := git.PlainClone(peerDir, false, &git.CloneOptions{URL: "file://" + bareDir})
+	if err != nil {
+		t.Fatalf("clone peer: %v", err)
+	}
+	peerWT, err := peer.Worktree()
+	if err != nil {
+		t.Fatalf("peer worktree: %v", err)
+	}
+	// Advance the remote main by one commit (peer:first).
+	pf, err := peerWT.Filesystem.Create("peer1.txt")
+	if err != nil {
+		t.Fatalf("create peer1: %v", err)
+	}
+	_ = pf.Close()
+	if _, err := peerWT.Add("peer1.txt"); err != nil {
+		t.Fatalf("add peer1: %v", err)
+	}
+	if _, err := peerWT.Commit("peer:first", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("peer first commit: %v", err)
+	}
+	if err := peer.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("peer first push: %v", err)
+	}
+
+	// Local gitStore cloned from the remote at peer:first.
+	localDir := filepath.Join(tmpDir, "local")
+	localRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{URL: "file://" + bareDir})
+	if err != nil {
+		t.Fatalf("clone local: %v", err)
+	}
+	localWT, err := localRepo.Worktree()
+	if err != nil {
+		t.Fatalf("local worktree: %v", err)
+	}
+	gs := &gitStore{
+		repo:     localRepo,
+		wt:       localWT,
+		fs:       localWT.Filesystem,
+		backend:  localRepo.Storer,
+		basePath: t.TempDir(),
+	}
+	gs.remoteURL = "file://" + bareDir
+	gs.authFn = func() (transport.AuthMethod, error) { return noopAuth{}, nil }
+
+	// Diverge: local advances past the base commit while remote also advances.
+	localFile, err := localWT.Filesystem.Create("local.txt")
+	if err != nil {
+		t.Fatalf("create local file: %v", err)
+	}
+	_ = localFile.Close()
+	if _, err := localWT.Add("local.txt"); err != nil {
+		t.Fatalf("add local file: %v", err)
+	}
+	if _, err := localWT.Commit("local:diverge", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("local diverge commit: %v", err)
+	}
+
+	// Advance remote main further so remote and local truly diverge.
+	peer2File, err := peerWT.Filesystem.Create("peer2.txt")
+	if err != nil {
+		t.Fatalf("create peer2: %v", err)
+	}
+	_ = peer2File.Close()
+	if _, err := peerWT.Add("peer2.txt"); err != nil {
+		t.Fatalf("add peer2: %v", err)
+	}
+	if _, err := peerWT.Commit("peer:second", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("peer second commit: %v", err)
+	}
+	if err := peer.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("peer second push: %v", err)
+	}
+
+	err = gs.WithGitLock(func() error {
+		if err := gs.PullAndFastForward(ctx()); err == nil {
+			return fmt.Errorf("expected ErrPullDiverged, got nil")
+		} else if !errors.Is(err, ErrPullDiverged) {
+			return fmt.Errorf("expected ErrPullDiverged, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("PullAndFastForwardDiverged: %v", err)
+	}
+}
+
+// TestCloneCurrentFromRemote clones a remote via internal operations
 // (the same flow as CloneSingleBranch, exercised without URL scheme validation
 // since file:// URLs are not valid remote schemes per SPEC).
 func TestCloneSingleBranchFromRemote(t *testing.T) {
@@ -2994,6 +3198,13 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 			return fmt.Errorf("data file should exist after clone: %w", err)
 		}
 
+		// Note: this test replicates the CloneSingleBranch flow manually. The
+		// forced checkout replaces the tracked working tree (entities/ + edges/
+		// .gitkeep init files are lost here), but the production CloneSingleBranch
+		// (remote.go) re-creates entities/ + edges/ after reopening the repo, which
+		// this manual replication does not do. entities/ + edges/ are not asserted
+		// here precisely because this test bypasses that production step.
+
 		return nil
 	})
 	if err != nil {
@@ -3021,10 +3232,11 @@ func TestIsEmptyMainRefError(t *testing.T) {
 
 	// Create a broken storer that fails on SetReference
 	gs := &gitStore{
-		repo:    repo,
-		wt:      wt,
-		fs:      fs,
-		backend: storer,
+		repo:     repo,
+		wt:       wt,
+		fs:       fs,
+		backend:  storer,
+		basePath: t.TempDir(),
 	}
 
 	err = gs.WithGitLock(func() error {
@@ -3046,8 +3258,9 @@ func TestIsEmptyMainRefError(t *testing.T) {
 	}
 }
 
-// TestReadAllEntityFilesOpenError tests error handling in ReadAllEntityFiles.
-func TestReadAllEntityFilesOpenError(t *testing.T) {
+// TestReadAllEntityFilesEmptyTypeDir tests reading an empty type directory
+// returns an empty slice (not an error).
+func TestReadAllEntityFilesEmptyTypeDir(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		// Create an empty type directory (no JSON files)
@@ -3064,7 +3277,7 @@ func TestReadAllEntityFilesOpenError(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("TestReadAllEntityFilesOpenError: %v", err)
+		t.Fatalf("TestReadAllEntityFilesEmptyTypeDir: %v", err)
 	}
 }
 
@@ -3072,7 +3285,7 @@ func TestReadAllEntityFilesOpenError(t *testing.T) {
 func TestWriteEntityNilEmbedding(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		entities := []Entity{
@@ -3111,7 +3324,7 @@ func TestWriteEntityNilEmbedding(t *testing.T) {
 func TestWriteEntityEmptyEmbeddingSlice(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		e1ID := validUUID()
+		e1ID := validUUID(t)
 		now := time.Now().UTC().Round(time.Millisecond)
 
 		entities := []Entity{
@@ -3230,10 +3443,11 @@ func TestFetchRemoteSuccess(t *testing.T) {
 	}
 
 	gs := &gitStore{
-		repo:    localRepo,
-		wt:      localWT,
-		fs:      localWT.Filesystem,
-		backend: localRepo.Storer,
+		repo:     localRepo,
+		wt:       localWT,
+		fs:       localWT.Filesystem,
+		backend:  localRepo.Storer,
+		basePath: t.TempDir(),
 	}
 
 	err = gs.WithGitLock(func() error {
@@ -3320,10 +3534,11 @@ func TestPushAlreadyUpToDate(t *testing.T) {
 	// Open a gitStore on the work repo to test push via gitstore
 	// The work and bare repos already have the same content.
 	gs := &gitStore{
-		repo:    workRepo,
-		wt:      workWT,
-		fs:      workWT.Filesystem,
-		backend: workRepo.Storer,
+		repo:     workRepo,
+		wt:       workWT,
+		fs:       workWT.Filesystem,
+		backend:  workRepo.Storer,
+		basePath: t.TempDir(),
 	}
 
 	err = gs.WithGitLock(func() error {
@@ -3396,10 +3611,11 @@ func cloneFromBare(t *testing.T, tmpDir, bareDir string) *gitStore {
 		t.Fatalf("get worktree: %v", err)
 	}
 	return &gitStore{
-		repo:    clonedRepo,
-		wt:      clonedWT,
-		fs:      clonedWT.Filesystem,
-		backend: clonedRepo.Storer,
+		repo:     clonedRepo,
+		wt:       clonedWT,
+		fs:       clonedWT.Filesystem,
+		backend:  clonedRepo.Storer,
+		basePath: t.TempDir(),
 	}
 }
 
@@ -3630,6 +3846,17 @@ func TestFetchAndMerge_MergeCommit(t *testing.T) {
 	if err == nil {
 		t.Fatal("local.txt should NOT exist in working tree after simplified merge")
 	}
+
+	// Note on entities/ and edges/: this test's repo is a plain clone of a bare
+	// remote containing only init.txt, so it never had New()-created entities/
+	// and edges/ dirs to lose. The simplified merge (remote.go:129 createMergeCommit)
+	// checks out the remote tree, so if a New()-initialised repo were merged against
+	// a remote whose tree lacks entities/ and edges/, those dirs would be dropped
+	// from the merge commit and removed from the working tree — the same intentional
+	// loss documented for local.txt and the ponytail at remote.go:125-128. The
+	// remote-bootstrap path (CloneSingleBranch) recreates them explicitly
+	// (remote.go:468-476); the merge path relies on re-hydration (R8) or a remote
+	// that already contains the dirs.
 }
 
 // TestPullAlreadyUpToDate2 tests that pulling when already up-to-date
@@ -3684,10 +3911,11 @@ func TestPullAlreadyUpToDate2(t *testing.T) {
 	}
 
 	gs := &gitStore{
-		repo:    clonedRepo,
-		wt:      clonedWT,
-		fs:      clonedWT.Filesystem,
-		backend: clonedRepo.Storer,
+		repo:     clonedRepo,
+		wt:       clonedWT,
+		fs:       clonedWT.Filesystem,
+		backend:  clonedRepo.Storer,
+		basePath: t.TempDir(),
 	}
 
 	err = gs.WithGitLock(func() error {

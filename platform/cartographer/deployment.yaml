@@ -26,12 +26,46 @@ spec:
         app: cartographer
     spec:
       serviceAccountName: cartographer
+      # terminationGracePeriodSeconds must exceed the in-process shutdown budget so the
+      # durability teardown finishes before kubelet SIGKILLs. waitForShutdown (cmd/main.go)
+      # budgets 30s for GrpcServerGracefulStop, then performs durability teardown afterwards
+      # (StopGC, dbStore.Close, git RestoreMain/CleanUntracked). 100s gives that trailing
+      # git/LADYBUGDB durability phase ~70s beyond the drain. If this field falls below the
+      # 30s GracefulStop budget, a slow drain consumes the whole window and the
+      # durability/git-restore steps are SIGKILLed mid-write — keep this > 30s.
+      terminationGracePeriodSeconds: 100
+      # The image runs as non-root USER 65532:65532 (see Dockerfile). fsGroup==65532
+      # makes the mounted PVC group-owned and writable by 65532, and runAsUser/runAsGroup
+      # mirror the Dockerfile USER so the container identity matches the volume ownership.
+      # Without this, a PVC provisioned root-owned (hostpath / EBS static PVs) is unwritable
+      # from UID 65532 and `main.lbug`/`graph-repo/` creation fails at startup (main.go:76,81).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
       containers:
         - name: cartographer
+          # ponytail: cartographer:latest is a reference-only placeholder. The
+          # actual image is sourced from the Operator's CARTOGRAPHER_IMAGE env var
+          # (SPEC R6 step 3); the Operator overrides this field when it renders the
+          # real Deployment from the FoundryGraph CRD. This template value is the
+          # second source of truth — a manual deploy of this YAML without the
+          # Operator would run a stale/imaginary tag. Ceiling: two places that must
+          # not drift. Upgrade path: drop the image tag and require CARTOGRAPHER_IMAGE
+          # (or move this template behind the values that render it) once manual
+          # deploys are no longer supported.
           image: cartographer:latest
           ports:
             - containerPort: 50051
               name: grpc
+          # ponytail: the grpc port is hardcoded to 50051 here, in CARTOGRAPHER_PORT,
+          # in the readinessProbe, and in the ClusterIP Service targetPort. Changing
+          # CARTOGRAPHER_PORT alone orphans the probe and Service ports, so probes start
+          # failing and traffic silently misroutes until all four are updated together.
+          # Ceiling: one more hardcoded value every time the port is retyped. Upgrade
+          # path: derive probe/Service ports from a single source (e.g. ProcessOpen
+          # grafana-style port constant or a values param) once the port must vary.
           env:
             - name: LADYBUG_DB_PATH
               value: /data
@@ -68,7 +102,6 @@ spec:
           readinessProbe:
             grpc:
               port: 50051
-              service: grpc.health.v1.Health
             initialDelaySeconds: 5
             periodSeconds: 10
       volumes:

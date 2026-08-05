@@ -199,10 +199,10 @@ func TestChangeLogMixed(t *testing.T) {
 }
 
 func TestChangeLogFullCapEnforced(t *testing.T) {
-	cl := NewChangeLog()
+	cl := NewChangeLogWithCap(10)
 
-	// Add 100K entries (the cap)
-	for i := range 100000 {
+	// Add 10 entries (the small cap)
+	for i := range 10 {
 		if err := cl.Add(ChangeLogEntry{
 			Kind:   ChangeAddEntity,
 			ID:     formatIntID(i),
@@ -212,8 +212,8 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 			t.Fatalf("Add %d failed: %v", i, err)
 		}
 	}
-	if cl.Len() != 100000 {
-		t.Fatalf("expected Len()=100000, got %d", cl.Len())
+	if cl.Len() != 10 {
+		t.Fatalf("expected Len()=10, got %d", cl.Len())
 	}
 
 	// One more should fail
@@ -225,13 +225,13 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	}); err != ErrChangeLogFull {
 		t.Fatalf("expected ErrChangeLogFull, got %v", err)
 	}
-	if cl.Len() != 100000 {
-		t.Fatalf("expected Len() still 100000, got %d", cl.Len())
+	if cl.Len() != 10 {
+		t.Fatalf("expected Len() still 10, got %d", cl.Len())
 	}
 
 	// Verify each typed method enforces the cap
-	cl2 := NewChangeLog()
-	for i := range 100000 {
+	cl2 := NewChangeLogWithCap(10)
+	for i := range 10 {
 		_ = cl2.Add(ChangeLogEntry{
 			Kind:   ChangeAddEntity,
 			ID:     formatIntID(i),
@@ -273,8 +273,8 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	}
 
 	// Generic Add method
-	cl3 := NewChangeLog()
-	for i := range 100000 {
+	cl3 := NewChangeLogWithCap(10)
+	for i := range 10 {
 		_ = cl3.Add(ChangeLogEntry{
 			Kind: ChangeAddEntity,
 			ID:   formatIntID(i),
@@ -329,6 +329,7 @@ func TestChangeLogClear(t *testing.T) {
 func TestChangeLogConcurrent(t *testing.T) {
 	cl := NewChangeLog()
 	var wg sync.WaitGroup
+	errCh := make(chan error, 100)
 
 	// Concurrently add entries
 	for i := range 100 {
@@ -342,7 +343,7 @@ func TestChangeLogConcurrent(t *testing.T) {
 				Type:   testComponentType,
 				Entity: &EntityEntry{ID: id, Type: testComponentType},
 			}); err != nil {
-				t.Errorf("Add failed: %v", err)
+				errCh <- err
 			}
 		}(i)
 	}
@@ -356,6 +357,10 @@ func TestChangeLogConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Errorf("Add failed: %v", err)
+	}
 }
 
 func TestChangeLogGenericAdd(t *testing.T) {

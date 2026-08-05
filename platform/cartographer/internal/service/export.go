@@ -155,18 +155,14 @@ func serializeGraphML(entities []store.Entity, edges []store.Edge) ([]byte, erro
 	for _, e := range entities {
 		fmt.Fprintf(&buf, `    <node id="%s">`, e.Id)
 		for k, v := range e.Properties {
-			if v != "" {
-				fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
-			}
+			fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
 		}
 		buf.WriteString("</node>\n")
 	}
 	for _, e := range edges {
 		fmt.Fprintf(&buf, `    <edge id="%s" source="%s" target="%s">`, e.Id, e.FromEntityID, e.ToEntityID)
 		for k, v := range e.Properties {
-			if v != "" {
-				fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
-			}
+			fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
 		}
 		buf.WriteString("</edge>\n")
 	}

@@ -68,12 +68,12 @@ type Store interface {
 	ResolveEntityType(ctx context.Context, entityID, branch string) (string, error)
 
 	// Transaction (branch DB management)
-	CreateBranchDB(txID string) error
-	DropBranchDB(txID string) error
-	SaveBranchTransactionState(txID string, state BranchTransactionState) error
-	LoadBranchTransactionState(txID string) (BranchTransactionState, error)
-	InvalidateBranchState(txID string) error
-	ReplicateSchemaToBranch(txID string) error
+	CreateBranchDB(ctx context.Context, txID string) error
+	DropBranchDB(ctx context.Context, txID string) error
+	SaveBranchTransactionState(ctx context.Context, txID string, state BranchTransactionState) error
+	LoadBranchTransactionState(ctx context.Context, txID string) (BranchTransactionState, error)
+	InvalidateBranchState(ctx context.Context, txID string) error
+	ReplicateSchemaToBranch(ctx context.Context, txID string) error
 	RehydrateFromBranch(ctx context.Context, txID string) error
 	RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error
 	HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error

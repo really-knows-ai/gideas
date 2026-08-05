@@ -8,7 +8,6 @@ import "errors"
 
 // Schema errors
 var (
-	ErrTableStructureMismatch  = errors.New("table structure mismatch")
 	ErrDatabaseNotReady        = errors.New("database not ready")
 	ErrDestructiveSchemaChange = errors.New("destructive schema change: wipe required before applying")
 )
@@ -49,7 +48,6 @@ var (
 var (
 	ErrNaNOrInfEmbedding  = errors.New("embedding contains NaN or infinity values")
 	ErrEmbeddingDimension = errors.New("embedding dimension mismatch")
-	ErrEmbeddingRequired  = errors.New("embedding is required")
 )
 
 // Branch errors

@@ -4,11 +4,14 @@ import (
 	"sort"
 )
 
-const defaultChangeLogCap = 100000
+// DefaultChangeLogCap is the admission cap applied when NewChangeLog is used.
+// Exported so the store/service layer can import it rather than hardcoding the
+// 100 000 literal.
+const DefaultChangeLogCap = 100000
 
 // NewChangeLog creates a new ChangeLog with all maps initialised.
 func NewChangeLog() *ChangeLog {
-	return newChangeLog(defaultChangeLogCap)
+	return newChangeLog(DefaultChangeLogCap)
 }
 
 // NewChangeLogWithCap creates a ChangeLog with an explicit admission cap.
@@ -34,7 +37,7 @@ func (cl *ChangeLog) Add(entry ChangeLogEntry) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
-	if cl.count >= cl.cap {
+	if cl.checkCapacityLocked() {
 		return ErrChangeLogFull
 	}
 
@@ -46,10 +49,25 @@ func (cl *ChangeLog) Add(entry ChangeLogEntry) error {
 func (cl *ChangeLog) CheckCapacity() error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
-	if cl.count >= cl.cap {
+
+	if cl.checkCapacityLocked() {
 		return ErrChangeLogFull
 	}
 	return nil
+}
+
+// checkCapacityLocked reports whether the ChangeLog has reached its cap.
+// Must be called with cl.mu held.
+//
+// ponytail: The check-then-add performed by a caller of CheckCapacity followed
+// by Add is not atomic — between the two lock acquisitions another goroutine
+// could fill the final slot, so CheckCapacity is advisory only. This is safe in
+// the transaction lifecycle context because per-transaction lifecycle locking
+// serialises mutations for a given transaction, making the preflight reliable
+// there. The Add method itself re-checks under the lock and returns
+// ErrChangeLogFull if the cap was reached.
+func (cl *ChangeLog) checkCapacityLocked() bool {
+	return cl.count >= cl.cap
 }
 
 // AddEntry adds a ChangeLogEntry to the ChangeLog without checking the 100K cap.

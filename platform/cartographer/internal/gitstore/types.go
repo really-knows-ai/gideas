@@ -81,23 +81,23 @@ type EdgeFile struct {
 
 // EntityEntry stores the full snapshot for an added or modified entity.
 type EntityEntry struct {
-	ID         string            `json:"id"`
-	Type       string            `json:"type"`
-	Properties map[string]string `json:"properties,omitempty"`
-	Embedding  []float32         `json:"embedding,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	ID         string
+	Type       string
+	Properties map[string]string
+	Embedding  []float32
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // EdgeEntry stores the full snapshot for an added edge.
 type EdgeEntry struct {
-	ID           string            `json:"id"`
-	Type         string            `json:"type"`
-	FromEntityID string            `json:"from_entity_id"`
-	ToEntityID   string            `json:"to_entity_id"`
-	Properties   map[string]string `json:"properties,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	ID           string
+	Type         string
+	FromEntityID string
+	ToEntityID   string
+	Properties   map[string]string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // ChangeKind identifies the type of mutation.
@@ -125,8 +125,8 @@ type ChangeLogEntry struct {
 	ID        string
 	Type      string
 	Suspected bool         // true when reconstructed during startup recovery (deletions only)
-	Entity    *EntityEntry `json:"entity,omitempty"` // full snapshot for add/modify entity
-	Edge      *EdgeEntry   `json:"edge,omitempty"`   // full snapshot for add edge
+	Entity    *EntityEntry // full snapshot for add/modify entity
+	Edge      *EdgeEntry   // full snapshot for add edge
 }
 
 // ChangeLog tracks mutations within a transaction using per-category maps.
@@ -159,5 +159,8 @@ var (
 	ErrUnknownChangeKind          = errors.New("unknown change kind")
 	ErrEntityTypeMismatch         = errors.New("entity type mismatch")
 	ErrEdgeTypeMismatch           = errors.New("edge type mismatch")
-	ErrHasData                    = errors.New("has data")
+	ErrInvalidHash                = errors.New("invalid commit hash")
+	ErrRemoteURLNoHost            = errors.New("remote URL has no host")
+	ErrEmptyBasePath              = errors.New("gitstore: basePath must not be empty")
+	errHasData                    = errors.New("has data")
 )

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/schema"
 	"github.com/foundry/flow/cartographer/internal/store"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -57,12 +58,53 @@ func (db *ladybugDB) collectVectorIndexes() (map[string]bool, error) {
 		indexType := fmt.Sprintf("%v", vals[2])
 
 		// Only HNSW (vector) indexes count as vector indexes.
-		if tableName != "" && indexType == "HNSW" {
+		if tableName != "" && strings.EqualFold(indexType, "HNSW") {
 			idxMap[tableName] = true
 		}
 	}
 
 	return idxMap, nil
+}
+
+// indexExistsOnConn reports whether the given table has an index with the
+// given name, using the LadybugDB show_indexes catalog (columns: table_name,
+// index_name, index_type, property_names, ...). It returns false on a catalog
+// read failure (the caller's table-DDL path will surface a genuine subsequent
+// create/drop error rather than silently proceeding), mirroring the
+// best-effort treatment of collectVectorIndexes.
+func indexExistsOnConn(conn *lbug.Connection, table, index string) bool {
+	result, err := conn.Query("CALL show_indexes() RETURN *;")
+	if err != nil {
+		return false
+	}
+	defer result.Close()
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return false
+		}
+		vals, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil || len(vals) < 2 {
+			continue
+		}
+		if fmt.Sprintf("%v", vals[0]) == table && fmt.Sprintf("%v", vals[1]) == index {
+			return true
+		}
+	}
+	return false
+}
+
+// ftsIndexExists reports whether the table already carries its _fts full-text
+// index, so CREATE_FTS_INDEX is only issued for a table that lacks one.
+func ftsIndexExists(conn *lbug.Connection, table string) bool {
+	return indexExistsOnConn(conn, table, table+"_fts")
+}
+
+// vectorIndexExists reports whether the table already carries its _vec vector
+// (HNSW) index, so DROP_VECTOR_INDEX is only issued when one is present.
+func vectorIndexExists(conn *lbug.Connection, table string) bool {
+	return indexExistsOnConn(conn, table, table+"_vec")
 }
 
 // getTableProperties queries table_info for the given table and returns its
@@ -176,12 +218,10 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 	for _, et := range s.EntityTypes {
 		if existing, exists := db.entityTypeDefs[et.Name]; exists {
 			if err := db.alterNodeTable(et, existing); err != nil {
-				db.failed = true
 				return fmt.Errorf("alter node table %q: %w", et.Name, err)
 			}
 		} else {
 			if err := db.createNodeTable(et); err != nil {
-				db.failed = true
 				return fmt.Errorf("create node table %q: %w", et.Name, err)
 			}
 		}
@@ -191,12 +231,10 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 	for _, et := range s.EdgeTypes {
 		if existing, exists := db.edgeTypeDefs[et.Name]; exists {
 			if err := db.alterRelTable(et, existing, edgePairs[et.Name]); err != nil {
-				db.failed = true
 				return fmt.Errorf("alter rel table %q: %w", et.Name, err)
 			}
 		} else {
 			if err := db.createRelTable(et, edgePairs[et.Name]); err != nil {
-				db.failed = true
 				return fmt.Errorf("create rel table %q: %w", et.Name, err)
 			}
 		}
@@ -204,11 +242,11 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 
 	if db.path != "" {
 		if err := db.publishMetadata(stagedMetadata, db.mainMetadataPath()); err != nil {
-			db.failed = true
 			return fmt.Errorf("publish schema metadata: %w", err)
 		}
 	}
 	db.entityTypeDefs, db.edgeTypeDefs, db.ruleIndex, db.edgePairs = applySchemaMetadata(metadata)
+	db.schemaApplied = true
 	return nil
 }
 
@@ -310,6 +348,7 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 	for _, p := range existing.Properties {
 		existingProps[p.Name] = true
 	}
+	var newStringProps []string
 	for _, p := range et.Properties {
 		if existingProps[p.Name] {
 			continue
@@ -318,20 +357,72 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 		if _, err := db.conn.Query(ddl); err != nil {
 			return fmt.Errorf("add column %q: %w", p.Name, err)
 		}
-		// Rebuild FTS index if this is a string property.
 		if ladybugType(p.Type) == colTypeString {
-			ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', ['%s'], stemmer := 'porter');",
-				et.Name, et.Name, p.Name)
-			_, _ = db.conn.Query(ftsDDL) // non-fatal
+			newStringProps = append(newStringProps, p.Name)
+		}
+	}
+	// Rebuild FTS index with all string properties (existing + new) so that
+	// the index covers every string column, not just the newly added one.
+	if len(newStringProps) > 0 {
+		var allStringProps []string
+		for _, p := range existing.Properties {
+			if ladybugType(p.Type) == colTypeString {
+				allStringProps = append(allStringProps, p.Name)
+			}
+		}
+		allStringProps = append(allStringProps, newStringProps...)
+		propsList := "'" + strings.Join(allStringProps, "', '") + "'"
+		ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
+			et.Name, et.Name, propsList)
+		// CREATE_FTS_INDEX is not idempotent (it errors if the index already
+		// exists), so drop any existing _fts index first and then recreate it
+		// over the full property set. Dropping is only attempted when the index
+		// is known to exist, so a genuine create/rebuild error — not the benign
+		// "already exists" collision — propagates and cannot leave the type
+		// silently unsearchable (FTS search in query.go silently skips
+		// index-less types). Intentionally NOT error-text matched; the
+		// existence check is the discriminator.
+		if ftsIndexExists(db.conn, et.Name) {
+			if _, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", et.Name, et.Name)); err != nil {
+				return fmt.Errorf("drop existing FTS index for %q: %w", et.Name, err)
+			}
+		}
+		if _, err := db.conn.Query(ftsDDL); err != nil {
+			return fmt.Errorf("rebuild FTS index for %q: %w", et.Name, err)
 		}
 	}
 	return nil
 }
 
 // alterRelTable applies additive ALTER DDL for new properties on an existing
-// rel table. ponytail: FROM/TO pair changes are not supported via ALTER;
-// changing endpoints requires a destructive schema change (WipeGraph).
-func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType, existing *store.EdgeTypeDef, _ []fromToPair) error {
+// rel table. Changing an edge's FROM/TO pairs (e.g. a rule change that
+// adds/removes a canConnectTo pair for an existing edge type) cannot be
+// expressed through ALTER — the rel table's endpoint clauses are fixed at
+// CREATE time. SPEC R2 treats a rule modification as non-destructive, so an
+// endpoint change that diverges from the table's persisted clauses is surfaced
+// as a destructive schema change (ErrDestructiveSchemaChange) that the caller
+// must resolve via WipeGraph — rather than silently updating the in-memory
+// rule/edge cache while the table keeps old endpoints (which would let a
+// CreateEdge on the new pair fail or be stored against a table that does not
+// permit it, and diverge from the persisted metadata on reopen).
+func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType, existing *store.EdgeTypeDef, pairs []fromToPair) error {
+	// Reconcile the requested FROM/TO pair set against the endpoints the rel
+	// table actually persist. A change the table cannot express is destructive
+	// at the schema level: the persisted metadata (which is what
+	// validateMetadataAgainstCatalog re-validates on reopen) would diverge
+	// from the table structure, bricking the open.
+	actualPairs, err := connectionPairsOnConn(db.conn, et.Name)
+	if err != nil {
+		return fmt.Errorf("read relationship endpoints for %q: %w", et.Name, err)
+	}
+	if len(pairs) == 0 {
+		pairs = []fromToPair{{From: untypedTableName, To: untypedTableName}}
+	}
+	if !equalFromToPairs(actualPairs, pairs) {
+		return fmt.Errorf("%w: edge %q relationship endpoints would change; WipeGraph required before applying",
+			store.ErrDestructiveSchemaChange, et.Name)
+	}
+
 	existingProps := make(map[string]bool, len(existing.Properties))
 	for _, p := range existing.Properties {
 		existingProps[p.Name] = true
@@ -406,71 +497,37 @@ func (db *ladybugDB) rebuildSchemaCacheLocked() error {
 	return nil
 }
 
-// createNodeTable generates and executes CREATE NODE TABLE IF NOT EXISTS DDL.
-// If the entity type has EnableVectorIndex, the embedding column is NOT created
-// here — it is bootstrapped lazily on the first CreateEntity with an embedding.
-// An FTS index is created on all string properties for full-text search.
+// createNodeTable translates an entity type into a PropertyDef list and runs
+// the shared node-table DDL builder (see createNodeTableOnConn). If the entity
+// type has EnableVectorIndex, the embedding column is NOT created here — it is
+// bootstrapped lazily on the first CreateEntity with an embedding. An FTS index
+// is created on all string properties for full-text search.
 func (db *ladybugDB) createNodeTable(et *flowv1.EntityType) error {
-	cols := make([]string, 0, 1+len(et.Properties)+1)
-	cols = append(cols, "id STRING PRIMARY KEY")
-	var stringProps []string
-	for _, p := range et.Properties {
-		colType := ladybugType(p.Type)
-		cols = append(cols, quoteID(p.Name)+" "+colType)
-		if colType == colTypeString || colType == "STRING[]" {
-			stringProps = append(stringProps, p.Name)
-		}
-	}
-
-	ddl := fmt.Sprintf("CREATE NODE TABLE IF NOT EXISTS %s (%s);",
-		quoteID(et.Name), strings.Join(cols, ", "))
-
-	if _, err := db.conn.Query(ddl); err != nil {
-		return err
-	}
-
-	// Create FTS index on all string properties.
-	if len(stringProps) > 0 {
-		propsList := "'" + strings.Join(stringProps, "', '") + "'"
-		ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
-			et.Name, et.Name, propsList)
-		_, _ = db.conn.Query(ftsDDL) // non-fatal; may fail if FTS ext not loaded
-	}
-
-	return nil
+	return createNodeTableOnConn(db.conn, et.Name, propsFromEntity(et))
 }
 
-// createRelTable generates and executes CREATE REL TABLE IF NOT EXISTS DDL.
+// createRelTable translates an edge flow into a PropertyDef list and runs the
+// shared rel-table DDL (see createRelTableOnConn).
 func (db *ladybugDB) createRelTable(et *flowv1.EdgeType, pairs []fromToPair) error {
-	var ddl strings.Builder
-	ddl.WriteString("CREATE REL TABLE IF NOT EXISTS ")
-	ddl.WriteString(quoteID(et.Name))
+	return createRelTableOnConn(db.conn, et.Name, propsFromEdge(et), pairs)
+}
 
-	// Add FROM/TO pairs.
-	var clauses []string
-	for _, p := range pairs {
-		clauses = append(clauses, fmt.Sprintf("FROM %s TO %s",
-			quoteID(p.From), quoteID(p.To)))
-	}
-	// If no rules defined, use a placeholder.
-	if len(clauses) == 0 {
-		clauses = append(clauses, "FROM _untyped TO _untyped")
-	}
-	ddl.WriteString(" (")
-	ddl.WriteString(strings.Join(clauses, ", "))
-
-	// Add id and edge properties.
-	ddl.WriteString(", id STRING")
+// propsFromEntity converts proto EntityType properties into store PropertyDefs.
+func propsFromEntity(et *flowv1.EntityType) []store.PropertyDef {
+	props := make([]store.PropertyDef, 0, len(et.Properties))
 	for _, p := range et.Properties {
-		ddl.WriteString(", ")
-		ddl.WriteString(quoteID(p.Name))
-		ddl.WriteString(" ")
-		ddl.WriteString(ladybugType(p.Type))
+		props = append(props, store.PropertyDef{Name: p.Name, Type: p.Type, Required: p.Required})
 	}
-	ddl.WriteString(");")
+	return props
+}
 
-	_, err := db.conn.Query(ddl.String())
-	return err
+// propsFromEdge converts proto EdgeType properties into store PropertyDefs.
+func propsFromEdge(et *flowv1.EdgeType) []store.PropertyDef {
+	props := make([]store.PropertyDef, 0, len(et.Properties))
+	for _, p := range et.Properties {
+		props = append(props, store.PropertyDef{Name: p.Name, Type: p.Type, Required: p.Required})
+	}
+	return props
 }
 
 // fromToPair describes a single FROM → TO clause for a rel table.
@@ -625,7 +682,7 @@ func (db *ladybugDB) Health(_ context.Context) (*store.HealthResult, error) {
 
 	return &store.HealthResult{
 		LadybugOK:     ladybugOK,
-		SchemaApplied: len(db.entityTypeDefs) > 0 || len(db.edgeTypeDefs) > 0,
+		SchemaApplied: db.schemaApplied,
 		PVCWritable:   pvcWritable,
 	}, nil
 }
@@ -637,7 +694,15 @@ func probePVCWritable(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer func() { _ = os.Remove(f.Name()) }()
+	// Always remove the temp file, and close any still-open handle on the
+	// early-return failure paths so no file descriptor leaks to GC.
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+		_ = os.Remove(f.Name())
+	}()
 
 	if _, err := f.Write([]byte("health")); err != nil {
 		return false
@@ -648,5 +713,6 @@ func probePVCWritable(path string) bool {
 	if err := f.Close(); err != nil {
 		return false
 	}
+	closed = true
 	return true
 }

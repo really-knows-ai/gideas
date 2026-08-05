@@ -177,6 +177,34 @@ func TestDiffSchema(t *testing.T) {
 			expected: SchemaDiffDestructive,
 		},
 		{
+			name: "reordered rules - no diff",
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{
+						Name: "Component",
+						Rules: []flowv1.ConnectionRule{
+							{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+							{CanConnectTo: []string{"Database"}, Using: []string{"CONTAINS"}},
+						},
+					},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{
+						Name: "Component",
+						// Rules reversed — SPEC R1 treats the list as OR-ed, order is
+						// semantically irrelevant, so this must be SchemaDiffNone.
+						Rules: []flowv1.ConnectionRule{
+							{CanConnectTo: []string{"Database"}, Using: []string{"CONTAINS"}},
+							{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+						},
+					},
+				},
+			},
+			expected: SchemaDiffNone,
+		},
+		{
 			name: "rules modified only - non-destructive",
 			old: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
@@ -200,6 +228,121 @@ func TestDiffSchema(t *testing.T) {
 			},
 			expected: SchemaDiffNonDestructive,
 		},
+		{
+			name: "canConnectTo entry removed - non-destructive (membership change surfaced)",
+			// Removing a member from an OR membership list is a semantically relevant
+			// change (it narrows which connections are permitted) that must NOT collapse to
+			// SchemaDiffNone — the old spec permitted "Service", the new one no longer does.
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service", "Database"}, Using: []string{"DEPENDS_ON"}}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Database"}, Using: []string{"DEPENDS_ON"}}}},
+				},
+			},
+			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "using entry removed - non-destructive (membership change)",
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON", "CONTAINS"}}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}}}},
+				},
+			},
+			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "whole rule dropped - non-destructive (membership change)",
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{
+						{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+						{CanConnectTo: []string{"Database"}, Using: []string{"CONTAINS"}},
+					}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}}}},
+				},
+			},
+			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "properties reorder - no diff (non-destructive is NOT implied or destructive)",
+			// A mere reordering of the properties list is semantically irrelevant (the
+			// property schema is a name→{type,required} set) and must not be classified as
+			// destructive (or any diff) — ordering does not change the underlying columns.
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "z", Type: "string"}, {Name: "a", Type: "int", Required: true}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "a", Type: "int", Required: true}, {Name: "z", Type: "string"}}},
+				},
+			},
+			expected: SchemaDiffNone,
+		},
+		{
+			name: "canConnectTo duplicate members - no diff (set-based membership)",
+			// SPEC R1 matches each list by set membership, so [A,A] ≡ [A]: a redundant
+			// duplicate must not surface as a schema change (it is SchemaDiffNone, not
+			// non-destructive/destructive).
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"A", "A"}, Using: []string{"DEPENDS_ON"}}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"A"}, Using: []string{"DEPENDS_ON"}}}},
+				},
+			},
+			expected: SchemaDiffNone,
+		},
+		{
+			name: "using duplicate members - no diff (set-based membership)",
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"A"}, Using: []string{"E", "E"}}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"A"}, Using: []string{"E"}}}},
+				},
+			},
+			expected: SchemaDiffNone,
+		},
+		{
+			name: "duplicated rule entry - no diff (rules are OR-ed, duplicates are no-ops)",
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{
+						{CanConnectTo: []string{"A"}, Using: []string{"E"}},
+						{CanConnectTo: []string{"A"}, Using: []string{"E"}},
+					}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{
+						{CanConnectTo: []string{"A"}, Using: []string{"E"}},
+					}},
+				},
+			},
+			expected: SchemaDiffNone,
+		},
 	}
 
 	for _, tt := range tests {
@@ -207,6 +350,53 @@ func TestDiffSchema(t *testing.T) {
 			result := diffSchema(tt.old, tt.new)
 			if result != tt.expected {
 				t.Errorf("diffSchema(%q) = %d, want %d", tt.name, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSchemaDuplicateNames(t *testing.T) {
+	tests := []struct {
+		name string
+		spec *flowv1.FoundryGraphSpec
+		want string
+	}{
+		{
+			name: "no duplicates",
+			spec: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{{Name: "A"}, {Name: "B"}},
+				EdgeTypes:   []flowv1.EdgeTypeSpec{{Name: "C"}},
+			},
+			want: "",
+		},
+		{
+			name: "duplicate entity name",
+			spec: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{{Name: "A"}, {Name: "A"}},
+			},
+			want: "duplicate entity type name A",
+		},
+		{
+			name: "duplicate edge name",
+			spec: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{{Name: "X"}, {Name: "X"}},
+			},
+			want: "duplicate edge type name X",
+		},
+		{
+			name: "cross-list overlap allowed",
+			spec: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{{Name: "A"}},
+				EdgeTypes:   []flowv1.EdgeTypeSpec{{Name: "A"}},
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schemaDuplicateNames(tt.spec); got != tt.want {
+				t.Errorf("schemaDuplicateNames() = %q, want %q", got, tt.want)
 			}
 		})
 	}

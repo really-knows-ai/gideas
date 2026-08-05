@@ -39,14 +39,17 @@ type Edge struct {
 }
 
 // SearchResult is a single result from a vector similarity search.
+// Identity is exposed as typed fields; properties are carried losslessly.
 type SearchResult struct {
-	Entity     map[string]any
+	ID         string
+	Type       string
+	Properties map[string]string
 	Similarity float64
 }
 
 // EntityPage is a page of entities returned by ListEntities.
 type EntityPage struct {
-	Entities      []map[string]any
+	Entities      []Entity
 	NextPageToken string
 }
 
@@ -232,6 +235,11 @@ func (g *Graph) ExecuteCypher(cypher string, params map[string]any) ([]map[strin
 	}
 
 	labels := extractEntityTypes(cypher)
+	if len(labels) == 0 {
+		// Parser failed to extract entity types — fall back to the
+		// READ:graph/entity/* wildcard capability (R3).
+		labels = []string{"*"}
+	}
 
 	var resp *flowv1.ExecuteCypherResponse
 	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
@@ -284,15 +292,10 @@ func (g *Graph) SearchNeighbors(embedding []float32, entityType string, topK int
 
 	results := make([]SearchResult, 0, len(resp.GetResults()))
 	for _, r := range resp.GetResults() {
-		entity := map[string]any{
-			"entity_id":   r.GetEntityId(),
-			"entity_type": r.GetEntityType(),
-		}
-		for k, v := range r.GetProperties() {
-			entity[k] = v
-		}
 		results = append(results, SearchResult{
-			Entity:     entity,
+			ID:         r.GetEntityId(),
+			Type:       r.GetEntityType(),
+			Properties: r.GetProperties(),
 			Similarity: r.GetScore(),
 		})
 		// Populate ID-to-type map.
@@ -302,7 +305,7 @@ func (g *Graph) SearchNeighbors(embedding []float32, entityType string, topK int
 }
 
 // FullTextSearch performs a full-text search across all string properties.
-func (g *Graph) FullTextSearch(query, entityType string) ([]map[string]any, error) {
+func (g *Graph) FullTextSearch(query, entityType string) ([]Entity, error) {
 	if g.session == nil {
 		return nil, fmt.Errorf("flow sdk: graph not initialised")
 	}
@@ -322,17 +325,14 @@ func (g *Graph) FullTextSearch(query, entityType string) ([]map[string]any, erro
 		return nil, err
 	}
 
-	// Convert proto Entity list to []map[string]any.
-	results := make([]map[string]any, 0, len(resp.GetResults()))
+	// Convert proto Entity list to []Entity.
+	results := make([]Entity, 0, len(resp.GetResults()))
 	for _, e := range resp.GetResults() {
-		m := map[string]any{
-			"entity_id":   e.GetEntityId(),
-			"entity_type": e.GetEntityType(),
-		}
-		for k, v := range e.GetProperties() {
-			m[k] = v
-		}
-		results = append(results, m)
+		results = append(results, Entity{
+			ID:         e.GetEntityId(),
+			Type:       e.GetEntityType(),
+			Properties: e.GetProperties(),
+		})
 		// Populate ID-to-type map.
 		g.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
 	}
@@ -366,16 +366,13 @@ func (g *Graph) ListEntities(entityType string, opts ...ListEntitiesOption) (*En
 		return nil, err
 	}
 
-	entities := make([]map[string]any, 0, len(resp.GetEntities()))
+	entities := make([]Entity, 0, len(resp.GetEntities()))
 	for _, e := range resp.GetEntities() {
-		m := map[string]any{
-			"entity_id":   e.GetEntityId(),
-			"entity_type": e.GetEntityType(),
-		}
-		for k, v := range e.GetProperties() {
-			m[k] = v
-		}
-		entities = append(entities, m)
+		entities = append(entities, Entity{
+			ID:         e.GetEntityId(),
+			Type:       e.GetEntityType(),
+			Properties: e.GetProperties(),
+		})
 		// Populate ID-to-type map.
 		g.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
 	}
@@ -502,6 +499,7 @@ func (g *Graph) DeleteEntity(id string) (*Entity, error) {
 		ID:         resp.GetEntityId(),
 		Type:       resp.GetEntityType(),
 		Properties: resp.GetProperties(),
+		Embedding:  resp.GetEmbedding(),
 	}, nil
 }
 
@@ -618,15 +616,6 @@ func (g *Graph) PullFromRemote() error {
 		return fmt.Errorf("flow sdk: graph not initialised")
 	}
 	_, err := g.session.Cartographer.PullFromRemote(g.session.ctx, &flowv1.PullFromRemoteRequest{})
-	return err
-}
-
-// PushToRemote pushes local commits to the configured remote repository.
-func (g *Graph) PushToRemote() error {
-	if g.session == nil {
-		return fmt.Errorf("flow sdk: graph not initialised")
-	}
-	_, err := g.session.Cartographer.PushToRemote(g.session.ctx, &flowv1.PushToRemoteRequest{})
 	return err
 }
 

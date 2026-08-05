@@ -282,6 +282,13 @@ func (tm *TransactionManager) HasActive() bool {
 }
 
 // ActiveCount returns the number of active (non-expired) transactions.
+// ponytail: no production code path or test calls ActiveCount today; it is
+// defined only as a companion to HasActive. It becomes reachable when a caller
+// needs the magnitude of in-flight transactions rather than a boolean — e.g. a
+// telemetry/observability metric reporting the active transaction count (the GC
+// loop at cartographer_server.go already publishes per-transaction telemetry,
+// so surfacing the outstanding count alongside it is the natural next consumer).
+// If no such consumer materialises, remove the method to avoid a dead symbol.
 func (tm *TransactionManager) ActiveCount() int {
 	now := tm.clock.Now()
 	tm.mu.RLock()

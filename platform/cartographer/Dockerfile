@@ -22,7 +22,7 @@ COPY platform/cartographer/ platform/cartographer/
 RUN cd platform/cartographer && GOWORK=/workspace/.cache/ladybug/go.work CGO_ENABLED=1 go build -o /cartographer ./cmd
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates libstdc++6 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates libstdc++6 libssl3 && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /cartographer /cartographer
 COPY --from=builder /ladybug-lib/ /usr/local/lib/
 ENV LD_LIBRARY_PATH=/usr/local/lib

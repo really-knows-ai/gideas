@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 
 	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/store"
@@ -81,9 +83,6 @@ func (db *ladybugDB) SearchNeighbors(
 			return nil, store.ErrNaNOrInfEmbedding
 		}
 	}
-	if len(embedding) == 0 {
-		return nil, store.ErrEmbeddingRequired
-	}
 	if topK < 0 {
 		return nil, store.ErrInvalidTopK
 	}
@@ -119,7 +118,17 @@ func (db *ladybugDB) SearchNeighbors(
 	var results []store.NeighborResult
 	for _, t := range typesToSearch {
 		// Check if the index is bootstrapped.
-		dim := getEmbeddingDimension(conn, t)
+		dim, derr := getEmbeddingDimension(conn, t)
+		if derr != nil {
+			return nil, fmt.Errorf("read embedding dimension for %q: %w", t, derr)
+		}
+		// ponytail: A type whose vector index is not yet bootstrapped (dim == 0) is
+		// silently skipped rather than surfacing an error. The dimension is inferred
+		// from the first embedding written for the type (lazy index bootstrap, see
+		// R7), so a type with no embeddings legitimately has no index yet and is
+		// simply not searchable. The SPEC does not define this as an error condition,
+		// so we skip silently while still surfacing real errors (dimension mismatch,
+		// read failures, etc.) where they exist.
 		if dim == 0 {
 			continue // no bootstrapped index yet
 		}
@@ -134,8 +143,12 @@ func (db *ladybugDB) SearchNeighbors(
 			t, idxName, topK)
 		stmt, err := conn.Prepare(q)
 		if err != nil {
-			// Index may not exist yet — skip.
-			continue
+			// The embedding column exists with a bootstrapped dimension (dim > 0),
+			// so the vector index should be present; a Prepare failure here is an
+			// operational error for this type, not a transient "index absent"
+			// state. Propagate so the caller can distinguish the two instead of
+			// silently dropping this type's contribution.
+			return nil, fmt.Errorf("prepare vector index query for %q: %w", t, err)
 		}
 		// ponytail: The LadybugDB query-vector-index call expects the embedding
 		// as a FLOAT[] parameter. We pass it as a flat []any slice.
@@ -146,7 +159,10 @@ func (db *ladybugDB) SearchNeighbors(
 		result, err := conn.Execute(stmt, map[string]any{"emb": embAny})
 		stmt.Close()
 		if err != nil {
-			continue
+			// The vector index query prepared successfully, so the index exists;
+			// an Execute failure here is operational. Surface it rather than
+			// silently dropping this type's contribution.
+			return nil, fmt.Errorf("execute vector index query for %q: %w", t, err)
 		}
 		for result.HasNext() {
 			tuple, err := result.Next()
@@ -164,7 +180,17 @@ func (db *ladybugDB) SearchNeighbors(
 			if !ok {
 				continue
 			}
-			distance, _ := m["distance"].(float64)
+			var distance float64
+			switch d := m["distance"].(type) {
+			case float64:
+				distance = d
+			case float32:
+				distance = float64(d)
+			case nil:
+				return nil, fmt.Errorf("vector result for %q missing distance", t)
+			default:
+				return nil, fmt.Errorf("unexpected distance type for %q: got %T", t, m["distance"])
+			}
 			entity := entityFromNode(node, t)
 			results = append(results, store.NeighborResult{
 				Entity:   *entity,
@@ -220,17 +246,35 @@ func (db *ladybugDB) FullTextSearch(
 	for _, t := range typesToSearch {
 		// Use QUERY_FTS_INDEX if available; fall back to property scan.
 		idxName := t + "_fts"
+		// ponytail: TOP is hard-coded to 100 because the SPEC R2 defines
+		// FullTextSearch(query, entityType?) with no topK parameter, so there is no
+		// caller-supplied limit to thread through. If a topK parameter is added to
+		// the SPEC in future, this constant should be replaced with it.
 		q := fmt.Sprintf("CALL QUERY_FTS_INDEX('%s', '%s', $q, TOP := 100) RETURN node, score ORDER BY score DESC;",
 			t, idxName)
 		stmt, err := conn.Prepare(q)
 		if err != nil {
-			// FTS index may not exist — fall back to simple MATCH + scan.
+			// ponytail: An entity type whose FTS index is absent (never created,
+			// or the FTS extension failed to load at table-creation time) is
+			// silently skipped here, so a FullTextSearch across multiple types
+			// returns an incomplete result set with no error and no indication
+			// of which types were omitted. The SPEC does not define this as an
+			// error condition and an index-less type is legitimately
+			// unsearchable, so we skip silently — but the caller has no way to
+			// distinguish a complete result set from one missing types. Upgrade
+			// path: surface per-type index absence (log or return a partial-result
+			// notice) or fall back to a property scan (MATCH + LIKE) when the FTS
+			// index is unavailable. This is the same silent-skip failure mode
+			// documented for vector search in SearchNeighbors.
 			continue
 		}
 		result, err := conn.Execute(stmt, map[string]any{"q": query})
 		stmt.Close()
 		if err != nil {
-			continue
+			// The FTS index query prepared successfully, so the index exists;
+			// an Execute failure here is operational. Surface it rather than
+			// silently omitting this type from the result set.
+			return nil, fmt.Errorf("execute fts index query for %q: %w", t, err)
 		}
 		for result.HasNext() {
 			tuple, err := result.Next()
@@ -287,15 +331,26 @@ func (db *ladybugDB) ListEntities(
 	}
 
 	// Decode page token (offset-based: base64-encoded offset as string).
+	// ponytail: Pagination is offset-based (ORDER BY n.id with SKIP $off), which is
+	// fragile under concurrent mutations: an insert or delete between pages can
+	// shift offsets and cause rows to be skipped or duplicated. A cursor-based
+	// (keyset) scheme would be resilient, but that changes the page-token semantics
+	// and the SPEC does not document either approach or its fragility. Kept as-is
+	// until the SPEC is updated.
 	offset := 0
 	if pageToken != "" {
 		data, err := base64.StdEncoding.DecodeString(pageToken)
 		if err != nil {
 			return nil, "", fmt.Errorf("%w: malformed page token", store.ErrInvalidPageToken)
 		}
-		if _, err := fmt.Sscanf(string(data), "%d", &offset); err != nil {
+		parsed, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+		if err != nil {
+			// Require an exact integer token: ParseInt rejects trailing garbage
+			// (SPEC R2/R3) where the previous fmt.Sscanf partial match silently
+			// accepted a malformed token like "12abc" as offset 12.
 			return nil, "", fmt.Errorf("%w: malformed page token", store.ErrInvalidPageToken)
 		}
+		offset = int(parsed)
 		if offset < 0 {
 			return nil, "", fmt.Errorf("%w: malformed page token (negative offset)", store.ErrInvalidPageToken)
 		}

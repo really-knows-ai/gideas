@@ -22,6 +22,16 @@ import (
 // operations. Every method must be called with the git lock held (via
 // WithGitLock). The context parameter is reserved for future cancellation
 // support in I/O-bound operations.
+//
+// ponytail: none of the ctx parameters are wired into the underlying go-billy
+// or go-git I/O, because neither library exposes a ctx-aware filesystem API.
+// Consequence: a hung CSI/NFS filesystem (a blocked stat, open, write, or
+// Close) blocks the reconcile or RPC for the duration of the hang regardless
+// of caller cancellation — the contract param is a pure affordance today.
+// Upgrade path: run the store's I/O on a goroutine and select on ctx.Done(),
+// or wrap the filesystem in a deadline-bounding adapter that fails operations
+// exceeding a configured budget; once go-billy gains ctx-aware IO, thread ctx
+// through directly.
 type GitStore interface {
 	// Branch management
 	CreateBranch(ctx context.Context, txID string) error
@@ -63,15 +73,17 @@ type GitStore interface {
 	CloneSingleBranch(ctx context.Context, url, branch string) error
 	IsEmpty(ctx context.Context) (bool, error)
 
+	// HydrationDirs returns the working-tree directories (entities/ and edges/)
+	// under graph-repo from which main's LadybugDB is re-hydrated. Callers
+	// (service layer) use these even when LADYBUG_DB_PATH is not set, so an
+	// in-memory main can be re-hydrated from the git working tree.
+	HydrationDirs() (entitiesDir, edgesDir string)
+
 	// Lock
 	WithGitLock(fn func() error) error
 
 	// Lifecycle
 	Close() error
-
-	// InitDir creates a directory with a .gitkeep file and stages it.
-	// Used by WipeGraph to recreate tracked root directories.
-	InitDir(ctx context.Context, name string) error
 }
 
 // gitStore is the concrete implementation of GitStore.
@@ -97,16 +109,13 @@ func initDir(wt *git.Worktree, fs billy.Filesystem, name string) error {
 	if err != nil {
 		return err
 	}
-	_ = f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", keep, err)
+	}
 	if _, err := wt.Add(keep); err != nil {
 		return err
 	}
 	return nil
-}
-
-// InitDir creates a directory with a .gitkeep file and stages it.
-func (g *gitStore) InitDir(ctx context.Context, name string) error {
-	return initDir(g.wt, g.fs, name)
 }
 
 // compile-time interface check
@@ -117,6 +126,9 @@ var _ GitStore = (*gitStore)(nil)
 // branch set to "main" and an initial "init" commit containing the
 // entities/ and edges/ directories.
 func New(basePath string) (GitStore, error) {
+	if basePath == "" {
+		return nil, ErrEmptyBasePath
+	}
 	repoPath := filepath.Join(basePath, "graph-repo")
 	gitPath := filepath.Join(repoPath, ".git")
 
@@ -124,13 +136,15 @@ func New(basePath string) (GitStore, error) {
 	var repo *git.Repository
 	var err error
 
-	if info, statErr := os.Stat(gitPath); statErr == nil && info.IsDir() {
+	info, statErr := os.Stat(gitPath)
+	switch {
+	case statErr == nil && info.IsDir():
 		repo, err = git.PlainOpen(repoPath)
 		if err != nil {
 			return nil, fmt.Errorf("open existing repo: %w", err)
 		}
 		isNew = false
-	} else if os.IsNotExist(statErr) {
+	case os.IsNotExist(statErr):
 		repo, err = git.PlainInitWithOptions(repoPath, &git.PlainInitOptions{
 			InitOptions: git.InitOptions{
 				DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
@@ -140,8 +154,10 @@ func New(basePath string) (GitStore, error) {
 			return nil, fmt.Errorf("init repo: %w", err)
 		}
 		isNew = true
-	} else {
+	case statErr != nil:
 		return nil, fmt.Errorf("stat .git: %w", statErr)
+	default:
+		return nil, fmt.Errorf(".git exists but is not a directory: %s", gitPath)
 	}
 
 	wt, err := repo.Worktree()
@@ -194,6 +210,14 @@ func New(basePath string) (GitStore, error) {
 // with lifecycle-aware consumers.
 func (g *gitStore) Close() error {
 	return nil
+}
+
+// HydrationDirs returns the working-tree directories under graph-repo/ from
+// which a LadybugDB instance is re-hydrated (SPEC R8/R10). They mirror the
+// repository layout created by New.
+func (g *gitStore) HydrationDirs() (string, string) {
+	base := filepath.Join(g.basePath, "graph-repo")
+	return filepath.Join(base, "entities"), filepath.Join(base, "edges")
 }
 
 // WithGitLock acquires the mutex, calls fn, and releases the mutex.

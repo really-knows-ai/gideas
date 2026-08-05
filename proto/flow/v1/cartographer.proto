@@ -37,7 +37,6 @@ service CartographerService {
 
   // --- Administrative Path (Node-Facing) ---
   rpc PullFromRemote(PullFromRemoteRequest) returns (PullFromRemoteResponse);
-  rpc PushToRemote(PushToRemoteRequest) returns (PushToRemoteResponse);
   rpc ExportGraph(ExportGraphRequest) returns (stream ExportGraphResponse);
 }
 
@@ -314,10 +313,6 @@ message HealthCheckResponse {
 message PullFromRemoteRequest {}
 
 message PullFromRemoteResponse {}
-
-message PushToRemoteRequest {}
-
-message PushToRemoteResponse {}
 
 message ExportGraphRequest {
   string format = 1;

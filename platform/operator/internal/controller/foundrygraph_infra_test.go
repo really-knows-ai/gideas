@@ -22,6 +22,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -172,5 +173,222 @@ func TestPVCStorageDefaulting(t *testing.T) {
 	qty := resource.MustParse(cartographerStorageSize)
 	if qty.Value() != 1*1024*1024*1024 {
 		t.Errorf("expected 1Gi, got %v", qty)
+	}
+}
+
+func TestReconcilePVCDefaultsToConstant(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+	ctx := context.Background()
+	if err := r.reconcilePVC(ctx, fg); err != nil {
+		t.Fatalf("reconcilePVC: %v", err)
+	}
+
+	var pvc corev1.PersistentVolumeClaim
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: "test-ns"}, &pvc); err != nil {
+		t.Fatalf("get PVC: %v", err)
+	}
+	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if got.Value() != 1*1024*1024*1024 {
+		t.Errorf("expected default size 1Gi, got %v", got)
+	}
+}
+
+func TestReconcilePVCMinimumClamp(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	tiny := resource.MustParse("100Ki")
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"},
+		Spec: flowv1.FoundryGraphSpec{
+			Storage: &flowv1.StorageSpec{Size: &tiny},
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+	ctx := context.Background()
+	if err := r.reconcilePVC(ctx, fg); err != nil {
+		t.Fatalf("reconcilePVC: %v", err)
+	}
+
+	var pvc corev1.PersistentVolumeClaim
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: "test-ns"}, &pvc); err != nil {
+		t.Fatalf("get PVC: %v", err)
+	}
+	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if got.Value() < 1*1024*1024 {
+		t.Errorf("expected request clamped to at least 1Mi, got %v", got)
+	}
+	if got.Value() != 1*1024*1024 {
+		t.Errorf("expected request exactly 1Mi after clamp, got %v", got)
+	}
+}
+
+func TestReconcilePVCNeverShrinks(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	large := resource.MustParse("5Gi")
+	small := resource.MustParse("1Gi")
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"},
+		Spec: flowv1.FoundryGraphSpec{
+			Storage: &flowv1.StorageSpec{Size: &large},
+		},
+	}
+
+	// Pre-seed an existing PVC already allocated at 5Gi.
+	existing := corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data-flow-graph", Namespace: "test-ns"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: large},
+			},
+		},
+	}
+
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, &existing).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+	ctx := context.Background()
+
+	// Now reduce spec.storage.size to 1Gi — the PVC must silently retain 5Gi.
+	fg.Spec.Storage.Size = &small
+	if err := r.reconcilePVC(ctx, fg); err != nil {
+		t.Fatalf("reconcilePVC: %v", err)
+	}
+
+	var pvc corev1.PersistentVolumeClaim
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: "test-ns"}, &pvc); err != nil {
+		t.Fatalf("get PVC: %v", err)
+	}
+	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if got.Value() != 5*1024*1024*1024 {
+		t.Errorf("expected PVC to retain 5Gi (never shrink), got %v", got)
+	}
+}
+
+func TestReconcileRBACRemoteAuthTeardown(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := "test-ns"
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		// Remote config present but secretRef empty → teardown path.
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: ""}},
+			},
+		},
+	}
+
+	// Pre-create the remote-auth Role and RoleBinding so teardown must delete them.
+	remoteRole := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}}
+	remoteRB := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}}
+
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, remoteRole, remoteRB).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+	ctx := context.Background()
+	if err := r.reconcileRBAC(ctx, fg); err != nil {
+		t.Fatalf("reconcileRBAC: %v", err)
+	}
+
+	// Remote-auth RoleBinding must be deleted.
+	var gotRB rbacv1.RoleBinding
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &gotRB); err == nil {
+		t.Fatal("expected remote-auth RoleBinding to be deleted when secretRef is removed")
+	}
+	var gotRole rbacv1.Role
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &gotRole); err == nil {
+		t.Fatal("expected remote-auth Role to be deleted when secretRef is removed")
+	}
+}
+
+// TestReconcileRBACCreation verifies the CREATE path (item 8): reconcileRBAC creates the
+// ServiceAccount, the verification-key Role/RoleBinding, and, when secretRef is set, the
+// remote-auth Role and RoleBinding.
+func TestReconcileRBACCreation(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := "test-ns"
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: "remote-secret"}},
+			},
+		},
+	}
+
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+	ctx := context.Background()
+	if err := r.reconcileRBAC(ctx, fg); err != nil {
+		t.Fatalf("reconcileRBAC: %v", err)
+	}
+
+	// ServiceAccount created.
+	var sa corev1.ServiceAccount
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph", Namespace: ns}, &sa); err != nil {
+		t.Fatalf("expected ServiceAccount to be created: %v", err)
+	}
+
+	// Key-reader Role created with get on the verification-key Secrets.
+	var keyRole rbacv1.Role
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-key-reader", Namespace: ns}, &keyRole); err != nil {
+		t.Fatalf("expected key-reader Role to be created: %v", err)
+	}
+	if len(keyRole.Rules) != 1 {
+		t.Fatalf("expected 1 rule on key-reader Role, got %d", len(keyRole.Rules))
+	}
+	names := keyRole.Rules[0].ResourceNames
+	if len(names) != 2 || names[0] != "cartographer-operator-key" || names[1] != "cartographer-sidecar-key" {
+		t.Errorf("key-reader Role must reference the two verification key Secrets, got %v", names)
+	}
+
+	// Key-reader RoleBinding bound to the ServiceAccount.
+	var keyRB rbacv1.RoleBinding
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-key-reader", Namespace: ns}, &keyRB); err != nil {
+		t.Fatalf("expected key-reader RoleBinding to be created: %v", err)
+	}
+	if keyRB.RoleRef.Name != "cartographer-flow-graph-key-reader" {
+		t.Errorf("key-reader RoleBinding RoleRef mismatch: %q", keyRB.RoleRef.Name)
+	}
+	if len(keyRB.Subjects) != 1 || keyRB.Subjects[0].Name != "cartographer-flow-graph" {
+		t.Errorf("key-reader RoleBinding must reference the operator ServiceAccount, got %+v", keyRB.Subjects)
+	}
+
+	// Remote-auth Role created for the referenced secret.
+	var remoteRole rbacv1.Role
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &remoteRole); err != nil {
+		t.Fatalf("expected remote-auth Role to be created when secretRef is set: %v", err)
+	}
+	if len(remoteRole.Rules) != 1 || len(remoteRole.Rules[0].ResourceNames) != 1 || remoteRole.Rules[0].ResourceNames[0] != "remote-secret" {
+		t.Errorf("remote-auth Role must reference the secretRef, got %+v", remoteRole.Rules)
+	}
+
+	// Remote-auth RoleBinding.
+	var remoteRB rbacv1.RoleBinding
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &remoteRB); err != nil {
+		t.Fatalf("expected remote-auth RoleBinding to be created: %v", err)
 	}
 }

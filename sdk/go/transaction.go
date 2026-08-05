@@ -60,6 +60,11 @@ func (tx *Transaction) ExecuteCypher(cypher string, params map[string]any) ([]ma
 	}
 
 	labels := extractEntityTypes(cypher)
+	if len(labels) == 0 {
+		// Parser failed to extract entity types — fall back to the
+		// READ:graph/entity/* wildcard capability (R3).
+		labels = []string{"*"}
+	}
 
 	var resp *flowv1.ExecuteCypherResponse
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
@@ -110,15 +115,10 @@ func (tx *Transaction) SearchNeighbors(embedding []float32, entityType string, t
 
 	results := make([]SearchResult, 0, len(resp.GetResults()))
 	for _, r := range resp.GetResults() {
-		entity := map[string]any{
-			"entity_id":   r.GetEntityId(),
-			"entity_type": r.GetEntityType(),
-		}
-		for k, v := range r.GetProperties() {
-			entity[k] = v
-		}
 		results = append(results, SearchResult{
-			Entity:     entity,
+			ID:         r.GetEntityId(),
+			Type:       r.GetEntityType(),
+			Properties: r.GetProperties(),
 			Similarity: r.GetScore(),
 		})
 		tx.idTypeMap.store(r.GetEntityId(), r.GetEntityType())
@@ -127,7 +127,7 @@ func (tx *Transaction) SearchNeighbors(embedding []float32, entityType string, t
 }
 
 // FullTextSearch performs a full-text search within the transaction.
-func (tx *Transaction) FullTextSearch(query, entityType string) ([]map[string]any, error) {
+func (tx *Transaction) FullTextSearch(query, entityType string) ([]Entity, error) {
 	if err := tx.checkRolled(); err != nil {
 		return nil, err
 	}
@@ -148,16 +148,13 @@ func (tx *Transaction) FullTextSearch(query, entityType string) ([]map[string]an
 		return nil, err
 	}
 
-	results := make([]map[string]any, 0, len(resp.GetResults()))
+	results := make([]Entity, 0, len(resp.GetResults()))
 	for _, e := range resp.GetResults() {
-		m := map[string]any{
-			"entity_id":   e.GetEntityId(),
-			"entity_type": e.GetEntityType(),
-		}
-		for k, v := range e.GetProperties() {
-			m[k] = v
-		}
-		results = append(results, m)
+		results = append(results, Entity{
+			ID:         e.GetEntityId(),
+			Type:       e.GetEntityType(),
+			Properties: e.GetProperties(),
+		})
 		tx.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
 	}
 	return results, nil
@@ -191,16 +188,13 @@ func (tx *Transaction) ListEntities(entityType string, opts ...ListEntitiesOptio
 		return nil, err
 	}
 
-	entities := make([]map[string]any, 0, len(resp.GetEntities()))
+	entities := make([]Entity, 0, len(resp.GetEntities()))
 	for _, e := range resp.GetEntities() {
-		m := map[string]any{
-			"entity_id":   e.GetEntityId(),
-			"entity_type": e.GetEntityType(),
-		}
-		for k, v := range e.GetProperties() {
-			m[k] = v
-		}
-		entities = append(entities, m)
+		entities = append(entities, Entity{
+			ID:         e.GetEntityId(),
+			Type:       e.GetEntityType(),
+			Properties: e.GetProperties(),
+		})
 		tx.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
 	}
 
@@ -323,6 +317,7 @@ func (tx *Transaction) DeleteEntity(id string) (*Entity, error) {
 		ID:         resp.GetEntityId(),
 		Type:       resp.GetEntityType(),
 		Properties: resp.GetProperties(),
+		Embedding:  resp.GetEmbedding(),
 	}, nil
 }
 
@@ -510,6 +505,7 @@ func diffEntryToEntity(e *flowv1.DiffEntry) Entity {
 		Type:       e.GetType(),
 		Properties: e.GetProperties(),
 		Embedding:  e.GetEmbedding(),
+		Suspected:  e.GetSuspected(),
 	}
 }
 
@@ -520,5 +516,6 @@ func diffEntryToEdge(e *flowv1.DiffEntry) Edge {
 		FromEntityID: e.GetFromEntityId(),
 		ToEntityID:   e.GetToEntityId(),
 		Properties:   e.GetProperties(),
+		Suspected:    e.GetSuspected(),
 	}
 }

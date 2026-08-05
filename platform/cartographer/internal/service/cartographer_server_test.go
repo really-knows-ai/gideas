@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // testSidecarPriv is a test-level Ed25519 private key used for signing
@@ -156,7 +157,7 @@ type failOnCreateBranchDBStore struct {
 	store.Store
 }
 
-func (f *failOnCreateBranchDBStore) CreateBranchDB(txID string) error {
+func (f *failOnCreateBranchDBStore) CreateBranchDB(context.Context, string) error {
 	return fmt.Errorf("simulated CreateBranchDB failure")
 }
 
@@ -166,10 +167,10 @@ type beginSetupBlockingStore struct {
 	release chan struct{}
 }
 
-func (s *beginSetupBlockingStore) CreateBranchDB(txID string) error {
+func (s *beginSetupBlockingStore) CreateBranchDB(ctx context.Context, txID string) error {
 	close(s.entered)
 	<-s.release
-	return s.Store.CreateBranchDB(txID)
+	return s.Store.CreateBranchDB(ctx, txID)
 }
 
 type wipeBlockingStore struct {
@@ -191,14 +192,14 @@ func (s *wipeBlockingStore) WipeSchema(ctx context.Context) error {
 	return err
 }
 
-func (s *wipeBlockingStore) CreateBranchDB(txID string) error {
+func (s *wipeBlockingStore) CreateBranchDB(ctx context.Context, txID string) error {
 	if s.branchSetup != nil {
 		s.mu.Lock()
 		wipeCompleted := s.wipeCompleted
 		s.mu.Unlock()
 		s.branchSetup <- wipeCompleted
 	}
-	return s.Store.CreateBranchDB(txID)
+	return s.Store.CreateBranchDB(ctx, txID)
 }
 
 // panicStore panics on ListMainEntityTypes to simulate a buffer allocation
@@ -293,31 +294,31 @@ type transactionStateFailingStore struct {
 }
 
 func (s *transactionStateFailingStore) SaveBranchTransactionState(
-	txID string, state store.BranchTransactionState,
+	ctx context.Context, txID string, state store.BranchTransactionState,
 ) error {
 	if !s.failed && s.fail(state) {
 		s.failed = true
 		return errors.New("simulated transaction state write failure")
 	}
-	return s.Store.SaveBranchTransactionState(txID, state)
+	return s.Store.SaveBranchTransactionState(ctx, txID, state)
 }
 
 func (s *markerFailingStore) SaveBranchTransactionState(
-	txID string, state store.BranchTransactionState,
+	ctx context.Context, txID string, state store.BranchTransactionState,
 ) error {
 	if s.failMark && state.RollbackOnly {
 		s.failMark = false
 		return errors.New("simulated rollback-only marker failure")
 	}
-	return s.Store.SaveBranchTransactionState(txID, state)
+	return s.Store.SaveBranchTransactionState(ctx, txID, state)
 }
 
-func (s *markerFailingStore) DropBranchDB(txID string) error {
+func (s *markerFailingStore) DropBranchDB(ctx context.Context, txID string) error {
 	if s.failDrop {
 		s.failDrop = false
 		return errors.New("simulated marker cleanup drop failure")
 	}
-	return s.Store.DropBranchDB(txID)
+	return s.Store.DropBranchDB(ctx, txID)
 }
 
 type gcBlockingStore struct {
@@ -332,12 +333,12 @@ func (s *gcBlockingStore) RehydrateMainFromFiles(ctx context.Context, entitiesDi
 	return s.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
 }
 
-func (s *dropFailingStore) DropBranchDB(txID string) error {
+func (s *dropFailingStore) DropBranchDB(ctx context.Context, txID string) error {
 	if s.failDrop {
 		s.failDrop = false
 		return fmt.Errorf("simulated DropBranchDB failure")
 	}
-	return s.Store.DropBranchDB(txID)
+	return s.Store.DropBranchDB(ctx, txID)
 }
 
 type mergeFailingGitStore struct {
@@ -992,6 +993,84 @@ func TestApplySchema_InvalidSchema(t *testing.T) {
 	}
 }
 
+// TestApplySchema_ValidationErrorPaths covers each SPEC error-table schema
+// validation path at the service level. Each invalid schema must be rejected
+// with INVALID_ARGUMENT via ApplySchema.
+func TestApplySchema_ValidationErrorPaths(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema *flowv1.Schema
+	}{
+		{
+			name: "duplicate property name",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "Component", Properties: []*flowv1.Property{
+					{Name: "name", Type: "string"},
+					{Name: "name", Type: "string"},
+				}},
+			}},
+		},
+		{
+			name: "name is a reserved word",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "MATCH", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+			}},
+		},
+		{
+			name: "name violates cypher identifier regex",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "1bad-name", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+			}},
+		},
+		{
+			name: "property name collides with implicit column",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "Component", Properties: []*flowv1.Property{{Name: "id", Type: "string"}}},
+			}},
+		},
+		{
+			name: "invalid property type in schema",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "int"}}},
+			}},
+		},
+		{
+			name: "empty canConnectTo list",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+					Rules: []*flowv1.ConnectionRule{{CanConnectTo: []string{}, Using: []string{"DEPENDS_ON"}}}},
+			}},
+		},
+		{
+			name: "empty using list",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+					Rules: []*flowv1.ConnectionRule{{CanConnectTo: []string{"Component"}, Using: []string{}}}},
+			}},
+		},
+		{
+			name: "undeclared type reference",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+					Rules: []*flowv1.ConnectionRule{{CanConnectTo: []string{"Missing"}, Using: []string{"DEPENDS_ON"}}}},
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := newTestServer(t)
+			ctx := context.Background()
+			_, err := srv.ApplySchema(ctx, &flowv1.ApplySchemaRequest{Schema: tt.schema})
+			if err == nil {
+				t.Fatal("expected ApplySchema to reject invalid schema, got nil")
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+			}
+		})
+	}
+}
+
 func TestHealthCheck_Healthy(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := context.Background()
@@ -1018,7 +1097,7 @@ func TestWipeGraph_WithOpenTx(t *testing.T) {
 	// Create an active transaction.
 	srv.dbReady.Store(true)
 	applyTestSchema(ctx, t, srv.store)
-	err := srv.store.CreateBranchDB("test-tx")
+	err := srv.store.CreateBranchDB(ctx, "test-tx")
 	if err != nil {
 		t.Fatalf("CreateBranchDB: %v", err)
 	}
@@ -1030,6 +1109,38 @@ func TestWipeGraph_WithOpenTx(t *testing.T) {
 	}
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
+	}
+}
+
+// TestWipeGraph_ExpiredTxDoesNotBlock verifies that a transaction whose
+// deadline has passed (but which has not yet been garbage-collected) is not
+// considered active, so WipeGraph does NOT return FAILED_PRECONDITION
+// (SPEC R2 WipeGraph: only transactions that are still open block a wipe).
+func TestWipeGraph_ExpiredTxDoesNotBlock(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := context.Background()
+
+	srv.dbReady.Store(true)
+	applyTestSchema(ctx, t, srv.store)
+	err := srv.store.CreateBranchDB(ctx, "test-tx")
+	if err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+
+	fc := newFakeClock(time.Now())
+	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+	_, _ = srv.txManager.Create("test-tx", 1*time.Minute, "head")
+
+	// Advance past the transaction deadline without GC: the transaction is
+	// still registered but is no longer active.
+	fc.Advance(2 * time.Minute)
+	if srv.txManager.HasActive() {
+		t.Fatal("expired transaction must not be reported as active")
+	}
+
+	_, err = srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{})
+	if err != nil {
+		t.Fatalf("WipeGraph with only expired transaction should succeed, got %v", err)
 	}
 }
 
@@ -1066,18 +1177,71 @@ func TestExecuteCypher_ValidQuery(t *testing.T) {
 	}
 }
 
-func TestExecuteCypher_MutationRejected(t *testing.T) {
-	srv, _ := newTestServer(t)
-	ctx := testCtx()
+// TestRowsToTuplesDeterministicColumnAligned asserts R2's deterministic
+// "flat tuples" contract: value order is a stable sorted column set, and every
+// tuple lists values in that same column order (null-filling absent columns),
+// independent of Go's randomised map iteration order.
+func TestRowsToTuplesDeterministicColumnAligned(t *testing.T) {
+	rows := []map[string]any{
+		{"b": 2, "a": "x", "c": 3.5},
+		{"b": 4, "a": "y"},
+		{"c": false},
+	}
+	tuples := rowsToTuples(rows)
+	if len(tuples) != 3 {
+		t.Fatalf("expected 3 tuples, got %d", len(tuples))
+	}
+	cases := []struct {
+		values []any // nil => null column
+	}{
+		{[]any{"x", float64(2), 3.5}},
+		{[]any{"y", float64(4), nil}},
+		{[]any{nil, nil, false}},
+	}
+	wantCols := []string{"a", "b", "c"}
+	for i, tc := range cases {
+		if len(tuples[i].Values) != 3 {
+			t.Fatalf("tuple %d: expected 3 values, got %d", i, len(tuples[i].Values))
+		}
+		for j, want := range wantCols {
+			got := tuples[i].Values[j]
+			switch wantVal := tc.values[j].(type) {
+			case nil:
+				if _, ok := got.Kind.(*structpb.Value_NullValue); !ok {
+					t.Fatalf("tuple %d col %q: expected null, got kind %T", i, want, got.Kind)
+				}
+			case string:
+				if got.GetStringValue() != wantVal {
+					t.Fatalf("tuple %d col %q: expected string %q, got val %q", i, want, wantVal, got.GetStringValue())
+				}
+			case bool:
+				if got.GetBoolValue() != wantVal {
+					t.Fatalf("tuple %d col %q: expected bool %v, got %v", i, want, wantVal, got.GetBoolValue())
+				}
+			case float64:
+				if got.GetNumberValue() != wantVal {
+					t.Fatalf("tuple %d col %q: expected number %v, got %v", i, want, wantVal, got.GetNumberValue())
+				}
+			}
+		}
+	}
+}
 
-	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "CREATE (n:Test)"})
+func TestExecuteCypher_MutationRejected(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+	applyTestSchema(ctx, t, st)
+
+	// A syntactically valid CREATE against a declared type reaches the
+	// mutation classifier, which returns PERMISSION_DENIED per SPEC R7 §5.
+	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "CREATE (n:Component {id: '11111111-1111-1111-1111-111111111111', name: 'x'})",
+	})
 	if err == nil {
 		t.Fatal("expected error for mutation, got nil")
 	}
-	// The real LadybugDB rejects mutations at the Prepare step, returning
-	// InvalidArgument rather than PermissionDenied.
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
 	}
 }
 
@@ -1325,6 +1489,66 @@ func TestDeleteEntity_Valid(t *testing.T) {
 	}
 }
 
+// TestDeleteEntity_TransactionRecordsCascadeEdgeDeletion verifies SPEC R7 §4
+// atomicity is preserved across a commit: deleting an entity inside a
+// transaction must also record the cascade-removed edges in the change log so
+// commit serialisation removes their git files. Without this, committed main
+// retains edges pointing at a deleted entity.
+func TestDeleteEntity_TransactionRecordsCascadeEdgeDeletion(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	txID := begin.TransactionId
+
+	// Create the participating entities and edge inside the transaction so they
+	// exist on the branch DB (the in-memory branch is not seeded from main).
+	svcResp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Service", Properties: map[string]string{"name": "svc"}, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity svc: %v", err)
+	}
+	svc := svcResp.EntityId
+	compResp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "core"}, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity comp: %v", err)
+	}
+	comp := compResp.EntityId
+	edgeResp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType: "DEPENDS_ON", FromEntityId: svc, ToEntityId: comp, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEdge: %v", err)
+	}
+
+	// Delete the service entity inside the transaction; the DEPENDS_ON edge it
+	// participates in is cascade-removed by the store.
+	_, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: svc, TransactionId: txID})
+	if err != nil {
+		t.Fatalf("transactional DeleteEntity: %v", err)
+	}
+
+	// The deleted edge must be present in the change log as a ChangeDelEdge.
+	state, err := srv.txManager.Lookup(txID)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if _, ok := state.ChangeLog.DeletedEdges[edgeResp.EdgeId]; !ok {
+		t.Fatalf("expected cascade-deleted edge %q in change log, got %+v", edgeResp.EdgeId, state.ChangeLog.DeletedEdges)
+	}
+	if _, ok := state.ChangeLog.DeletedEntities[svc]; !ok {
+		t.Fatalf("expected deleted entity %q in change log", svc)
+	}
+}
+
 func TestCreateEdge_Valid(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
@@ -1382,6 +1606,32 @@ func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
+// TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability asserts the SPEC
+// validation order (structural before capability): a caller lacking
+// WRITE:graph/entity/* still gets INVALID_ARGUMENT (not PERMISSION_DENIED)
+// for an unknown edge type.
+func TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
+
+	// Only READ capabilities — the caller holds no write capability at all.
+	noWriteCtx := capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")
+	_, err := srv.CreateEdge(noWriteCtx, &flowv1.CreateEdgeRequest{
+		EdgeType:     "UNKNOWN_EDGE",
+		FromEntityId: ent.Id,
+		ToEntityId:   ent.Id,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown edge type, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected structural InvalidArgument to win over capability check, got %v (%v)", status.Code(err), err)
 	}
 }
 
@@ -2986,7 +3236,7 @@ func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntity: %v", err)
 	}
-	mainEntityID := "11111111-1111-4111-8111-111111111111"
+	mainEntityID := testMutationEntityID
 	commitGitEntity(ctx, t, gs, mainEntityID, "main")
 
 	refreshDone := make(chan error, 1)
@@ -3138,6 +3388,62 @@ func TestRefreshTransaction_ConflictLeavesCleanRefreshedBranch(t *testing.T) {
 	}
 	if firstAfter.Properties["name"] != "one" || secondAfter.Properties["name"] != "main-two" {
 		t.Fatalf("conflicted refresh partially reapplied changes: first=%+v second=%+v", firstAfter, secondAfter)
+	}
+}
+
+// TestRefreshTransaction_EmbeddingDimensionConflict exercises the SPEC R7
+// dimension-scope refresh-conflict rule. validateRefresh checks each
+// change-log entry carrying an embedding against main's established
+// embedding dimension; a mismatch must surface as ABORTED (errRefreshConflict).
+// Every pre-existing refresh test only exercises entity/edge-overlap conflicts,
+// leaving this dimension path uncovered.
+func TestRefreshTransaction_EmbeddingDimensionConflict(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VecType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	// Main bootstraps a 3-dim embedding column for VecType.
+	_, err := st.CreateEntity(ctx, "VecType", "", map[string]string{"name": "main"}, []float32{1.0, 0.0, 0.0}, "main")
+	if err != nil {
+		t.Fatalf("bootstrap main: %v", err)
+	}
+
+	// A transaction whose change log records a 2-dim embedding add.
+	txID := "11111111-1111-4111-8111-111111111111"
+	state, err := srv.txManager.Create(txID, time.Minute, "head")
+	if err != nil {
+		t.Fatalf("Create transaction: %v", err)
+	}
+	err = state.ChangeLog.Add(gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeAddEntity, ID: "22222222-2222-4222-8222-222222222222", Type: "VecType",
+		Entity: &gitstore.EntityEntry{
+			ID: "22222222-2222-4222-8222-222222222222", Type: "VecType",
+			Embedding: []float32{1.0, 0.0}, // 2 dims vs main's established 3
+		},
+	})
+	if err != nil {
+		t.Fatalf("Add change log entry: %v", err)
+	}
+
+	// No entity/edge files collide — before and current are empty — so only the
+	// dimension check can fire. It must map to an ABORTED refresh conflict.
+	err = srv.validateRefresh(state, gitGraphSnapshot{}, gitGraphSnapshot{})
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("expected ABORTED dimension-scope refresh conflict, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "refresh conflict") {
+		t.Fatalf("expected refresh-conflict message, got %q", err.Error())
 	}
 }
 
@@ -4033,6 +4339,77 @@ func TestPullFromRemote_HoldsGitLockThroughHydration(t *testing.T) {
 	}
 }
 
+// TestPullFromRemote_RehydrationFailure asserts the SPEC error-table row
+// "PullFromRemote re-hydration failed -> INTERNAL": the pull succeeds but
+// re-hydrating main from the pulled files fails, returning the
+// errPullFromRemoteRehydrationFailed INTERNAL status.
+func TestPullFromRemote_RehydrationFailure(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	// remoteErrorGitStore drives the pull success path (FetchAndMerge yields a
+	// hash); the store's RehydrateMainFromFiles fails on the first call.
+	failingStore := &rehydrateFailingStore{Store: base, fail: true}
+	remoteGit := &remoteErrorGitStore{GitStore: gs, empty: false, err: nil}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		failingStore, remoteGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+		30*time.Second, "test-ns", 30*time.Minute, 100000, WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+
+	_, pullErr := srv.PullFromRemote(testCtx(), &flowv1.PullFromRemoteRequest{})
+	if pullErr == nil {
+		t.Fatal("expected re-hydration failure, got nil")
+	}
+	if status.Code(pullErr) != codes.Internal {
+		t.Fatalf("expected INTERNAL, got %v (%v)", status.Code(pullErr), pullErr)
+	}
+	if !strings.Contains(pullErr.Error(), "pull from remote re-hydration failed") {
+		t.Fatalf("expected re-hydration failure message, got %q", pullErr.Error())
+	}
+}
+
+// TestPullFromRemote_RehydratesWithoutLadybugPath asserts SPEC R10: after a
+// successful pull, main is re-hydrated unconditionally — even in in-memory
+// mode (ladybugPath unset) — so it does not go stale. The hydration count is
+// observed via a counting store wrapper.
+func TestPullFromRemote_RehydratesWithoutLadybugPath(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	counting := &hydrationCountingStore{Store: base}
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	remoteGit := &remoteErrorGitStore{GitStore: gs, empty: false, err: nil}
+	opPub, _ := generateTestKey()
+	// No WithLadybugPath option — simulates in-memory mode.
+	srv := NewCartographerServer(
+		counting, remoteGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+		30*time.Second, "test-ns", 30*time.Minute, 100000,
+	)
+	srv.MarkDBReady()
+
+	_, pullErr := srv.PullFromRemote(testCtx(), &flowv1.PullFromRemoteRequest{})
+	if pullErr != nil {
+		t.Fatalf("PullFromRemote: %v", pullErr)
+	}
+	if counting.fromFiles != 1 {
+		t.Fatalf("expected main re-hydration from files in in-memory mode, got fromFiles=%d", counting.fromFiles)
+	}
+}
+
 //nolint:dupl // PullFromRemote negative tests share setup structure.
 func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
@@ -4079,62 +4456,6 @@ func TestPullFromRemote_NoRemote(t *testing.T) {
 	if !handlerInvoked {
 		t.Fatal("unary interceptor did not invoke PullFromRemote")
 	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
-	}
-}
-
-// =========================================================================
-// 11b. PushToRemote error-path tests
-// =========================================================================
-
-func TestPushToRemote_RemoteNotConfigured(t *testing.T) {
-	srv, _ := newTestServer(t)
-	ctx := testCtx()
-
-	_, err := srv.PushToRemote(ctx, &flowv1.PushToRemoteRequest{})
-	if err == nil {
-		t.Fatal("expected error for no remote configured, got nil")
-	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
-	}
-}
-
-func TestPushToRemote_MissingWriteCapability(t *testing.T) {
-	opPub, _ := generateTestKey()
-	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
-	t.Cleanup(func() { _ = st.Close() })
-	gs, _ := gitstore.New(t.TempDir())
-	srv := NewCartographerServer(st, gs, opPub, scPub, nil,
-		"https://example.com/repo.git", 30*time.Second, "test-ns",
-		30*time.Minute, 100000)
-	srv.MarkDBReady()
-
-	// Only READ capabilities, no WRITE:graph/entity/*.
-	ctx := capabilityContext("READ:graph/entity/*,READ:graph/tx", scPriv, "sidecar")
-	_, err := srv.PushToRemote(ctx, &flowv1.PushToRemoteRequest{})
-	if status.Code(err) != codes.PermissionDenied ||
-		status.Convert(err).Message() != "capability denied: WRITE:graph/entity/*" {
-		t.Fatalf("expected missing-WRITE PermissionDenied, got %v", err)
-	}
-}
-
-func TestPushToRemote_NoRemote(t *testing.T) {
-	opPub, _ := generateTestKey()
-	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
-	t.Cleanup(func() { _ = st.Close() })
-	gs, _ := gitstore.New(t.TempDir())
-	// remoteURL is empty — should fail with FailedPrecondition BEFORE
-	// checking capabilities.
-	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
-		30*time.Second, "test-ns", 30*time.Minute, 100000)
-	srv.MarkDBReady()
-
-	ctx := capabilityContext("WRITE:graph/entity/*,READ:graph/entity/*", scPriv, "sidecar")
-	_, err := srv.PushToRemote(ctx, &flowv1.PushToRemoteRequest{})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
 	}
@@ -4305,6 +4626,33 @@ func TestExtendTimeout_ExceedsMaxTotalLifetime(t *testing.T) {
 	}
 }
 
+func TestExtendTimeout_AcceptedAt7DayBoundary(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	// Replace with a fake clock so the boundary is deterministic.
+	fc := newFakeClock(time.Now())
+	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+
+	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+		Timeout: durationpb.New(1 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+	txID := beginResp.TransactionId
+
+	// created at the fake now, so a lifetime of exactly 7 days is
+	// totalLifetime == hardMaxTimeout, which strict `>` accepts.
+	_, err = srv.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
+		TransactionId: txID,
+		Duration:      durationpb.New(7 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("expected 7-day-boundary extend to be accepted, got %v", err)
+	}
+}
+
 // =========================================================================
 // 14. RollbackTransaction NOT_FOUND test
 // =========================================================================
@@ -4382,15 +4730,15 @@ type cleanupFailingStore struct {
 	failDrop bool
 }
 
-func (s *cleanupFailingStore) CreateBranchDB(txID string) error {
+func (s *cleanupFailingStore) CreateBranchDB(context.Context, string) error {
 	return fmt.Errorf("simulated CreateBranchDB failure")
 }
 
-func (s *cleanupFailingStore) DropBranchDB(txID string) error {
+func (s *cleanupFailingStore) DropBranchDB(ctx context.Context, txID string) error {
 	if s.failDrop {
 		return fmt.Errorf("simulated DropBranchDB failure")
 	}
-	return s.Store.DropBranchDB(txID)
+	return s.Store.DropBranchDB(ctx, txID)
 }
 
 // cleanupFailingGitStore fails on specified git operations to test
@@ -6061,5 +6409,390 @@ func TestListEntities_Pagination(t *testing.T) {
 		if page1IDs[e.EntityId] {
 			t.Fatalf("entity %q appears in both pages", e.EntityId)
 		}
+	}
+}
+
+// =========================================================================
+// 31. Remote error-path mapping tests (SPEC error table)
+// =========================================================================
+
+// remoteErrorGitStore wraps a gitstore to inject any remote operation failure
+// as a sentinel. WithGitLock runs fn inline (no real git lock) so handlers can
+// be driven deterministically. CloneSingleBranch is used when the repo is empty
+// (IsEmpty returns true); FetchAndMerge is used otherwise.
+type remoteErrorGitStore struct {
+	gitstore.GitStore
+	empty bool
+	err   error
+}
+
+func (s *remoteErrorGitStore) WithGitLock(fn func() error) error { return fn() }
+func (s *remoteErrorGitStore) IsEmpty(ctx context.Context) (bool, error) {
+	return s.empty, nil
+}
+func (s *remoteErrorGitStore) CloneSingleBranch(ctx context.Context, url, branch string) error {
+	return s.err
+}
+func (s *remoteErrorGitStore) FetchAndMerge(ctx context.Context, remote, branch string) (plumbing.Hash, error) {
+	return plumbing.ZeroHash, s.err
+}
+
+// TestPullFromRemote_MapGitErrorRows drives each SPEC error-table row that
+// mapGitError maps but no handler test previously exercised. Each case routes
+// the git-store sentinel through the PullFromRemote handler and asserts the
+// resulting gRPC status code.
+func TestPullFromRemote_MapGitErrorRows(t *testing.T) {
+	tests := []struct {
+		name       string
+		empty      bool
+		err        error
+		wantCode   codes.Code
+		wantSubstr string
+	}{
+		{
+			name:       "remote auth config missing",
+			empty:      false,
+			err:        gitstore.ErrAuthConfigMissing,
+			wantCode:   codes.FailedPrecondition,
+			wantSubstr: "auth configuration missing",
+		},
+		{
+			name:       "remote credentials rejected",
+			empty:      false,
+			err:        gitstore.ErrAuthFailed,
+			wantCode:   codes.Unauthenticated,
+			wantSubstr: "credentials rejected",
+		},
+		{
+			name:       "unsupported remote URL scheme",
+			empty:      true,
+			err:        gitstore.ErrUnsupportedURLScheme,
+			wantCode:   codes.InvalidArgument,
+			wantSubstr: "unsupported remote URL scheme",
+		},
+		{
+			name:       "remote pull diverged",
+			empty:      false,
+			err:        gitstore.ErrPullDiverged,
+			wantCode:   codes.FailedPrecondition,
+			wantSubstr: "pull would diverge",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base, err := ladybug.OpenInMemory()
+			if err != nil {
+				t.Fatalf("OpenInMemory: %v", err)
+			}
+			t.Cleanup(func() { _ = base.Close() })
+			gs, _ := gitstore.New(t.TempDir())
+			remoteGit := &remoteErrorGitStore{GitStore: gs, empty: tt.empty, err: tt.err}
+			opPub, _ := generateTestKey()
+			srv := NewCartographerServer(
+				base, remoteGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+				30*time.Second, "test-ns", 30*time.Minute, 100000,
+			)
+			srv.MarkDBReady()
+
+			_, pullErr := srv.PullFromRemote(testCtx(), &flowv1.PullFromRemoteRequest{})
+			if pullErr == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if status.Code(pullErr) != tt.wantCode {
+				t.Fatalf("expected %v, got %v (%v)", tt.wantCode, status.Code(pullErr), pullErr)
+			}
+			if !strings.Contains(pullErr.Error(), tt.wantSubstr) {
+				t.Fatalf("expected message containing %q, got %q", tt.wantSubstr, pullErr.Error())
+			}
+		})
+	}
+}
+
+// TestErrNoTransportCredentials covers the SPEC R2 error-table row "Request
+// without valid transport credentials → UNAUTHENTICATED". The sentinel is a
+// forward-looking placeholder for mTLS (currently unused because all internal
+// gRPC uses insecure credentials); the test pins the mapped gRPC status code
+// so the contract is locked before mTLS lands.
+func TestErrNoTransportCredentials(t *testing.T) {
+	got := errNoTransportCredentials()
+	if got == nil {
+		t.Fatal("expected non-nil error, got nil")
+	}
+	if code := status.Code(got); code != codes.Unauthenticated {
+		t.Fatalf("expected code UNAUTHENTICATED, got %v (%v)", code, got)
+	}
+	if !strings.Contains(got.Error(), "transport credentials") {
+		t.Fatalf("expected message mentioning transport credentials, got %q", got.Error())
+	}
+}
+
+// =========================================================================
+// 32. Read-path transactionId rejection tests (SPEC R2)
+// =========================================================================
+
+func TestReadPathTransactionID_Rejected(t *testing.T) {
+	applySchemaAndSeed := func(ctx context.Context, t *testing.T, srv *CartographerServer) {
+		t.Helper()
+		applyTestSchema(ctx, t, srv.store)
+		_, _ = srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "a"}, nil, "")
+	}
+
+	t.Run("ExecuteCypher invalid transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applyTestSchema(testCtx(), t, srv.store)
+		_, err := srv.ExecuteCypher(testCtx(), &flowv1.ExecuteCypherRequest{
+			Cypher:        "MATCH (n:Component) RETURN n",
+			TransactionId: "not-a-uuid",
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+		}
+	})
+
+	t.Run("ExecuteCypher unknown transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applySchemaAndSeed(testCtx(), t, srv)
+		_, err := srv.ExecuteCypher(testCtx(), &flowv1.ExecuteCypherRequest{
+			Cypher:        "MATCH (n:Component) RETURN n",
+			TransactionId: "11111111-1111-4111-8111-111111111111",
+		})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("expected NotFound, got %v", status.Code(err))
+		}
+	})
+
+	t.Run("SearchNeighbors invalid transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applySchemaAndSeed(testCtx(), t, srv)
+		_, err := srv.SearchNeighbors(testCtx(), &flowv1.SearchNeighborsRequest{
+			Embedding:     []float32{1.0, 2.0, 3.0},
+			EntityType:    "Component",
+			TopK:          5,
+			TransactionId: "not-a-uuid",
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+		}
+	})
+
+	t.Run("SearchNeighbors unknown transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applySchemaAndSeed(testCtx(), t, srv)
+		_, err := srv.SearchNeighbors(testCtx(), &flowv1.SearchNeighborsRequest{
+			Embedding:     []float32{1.0, 2.0, 3.0},
+			EntityType:    "Component",
+			TopK:          5,
+			TransactionId: "11111111-1111-4111-8111-111111111111",
+		})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("expected NotFound, got %v", status.Code(err))
+		}
+	})
+
+	t.Run("FullTextSearch invalid transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applySchemaAndSeed(testCtx(), t, srv)
+		_, err := srv.FullTextSearch(testCtx(), &flowv1.FullTextSearchRequest{
+			Query:         "apple",
+			EntityType:    "Component",
+			TransactionId: "not-a-uuid",
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+		}
+	})
+
+	t.Run("FullTextSearch unknown transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applySchemaAndSeed(testCtx(), t, srv)
+		_, err := srv.FullTextSearch(testCtx(), &flowv1.FullTextSearchRequest{
+			Query:         "apple",
+			EntityType:    "Component",
+			TransactionId: "11111111-1111-4111-8111-111111111111",
+		})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("expected NotFound, got %v", status.Code(err))
+		}
+	})
+
+	t.Run("ListEntities invalid transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applySchemaAndSeed(testCtx(), t, srv)
+		_, err := srv.ListEntities(testCtx(), &flowv1.ListEntitiesRequest{
+			EntityType:    "Component",
+			PageSize:      10,
+			TransactionId: "not-a-uuid",
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+		}
+	})
+
+	t.Run("ListEntities unknown transaction id", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		applySchemaAndSeed(testCtx(), t, srv)
+		_, err := srv.ListEntities(testCtx(), &flowv1.ListEntitiesRequest{
+			EntityType:    "Component",
+			PageSize:      10,
+			TransactionId: "11111111-1111-4111-8111-111111111111",
+		})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("expected NotFound, got %v", status.Code(err))
+		}
+	})
+}
+
+// =========================================================================
+// 33. HealthCheck propagates store errors (SPEC R1/R5)
+// =========================================================================
+
+type healthFailingStore struct {
+	store.Store
+}
+
+func (s *healthFailingStore) Health(ctx context.Context) (*store.HealthResult, error) {
+	return nil, fmt.Errorf("store health probe failed: pvc unreadable")
+}
+
+func TestHealthCheck_PropagatesStoreError(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	failing := &healthFailingStore{Store: base}
+	gs, _ := gitstore.New(t.TempDir())
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(failing, gs, opPub, initTestKey(), nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	resp, err := srv.HealthCheck(context.Background(), &flowv1.HealthCheckRequest{})
+	if err == nil {
+		t.Fatal("expected HealthCheck to propagate store error, got nil")
+	}
+	// A healthy-probe store must not be reported as a successful (non-nil)
+	// response while the probe failed.
+	if resp != nil {
+		t.Fatalf("expected nil response on error, got %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "pvc unreadable") {
+		t.Fatalf("expected store error message, got %v", err)
+	}
+}
+
+// =========================================================================
+// 34. capability.go missing/malformed signed-at branch
+// =========================================================================
+
+func TestCapability_MissingSignedAt(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	// Build metadata without the signed-at key (or with an empty value).
+	payload := "READ:graph/entity/Component|1234567890"
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
+	md := metadata.Pairs(
+		MetadataKeyCapabilities, "READ:graph/entity/Component",
+		MetadataKeyCapabilitiesSignature, sig,
+		MetadataKeyCapabilitiesSignedBy, "sidecar",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	_, err := srv.verifier.verify(ctx)
+	if err == nil {
+		t.Fatal("expected error for missing signed-at, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != "invalid capability signature" {
+		t.Fatalf("expected PermissionDenied invalid-signature, got %v", err)
+	}
+}
+
+func TestCapability_EmptySignedAt(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, _ := generateTestKey()
+	base, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = base.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(base, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	md := metadata.Pairs(
+		MetadataKeyCapabilities, "READ:graph/entity/Component",
+		MetadataKeyCapabilitiesSignature, base64.StdEncoding.EncodeToString([]byte("fake")),
+		MetadataKeyCapabilitiesSignedAt, "",
+		MetadataKeyCapabilitiesSignedBy, "sidecar",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	_, err := srv.verifier.verify(ctx)
+	if err == nil {
+		t.Fatal("expected error for empty signed-at, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// =========================================================================
+// 35. ExecuteCypher read-only caller without entity-types metadata
+// =========================================================================
+
+func TestExecuteCypher_NoEntityTypesMetadataReadOnlyDenied(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := noReadCtx() // WRITE-only capabilities, no READ.
+
+	// No x-flow-entity-types metadata: ExecuteCypher falls back to the wildcard
+	// READ capability check, which a write-only caller lacks.
+	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (n) RETURN n"})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for write-only caller, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// =========================================================================
+// 36. ExportGraph deterministic RESOURCE_EXHAUSTED during enumeration
+// =========================================================================
+
+// exhaustedStore fails deterministically during export enumeration with a
+// RESOURCE_EXHAUSTED gRPC status, exercising the collectExportData error path.
+type exhaustedStore struct {
+	store.Store
+}
+
+func (e *exhaustedStore) ListMainEntityTypes() ([]string, error) {
+	return nil, status.Error(codes.ResourceExhausted, "simulated enumeration capacity exceeded")
+}
+
+func TestExportGraph_DeterministicResourceExhausted(t *testing.T) {
+	base, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = base.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(base, gs, opPub, initTestKey(), nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+	srv.store = &exhaustedStore{Store: base}
+
+	stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")}
+	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
+	}
+	if err == nil {
+		t.Fatal("expected error during enumeration, got nil")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted, got %v (%v)", status.Code(err), err)
+	}
+	if len(stream.data) != 0 {
+		t.Fatalf("expected no data streamed on failure, got %d bytes", len(stream.data))
 	}
 }

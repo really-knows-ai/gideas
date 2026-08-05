@@ -336,6 +336,7 @@ func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 	}
 	db.entityTypeDefs, db.edgeTypeDefs = entities, edges
 	db.ruleIndex, db.edgePairs = rules, pairs
+	db.schemaApplied = true
 	return nil
 }
 
@@ -393,7 +394,11 @@ func validateMetadataAgainstCatalog(
 		if actual.EnableVectorIndex != metadata.VectorIndexes[name] {
 			return fmt.Errorf("entity type %q vector index does not match schema metadata", name)
 		}
-		if conn != nil && getEmbeddingDimension(conn, name) != metadata.VectorDimensions[name] {
+		actualDim, derr := getEmbeddingDimension(conn, name)
+		if derr != nil {
+			return fmt.Errorf("entity type %q read vector dimension: %w", name, derr)
+		}
+		if actualDim != metadata.VectorDimensions[name] {
 			return fmt.Errorf("entity type %q vector dimension does not match schema metadata", name)
 		}
 	}
@@ -492,7 +497,11 @@ func captureVectorState(conn *lbug.Connection, metadata schemaMetadata) (schemaM
 	}
 	for _, entity := range metadata.EntityTypes {
 		metadata.VectorIndexes[entity.Name] = indexes[entity.Name]
-		metadata.VectorDimensions[entity.Name] = getEmbeddingDimension(conn, entity.Name)
+		dim, derr := getEmbeddingDimension(conn, entity.Name)
+		if derr != nil {
+			return schemaMetadata{}, fmt.Errorf("read vector dimension for %q: %w", entity.Name, derr)
+		}
+		metadata.VectorDimensions[entity.Name] = dim
 		if !entity.EnableVectorIndex &&
 			(metadata.VectorIndexes[entity.Name] || metadata.VectorDimensions[entity.Name] > 0) {
 			return schemaMetadata{}, fmt.Errorf("entity type %q cannot disable an existing vector index", entity.Name)

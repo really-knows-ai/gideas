@@ -2595,78 +2595,6 @@ func (*PullFromRemoteResponse) Descriptor() ([]byte, []int) {
 	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{46}
 }
 
-type PushToRemoteRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PushToRemoteRequest) Reset() {
-	*x = PushToRemoteRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PushToRemoteRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PushToRemoteRequest) ProtoMessage() {}
-
-func (x *PushToRemoteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PushToRemoteRequest.ProtoReflect.Descriptor instead.
-func (*PushToRemoteRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{47}
-}
-
-type PushToRemoteResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PushToRemoteResponse) Reset() {
-	*x = PushToRemoteResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[48]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PushToRemoteResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PushToRemoteResponse) ProtoMessage() {}
-
-func (x *PushToRemoteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[48]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PushToRemoteResponse.ProtoReflect.Descriptor instead.
-func (*PushToRemoteResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{48}
-}
-
 type ExportGraphRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Format        string                 `protobuf:"bytes,1,opt,name=format,proto3" json:"format,omitempty"`
@@ -2676,7 +2604,7 @@ type ExportGraphRequest struct {
 
 func (x *ExportGraphRequest) Reset() {
 	*x = ExportGraphRequest{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[49]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2688,7 +2616,7 @@ func (x *ExportGraphRequest) String() string {
 func (*ExportGraphRequest) ProtoMessage() {}
 
 func (x *ExportGraphRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[49]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2701,7 +2629,7 @@ func (x *ExportGraphRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportGraphRequest.ProtoReflect.Descriptor instead.
 func (*ExportGraphRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{49}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ExportGraphRequest) GetFormat() string {
@@ -2720,7 +2648,7 @@ type ExportGraphResponse struct {
 
 func (x *ExportGraphResponse) Reset() {
 	*x = ExportGraphResponse{}
-	mi := &file_flow_v1_cartographer_proto_msgTypes[50]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2732,7 +2660,7 @@ func (x *ExportGraphResponse) String() string {
 func (*ExportGraphResponse) ProtoMessage() {}
 
 func (x *ExportGraphResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_cartographer_proto_msgTypes[50]
+	mi := &file_flow_v1_cartographer_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2745,7 +2673,7 @@ func (x *ExportGraphResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportGraphResponse.ProtoReflect.Descriptor instead.
 func (*ExportGraphResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{50}
+	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ExportGraphResponse) GetChunk() []byte {
@@ -2990,13 +2918,11 @@ const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\x0eschema_applied\x18\x02 \x01(\bR\rschemaApplied\x12!\n" +
 	"\fpvc_writable\x18\x03 \x01(\bR\vpvcWritable\"\x17\n" +
 	"\x15PullFromRemoteRequest\"\x18\n" +
-	"\x16PullFromRemoteResponse\"\x15\n" +
-	"\x13PushToRemoteRequest\"\x16\n" +
-	"\x14PushToRemoteResponse\",\n" +
+	"\x16PullFromRemoteResponse\",\n" +
 	"\x12ExportGraphRequest\x12\x16\n" +
 	"\x06format\x18\x01 \x01(\tR\x06format\"+\n" +
 	"\x13ExportGraphResponse\x12\x14\n" +
-	"\x05chunk\x18\x01 \x01(\fR\x05chunk2\xb9\r\n" +
+	"\x05chunk\x18\x01 \x01(\fR\x05chunk2\xec\f\n" +
 	"\x13CartographerService\x12N\n" +
 	"\rExecuteCypher\x12\x1d.flow.v1.ExecuteCypherRequest\x1a\x1e.flow.v1.ExecuteCypherResponse\x12T\n" +
 	"\x0fSearchNeighbors\x12\x1f.flow.v1.SearchNeighborsRequest\x1a .flow.v1.SearchNeighborsResponse\x12Q\n" +
@@ -3018,8 +2944,7 @@ const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\vApplySchema\x12\x1b.flow.v1.ApplySchemaRequest\x1a\x1c.flow.v1.ApplySchemaResponse\x12B\n" +
 	"\tWipeGraph\x12\x19.flow.v1.WipeGraphRequest\x1a\x1a.flow.v1.WipeGraphResponse\x12H\n" +
 	"\vHealthCheck\x12\x1b.flow.v1.HealthCheckRequest\x1a\x1c.flow.v1.HealthCheckResponse\x12Q\n" +
-	"\x0ePullFromRemote\x12\x1e.flow.v1.PullFromRemoteRequest\x1a\x1f.flow.v1.PullFromRemoteResponse\x12K\n" +
-	"\fPushToRemote\x12\x1c.flow.v1.PushToRemoteRequest\x1a\x1d.flow.v1.PushToRemoteResponse\x12J\n" +
+	"\x0ePullFromRemote\x12\x1e.flow.v1.PullFromRemoteRequest\x1a\x1f.flow.v1.PullFromRemoteResponse\x12J\n" +
 	"\vExportGraph\x12\x1b.flow.v1.ExportGraphRequest\x1a\x1c.flow.v1.ExportGraphResponse0\x01B\x89\x01\n" +
 	"\vcom.flow.v1B\x11CartographerProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
@@ -3035,7 +2960,7 @@ func file_flow_v1_cartographer_proto_rawDescGZIP() []byte {
 	return file_flow_v1_cartographer_proto_rawDescData
 }
 
-var file_flow_v1_cartographer_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
+var file_flow_v1_cartographer_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
 var file_flow_v1_cartographer_proto_goTypes = []any{
 	(*ExecuteCypherRequest)(nil),        // 0: flow.v1.ExecuteCypherRequest
 	(*FlatTuple)(nil),                   // 1: flow.v1.FlatTuple
@@ -3084,51 +3009,49 @@ var file_flow_v1_cartographer_proto_goTypes = []any{
 	(*HealthCheckResponse)(nil),         // 44: flow.v1.HealthCheckResponse
 	(*PullFromRemoteRequest)(nil),       // 45: flow.v1.PullFromRemoteRequest
 	(*PullFromRemoteResponse)(nil),      // 46: flow.v1.PullFromRemoteResponse
-	(*PushToRemoteRequest)(nil),         // 47: flow.v1.PushToRemoteRequest
-	(*PushToRemoteResponse)(nil),        // 48: flow.v1.PushToRemoteResponse
-	(*ExportGraphRequest)(nil),          // 49: flow.v1.ExportGraphRequest
-	(*ExportGraphResponse)(nil),         // 50: flow.v1.ExportGraphResponse
-	nil,                                 // 51: flow.v1.SearchNeighborResult.PropertiesEntry
-	nil,                                 // 52: flow.v1.CreateEntityRequest.PropertiesEntry
-	nil,                                 // 53: flow.v1.CreateEntityResponse.PropertiesEntry
-	nil,                                 // 54: flow.v1.UpdateEntityRequest.PropertiesEntry
-	nil,                                 // 55: flow.v1.UpdateEntityResponse.PropertiesEntry
-	nil,                                 // 56: flow.v1.DeleteEntityResponse.PropertiesEntry
-	nil,                                 // 57: flow.v1.CreateEdgeRequest.PropertiesEntry
-	nil,                                 // 58: flow.v1.CreateEdgeResponse.PropertiesEntry
-	nil,                                 // 59: flow.v1.DeleteEdgeResponse.PropertiesEntry
-	nil,                                 // 60: flow.v1.DiffEntry.PropertiesEntry
-	nil,                                 // 61: flow.v1.Entity.PropertiesEntry
-	(*structpb.Value)(nil),              // 62: google.protobuf.Value
-	(*durationpb.Duration)(nil),         // 63: google.protobuf.Duration
+	(*ExportGraphRequest)(nil),          // 47: flow.v1.ExportGraphRequest
+	(*ExportGraphResponse)(nil),         // 48: flow.v1.ExportGraphResponse
+	nil,                                 // 49: flow.v1.SearchNeighborResult.PropertiesEntry
+	nil,                                 // 50: flow.v1.CreateEntityRequest.PropertiesEntry
+	nil,                                 // 51: flow.v1.CreateEntityResponse.PropertiesEntry
+	nil,                                 // 52: flow.v1.UpdateEntityRequest.PropertiesEntry
+	nil,                                 // 53: flow.v1.UpdateEntityResponse.PropertiesEntry
+	nil,                                 // 54: flow.v1.DeleteEntityResponse.PropertiesEntry
+	nil,                                 // 55: flow.v1.CreateEdgeRequest.PropertiesEntry
+	nil,                                 // 56: flow.v1.CreateEdgeResponse.PropertiesEntry
+	nil,                                 // 57: flow.v1.DeleteEdgeResponse.PropertiesEntry
+	nil,                                 // 58: flow.v1.DiffEntry.PropertiesEntry
+	nil,                                 // 59: flow.v1.Entity.PropertiesEntry
+	(*structpb.Value)(nil),              // 60: google.protobuf.Value
+	(*durationpb.Duration)(nil),         // 61: google.protobuf.Duration
 }
 var file_flow_v1_cartographer_proto_depIdxs = []int32{
-	62, // 0: flow.v1.ExecuteCypherRequest.params:type_name -> google.protobuf.Value
-	62, // 1: flow.v1.FlatTuple.values:type_name -> google.protobuf.Value
+	60, // 0: flow.v1.ExecuteCypherRequest.params:type_name -> google.protobuf.Value
+	60, // 1: flow.v1.FlatTuple.values:type_name -> google.protobuf.Value
 	1,  // 2: flow.v1.ExecuteCypherResponse.rows:type_name -> flow.v1.FlatTuple
 	5,  // 3: flow.v1.SearchNeighborsResponse.results:type_name -> flow.v1.SearchNeighborResult
-	51, // 4: flow.v1.SearchNeighborResult.properties:type_name -> flow.v1.SearchNeighborResult.PropertiesEntry
+	49, // 4: flow.v1.SearchNeighborResult.properties:type_name -> flow.v1.SearchNeighborResult.PropertiesEntry
 	33, // 5: flow.v1.FullTextSearchResponse.results:type_name -> flow.v1.Entity
 	33, // 6: flow.v1.ListEntitiesResponse.entities:type_name -> flow.v1.Entity
-	52, // 7: flow.v1.CreateEntityRequest.properties:type_name -> flow.v1.CreateEntityRequest.PropertiesEntry
-	53, // 8: flow.v1.CreateEntityResponse.properties:type_name -> flow.v1.CreateEntityResponse.PropertiesEntry
-	54, // 9: flow.v1.UpdateEntityRequest.properties:type_name -> flow.v1.UpdateEntityRequest.PropertiesEntry
-	55, // 10: flow.v1.UpdateEntityResponse.properties:type_name -> flow.v1.UpdateEntityResponse.PropertiesEntry
-	56, // 11: flow.v1.DeleteEntityResponse.properties:type_name -> flow.v1.DeleteEntityResponse.PropertiesEntry
-	57, // 12: flow.v1.CreateEdgeRequest.properties:type_name -> flow.v1.CreateEdgeRequest.PropertiesEntry
-	58, // 13: flow.v1.CreateEdgeResponse.properties:type_name -> flow.v1.CreateEdgeResponse.PropertiesEntry
-	59, // 14: flow.v1.DeleteEdgeResponse.properties:type_name -> flow.v1.DeleteEdgeResponse.PropertiesEntry
-	63, // 15: flow.v1.BeginTransactionRequest.timeout:type_name -> google.protobuf.Duration
-	63, // 16: flow.v1.BeginTransactionResponse.applied_timeout:type_name -> google.protobuf.Duration
+	50, // 7: flow.v1.CreateEntityRequest.properties:type_name -> flow.v1.CreateEntityRequest.PropertiesEntry
+	51, // 8: flow.v1.CreateEntityResponse.properties:type_name -> flow.v1.CreateEntityResponse.PropertiesEntry
+	52, // 9: flow.v1.UpdateEntityRequest.properties:type_name -> flow.v1.UpdateEntityRequest.PropertiesEntry
+	53, // 10: flow.v1.UpdateEntityResponse.properties:type_name -> flow.v1.UpdateEntityResponse.PropertiesEntry
+	54, // 11: flow.v1.DeleteEntityResponse.properties:type_name -> flow.v1.DeleteEntityResponse.PropertiesEntry
+	55, // 12: flow.v1.CreateEdgeRequest.properties:type_name -> flow.v1.CreateEdgeRequest.PropertiesEntry
+	56, // 13: flow.v1.CreateEdgeResponse.properties:type_name -> flow.v1.CreateEdgeResponse.PropertiesEntry
+	57, // 14: flow.v1.DeleteEdgeResponse.properties:type_name -> flow.v1.DeleteEdgeResponse.PropertiesEntry
+	61, // 15: flow.v1.BeginTransactionRequest.timeout:type_name -> google.protobuf.Duration
+	61, // 16: flow.v1.BeginTransactionResponse.applied_timeout:type_name -> google.protobuf.Duration
 	30, // 17: flow.v1.GetTransactionDiffResponse.added_entities:type_name -> flow.v1.DiffEntry
 	30, // 18: flow.v1.GetTransactionDiffResponse.modified_entities:type_name -> flow.v1.DiffEntry
 	30, // 19: flow.v1.GetTransactionDiffResponse.deleted_entities:type_name -> flow.v1.DiffEntry
 	30, // 20: flow.v1.GetTransactionDiffResponse.added_edges:type_name -> flow.v1.DiffEntry
 	30, // 21: flow.v1.GetTransactionDiffResponse.modified_edges:type_name -> flow.v1.DiffEntry
 	30, // 22: flow.v1.GetTransactionDiffResponse.deleted_edges:type_name -> flow.v1.DiffEntry
-	60, // 23: flow.v1.DiffEntry.properties:type_name -> flow.v1.DiffEntry.PropertiesEntry
-	63, // 24: flow.v1.ExtendTimeoutRequest.duration:type_name -> google.protobuf.Duration
-	61, // 25: flow.v1.Entity.properties:type_name -> flow.v1.Entity.PropertiesEntry
+	58, // 23: flow.v1.DiffEntry.properties:type_name -> flow.v1.DiffEntry.PropertiesEntry
+	61, // 24: flow.v1.ExtendTimeoutRequest.duration:type_name -> google.protobuf.Duration
+	59, // 25: flow.v1.Entity.properties:type_name -> flow.v1.Entity.PropertiesEntry
 	35, // 26: flow.v1.Schema.entity_types:type_name -> flow.v1.EntityType
 	36, // 27: flow.v1.Schema.edge_types:type_name -> flow.v1.EdgeType
 	37, // 28: flow.v1.EntityType.properties:type_name -> flow.v1.Property
@@ -3154,31 +3077,29 @@ var file_flow_v1_cartographer_proto_depIdxs = []int32{
 	41, // 48: flow.v1.CartographerService.WipeGraph:input_type -> flow.v1.WipeGraphRequest
 	43, // 49: flow.v1.CartographerService.HealthCheck:input_type -> flow.v1.HealthCheckRequest
 	45, // 50: flow.v1.CartographerService.PullFromRemote:input_type -> flow.v1.PullFromRemoteRequest
-	47, // 51: flow.v1.CartographerService.PushToRemote:input_type -> flow.v1.PushToRemoteRequest
-	49, // 52: flow.v1.CartographerService.ExportGraph:input_type -> flow.v1.ExportGraphRequest
-	2,  // 53: flow.v1.CartographerService.ExecuteCypher:output_type -> flow.v1.ExecuteCypherResponse
-	4,  // 54: flow.v1.CartographerService.SearchNeighbors:output_type -> flow.v1.SearchNeighborsResponse
-	7,  // 55: flow.v1.CartographerService.FullTextSearch:output_type -> flow.v1.FullTextSearchResponse
-	9,  // 56: flow.v1.CartographerService.ListEntities:output_type -> flow.v1.ListEntitiesResponse
-	11, // 57: flow.v1.CartographerService.CreateEntity:output_type -> flow.v1.CreateEntityResponse
-	13, // 58: flow.v1.CartographerService.UpdateEntity:output_type -> flow.v1.UpdateEntityResponse
-	15, // 59: flow.v1.CartographerService.DeleteEntity:output_type -> flow.v1.DeleteEntityResponse
-	17, // 60: flow.v1.CartographerService.CreateEdge:output_type -> flow.v1.CreateEdgeResponse
-	19, // 61: flow.v1.CartographerService.DeleteEdge:output_type -> flow.v1.DeleteEdgeResponse
-	21, // 62: flow.v1.CartographerService.BeginTransaction:output_type -> flow.v1.BeginTransactionResponse
-	23, // 63: flow.v1.CartographerService.CommitTransaction:output_type -> flow.v1.CommitTransactionResponse
-	25, // 64: flow.v1.CartographerService.RollbackTransaction:output_type -> flow.v1.RollbackTransactionResponse
-	27, // 65: flow.v1.CartographerService.RefreshTransaction:output_type -> flow.v1.RefreshTransactionResponse
-	29, // 66: flow.v1.CartographerService.GetTransactionDiff:output_type -> flow.v1.GetTransactionDiffResponse
-	32, // 67: flow.v1.CartographerService.ExtendTimeout:output_type -> flow.v1.ExtendTimeoutResponse
-	40, // 68: flow.v1.CartographerService.ApplySchema:output_type -> flow.v1.ApplySchemaResponse
-	42, // 69: flow.v1.CartographerService.WipeGraph:output_type -> flow.v1.WipeGraphResponse
-	44, // 70: flow.v1.CartographerService.HealthCheck:output_type -> flow.v1.HealthCheckResponse
-	46, // 71: flow.v1.CartographerService.PullFromRemote:output_type -> flow.v1.PullFromRemoteResponse
-	48, // 72: flow.v1.CartographerService.PushToRemote:output_type -> flow.v1.PushToRemoteResponse
-	50, // 73: flow.v1.CartographerService.ExportGraph:output_type -> flow.v1.ExportGraphResponse
-	53, // [53:74] is the sub-list for method output_type
-	32, // [32:53] is the sub-list for method input_type
+	47, // 51: flow.v1.CartographerService.ExportGraph:input_type -> flow.v1.ExportGraphRequest
+	2,  // 52: flow.v1.CartographerService.ExecuteCypher:output_type -> flow.v1.ExecuteCypherResponse
+	4,  // 53: flow.v1.CartographerService.SearchNeighbors:output_type -> flow.v1.SearchNeighborsResponse
+	7,  // 54: flow.v1.CartographerService.FullTextSearch:output_type -> flow.v1.FullTextSearchResponse
+	9,  // 55: flow.v1.CartographerService.ListEntities:output_type -> flow.v1.ListEntitiesResponse
+	11, // 56: flow.v1.CartographerService.CreateEntity:output_type -> flow.v1.CreateEntityResponse
+	13, // 57: flow.v1.CartographerService.UpdateEntity:output_type -> flow.v1.UpdateEntityResponse
+	15, // 58: flow.v1.CartographerService.DeleteEntity:output_type -> flow.v1.DeleteEntityResponse
+	17, // 59: flow.v1.CartographerService.CreateEdge:output_type -> flow.v1.CreateEdgeResponse
+	19, // 60: flow.v1.CartographerService.DeleteEdge:output_type -> flow.v1.DeleteEdgeResponse
+	21, // 61: flow.v1.CartographerService.BeginTransaction:output_type -> flow.v1.BeginTransactionResponse
+	23, // 62: flow.v1.CartographerService.CommitTransaction:output_type -> flow.v1.CommitTransactionResponse
+	25, // 63: flow.v1.CartographerService.RollbackTransaction:output_type -> flow.v1.RollbackTransactionResponse
+	27, // 64: flow.v1.CartographerService.RefreshTransaction:output_type -> flow.v1.RefreshTransactionResponse
+	29, // 65: flow.v1.CartographerService.GetTransactionDiff:output_type -> flow.v1.GetTransactionDiffResponse
+	32, // 66: flow.v1.CartographerService.ExtendTimeout:output_type -> flow.v1.ExtendTimeoutResponse
+	40, // 67: flow.v1.CartographerService.ApplySchema:output_type -> flow.v1.ApplySchemaResponse
+	42, // 68: flow.v1.CartographerService.WipeGraph:output_type -> flow.v1.WipeGraphResponse
+	44, // 69: flow.v1.CartographerService.HealthCheck:output_type -> flow.v1.HealthCheckResponse
+	46, // 70: flow.v1.CartographerService.PullFromRemote:output_type -> flow.v1.PullFromRemoteResponse
+	48, // 71: flow.v1.CartographerService.ExportGraph:output_type -> flow.v1.ExportGraphResponse
+	52, // [52:72] is the sub-list for method output_type
+	32, // [32:52] is the sub-list for method input_type
 	32, // [32:32] is the sub-list for extension type_name
 	32, // [32:32] is the sub-list for extension extendee
 	0,  // [0:32] is the sub-list for field type_name
@@ -3195,7 +3116,7 @@ func file_flow_v1_cartographer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_cartographer_proto_rawDesc), len(file_flow_v1_cartographer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   62,
+			NumMessages:   60,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

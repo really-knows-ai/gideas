@@ -26,6 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
@@ -136,106 +137,76 @@ func InitializeSidecarSigningKey(ctx context.Context, c client.Client, operatorN
 	return nil
 }
 
-// reconcileSecrets creates the namespace-scoped key Secrets if absent.
-// These Secrets do NOT get SetControllerReference so they survive FoundryGraph deletion.
+// reconcileSecrets reconciles the namespace-scoped key Secrets against the
+// operator-namespace signing Secrets. These Secrets do NOT get SetControllerReference
+// so they survive FoundryGraph deletion.
+//
+// The operator's signing keys are provisioned once per namespace (SPEC R6 preamble) but
+// may be rotated later (the operator regenerates its signing key Secret). When that
+// happens the per-namespace public-key Secrets must be reconciled to the new operator
+// key — otherwise the proxy signs with the new private key while the Cartographer
+// verifies against a stale public key, failing closed on every request. So this
+// reconciles (CreateOrUpdate) rather than create-only.
 func (r *FoundryGraphReconciler) reconcileSecrets(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	log := logf.FromContext(ctx)
 
-	// cartographer-sidecar-key: contains public+private key from the shared sidecar signing key
+	labels := r.labelsForCartographer(fg)
+
+	// Sidecar signing key from the operator namespace provides both public and private.
+	operatorSidecar := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sidecarSigningKeySecretName,
+			Namespace: r.OperatorNamespace,
+		},
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(operatorSidecar), operatorSidecar); err != nil {
+		return fmt.Errorf("get sidecar signing key from operator namespace: %w", err)
+	}
 	sidecarSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sidecarKeySecretName,
 			Namespace: fg.Namespace,
 		},
 	}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(sidecarSecret), sidecarSecret); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get sidecar key Secret: %w", err)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sidecarSecret, func() error {
+		sidecarSecret.Labels = labels
+		sidecarSecret.Data = map[string][]byte{
+			"key":         operatorSidecar.Data["key"],
+			"private-key": operatorSidecar.Data["private-key"],
 		}
-		// Secret does not exist — read from operator namespace and create.
-		operatorSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      sidecarSigningKeySecretName,
-				Namespace: r.OperatorNamespace,
-			},
-		}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(operatorSecret), operatorSecret); err != nil {
-			return fmt.Errorf("get sidecar signing key from operator namespace: %w", err)
-		}
-
-		sidecarSecret = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      sidecarKeySecretName,
-				Namespace: fg.Namespace,
-				Labels:    r.labelsForCartographer(fg),
-			},
-			Data: map[string][]byte{
-				"key":         operatorSecret.Data["key"],
-				"private-key": operatorSecret.Data["private-key"],
-			},
-		}
-		if err := r.Create(ctx, sidecarSecret); err != nil {
-			return fmt.Errorf("create sidecar key Secret: %w", err)
-		}
-		log.Info("Created sidecar key Secret", "namespace", fg.Namespace)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconcile sidecar key Secret: %w", err)
 	}
 
-	// cartographer-operator-key: contains operator's public key
+	// Operator signing key: the per-namespace Secret carries the operator's public key.
+	operatorSigningSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      operatorSigningKeySecretName,
+			Namespace: r.OperatorNamespace,
+		},
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(operatorSigningSecret), operatorSigningSecret); err != nil {
+		return fmt.Errorf("get operator signing key from operator namespace: %w", err)
+	}
 	operatorSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      operatorKeySecretName,
 			Namespace: fg.Namespace,
 		},
 	}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(operatorSecret), operatorSecret); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get operator key Secret: %w", err)
+	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, operatorSecret, func() error {
+		operatorSecret.Labels = labels
+		operatorSecret.Data = map[string][]byte{
+			"key": operatorSigningSecret.Data["key"],
 		}
-		// Secret does not exist — read from operator namespace and create.
-		operatorSigningSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      operatorSigningKeySecretName,
-				Namespace: r.OperatorNamespace,
-			},
-		}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(operatorSigningSecret), operatorSigningSecret); err != nil {
-			return fmt.Errorf("get operator signing key from operator namespace: %w", err)
-		}
-
-		operatorSecret = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      operatorKeySecretName,
-				Namespace: fg.Namespace,
-				Labels:    r.labelsForCartographer(fg),
-			},
-			Data: map[string][]byte{
-				"key": operatorSigningSecret.Data["key"],
-			},
-		}
-		if err := r.Create(ctx, operatorSecret); err != nil {
-			return fmt.Errorf("create operator key Secret: %w", err)
-		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("reconcile operator key Secret: %w", err)
+	}
+	if result == controllerutil.OperationResultCreated {
 		log.Info("Created operator key Secret", "namespace", fg.Namespace)
 	}
-
 	return nil
-}
-
-// readOperatorSigningKey reads the operator's signing key from the operator namespace.
-// Used by tests to get the key for proxy server setup.
-func readOperatorSigningKey(ctx context.Context, c client.Client, operatorNamespace string) ([]byte, error) {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      operatorSigningKeySecretName,
-			Namespace: operatorNamespace,
-		},
-	}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
-		return nil, fmt.Errorf("read operator signing key: %w", err)
-	}
-	privKey := secret.Data["private-key"]
-	if len(privKey) == 0 {
-		return nil, fmt.Errorf("operator signing key Secret %q has empty private-key", operatorSigningKeySecretName)
-	}
-	return privKey, nil
 }

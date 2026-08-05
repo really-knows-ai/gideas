@@ -59,6 +59,18 @@ func TestExtractLabels_CreateStatement(t *testing.T) {
 	}
 }
 
+func TestExtractLabels_NonReadOnlyStatement(t *testing.T) {
+	// A successfully-classified mutation (non-read-only) must NOT collapse to
+	// the READ:graph/entity/* wildcard. R3's wildcard fallback applies only to
+	// genuine parser failure; a mutation that parses still references specific
+	// entity types, so extractEntityTypes must return them rather than nil.
+	labels := extractEntityTypes("MATCH (c:Component) DELETE c")
+	expected := []string{componentType}
+	if !slices.Equal(labels, expected) {
+		t.Errorf("expected %v for mutation, got %v", expected, labels)
+	}
+}
+
 func TestExtractLabels_MultiMatch(t *testing.T) {
 	labels := extractEntityTypes("MATCH (c:Component) MATCH (s:Service) RETURN c, s")
 	expected := []string{componentType, "Service"}

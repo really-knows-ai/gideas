@@ -3,7 +3,6 @@ package gitstore
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,10 +60,15 @@ func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([
 			if err != nil {
 				return EntityFile{}, fmt.Errorf("open entity file %s: %w", fi.Name(), err)
 			}
-			defer func() { _ = f.Close() }()
 			var ej EntityJSON
 			if err := json.NewDecoder(f).Decode(&ej); err != nil {
+				_ = f.Close()
 				return EntityFile{}, fmt.Errorf("decode entity file %s: %w", fi.Name(), err)
+			}
+			// A Close error signals an I/O problem reading the file; propagating it
+			// prevents a clean-but-corrupt read from silently passing.
+			if err := f.Close(); err != nil {
+				return EntityFile{}, fmt.Errorf("close entity file %s: %w", fi.Name(), err)
 			}
 			ef := EntityFile{
 				ID:         ej.ID.String(),
@@ -143,15 +147,22 @@ func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 	if err != nil {
 		return fmt.Errorf("create entity file %s: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("write entity file %s: %w", path, err)
 	}
 	if _, err := f.Write([]byte("\n")); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("write newline %s: %w", path, err)
 	}
-
+	// Closing the file is the point at which a buffered flush failure (and thus
+	// data loss) becomes observable, so its error must be propagated, not
+	// silently discarded. go-billy's File has no Sync(); Close is the deepest
+	// durability boundary the interface exposes.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close entity file %s: %w", path, err)
+	}
 	return nil
 }
 
@@ -186,7 +197,7 @@ func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 		}
 		subEntries, err := fs.ReadDir(filepath.Join(baseDir, fi.Name()))
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read type dir %s: %w", filepath.Join(baseDir, fi.Name()), err)
 		}
 		hasJSON := false
 		for _, se := range subEntries {
@@ -208,5 +219,5 @@ func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 // Handles both OS-backed errors (os.PathError / syscall.ENOENT) and go-billy
 // internal filesystem errors.
 func isNotExist(err error) bool {
-	return os.IsNotExist(err) || errors.Is(err, os.ErrNotExist)
+	return os.IsNotExist(err)
 }

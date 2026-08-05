@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-git/go-git/v5"
@@ -106,13 +107,28 @@ func (g *gitStore) DeleteBranch(ctx context.Context, txID string) error {
 	if err := g.backend.RemoveReference(refName); err != nil {
 		return fmt.Errorf("remove branch ref %s: %w", txID, err)
 	}
-	// Also remove the config entry (best-effort; may already be gone)
-	_ = g.repo.DeleteBranch(txID)
+	// Also remove the config entry. go-git returns ErrBranchNotFound when the
+	// entry is already absent (e.g. branches created via SetBranchRef never
+	// have a config entry) — that is a harmless no-op. Any other failure means
+	// the config entry was not removed, leaving a stale branch behind while
+	// the ref is gone, so it must be propagated.
+	if err := g.repo.DeleteBranch(txID); err != nil && !errors.Is(err, git.ErrBranchNotFound) {
+		return fmt.Errorf("delete branch config %s: %w", txID, err)
+	}
 	return nil
 }
 
 // CleanUntracked removes untracked files and directories from the working
-// tree. The ctx parameter is reserved for future cancellation support.
+// tree.
+//
+// ponytail: the ctx parameter is not passed to any underlying go-billy or
+// go-git call (neither exposes ctx-aware IO), so it cannot cancel or
+// time-box a hung filesystem. Its presence exists only to keep the GitStore
+// interface uniform across all I/O methods. Consequence: a blocked wt.Clean
+// on a stalled CSI/NFS mount blocks this call regardless of caller
+// cancellation. Upgrade path: run the store's I/O on a ctx-cancellable
+// goroutine or wrap the filesystem in a deadline adapter, as documented on
+// GitStore.
 func (g *gitStore) CleanUntracked(ctx context.Context) error {
 	if err := g.wt.Clean(&git.CleanOptions{Dir: true}); err != nil {
 		return fmt.Errorf("clean untracked: %w", err)
@@ -159,11 +175,11 @@ func (g *gitStore) BranchHEAD(ctx context.Context, branch string) (string, error
 // hash. Validates that the hash is a 40-character lowercase hex string.
 func (g *gitStore) SetBranchRef(ctx context.Context, branch string, hash string) error {
 	if len(hash) != 40 {
-		return fmt.Errorf("invalid commit hash: %q", hash)
+		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 	}
 	for _, c := range hash {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return fmt.Errorf("invalid commit hash: %q", hash)
+			return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 		}
 	}
 

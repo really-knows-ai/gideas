@@ -7,14 +7,9 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
+  - persistentvolumeclaims
+  - secrets
+  - serviceaccounts
   - services
   verbs:
   - create
@@ -23,6 +18,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - apps
@@ -38,11 +41,31 @@ rules:
   - update
   - watch
 - apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
   - flow.foundry.io
   resources:
   - codificationservices
   - flowsupportservices
   - foundryflows
+  - foundrygraphs
   - foundrynodes
   - governedartefacts
   - lawgroups
@@ -63,6 +86,7 @@ rules:
   - codificationservices/finalizers
   - flowsupportservices/finalizers
   - foundryflows/finalizers
+  - foundrygraphs/finalizers
   - foundrynodes/finalizers
   - governedartefacts/finalizers
   - lawgroups/finalizers
@@ -77,6 +101,7 @@ rules:
   - codificationservices/status
   - flowsupportservices/status
   - foundryflows/status
+  - foundrygraphs/status
   - foundrynodes/status
   - governedartefacts/status
   - lawgroups/status
@@ -87,3 +112,16 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

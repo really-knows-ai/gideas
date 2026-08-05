@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -76,6 +77,18 @@ const lastAppliedSpecAnnotation = "flow.foundry.io/cartographer-last-applied-spe
 // finalizerName is the finalizer for FoundryGraph cleanup.
 const finalizerName = "flow.foundry.io/cartographer-cleanup"
 
+// errWipeBlockedByOpenTransactions is the sentinel returned when a destructive
+// schema change's WipeGraph call fails with FAILED_PRECONDITION because open
+// transactions exist. Only this error warrants the DestructiveChangeBlocked
+// condition (SPEC R1/R6).
+var errWipeBlockedByOpenTransactions = errors.New("wipe blocked by open transactions")
+
+// grpcCallTimeout bounds each Cartographer RPC phase issued by the reconciler. The
+// controller-runtime reconcile ctx carries no per-reconcile deadline (only manager
+// cancellation), so a slow or blackholed Cartographer would otherwise hang the reconcile
+// indefinitely rather than failing fast into the SPEC R6 requeue-with-backoff path.
+const grpcCallTimeout = 30 * time.Second
+
 // Reconcile implements the main reconciliation loop for FoundryGraph.
 func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -111,6 +124,13 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
+	// Reject duplicate type names — SPEC requires duplicates within entityTypes/edgeTypes
+	// to fail schema application (INVALID_ARGUMENT). The operator-side diff would otherwise
+	// silently deduplicate them (last wins), so reject before diffing.
+	if dup := schemaDuplicateNames(&fg.Spec); dup != "" {
+		return r.setFailedCondition(ctx, &fg, fmt.Errorf("invalid schema: %s", dup))
+	}
+
 	// Determine schema diff if a previous spec exists.
 	var oldSpec *flowv1.FoundryGraphSpec
 	diffResult := SchemaDiffNone
@@ -131,12 +151,19 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Build the spec map for comparison at reconcile start.
 	currentSpec := *fg.Spec.DeepCopy()
 
-	// Branching logic for spec changes (see PHASE_05.md D1 branching pseudocode).
+	// Branching logic for spec changes (see PHASE_05 D1 branching pseudocode).
 	switch diffResult {
 	case SchemaDiffDestructive:
 		// Destructive: HealthCheck -> WipeGraph -> ApplySchema on existing pod.
 		if err := r.applySchemaOnExisting(ctx, &fg, true); err != nil {
-			return r.setBlockedCondition(ctx, &fg, err)
+			// SPEC R6: the DestructiveChangeBlocked condition is reserved for the
+			// single case where WipeGraph fails with FAILED_PRECONDITION because
+			// open transactions exist. All other destructive-path errors (dial,
+			// HealthCheck, WipeGraph INTERNAL, ApplySchema) are ordinary failures.
+			if errors.Is(err, errWipeBlockedByOpenTransactions) {
+				return r.setBlockedCondition(ctx, &fg, err)
+			}
+			return r.setFailedCondition(ctx, &fg, err)
 		}
 	case SchemaDiffNonDestructive:
 		// Non-destructive: HealthCheck -> ApplySchema on existing pod.
@@ -198,16 +225,24 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 	}
 	defer client.Close()
 
+	// Bound the RPC phase with a per-call deadline: the reconcile ctx has no deadline (only
+	// manager cancellation), so without this a blackholed Cartographer hangs the reconcile
+	// instead of failing fast into the SPEC R6 requeue-with-backoff path.
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, grpcCallTimeout)
+	defer rpcCancel()
+
 	// HealthCheck
-	if _, err := client.HealthCheck(ctx, &flowv1gen.HealthCheckRequest{}); err != nil {
+	if _, err := client.HealthCheck(rpcCtx, &flowv1gen.HealthCheckRequest{}); err != nil {
 		return fmt.Errorf("health check on existing pod: %w", err)
 	}
 
 	if destructive {
 		// WipeGraph
-		if _, err := client.WipeGraph(ctx, &flowv1gen.WipeGraphRequest{}); err != nil {
+		if _, err := client.WipeGraph(rpcCtx, &flowv1gen.WipeGraphRequest{}); err != nil {
 			if isFailedPrecondition(err) {
-				return fmt.Errorf("wipe blocked by open transactions: %w", err)
+				// DISTINCT SENTINEL: only this case (WipeGraph blocked by open
+				// transactions) deserves the DestructiveChangeBlocked condition.
+				return fmt.Errorf("%w: %v", errWipeBlockedByOpenTransactions, err)
 			}
 			return fmt.Errorf("wipe graph: %w", err)
 		}
@@ -215,7 +250,7 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 
 	// ApplySchema
 	schema := r.schemaFromCRD(&fg.Spec)
-	if _, err := client.ApplySchema(ctx, &flowv1gen.ApplySchemaRequest{Schema: schema}); err != nil {
+	if _, err := client.ApplySchema(rpcCtx, &flowv1gen.ApplySchemaRequest{Schema: schema}); err != nil {
 		return fmt.Errorf("apply schema on existing pod: %w", err)
 	}
 
@@ -236,14 +271,18 @@ func (r *FoundryGraphReconciler) applySchema(ctx context.Context, fg *flowv1.Fou
 	}
 	defer c.Close()
 
+	// Bound the RPC phase with a per-call deadline (the reconcile ctx has no deadline).
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, grpcCallTimeout)
+	defer rpcCancel()
+
 	// HealthCheck
-	if _, err := c.HealthCheck(ctx, &flowv1gen.HealthCheckRequest{}); err != nil {
+	if _, err := c.HealthCheck(rpcCtx, &flowv1gen.HealthCheckRequest{}); err != nil {
 		return fmt.Errorf("health check: %w", err)
 	}
 
 	// ApplySchema
 	schema := r.schemaFromCRD(&fg.Spec)
-	if _, err := c.ApplySchema(ctx, &flowv1gen.ApplySchemaRequest{Schema: schema}); err != nil {
+	if _, err := c.ApplySchema(rpcCtx, &flowv1gen.ApplySchemaRequest{Schema: schema}); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
 
@@ -255,7 +294,9 @@ func isFailedPrecondition(err error) bool {
 	return status.Code(err) == codes.FailedPrecondition
 }
 
-// waitForReadiness polls the Deployment until it is ready or the timeout elapses.
+// waitForReadiness polls the Deployment until it is ready or the timeout elapses. The
+// readiness timeout is the sole termination condition: transient Get errors (e.g. a
+// Deployment momentarily not yet visible after CreateOrUpdate) do not short-circuit the poll.
 func (r *FoundryGraphReconciler) waitForReadiness(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	log := logf.FromContext(ctx)
 	deployName := "cartographer-" + fg.Name
@@ -267,9 +308,9 @@ func (r *FoundryGraphReconciler) waitForReadiness(ctx context.Context, fg *flowv
 	for time.Now().Before(deadline) {
 		var deploy appsv1.Deployment
 		if err := r.Get(ctx, nn, &deploy); err != nil {
-			return fmt.Errorf("get deployment: %w", err)
-		}
-		if deploy.Status.AvailableReplicas > 0 {
+			// Keep polling until the timeout; the Deployment may not be visible yet.
+			log.Info("waiting for cartographer deployment", "deployment", deployName, "err", err)
+		} else if allReplicasReady(&deploy) {
 			log.Info("Cartographer pod is ready", "deployment", deployName)
 			return nil
 		}
@@ -282,6 +323,17 @@ func (r *FoundryGraphReconciler) waitForReadiness(ctx context.Context, fg *flowv
 	return fmt.Errorf("readiness timeout (%v) exceeded for deployment %s", r.ReadinessTimeout, deployName)
 }
 
+// allReplicasReady reports whether every desired replica is ready (SPEC: "all replicas
+// ready, readiness probe passing"). Using Replicas/ReadyReplicas rather than
+// AvailableReplicas > 0 keeps the check correct even if the replica count ever diverges
+// from the hardcoded value in the Deployment.
+func allReplicasReady(deploy *appsv1.Deployment) bool {
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas == 0 {
+		return false
+	}
+	return deploy.Status.ReadyReplicas >= *deploy.Spec.Replicas
+}
+
 // updateStatus sets the endpoint, storageSize, and last-applied-spec annotation.
 func (r *FoundryGraphReconciler) updateStatus(ctx context.Context, fg *flowv1.FoundryGraph, currentSpec *flowv1.FoundryGraphSpec) error {
 	// Re-fetch to get latest resourceVersion.
@@ -289,7 +341,27 @@ func (r *FoundryGraphReconciler) updateStatus(ctx context.Context, fg *flowv1.Fo
 		return client.IgnoreNotFound(err)
 	}
 
+	// The last-applied-spec annotation is metadata and must go through the main Update —
+	// the status subresource does not carry annotations. The main Update replaces any
+	// status on the in-memory object with the stored status, so persist the annotation
+	// first and set the status on a subsequent pass.
+	specJSON, err := json.Marshal(currentSpec)
+	if err != nil {
+		return fmt.Errorf("marshal spec: %w", err)
+	}
+	if fg.Annotations == nil {
+		fg.Annotations = make(map[string]string)
+	}
+	fg.Annotations[lastAppliedSpecAnnotation] = string(specJSON)
+
+	if err := r.Update(ctx, fg); err != nil {
+		return fmt.Errorf("update FoundryGraph: %w", err)
+	}
+
 	// Set endpoint.
+	if err := r.Get(ctx, client.ObjectKeyFromObject(fg), fg); err != nil {
+		return client.IgnoreNotFound(err)
+	}
 	fg.Status.Endpoint.Host = fmt.Sprintf("cartographer-%s.%s.svc.cluster.local", fg.Name, fg.Namespace)
 	fg.Status.Endpoint.Port = r.CartographerPort
 
@@ -303,18 +375,12 @@ func (r *FoundryGraphReconciler) updateStatus(ctx context.Context, fg *flowv1.Fo
 		}
 	}
 
-	// Store the full serialized current spec in annotation.
-	specJSON, err := json.Marshal(currentSpec)
-	if err != nil {
-		return fmt.Errorf("marshal spec: %w", err)
-	}
-	if fg.Annotations == nil {
-		fg.Annotations = make(map[string]string)
-	}
-	fg.Annotations[lastAppliedSpecAnnotation] = string(specJSON)
-
-	if err := r.Update(ctx, fg); err != nil {
-		return fmt.Errorf("update FoundryGraph: %w", err)
+	// Persist the status block (endpoint, storageSize) via the status subresource. The
+	// CRD declares +kubebuilder:subresource:status, so the apiserver silently discards
+	// status mutations on the main Update; the set*Condition helpers all use
+	// Status().Update and this must be consistent with them.
+	if err := r.Status().Update(ctx, fg); err != nil {
+		return fmt.Errorf("update FoundryGraph status: %w", err)
 	}
 
 	return nil
@@ -368,6 +434,9 @@ func (r *FoundryGraphReconciler) setReadyCondition(ctx context.Context, fg *flow
 	}
 
 	// Clear prior blocking conditions.
+	// Remove any stale DestructiveChangeBlocked condition set by a previous
+	// destructive-change attempt that has since recovered.
+	meta.RemoveStatusCondition(&fg.Status.Conditions, "DestructiveChangeBlocked")
 	meta.SetStatusCondition(&fg.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,
@@ -390,6 +459,14 @@ func (r *FoundryGraphReconciler) setFailedCondition(ctx context.Context, fg *flo
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// A ReconcileFailed condition represents an ordinary (non-OPEN-on-transactions)
+	// failure; the blocked-destructive-change class funnels exclusively to
+	// setBlockedCondition. Clear any stale DestructiveChangeBlocked so a previously
+	// blocked FoundryGraph that later fails for an unrelated reason does not retain a
+	// blocked condition that no longer describes the current reconcile (SPEC R6:
+	// blocking conditions belong only to the WipeGraph open-transaction error class).
+	meta.RemoveStatusCondition(&fg.Status.Conditions, "DestructiveChangeBlocked")
+
 	meta.SetStatusCondition(&fg.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
@@ -411,6 +488,14 @@ func (r *FoundryGraphReconciler) setBlockedCondition(ctx context.Context, fg *fl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// ponytail: a blocked destructive change sets only DestructiveChangeBlocked=True and
+	// leaves Ready untouched. After a previously-Ready=True resource hits a blocked change,
+	// it therefore carries Ready=True alongside DestructiveChangeBlocked=True, which is
+	// inconsistent for aggregate consumers that collapse Ready. This is intentional: the
+	// block is a transient operator wait (spec is unchanged, the wipe is simply deferred
+	// until open transactions finish), not a Ready-worthy failure, and the spec only mandates
+	// the DestructiveChangeBlocked condition. A fixed consumer that requires Ready=False
+	// here should treat either DestructiveChangeBlocked=True, Ready=True as "not applying".
 	meta.SetStatusCondition(&fg.Status.Conditions, metav1.Condition{
 		Type:               "DestructiveChangeBlocked",
 		Status:             metav1.ConditionTrue,

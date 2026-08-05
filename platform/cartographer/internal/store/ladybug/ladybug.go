@@ -39,6 +39,12 @@ type ladybugDB struct {
 	// ApplySchema and used when rehydrating edge tables.
 	edgePairs map[string][]fromToPair
 
+	// schemaApplied records whether a schema has been applied (or restored from
+	// persisted metadata). An empty entityTypes/edgeTypes schema is valid (SPEC
+	// R1), so the type-count maps are insufficient to distinguish "no schema"
+	// from "applied empty schema" — this flag is authoritative for Health.
+	schemaApplied bool
+
 	// Branches (txID -> branchDB)
 	branches     map[string]*branchDB
 	branchStates map[string]store.BranchTransactionState
@@ -70,7 +76,28 @@ func Open(path string) (store.Store, error) {
 	dbPath := filepath.Join(path, "main.lbug")
 	database, err := lbug.OpenDatabase(dbPath, lbug.DefaultSystemConfig())
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+		// Corruption recovery (SPEC R8) applies only to a genuinely corrupted
+		// main.lbug, not to any open failure. The library reports only a status
+		// integer for database_init and exposes no error detail through the Go
+		// wrapper, so we distinguish corruption from an operational (e.g.
+		// permission/IO) open failure by probing whether the file itself is
+		// readable. If the file is readable it is present but unreadable by the
+		// database engine — corruption — and deleting it to rehydrate from git
+		// is correct. If the file is NOT clearly readable, the failure is more
+		// likely a privilege/IO problem and deleting the file would permanently
+		// destroy data that was never corrupt; in that case we classify and
+		// fail without touching the file.
+		if corruptionCandidates(dbPath) {
+			if rmErr := os.Remove(dbPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				return nil, fmt.Errorf("remove corrupted database: %w", rmErr)
+			}
+			database, err = lbug.OpenDatabase(dbPath, lbug.DefaultSystemConfig())
+			if err != nil {
+				return nil, fmt.Errorf("open database after recovery: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("open database: %w", err)
+		}
 	}
 
 	conn, err := lbug.OpenConnection(database)
@@ -114,6 +141,32 @@ func Open(path string) (store.Store, error) {
 	}
 
 	return ldb, nil
+}
+
+// corruptionCandidates reports whether an OpenDatabase failure is consistent
+// with a corrupted main.lbug rather than an operational open failure. The
+// go-ladybug wrapper surfaces only a status integer for database_init and does
+// not expose the underlying reason, so we classify by file accessibility: if
+// the database file is present but cannot be opened at the OS File layer
+// (e.g. permission denied or a path/IO problem), removing it would permanently
+// destroy data that was never corrupt, so those opens must fail/classify
+// instead of recovering. If the file is readable, the database engine could
+// not parse it — genuine corruption — and the SPEC R8 recovery path applies.
+func corruptionCandidates(dbPath string) bool {
+	// A missing file is not a corruption candidate: OpenDatabase creates a
+	// fresh database for a missing path, so a failure with no file present is
+	// an operational error (e.g. the directory is not writable).
+	if _, err := os.Stat(dbPath); err != nil {
+		return false
+	}
+	// Prove the file is readable at the OS level before assuming the engine
+	// failed because of its contents.
+	f, err := os.OpenFile(dbPath, os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
 }
 
 // OpenInMemory opens an ephemeral in-memory LadybugDB for tests.

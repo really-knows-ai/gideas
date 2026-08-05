@@ -24,7 +24,10 @@ func (db *ladybugDB) IsVectorIndexBootstrapped(entityType, branch string) bool {
 	}
 
 	// Check that the embedding column exists with a dimension > 0.
-	dim := getEmbeddingDimension(conn, entityType)
+	dim, err := getEmbeddingDimension(conn, entityType)
+	if err != nil {
+		return false
+	}
 	if dim == 0 {
 		return false
 	}
@@ -49,7 +52,7 @@ func (db *ladybugDB) IsVectorIndexBootstrapped(entityType, branch string) bool {
 		}
 		tableName := fmt.Sprintf("%v", vals[0])
 		indexType := fmt.Sprintf("%v", vals[2])
-		if tableName == entityType && indexType == "HNSW" {
+		if tableName == entityType && strings.EqualFold(indexType, "HNSW") {
 			return true
 		}
 	}
@@ -69,7 +72,10 @@ func (db *ladybugDB) GetEstablishedDimension(entityType, branch string) (int, er
 		return 0, fmt.Errorf("%w: %q", store.ErrUnknownEntityType, entityType)
 	}
 
-	dim := getEmbeddingDimension(conn, entityType)
+	dim, err := getEmbeddingDimension(conn, entityType)
+	if err != nil {
+		return 0, fmt.Errorf("read embedding dimension for %q: %w", entityType, err)
+	}
 	return dim, nil
 }
 
@@ -134,27 +140,34 @@ func (db *ladybugDB) WipeSchema(ctx context.Context) error {
 
 	// Drop indexes first, then REL tables, then NODE tables.
 	dropTable := func(name string) error {
-		// Drop vector index first if it exists (non-fatal; may not exist).
-		_, _ = db.conn.Query(fmt.Sprintf("CALL DROP_VECTOR_INDEX('%s', '%s_vec');", name, name))
-		// Drop FTS index if it exists (non-fatal; may not exist).
-		_, _ = db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", name, name))
+		// Drop vector/FTS indexes before the table. DROP on an index that does
+		// not exist errors in LadybugDB, so guard each drop with an existence
+		// probe rather than discarding-or-error-matching. A genuine drop failure
+		// (index exists but cannot be dropped) propagates, preventing the
+		// residual-index hazard where the drop fails while the subsequent
+		// DROP TABLE succeeds — leaving an index pointing at a vanished table
+		// that would collide with a later ApplySchema of the same-named type.
+		if vectorIndexExists(db.conn, name) {
+			if _, err := db.conn.Query(fmt.Sprintf("CALL DROP_VECTOR_INDEX('%s', '%s_vec');", name, name)); err != nil {
+				return fmt.Errorf("drop vector index for %q: %w", name, err)
+			}
+		}
+		if ftsIndexExists(db.conn, name) {
+			if _, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", name, name)); err != nil {
+				return fmt.Errorf("drop FTS index for %q: %w", name, err)
+			}
+		}
 		if _, err := db.conn.Query(fmt.Sprintf("DROP TABLE %s;", quoteID(name))); err != nil {
 			return fmt.Errorf("drop table %q: %w", name, err)
 		}
 		return nil
 	}
 	for _, name := range relTables {
-		if name == untypedTableName {
-			continue
-		}
 		if err := dropTable(name); err != nil {
 			return err
 		}
 	}
 	for _, name := range nodeTables {
-		if name == untypedTableName {
-			continue
-		}
 		if err := dropTable(name); err != nil {
 			return err
 		}
@@ -165,6 +178,8 @@ func (db *ladybugDB) WipeSchema(ctx context.Context) error {
 	db.edgeTypeDefs = make(map[string]*store.EdgeTypeDef)
 	db.ruleIndex = make(map[string][]*flowv1.ConnectionRule)
 	db.edgePairs = make(map[string][]fromToPair)
+	db.branchStates = make(map[string]store.BranchTransactionState)
+	db.schemaApplied = false
 
 	// Remove persisted schema metadata.
 	if db.path != "" {

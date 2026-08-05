@@ -166,22 +166,6 @@ func TestValidate_EntityPropertyCollidesWithID(t *testing.T) {
 	}
 }
 
-func TestValidate_EntityPropertyCollidesWithProperties(t *testing.T) {
-	s := &flowv1.Schema{
-		EntityTypes: []*flowv1.EntityType{
-			{
-				Name: "Component",
-				Properties: []*flowv1.Property{
-					{Name: "id", Type: "string"},
-				},
-			},
-		},
-	}
-	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
-	}
-}
-
 func TestValidate_EntityPropertyCollidesWithEmbeddingIndexed(t *testing.T) {
 	s := &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
@@ -265,22 +249,6 @@ func TestValidate_EdgePropertyCollidesWithType(t *testing.T) {
 }
 
 func TestValidate_EdgePropertyCollidesWithID(t *testing.T) {
-	s := &flowv1.Schema{
-		EdgeTypes: []*flowv1.EdgeType{
-			{
-				Name: "DEPENDS_ON",
-				Properties: []*flowv1.Property{
-					{Name: "id", Type: "string"},
-				},
-			},
-		},
-	}
-	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
-	}
-}
-
-func TestValidate_EdgePropertyCollidesWithProperties(t *testing.T) {
 	s := &flowv1.Schema{
 		EdgeTypes: []*flowv1.EdgeType{
 			{
@@ -419,6 +387,43 @@ func TestValidate_ReservedWordEdgeTypeName(t *testing.T) {
 	}
 }
 
+// reservedWords are matched case-insensitively (validate.go uppercases names
+// before lookup), so lowercase reserved words must be rejected too.
+func TestValidate_ReservedWordCaseInsensitive(t *testing.T) {
+	tests := []struct {
+		name string
+		s    *flowv1.Schema
+	}{
+		{"entity type name lowercased", &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{Name: "match"}},
+		}},
+		{"entity property name lowercased", &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{
+				Name:       "Component",
+				Properties: []*flowv1.Property{{Name: "create", Type: "string"}},
+			}},
+		}},
+		{"edge type name lowercased", &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{{Name: "where"}},
+		}},
+		{"edge property name lowercased", &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{{
+				Name:       "DEPENDS_ON",
+				Properties: []*flowv1.Property{{Name: "using", Type: "string"}},
+			}},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := Validate(tc.s); err == nil {
+				t.Fatal("expected ErrReservedWord, got nil")
+			} else if !errors.Is(err, ErrReservedWord) {
+				t.Fatalf("expected ErrReservedWord, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidate_CypherIdentifierBoundaryCases(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -463,26 +468,44 @@ func TestValidate_NameLengthBoundary(t *testing.T) {
 		t.Fatalf("test string length is %d, expected 256", len(long256))
 	}
 
-	// 255-char name accepted.
-	s := &flowv1.Schema{
-		EntityTypes: []*flowv1.EntityType{
-			{Name: long255},
-		},
+	// The maxNameLength boundary (SPEC R1) applies to entity type names, edge
+	// type names, and property names alike, so exercise it on each.
+	cases := []struct {
+		name string
+		s    func(name string) *flowv1.Schema
+	}{
+		{"entity type name", func(n string) *flowv1.Schema {
+			return &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{Name: n}}}
+		}},
+		{"edge type name", func(n string) *flowv1.Schema {
+			return &flowv1.Schema{EdgeTypes: []*flowv1.EdgeType{{Name: n}}}
+		}},
+		{"entity property name", func(n string) *flowv1.Schema {
+			return &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+				Name:       "Component",
+				Properties: []*flowv1.Property{{Name: n, Type: "string"}},
+			}}}
+		}},
+		{"edge property name", func(n string) *flowv1.Schema {
+			return &flowv1.Schema{EdgeTypes: []*flowv1.EdgeType{{
+				Name:       "DEPENDS_ON",
+				Properties: []*flowv1.Property{{Name: n, Type: "string"}},
+			}}}
+		}},
 	}
-	if err := Validate(s); err != nil {
-		t.Fatalf("expected nil error for 255-char name, got: %v", err)
-	}
-
-	// 256-char name rejected.
-	s = &flowv1.Schema{
-		EntityTypes: []*flowv1.EntityType{
-			{Name: long256},
-		},
-	}
-	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrInvalidName for 256-char name, got nil")
-	} else if !errors.Is(err, ErrInvalidName) {
-		t.Fatalf("expected ErrInvalidName, got: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name+"/255-char accepted", func(t *testing.T) {
+			if err := Validate(tc.s(long255)); err != nil {
+				t.Fatalf("expected nil error for 255-char name, got: %v", err)
+			}
+		})
+		t.Run(tc.name+"/256-char rejected", func(t *testing.T) {
+			if err := Validate(tc.s(long256)); err == nil {
+				t.Fatal("expected ErrInvalidName for 256-char name, got nil")
+			} else if !errors.Is(err, ErrInvalidName) {
+				t.Fatalf("expected ErrInvalidName, got: %v", err)
+			}
+		})
 	}
 }
 

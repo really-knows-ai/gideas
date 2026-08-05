@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ import (
 
 // CreateBranchDB opens a new LadybugDB for the given txID. File-backed stores
 // persist branches under branches/<txID>.lbug; in-memory stores remain ephemeral.
-func (db *ladybugDB) CreateBranchDB(txID string) error {
+func (db *ladybugDB) CreateBranchDB(_ context.Context, txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -86,7 +87,7 @@ func (db *ladybugDB) CreateBranchDB(txID string) error {
 }
 
 // DropBranchDB closes and removes the branch database.
-func (db *ladybugDB) DropBranchDB(txID string) error {
+func (db *ladybugDB) DropBranchDB(_ context.Context, txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
@@ -289,7 +290,7 @@ func tablePropertiesOnConn(conn *lbug.Connection, table string) ([]store.Propert
 }
 
 // ReplicateSchemaToBranch applies the main DB's schema DDL to the branch.
-func (db *ladybugDB) ReplicateSchemaToBranch(txID string) error {
+func (db *ladybugDB) ReplicateSchemaToBranch(_ context.Context, txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	br, err := db.branchLocked(txID)
@@ -317,7 +318,10 @@ func (db *ladybugDB) ReplicateSchemaToBranch(txID string) error {
 	// We need to recreate the node and rel tables.
 	for _, name := range sortedKeys(db.entityTypeDefs) {
 		def := db.entityTypeDefs[name]
-		dimension := getEmbeddingDimension(db.conn, name)
+		dimension, derr := getEmbeddingDimension(db.conn, name)
+		if derr != nil {
+			return fmt.Errorf("read embedding dimension for %q: %w", name, derr)
+		}
 		if err := createNodeTableOnConn(br.conn, name, def.Properties); err != nil {
 			return fmt.Errorf("replicate node table %q: %w", name, err)
 		}
@@ -408,6 +412,17 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 				continue
 			}
 			entity := entityFromNode(node, name)
+			// Ensure main's embedding column / vector index exists before
+			// inserting an entity that carries an embedding. The branch may have
+			// bootstrapped the dimension (SPEC R7 lazy bootstrap on the first
+			// embedding write), so main's table need not have the embedding
+			// column yet — the copy path leads with an entity that targets it.
+			if len(entity.Embedding) > 0 {
+				if err := db.ensureEmbeddingLoadSchema(db.conn, name, entity.Embedding, db.entityTypeDefs); err != nil {
+					result.Close()
+					return fmt.Errorf("promote embedding schema to main for %q: %w", name, err)
+				}
+			}
 			if err := insertEntityOnConn(db.conn, name, entity); err != nil {
 				result.Close()
 				return fmt.Errorf("insert entity into main: %w", err)
@@ -469,6 +484,12 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	if err := db.loadEdgesFromDir(edgesDir, edgeDefs); err != nil {
 		return err
 	}
+	// Promote the schema cache so any types inferred from the directory
+	// structure (SPEC R8) are visible to subsequent reads and writes via
+	// db.entityTypeDefs / db.edgeTypeDefs. The caches were loaded from a copy
+	// above, so this merge also carries the pre-existing compiled defs back.
+	db.entityTypeDefs = entDefs
+	db.edgeTypeDefs = edgeDefs
 	return nil
 }
 
@@ -596,10 +617,21 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 	}
 	// Create FTS index on all string properties.
 	if len(stringProps) > 0 {
-		propsList := "'" + strings.Join(stringProps, "', '") + "'"
-		ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
-			name, name, propsList)
-		_, _ = conn.Query(ftsDDL) // non-fatal
+		// Whether the table was freshly created or already existed (this builder
+		// runs CREATE NODE TABLE IF NOT EXISTS on every table (re)creation at
+		// hydration / schema-load), its FTS index — also not idempotent to
+		// create — may already exist. Skip only when the index is known present,
+		// so a genuine index-creation error propagates and cannot silently skip
+		// the type's FullTextSearch coverage (query.go silently skips index-less
+		// types), rather than error-matching the library's "already exists" text.
+		if !ftsIndexExists(conn, name) {
+			propsList := "'" + strings.Join(stringProps, "', '") + "'"
+			ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
+				name, name, propsList)
+			if _, err := conn.Query(ftsDDL); err != nil {
+				return fmt.Errorf("create FTS index for %q: %w", name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -613,8 +645,8 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 		}
 	} else {
 		// Need at least one FROM/TO pair; create a placeholder _untyped node table.
-		_, _ = conn.Query("CREATE NODE TABLE IF NOT EXISTS _untyped (id STRING PRIMARY KEY);")
-		clauses = append(clauses, "FROM _untyped TO _untyped")
+		_, _ = conn.Query("CREATE NODE TABLE IF NOT EXISTS " + untypedTableName + " (id STRING PRIMARY KEY);")
+		clauses = append(clauses, "FROM "+untypedTableName+" TO "+untypedTableName)
 	}
 
 	cols := make([]string, 0, 2+len(properties)+1)
@@ -716,6 +748,105 @@ func listEdgesOnConn(conn *lbug.Connection, edgeType string) ([]store.Edge, erro
 // Internal helpers — file loading
 // --------------------------------------------------------------------------
 
+// ensureEntityLoadSchema makes the entity table exist before entities are
+// loaded from files. When no schema is applied (empty entDefs), the table is
+// inferred on demand from the directory structure (SPEC R8). It also (re)creates
+// the FTS index on the type's string properties so re-hydration restores the
+// full search state (SPEC R8).
+func (db *ladybugDB) ensureEntityLoadSchema(
+	conn *lbug.Connection, typeName, typeDir string, entDefs map[string]*store.EntityTypeDef,
+) error {
+	def, known := entDefs[typeName]
+	var props []store.PropertyDef
+	if known {
+		props = def.Properties
+	} else {
+		// Infer the schema from the directory structure (SPEC R8): when the
+		// type is not in the applied schema, scan its JSON files to collect
+		// the union of all property names so the created table has a real
+		// column for every property a file may set. Without this, a
+		// property-bearing file builds `CREATE (n:Type {col: $v})` against a
+		// non-existent column and re-hydration of that type cannot succeed.
+		// ponytail: inferred property types are always "string" because the
+		// file-per-element representation stores property values as strings.
+		// If a future representation carries non-string values, the column
+		// type inference here would need corresponding handling.
+		names := make(map[string]bool)
+		if files, err := db.readDir(typeDir); err == nil {
+			for _, f := range files {
+				if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
+				if err != nil {
+					continue
+				}
+				var je struct {
+					Properties map[string]string `json:"properties"`
+				}
+				if err := json.Unmarshal(data, &je); err != nil {
+					continue
+				}
+				for k := range je.Properties {
+					names[k] = true
+				}
+			}
+		}
+		for name := range names {
+			props = append(props, store.PropertyDef{Name: name, Type: colTypeString})
+		}
+		slices.SortFunc(props, func(a, b store.PropertyDef) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+	}
+	if err := createNodeTableOnConn(conn, typeName, props); err != nil {
+		return fmt.Errorf("create entity table %q for load: %w", typeName, err)
+	}
+	if !known {
+		// Infer schema from the directory structure: register the type so
+		// subsequent files of the same type are treated as known.
+		entDefs[typeName] = &store.EntityTypeDef{Name: typeName, Properties: props}
+	}
+	return nil
+}
+
+// ensureEmbeddingLoadSchema adds the embedding column (and vector index) to the
+// entity table when an entity carrying an embedding is loaded. The dimension is
+// taken from the first embedding seen for the type. It also marks the type's
+// definition as vector-enabled in defs so the in-memory model stays in parity
+// with the column/index it creates during re-hydration.
+func (db *ladybugDB) ensureEmbeddingLoadSchema(
+	conn *lbug.Connection, typeName string, embedding []float32,
+	defs map[string]*store.EntityTypeDef,
+) error {
+	if dim, derr := getEmbeddingDimension(conn, typeName); derr != nil {
+		return fmt.Errorf("read embedding dimension for %q: %w", typeName, derr)
+	} else if dim > 0 {
+		return nil
+	}
+	altDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(typeName), len(embedding))
+	if _, err := conn.Query(altDDL); err != nil {
+		return fmt.Errorf("ensure embedding column %q: %w", typeName, err)
+	}
+	if err := db.createVectorIndex(conn, typeName); err != nil {
+		return fmt.Errorf("ensure vector index %q: %w", typeName, err)
+	}
+	// Keep the definition in parity with the column/index just created: a type
+	// whose schema def stays EnableVectorIndex=false while the table now carries
+	// an embedding column and vector index would diverge from the metadata model
+	// (captureVectorState/ValidateMetadataAgainstCatalog require VectorIndexes to
+	// match def.EnableVectorIndex) and from the query path (SearchNeighbors reads
+	// EnableVectorIndex to decide which types are searchable). Re-hydration is the
+	// only path that can create a vector index without a type first declared with
+	// EnableVectorIndex=true (inferred directory schema, SPEC R8), so we promote
+	// the flag here on the file-load path to keep the def consistent with the
+	// database.
+	if def, ok := defs[typeName]; ok {
+		def.EnableVectorIndex = true
+	}
+	return nil
+}
+
 func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.EntityTypeDef) error {
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -740,6 +871,9 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
+		if err := db.ensureEntityLoadSchema(db.conn, typeName, typeDir, entDefs); err != nil {
+			return err
+		}
 		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
@@ -768,6 +902,15 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 			}
 			if je.ID == "" {
 				je.ID = uuid.New().String()
+			}
+			if len(je.Embedding) > 0 {
+				if err := db.ensureEmbeddingLoadSchema(db.conn, typeName, je.Embedding, entDefs); err != nil {
+					return err
+				}
+			}
+			if je.Type != typeName {
+				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
+					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
 			}
 			props := je.Properties
 			if props == nil {
@@ -840,6 +983,10 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 			if je.ID == "" {
 				je.ID = uuid.New().String()
 			}
+			if je.Type != typeName {
+				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
+					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
+			}
 			props := je.Properties
 			if props == nil {
 				props = make(map[string]string)
@@ -883,6 +1030,9 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
+		if err := db.ensureEntityLoadSchema(conn, typeName, typeDir, entDefs); err != nil {
+			return err
+		}
 		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
@@ -911,6 +1061,15 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			}
 			if je.ID == "" {
 				je.ID = uuid.New().String()
+			}
+			if len(je.Embedding) > 0 {
+				if err := db.ensureEmbeddingLoadSchema(conn, typeName, je.Embedding, entDefs); err != nil {
+					return err
+				}
+			}
+			if je.Type != typeName {
+				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
+					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
 			}
 			props := je.Properties
 			if props == nil {
@@ -983,6 +1142,10 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			}
 			if je.ID == "" {
 				je.ID = uuid.New().String()
+			}
+			if je.Type != typeName {
+				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
+					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
 			}
 			props := je.Properties
 			if props == nil {

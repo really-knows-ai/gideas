@@ -76,6 +76,14 @@ func mapStoreError(err error) error {
 		return nil
 	}
 
+	// Pass through already-formatted gRPC status errors without double-wrapping
+	// (identical to mapGitError), so store-layer errors that carry their own
+	// status code (e.g. RESOURCE_EXHAUSTED during export enumeration) are not
+	// flattened into a generic Internal.
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+
 	switch {
 	case errors.Is(err, store.ErrUnknownEntityType):
 		return status.Error(codes.InvalidArgument, err.Error())
@@ -117,10 +125,6 @@ func mapStoreError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrEmbeddingDimension):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, store.ErrEmbeddingRequired):
-		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, store.ErrTableStructureMismatch):
-		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrDestructiveSchemaChange):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrDatabaseNotReady):
@@ -154,7 +158,7 @@ func mapGitError(err error) error {
 
 	switch {
 	case errors.Is(err, gitstore.ErrNoRemote):
-		return status.Error(codes.FailedPrecondition, "no remote configured")
+		return errRemoteNotConfigured()
 	case errors.Is(err, gitstore.ErrAuthFailed):
 		return status.Error(codes.Unauthenticated, "remote credentials rejected")
 	case errors.Is(err, gitstore.ErrAuthConfigMissing):
@@ -297,4 +301,16 @@ func errCypherParamsNotAStruct() error {
 
 func errCapabilitySignedByUnrecognized(signer string) error {
 	return status.Errorf(codes.PermissionDenied, "unrecognized capability signer: %q", signer)
+}
+
+// errNoTransportCredentials is the error-table row "Request without valid
+// transport credentials → UNAUTHENTICATED". ponytail: mTLS is deferred to a
+// later phase — all internal gRPC uses insecure.NewCredentials() (consistent
+// with the codebase-wide pattern), so this sentinel is currently unused as a
+// forward-looking placeholder. When mTLS is added, transport-level rejection
+// occurs in the gRPC interceptor/credential layer; this sentinel exists so a
+// handler-thrown UNAUTHENTICATED status for a missing/invalid client
+// certificate has a single named source rather than a scattered status.Error.
+func errNoTransportCredentials() error {
+	return status.Error(codes.Unauthenticated, "request without valid transport credentials")
 }

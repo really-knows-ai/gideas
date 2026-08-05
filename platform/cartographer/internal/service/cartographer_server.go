@@ -32,6 +32,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// HardMaxTimeout is the hard maximum lifetime (inclusive ceiling) for any
+// transaction. It pins the constructor default, recovered-transaction timeout,
+// and the ExtendTimeout ceiling (enforced via tm.hardMaxTimeout) to a single
+// named constant so the three cannot diverge independently on future edits.
+const HardMaxTimeout = 7 * 24 * time.Hour
+
 // TelemetryPublisher provides non-blocking telemetry event submission.
 type TelemetryPublisher interface {
 	Submit(req *flowv1.PublishRequest)
@@ -93,14 +99,11 @@ func NewCartographerServer(
 		defaultTimeout: defaultTimeout,
 		auditor:        nil,
 		gcStop:         make(chan struct{}),
-		// ponytail: hardMaxTimeout of 7*24*time.Hour (7 days) is passed as a bare
-		// literal to NewTransactionManager. The same constant is used by ExtendTimeout
-		// via tm.hardMaxTimeout. If this value drifts on future edits (e.g. is replaced
-		// with a config parameter in a different location), ExtendTimeout silently uses
-		// the wrong ceiling. There is no named constant shared between the constructor
-		// call site and the TransactionManager field. Upgrade path: define a package-level
-		// const HardMaxTimeout = 7 * 24 * time.Hour and reference it in both places.
-		txManager: NewTransactionManager(defaultTimeout, 7*24*time.Hour, changeLogCap),
+		// HardMaxTimeout (7 days) is pinned to the package-level const and passed
+		// to NewTransactionManager, which stores it as tm.hardMaxTimeout. ExtendTimeout
+		// enforces the ceiling via that field, and RecoverOpenTransactions reuses the
+		// same const; all three share one source of truth.
+		txManager: NewTransactionManager(defaultTimeout, HardMaxTimeout, changeLogCap),
 	}
 	for _, o := range opts {
 		o(srv)
@@ -222,10 +225,10 @@ func (s *CartographerServer) rejectFullChangeLog(ctx context.Context, txID strin
 		}
 	}
 	state.RollbackOnly = true
-	persistErr := s.persistTransactionState(state)
+	persistErr := s.persistTransactionState(ctx, state)
 	var invalidateErr error
 	if persistErr != nil {
-		invalidateErr = s.store.InvalidateBranchState(txID)
+		invalidateErr = s.store.InvalidateBranchState(ctx, txID)
 	}
 	cleanupErr := s.cleanupTransaction(ctx, state)
 	return &ChangeLogFullError{
@@ -250,8 +253,8 @@ func durableTransactionState(state *TransactionState) store.BranchTransactionSta
 	}
 }
 
-func (s *CartographerServer) persistTransactionState(state *TransactionState) error {
-	return s.store.SaveBranchTransactionState(state.ID, durableTransactionState(state))
+func (s *CartographerServer) persistTransactionState(ctx context.Context, state *TransactionState) error {
+	return s.store.SaveBranchTransactionState(ctx, state.ID, durableTransactionState(state))
 }
 
 // cleanupTransaction removes transaction resources in retry-safe order. The
@@ -289,7 +292,7 @@ func (s *CartographerServer) cleanupTransactionGitLocked(ctx context.Context, st
 }
 
 func (s *CartographerServer) finishTransactionCleanup(ctx context.Context, state *TransactionState) error {
-	if err := s.store.DropBranchDB(state.ID); err != nil {
+	if err := s.store.DropBranchDB(ctx, state.ID); err != nil {
 		return fmt.Errorf("drop transaction branch DB: %w", err)
 	}
 	if err := s.withGitLock(func() error {
@@ -346,7 +349,7 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		if dumpErr != nil {
 			return fmt.Errorf("open transaction branch DB %q: %w", txID, dumpErr)
 		}
-		durableState, stateErr := s.store.LoadBranchTransactionState(txID)
+		durableState, stateErr := s.store.LoadBranchTransactionState(ctx, txID)
 		if stateErr != nil {
 			return fmt.Errorf("read transaction state %q: %w", txID, stateErr)
 		}
@@ -380,7 +383,7 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		// with a shorter duration. Upgrade path: persist the requested timeout alongside
 		// the branch DB (e.g. a metadata file in the git branch or a sidecar record)
 		// and read it back here instead of using the hard maximum.
-		state, err := s.txManager.Create(txID, 7*24*time.Hour, durableState.MainHeadAtLastSync)
+		state, err := s.txManager.Create(txID, HardMaxTimeout, durableState.MainHeadAtLastSync)
 		if err != nil {
 			return fmt.Errorf("register recovered transaction %q: %w", txID, err)
 		}
@@ -611,6 +614,18 @@ func (s *CartographerServer) gcTick() {
 			continue
 		}
 		var merged bool
+		// ponytail: the git working-tree lock (WithGitLock) is held across the
+		// store-layer RehydrateMainFromFiles DB I/O below, so a slow, PVC-backed
+		// LadybugDB re-hydration serializes every other git operation in the
+		// process (commit/rollback/begin/cleanup/recovery, and this GC loop
+		// itself) behind it. This keeps the re-hydration's file reads consistent
+		// with the main working tree, but at the cost of blocking git work for
+		// the full DB I/O duration. Upgrade path: narrow the lock to cover only
+		// the git operations (RestoreMain/CleanUntracked/GitLogOneline) and run
+		// RehydrateMainFromFiles outside it (e.g. after releasing the git lock,
+		// mirroring the narrowed lock scope used in RefreshTransaction), or
+		// re-order so re-hydration happens outside the git lock while still
+		// holding the writeLock for main-store exclusivity.
 		if err := s.withGitLock(func() error {
 			if err := s.gitstore.RestoreMain(ctx); err != nil {
 				return err
@@ -623,11 +638,13 @@ func (s *CartographerServer) gcTick() {
 				return err
 			}
 			merged = len(logs) > 0
-			if !merged && s.ladybugPath != "" {
+			if !merged {
+				// Re-hydrate main unconditionally (SPEC R10/serialisation
+				// re-hydration), even in in-memory mode where ladybugPath is
+				// unset, so main stays consistent with the git working tree.
 				s.lockMainStore()
-				err := s.store.RehydrateMainFromFiles(ctx,
-					filepath.Join(s.ladybugPath, "graph-repo/entities"),
-					filepath.Join(s.ladybugPath, "graph-repo/edges"))
+				entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+				err := s.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
 				s.writeLock.Unlock()
 				if err != nil {
 					return err
@@ -833,14 +850,6 @@ func (s *CartographerServer) ExecuteCypher(
 		}
 	}
 	rows, err := s.store.ExecuteCypher(ctx, req.Cypher, params, s.resolveBranch(req.TransactionId))
-	// ponytail: SPEC R7 §5 requires PERMISSION_DENIED for mutation statements
-	// in ExecuteCypher, enforced by classifying the Cypher AST before execution.
-	// The current implementation delegates to LadybugDB's Prepare step, which
-	// rejects mutations with INVALID_ARGUMENT (the mutation is still rejected,
-	// but with the wrong error code). Adding AST classification would require
-	// parsing the Cypher via LadybugDB's parser before execution — a non-trivial
-	// addition that is deferred until a caller needs to distinguish "bad syntax"
-	// from "write verb in read-only method" by error code alone.
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -850,11 +859,36 @@ func (s *CartographerServer) ExecuteCypher(
 // rowsToTuples converts a []map[string]any result from LadybugDB into a
 // []*flowv1.FlatTuple. Each map entry is stringified and wrapped in a
 // structpb.Value to produce flat tuples per SPEC §R2.
+//
+// Go map iteration order is randomised, so ranging over each row's map would
+// yield a nondeterministic, unaligned value order. To honour R2's "flat
+// tuples" deterministic contract, the column set is the sorted union of every
+// row's keys; each tuple lists values in that column order, emitting a null
+// for columns absent from that row. This makes value order and column
+// alignment identical across rows and across calls.
 func rowsToTuples(rows []map[string]any) []*flowv1.FlatTuple {
+	columns := make([]string, 0, len(rows))
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		for k := range row {
+			if !seen[k] {
+				seen[k] = true
+				columns = append(columns, k)
+			}
+		}
+	}
+	sort.Strings(columns)
+
+	nullVal := structpb.NewNullValue()
 	result := make([]*flowv1.FlatTuple, 0, len(rows))
 	for _, row := range rows {
-		values := make([]*structpb.Value, 0, len(row))
-		for _, v := range row {
+		values := make([]*structpb.Value, 0, len(columns))
+		for _, col := range columns {
+			v, ok := row[col]
+			if !ok {
+				values = append(values, nullVal)
+				continue
+			}
 			val, err := structpb.NewValue(v)
 			if err != nil {
 				val = structpb.NewStringValue(fmt.Sprintf("%v", v))
@@ -1130,9 +1164,31 @@ func (s *CartographerServer) DeleteEntity(
 		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
 			return nil, err
 		}
+		// Enumerate the edges that DeleteEntity's cascade will remove (DETACH
+		// DELETE) so they can be recorded in the change log. Without this, the
+		// cascade-deleted edges never reach the log and their git files are not
+		// removed on commit, breaking SPEC R7 §4 atomicity ("edges are removed
+		// atomically with the entity") across a commit.
+		var cascadeEdges []store.Edge
+		allEdges, dumpErr := s.store.DumpAllEdges(ctx, branch)
+		if dumpErr != nil {
+			return nil, mapStoreError(dumpErr)
+		}
+		for _, e := range allEdges {
+			if e.FromEntityID == req.Id || e.ToEntityID == req.Id {
+				cascadeEdges = append(cascadeEdges, e)
+			}
+		}
 		ent, err = s.store.DeleteEntity(ctx, req.Id, branch)
 		if err != nil {
 			return nil, mapStoreError(err)
+		}
+		for _, e := range cascadeEdges {
+			if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+				Kind: gitstore.ChangeDelEdge, ID: e.Id, Type: e.Type,
+			}); err != nil {
+				return nil, err
+			}
 		}
 		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeDelEntity, ID: ent.Id, Type: ent.Type,
@@ -1164,8 +1220,15 @@ func (s *CartographerServer) CreateEdge(
 		return nil, err
 	}
 	defer unlockTx()
-	// Resolve source entity type for capability check.
+	// SPEC order: structural (unknown edge type / rule) validation precedes
+	// entity-existence and capability checks, so an unknown edge type yields
+	// INVALID_ARGUMENT even when the caller lacks write capability.
 	branch := s.resolveBranch(req.TransactionId)
+	if _, ok := s.store.EdgeType(req.EdgeType); !ok {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"unknown edge type: %q", req.EdgeType)
+	}
+	// Resolve source entity type for capability check.
 	sourceType, resolveErr := s.store.ResolveEntityType(ctx, req.FromEntityId, branch)
 	if resolveErr != nil {
 		return nil, mapStoreError(resolveErr)
@@ -1293,9 +1356,9 @@ func (s *CartographerServer) BeginTransaction(
 		if err := s.gitstore.HardResetToBranch(ctx, txID); err != nil {
 			return fmt.Errorf("hard reset: %w", err)
 		}
-		if err := s.store.CreateBranchDB(txID); err != nil {
+		if err := s.store.CreateBranchDB(ctx, txID); err != nil {
 			branchStoreErr = fmt.Errorf("create branch DB: %w", err)
-		} else if err := s.store.ReplicateSchemaToBranch(txID); err != nil {
+		} else if err := s.store.ReplicateSchemaToBranch(ctx, txID); err != nil {
 			branchStoreErr = fmt.Errorf("replicate branch schema: %w", err)
 		} else if s.ladybugPath != "" {
 			branchStoreErr = s.store.HydrateBranchFromFiles(ctx, txID,
@@ -1304,7 +1367,7 @@ func (s *CartographerServer) BeginTransaction(
 		}
 		if branchStoreErr != nil {
 			var cleanups []string
-			if err := s.store.DropBranchDB(txID); err != nil {
+			if err := s.store.DropBranchDB(ctx, txID); err != nil {
 				cleanups = append(cleanups, fmt.Sprintf("drop branch DB: %v", err))
 			}
 			if err := s.gitstore.RestoreMain(ctx); err != nil {
@@ -1340,7 +1403,7 @@ func (s *CartographerServer) BeginTransaction(
 			}
 			return nil
 		})
-		if err := s.store.DropBranchDB(txID); err != nil {
+		if err := s.store.DropBranchDB(ctx, txID); err != nil {
 			cleanups = append(cleanups, fmt.Sprintf("drop branch DB: %v", err))
 		}
 		msg := fmt.Sprintf("register tx: %v", err)
@@ -1350,7 +1413,7 @@ func (s *CartographerServer) BeginTransaction(
 		return nil, errBeginTransactionResourceExhausted(msg)
 	}
 	state.SchemaHash = computeSchemaHash(s.store)
-	if err := s.persistTransactionState(state); err != nil {
+	if err := s.persistTransactionState(ctx, state); err != nil {
 		cleanupErr := s.cleanupTransaction(ctx, state)
 		if cleanupErr != nil {
 			return nil, errBeginTransactionResourceExhausted(fmt.Sprintf(
@@ -1423,7 +1486,7 @@ func (s *CartographerServer) CommitTransaction(
 		if commitExists && !state.CommitCreated {
 			state.CommitCreated = true
 			state.CommitStarted = true
-			if err := s.persistTransactionState(state); err != nil {
+			if err := s.persistTransactionState(ctx, state); err != nil {
 				commitErr = fmt.Errorf("persist detected commit: %w", err)
 				return nil
 			}
@@ -1438,7 +1501,7 @@ func (s *CartographerServer) CommitTransaction(
 			if txHead == mainHead {
 				state.MergeCompleted = true
 				state.MainRehydrated = false
-				if err := s.persistTransactionState(state); err != nil {
+				if err := s.persistTransactionState(ctx, state); err != nil {
 					commitErr = fmt.Errorf("persist detected merge: %w", err)
 					return nil
 				}
@@ -1451,13 +1514,13 @@ func (s *CartographerServer) CommitTransaction(
 		if !state.CommitCreated {
 			tc := groupChanges(state.ChangeLog)
 			for et, entries := range tc.addedEntities {
-				if err := s.gitstore.WriteEntityFiles(ctx, et, toGitEntities(entries)); err != nil {
+				if err := s.gitstore.WriteEntityFiles(ctx, et, s.toGitEntities(entries)); err != nil {
 					commitErr = fmt.Errorf("write entity files: %w", err)
 					return nil
 				}
 			}
 			for et, entries := range tc.modifiedEntities {
-				if err := s.gitstore.WriteEntityFiles(ctx, et, toGitEntities(entries)); err != nil {
+				if err := s.gitstore.WriteEntityFiles(ctx, et, s.toGitEntities(entries)); err != nil {
 					commitErr = fmt.Errorf("write modified entity files: %w", err)
 					return nil
 				}
@@ -1502,7 +1565,7 @@ func (s *CartographerServer) CommitTransaction(
 				return nil
 			}
 			state.CommitStarted = true
-			if err := s.persistTransactionState(state); err != nil {
+			if err := s.persistTransactionState(ctx, state); err != nil {
 				commitErr = fmt.Errorf("persist commit start: %w", err)
 				return nil
 			}
@@ -1511,7 +1574,7 @@ func (s *CartographerServer) CommitTransaction(
 				return nil
 			}
 			state.CommitCreated = true
-			if err := s.persistTransactionState(state); err != nil {
+			if err := s.persistTransactionState(ctx, state); err != nil {
 				commitErr = fmt.Errorf("persist created commit: %w", err)
 				return nil
 			}
@@ -1520,7 +1583,7 @@ func (s *CartographerServer) CommitTransaction(
 			// SPEC steps 7-8: git lock is outer; main write lock is inner.
 			s.lockMainStore()
 			state.MainRehydrated = true
-			if err := s.persistTransactionState(state); err != nil {
+			if err := s.persistTransactionState(ctx, state); err != nil {
 				state.MainRehydrated = false
 				s.writeLock.Unlock()
 				commitErr = fmt.Errorf("persist main rehydration start: %w", err)
@@ -1539,7 +1602,7 @@ func (s *CartographerServer) CommitTransaction(
 				return nil
 			}
 			state.CommitHydrated = true
-			if err := s.persistTransactionState(state); err != nil {
+			if err := s.persistTransactionState(ctx, state); err != nil {
 				state.CommitHydrated = false
 				commitErr = fmt.Errorf("persist completed main rehydration: %w", err)
 				return nil
@@ -1557,7 +1620,7 @@ func (s *CartographerServer) CommitTransaction(
 		}
 		state.MergeCompleted = true
 		state.MainRehydrated = false
-		if err := s.persistTransactionState(state); err != nil {
+		if err := s.persistTransactionState(ctx, state); err != nil {
 			commitErr = fmt.Errorf("persist completed merge: %w", err)
 			return nil
 		}
@@ -1582,6 +1645,39 @@ func (s *CartographerServer) CommitTransaction(
 			pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := s.gitstore.WithGitLock(func() error {
+				// ponytail: This pull-before-push diverges from SPEC R10's
+				// Commit step 14, which specifies a remote push only (fire-and-
+				// forget). FetchAndMerge is an extra, unspecified git operation
+				// on the local `main` working tree performed to reduce
+				// non-fast-forward push rejections when the remote has advanced
+				// since the last sync. Failure modes/consequences:
+				//   (1) FetchAndMerge can itself advance local `main` via
+				//       setLocalRefAndCheckout, so a rejected push still
+				//       leaves local main ahead of (or diverged from) what the
+				//       remote accepts, and the divergence keeps re-issuing the
+				//       merge on the next commit;
+				//   (2) when local and remote have truly diverged,
+				//       FetchAndMerge builds a MERGE COMMIT on local `main` —
+				//       a state the local transaction history never authored —
+				//       which can then be pushed, mixing a peer's commits
+				//       (or an older replica's) into the published timeline;
+				//   (3) under HA/multi-replica deployment a peer push in the
+				//       gap between fetch and push makes this merge race —
+				//       FetchAndMerge pulls the peer's commits, then the push
+				//       fails as non-fast-forward and the failure is only
+				//       logged/telemetry, so a peer's commit may be lost to the
+				//       local timeline while main stays consistent on the
+				//       remote, requiring a later pull to reconcile;
+				//   (4) it adds a network round-trip on every commit and, if
+				//       the merge is created, a local re-hydration is skipped
+				//       — the branch DB was already re-hydrated from the
+				//       pre-merge main, so a merge with remote content is not
+				//       reflected in main until the NEXT commit's hydration.
+				// Upgrade path: push without mutating local main, retrying the
+				// push itself (not a pre-merge) when it fails non-fast-forward;
+				// and treat remote divergence as an operator-visible condition
+				// (telemetry event) rather than silently merging on the
+				// working tree.
 				if _, err := s.gitstore.FetchAndMerge(pushCtx, "origin", "main"); err != nil {
 					return err
 				}
@@ -1610,7 +1706,7 @@ func (s *CartographerServer) reconcileFailedCommitGitLocked(
 	if commitExists {
 		state.CommitStarted = true
 		state.CommitCreated = true
-		return s.persistTransactionState(state)
+		return s.persistTransactionState(ctx, state)
 	}
 	if err := s.gitstore.HardResetToBranch(ctx, state.ID); err != nil {
 		return fmt.Errorf("clean transaction branch: %w", err)
@@ -1620,7 +1716,7 @@ func (s *CartographerServer) reconcileFailedCommitGitLocked(
 	state.CommitCreated = false
 	state.CommitHydrated = false
 	state.MainRehydrated = false
-	if err := s.persistTransactionState(state); err != nil {
+	if err := s.persistTransactionState(ctx, state); err != nil {
 		state.CommitStarted = previous.CommitStarted
 		state.CommitCreated = previous.CommitCreated
 		state.CommitHydrated = previous.CommitHydrated
@@ -1668,7 +1764,7 @@ func (s *CartographerServer) refreshEmptyTransactionHead(
 	}
 	oldMainHead := state.MainHeadAtLastSync
 	state.MainHeadAtLastSync = mainHead
-	if err := s.persistTransactionState(state); err != nil {
+	if err := s.persistTransactionState(ctx, state); err != nil {
 		state.MainHeadAtLastSync = oldMainHead
 		return fmt.Errorf("persist refreshed transaction: %w", err)
 	}
@@ -1805,13 +1901,13 @@ func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context
 	if s.ladybugPath == "" {
 		return status.Error(codes.FailedPrecondition, "refresh requires LADYBUG_DB_PATH")
 	}
-	if err := s.store.DropBranchDB(txID); err != nil {
+	if err := s.store.DropBranchDB(ctx, txID); err != nil {
 		return mapStoreError(err)
 	}
-	if err := s.store.CreateBranchDB(txID); err != nil {
+	if err := s.store.CreateBranchDB(ctx, txID); err != nil {
 		return mapStoreError(err)
 	}
-	if err := s.store.ReplicateSchemaToBranch(txID); err != nil {
+	if err := s.store.ReplicateSchemaToBranch(ctx, txID); err != nil {
 		return mapStoreError(err)
 	}
 	if err := s.store.HydrateBranchFromFiles(ctx, txID,
@@ -1891,7 +1987,7 @@ func (s *CartographerServer) RefreshTransaction(
 		}
 		oldMainHead := state.MainHeadAtLastSync
 		state.MainHeadAtLastSync = mainHash
-		if err := s.persistTransactionState(state); err != nil {
+		if err := s.persistTransactionState(ctx, state); err != nil {
 			state.MainHeadAtLastSync = oldMainHead
 			return fmt.Errorf("persist refreshed transaction: %w", err)
 		}
@@ -2010,21 +2106,16 @@ func (s *CartographerServer) WipeGraph(
 			wipeErr = err
 			return nil
 		}
-		_ = s.gitstore.CleanUntracked(ctx)
-		// Recreate tracked root directories so an entity-only graph is valid
-		// and absence does not masquerade as corruption.
-		if err := s.gitstore.InitDir(ctx, "entities"); err != nil {
-			wipeErr = fmt.Errorf("recreate entities dir: %w", err)
+		if err := s.gitstore.CleanUntracked(ctx); err != nil {
+			wipeErr = fmt.Errorf("clean untracked: %w", err)
 			return nil
 		}
-		if err := s.gitstore.InitDir(ctx, "edges"); err != nil {
-			wipeErr = fmt.Errorf("recreate edges dir: %w", err)
-			return nil
-		}
-		if err := s.gitstore.Commit(ctx, "recreate roots"); err != nil {
-			wipeErr = err
-			return nil
-		}
+		// SPEC R2 WipeGraph: the sequence is git rm -r (entities+edges),
+		// commit "wipe", then git clean -fd. Root directories are NOT
+		// recreated here — a clean wipe leaves entities/ and edges/ absent.
+		// Downstream file-per-element writes (WriteEntityFiles/WriteEdgeFiles)
+		// recreate type dirs on demand via MkdirAll, and re-hydration
+		// (loadEntitiesFromDir/loadEdgesFromDir) treats a missing dir as empty.
 		return nil
 	})
 	if wipeErr != nil {
@@ -2044,9 +2135,7 @@ func (s *CartographerServer) HealthCheck(
 ) (*flowv1.HealthCheckResponse, error) {
 	health, err := s.store.Health(ctx)
 	if err != nil {
-		return &flowv1.HealthCheckResponse{
-			LadybugOk: false, PvcWritable: false,
-		}, nil
+		return nil, err
 	}
 	return &flowv1.HealthCheckResponse{
 		LadybugOk: health.LadybugOK, SchemaApplied: health.SchemaApplied, PvcWritable: health.PVCWritable,
@@ -2079,13 +2168,27 @@ func (s *CartographerServer) PullFromRemote(
 		} else if _, err := s.gitstore.FetchAndMerge(ctx, "origin", "main"); err != nil {
 			return err
 		}
-		if s.ladybugPath != "" {
-			s.lockMainStore()
-			hydrationErr = s.store.RehydrateMainFromFiles(ctx,
-				filepath.Join(s.ladybugPath, "graph-repo/entities"),
-				filepath.Join(s.ladybugPath, "graph-repo/edges"))
-			s.writeLock.Unlock()
-		}
+		// Unconditionally re-hydrate main from the git working tree on a successful
+		// pull (SPEC R10), mirroring the Commit path: derive the file directories
+		// from the gitstore so main is refreshed even when running in-memory
+		// (ladybugPath unset), keeping the in-memory main consistent with the
+		// pulled working tree.
+		// ponytail: Unlike SPEC R10, which sequences "release the git lock, then
+		// acquire the LadybugDB write lock and drop/re-hydrate main", this path holds
+		// the git working-tree lock across lockMainStore() + RehydrateMainFromFiles.
+		// Holding both locks together serialises the drop/re-hydrate against any
+		// concurrent git mutation (Commit/Refresh/GC) for the duration of the re-hydration,
+		// so the working tree cannot change underneath the file read; releasing the git
+		// lock first would admit a commit between the fetch and the re-hydrate, giving main
+		// a re-hydrate from a stale snapshot. The cost is that a slow re-hydration stalls
+		// every git mutation on the single-leader Cartographer for the whole window.
+		// Upgrade path: pin the pulled working-tree HEAD (e.g. read the file bytes under
+		// the git lock into memory, or record the pulled commit SHA), release the git lock,
+		// then re-hydrate under only the write lock — matching SPEC R10 sequencing.
+		s.lockMainStore()
+		entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+		hydrationErr = s.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+		s.writeLock.Unlock()
 		return nil
 	}); err != nil {
 		return nil, mapGitError(err)
@@ -2096,27 +2199,6 @@ func (s *CartographerServer) PullFromRemote(
 	return &flowv1.PullFromRemoteResponse{}, nil
 }
 
-// PushToRemote pushes local commits to the configured remote repository.
-func (s *CartographerServer) PushToRemote(
-	ctx context.Context, req *flowv1.PushToRemoteRequest,
-) (*flowv1.PushToRemoteResponse, error) {
-	if s.remoteURL == "" {
-		return nil, errRemoteNotConfigured()
-	}
-	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
-		return nil, err
-	}
-	if err := s.withGitLock(func() error {
-		if _, err := s.gitstore.FetchAndMerge(ctx, "origin", "main"); err != nil {
-			return err
-		}
-		return s.gitstore.PushRemote(ctx)
-	}); err != nil {
-		return nil, mapGitError(err)
-	}
-	return &flowv1.PushToRemoteResponse{}, nil
-}
-
 // ExportGraph streams the serialised graph.
 func (s *CartographerServer) ExportGraph(
 	req *flowv1.ExportGraphRequest,
@@ -2125,6 +2207,13 @@ func (s *CartographerServer) ExportGraph(
 	ctx := stream.Context()
 	if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
 		return err
+	}
+
+	// Reject an unsupported format before enumerating the graph. Collecting the
+	// full graph only to discard it on an unsupported format wastes I/O (SPEC
+	// R11/R2 maps unsupported format to INVALID_ARGUMENT).
+	if format := req.GetFormat(); format != ExportFormatJSON && format != ExportFormatGraphML {
+		return errUnsupportedExportFormat(format)
 	}
 
 	// collectExportData may panic (e.g. bytes.ErrTooLarge, make() OOM) when the
@@ -2189,12 +2278,22 @@ func groupChanges(cl *gitstore.ChangeLog) typeChanges {
 	return tc
 }
 
-func toGitEntities(entries []*gitstore.EntityEntry) []gitstore.Entity {
+// toGitEntities converts change-log entity entries to gitstore.Entity values
+// for file serialisation. Embeddings are stripped for entity types that are
+// not vector-indexed (SPEC R7: embedding data is discarded — not persisted),
+// so that no embedding data leaks into the git repository for non-indexed
+// types. For indexed types the embedding is retained so corruption recovery
+// (SPEC R8) can restore the full graph state including vector data.
+func (s *CartographerServer) toGitEntities(entries []*gitstore.EntityEntry) []gitstore.Entity {
 	r := make([]gitstore.Entity, len(entries))
 	for i, e := range entries {
+		emb := e.Embedding
+		if def, ok := s.store.EntityType(e.Type); ok && !def.EnableVectorIndex {
+			emb = nil
+		}
 		r[i] = gitstore.Entity{
 			ID: e.ID, Type: e.Type, Properties: e.Properties,
-			Embedding: e.Embedding, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
+			Embedding: emb, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
 		}
 	}
 	return r

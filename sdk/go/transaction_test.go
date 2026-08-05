@@ -7,6 +7,7 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 func newMockTx(mock *mockCartographerClient) *Transaction {
@@ -159,6 +160,52 @@ func TestTxSearchNeighbors(t *testing.T) {
 	}
 }
 
+func TestTxSearchNeighbors_LosslessIdentityLikeProperties(t *testing.T) {
+	mock := &mockCartographerClient{
+		searchNeighbors: func(ctx context.Context,
+			req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
+			return &flowv1.SearchNeighborsResponse{
+				Results: []*flowv1.SearchNeighborResult{
+					{
+						EntityId:   "tn1",
+						EntityType: componentType,
+						Properties: map[string]string{
+							"entity_id":   clobberedIDProp,
+							"entity_type": clobberedTypeProp,
+						},
+						Score: 0.7,
+					},
+				},
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	results, err := tx.SearchNeighbors([]float32{0.1}, "Component", 10)
+	if err != nil {
+		t.Fatalf("SearchNeighbors returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if r.ID != "tn1" {
+		t.Errorf("expected identity ID tn1, got %q", r.ID)
+	}
+	if r.Type != componentType {
+		t.Errorf("expected identity type Component, got %q", r.Type)
+	}
+	if r.Properties["entity_id"] != clobberedIDProp {
+		t.Errorf("expected identity-like property entity_id preserved, got %q", r.Properties["entity_id"])
+	}
+	if r.Properties["entity_type"] != clobberedTypeProp {
+		t.Errorf("expected identity-like property entity_type preserved, got %q", r.Properties["entity_type"])
+	}
+	if r.Similarity != 0.7 {
+		t.Errorf("expected similarity 0.7, got %v", r.Similarity)
+	}
+}
+
 func TestTxFullTextSearch(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{
@@ -174,6 +221,46 @@ func TestTxFullTextSearch(t *testing.T) {
 	}
 	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
+	}
+}
+
+func TestTxFullTextSearch_LosslessIdentityLikeProperties(t *testing.T) {
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			return &flowv1.FullTextSearchResponse{
+				Results: []*flowv1.Entity{
+					{
+						EntityId:   "tf1",
+						EntityType: componentType,
+						Properties: map[string]string{
+							"entity_id":   "flattened-id",
+							"entity_type": "FlattenedType",
+						},
+					},
+				},
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	results, err := tx.FullTextSearch("query", "Component")
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	e := results[0]
+	if e.ID != "tf1" {
+		t.Errorf("expected identity ID tf1, got %q", e.ID)
+	}
+	if e.Type != componentType {
+		t.Errorf("expected identity type Component, got %q", e.Type)
+	}
+	if e.Properties["entity_id"] != "flattened-id" {
+		t.Errorf("expected identity-like property entity_id preserved, got %q", e.Properties["entity_id"])
+	}
+	if e.Properties["entity_type"] != "FlattenedType" {
+		t.Errorf("expected identity-like property entity_type preserved, got %q", e.Properties["entity_type"])
 	}
 }
 
@@ -195,6 +282,47 @@ func TestTxListEntities(t *testing.T) {
 	}
 }
 
+func TestTxListEntities_LosslessIdentityLikeProperties(t *testing.T) {
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			return &flowv1.ListEntitiesResponse{
+				Entities: []*flowv1.Entity{
+					{
+						EntityId:   "te1",
+						EntityType: componentType,
+						Properties: map[string]string{
+							"entity_id":   clobberedIDProp,
+							"entity_type": clobberedTypeProp,
+							"name":        "real",
+						},
+					},
+				},
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	page, err := tx.ListEntities("Component")
+	if err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if len(page.Entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(page.Entities))
+	}
+	e := page.Entities[0]
+	if e.ID != "te1" {
+		t.Errorf("expected identity ID te1, got %q", e.ID)
+	}
+	if e.Type != componentType {
+		t.Errorf("expected identity type Component, got %q", e.Type)
+	}
+	if e.Properties["entity_id"] != clobberedIDProp {
+		t.Errorf("expected identity-like property entity_id preserved, got %q", e.Properties["entity_id"])
+	}
+	if e.Properties["entity_type"] != clobberedTypeProp {
+		t.Errorf("expected identity-like property entity_type preserved, got %q", e.Properties["entity_type"])
+	}
+}
+
 func TestDiff(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{
@@ -202,16 +330,81 @@ func TestDiff(t *testing.T) {
 			req *flowv1.GetTransactionDiffRequest,
 		) (*flowv1.GetTransactionDiffResponse, error) {
 			capturedTxID = req.GetTransactionId()
-			return &flowv1.GetTransactionDiffResponse{}, nil
+			return &flowv1.GetTransactionDiffResponse{
+				AddedEntities: []*flowv1.DiffEntry{
+					{
+						Id:         "e1",
+						Type:       "Component",
+						Properties: map[string]string{"name": "add"},
+						Embedding:  []float32{0.1, 0.2},
+						Suspected:  true,
+					},
+				},
+				ModifiedEntities: []*flowv1.DiffEntry{
+					{Id: "e2", Type: "Service", Properties: map[string]string{"name": "mod"}},
+				},
+				DeletedEntities: []*flowv1.DiffEntry{
+					{Id: "e3", Type: "Component"},
+				},
+				AddedEdges: []*flowv1.DiffEntry{
+					{
+						Id: "edge1", Type: "DEPENDS_ON",
+						FromEntityId: "e1", ToEntityId: "e2",
+						Properties: map[string]string{"k": "v"},
+						Suspected:  true,
+					},
+				},
+				ModifiedEdges: []*flowv1.DiffEntry{
+					{Id: "edge2", Type: "DEPENDS_ON", FromEntityId: "e2", ToEntityId: "e3"},
+				},
+				DeletedEdges: []*flowv1.DiffEntry{
+					{Id: "edge3", Type: "DEPENDS_ON", FromEntityId: "e3", ToEntityId: "e1"},
+				},
+			}, nil
 		},
 	}
 	tx := newMockTx(mock)
-	_, err := tx.Diff()
+	diff, err := tx.Diff()
 	if err != nil {
 		t.Fatalf("Diff returned error: %v", err)
 	}
 	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
+	}
+
+	if len(diff.AddedEntities) != 1 || len(diff.ModifiedEntities) != 1 || len(diff.DeletedEntities) != 1 {
+		t.Fatalf("expected 1 added/modified/deleted entity each, got %d/%d/%d",
+			len(diff.AddedEntities), len(diff.ModifiedEntities), len(diff.DeletedEntities))
+	}
+	add := diff.AddedEntities[0]
+	if add.ID != "e1" || add.Type != "Component" || add.Properties["name"] != "add" {
+		t.Errorf("added entity conversion wrong: %+v", add)
+	}
+	if len(add.Embedding) != 2 || add.Embedding[0] != 0.1 || add.Embedding[1] != 0.2 {
+		t.Errorf("expected embedding [0.1 0.2] on entity, got %v", add.Embedding)
+	}
+	if !add.Suspected {
+		t.Error("expected Suspected flag propagated on entity")
+	}
+	if diff.ModifiedEntities[0].ID != "e2" || diff.DeletedEntities[0].ID != "e3" {
+		t.Errorf("unexpected modified/deleted entity conversion:\n %+v / %+v",
+			diff.ModifiedEntities[0], diff.DeletedEntities[0])
+	}
+
+	if len(diff.AddedEdges) != 1 || len(diff.ModifiedEdges) != 1 || len(diff.DeletedEdges) != 1 {
+		t.Fatalf("expected 1 added/modified/deleted edge each, got %d/%d/%d",
+			len(diff.AddedEdges), len(diff.ModifiedEdges), len(diff.DeletedEdges))
+	}
+	addEdge := diff.AddedEdges[0]
+	if addEdge.ID != "edge1" || addEdge.Type != "DEPENDS_ON" ||
+		addEdge.FromEntityID != "e1" || addEdge.ToEntityID != "e2" || addEdge.Properties["k"] != "v" {
+		t.Errorf("edge conversion wrong: %+v", addEdge)
+	}
+	if !addEdge.Suspected {
+		t.Errorf("expected Suspected flag propagated on edge")
+	}
+	if diff.ModifiedEdges[0].ID != "edge2" || diff.DeletedEdges[0].ID != "edge3" {
+		t.Errorf("unexpected modified/deleted edge conversion wrong: %+v/%+v", diff.ModifiedEdges[0], diff.DeletedEdges[0])
 	}
 }
 
@@ -313,6 +506,39 @@ func TestExtendTimeout_RejectsNonPositive(t *testing.T) {
 	_, err = tx.ExtendTimeout(-1 * time.Second)
 	if err == nil {
 		t.Error("expected error for negative duration")
+	}
+}
+
+func TestExtendTimeout(t *testing.T) {
+	var capturedTxID string
+	var capturedDuration *durationpb.Duration
+	mock := &mockCartographerClient{
+		extendTimeout: func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error) {
+			capturedTxID = req.GetTransactionId()
+			capturedDuration = req.GetDuration()
+			return &flowv1.ExtendTimeoutResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+
+	got, err := tx.ExtendTimeout(24 * time.Hour)
+	if err != nil {
+		t.Fatalf("ExtendTimeout returned error: %v", err)
+	}
+	if capturedTxID != embassyTestTxID {
+		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
+	}
+	if capturedDuration == nil {
+		t.Fatal("expected duration to be set on request")
+	}
+	if capturedDuration.AsDuration() != 24*time.Hour {
+		t.Errorf("expected requested duration 24h on RPC, got %v", capturedDuration.AsDuration())
+	}
+	if got != 24*time.Hour {
+		t.Errorf("expected returned value 24h, got %v", got)
+	}
+	if tx.timeout != got {
+		t.Errorf("expected tx.timeout set to returned value %v, got %v", got, tx.timeout)
 	}
 }
 

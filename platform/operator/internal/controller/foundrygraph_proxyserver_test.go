@@ -18,11 +18,25 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"io"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	flowv1gen "github.com/foundry/flow/gen/flow/v1"
 )
 
 func TestProxyServerExtractRoutingMetadata(t *testing.T) {
@@ -95,5 +109,559 @@ func TestProxyUnimplemented(t *testing.T) {
 	}
 	if status.Code(err) != codes.Unimplemented {
 		t.Errorf("expected Unimplemented, got %v", status.Code(err))
+	}
+}
+
+// authProxyClient builds a fake client whose Create interceptor populates
+// TokenReview / SubjectAccessReview statuses — simulating the in-cluster API
+// server responses — so the authorize path can be tested without a real cluster.
+func authProxyClient(t *testing.T, authenticated, allowed bool) client.Client {
+	t.Helper()
+
+	interceptorFuncs := interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			switch o := obj.(type) {
+			case *authenticationv1.TokenReview:
+				o.Status = authenticationv1.TokenReviewStatus{
+					Authenticated: authenticated,
+					User:          authenticationv1.UserInfo{Username: "test-user"},
+				}
+			case *authorizationv1.SubjectAccessReview:
+				o.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: allowed}
+			}
+			return nil
+		},
+	}
+
+	_ = authenticationv1.AddToScheme(scheme.Scheme)
+	_ = authorizationv1.AddToScheme(scheme.Scheme)
+
+	return fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithInterceptorFuncs(interceptorFuncs).
+		Build()
+}
+
+func TestAuthorizeMissingAuthHeader(t *testing.T) {
+	s := &ProxyServer{
+		k8sClient: authProxyClient(t, true, true),
+		authCache: newAuthCache(30 * time.Second),
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs())
+	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected Unauthenticated for missing auth header, got %v", status.Code(err))
+	}
+}
+
+func TestAuthorizeInvalidToken(t *testing.T) {
+	s := &ProxyServer{
+		k8sClient: authProxyClient(t, false, false),
+		authCache: newAuthCache(30 * time.Second),
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer bad-token"))
+	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected Unauthenticated for invalid token, got %v", status.Code(err))
+	}
+}
+
+func TestAuthorizeDenied(t *testing.T) {
+	s := &ProxyServer{
+		k8sClient: authProxyClient(t, true, false),
+		authCache: newAuthCache(30 * time.Second),
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
+	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+func TestAuthorizeAllowedAndCached(t *testing.T) {
+	s := &ProxyServer{
+		k8sClient: authProxyClient(t, true, true),
+		authCache: newAuthCache(30 * time.Second),
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer valid"))
+	if err := s.authorize(ctx, "ns", "graph", "get"); err != nil {
+		t.Fatalf("expected authorize to succeed: %v", err)
+	}
+	// Second call must be served from the auth cache (no token/sar re-evaluation).
+	if err := s.authorize(ctx, "ns", "graph", "get"); err != nil {
+		t.Fatalf("expected cached authorize to succeed: %v", err)
+	}
+}
+
+// mockExportClientWithChunks returns one chunk then io.EOF.
+type mockExportClientWithChunks struct {
+	calls int
+}
+
+func (m *mockExportClientWithChunks) Recv() (*flowv1gen.ExportGraphResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		return &flowv1gen.ExportGraphResponse{Chunk: []byte("hello")}, nil
+	}
+	return nil, io.EOF
+}
+
+func (mockExportClientWithChunks) Context() context.Context { return context.Background() }
+func (mockExportClientWithChunks) Header() (metadata.MD, error) {
+	return nil, nil
+}
+func (mockExportClientWithChunks) Trailer() metadata.MD { return nil }
+func (mockExportClientWithChunks) CloseSend() error     { return nil }
+func (mockExportClientWithChunks) SendMsg(any) error    { return nil }
+func (mockExportClientWithChunks) RecvMsg(any) error    { return nil }
+
+// mockExportClientEOF returns io.EOF immediately (empty stream, OK termination).
+type mockExportClientEOF struct{}
+
+func (mockExportClientEOF) Recv() (*flowv1gen.ExportGraphResponse, error) {
+	return nil, io.EOF
+}
+
+func (mockExportClientEOF) Context() context.Context { return context.Background() }
+func (mockExportClientEOF) Header() (metadata.MD, error) {
+	return nil, nil
+}
+func (mockExportClientEOF) Trailer() metadata.MD { return nil }
+func (mockExportClientEOF) CloseSend() error     { return nil }
+func (mockExportClientEOF) SendMsg(any) error    { return nil }
+func (mockExportClientEOF) RecvMsg(any) error    { return nil }
+
+// mockExportStream implements the server streaming interface for ExportGraph tests.
+type mockExportStream struct {
+	ctx   context.Context
+	sends []*flowv1gen.ExportGraphResponse
+}
+
+func (m *mockExportStream) Send(r *flowv1gen.ExportGraphResponse) error {
+	m.sends = append(m.sends, r)
+	return nil
+}
+
+func (m *mockExportStream) SetHeader(metadata.MD) error  { return nil }
+func (m *mockExportStream) SendHeader(metadata.MD) error { return nil }
+func (m *mockExportStream) SetTrailer(metadata.MD)       {}
+func (m *mockExportStream) Context() context.Context     { return m.ctx }
+func (m *mockExportStream) SendMsg(any) error            { return nil }
+func (m *mockExportStream) RecvMsg(any) error            { return nil }
+
+func TestExportGraphForwarding(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					return &mockExportClientWithChunks{}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	req := &flowv1gen.ExportGraphRequest{Format: "json"}
+	if err := s.ExportGraph(req, stream); err != nil {
+		t.Fatalf("ExportGraph returned error: %v", err)
+	}
+	if len(stream.sends) == 0 {
+		t.Fatal("expected at least one forwarded chunk")
+	}
+}
+
+func TestExportGraphForwardingEmptyStream(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					return &mockExportClientEOF{}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	if err := s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream); err != nil {
+		t.Fatalf("ExportGraph on empty stream should succeed, got: %v", err)
+	}
+	if len(stream.sends) != 0 {
+		t.Fatalf("expected no chunks forwarded, got %d", len(stream.sends))
+	}
+}
+
+// mockExportClientErr returns a fixed error from Recv to simulate an upstream stream
+// failure (SPEC R11 mid-stream export failure → INTERNAL).
+type mockExportClientErr struct {
+	err error
+}
+
+func (m *mockExportClientErr) Recv() (*flowv1gen.ExportGraphResponse, error) { return nil, m.err }
+func (mockExportClientErr) Context() context.Context                         { return context.Background() }
+func (mockExportClientErr) Header() (metadata.MD, error)                     { return nil, nil }
+func (mockExportClientErr) Trailer() metadata.MD                             { return nil }
+func (mockExportClientErr) CloseSend() error                                 { return nil }
+func (mockExportClientErr) SendMsg(any) error                                { return nil }
+func (mockExportClientErr) RecvMsg(any) error                                { return nil }
+
+// TestExportGraphPropagatesUpstreamStatus asserts the proxy propagates the upstream gRPC
+// status on a mid-stream Recv error (SPEC R11: ExportGraph mid-stream failure → INTERNAL)
+// rather than recasting every upstream error as Unavailable.
+func TestExportGraphPropagatesUpstreamStatus(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	upstreamErr := status.Error(codes.Internal, "stream broke during export")
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					return &mockExportClientErr{err: upstreamErr}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if err == nil {
+		t.Fatal("expected an error on upstream stream failure")
+	}
+	// The upstream INTERNAL status must be propagated, not masked as Unavailable.
+	if status.Code(err) != codes.Internal {
+		t.Errorf("expected upstream status code Internal to propagate, got %v", status.Code(err))
+	}
+}
+
+// TestExportGraphStreamUsesCallerContext verifies the ExportGraph stream is established on the
+// caller's context, not the 10s dial deadline. grpc-go binds a client stream's lifetime to the
+// context passed to the stream RPC, so passing the dial deadline would cut any export that
+// streams past 10s mid-stream (SPEC R11 INTERNAL). Decoupling the stream from the dial window
+// proves a stream that outlives the dial window is not cut.
+func TestExportGraphStreamUsesCallerContext(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns1", "graph", "cartographer-graph.ns1.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	var streamCtx context.Context
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					streamCtx = ctx
+					return &mockExportClientEOF{}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns1",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	if err := s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream); err != nil {
+		t.Fatalf("ExportGraph returned error: %v", err)
+	}
+	if streamCtx == nil {
+		t.Fatal("expected the ExportGraph call to receive a context")
+	}
+	// The caller's context carries no deadline; if the dialCtx (10s) were passed instead, a
+	// deadline would be set and the stream would be cut once it fired.
+	if deadline, ok := streamCtx.Deadline(); ok {
+		t.Errorf("expected the ExportGraph stream context to carry no dial deadline, got deadline %v (stream would be cut mid-export)", deadline)
+	}
+}
+
+// TestExportGraphMidStreamUnavailableIsInternal asserts that a mid-stream transport-level
+// break (Unavailable) after the stream has started surfaces as the SPEC's INTERNAL, not a
+// dial-timeout Unavailable.
+func TestExportGraphMidStreamUnavailableIsInternal(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					return &mockExportClientErr{err: status.Error(codes.Unavailable, "connection reset mid-stream")}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if err == nil {
+		t.Fatal("expected an error on mid-stream upstream break")
+	}
+	// SPEC R11: mid-stream export failure is INTERNAL, not the Unavailable used for dial.
+	if status.Code(err) != codes.Internal {
+		t.Errorf("expected INTERNAL for mid-stream break, got %v", status.Code(err))
+	}
+}
+
+// TestSignCapabilitiesValidSignature (item 9) verifies signCapabilities produces an
+// Ed25519 signature over {cap}|{ts} that verifies against the operator public key.
+func TestSignCapabilitiesValidSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	s := &ProxyServer{operatorSigningKey: priv}
+
+	// Accept a fixed "now" via a wrapper: use signCapabilities with capabilities and verify
+	// the returned signature against the payload it claims.
+	caps, err := s.signCapabilities("READ:graph/entity/*")
+	if err != nil {
+		t.Fatalf("signCapabilities: %v", err)
+	}
+	if caps.capabilities != "READ:graph/entity/*" {
+		t.Errorf("capabilities mismatch: %q", caps.capabilities)
+	}
+	if caps.signedBy != "operator" {
+		t.Errorf("signed-by mismatch: %q", caps.signedBy)
+	}
+	if caps.signature == "" {
+		t.Fatal("expected a non-empty signature")
+	}
+	payload := caps.capabilities + "|" + caps.signedAt
+	sig, err := base64.StdEncoding.DecodeString(caps.signature)
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	if !ed25519.Verify(pub, []byte(payload), sig) {
+		t.Error("signature did not verify over {cap}|{ts}")
+	}
+}
+
+// TestSignCapabilitiesFailClosed (item 10) asserts signCapabilities returns an error when
+// the operator signing key has the wrong length, rather than forwarding an unsigned/empty
+// signature — fail closed, never fail open.
+func TestSignCapabilitiesFailClosed(t *testing.T) {
+	s := &ProxyServer{operatorSigningKey: []byte("too-short")} // 9 bytes ≠ 64
+	_, err := s.signCapabilities("READ:graph/entity/*")
+	if err == nil {
+		t.Fatal("expected error for wrong-length signing key (must fail closed)")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Errorf("expected codes.Internal on key mismatch, got %v", status.Code(err))
+	}
+}
+
+// TestExportGraphSignsAndInjectsCapabilityMetadata (item 9) verifies the capability-signed
+// metadata is injected into the outgoing request forwarded to the Cartographer: the
+// x-flow-capabilities-* metadata carries a valid Ed25519 signature over {cap}|{ts} that
+// verifies with the operator public key.
+func TestExportGraphSignsAndInjectsCapabilityMetadata(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	var capturedMD metadata.MD
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					// The outgoing context passed to this call is the capability-injected one.
+					md, _ := metadata.FromOutgoingContext(ctx)
+					capturedMD = md
+					return &mockExportClientEOF{}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	if err := s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream); err != nil {
+		t.Fatalf("ExportGraph returned error: %v", err)
+	}
+
+	caps := capturedMD.Get("x-flow-capabilities")
+	signedAt := capturedMD.Get("x-flow-capabilities-signed-at")
+	sig := capturedMD.Get("x-flow-capabilities-signature")
+	signedBy := capturedMD.Get("x-flow-capabilities-signed-by")
+	if len(caps) == 0 || caps[0] != "READ:graph/entity/*" {
+		t.Fatalf("expected capability metadata injected, got %v", caps)
+	}
+	if len(signedAt) == 0 {
+		t.Fatal("expected signed-at metadata")
+	}
+	if len(signedBy) == 0 || signedBy[0] != "operator" {
+		t.Fatalf("expected signed-by=operator, got %v", signedBy)
+	}
+	if len(sig) == 0 {
+		t.Fatal("expected a signature to be injected (must not forward unsigned)")
+	}
+	raw, err := base64.StdEncoding.DecodeString(sig[0])
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	payload := caps[0] + "|" + signedAt[0]
+	if !ed25519.Verify(pub, []byte(payload), raw) {
+		t.Error("injected capability signature did not verify over {cap}|{ts} with the operator public key")
+	}
+}
+
+// TestExportGraphRouteNotRegistered (item 11) verifies the "route not registered" path
+// returns codes.Unavailable and never forwards.
+func TestExportGraphRouteNotRegistered(t *testing.T) {
+	s := &ProxyServer{
+		routingTable: NewProxyRoutingTable(), // empty → Lookup fails
+		authCache:    newAuthCache(30 * time.Second),
+	}
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err := s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable for unregistered route, got %v", status.Code(err))
+	}
+	if len(stream.sends) != 0 {
+		t.Error("expected no chunks forwarded for unregistered route")
+	}
+}
+
+// TestAuthorizeTokenReviewFailure verifies the TokenReview Create error → codes.Unavailable
+// branch inside authorize (item 11).
+func TestAuthorizeTokenReviewFailure(t *testing.T) {
+	interceptorFuncs := interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*authenticationv1.TokenReview); ok {
+				return errors.New("TokenReview API unreachable")
+			}
+			return nil
+		},
+	}
+	_ = authenticationv1.AddToScheme(scheme.Scheme)
+	_ = authorizationv1.AddToScheme(scheme.Scheme)
+	fakeCli := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithInterceptorFuncs(interceptorFuncs).Build()
+
+	s := &ProxyServer{k8sClient: fakeCli, authCache: newAuthCache(30 * time.Second)}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
+	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable on TokenReview failure, got %v", status.Code(err))
+	}
+}
+
+func TestAuthorizeSARFailure(t *testing.T) {
+	interceptorFuncs := interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			switch o := obj.(type) {
+			case *authenticationv1.TokenReview:
+				o.Status = authenticationv1.TokenReviewStatus{Authenticated: true, User: authenticationv1.UserInfo{Username: "user"}}
+				return nil
+			case *authorizationv1.SubjectAccessReview:
+				return errors.New("SAR API unreachable")
+			}
+			return nil
+		},
+	}
+	_ = authenticationv1.AddToScheme(scheme.Scheme)
+	_ = authorizationv1.AddToScheme(scheme.Scheme)
+	fakeCli := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithInterceptorFuncs(interceptorFuncs).Build()
+
+	s := &ProxyServer{k8sClient: fakeCli, authCache: newAuthCache(30 * time.Second)}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
+	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable on SAR failure, got %v", status.Code(err))
 	}
 }

@@ -48,16 +48,13 @@ func extractEntityTypes(cypher string) []string {
 				db.Close()
 				return nil
 			}
-			// Check that the statement is read-only.
-			if !stmt.IsReadOnly() {
-				// ponytail: Non-read-only statements are rejected at the
-				// Cartographer server level (R7). We also reject them
-				// client-side here as a defence-in-depth measure.
-				stmt.Close()
-				conn.Close()
-				db.Close()
-				return nil
-			}
+			// The statement parsed successfully. No label extraction short-
+			// circuit here: READ:graph/entity/* wildcard (R3) applies ONLY to
+			// parser failure, not to a successfully-classified statement.
+			// Mutation read/write enforcement is authoritative at the
+			// Cartographer server level (R7); the SDK never rejects based on
+			// IsReadOnly here, so a mutation still yields its specific entity
+			// types rather than collapsing to the read wildcard.
 			stmt.Close()
 			conn.Close()
 		}

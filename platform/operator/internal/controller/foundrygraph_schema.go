@@ -17,7 +17,9 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
@@ -30,6 +32,28 @@ const (
 	SchemaDiffNonDestructive                         // additive-only: new types, new properties, rule changes, enableVectorIndex false->true
 	SchemaDiffDestructive                            // removed types, removed/changed properties, enableVectorIndex true->false
 )
+
+// schemaDuplicateNames returns the first duplicated entity or edge type name in the spec,
+// or "" if none. SPEC requires duplicates within entityTypes/edgeTypes to be rejected
+// (INVALID_ARGUMENT) at schema application. Namespaces are independent across the two lists
+// (an entity type and an edge type may share a name), so each list is checked separately.
+func schemaDuplicateNames(spec *flowv1.FoundryGraphSpec) string {
+	entitySeen := make(map[string]bool, len(spec.EntityTypes))
+	for _, et := range spec.EntityTypes {
+		if entitySeen[et.Name] {
+			return "duplicate entity type name " + et.Name
+		}
+		entitySeen[et.Name] = true
+	}
+	edgeSeen := make(map[string]bool, len(spec.EdgeTypes))
+	for _, et := range spec.EdgeTypes {
+		if edgeSeen[et.Name] {
+			return "duplicate edge type name " + et.Name
+		}
+		edgeSeen[et.Name] = true
+	}
+	return ""
+}
 
 // diffSchema compares old and new FoundryGraphSpec and returns the type of schema change.
 // The old spec is from the last-applied annotation; new is the current CR spec.
@@ -170,51 +194,49 @@ func diffSchema(oldSpec, newSpec *flowv1.FoundryGraphSpec) SchemaDiffResult {
 	return SchemaDiffNone
 }
 
-// rulesEqual compares two ConnectionRule slices regardless of order.
+// rulesEqual compares two ConnectionRule slices. Per SPEC R1, both the `rules` list entries
+// (OR-ed) and the members within each canConnectTo/using list (implicit OR) are matched by
+// set membership — order AND duplicates within a list are semantically irrelevant. So
+// `canConnectTo: [A]` ≡ `[A, A]` and a duplicated rule entry is a no-op. The comparison is
+// therefore set-based at every level: each rule is canonically the sorted (de-duplicated)
+// membership of its canConnectTo/using lists, and the rule sets are compared as unordered,
+// deduplicated sets.
 func rulesEqual(a, b []flowv1.ConnectionRule) bool {
-	if len(a) != len(b) {
+	na, nb := ruleSet(a), ruleSet(b)
+	if len(na) != len(nb) {
 		return false
 	}
-	// Normalize by sorting CanConnectTo and Using within each rule, then compare.
-	type normalizedRule struct {
-		canConnectTo []string
-		using        []string
-	}
-	norm := func(rules []flowv1.ConnectionRule) []normalizedRule {
-		result := make([]normalizedRule, len(rules))
-		for i, r := range rules {
-			cc := make([]string, len(r.CanConnectTo))
-			copy(cc, r.CanConnectTo)
-			sort.Strings(cc)
-			uu := make([]string, len(r.Using))
-			copy(uu, r.Using)
-			sort.Strings(uu)
-			result[i] = normalizedRule{canConnectTo: cc, using: uu}
-		}
-		return result
-	}
-	na, nb := norm(a), norm(b)
-	for i := range na {
-		if !stringSliceEqual(na[i].canConnectTo, nb[i].canConnectTo) {
-			return false
-		}
-		if !stringSliceEqual(na[i].using, nb[i].using) {
+	for k := range na {
+		if !nb[k] {
 			return false
 		}
 	}
 	return true
 }
 
-func stringSliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+// ruleSet canonises a ConnectionRule slice into an unordered set of canonical rule strings.
+func ruleSet(rules []flowv1.ConnectionRule) map[string]bool {
+	set := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		// De-duplicate within each list (membership is implicit OR, so [A,A] ≡ [A]) and sort
+		// so equal memberships compare equal regardless of declaration order.
+		set[fmt.Sprintf("%s|%s", strings.Join(dedupeSorted(r.CanConnectTo), "\x00"), strings.Join(dedupeSorted(r.Using), "\x00"))] = true
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	return set
+}
+
+// dedupeSorted returns the de-duplicated, sorted form of a membership list.
+func dedupeSorted(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
 		}
 	}
-	return true
+	sort.Strings(out)
+	return out
 }
 
 // specSemanticallyEqual checks if two FoundryGraphSpecs are semantically identical.

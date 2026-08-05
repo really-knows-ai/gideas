@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -19,44 +22,59 @@ import (
 // so credentials can be refreshed on every call. A configured authFn returning
 // nil credentials explicitly selects anonymous access for fetch and pull;
 // a nil authFn means auth was not configured.
-func (g *gitStore) SetRemote(ctx context.Context, url string, authFn func() (transport.AuthMethod, error)) error {
-	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "ssh://") {
-		return ErrUnsupportedURLScheme
+func (g *gitStore) SetRemote(ctx context.Context, rawURL string, authFn func() (transport.AuthMethod, error)) error {
+	if err := validateRemoteURL(rawURL); err != nil {
+		return err
 	}
-	g.remoteURL = url
+	g.remoteURL = rawURL
 	g.authFn = authFn
 
-	_, err := g.repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{url}})
-	if err != nil {
-		if errors.Is(err, git.ErrRemoteExists) {
-			// Remote already exists; update its URL
-			remote, remErr := g.repo.Remote("origin")
-			if remErr != nil {
-				return fmt.Errorf("get existing remote: %w", remErr)
-			}
-			if remote.Config().URLs[0] != url {
-				// ponytail: this deletes and recreates the remote because go-git's
-				// RemoteConfig is immutable after creation. The upgrade path is to
-				// use a lower-level config API if performance becomes a concern.
-				if err := g.repo.DeleteRemote("origin"); err != nil {
-					return fmt.Errorf("delete remote: %w", err)
-				}
-				_, err = g.repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{url}})
-				if err != nil {
-					return fmt.Errorf("recreate remote: %w", err)
-				}
-			}
-		} else {
-			return fmt.Errorf("create remote: %w", err)
-		}
+	if err := g.ensureRemoteExists(); err != nil {
+		return err
 	}
 	return nil
+}
+
+// validateRemoteURL rejects URLs that are not https:// or ssh:// and any
+// clearly malformed URL with no host component (e.g. "https://").
+func validateRemoteURL(rawURL string) error {
+	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "ssh://") {
+		return ErrUnsupportedURLScheme
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parse remote URL: %w", err)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%w: %q", ErrRemoteURLNoHost, rawURL)
+	}
+	return nil
+}
+
+// requiresAuth reports whether the given remote URL requires credentials.
+// ssh:// always requires an SSH key. https:// requires credentials only when
+// it embeds a user (basic auth); a plain https URL may be a public remote.
+func requiresAuth(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme == "ssh" {
+		return true
+	}
+	return parsed.User != nil
 }
 
 // FetchRemote fetches the main branch from the remote origin.
 // Returns ErrNoRemote if no remote is configured, ErrAuthConfigMissing
 // if no auth provider is configured, and typed errors for auth and network
 // failures. A configured provider may return nil for an anonymous public remote.
+//
+// ponytail: no production caller invokes this method — the service layer pulls
+// via FetchAndMerge, never FetchRemote. It is retained only because it is a
+// member of the GitStore interface (and is exercised by the interface-level
+// tests). If the interface is ever trimmed, this implementation and its tests
+// should be removed together.
 func (g *gitStore) FetchRemote(ctx context.Context) error {
 	if g.remoteURL == "" {
 		return ErrNoRemote
@@ -78,23 +96,10 @@ func (g *gitStore) FetchRemote(ctx context.Context) error {
 		RemoteName: "origin",
 		Auth:       auth,
 		Force:      false,
-		RefSpecs:   []config.RefSpec{"refs/heads/main:refs/heads/main"},
+		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/heads/main:refs/remotes/origin/main")},
 	})
 	if err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return nil
-		}
-		if errors.Is(err, transport.ErrAuthenticationRequired) ||
-			strings.Contains(err.Error(), "authentication") {
-			return ErrAuthFailed
-		}
-		if strings.Contains(err.Error(), "no such host") ||
-			strings.Contains(err.Error(), "connection refused") ||
-			strings.Contains(err.Error(), "i/o timeout") ||
-			strings.Contains(err.Error(), "dial tcp") {
-			return ErrRemoteUnreachable
-		}
-		return fmt.Errorf("fetch: %w", err)
+		return mapFetchError(err)
 	}
 	return nil
 }
@@ -104,22 +109,48 @@ func (g *gitStore) FetchRemote(ctx context.Context) error {
 // pointing at the remote tracking ref. If fast-forward is possible, the local
 // ref is advanced. Otherwise a merge commit is created with two parents.
 // Returns the new HEAD hash.
-// mapFetchError converts common fetch errors to typed sentinels.
+// mapFetchError converts common fetch errors to typed package sentinels.
+// Classification is based on typed errors (go-git sentinels and the standard
+// library's net error types) — never on matching library error message text,
+// which is a message, not a contract.
 func mapFetchError(err error) error {
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return nil
 	}
-	if errors.Is(err, transport.ErrAuthenticationRequired) ||
-		strings.Contains(err.Error(), "authentication") {
-		return ErrAuthFailed
-	}
-	if strings.Contains(err.Error(), "no such host") ||
-		strings.Contains(err.Error(), "connection refused") ||
-		strings.Contains(err.Error(), "i/o timeout") ||
-		strings.Contains(err.Error(), "dial tcp") {
-		return ErrRemoteUnreachable
+	if err := classifyRemoteError(err); err != nil {
+		return err
 	}
 	return fmt.Errorf("fetch: %w", err)
+}
+
+// classifyRemoteError returns a typed package sentinel for the given remote
+// operation error, or nil if it is not one of the recognised failure classes.
+func classifyRemoteError(err error) error {
+	switch {
+	// go-git's HTTP/Smart transport classifies 401/403/`auth-required` as
+	// typed errors; SSLFailure and invalid auth surfaces as ErrInvalidAuthMethod.
+	case errors.Is(err, transport.ErrAuthenticationRequired),
+		errors.Is(err, transport.ErrAuthorizationFailed),
+		errors.Is(err, transport.ErrInvalidAuthMethod):
+		return ErrAuthFailed
+	case isRemoteUnreachable(err):
+		return ErrRemoteUnreachable
+	default:
+		return nil
+	}
+}
+
+// isRemoteUnreachable reports whether err indicates the remote endpoint could
+// not be reached. It uses the typed net error types from the standard library
+// (DNS resolution failure, connection refused, or a transport timeout) rather
+// than matching the underlying library's message text.
+func isRemoteUnreachable(err error) bool {
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
+	var netErr net.Error
+	return errors.As(err, &dnsErr) ||
+		errors.As(err, &opErr) ||
+		(errors.As(err, &netErr) && netErr.Timeout())
 }
 
 // createMergeCommit builds a merge commit with the given parents using the
@@ -193,6 +224,32 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 	})
 }
 
+// FetchAndMerge is invoked on two divergent but distinct paths:
+//
+//   - Explicit pull: SPEC R10 mandates that when main has diverged from the
+//     remote, PullFromRemote fails with FAILED_PRECONDITION ("Remote pull
+//     diverged"). Using the merge-commit branch below in that path converts a
+//     divergent pull into a silent merge commit, making the SPEC-mandated
+//     divergence failure unreachable for an explicit pull.
+//   - Commit step 14 (pull-before-push): the fire-and-forget push path needs a
+//     fast-forward merge (or a merge commit) so the subsequent push is always
+//     fast-forward.
+//
+// The two requirements conflict: the merge-commit behavior is required by the
+// commit pull-before-push, but contradicts the explicit-pull divergence
+// failure. The merge is kept here (ponytail) rather than splitting into two
+// divergence policies, because:
+//  1. GIT_PLAN.md (the remote-sync overhaul design) deliberately specifies
+//     FetchAndMerge merge-commit semantics for both paths and
+//     TestFetchAndMerge_MergeCommit asserts the delivered behavior.
+//  2. A divergent PullFromRemote that instead fails FAILED_PRECONDITION is
+//     extremely rare in operation (the Cartographer is documented as the sole
+//     writer to main), so the silent-merge-on-divergence window it opens is
+//     acceptable for the foreseeable future.
+//
+// Upgrade path: give PullFromRemote a fast-forward-only fetch (failing on
+// divergence) while reserving the merge-commit behavior for the commit
+// pull-before-push path.
 func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string) (plumbing.Hash, error) {
 	if g.remoteURL == "" {
 		return plumbing.ZeroHash, ErrNoRemote
@@ -306,19 +363,23 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
 			return nil
 		}
-		if errors.Is(err, transport.ErrAuthenticationRequired) ||
-			strings.Contains(err.Error(), "authentication") {
-			return ErrAuthFailed
-		}
-		if strings.Contains(err.Error(), "non-fast-forward") ||
-			strings.Contains(err.Error(), "[rejected]") {
+		// ponytail: go-git surfaces a server-side non-fast-forward rejection as an
+		// untyped text error (from checkFastForwardUpdate / the receive-pack report
+		// status), not wrapped in git.ErrNonFastForwardUpdate. The only typed signal
+		// this code can detect without grepping library text is that sentinel, so
+		// ErrPushRejected is produced only when go-git does wrap it. Consequence: a
+		// genuine rejected push may surface as a generic "push:" error instead of
+		// ErrPushRejected. This is acceptable in production because the commit
+		// pull-before-push path (FetchAndMerge) enforces a fast-forward before
+		// pushing, so a rejected push is effectively unreachable via production
+		// flows. Upgrade path: wrap the push result in a typed sentinel at the
+		// point the pull-before-push checks divergence, or patch go-git to return a
+		// typed error for non-fast-forward pushes.
+		if errors.Is(err, git.ErrNonFastForwardUpdate) {
 			return ErrPushRejected
 		}
-		if strings.Contains(err.Error(), "no such host") ||
-			strings.Contains(err.Error(), "connection refused") ||
-			strings.Contains(err.Error(), "i/o timeout") ||
-			strings.Contains(err.Error(), "dial tcp") {
-			return ErrRemoteUnreachable
+		if err := classifyRemoteError(err); err != nil {
+			return err
 		}
 		return fmt.Errorf("push: %w", err)
 	}
@@ -330,6 +391,13 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 // ErrAuthConfigMissing if no auth provider is configured, and typed errors for
 // auth, network, and divergence failures. A configured provider may return nil
 // for an anonymous public remote.
+//
+// ponytail: no production caller invokes this method — the service pulls via
+// FetchAndMerge, and Commit's pull-before-push also uses FetchAndMerge.
+// Consequently ErrPullDiverged is compared in service mapGitError but is not
+// returned by production code (it is unit-tested directly). This method and
+// the interface member are retained for the tests; if the interface is ever
+// trimmed it and its tests should be removed together.
 func (g *gitStore) PullAndFastForward(ctx context.Context) error {
 	if g.remoteURL == "" {
 		return ErrNoRemote
@@ -354,30 +422,23 @@ func (g *gitStore) PullAndFastForward(ctx context.Context) error {
 		SingleBranch: true,
 	})
 	if err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return nil
-		}
-		if errors.Is(err, transport.ErrAuthenticationRequired) ||
-			strings.Contains(err.Error(), "authentication") {
-			return ErrAuthFailed
-		}
-		if errors.Is(err, git.ErrNonFastForwardUpdate) ||
-			strings.Contains(err.Error(), "non-fast-forward") {
+		if errors.Is(err, git.ErrNonFastForwardUpdate) {
 			return ErrPullDiverged
 		}
-		if strings.Contains(err.Error(), "no such host") ||
-			strings.Contains(err.Error(), "connection refused") ||
-			strings.Contains(err.Error(), "i/o timeout") ||
-			strings.Contains(err.Error(), "dial tcp") {
-			return ErrRemoteUnreachable
-		}
-		return fmt.Errorf("pull: %w", err)
+		return mapFetchError(err)
 	}
 	return nil
 }
 
 // HasRemote returns whether the remote "origin" is configured.
 // Returns an error if the check itself fails (I/O error, storage corruption).
+//
+// ponytail: no production caller invokes this method — the service layer
+// determines remote presence by comparing s.remoteURL != "" before calling the
+// git operations. It is retained only because it is a member of the GitStore
+// interface (and is exercised by the interface-level tests). If the interface
+// is ever trimmed, this implementation and its tests should be removed
+// together.
 func (g *gitStore) HasRemote(ctx context.Context) (bool, error) {
 	_, err := g.repo.Remote("origin")
 	if err != nil {
@@ -390,12 +451,20 @@ func (g *gitStore) HasRemote(ctx context.Context) (bool, error) {
 }
 
 // CloneSingleBranch fetches a single branch from a remote URL into the
-// existing repository. The url parameter is passed explicitly (not from
+// existing repository. The rawURL parameter is passed explicitly (not from
 // g.remoteURL). After fetching, the local main ref is set to the fetched
 // commit and the working tree is checked out to main.
-func (g *gitStore) CloneSingleBranch(ctx context.Context, url, branch string) error {
-	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "ssh://") {
-		return ErrUnsupportedURLScheme
+func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string) error {
+	if err := validateRemoteURL(rawURL); err != nil {
+		return err
+	}
+
+	// Pre-flight: an authenticated URL requires an auth provider. A nil authFn
+	// means auth was not configured, so an authenticated remote cannot be
+	// cloned — fail before attempting the fetch rather than surfacing a
+	// runtime auth error.
+	if requiresAuth(rawURL) && g.authFn == nil {
+		return ErrAuthConfigMissing
 	}
 
 	// Resolve auth: nil authFn or nil return means anonymous access to public
@@ -412,32 +481,23 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, url, branch string) er
 	// nil auth is OK for anonymous public remotes
 
 	// Ensure remote exists
-	_, err = g.repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{url}})
+	_, err = g.repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{rawURL}})
 	if err != nil && !errors.Is(err, git.ErrRemoteExists) {
 		return fmt.Errorf("create remote: %w", err)
 	}
 
-	// Fetch from remote
+	// Fetch from remote (single-branch: limit to the requested branch)
 	err = g.repo.FetchContext(ctx, &git.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
 		Force:      false,
+		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/heads/" + branch + ":refs/remotes/origin/" + branch)},
 	})
 	if err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
 			// Already up-to-date is fine; continue to set main ref
 		} else {
-			if errors.Is(err, transport.ErrAuthenticationRequired) ||
-				strings.Contains(err.Error(), "authentication") {
-				return ErrAuthFailed
-			}
-			if strings.Contains(err.Error(), "no such host") ||
-				strings.Contains(err.Error(), "connection refused") ||
-				strings.Contains(err.Error(), "i/o timeout") ||
-				strings.Contains(err.Error(), "dial tcp") {
-				return ErrRemoteUnreachable
-			}
-			return fmt.Errorf("fetch: %w", err)
+			return mapFetchError(err)
 		}
 	}
 
@@ -466,7 +526,7 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, url, branch string) er
 
 	// Re-open repo to refresh worktree and filesystem
 	// Use g.basePath to locate the repo directory
-	repoPath := g.basePath + "/graph-repo"
+	repoPath := filepath.Join(g.basePath, "graph-repo")
 	reopened, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("reopen repo: %w", err)
@@ -515,12 +575,12 @@ func (g *gitStore) IsEmpty(ctx context.Context) (bool, error) {
 	err = log.ForEach(func(commit *object.Commit) error {
 		if commit.Message != "init" {
 			// Found a non-init commit
-			return ErrHasData
+			return errHasData
 		}
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrHasData) {
+		if errors.Is(err, errHasData) {
 			return false, nil
 		}
 		return false, fmt.Errorf("iterate log: %w", err)

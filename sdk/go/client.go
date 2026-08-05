@@ -174,14 +174,13 @@ func (c *Client) GetFlow() (*Flow, error) {
 }
 
 // GetGraph returns the Cartographer graph handle for the current flow.
-// The returned *Graph shares the Client's session for gRPC connectivity.
-// Graph operations (ExecuteCypher, SearchNeighbors, etc.) require a workitem
-// context and will return errors if FLOW_WORKITEM_ID was not set on the client.
-func (c *Client) GetGraph() (*Graph, error) {
-	if c.session == nil {
-		return nil, fmt.Errorf("flow sdk: client not initialised")
-	}
-	return &Graph{session: c.session, idTypeMap: newIDTypeMap()}, nil
+// The graph operations (ExecuteCypher, SearchNeighbors, etc.) require a
+// workitem context and will return errors if the client was not initialised or
+// FLOW_WORKITEM_ID was not set. The single-value return documents the SDK
+// surface (SPEC R4): a Graph handle is always returned; graph operations
+// surface nil-session errors themselves.
+func (c *Client) GetGraph() *Graph {
+	return &Graph{session: c.session, idTypeMap: newIDTypeMap()}
 }
 
 // GetNode returns the calling node's identity and capabilities.

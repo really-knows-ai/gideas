@@ -2,6 +2,7 @@ package ladybug
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -12,6 +13,7 @@ import (
 	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/store"
 	"github.com/foundry/flow/cartographer/internal/uuidutil"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/google/uuid"
 )
 
@@ -44,6 +46,21 @@ func (db *ladybugDB) CreateEntity(
 		return nil, err
 	}
 
+	// Durable duplicate detection: a duplicate-ID create must return
+	// ErrEntityAlreadyExists regardless of the underlying DB's error text.
+	// LadybugDB's error message is a message, not a contract, so instead of
+	// substring-matching it we probe for an existing entity up-front. This is
+	// O(#entity_types) per create; CreateEntity is not hot enough to warrant
+	// an ID→type index for this (ponytail: upgrade path is a global ID→type
+	// index shared with findEntityByID).
+	if _, perr := findEntityByID(conn, typeDefs.entityTypeDefs, id); perr == nil {
+		return nil, fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, id)
+	} else if !errors.Is(perr, store.ErrEntityNotFound) {
+		// The probe itself failed for a non-"not found" reason — propagate it
+		// rather than masking a real read failure behind the INSERT.
+		return nil, perr
+	}
+
 	// Validate properties against schema.
 	propDefs := make(map[string]bool)
 	for _, p := range def.Properties {
@@ -62,14 +79,24 @@ func (db *ladybugDB) CreateEntity(
 		}
 	}
 
+	// Determine the bootstrapped embedding dimension (0 if the vector column
+	// has not been created yet for this entity type).
+	dim := 0
+	if def.EnableVectorIndex {
+		var derr error
+		dim, derr = getEmbeddingDimension(conn, entityType)
+		if derr != nil {
+			return nil, fmt.Errorf("read embedding dimension for %q: %w", entityType, derr)
+		}
+	}
+
 	// Validate embedding (dimension check requires bootstrapped column).
-	if err := validateEmbeddingForCreate(embedding, def); err != nil {
+	if err := validateEmbeddingForCreate(embedding, def, dim); err != nil {
 		return nil, err
 	}
 
 	// Bootstrap embedding column and vector index on first entity with embedding.
 	if def.EnableVectorIndex && len(embedding) > 0 {
-		dim := getEmbeddingDimension(conn, entityType)
 		if dim == 0 {
 			// No embedding column yet — bootstrap it.
 			dim = len(embedding)
@@ -123,23 +150,26 @@ func (db *ladybugDB) CreateEntity(
 	_, eErr := conn.Execute(stmt, params)
 	stmt.Close()
 	if eErr != nil {
-		errStr := eErr.Error()
-		if strings.Contains(errStr, "duplicate key") || strings.Contains(errStr, "already exists") ||
-			strings.Contains(errStr, "primary key") {
-			return nil, fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, id)
-		}
 		return nil, eErr
 	}
 
 	now := time.Now().UTC()
 	props := make(map[string]string, len(properties))
 	maps.Copy(props, properties)
+	// Only surface the embedding in the return value when it was actually
+	// persisted. Non-indexed types discard the embedding, and a zero-embedding
+	// create stores NULL in the vector column (SPEC R7).
+	returnedEmbedding := embedding
+	if !def.EnableVectorIndex || len(embedding) == 0 {
+		returnedEmbedding = nil
+	}
 	return &store.Entity{
 		Id: id, Type: entityType, Properties: props,
-		Embedding: embedding, CreatedAt: now, UpdatedAt: now,
+		Embedding: returnedEmbedding, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
+//nolint:gocyclo
 func (db *ladybugDB) UpdateEntity(
 	ctx context.Context, id string,
 	properties map[string]string, embedding []float32, branch string,
@@ -176,7 +206,10 @@ func (db *ladybugDB) UpdateEntity(
 		}
 	}
 
-	// Validate embedding.
+	// Validate and bootstrap embedding. Mirrors CreateEntity's embedding handling
+	// (SPEC R7 parity): if the embedding column has not been bootstrapped yet
+	// (dim == 0), the first update supplying an embedding bootstraps it; a
+	// subsequent update must match the established dimension.
 	hasNewEmb := len(embedding) > 0
 	for _, v := range embedding {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
@@ -184,8 +217,38 @@ func (db *ladybugDB) UpdateEntity(
 		}
 	}
 	if def.EnableVectorIndex && hasNewEmb {
-		dim := getEmbeddingDimension(conn, entity.Type)
-		if dim > 0 && len(embedding) != dim {
+		dim, derr := getEmbeddingDimension(conn, entity.Type)
+		if derr != nil {
+			return nil, fmt.Errorf("read embedding dimension for %q: %w", entity.Type, derr)
+		}
+		if dim == 0 {
+			// No embedding column yet — bootstrap it (same as CreateEntity).
+			dim = len(embedding)
+			altDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(entity.Type), dim)
+			if _, err := conn.Query(altDDL); err != nil {
+				return nil, fmt.Errorf("bootstrap embedding column: %w", err)
+			}
+			if err := db.createVectorIndex(conn, entity.Type); err != nil {
+				typeDefs.markFailed()
+				return nil, fmt.Errorf("bootstrap vector index: %w", err)
+			}
+			if db.path != "" {
+				metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs)
+				metadata, err = captureVectorState(conn, metadata)
+				if err != nil {
+					typeDefs.markFailed()
+					return nil, fmt.Errorf("capture vector schema metadata: %w", err)
+				}
+				path := db.mainMetadataPath()
+				if branch != "" && branch != mainBranch {
+					path = db.branchMetadataPath(branch)
+				}
+				if err := db.writeMetadata(path, metadata); err != nil {
+					typeDefs.markFailed()
+					return nil, fmt.Errorf("persist vector schema metadata: %w", err)
+				}
+			}
+		} else if len(embedding) != dim {
 			return nil, fmt.Errorf("%w: expected dimension %d, got %d", store.ErrEmbeddingDimension, dim, len(embedding))
 		}
 	}
@@ -477,6 +540,7 @@ func (db *ladybugDB) ValidateEdgeRules(sourceType, targetType, edgeType string) 
 	return db.validateEdgeRulesFor(&branchDBCache{
 		entityTypeDefs: db.entityTypeDefs,
 		edgeTypeDefs:   db.edgeTypeDefs,
+		ruleIndex:      db.ruleIndex,
 	},
 		sourceType, targetType, edgeType)
 }
@@ -515,6 +579,7 @@ func (db *ladybugDB) lockForRead(branch string) (*lbug.Connection, *branchDBCach
 		return db.conn, &branchDBCache{
 			entityTypeDefs: db.entityTypeDefs,
 			edgeTypeDefs:   db.edgeTypeDefs,
+			ruleIndex:      db.ruleIndex,
 			markFailed:     func() { db.failed = true },
 		}, db.mu.Unlock, nil
 	}
@@ -525,6 +590,11 @@ func (db *ladybugDB) lockForRead(branch string) (*lbug.Connection, *branchDBCach
 		return nil, nil, nil, err
 	}
 	br.mu.Lock()
+	// Snapshot main's ruleIndex while still holding db.mu so the cache below
+	// (guarded by br.mu) never races concurrent ApplySchema/WipeSchema writes.
+	// The maps themselves are never mutated in place — they are replaced — so a
+	// shallow copy of the map header under db.mu is race-safe.
+	ruleIndex := maps.Clone(db.ruleIndex)
 	db.mu.Unlock()
 	if br.failed {
 		br.mu.Unlock()
@@ -533,6 +603,7 @@ func (db *ladybugDB) lockForRead(branch string) (*lbug.Connection, *branchDBCach
 	return br.conn, &branchDBCache{
 		entityTypeDefs: br.entityTypeDefs,
 		edgeTypeDefs:   br.edgeTypeDefs,
+		ruleIndex:      ruleIndex,
 		markFailed:     func() { br.failed = true },
 	}, br.mu.Unlock, nil
 }
@@ -551,6 +622,7 @@ func (db *ladybugDB) lockForWrite(branch string) (*lbug.Connection, *branchDBCac
 type branchDBCache struct {
 	entityTypeDefs map[string]*store.EntityTypeDef
 	edgeTypeDefs   map[string]*store.EdgeTypeDef
+	ruleIndex      map[string][]*flowv1.ConnectionRule
 	markFailed     func()
 }
 
@@ -695,7 +767,11 @@ func validateUUID(id string) error {
 }
 
 // validateEmbeddingForCreate validates embedding for a CreateEntity call.
-func validateEmbeddingForCreate(embedding []float32, def *store.EntityTypeDef) error {
+// bootstrappedDim is the established vector column dimension (0 if not yet
+// bootstrapped). A zero-embedding create is only rejected when the dimension
+// has not been bootstrapped yet — per SPEC R7, subsequent CreateEntity calls
+// may omit the embedding once the dimension is locked in.
+func validateEmbeddingForCreate(embedding []float32, def *store.EntityTypeDef, bootstrappedDim int) error {
 	for _, v := range embedding {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
 			return store.ErrNaNOrInfEmbedding
@@ -704,30 +780,54 @@ func validateEmbeddingForCreate(embedding []float32, def *store.EntityTypeDef) e
 	if !def.EnableVectorIndex {
 		return nil
 	}
-	if len(embedding) == 0 {
+	if len(embedding) == 0 && bootstrappedDim == 0 {
 		return fmt.Errorf("%w: entity type %q has vector index enabled but no embedding provided",
 			store.ErrVectorBootstrap, def.Name)
 	}
 	return nil
 }
 
-// getEmbeddingDimension queries the FLOAT[n] column type to determine dimension.
-func getEmbeddingDimension(conn *lbug.Connection, entityType string) int {
-	q := fmt.Sprintf("CALL table_info('%s') RETURN *;", entityType)
-	result, err := conn.Query(q)
+// getEmbeddingDimension queries the FLOAT[n] column type to determine the
+// dimension. It returns (0, nil) when the embedding column has not been
+// bootstrapped for the entity type — including when the node table has not
+// been created yet (fresh schema, SPEC R7 lazy bootstrap) — and (dim, nil)
+// when it has. It returns a non-nil error when it cannot determine the
+// answer (e.g. a present embedding column whose type is not a parseable
+// FLOAT[n]), so callers can distinguish "no dimension locked in yet" and
+// "schema read failed" from a present-but-anomalous column instead of
+// treating every non-empty case as "not bootstrapped". Table existence is
+// checked via CALL show_tables() — a durable predicate — rather than by
+// matching LadybugDB's query error text (which is a message, not a
+// contract).
+func getEmbeddingDimension(conn *lbug.Connection, entityType string) (int, error) {
+	// A node table that does not exist has no embedding column yet; that is
+	// the "not bootstrapped" state, not a read failure.
+	exists, err := connTableExists(conn, entityType)
 	if err != nil {
-		return 0
+		return 0, err
 	}
+	if !exists {
+		return 0, nil
+	}
+
+	qr, err := conn.Query(fmt.Sprintf("CALL table_info('%s') RETURN *;", entityType))
+	if err != nil {
+		return 0, fmt.Errorf("query table info for %q: %w", entityType, err)
+	}
+	result := qr
 	defer result.Close()
 
 	for result.HasNext() {
 		tuple, err := result.Next()
 		if err != nil {
-			return 0
+			return 0, fmt.Errorf("read table info row for %q: %w", entityType, err)
 		}
 		vals, err := tuple.GetAsSlice()
 		tuple.Close()
-		if err != nil || len(vals) < 3 {
+		if err != nil {
+			return 0, fmt.Errorf("parse table info row for %q: %w", entityType, err)
+		}
+		if len(vals) < 3 {
 			continue
 		}
 		colName := fmt.Sprintf("%v", vals[1])
@@ -735,15 +835,46 @@ func getEmbeddingDimension(conn *lbug.Connection, entityType string) int {
 			continue
 		}
 		colType := fmt.Sprintf("%v", vals[2])
-		// Parse FLOAT[n]
+		// Parse FLOAT[n]. A present embedding column whose type is not a
+		// parseable FLOAT[n] is anomalous (it should only ever be created here
+		// with a FLOAT[n] shape), so surface it rather than treating it as
+		// "not bootstrapped" — callers that recreate the index over a malformed
+		// column would silently corrupt the vector store.
 		if strings.HasPrefix(colType, "FLOAT[") && strings.HasSuffix(colType, "]") {
 			var dim int
-			if _, err := fmt.Sscanf(colType, "FLOAT[%d]", &dim); err == nil {
-				return dim
+			if _, err := fmt.Sscanf(colType, "FLOAT[%d]", &dim); err == nil && dim > 0 {
+				return dim, nil
 			}
 		}
+		return 0, fmt.Errorf("entity type %q has an anomalous embedding column type %q", entityType, colType)
 	}
-	return 0
+	return 0, nil
+}
+
+// connTableExists reports whether a NODE table with the given name exists in
+// the catalog, using the durable show_tables() predicate rather than any
+// error-text matching.
+func connTableExists(conn *lbug.Connection, name string) (bool, error) {
+	result, err := conn.Query("CALL show_tables() RETURN *;")
+	if err != nil {
+		return false, fmt.Errorf("list tables: %w", err)
+	}
+	defer result.Close()
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return false, fmt.Errorf("read table row: %w", err)
+		}
+		values, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return false, fmt.Errorf("parse table row: %w", err)
+		}
+		if len(values) >= 3 && fmt.Sprintf("%v", values[1]) == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // validateEdgeRulesFor validates that sourceType->targetType via edgeType is allowed.
@@ -762,7 +893,7 @@ func (db *ladybugDB) validateEdgeRulesFor(typeDefs *branchDBCache,
 		return fmt.Errorf("%w: %q", store.ErrUnknownEdgeType, edgeType)
 	}
 
-	rules := db.ruleIndex[sourceType]
+	rules := typeDefs.ruleIndex[sourceType]
 	if len(rules) == 0 {
 		// No rules means no connections are permitted — return rule violation.
 		return fmt.Errorf("%w: entity type %q has no connection rules, cannot connect to %q via %q",

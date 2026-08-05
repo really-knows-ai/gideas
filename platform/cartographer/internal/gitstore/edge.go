@@ -59,10 +59,15 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 			if err != nil {
 				return EdgeFile{}, fmt.Errorf("open edge file %s: %w", fi.Name(), err)
 			}
-			defer func() { _ = f.Close() }()
 			var ej EdgeJSON
 			if err := json.NewDecoder(f).Decode(&ej); err != nil {
+				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf("decode edge file %s: %w", fi.Name(), err)
+			}
+			// A Close error signals an I/O problem reading the file; propagating it
+			// prevents a clean-but-corrupt read from silently passing.
+			if err := f.Close(); err != nil {
+				return EdgeFile{}, fmt.Errorf("close edge file %s: %w", fi.Name(), err)
 			}
 			ef := EdgeFile{
 				ID:           ej.ID.String(),
@@ -142,15 +147,22 @@ func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 	if err != nil {
 		return fmt.Errorf("create edge file %s: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("write edge file %s: %w", path, err)
 	}
 	if _, err := f.Write([]byte("\n")); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("write newline %s: %w", path, err)
 	}
-
+	// Closing the file is the point at which a buffered flush failure (and thus
+	// data loss) becomes observable, so its error must be propagated, not
+	// silently discarded. go-billy's File has no Sync(); Close is the deepest
+	// durability boundary the interface exposes.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close edge file %s: %w", path, err)
+	}
 	return nil
 }
 

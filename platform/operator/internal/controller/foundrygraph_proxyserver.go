@@ -23,7 +23,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,18 +45,26 @@ type ProxyServer struct {
 	flowv1gen.UnimplementedCartographerServiceServer
 	routingTable       *ProxyRoutingTable
 	k8sClient          client.Client
-	port               int
 	authCache          *authCache
 	dialer             func(ctx context.Context, endpoint string) (CartographerClient, error)
 	operatorSigningKey []byte
 }
 
 // NewProxyServer creates a new ProxyServer.
-func NewProxyServer(rt *ProxyRoutingTable, k8sClient client.Client, port int, dialer func(ctx context.Context, endpoint string) (CartographerClient, error), operatorSigningKey []byte) *ProxyServer {
+func NewProxyServer(rt *ProxyRoutingTable, k8sClient client.Client, dialer func(ctx context.Context, endpoint string) (CartographerClient, error), operatorSigningKey []byte) *ProxyServer {
 	return &ProxyServer{
-		routingTable:       rt,
-		k8sClient:          k8sClient,
-		port:               port,
+		routingTable: rt,
+		k8sClient:    k8sClient,
+		// ponytail: the proxy auth cache TTL is a fixed 30s irrespective of the
+		// CAPABILITY_STALENESS_WINDOW the operator forwards to the Cartographer
+		// (foundrygraph_infra.go). That env bounds how long the *Cartographer* honours a
+		// signed request capability; this TTL bounds how long the *operator* caches a
+		// positive TokenReview/SAR authz decision. The two are intentionally decoupled, but
+		// the coupling risk is: if an operator deploys CAPABILITY_STALENESS_WINDOW < 30s to
+		// shorten the freshness window, this 30s proxy cache does not honour that intent, so
+		// a revoked identity can keep a cached authorization for up to 30s. Accepted because
+		// the proxy also does a fresh SAR per grant; wiring the TTL to the env would require
+		// threading reconciler config into the proxy server constructor.
 		authCache:          newAuthCache(30 * time.Second),
 		dialer:             dialer,
 		operatorSigningKey: operatorSigningKey,
@@ -119,10 +126,14 @@ func (s *ProxyServer) authorize(ctx context.Context, namespace, name, verb strin
 		return status.Error(codes.Unauthenticated, "invalid token")
 	}
 
-	// SubjectAccessReview
+	// SubjectAccessReview — include the caller's full identity (groups, UID) from the
+	// TokenReview so group-based RBAC (the common way `get` on foundrygraphs is granted)
+	// matches; omitting Groups would yield spurious PermissionDenied.
 	sar := &authorizationv1.SubjectAccessReview{
 		Spec: authorizationv1.SubjectAccessReviewSpec{
-			User: tr.Status.User.Username,
+			User:   tr.Status.User.Username,
+			Groups: tr.Status.User.Groups,
+			UID:    tr.Status.User.UID,
 			ResourceAttributes: &authorizationv1.ResourceAttributes{
 				Namespace: namespace,
 				Group:     "flow.foundry.io",
@@ -153,19 +164,14 @@ type signedCapabilities struct {
 }
 
 // signCapabilities creates capability-signed gRPC metadata for the forwarding path.
-func (s *ProxyServer) signCapabilities(capabilities string) *signedCapabilities {
+// fail closed: if the operator signing key is missing or not an Ed25519 private key,
+// it returns an error rather than forwarding an empty (invalid) signature. An unsigned
+// capability must never be forwarded, because the Cartographer would reject it and the
+// caller would be left with a request we cannot authoritatively authorize.
+func (s *ProxyServer) signCapabilities(capabilities string) (*signedCapabilities, error) {
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	if len(s.operatorSigningKey) != ed25519.PrivateKeySize {
-		slog.Warn("operator signing key has wrong length, returning unsigned capabilities",
-			"expected", ed25519.PrivateKeySize,
-			"got", len(s.operatorSigningKey),
-		)
-		return &signedCapabilities{
-			capabilities: capabilities,
-			signedBy:     "operator",
-			signedAt:     now,
-			signature:    "",
-		}
+		return nil, status.Error(codes.Internal, "operator signing key has wrong length; refusing to forward unsigned capabilities")
 	}
 	payload := capabilities + "|" + now
 	sig := ed25519.Sign(ed25519.PrivateKey(s.operatorSigningKey), []byte(payload))
@@ -174,7 +180,7 @@ func (s *ProxyServer) signCapabilities(capabilities string) *signedCapabilities 
 		signedBy:     "operator",
 		signedAt:     now,
 		signature:    base64.StdEncoding.EncodeToString(sig),
-	}
+	}, nil
 }
 
 // authCache is a short-TTL positive-result cache for auth decisions.
@@ -212,7 +218,15 @@ func (c *authCache) Set(key string) {
 }
 
 func (c *authCache) key(token, ns, name, verb string) string {
-	// ponytail: pipe delimiter assumes none of the four fields contain literal pipe.
+	// ponytail: pipe delimiter assumes none of the four fields contain a literal pipe. If
+	// one did (e.g. a token value containing '|'), distinct (token, ns, name, verb) tuples
+	// could hash to the same cache key, so a cached positive authz decision for one identity
+	// could be served for a different identity for up to the 30s TTL. This fails closed — a
+	// collision only ever grants access that was granted to some other identity, never
+	// revokes — but it is a real, if unlikely, boundary. Namespaces/verbs are operator/API
+	// normalised and pipe-free; only the raw Bearer token is user-supplied. Upgrade path:
+	// switch to a struct key or a length-prefixed field encoding (e.g. fmt of each field with
+	// an explicit length) so a pipe in a value cannot alias another tuple.
 	h := sha256.Sum256([]byte(token + "|" + ns + "|" + name + "|" + verb))
 	return fmt.Sprintf("%x", h)
 }
@@ -236,7 +250,10 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 	}
 
 	// Inject capability metadata signed by the operator.
-	caps := s.signCapabilities("READ:graph/entity/*")
+	caps, err := s.signCapabilities("READ:graph/entity/*")
+	if err != nil {
+		return err
+	}
 	ctx := metadata.AppendToOutgoingContext(stream.Context(),
 		"x-flow-capabilities", caps.capabilities,
 		"x-flow-capabilities-signed-by", caps.signedBy,
@@ -244,7 +261,16 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		"x-flow-capabilities-signature", caps.signature,
 	)
 
-	dialCtx, cancel := context.WithTimeout(stream.Context(), 10*time.Second)
+	// grpc.NewClient connects lazily, so the 10s dial timeout above does not by itself
+	// bound the transport connection — the actual connect happens when the stream RPC is
+	// initiated. Bound ONLY the dial/connect with the short deadline, then establish and
+	// stream on the capability-injected caller ctx below. grpc-go binds a client stream's
+	// lifetime to the context passed to the stream RPC, so passing the dial deadline to
+	// ExportGraph would cut any export that streams longer than the window mid-stream
+	// (surfacing as the SPEC R11 INTERNAL case). The dial deadline stays scoped to the
+	// connect so an unreachable/blackholed upstream still fails fast before the stream is
+	// established, while a connected stream that outlives the dial window is not cut.
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	client, err := s.dialer(dialCtx, endpoint)
@@ -253,6 +279,10 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 	}
 	defer client.Close()
 
+	// Establish and stream on the caller's ctx (the capability-injected outgoing context),
+	// NOT the dial deadline: a stream that outlives the 10s dial window must not be cut
+	// mid-stream. A broken upstream that surfaces after establishment is the SPEC R11
+	// INTERNAL case, not a dial-timeout Unavailable.
 	clientStream, err := client.ExportGraph(ctx, req)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "cannot start export stream: %v", err)
@@ -264,7 +294,13 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 			return nil
 		}
 		if err != nil {
-			return status.Errorf(codes.Unavailable, "export stream failed: %v", err)
+			// SPEC R11/error table: a mid-stream export failure is INTERNAL. A
+			// transport-level break (Unavailable) after the stream has started is such a
+			// failure, so surface it as INTERNAL rather than the dial-style Unavailable.
+			if st, ok := status.FromError(err); ok && st.Code() != codes.Unavailable {
+				return st.Err()
+			}
+			return status.Errorf(codes.Internal, "export stream failed: %v", err)
 		}
 		if err := stream.Send(chunk); err != nil {
 			return status.Errorf(codes.Canceled, "client cancelled: %v", err)

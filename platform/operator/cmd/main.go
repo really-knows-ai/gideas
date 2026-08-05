@@ -445,14 +445,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Parse proxy port from --proxy-bind-address (default ":50053").
+	// Parse proxy port from --proxy-bind-address (default ":50053"). The port is
+	// validated but the numeric value is not retained: the proxy listener binds
+	// the full --proxy-bind-address (proxyAddr) below.
 	_, proxyPortStr, err := net.SplitHostPort(proxyAddr)
 	if err != nil {
 		setupLog.Error(err, "invalid --proxy-bind-address", "address", proxyAddr)
 		os.Exit(1)
 	}
-	proxyPort, err := strconv.Atoi(proxyPortStr)
-	if err != nil {
+	if _, err := strconv.Atoi(proxyPortStr); err != nil {
 		setupLog.Error(err, "invalid port in --proxy-bind-address", "address", proxyAddr, "port", proxyPortStr)
 		os.Exit(1)
 	}
@@ -549,7 +550,7 @@ func main() {
 		os.Exit(1)
 	}
 	proxySrv := grpc.NewServer()
-	proxyServer := controller.NewProxyServer(proxyRoutingTable, mgr.GetClient(), proxyPort, controller.DialCartographer, operatorKey)
+	proxyServer := controller.NewProxyServer(proxyRoutingTable, mgr.GetClient(), controller.DialCartographer, operatorKey)
 	flowv1gen.RegisterCartographerServiceServer(proxySrv, proxyServer)
 
 	go func() {

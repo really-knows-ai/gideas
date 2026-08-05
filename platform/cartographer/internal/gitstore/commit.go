@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -62,7 +63,7 @@ func (g *gitStore) removePathRecursive(path string) error {
 	}
 
 	for _, entry := range entries {
-		childPath := path + "/" + entry.Name()
+		childPath := filepath.Join(path, entry.Name())
 		if entry.IsDir() {
 			if err := g.removePathRecursive(childPath); err != nil {
 				return err
@@ -96,7 +97,10 @@ func (g *gitStore) Commit(ctx context.Context, message string) error {
 }
 
 // CommitExistsOnBranch scans the commit log of the currently checked-out
-// branch for a commit whose first message line equals "transaction:<txID>".
+// branch for a commit whose first message line has the prefix
+// "transaction:<txID>". Prefix matching (per SPEC Commit retry, which
+// inspects git log for the transaction:<tx-id> prefix) is consistent with
+// GitLogOneline.
 func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool, error) {
 	message := "transaction:" + txID
 	log, err := g.repo.Log(&git.LogOptions{})
@@ -108,7 +112,7 @@ func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool,
 	if err := log.ForEach(func(commit *object.Commit) error {
 		firstLine, _, _ := strings.Cut(commit.Message, "\n")
 		firstLine = strings.TrimRight(firstLine, "\r")
-		if firstLine == message {
+		if strings.HasPrefix(firstLine, message) {
 			return errCommitFound
 		}
 		return nil
