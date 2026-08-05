@@ -18,6 +18,10 @@ package controller
 
 import (
 	"testing"
+	"time"
+
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
@@ -177,6 +181,69 @@ func TestDiffSchema(t *testing.T) {
 			expected: SchemaDiffDestructive,
 		},
 		{
+			name: "edge type added - non-destructive",
+			old: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+					{Name: "CONTAINS"},
+				},
+			},
+			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "edge type property added - non-destructive",
+			old: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "int"}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{
+						{Name: "weight", Type: "int"},
+						{Name: "note", Type: "string"},
+					}},
+				},
+			},
+			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "edge type property removed - destructive",
+			old: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{
+						{Name: "weight", Type: "int"},
+						{Name: "note", Type: "string"},
+					}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "int"}}},
+				},
+			},
+			expected: SchemaDiffDestructive,
+		},
+		{
+			name: "edge type property type changed - destructive",
+			old: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "int"}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "string"}}},
+				},
+			},
+			expected: SchemaDiffDestructive,
+		},
+		{
 			name: "reordered rules - no diff",
 			old: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
@@ -292,6 +359,41 @@ func TestDiffSchema(t *testing.T) {
 				},
 			},
 			expected: SchemaDiffNone,
+		},
+		{
+			name: "entity property required toggled - destructive",
+			// SPEC R6 lists "removed or changed existing type properties" as destructive:
+			// a bare toggle of an existing property's Required flag changes the existing
+			// property's schema metadata (not just forward-only runtime enforcement), so it
+			// requires WipeGraph → destructive.
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "name", Type: "string", Required: false}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "name", Type: "string", Required: true}}},
+				},
+			},
+			expected: SchemaDiffDestructive,
+		},
+		{
+			name: "edge type property required toggled - destructive",
+			// Same branch as above (foundrygraph_schema.go:175) for edge-type properties: a
+			// bare Required toggle on an existing edge property is a changed property
+			// → destructive.
+			old: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "int", Required: false}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "int", Required: true}}},
+				},
+			},
+			expected: SchemaDiffDestructive,
 		},
 		{
 			name: "canConnectTo duplicate members - no diff (set-based membership)",
@@ -430,6 +532,80 @@ func TestSpecSemanticallyEqual(t *testing.T) {
 			},
 			want: true,
 		},
+		{
+			// These storage/versioning equality and inequality paths gate the SPEC R6
+			// redeploy-vs-apply decision: a change to storage.size or any versioning field
+			// triggers a Cartographer redeployment (patched PVC / updated env) without
+			// WipeGraph, so specSemanticallyEqual must be able to distinguish them.
+			name: "storage.size equal - same",
+			a:    specWithStorage("2Gi"),
+			b:    specWithStorage("2Gi"),
+			want: true,
+		},
+		{
+			name: "storage.size different - not equal (R6 redeploy)",
+			a:    specWithStorage("1Gi"),
+			b:    specWithStorage("3Gi"),
+			want: false,
+		},
+		{
+			name: "storage nil vs set - not equal",
+			a:    &flowv1.FoundryGraphSpec{},
+			b:    specWithStorage("1Gi"),
+			want: false,
+		},
+		{
+			name: "versioning.transactionTimeout equal",
+			a:    specWithVersioning(30),
+			b:    specWithVersioning(30),
+			want: true,
+		},
+		{
+			name: "versioning.transactionTimeout different - not equal (R6 redeploy)",
+			a:    specWithVersioning(30),
+			b:    specWithVersioning(45),
+			want: false,
+		},
+		{
+			name: "versioning.remote equal",
+			a: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{URL: "https://github.com/org/repo.git", PullOnInit: true, Auth: &flowv1.RemoteAuth{SecretRef: "secret-a"}},
+			}},
+			b: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{URL: "https://github.com/org/repo.git", PullOnInit: true, Auth: &flowv1.RemoteAuth{SecretRef: "secret-a"}},
+			}},
+			want: true,
+		},
+		{
+			name: "versioning.remote.url different - not equal (R6 redeploy)",
+			a: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{URL: "https://github.com/org/a.git"},
+			}},
+			b: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{URL: "https://github.com/org/b.git"},
+			}},
+			want: false,
+		},
+		{
+			name: "versioning.remote.pullOnInit different - not equal (R6 redeploy)",
+			a: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{PullOnInit: false},
+			}},
+			b: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{PullOnInit: true},
+			}},
+			want: false,
+		},
+		{
+			name: "versioning.remote.auth.secretRef different - not equal (R6 redeploy/teardown)",
+			a: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: "secret-a"}},
+			}},
+			b: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: "secret-b"}},
+			}},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -439,5 +615,25 @@ func TestSpecSemanticallyEqual(t *testing.T) {
 				t.Errorf("specSemanticallyEqual(%q) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
+	}
+}
+
+// qPtr parses a Kubernetes resource.Quantity string to a *Quantity.
+func qPtr(v string) *resource.Quantity {
+	q := resource.MustParse(v)
+	return &q
+}
+
+// specWithStorage returns a FoundryGraphSpec with storage.size set.
+func specWithStorage(size string) *flowv1.FoundryGraphSpec {
+	return &flowv1.FoundryGraphSpec{Storage: &flowv1.StorageSpec{Size: qPtr(size)}}
+}
+
+// specWithVersioning returns a FoundryGraphSpec with a TransactionTimeout in minutes.
+func specWithVersioning(timeoutMinutes int) *flowv1.FoundryGraphSpec {
+	return &flowv1.FoundryGraphSpec{
+		Versioning: &flowv1.VersioningSpec{
+			TransactionTimeout: &metav1.Duration{Duration: time.Duration(timeoutMinutes) * time.Minute},
+		},
 	}
 }

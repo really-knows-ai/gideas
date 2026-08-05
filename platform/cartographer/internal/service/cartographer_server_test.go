@@ -3455,12 +3455,18 @@ func TestRecoveryDiffPropagatesSuspectedDeletions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create transaction: %v", err)
 	}
-	srv.recoverEntityChanges(state.ChangeLog, nil, map[string]map[string]gitstore.EntityFile{
+	_, err = srv.recoverEntityChanges(state.ChangeLog, nil, map[string]map[string]gitstore.EntityFile{
 		"Component": {"entity": {ID: "entity", Type: "Component"}},
 	})
-	srv.recoverEdgeChanges(state.ChangeLog, nil, map[string]map[string]gitstore.EdgeFile{
+	if err != nil {
+		t.Fatalf("recoverEntityChanges: %v", err)
+	}
+	_, err = srv.recoverEdgeChanges(state.ChangeLog, nil, map[string]map[string]gitstore.EdgeFile{
 		"DEPENDS_ON": {"edge": {ID: "edge", Type: "DEPENDS_ON"}},
 	})
+	if err != nil {
+		t.Fatalf("recoverEdgeChanges: %v", err)
+	}
 
 	diff, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID})
 	if err != nil {

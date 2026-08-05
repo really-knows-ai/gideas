@@ -146,6 +146,15 @@ func TestCartographerPodSecurityContext(t *testing.T) {
 		t.Fatal("PodSecurityContext is nil")
 	}
 
+	// terminationGracePeriodSeconds must exceed the GracefulStop drain so durability
+	// teardown completes before kubelet SIGKILL (cartographer deployment.yaml: 100s).
+	if deploy.Spec.Template.Spec.TerminationGracePeriodSeconds == nil {
+		t.Fatal("TerminationGracePeriodSeconds is nil — durability teardown could be SIGKILLed mid-write")
+	}
+	if *deploy.Spec.Template.Spec.TerminationGracePeriodSeconds < 30 {
+		t.Errorf("expected TerminationGracePeriodSeconds >= 30 (GracefulStop budget), got %d", *deploy.Spec.Template.Spec.TerminationGracePeriodSeconds)
+	}
+
 	if psc.FSGroup == nil {
 		t.Fatal("FSGroup is nil — root-owned PVC will not be writable by UID 65532")
 	}
@@ -390,5 +399,69 @@ func TestReconcileRBACCreation(t *testing.T) {
 	var remoteRB rbacv1.RoleBinding
 	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &remoteRB); err != nil {
 		t.Fatalf("expected remote-auth RoleBinding to be created: %v", err)
+	}
+}
+
+// TestReconcileRBACRemoteAuthSecretChanged exercises the mutable-remote-auth path
+// (SPEC R6: "If versioning.remote.auth.secretRef changes to a different Secret name, the
+// Operator updates the remote-auth-specific Role and RoleBinding to reference the new
+// Secret name"). The existing remote-auth Role's ResourceNames must be rewritten from the
+// old to the new Secret name, and the RoleBinding must remain bound.
+func TestReconcileRBACRemoteAuthSecretChanged(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := "test-ns"
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: "new-secret"}},
+			},
+		},
+	}
+
+	// Pre-seed the remote-auth Role and RoleBinding as they would be after an earlier
+	// reconcile with secretRef="old-secret".
+	remoteRole := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph-remote-auth", Namespace: ns},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups:     []string{""},
+			Resources:     []string{"secrets"},
+			ResourceNames: []string{"old-secret"},
+			Verbs:         []string{"get"},
+		}},
+	}
+	remoteRB := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph-remote-auth", Namespace: ns},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "cartographer-flow-graph-remote-auth"},
+	}
+
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, remoteRole, remoteRB).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+	ctx := context.Background()
+	if err := r.reconcileRBAC(ctx, fg); err != nil {
+		t.Fatalf("reconcileRBAC: %v", err)
+	}
+
+	// The remote-auth Role's ResourceNames must now reference the new Secret name.
+	var gotRole rbacv1.Role
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &gotRole); err != nil {
+		t.Fatalf("get remote-auth Role: %v", err)
+	}
+	if len(gotRole.Rules) != 1 || len(gotRole.Rules[0].ResourceNames) != 1 || gotRole.Rules[0].ResourceNames[0] != "new-secret" {
+		t.Errorf("expected remote-auth Role updated to reference %q, got %+v", "new-secret", gotRole.Rules)
+	}
+
+	// The remote-auth RoleBinding must not be torn down or re-created pointing elsewhere.
+	var gotRB rbacv1.RoleBinding
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &gotRB); err != nil {
+		t.Fatalf("get remote-auth RoleBinding: %v", err)
+	}
+	if gotRB.RoleRef.Name != "cartographer-flow-graph-remote-auth" {
+		t.Errorf("remote-auth RoleBinding RoleRef changed unexpectedly: %q", gotRB.RoleRef.Name)
 	}
 }

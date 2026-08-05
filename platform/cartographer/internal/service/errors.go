@@ -71,6 +71,8 @@ var errWildcardMissing = errors.New(
 )
 
 // mapStoreError maps a store-layer error to a gRPC status error.
+//
+//nolint:gocyclo
 func mapStoreError(err error) error {
 	if err == nil {
 		return nil
@@ -121,10 +123,12 @@ func mapStoreError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrInvalidTopK):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, store.ErrNaNOrInfEmbedding):
+	case errors.Is(err, store.ErrNaNOrInfEmbedding), errors.Is(err, store.ErrEmptyEmbedding):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrEmbeddingDimension):
 		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, store.ErrEmbeddingUpdateUnsupported):
+		return status.Error(codes.Unimplemented, err.Error())
 	case errors.Is(err, store.ErrDestructiveSchemaChange):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrDatabaseNotReady):

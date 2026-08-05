@@ -86,52 +86,25 @@ func main() {
 	slog.Info("Git repository open", "path", filepath.Join(ladybugDBPath, "graph-repo"))
 
 	// -----------------------------------------------------------------------
-	// 4. Handle main.lbug corruption recovery
+	// 4. Fail closed on main.lbug open failure (SPEC R8 corruption-only recovery)
 	// -----------------------------------------------------------------------
+	// SPEC R8 corruption recovery is scoped entirely to a genuinely corrupted
+	// main.lbug. ladybug.Open already performs that recovery itself: on a
+	// readable-but-unparseable file (corruptionCandidates) it removes main.lbug
+	// and re-opens a fresh database internally, returning nil error. Any
+	// non-nil error returned here is therefore an operational (IO/permission)
+	// or post-open failure (OpenConnection / extension LOAD / rebuildSchemaCache
+	// / restoreMainSchemaMetadata) — it does NOT prove main.lbug is corrupt.
+	// The store deliberately refuses to delete a database it cannot prove
+	// corrupt (see corruptionCandidate in ladybug.go), so deleting main.lbug
+	// here would permanently destroy durable non-transactional writes from a
+	// possibly-valid database. Fail closed without touching the file.
 	if dbErr != nil {
-		slog.Warn("Failed to open main.lbug, attempting recovery",
+		slog.Error("Failed to open main.lbug; refusing to delete database (failure is not proven corruption)",
 			"path", filepath.Join(ladybugDBPath, "main.lbug"),
 			"error", dbErr,
 		)
-
-		empty, isEmptyErr := gs.IsEmpty(context.Background())
-		if isEmptyErr != nil {
-			slog.Error("Failed to check git repo state during recovery", "error", isEmptyErr)
-			os.Exit(1)
-		}
-
-		if rmErr := os.Remove(filepath.Join(ladybugDBPath, "main.lbug")); rmErr != nil {
-			slog.Error("Failed to remove corrupt main.lbug, cannot recover", "error", rmErr)
-			os.Exit(1)
-		}
-
-		if empty {
-			dbStore, dbErr = ladybug.Open(ladybugDBPath)
-			if dbErr != nil {
-				slog.Error("Failed to create fresh database after recovery", "error", dbErr)
-				os.Exit(1)
-			}
-			slog.Info("Recovery: created fresh database (empty git repo)")
-		} else {
-			dbStore, dbErr = ladybug.Open(ladybugDBPath)
-			if dbErr != nil {
-				slog.Error("Failed to open database for re-hydration", "error", dbErr)
-				os.Exit(1)
-			}
-			// ponytail: These paths mirror the gitstore's internal working tree structure:
-			// gitstore.New(basePath) creates the repo at <basePath>/graph-repo/ and the
-			// working tree uses relative directories "entities/" and "edges/" (see
-			// platform/cartographer/internal/gitstore/gitstore.go:114,148-153).  If the
-			// gitstore changes its path convention (e.g. a configurable subdirectory or
-			// flat file layout), these paths must be updated in tandem.
-			entitiesDir := filepath.Join(ladybugDBPath, "graph-repo/entities")
-			edgesDir := filepath.Join(ladybugDBPath, "graph-repo/edges")
-			if err := dbStore.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir); err != nil {
-				slog.Error("Failed to re-hydrate main from git", "error", err)
-				os.Exit(1)
-			}
-			slog.Info("Recovery: re-hydrated main from git working tree")
-		}
+		os.Exit(1)
 	}
 
 	// -----------------------------------------------------------------------

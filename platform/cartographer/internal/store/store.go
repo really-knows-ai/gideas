@@ -64,7 +64,6 @@ type Store interface {
 	) ([]Entity, string, error)
 
 	// Rules (edge validation)
-	ValidateEdgeRules(sourceType, targetType, edgeType string) error
 	ResolveEntityType(ctx context.Context, entityID, branch string) (string, error)
 
 	// Transaction (branch DB management)

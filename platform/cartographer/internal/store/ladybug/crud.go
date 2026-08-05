@@ -251,19 +251,26 @@ func (db *ladybugDB) UpdateEntity(
 		} else if len(embedding) != dim {
 			return nil, fmt.Errorf("%w: expected dimension %d, got %d", store.ErrEmbeddingDimension, dim, len(embedding))
 		}
+
+		// LadybugDB refuses to rewrite the embedding of an existing row once the
+		// vector index exists ("Cannot set property ... because it is used in one
+		// or more indexes"), so UpdateEntity cannot change an embedding either
+		// after the column was bootstrapped (dim > 0) or immediately after this
+		// update bootstraps it above. Surface a defined store sentinel here — at
+		// the store boundary, rather than leaking the raw engine error — so the
+		// service layer can respond; the bootstrap DDL above has already locked
+		// the vector dimension as its side effect.
+		return nil, store.ErrEmbeddingUpdateUnsupported
 	}
 
-	// Build SET clause.
+	// Build SET clause (embedding is never settable on an existing indexed row,
+	// so it is absent here — see the guard above).
 	var sets []string
 	params := map[string]any{"id": id}
 	for k, v := range properties {
 		pk := "p_" + k
 		sets = append(sets, "n."+quoteID(k)+" = $"+pk)
 		params[pk] = v
-	}
-	if def.EnableVectorIndex && hasNewEmb {
-		sets = append(sets, "n.embedding = $embedding")
-		params["embedding"] = embedding
 	}
 	if len(sets) == 0 {
 		// No-op update — return the entity as-is.
@@ -281,11 +288,9 @@ func (db *ladybugDB) UpdateEntity(
 		return nil, eErr
 	}
 
-	// Merge properties and return.
+	// Merge properties and return. An embedding is never set here: changing it
+	// is rejected above by ErrEmbeddingUpdateUnsupported.
 	maps.Copy(entity.Properties, properties)
-	if def.EnableVectorIndex && hasNewEmb {
-		entity.Embedding = embedding
-	}
 	entity.UpdatedAt = time.Now().UTC()
 	return entity, nil
 }
@@ -530,20 +535,6 @@ func (db *ladybugDB) ListEdgesOfType(
 // --------------------------------------------------------------------------
 // Rules
 // --------------------------------------------------------------------------
-
-func (db *ladybugDB) ValidateEdgeRules(sourceType, targetType, edgeType string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if db.closed || db.failed {
-		return store.ErrDatabaseNotReady
-	}
-	return db.validateEdgeRulesFor(&branchDBCache{
-		entityTypeDefs: db.entityTypeDefs,
-		edgeTypeDefs:   db.edgeTypeDefs,
-		ruleIndex:      db.ruleIndex,
-	},
-		sourceType, targetType, edgeType)
-}
 
 func (db *ladybugDB) ResolveEntityType(ctx context.Context, entityID, branch string) (string, error) {
 	if err := validateUUID(entityID); err != nil {

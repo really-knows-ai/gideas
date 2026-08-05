@@ -1507,16 +1507,21 @@ func TestSearchNeighbors_EmptyEmbedding(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	// Empty embedding is not an error per SPEC — the SPEC only defines
-	// NaN/infinity, dimension mismatch, and non-indexed type errors for
-	// SearchNeighbors. The function proceeds past the removed empty check
-	// and returns empty results (no bootstrapped index to search).
-	results, err := s.SearchNeighbors(context.Background(), nil, "VectorType", 10, "")
-	if err != nil {
-		t.Fatalf("unexpected error for empty embedding: %v", err)
+	// SPEC error-table: "Empty embedding in SearchNeighbors → INVALID_ARGUMENT".
+	// The store must enforce this at its own SearchNeighbors boundary (not rely
+	// on the service layer), so an empty embedding is rejected with
+	// store.ErrEmptyEmbedding rather than silently returning empty results.
+	_, err = s.SearchNeighbors(context.Background(), nil, "VectorType", 10, "")
+	if err == nil {
+		t.Fatal("expected INVALID_ARGUMENT error for empty embedding")
 	}
-	if len(results) != 0 {
-		t.Errorf("expected 0 results for empty embedding, got %d", len(results))
+	if !errors.Is(err, store.ErrEmptyEmbedding) {
+		t.Errorf("expected ErrEmptyEmbedding, got %v", err)
+	}
+	if _, err := s.SearchNeighbors(context.Background(), []float32{}, "VectorType", 10, ""); err == nil {
+		t.Fatal("expected INVALID_ARGUMENT error for zero-length embedding")
+	} else if !errors.Is(err, store.ErrEmptyEmbedding) {
+		t.Errorf("expected ErrEmptyEmbedding for zero-length vector, got %v", err)
 	}
 }
 
@@ -3827,12 +3832,12 @@ func TestUpdateEntity_EmbeddingDimensionMismatch(t *testing.T) {
 // vector index, and persist the embedding. Only CreateEntity's bootstrap was
 // previously tested.
 //
-// ponytail: this test verifies only that the bootstrap side-effects (vector
-// index + established dimension) execute, because the first embedding update
-// cannot be asserted end-to-end: once the vector index is created, LadybugDB
-// refuses `SET embedding` on an existing row ("Cannot set property ... because
-// it is used in one or more indexes"), so UpdateEntity never persists an
-// embedding value. The bootstrap DDL still runs first and locks the dimension.
+// Once the vector index is created, LadybugDB refuses `SET embedding` on an
+// existing row ("Cannot set property ... because it is used in one or more
+// indexes"), so UpdateEntity cannot persist an embedding value. The store
+// surfaces the defined ErrEmbeddingUpdateUnsupported sentinel at its boundary
+// (rather than leaking the raw engine error), while the bootstrap DDL still
+// runs first and locks the dimension.
 func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -3866,8 +3871,12 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	}
 
 	// First embedding update runs the bootstrap: ALTER TABLE add embedding
-	// column + CREATE_VECTOR_INDEX, locking the dimension to 3.
+	// column + CREATE_VECTOR_INDEX, locking the dimension to 3, then rejects
+	// the embedding change with the defined sentinel.
 	_, err = s.UpdateEntity(context.Background(), id, nil, []float32{1, 2, 3}, "")
+	if !errors.Is(err, store.ErrEmbeddingUpdateUnsupported) {
+		t.Fatalf("expected ErrEmbeddingUpdateUnsupported, got %v", err)
+	}
 	if !s.IsVectorIndexBootstrapped("VectorType", "") {
 		t.Fatalf("expected vector index bootstrapped after first embedding update (update err: %v)", err)
 	}

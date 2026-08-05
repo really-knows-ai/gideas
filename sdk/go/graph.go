@@ -586,7 +586,12 @@ func (g *Graph) BeginTransaction(opts ...BeginTxOption) (*Transaction, error) {
 		req.Timeout = durationpb.New(cfg.timeout)
 	}
 
-	resp, err := g.session.Cartographer.BeginTransaction(g.session.ctx, req)
+	var resp *flowv1.BeginTransactionResponse
+	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
+		var callErr error
+		resp, callErr = g.session.Cartographer.BeginTransaction(ctx, req)
+		return callErr
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -615,8 +620,10 @@ func (g *Graph) PullFromRemote() error {
 	if g.session == nil {
 		return fmt.Errorf("flow sdk: graph not initialised")
 	}
-	_, err := g.session.Cartographer.PullFromRemote(g.session.ctx, &flowv1.PullFromRemoteRequest{})
-	return err
+	return g.session.call(g.session.ctx, func(ctx context.Context) error {
+		_, err := g.session.Cartographer.PullFromRemote(ctx, &flowv1.PullFromRemoteRequest{})
+		return err
+	}, "")
 }
 
 // ExportGraph starts a server-streaming export of the full graph.

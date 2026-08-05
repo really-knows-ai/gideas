@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -734,5 +735,36 @@ func TestTxDeleteEdge_SendsKeyAndWildcard(t *testing.T) {
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+// TestDiff_AppliesPerCallDeadline verifies that the per-call deadline
+// configured via session timeout is applied to transaction lifecycle RPCs.
+// A mock that parks until its context deadline fires proves the operation is
+// cut by the deadline (via session.call) rather than hanging on the raw
+// session ctx, which carries no deadline.
+func TestDiff_AppliesPerCallDeadline(t *testing.T) {
+	mock := &mockCartographerClient{
+		getTxDiff: func(ctx context.Context, _ *flowv1.GetTransactionDiffRequest,
+		) (*flowv1.GetTransactionDiffResponse, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+				// If the per-call deadline is not applied, the call would hang
+				// instead of being cut. Fail loudly rather than hang the suite.
+				return nil, errors.New("per-call deadline was not applied; call was not cut")
+			}
+		},
+	}
+	tx := newMockTx(mock)
+	tx.session.timeout = 100 * time.Millisecond
+
+	_, err := tx.Diff()
+	if err == nil {
+		t.Fatal("expected Diff to be cut by the per-call deadline")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded to cut the call, got %v", err)
 	}
 }

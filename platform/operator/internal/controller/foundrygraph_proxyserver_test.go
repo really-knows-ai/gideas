@@ -435,6 +435,47 @@ func TestExportGraphStreamUsesCallerContext(t *testing.T) {
 	}
 }
 
+// TestExportGraphDialFailureIsUnavailable exercises the dial-failure branch
+// (foundrygraph_proxyserver.go:276-279): a dialer error must surface as codes.Unavailable
+// ("cannot connect to cartographer"), distinguishing the SPEC R11 dial-timeout Unavailable
+// from the mid-stream INTERNAL case.
+func TestExportGraphDialFailureIsUnavailable(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return nil, errors.New("connect failed: timeout")
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if err == nil {
+		t.Fatal("expected an error on dial failure")
+	}
+	// SPEC R11: a dial-timeout/connect failure is Unavailable, NOT the mid-stream INTERNAL.
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("expected Unavailable on dial failure, got %v", status.Code(err))
+	}
+}
+
 // TestExportGraphMidStreamUnavailableIsInternal asserts that a mid-stream transport-level
 // break (Unavailable) after the stream has started surfaces as the SPEC's INTERNAL, not a
 // dial-timeout Unavailable.

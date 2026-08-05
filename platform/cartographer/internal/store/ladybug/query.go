@@ -77,7 +77,13 @@ func (db *ladybugDB) ExecuteCypher(
 func (db *ladybugDB) SearchNeighbors(
 	ctx context.Context, embedding []float32, entityType string, topK int, branch string,
 ) ([]store.NeighborResult, error) {
-	// Validate embedding.
+	// Validate embedding. The SPEC error-table (line ~880) defines an empty
+	// embedding as INVALID_ARGUMENT; enforce it at this authoritative store
+	// boundary in addition to the service-layer gate so a direct store caller
+	// cannot silently receive empty results for an empty embedding.
+	if len(embedding) == 0 {
+		return nil, store.ErrEmptyEmbedding
+	}
 	for _, v := range embedding {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
 			return nil, store.ErrNaNOrInfEmbedding

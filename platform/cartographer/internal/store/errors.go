@@ -46,8 +46,13 @@ var (
 
 // Embedding errors
 var (
-	ErrNaNOrInfEmbedding  = errors.New("embedding contains NaN or infinity values")
-	ErrEmbeddingDimension = errors.New("embedding dimension mismatch")
+	ErrNaNOrInfEmbedding          = errors.New("embedding contains NaN or infinity values")
+	ErrEmbeddingDimension         = errors.New("embedding dimension mismatch")
+	ErrEmptyEmbedding             = errors.New("empty embedding")
+	ErrEmbeddingUpdateUnsupported = errors.New(
+		"embedding of an existing entity cannot be changed: the vector index does not " +
+			"support rewriting the embedding of an existing row",
+	)
 )
 
 // Branch errors

@@ -44,6 +44,12 @@ func extractEntityTypes(cypher string) []string {
 			stmt, prepErr := conn.Prepare(cypher)
 			if prepErr != nil {
 				// Invalid Cypher — return nil for wildcard fallback.
+				// ponytail: Close errors are silently discarded because db is
+				// an ephemeral in-memory instance created solely to validate
+				// Cypher syntax; close failures release nothing durable and
+				// cannot lose committed data. The handles are garbage-collected
+				// regardless. If the database were ever shared or durable, the
+				// Close errors would need to be propagated.
 				conn.Close()
 				db.Close()
 				return nil
@@ -55,10 +61,10 @@ func extractEntityTypes(cypher string) []string {
 			// Cartographer server level (R7); the SDK never rejects based on
 			// IsReadOnly here, so a mutation still yields its specific entity
 			// types rather than collapsing to the read wildcard.
-			stmt.Close()
-			conn.Close()
+			stmt.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant
+			conn.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant
 		}
-		db.Close()
+		db.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant
 	}
 
 	// Step 2: Extract labels from MATCH patterns using regex.

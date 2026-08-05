@@ -191,9 +191,9 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Step 9: Wait for readiness.
 	if err := r.waitForReadiness(ctx, &fg); err != nil {
-		if apierrors.IsConflict(err) {
-			return ctrl.Result{Requeue: true}, nil
-		}
+		// SPEC R6 step 5: a readiness timeout/cancellation surfaces as an error so
+		// controller-runtime re-queues the request with exponential backoff. Returning a
+		// bare (Result{}, err) is the requeue-with-backoff path.
 		return ctrl.Result{}, fmt.Errorf("readiness: %w", err)
 	}
 

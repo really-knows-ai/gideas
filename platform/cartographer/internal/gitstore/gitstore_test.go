@@ -2889,9 +2889,10 @@ func TestPullFromRemote(t *testing.T) {
 	if _, err := clonedWT.Add("another.txt"); err != nil {
 		t.Fatalf("add another: %v", err)
 	}
-	if _, err := clonedWT.Commit("second commit", &git.CommitOptions{
+	secondHash, err := clonedWT.Commit("second commit", &git.CommitOptions{
 		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("second commit: %v", err)
 	}
 	if err := cloned.Push(&git.PushOptions{}); err != nil {
@@ -2904,7 +2905,17 @@ func TestPullFromRemote(t *testing.T) {
 			return fmt.Errorf("second pull: %w", err)
 		}
 
-		// Verify the second commit exists
+		// The pull must have advanced the local main ref to the remote HEAD,
+		// not merely fetched the objects into the store.
+		mainRef, err := gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+		if err != nil {
+			return fmt.Errorf("main ref: %w", err)
+		}
+		if mainRef.Hash() != secondHash {
+			return fmt.Errorf("main ref = %s, want %s", mainRef.Hash(), secondHash)
+		}
+
+		// Verify the second commit appears in the log.
 		log, err := gs.repo.Log(&git.LogOptions{})
 		if err != nil {
 			return err
@@ -2913,10 +2924,10 @@ func TestPullFromRemote(t *testing.T) {
 
 		if err := log.ForEach(func(c *object.Commit) error {
 			if strings.HasPrefix(c.Message, "second commit") {
-				return fmt.Errorf("FOUND")
+				return errStop
 			}
 			return nil
-		}); err != nil && err.Error() != "FOUND" {
+		}); err != nil && !errors.Is(err, errStop) {
 			return err
 		}
 

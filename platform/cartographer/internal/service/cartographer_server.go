@@ -363,8 +363,14 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 			return fmt.Errorf("read main graph for transaction %q: %w", txID, err)
 		}
 		cl := gitstore.NewChangeLog()
-		entityChanged := s.recoverEntityChanges(cl, entities, mainEntities)
-		edgeChanged := s.recoverEdgeChanges(cl, edges, mainEdges)
+		entityChanged, entityErr := s.recoverEntityChanges(cl, entities, mainEntities)
+		if entityErr != nil {
+			return fmt.Errorf("recover entity changes for transaction %q: %w", txID, entityErr)
+		}
+		edgeChanged, edgeErr := s.recoverEdgeChanges(cl, edges, mainEdges)
+		if edgeErr != nil {
+			return fmt.Errorf("recover edge changes for transaction %q: %w", txID, edgeErr)
+		}
 
 		// SPEC recovery step 5: If the diff is empty (branch DB identical to main),
 		// the transaction was already committed — clean up and do not recover.
@@ -472,12 +478,13 @@ func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (
 // recoverEntityChanges classifies branch DB entities against main files and
 // adds ChangeLog entries for non-unchanged entities. It also detects suspected
 // deletions for entities present in main but absent from the branch DB.
-// Returns true if any change was recorded.
+// Returns true if any change was recorded, and an error if a change-log entry
+// could not be recorded (e.g. ErrChangeLogFull).
 func (s *CartographerServer) recoverEntityChanges(
 	cl *gitstore.ChangeLog,
 	entities []store.Entity,
 	mainEntities map[string]map[string]gitstore.EntityFile,
-) bool {
+) (bool, error) {
 	anyChange := false
 	// Build a set of (type, id) present in the branch DB for deletion detection.
 	branchSet := make(map[string]map[string]bool)
@@ -495,41 +502,46 @@ func (s *CartographerServer) recoverEntityChanges(
 		if !exists {
 			kind = gitstore.ChangeAddEntity
 		}
-		_ = cl.AddEntry(gitstore.ChangeLogEntry{
+		if err := cl.AddEntry(gitstore.ChangeLogEntry{
 			Kind: kind,
 			ID:   ent.Id, Type: ent.Type,
 			Entity: &gitstore.EntityEntry{
 				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
 				Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
 			},
-		})
+		}); err != nil {
+			return false, fmt.Errorf("record recovered entity change: %w", err)
+		}
 		anyChange = true
 	}
 	// Suspected deletions: entities in main but not in the branch DB.
 	for et, typeMap := range mainEntities {
 		for id := range typeMap {
 			if !branchSet[et][id] {
-				_ = cl.AddEntry(gitstore.ChangeLogEntry{
+				if err := cl.AddEntry(gitstore.ChangeLogEntry{
 					Kind: gitstore.ChangeDelEntity,
 					ID:   id, Type: et,
 					Suspected: true,
-				})
+				}); err != nil {
+					return false, fmt.Errorf("record recovered entity deletion: %w", err)
+				}
 				anyChange = true
 			}
 		}
 	}
-	return anyChange
+	return anyChange, nil
 }
 
 // recoverEdgeChanges classifies branch DB edges against main files and adds
 // ChangeLog entries for non-unchanged edges. It also detects suspected
 // deletions for edges present in main but absent from the branch DB.
-// Returns true if any change was recorded.
+// Returns true if any change was recorded, and an error if a change-log entry
+// could not be recorded (e.g. ErrChangeLogFull).
 func (s *CartographerServer) recoverEdgeChanges(
 	cl *gitstore.ChangeLog,
 	edges []store.Edge,
 	mainEdges map[string]map[string]gitstore.EdgeFile,
-) bool {
+) (bool, error) {
 	anyChange := false
 	branchSet := make(map[string]map[string]bool)
 	for _, edge := range edges {
@@ -542,7 +554,7 @@ func (s *CartographerServer) recoverEdgeChanges(
 		if exists && edgeContentEqual(edge, mainFile) {
 			continue // unchanged — skip
 		}
-		_ = cl.AddEntry(gitstore.ChangeLogEntry{
+		if err := cl.AddEntry(gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeAddEdge,
 			ID:   edge.Id, Type: edge.Type,
 			Edge: &gitstore.EdgeEntry{
@@ -550,23 +562,27 @@ func (s *CartographerServer) recoverEdgeChanges(
 				FromEntityID: edge.FromEntityID, ToEntityID: edge.ToEntityID,
 				Properties: edge.Properties, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
 			},
-		})
+		}); err != nil {
+			return false, fmt.Errorf("record recovered edge change: %w", err)
+		}
 		anyChange = true
 	}
 	// Suspected edge deletions: edges in main but not in the branch DB.
 	for et, typeMap := range mainEdges {
 		for id := range typeMap {
 			if !branchSet[et][id] {
-				_ = cl.AddEntry(gitstore.ChangeLogEntry{
+				if err := cl.AddEntry(gitstore.ChangeLogEntry{
 					Kind: gitstore.ChangeDelEdge,
 					ID:   id, Type: et,
 					Suspected: true,
-				})
+				}); err != nil {
+					return false, fmt.Errorf("record recovered edge deletion: %w", err)
+				}
 				anyChange = true
 			}
 		}
 	}
-	return anyChange
+	return anyChange, nil
 }
 
 // startGC runs the GC loop.
@@ -1394,7 +1410,7 @@ func (s *CartographerServer) BeginTransaction(
 	state, err := s.txManager.Create(txID, requestedTimeout, mainHead)
 	if err != nil {
 		var cleanups []string
-		_ = s.gitstore.WithGitLock(func() error {
+		if lockErr := s.gitstore.WithGitLock(func() error {
 			if err := s.gitstore.DeleteBranch(ctx, txID); err != nil {
 				cleanups = append(cleanups, fmt.Sprintf("delete branch: %v", err))
 			}
@@ -1402,7 +1418,9 @@ func (s *CartographerServer) BeginTransaction(
 				cleanups = append(cleanups, fmt.Sprintf("restore main: %v", err))
 			}
 			return nil
-		})
+		}); lockErr != nil {
+			cleanups = append(cleanups, fmt.Sprintf("git lock: %v", lockErr))
+		}
 		if err := s.store.DropBranchDB(ctx, txID); err != nil {
 			cleanups = append(cleanups, fmt.Sprintf("drop branch DB: %v", err))
 		}
@@ -2089,7 +2107,7 @@ func (s *CartographerServer) WipeGraph(
 	s.txAdmission.Lock()
 	defer s.txAdmission.Unlock()
 	var wipeErr error
-	_ = s.withGitLock(func() error {
+	lockErr := s.withGitLock(func() error {
 		if s.txManager.HasActive() {
 			wipeErr = errWipeGraphOpenTransactions()
 			return nil
@@ -2120,6 +2138,9 @@ func (s *CartographerServer) WipeGraph(
 	})
 	if wipeErr != nil {
 		return nil, wipeErr
+	}
+	if lockErr != nil {
+		return nil, mapGitError(lockErr)
 	}
 	s.lockMainStore()
 	if err := s.store.WipeSchema(ctx); err != nil {

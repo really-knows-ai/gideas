@@ -188,6 +188,10 @@ func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
 
 func loadBranchExtensions(conn *lbug.Connection) error {
 	for _, ext := range []string{"vector", "fts"} {
+		// INSTALL is idempotent — it is safe to call on every Open (same as
+		// main's loadExtensions). On some configurations the extension may
+		// already be installed, so we ignore INSTALL errors and attempt LOAD
+		// directly; the LOAD result is checked below.
 		_, _ = conn.Query("INSTALL " + ext + ";")
 		if _, err := conn.Query("LOAD " + ext + ";"); err != nil {
 			return fmt.Errorf("load extension %q on branch: %w", ext, err)

@@ -398,9 +398,14 @@ func (tx *Transaction) Diff() (*TransactionDiff, error) {
 		return nil, err
 	}
 
-	resp, err := tx.session.Cartographer.GetTransactionDiff(tx.session.ctx, &flowv1.GetTransactionDiffRequest{
-		TransactionId: tx.id,
-	})
+	var resp *flowv1.GetTransactionDiffResponse
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		var callErr error
+		resp, callErr = tx.session.Cartographer.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{
+			TransactionId: tx.id,
+		})
+		return callErr
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -434,9 +439,12 @@ func (tx *Transaction) Refresh() error {
 	if err := tx.checkRolled(); err != nil {
 		return err
 	}
-	_, err := tx.session.Cartographer.RefreshTransaction(tx.session.ctx, &flowv1.RefreshTransactionRequest{
-		TransactionId: tx.id,
-	})
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+			TransactionId: tx.id,
+		})
+		return callErr
+	}, "")
 	return err
 }
 
@@ -445,9 +453,12 @@ func (tx *Transaction) Commit() error {
 	if err := tx.checkRolled(); err != nil {
 		return err
 	}
-	_, err := tx.session.Cartographer.CommitTransaction(tx.session.ctx, &flowv1.CommitTransactionRequest{
-		TransactionId: tx.id,
-	})
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+			TransactionId: tx.id,
+		})
+		return callErr
+	}, "")
 	return err
 }
 
@@ -456,9 +467,12 @@ func (tx *Transaction) Rollback() error {
 	if tx.rolledBack {
 		return nil // idempotent
 	}
-	_, err := tx.session.Cartographer.RollbackTransaction(tx.session.ctx, &flowv1.RollbackTransactionRequest{
-		TransactionId: tx.id,
-	})
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+			TransactionId: tx.id,
+		})
+		return callErr
+	}, "")
 	if err != nil {
 		return err
 	}
@@ -477,10 +491,13 @@ func (tx *Transaction) ExtendTimeout(d time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("flow sdk: extend timeout duration must be positive")
 	}
 
-	_, err := tx.session.Cartographer.ExtendTimeout(tx.session.ctx, &flowv1.ExtendTimeoutRequest{
-		TransactionId: tx.id,
-		Duration:      durationpb.New(d),
-	})
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
+			TransactionId: tx.id,
+			Duration:      durationpb.New(d),
+		})
+		return callErr
+	}, "")
 	if err != nil {
 		return 0, err
 	}

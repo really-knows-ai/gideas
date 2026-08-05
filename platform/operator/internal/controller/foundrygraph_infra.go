@@ -41,6 +41,11 @@ var DefaultCartographerImage = "flow-operator:latest"
 // cartographerStorageSize is the default PVC storage size for Cartographer.
 const cartographerStorageSize = "1Gi"
 
+// cartographerTerminationGraceSecs is the Deployment's termination grace period. It must
+// exceed the in-process GracefulStop drain (~30s) so durability teardown completes before
+// kubelet SIGKILL; 100s matches the cartographer deployment.yaml reference template.
+const cartographerTerminationGraceSecs = int64(100)
+
 // labelsForCartographer returns the standard labels for Cartographer resources.
 func (r *FoundryGraphReconciler) labelsForCartographer(fg *flowv1.FoundryGraph) map[string]string {
 	return map[string]string{
@@ -296,6 +301,7 @@ func (r *FoundryGraphReconciler) deploymentEnvVars(fg *flowv1.FoundryGraph) []co
 // reconcileDeployment creates or updates the Cartographer Deployment.
 func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	replicas := int32(1)
+	termGrace := cartographerTerminationGraceSecs
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cartographer-" + fg.Name,
@@ -319,7 +325,13 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 					FSGroupChangePolicy: fsGroupChangePolicyPtr(corev1.FSGroupChangeOnRootMismatch),
 					SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 				},
-				ServiceAccountName: "cartographer-" + fg.Name,
+				// terminationGracePeriodSeconds must exceed the in-process GracefulStop drain
+				// budget so the durability teardown (StopGC, LADYBUGDB close, git restore)
+				// finishes before kubelet SIGKILL. 100s matches the cartographer
+				// deployment.yaml convention (SPEC R6: the Operator creates the Deployment
+				// dynamically from that reference template).
+				TerminationGracePeriodSeconds: &termGrace,
+				ServiceAccountName:            "cartographer-" + fg.Name,
 				Containers: []corev1.Container{{
 					Name:            "cartographer",
 					Image:           r.CartographerImage,
