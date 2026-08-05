@@ -1247,16 +1247,45 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 	ctx := testCtx()
 	applyTestSchema(ctx, t, st)
 
-	// A syntactically valid CREATE against a declared type reaches the
-	// mutation classifier, which returns PERMISSION_DENIED per SPEC R7 §5.
-	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
-		Cypher: "CREATE (n:Component {id: '11111111-1111-1111-1111-111111111111', name: 'x'})",
-	})
-	if err == nil {
-		t.Fatal("expected error for mutation, got nil")
+	// Each mutation/DDL clause the SPEC R7 §5 and error-table row 910 enumerate
+	// (CREATE, SET, DELETE, MERGE, REMOVE, DROP, DDL index/constraint, and
+	// FOREACH-as-mutation) must be rejected by ExecuteCypher so no mutation ever
+	// executes through the read-only RPC.
+	//
+	// LadybugDB v0.17.0's parser recognises CREATE/SET/DELETE/MERGE/DROP and
+	// classifies each as non-read-only, surfacing ErrMutationCypher which the
+	// service maps to PERMISSION_DENIED. Its grammar does not parse top-level
+	// FOREACH, `MATCH ... REMOVE ...`, or index/constraint DDL, so those fail at
+	// Prepare with ErrInvalidCypher (which the service maps to INVALID_ARGUMENT)
+	// before the read-only guard runs — they cannot execute either. The security
+	// property (a mutation can never execute through ExecuteCypher) holds for the
+	// whole set; the error code varies by whether the grammar can classify the AST
+	// root as a mutation.
+	cases := []struct {
+		name           string
+		cypher         string
+		wantStatusCode codes.Code
+	}{
+		{"create", "CREATE (n:Component {id: '11111111-1111-1111-1111-111111111111', name: 'x'})", codes.PermissionDenied},
+		{"set", "MATCH (n:Component) SET n.name = 'x'", codes.PermissionDenied},
+		{"delete", "MATCH (n:Component) DELETE n", codes.PermissionDenied},
+		{"merge", "MERGE (n:Component {id: '11111111-1111-1111-1111-111111111111'})", codes.PermissionDenied},
+		{"drop", "DROP TABLE Component", codes.PermissionDenied},
+		{"remove", "MATCH (n:Component) REMOVE n.name", codes.InvalidArgument},
+		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)", codes.InvalidArgument},
+		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE", codes.InvalidArgument},
+		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))", codes.InvalidArgument},
 	}
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: tc.cypher})
+			if err == nil {
+				t.Fatalf("expected error for mutation %q, got nil", tc.cypher)
+			}
+			if got := status.Code(err); got != tc.wantStatusCode {
+				t.Errorf("mutation %q: expected %v, got %v (%v)", tc.cypher, tc.wantStatusCode, got, err)
+			}
+		})
 	}
 }
 

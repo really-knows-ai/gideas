@@ -530,6 +530,18 @@ func (g *shutdownGitStore) CleanUntracked(context.Context) error {
 }
 func (g *shutdownGitStore) Close() error { g.closeCalls++; return nil }
 
+// lockErrGitStore is a gitstore.GitStore stub whose WithGitLock reports a lock
+// acquisition failure without invoking the closure, so the teardown's
+// working-tree branch is never reached. It verifies shutdown itself still runs
+// to completion (Close is reached) while the lock/Restore/Clean failures are
+// no longer silently swallowed.
+type lockErrGitStore struct {
+	shutdownGitStore
+	lockErr error
+}
+
+func (g *lockErrGitStore) WithGitLock(fn func() error) error { return g.lockErr }
+
 // TestIsFatalServeError verifies the Serve-return classification. A nil return
 // (normal graceful stop) and grpc.ErrServerStopped (the startup-race graceful
 // stop, and the case the shutdown goroutine's GracefulStop/Stop produces) must
@@ -611,5 +623,71 @@ func TestWaitForShutdownTeardownCompletes(t *testing.T) {
 	}
 	if gs.closeCalls != 1 {
 		t.Errorf("git Close calls = %d, want 1", gs.closeCalls)
+	}
+}
+
+// TestWaitForShutdownLockFailureStillCompletes verifies that a git lock
+// acquisition failure during shutdown is propagated (no longer `_ =`-discarded)
+// while the teardown still completes. WithGitLock failing means RestoreMain and
+// CleanUntracked are never invoked (the block is untouched under a failed
+// lock), but the durability teardown must continue past the git step: the main
+// db Close still runs and the shutdownDone join is still reached, so the
+// process does not hang and the operator gets a distinct log line correlating
+// the stranded tree.
+func TestWaitForShutdownLockFailureStillCompletes(t *testing.T) {
+	db := &shutdownStore{}
+	gs := &lockErrGitStore{lockErr: errors.New("git lock acquisition failed")}
+	server := service.NewCartographerServer(db, gs, nil, nil, nil, "", 30*time.Second,
+		"default", 30*time.Second, 100000)
+
+	healthSrv := health.NewServer()
+	grpcServer := grpc.NewServer()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthSrv)
+	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+
+	sigCh := make(chan os.Signal, 1)
+	shutdownDone := make(chan struct{})
+	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, db, gs, nil, nil)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- grpcServer.Serve(lis) }()
+
+	time.Sleep(50 * time.Millisecond)
+	sigCh <- syscall.SIGTERM
+
+	select {
+	case err := <-serveErr:
+		if isFatalServeError(err) {
+			t.Fatalf("graceful stop Serve returned %v, classified fatal", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return after graceful stop")
+	}
+
+	select {
+	case <-shutdownDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown did not complete after lock failure (teardown join unreachable)")
+	}
+
+	// The failed lock blocks the tree-branch but must not halt the teardown.
+	if db.closeCalls != 1 {
+		t.Errorf("dbStore.Close calls = %d, want 1 (teardown must not abort before Close)", db.closeCalls)
+	}
+	if gs.closeCalls != 1 {
+		t.Errorf("git Close calls = %d, want 1", gs.closeCalls)
+	}
+	// Under a failed lock the working-tree branch is never entered: the lock
+	// error is now surfaced instead of silently dropped, so Restore/Clean are
+	// correctly skipped (we are not falsely claiming a clean tree).
+	if gs.restoreCalls != 0 {
+		t.Errorf("git RestoreMain calls under failed lock = %d, want 0", gs.restoreCalls)
+	}
+	if gs.cleanCalls != 0 {
+		t.Errorf("git CleanUntracked calls under failed lock = %d, want 0", gs.cleanCalls)
 	}
 }

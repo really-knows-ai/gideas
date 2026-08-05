@@ -228,6 +228,61 @@ func TestReconcileDialFailureRequeues(t *testing.T) {
 	}
 }
 
+// TestReconcileStaticInvalidSpecReachesTerminalState drives the static-invalid-input
+// path (SPEC R1 INVALID_ARGUMENT): a FoundryGraph whose entityTypes contain a duplicate
+// type name must set the terminal Ready=False/ReconcileFailed condition and return a
+// NIL error so controller-runtime does NOT requeue with exponential backoff — the invalid
+// spec can never succeed, so it must reach a terminal failing state rather than retry
+// indefinitely.
+func TestReconcileStaticInvalidSpecReachesTerminalState(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := "test-ns"
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		Spec: flowv1.FoundryGraphSpec{
+			EntityTypes: []flowv1.EntityTypeSpec{
+				{Name: "Widget"},
+				{Name: "Widget"}, // duplicate type name → statically invalid
+			},
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
+	r := &FoundryGraphReconciler{
+		Client:            fakeCli,
+		Scheme:            s,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+	}
+
+	ctx := context.Background()
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: ns}})
+	if err != nil {
+		// A static invalid spec must reach a terminal state WITHOUT a requeue-with-backoff
+		// error (controller-runtime re-queues on a non-nil error).
+		t.Fatalf("expected no error for a statically-invalid spec (no requeue), got: %v", err)
+	}
+	// ctrl.Result{} with a nil error means no requeue; Requeue (deprecated) is not set.
+	if res.RequeueAfter != 0 {
+		t.Errorf("expected no requeue for a statically-invalid spec, got result %+v", res)
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: ns}, &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil {
+		t.Fatal("expected a Ready condition to be set for the invalid spec")
+	}
+	if ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+		t.Errorf("expected Ready=False/ReconcileFailed for invalid spec, got %v", ready)
+	}
+}
+
 func TestApplySchemaOnExistingWipeBlockedSentinel(t *testing.T) {
 	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
 

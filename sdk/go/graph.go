@@ -195,13 +195,17 @@ type beginTxConfig struct {
 	timeout time.Duration
 }
 
-// WithTxTimeout sets the initial transaction timeout requested on
+// WithTimeout sets the initial transaction timeout requested on
 // BeginTransaction. The 7-day hard maximum (SPEC R9/R2) is enforced by the
 // Cartographer: a duration above the cap is silently shortened server-side,
 // and the granted value is returned as the response's applied_timeout, which
 // the SDK honours on the resulting Transaction handle. The client sends the
 // requested value verbatim and relies on applied_timeout, never a local cap.
-func WithTxTimeout(d time.Duration) BeginTxOption {
+//
+// This is the SDK-surface BeginTxOption prescribed by SPEC R4/R9 as
+// `graph.BeginTransaction(graph.WithTimeout(48 * time.Hour))`. It is distinct
+// from the Client-level per-request timeout option WithRequestTimeout.
+func WithTimeout(d time.Duration) BeginTxOption {
 	return func(c *beginTxConfig) {
 		c.timeout = d
 	}

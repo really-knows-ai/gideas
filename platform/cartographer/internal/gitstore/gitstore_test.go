@@ -3932,7 +3932,13 @@ func TestFetchAndMerge_FastForward(t *testing.T) {
 }
 
 // TestFetchAndMerge_MergeCommit tests that FetchAndMerge creates a merge
-// commit when local and remote have diverged.
+// commit when local and remote have diverged. This is the delivered divergence
+// behavior of the explicit PullFromRemote path: because the service pulls via
+// FetchAndMerge (never PullAndFastForward), a divergent pull produces a merge
+// commit and must NOT surface ErrPullDiverged. SPEC R10's divergent
+// "FAILED_PRECONDITION" (error table line 926) is therefore unreachable in
+// production and is here pinned as intentionally set-aside (see remote.go
+// FetchAndMerge docs).
 func TestFetchAndMerge_MergeCommit(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")

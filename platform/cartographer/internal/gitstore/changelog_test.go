@@ -286,6 +286,64 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	}
 }
 
+// TestChangeLogAddEntryBypassesCap exercises the startup-recovery reconstruct
+// path (RecoverOpenTransactions): AddEntry must admit entries beyond the cap
+// because the original addition was already gated when the transaction ran.
+func TestChangeLogAddEntryBypassesCap(t *testing.T) {
+	cl := NewChangeLogWithCap(10)
+
+	// Fill the ChangeLog to its cap via the cap-enforcing Add path.
+	for i := range 10 {
+		if err := cl.Add(ChangeLogEntry{
+			Kind:   ChangeAddEntity,
+			ID:     formatIntID(i),
+			Type:   testComponentType,
+			Entity: &EntityEntry{ID: formatIntID(i), Type: testComponentType},
+		}); err != nil {
+			t.Fatalf("Add %d failed: %v", i, err)
+		}
+	}
+	if cl.Len() != 10 {
+		t.Fatalf("expected Len()=10, got %d", cl.Len())
+	}
+
+	// The 11th entry would be rejected by Add once the cap is reached.
+	if err := cl.Add(ChangeLogEntry{
+		Kind:   ChangeAddEntity,
+		ID:     "overflow",
+		Type:   testComponentType,
+		Entity: &EntityEntry{ID: "overflow", Type: testComponentType},
+	}); err != ErrChangeLogFull {
+		t.Fatalf("Add past cap: expected ErrChangeLogFull, got %v", err)
+	}
+
+	// Recovery reconstruction bypasses the cap: AddEntry admits the overflow entry.
+	if err := cl.AddEntry(ChangeLogEntry{
+		Kind:   ChangeAddEntity,
+		ID:     "recovered",
+		Type:   testComponentType,
+		Entity: &EntityEntry{ID: "recovered", Type: testComponentType},
+	}); err != nil {
+		t.Fatalf("AddEntry past cap should bypass the cap, got: %v", err)
+	}
+	if cl.Len() != 11 {
+		t.Fatalf("expected Len()=11 after AddEntry, got %d", cl.Len())
+	}
+	if _, ok := cl.AddedEntities["recovered"]; !ok {
+		t.Fatal("expected the recovered entry to be admitted into AddedEntities")
+	}
+
+	// The cap remains enforced for the normal Add path after a cap-bypassing AddEntry.
+	if err := cl.Add(ChangeLogEntry{
+		Kind:   ChangeAddEntity,
+		ID:     "overflow2",
+		Type:   testComponentType,
+		Entity: &EntityEntry{ID: "overflow2", Type: testComponentType},
+	}); err != ErrChangeLogFull {
+		t.Fatalf("Add after AddEntry: expected ErrChangeLogFull, got %v", err)
+	}
+}
+
 func TestChangeLogClear(t *testing.T) {
 	cl := NewChangeLog()
 	_ = cl.Add(ChangeLogEntry{

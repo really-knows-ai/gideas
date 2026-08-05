@@ -89,6 +89,20 @@ func (cl *ChangeLog) AddEntry(entry ChangeLogEntry) error {
 
 // add is the shared insertion logic used by both Add and AddEntry.
 // Must be called with cl.mu held.
+//
+// ponytail: cl.count counts per map slot, not per distinct element. The same
+// entityID modified twice (Add then Mod, or Add/Mod coordinated with Del)
+// occupies distinct slots in different category maps and so counts twice toward
+// the 100K cap, even though only one distinct element was touched. SPEC error
+// row "Transaction change log exceeds capacity" (line 917) is framed per
+// entity/edge, so a transaction touching 60K distinct entities each
+// added-then-modified fails at 120K slots despite only 60K distinct elements.
+// A distinct-element count would need a cross-map de-dup set keyed by ID. The
+// slot-count is retained because the cap is a memory guard and worst-case (all
+// 100K slots are distinct elements) admits at most 100K entities; double-count
+// only errs toward rejection. Upgrade path: track distinct IDs in a
+// map[string]struct{} across categories and count that set if SPEC-per-entity
+// semantics become a requirement.
 func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 	switch entry.Kind {
 	case ChangeAddEntity:

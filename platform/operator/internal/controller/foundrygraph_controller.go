@@ -128,7 +128,17 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// to fail schema application (INVALID_ARGUMENT). The operator-side diff would otherwise
 	// silently deduplicate them (last wins), so reject before diffing.
 	if dup := schemaDuplicateNames(&fg.Spec); dup != "" {
-		return r.setFailedCondition(ctx, &fg, fmt.Errorf("invalid schema: %s", dup))
+		// Static-invalid spec (SPEC R1 INVALID_ARGUMENT): duplicates within
+		// entityTypes/edgeTypes can never succeed on retry, so they must not be
+		// re-queued with exponential backoff. Set the terminal failure condition and
+		// return without an error; the static error is recomputed on the next
+		// (non-backoff) reconcile/resync. The condition is what makes the failure
+		// observable on the CR; discarding setFailedCondition's result drops the
+		// backoff requeue the item targets, with the periodic resync as the recorded
+		// safety net for a transient status-update failure that leaves the condition
+		// unpersisted.
+		_, _ = r.setFailedCondition(ctx, &fg, fmt.Errorf("invalid schema: %s", dup))
+		return ctrl.Result{}, nil
 	}
 
 	// Determine schema diff if a previous spec exists.
@@ -303,7 +313,13 @@ func (r *FoundryGraphReconciler) waitForReadiness(ctx context.Context, fg *flowv
 	nn := types.NamespacedName{Name: deployName, Namespace: fg.Namespace}
 
 	deadline := time.Now().Add(r.ReadinessTimeout)
+	// Scale the poll cadence with the configured timeout so a small overridden
+	// timeout still polls promptly instead of paying up to a fixed 5s of
+	// granularity; capped at 5s so the default (5m) timeout keeps the current cadence.
 	pollInterval := 5 * time.Second
+	if half := r.ReadinessTimeout / 2; half > 0 && half < pollInterval {
+		pollInterval = half
+	}
 
 	for time.Now().Before(deadline) {
 		var deploy appsv1.Deployment

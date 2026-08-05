@@ -16,9 +16,23 @@ import (
 // regex approach handles common Cypher patterns but may miss edge cases
 // (e.g., multi-line MATCH expressions, parameterised labels). When built
 // with `-tags ladybug` and liblbug is installed, the LadybugDB-backed
-// implementation in cypher_ladybug.go is used instead. The function
-// signature remains identical regardless of extraction strategy — callers
-// handle nil returns with wildcard fallback.
+// implementation in cypher_ladybug.go is used instead — it validates syntax
+// with the parser BEFORE extracting, so on invalid syntax it returns nil and
+// the caller collapses to the READ:graph/entity/* wildcard (SPEC R3). This
+// parser-failure fallback can NEVER fire in the default build: the regex
+// scan has no validation step, so invalid Cypher that the regex happens to
+// pattern-match is forwarded to the Cartographer with its extracted labels
+// (or the wildcard when no labels match) rather than collapsing to the
+// wildcard on failure as R3 prescribes. Consequence: in the default build
+// the R3 "parser fails -> wildcard" contract is degraded to "regex extracts
+// -> typed label", deviating from the SPEC's parser-backed contract.
+// The Cartographer re-authorizes on ingress, so the correctness risk is
+// bounded to capability annotation granularity, not authorization bypass.
+// Function signatures and callers are identical regardless of strategy —
+// callers handle nil returns with wildcard fallback. Upgrade path: make the
+// LadybugDB validation step a mandatory build-time requirement (always build
+// with `-tags ladybug`) so the R3 parser-failure fallback actually fires, or
+// vendor a pure-Go Cypher grammar/parser.
 func extractEntityTypes(cypher string) []string {
 	if cypher == "" {
 		return nil

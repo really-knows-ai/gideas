@@ -1303,6 +1303,60 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 	}
 }
 
+// TestExecuteCypher_MutationClausesClassified asserts that each mutation/DDL
+// clause the SPEC R7 §5 and error-table row 910 enumerate (CREATE, SET, DELETE,
+// MERGE, REMOVE, DROP, DDL index/constraint, and FOREACH-as-mutation) is REJECTED
+// by ExecuteCypher — never executed as read-only — not just the single CREATE
+// clause the historical test covered.
+//
+// LadybugDB v0.17.0's parser does not recognise the full Neo4j clause grammar:
+// forms like top-level FOREACH, `MATCH ... REMOVE ...`, and index/constraint DDL
+// fail at Prepare (surfacing ErrInvalidCypher) *before* the IsReadOnly guard runs,
+// so they cannot execute. The clauses its grammar does accept mutate (CREATE, SET,
+// DELETE, MERGE, DROP) are classified by IsReadOnly as non-read-only, returning
+// ErrMutationCypher. Both are rejections: the security property (no mutation may
+// execute through ExecuteCypher) holds for the entire SPEC-enumerated set.
+func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	cases := []struct {
+		name          string
+		cypher        string
+		wantMutation  bool // grammar parses it; expects ErrMutationCypher (PERMISSION_DENIED)
+		wantRejection bool // grammar rejects it at Prepare; ErrInvalidCypher still blocks execution
+	}{
+		{"create", "CREATE (n:Component {id: 'bad-uuid'})", true, false},
+		{"create-drop-entity", "CREATE (n:Component {id: 'bad-uuid'}) DROP n", false, true},
+		{"set", "MATCH (n:Component) SET n.name = 'x'", true, false},
+		{"delete", "MATCH (n:Component) DELETE n", true, false},
+		{"merge", "MERGE (n:Component {id: 'bad-uuid'})", true, false},
+		{"remove", "MATCH (n:Component) REMOVE n.name", false, true},
+		{"drop", "DROP TABLE Component", true, false},
+		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)", false, true},
+		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE", false, true},
+		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.ExecuteCypher(context.Background(), tc.cypher, nil, "")
+			if err == nil {
+				t.Fatalf("expected mutation %q to be rejected, got nil", tc.cypher)
+			}
+			if tc.wantMutation && !errors.Is(err, store.ErrMutationCypher) {
+				t.Errorf("expected ErrMutationCypher for %q, got %v", tc.cypher, err)
+			}
+			if tc.wantRejection && !errors.Is(err, store.ErrInvalidCypher) {
+				t.Errorf("expected ErrInvalidCypher rejection for %q, got %v", tc.cypher, err)
+			}
+		})
+	}
+}
+
 func TestExecuteCypher_WithParams(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -4318,5 +4372,234 @@ func TestSearchNeighbors_VectorPrepareFailureSurfacesError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `prepare vector index query for "VectorType"`) {
 		t.Fatalf("expected wrapped 'prepare vector index query' error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review: declared-but-not-bootstrapped single-type search, absent-FTS-index
+// skip, corruption heuristic (SPEC R8), and mid-multi-table-DDL fail-closed
+// ---------------------------------------------------------------------------
+
+// A vector-enabled entity type that has been declared with EnableVectorIndex
+// but whose embedding column has not yet been bootstrapped (dim == 0 — no
+// entity written yet) is legitimately not searchable, not an error (query.go
+// searchIndexedType skips silently, SPEC R7 lazy bootstrap). This pins the
+// single-type (non-empty entityType) success branch: SearchNeighbors returns an
+// empty result set with a nil error rather than erroring or fabricating data.
+func TestSearchNeighbors_DeclaredNotBootstrappedType_SucceedsEmpty(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+	// testSchema declares VectorType with EnableVectorIndex=true, but no entity
+	// is ever created, so its vector index is never bootstrapped (dim == 0).
+	applyTestSchema(t, s)
+
+	results, err := s.SearchNeighbors(ctx, []float32{1, 2, 3}, "VectorType", 10, "")
+	if err != nil {
+		t.Fatalf("declared-but-not-bootstrapped single-type search should succeed with nil error, got %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty result set for not-yet-bootstrapped index, got %d", len(results))
+	}
+}
+
+// FullTextSearch silently skips an entity type whose FTS index is absent
+// (query.go FullTextSearch, ponytail at the Prepare-failure `continue`): the
+// search returns a result set with nil error and no partial-result notice, so
+// an index-less type contributes nothing. This pins the skip branch — dropping
+// a table's FTS index and then searching it must NOT error and must return
+// nothing rather than fabricating results.
+func TestFullTextSearch_MissingIndexSilentlySkipped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+	applyTestSchema(t, s)
+
+	if _, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "needle"}, nil, ""); err != nil {
+		t.Fatalf("CreateEntity Document: %v", err)
+	}
+	// Confirm the type is currently FTS-searchable.
+	if matches, err := s.FullTextSearch(ctx, "needle", "Document", ""); err != nil || len(matches) == 0 {
+		t.Fatalf("expected Document FTS searchable before drop, matches=%d err=%v", len(matches), err)
+	}
+
+	// Drop the FTS index; the table itself remains.
+	db := s.(*ladybugDB)
+	res, err := db.conn.Query("CALL DROP_FTS_INDEX('Document', 'Document_fts');")
+	if err != nil {
+		t.Fatalf("drop FTS index: %v", err)
+	}
+	res.Close()
+	if ftsIndexExists(db.conn, "Document") {
+		t.Fatal("expected Document FTS index dropped")
+	}
+
+	// Querying the index-less type must silently succeed with an empty result,
+	// exercising the Prepare-fail `continue` (skip) branch.
+	results, err := s.FullTextSearch(ctx, "needle", "Document", "")
+	if err != nil {
+		t.Fatalf("expected silent skip (nil error) for absent FTS index, got %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty result set for absent FTS index, got %d", len(results))
+	}
+}
+
+// The corruption heuristic (ladybug.go corruptionCandidates, SPEC R8) classifies
+// an OpenDatabase failure by file accessibility: a present-but-readable file is
+// a corruption candidate (the engine could not parse genuine contents) while a
+// file the OS layer cannot open is an operational (permission/I/O) failure that
+// must NOT be treated as corrupt (removing it would destroy never-corrupt data).
+// This unit test drives both outcomes.
+func TestCorruptionCandidates_ReadableVersusUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "main.lbug")
+	if err := os.WriteFile(dbPath, []byte("corrupt-bytes"), 0600); err != nil {
+		t.Fatalf("write readable file: %v", err)
+	}
+
+	// Readable file -> candidate for corruption recovery.
+	if !corruptionCandidates(dbPath) {
+		t.Fatal("expected a readable present file to be a corruption candidate")
+	}
+
+	// Unreadable file (mode 000) -> NOT a candidate; it is an operational
+	// open problem, not engine-unparseable content.
+	if err := os.Chmod(dbPath, 0000); err != nil {
+		t.Fatalf("chmod 000: %v", err)
+	}
+	if corruptionCandidates(dbPath) {
+		t.Fatal("expected an unreadable file to NOT be a corruption candidate")
+	}
+	// Restore permissions so the temp dir can be cleaned up.
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		t.Fatalf("restore chmod: %v", err)
+	}
+
+	// A missing file is never a candidate (OpenDatabase creates it fresh).
+	if corruptionCandidates(filepath.Join(dir, "absent.lbug")) {
+		t.Fatal("expected an absent file to NOT be a corruption candidate")
+	}
+}
+
+// Open's SPEC R8 repair path: a genuinely corrupted main.lbug (present and
+// readable, but unparsable by the engine) is deleted and re-opened fresh, with
+// schema rehydrated from the persisted metadata. An unreadable main.lbug is an
+// operational failure and must NOT be deleted — Open fails and the file remains.
+func TestOpenCorruptDatabase_RecoversOrFailsClosed(t *testing.T) {
+	t.Run("readable corrupt file recovers", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+			Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+		}}}
+		if err := s.ApplySchema(context.Background(), schema); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		dbPath := filepath.Join(dir, "main.lbug")
+		// Overwrite with garbage the engine cannot parse.
+		if err := os.WriteFile(dbPath, []byte("not a ladybug database"), 0600); err != nil {
+			t.Fatalf("corrupt main.lbug: %v", err)
+		}
+		if !corruptionCandidates(dbPath) {
+			t.Fatal("expected corrupt file to be classified as a corruption candidate")
+		}
+		recovered, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open should recover a corrupt readable main.lbug, got %v", err)
+		}
+		defer closeStore(t, recovered)
+		// Recovery re-creates the schema from metadata.
+		if !recovered.TableExists("Component") {
+			t.Fatal("recovery did not rehydrate the Component table from metadata")
+		}
+		// The corrupt file was replaced by a freshly-created valid database.
+		if _, err := os.Stat(dbPath); err != nil {
+			t.Fatalf("recovered database file missing: %v", err)
+		}
+	})
+
+	t.Run("unreadable file classified and preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		dbPath := filepath.Join(dir, "main.lbug")
+		if err := os.Chmod(dbPath, 0000); err != nil {
+			t.Fatalf("chmod 000: %v", err)
+		}
+		// Not a corruption candidate: Open must fail WITHOUT removing the file.
+		if corruptionCandidates(dbPath) {
+			t.Fatal("unreadable file must not be a corruption candidate")
+		}
+		if reopened, err := Open(dir); err == nil {
+			_ = reopened.Close()
+			t.Fatal("expected Open to fail for an unreadable (non-corrupt) main.lbug")
+		}
+		if _, statErr := os.Stat(dbPath); statErr != nil {
+			t.Fatalf("unreadable file was removed by Open: %v", statErr)
+		}
+	})
+}
+
+// ApplySchema applies DDL for a fresh multi-table schema before publishing
+// metadata, so an intermediate (mid-loop, e.g. second-table) DDL failure leaves
+// the already-created tables in the catalog with NO corresponding schema
+// metadata (the metadata publish happens only after the full DDL loop). On a
+// subsequent reopen, the orphan table fails the metadata/catalog cross-check
+// and the store must fail closed. This drives that fail-closed-on-reopen
+// property by reconstructing the exact partial state a mid-DDL failure leaves:
+// the first table's metadata is intact; a second table exists in the catalog but
+// was never published to metadata.
+func TestApplySchema_MidMultiTableDDLFailureFailsClosedOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// First table: applied and published normally.
+	if err := s.ApplySchema(context.Background(), &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+		{Name: "First", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+	}}); err != nil {
+		t.Fatalf("ApplySchema First: %v", err)
+	}
+	// Simulate the residue of a second-table DDL failure: the second table was
+	// created in the catalog, but because ApplySchema aborted before publish the
+	// schema.json metadata still describes only "First".
+	db := s.(*ladybugDB)
+	orphanDDL := "CREATE NODE TABLE IF NOT EXISTS `Second` (id STRING PRIMARY KEY, name STRING);"
+	if _, err := db.conn.Query(orphanDDL); err != nil {
+		t.Fatalf("create orphaned Second table: %v", err)
+	}
+	if db.edgeTypeDefs["Second"] != nil || db.entityTypeDefs["Second"] != nil {
+		t.Fatal("orphaned table must not be in the schema cache")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the orphaned catalog table has no metadata entry, so the
+	// validate-MetadataAgainstCatalog cross-check must fail and Open must
+	// reject the store (fail closed) rather than silently dropping the table.
+	if reopened, err := Open(dir); err == nil {
+		_ = reopened.Close()
+		t.Fatal("expected fail-closed Open after a mid-DDL partial schema apply")
 	}
 }

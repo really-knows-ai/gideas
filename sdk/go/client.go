@@ -73,10 +73,10 @@ func WithWorkitemID(id string) ClientOption {
 	}
 }
 
-// WithTimeout sets the per-call timeout for gRPC requests made through
+// WithRequestTimeout sets the per-call timeout for gRPC requests made through
 // the session. If not set, calls use a default background context with no
 // timeout.
-func WithTimeout(d time.Duration) ClientOption {
+func WithRequestTimeout(d time.Duration) ClientOption {
 	return func(c *clientConfig) {
 		c.timeout = d
 	}

@@ -228,9 +228,13 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 //
 //   - Explicit pull: SPEC R10 mandates that when main has diverged from the
 //     remote, PullFromRemote fails with FAILED_PRECONDITION ("Remote pull
-//     diverged"). Using the merge-commit branch below in that path converts a
-//     divergent pull into a silent merge commit, making the SPEC-mandated
-//     divergence failure unreachable for an explicit pull.
+//     diverged" — error table row "Remote pull diverged", SPEC R10, line 926).
+//     This path routes through FetchAndMerge, so the merge-commit branch below
+//     converts a divergent pull into a silent merge commit, making the
+//     SPEC-mandated divergence failure unreachable for an explicit pull.
+//     Consequently ErrPullDiverged (produced only by PullAndFastForward) is
+//     never returned by production code; the SPEC-divergence FAILED_PRECONDITION
+//     is contractually unreachable.
 //   - Commit step 14 (pull-before-push): the fire-and-forget push path needs a
 //     fast-forward merge (or a merge commit) so the subsequent push is always
 //     fast-forward.
@@ -241,15 +245,19 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 // divergence policies, because:
 //  1. GIT_PLAN.md (the remote-sync overhaul design) deliberately specifies
 //     FetchAndMerge merge-commit semantics for both paths and
-//     TestFetchAndMerge_MergeCommit asserts the delivered behavior.
-//  2. A divergent PullFromRemote that instead fails FAILED_PRECONDITION is
-//     extremely rare in operation (the Cartographer is documented as the sole
-//     writer to main), so the silent-merge-on-divergence window it opens is
-//     acceptable for the foreseeable future.
+//     TestFetchAndMerge_MergeCommit asserts the delivered behavior. This sets
+//     aside the SPEC R10 divergent "FAILED_PRECONDITION" for an explicit pull.
+//  2. A divergent PullFromRemote that would otherwise fail FAILED_PRECONDITION
+//     is extremely rare in operation (the Cartographer is documented as the
+//     sole writer to main), so the silent-merge-on-divergence window it opens
+//     is acceptable for the foreseeable future. The divergence is therefore
+//     not silently dropped: it is pinned by TestFetchAndMerge_MergeCommit,
+//     which asserts the merge-commit result and the absence of ErrPullDiverged.
 //
-// Upgrade path: give PullFromRemote a fast-forward-only fetch (failing on
-// divergence) while reserving the merge-commit behavior for the commit
-// pull-before-push path.
+// Upgrade path: give PullFromRemote a dedicated fast-forward-only fetch
+// (failing with ErrPullDiverged on divergence) while reserving the merge-commit
+// behavior for the commit pull-before-push path, restoring the SPEC R10
+// divergence FAILED_PRECONDITION.
 func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string) (plumbing.Hash, error) {
 	if g.remoteURL == "" {
 		return plumbing.ZeroHash, ErrNoRemote

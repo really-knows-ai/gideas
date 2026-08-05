@@ -6,14 +6,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -25,6 +28,20 @@ const (
 	defaultGraphName      = "flow-graph"
 	operatorProxyPort     = 50053
 )
+
+// resolveOperatorProxyPort returns the operator gRPC proxy port to port-forward.
+// It mirrors the operator's own override behaviour (OPERATOR_PROXY_PORT, default
+// 50053, see SPEC R6): the env var wins, otherwise the hard-coded default.
+func resolveOperatorProxyPort() (int, error) {
+	if v := os.Getenv("OPERATOR_PROXY_PORT"); v != "" {
+		port, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("OPERATOR_PROXY_PORT parse error: %w", err)
+		}
+		return port, nil
+	}
+	return operatorProxyPort, nil
+}
 
 func newGraphExportCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -110,7 +127,11 @@ func runGraphExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no Ready operator pod found in namespace %q", operatorNS)
 	}
 
-	forwardID, localPort, err := pfm.ForwardPod(ctx, operatorNS, podName, operatorProxyPort)
+	proxyPort, err := resolveOperatorProxyPort()
+	if err != nil {
+		return err
+	}
+	forwardID, localPort, err := pfm.ForwardPod(ctx, operatorNS, podName, proxyPort)
 	if err != nil {
 		return fmt.Errorf("port-forward to operator pod failed: %w\n"+
 			"Ensure your kubeconfig identity has 'create' permission on "+
@@ -175,27 +196,19 @@ func runGraphExport(cmd *cobra.Command, args []string) error {
 			break
 		}
 		if err != nil {
-			// Stream break during gRPC Recv — transport failure.
-			if outputFile != nil {
-				outputFile.Close()
-				os.Remove(outputPath)
-			}
-			// ponytail: partial output may have been written. For stdout no
-			// cleanup is needed (shell captures partial output). For file output,
-			// we remove the partial file.
-			return fmt.Errorf("stream error: %w\n"+
+			// Stream break during gRPC Recv. Remove any partial file output so the
+			// caller doesn't mistake truncated data for a full graph.
+			removeStreamOutput(outputFile, outputPath)
+			return fmt.Errorf("%s\n"+
 				"Possible causes: API server restart, operator pod restart, or "+
-				"network partition.", err)
+				"network partition.", annotateRPCError("stream error", err))
 		}
 
 		data := chunk.GetChunk()
 		if len(data) > 0 {
 			if _, err := w.Write(data); err != nil {
 				// Stream break mid-write — partial data may have been written.
-				if outputFile != nil {
-					outputFile.Close()
-					os.Remove(outputPath)
-				}
+				removeStreamOutput(outputFile, outputPath)
 				return fmt.Errorf("write error: %w", err)
 			}
 		}
@@ -209,6 +222,28 @@ func runGraphExport(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// removeStreamOutput closes and removes a partial output file written before a
+// stream failure, so the caller doesn't mistake truncated data for a complete
+// graph. The deferred Close on outputFile is idempotent, so a double close is
+// harmless. It is a no-op for stdout output.
+func removeStreamOutput(outputFile *os.File, outputPath string) {
+	if outputFile != nil {
+		outputFile.Close()
+		os.Remove(outputPath)
+	}
+}
+
+// annotateRPCError prefixes prefix with the gRPC status code when err carries
+// one, so callers can distinguish the operator's mid-stream INTERNAL failure
+// (SPEC R11) from a dial/setup Unavailable. Non-gRPC errors are returned
+// unchanged wrapped by prefix.
+func annotateRPCError(prefix string, err error) error {
+	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
+		return fmt.Errorf("%s (%s): %w", prefix, st.Code(), err)
+	}
+	return fmt.Errorf("%s: %w", prefix, err)
 }
 
 // Ensure unstructured is used (implicit reference).

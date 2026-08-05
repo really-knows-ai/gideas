@@ -380,6 +380,80 @@ func TestTxListEntities_LosslessIdentityLikeProperties(t *testing.T) {
 	}
 }
 
+// The type-omitted read-search tests below exercise the SPEC type-omitted
+// wildcard branch (SPEC line 247: the Sidecar validates request entityType,
+// or against READ:graph/entity/* "when omitted") on the Transaction read path
+// at the SDK metadata-wiring level, on a fresh/non-bootstrapped graph (no
+// entities yet, which still succeeds with an empty result). The SDK wire path
+// is identical for a concrete type and the omitted type (both skip capability
+// annotation), so each asserts the request carries the empty entityType the
+// Sidecar interprets as the wildcard, plus the empty-graph success path.
+
+func TestTxSearchNeighbors_WildcardOmittedOnEmptyGraph(t *testing.T) {
+	var capturedType string
+	mock := &mockCartographerClient{
+		searchNeighbors: func(ctx context.Context,
+			req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
+			capturedType = req.GetEntityType()
+			return &flowv1.SearchNeighborsResponse{}, nil
+		},
+	}
+	g := newMockTx(mock)
+	results, err := g.SearchNeighbors([]float32{0.1}, "", 10)
+	if err != nil {
+		t.Fatalf("SearchNeighbors returned error: %v", err)
+	}
+	if capturedType != "" {
+		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty results on fresh graph, got %d", len(results))
+	}
+}
+
+func TestTxFullTextSearch_WildcardOmittedOnEmptyGraph(t *testing.T) {
+	var capturedType string
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			capturedType = req.GetEntityType()
+			return &flowv1.FullTextSearchResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	results, err := tx.FullTextSearch("query", "")
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	if capturedType != "" {
+		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty results on fresh graph, got %d", len(results))
+	}
+}
+
+func TestTxListEntities_WildcardOmittedOnEmptyGraph(t *testing.T) {
+	var capturedType string
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			capturedType = req.GetEntityType()
+			return &flowv1.ListEntitiesResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	page, err := tx.ListEntities("")
+	if err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if capturedType != "" {
+		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
+	}
+	if len(page.Entities) != 0 {
+		t.Errorf("expected empty entities on fresh graph, got %d", len(page.Entities))
+	}
+}
+
 func TestDiff(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{

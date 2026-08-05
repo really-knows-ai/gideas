@@ -390,6 +390,14 @@ func tryRemotePullOnInit(
 					// serving; the swallow is kept because the common failure
 					// (transient FS error during first boot) resolves on restart
 					// and blocking would convert a soft miss into a hard outage.
+					// Residual risk: a *persistent* re-hydration failure (disk
+					// full, or corrupt source files that survive restart) re-arms
+					// the vacuous-graph state on every boot and never surfaces a
+					// firm signal -- the R8 self-heal ceiling must climb into the
+					// multi-boot window, and an operator must correlate the
+					// per-boot warning to distinguish an empty flow from a
+					// provisioned-but-lost graph. That diagnosis is the deploy
+					// path this comment is designed to make visible.
 					slog.Warn("Initial clone re-hydration failed (non-blocking)", "error", rehydrateErr)
 				}
 			}
@@ -555,17 +563,27 @@ func waitForShutdown(
 	// (removing residual untracked files) are the highest-consequence shutdown
 	// drops in this teardown: failing them leaves the working tree stranded on a
 	// transaction branch or carrying stale files, which the next startup's R8
-	// re-hydration would interpret as the live graph. Surface any failure so an
-	// operator diagnosing a wrong-graph-on-restart can correlate it here.
-	_ = gs.WithGitLock(func() error {
+	// re-hydration would interpret as the live graph. Any failure -- the lock
+	// acquisition itself, RestoreMain, or CleanUntracked -- is therefore
+	// propagated up out of WithGitLock rather than discarded (Go-idiom
+	// store-layer I/O-error propagation), so a stranded tree is surfaced to the
+	// operator instead of being silently re-read as live on restart. There is
+	// no caller left to receive a returned error after main() returns, so
+	// surface it with a correlation message.
+	if err := gs.WithGitLock(func() error {
 		if err := gs.RestoreMain(context.Background()); err != nil {
 			slog.Error("Shutdown: failed to restore git working tree to main", "error", err)
+			return err
 		}
 		if err := gs.CleanUntracked(context.Background()); err != nil {
 			slog.Error("Shutdown: failed to clean residual untracked git files", "error", err)
+			return err
 		}
 		return nil
-	})
+	}); err != nil {
+		slog.Error("Shutdown: git working-tree teardown failed; tree may be left stranded and "+
+			"misread as live on next startup's R8 re-hydration", "error", err)
+	}
 	// gitStore.Close is a documented no-op (interface conformance only), so an
 	// error is not worth distinguishing from nil.
 	_ = gs.Close()

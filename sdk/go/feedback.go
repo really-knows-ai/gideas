@@ -77,7 +77,7 @@ func (f *Feedback) PB() *flowv1.FeedbackItem {
 //
 // ponytail: uses context.Background(); switch to per-session context when
 // the session struct carries one, so cancellation and timeout are
-// configurable at the client level (WithTimeout ClientOption).
+// configurable at the client level (WithRequestTimeout ClientOption).
 func (f *Feedback) GetDepth() (int32, error) {
 	resp, err := f.session.Archivist.GetFeedbackDepth(context.Background(), &flowv1.GetFeedbackDepthRequest{
 		WorkitemId: f.session.workitemID,

@@ -588,6 +588,80 @@ func TestListEntities_EmptyResult(t *testing.T) {
 	}
 }
 
+// The type-omitted read-search tests below exercise the SPEC type-omitted
+// wildcard branch (SPEC line 247: the Sidecar validates request entityType,
+// or against READ:graph/entity/* "when omitted") at the SDK metadata-wiring
+// level, on a fresh/non-bootstrapped graph (no entities, still succeeds).
+// The SDK wire path is identical for a concrete type and the omitted type
+// (both skip capability annotation), so each asserts the request carries the
+// empty entityType the Sidecar interprets as the wildcard, and that an empty
+// graph resolves a successful empty result.
+
+func TestSearchNeighbors_WildcardOmittedOnEmptyGraph(t *testing.T) {
+	var capturedType string
+	mock := &mockCartographerClient{
+		searchNeighbors: func(ctx context.Context,
+			req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
+			capturedType = req.GetEntityType()
+			return &flowv1.SearchNeighborsResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	results, err := g.SearchNeighbors([]float32{0.1, 0.2}, "", 10)
+	if err != nil {
+		t.Fatalf("SearchNeighbors returned error: %v", err)
+	}
+	if capturedType != "" {
+		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty results on fresh graph, got %d", len(results))
+	}
+}
+
+func TestFullTextSearch_WildcardOmittedOnEmptyGraph(t *testing.T) {
+	var capturedType string
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			capturedType = req.GetEntityType()
+			return &flowv1.FullTextSearchResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	results, err := g.FullTextSearch("query", "")
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	if capturedType != "" {
+		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty results on fresh graph, got %d", len(results))
+	}
+}
+
+func TestListEntities_WildcardOmittedOnEmptyGraph(t *testing.T) {
+	var capturedType string
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			capturedType = req.GetEntityType()
+			return &flowv1.ListEntitiesResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	page, err := g.ListEntities("")
+	if err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if capturedType != "" {
+		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
+	}
+	if len(page.Entities) != 0 {
+		t.Errorf("expected empty entities on fresh graph, got %d", len(page.Entities))
+	}
+}
+
 func TestCreateEntity(t *testing.T) {
 	mock := &mockCartographerClient{
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
@@ -1318,8 +1392,8 @@ func TestWithPageToken(t *testing.T) {
 	}
 }
 
-func TestWithTxTimeout(t *testing.T) {
-	opt := WithTxTimeout(48 * time.Hour)
+func TestWithTimeout(t *testing.T) {
+	opt := WithTimeout(48 * time.Hour)
 	cfg := &beginTxConfig{}
 	opt(cfg)
 	if cfg.timeout != 48*time.Hour {
@@ -1327,7 +1401,7 @@ func TestWithTxTimeout(t *testing.T) {
 	}
 }
 
-func TestBeginTransaction_WithTxTimeout(t *testing.T) {
+func TestBeginTransaction_WithTimeout(t *testing.T) {
 	var captured *durationpb.Duration
 	mock := &mockCartographerClient{
 		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
@@ -1339,7 +1413,7 @@ func TestBeginTransaction_WithTxTimeout(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction(WithTxTimeout(10 * 24 * time.Hour))
+	tx, err := g.BeginTransaction(WithTimeout(10 * 24 * time.Hour))
 	if err != nil {
 		t.Fatalf("BeginTransaction returned error: %v", err)
 	}

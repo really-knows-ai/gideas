@@ -525,9 +525,9 @@ func TestNewClient_CustomAddress(t *testing.T) {
 // Tests — New Client Options
 // ---------------------------------------------------------------------------
 
-func TestNewClient_WithTimeout(t *testing.T) {
+func TestNewClient_WithRequestTimeout(t *testing.T) {
 	cfg := &clientConfig{sidecarAddr: DefaultSidecarAddress}
-	WithTimeout(5 * time.Second)(cfg)
+	WithRequestTimeout(5 * time.Second)(cfg)
 	if cfg.timeout != 5*time.Second {
 		t.Fatalf("expected timeout=5s, got %v", cfg.timeout)
 	}
