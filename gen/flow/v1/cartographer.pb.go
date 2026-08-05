@@ -1865,10 +1865,18 @@ func (x *ExtendTimeoutRequest) GetDuration() *durationpb.Duration {
 	return nil
 }
 
+// ExtendTimeoutResponse returns the timeout the server applied. The server
+// applies the requested duration verbatim (rejecting an extension that would
+// exceed the 7-day hard maximum with INVALID_ARGUMENT), so applied_timeout
+// equals the granted duration; it mirrors BeginTransaction's applied_timeout
+// so the SDK surfaces what the server granted rather than assuming it.
 type ExtendTimeoutResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The timeout, in total, actually applied to the transaction, matching the
+	// granted request duration. Present whenever the extension is accepted.
+	AppliedTimeout *durationpb.Duration `protobuf:"bytes,1,opt,name=applied_timeout,json=appliedTimeout,proto3" json:"applied_timeout,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ExtendTimeoutResponse) Reset() {
@@ -1899,6 +1907,13 @@ func (x *ExtendTimeoutResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ExtendTimeoutResponse.ProtoReflect.Descriptor instead.
 func (*ExtendTimeoutResponse) Descriptor() ([]byte, []int) {
 	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ExtendTimeoutResponse) GetAppliedTimeout() *durationpb.Duration {
+	if x != nil {
+		return x.AppliedTimeout
+	}
+	return nil
 }
 
 type Entity struct {
@@ -2869,8 +2884,9 @@ const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"t\n" +
 	"\x14ExtendTimeoutRequest\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x125\n" +
-	"\bduration\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\bduration\"\x17\n" +
-	"\x15ExtendTimeoutResponse\"\xe4\x01\n" +
+	"\bduration\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\bduration\"[\n" +
+	"\x15ExtendTimeoutResponse\x12B\n" +
+	"\x0fapplied_timeout\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x0eappliedTimeout\"\xe4\x01\n" +
 	"\x06Entity\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\tR\bentityId\x12\x1f\n" +
 	"\ventity_type\x18\x02 \x01(\tR\n" +
@@ -3051,58 +3067,59 @@ var file_flow_v1_cartographer_proto_depIdxs = []int32{
 	30, // 22: flow.v1.GetTransactionDiffResponse.deleted_edges:type_name -> flow.v1.DiffEntry
 	58, // 23: flow.v1.DiffEntry.properties:type_name -> flow.v1.DiffEntry.PropertiesEntry
 	61, // 24: flow.v1.ExtendTimeoutRequest.duration:type_name -> google.protobuf.Duration
-	59, // 25: flow.v1.Entity.properties:type_name -> flow.v1.Entity.PropertiesEntry
-	35, // 26: flow.v1.Schema.entity_types:type_name -> flow.v1.EntityType
-	36, // 27: flow.v1.Schema.edge_types:type_name -> flow.v1.EdgeType
-	37, // 28: flow.v1.EntityType.properties:type_name -> flow.v1.Property
-	38, // 29: flow.v1.EntityType.rules:type_name -> flow.v1.ConnectionRule
-	37, // 30: flow.v1.EdgeType.properties:type_name -> flow.v1.Property
-	34, // 31: flow.v1.ApplySchemaRequest.schema:type_name -> flow.v1.Schema
-	0,  // 32: flow.v1.CartographerService.ExecuteCypher:input_type -> flow.v1.ExecuteCypherRequest
-	3,  // 33: flow.v1.CartographerService.SearchNeighbors:input_type -> flow.v1.SearchNeighborsRequest
-	6,  // 34: flow.v1.CartographerService.FullTextSearch:input_type -> flow.v1.FullTextSearchRequest
-	8,  // 35: flow.v1.CartographerService.ListEntities:input_type -> flow.v1.ListEntitiesRequest
-	10, // 36: flow.v1.CartographerService.CreateEntity:input_type -> flow.v1.CreateEntityRequest
-	12, // 37: flow.v1.CartographerService.UpdateEntity:input_type -> flow.v1.UpdateEntityRequest
-	14, // 38: flow.v1.CartographerService.DeleteEntity:input_type -> flow.v1.DeleteEntityRequest
-	16, // 39: flow.v1.CartographerService.CreateEdge:input_type -> flow.v1.CreateEdgeRequest
-	18, // 40: flow.v1.CartographerService.DeleteEdge:input_type -> flow.v1.DeleteEdgeRequest
-	20, // 41: flow.v1.CartographerService.BeginTransaction:input_type -> flow.v1.BeginTransactionRequest
-	22, // 42: flow.v1.CartographerService.CommitTransaction:input_type -> flow.v1.CommitTransactionRequest
-	24, // 43: flow.v1.CartographerService.RollbackTransaction:input_type -> flow.v1.RollbackTransactionRequest
-	26, // 44: flow.v1.CartographerService.RefreshTransaction:input_type -> flow.v1.RefreshTransactionRequest
-	28, // 45: flow.v1.CartographerService.GetTransactionDiff:input_type -> flow.v1.GetTransactionDiffRequest
-	31, // 46: flow.v1.CartographerService.ExtendTimeout:input_type -> flow.v1.ExtendTimeoutRequest
-	39, // 47: flow.v1.CartographerService.ApplySchema:input_type -> flow.v1.ApplySchemaRequest
-	41, // 48: flow.v1.CartographerService.WipeGraph:input_type -> flow.v1.WipeGraphRequest
-	43, // 49: flow.v1.CartographerService.HealthCheck:input_type -> flow.v1.HealthCheckRequest
-	45, // 50: flow.v1.CartographerService.PullFromRemote:input_type -> flow.v1.PullFromRemoteRequest
-	47, // 51: flow.v1.CartographerService.ExportGraph:input_type -> flow.v1.ExportGraphRequest
-	2,  // 52: flow.v1.CartographerService.ExecuteCypher:output_type -> flow.v1.ExecuteCypherResponse
-	4,  // 53: flow.v1.CartographerService.SearchNeighbors:output_type -> flow.v1.SearchNeighborsResponse
-	7,  // 54: flow.v1.CartographerService.FullTextSearch:output_type -> flow.v1.FullTextSearchResponse
-	9,  // 55: flow.v1.CartographerService.ListEntities:output_type -> flow.v1.ListEntitiesResponse
-	11, // 56: flow.v1.CartographerService.CreateEntity:output_type -> flow.v1.CreateEntityResponse
-	13, // 57: flow.v1.CartographerService.UpdateEntity:output_type -> flow.v1.UpdateEntityResponse
-	15, // 58: flow.v1.CartographerService.DeleteEntity:output_type -> flow.v1.DeleteEntityResponse
-	17, // 59: flow.v1.CartographerService.CreateEdge:output_type -> flow.v1.CreateEdgeResponse
-	19, // 60: flow.v1.CartographerService.DeleteEdge:output_type -> flow.v1.DeleteEdgeResponse
-	21, // 61: flow.v1.CartographerService.BeginTransaction:output_type -> flow.v1.BeginTransactionResponse
-	23, // 62: flow.v1.CartographerService.CommitTransaction:output_type -> flow.v1.CommitTransactionResponse
-	25, // 63: flow.v1.CartographerService.RollbackTransaction:output_type -> flow.v1.RollbackTransactionResponse
-	27, // 64: flow.v1.CartographerService.RefreshTransaction:output_type -> flow.v1.RefreshTransactionResponse
-	29, // 65: flow.v1.CartographerService.GetTransactionDiff:output_type -> flow.v1.GetTransactionDiffResponse
-	32, // 66: flow.v1.CartographerService.ExtendTimeout:output_type -> flow.v1.ExtendTimeoutResponse
-	40, // 67: flow.v1.CartographerService.ApplySchema:output_type -> flow.v1.ApplySchemaResponse
-	42, // 68: flow.v1.CartographerService.WipeGraph:output_type -> flow.v1.WipeGraphResponse
-	44, // 69: flow.v1.CartographerService.HealthCheck:output_type -> flow.v1.HealthCheckResponse
-	46, // 70: flow.v1.CartographerService.PullFromRemote:output_type -> flow.v1.PullFromRemoteResponse
-	48, // 71: flow.v1.CartographerService.ExportGraph:output_type -> flow.v1.ExportGraphResponse
-	52, // [52:72] is the sub-list for method output_type
-	32, // [32:52] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	61, // 25: flow.v1.ExtendTimeoutResponse.applied_timeout:type_name -> google.protobuf.Duration
+	59, // 26: flow.v1.Entity.properties:type_name -> flow.v1.Entity.PropertiesEntry
+	35, // 27: flow.v1.Schema.entity_types:type_name -> flow.v1.EntityType
+	36, // 28: flow.v1.Schema.edge_types:type_name -> flow.v1.EdgeType
+	37, // 29: flow.v1.EntityType.properties:type_name -> flow.v1.Property
+	38, // 30: flow.v1.EntityType.rules:type_name -> flow.v1.ConnectionRule
+	37, // 31: flow.v1.EdgeType.properties:type_name -> flow.v1.Property
+	34, // 32: flow.v1.ApplySchemaRequest.schema:type_name -> flow.v1.Schema
+	0,  // 33: flow.v1.CartographerService.ExecuteCypher:input_type -> flow.v1.ExecuteCypherRequest
+	3,  // 34: flow.v1.CartographerService.SearchNeighbors:input_type -> flow.v1.SearchNeighborsRequest
+	6,  // 35: flow.v1.CartographerService.FullTextSearch:input_type -> flow.v1.FullTextSearchRequest
+	8,  // 36: flow.v1.CartographerService.ListEntities:input_type -> flow.v1.ListEntitiesRequest
+	10, // 37: flow.v1.CartographerService.CreateEntity:input_type -> flow.v1.CreateEntityRequest
+	12, // 38: flow.v1.CartographerService.UpdateEntity:input_type -> flow.v1.UpdateEntityRequest
+	14, // 39: flow.v1.CartographerService.DeleteEntity:input_type -> flow.v1.DeleteEntityRequest
+	16, // 40: flow.v1.CartographerService.CreateEdge:input_type -> flow.v1.CreateEdgeRequest
+	18, // 41: flow.v1.CartographerService.DeleteEdge:input_type -> flow.v1.DeleteEdgeRequest
+	20, // 42: flow.v1.CartographerService.BeginTransaction:input_type -> flow.v1.BeginTransactionRequest
+	22, // 43: flow.v1.CartographerService.CommitTransaction:input_type -> flow.v1.CommitTransactionRequest
+	24, // 44: flow.v1.CartographerService.RollbackTransaction:input_type -> flow.v1.RollbackTransactionRequest
+	26, // 45: flow.v1.CartographerService.RefreshTransaction:input_type -> flow.v1.RefreshTransactionRequest
+	28, // 46: flow.v1.CartographerService.GetTransactionDiff:input_type -> flow.v1.GetTransactionDiffRequest
+	31, // 47: flow.v1.CartographerService.ExtendTimeout:input_type -> flow.v1.ExtendTimeoutRequest
+	39, // 48: flow.v1.CartographerService.ApplySchema:input_type -> flow.v1.ApplySchemaRequest
+	41, // 49: flow.v1.CartographerService.WipeGraph:input_type -> flow.v1.WipeGraphRequest
+	43, // 50: flow.v1.CartographerService.HealthCheck:input_type -> flow.v1.HealthCheckRequest
+	45, // 51: flow.v1.CartographerService.PullFromRemote:input_type -> flow.v1.PullFromRemoteRequest
+	47, // 52: flow.v1.CartographerService.ExportGraph:input_type -> flow.v1.ExportGraphRequest
+	2,  // 53: flow.v1.CartographerService.ExecuteCypher:output_type -> flow.v1.ExecuteCypherResponse
+	4,  // 54: flow.v1.CartographerService.SearchNeighbors:output_type -> flow.v1.SearchNeighborsResponse
+	7,  // 55: flow.v1.CartographerService.FullTextSearch:output_type -> flow.v1.FullTextSearchResponse
+	9,  // 56: flow.v1.CartographerService.ListEntities:output_type -> flow.v1.ListEntitiesResponse
+	11, // 57: flow.v1.CartographerService.CreateEntity:output_type -> flow.v1.CreateEntityResponse
+	13, // 58: flow.v1.CartographerService.UpdateEntity:output_type -> flow.v1.UpdateEntityResponse
+	15, // 59: flow.v1.CartographerService.DeleteEntity:output_type -> flow.v1.DeleteEntityResponse
+	17, // 60: flow.v1.CartographerService.CreateEdge:output_type -> flow.v1.CreateEdgeResponse
+	19, // 61: flow.v1.CartographerService.DeleteEdge:output_type -> flow.v1.DeleteEdgeResponse
+	21, // 62: flow.v1.CartographerService.BeginTransaction:output_type -> flow.v1.BeginTransactionResponse
+	23, // 63: flow.v1.CartographerService.CommitTransaction:output_type -> flow.v1.CommitTransactionResponse
+	25, // 64: flow.v1.CartographerService.RollbackTransaction:output_type -> flow.v1.RollbackTransactionResponse
+	27, // 65: flow.v1.CartographerService.RefreshTransaction:output_type -> flow.v1.RefreshTransactionResponse
+	29, // 66: flow.v1.CartographerService.GetTransactionDiff:output_type -> flow.v1.GetTransactionDiffResponse
+	32, // 67: flow.v1.CartographerService.ExtendTimeout:output_type -> flow.v1.ExtendTimeoutResponse
+	40, // 68: flow.v1.CartographerService.ApplySchema:output_type -> flow.v1.ApplySchemaResponse
+	42, // 69: flow.v1.CartographerService.WipeGraph:output_type -> flow.v1.WipeGraphResponse
+	44, // 70: flow.v1.CartographerService.HealthCheck:output_type -> flow.v1.HealthCheckResponse
+	46, // 71: flow.v1.CartographerService.PullFromRemote:output_type -> flow.v1.PullFromRemoteResponse
+	48, // 72: flow.v1.CartographerService.ExportGraph:output_type -> flow.v1.ExportGraphResponse
+	53, // [53:73] is the sub-list for method output_type
+	33, // [33:53] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_cartographer_proto_init() }

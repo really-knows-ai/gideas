@@ -216,8 +216,13 @@ func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 }
 
 // isNotExist returns true if err indicates a file or directory does not exist.
-// Handles both OS-backed errors (os.PathError / syscall.ENOENT) and go-billy
-// internal filesystem errors.
+// It matches os.ErrNotExist (and errors wrapping it), covering OS-backed errors
+// (os.PathError / syscall.ENOENT) as well as the go-billy OSFS and memfs
+// filesystems, both of which surface os.ErrNotExist for missing paths.
+// ponytail: billy v5.9 exposes no billy-native not-exist sentinel distinct from
+// os.ErrNotExist, so matching os.IsNotExist is the full surface today; if a
+// future billy filesystem returns a non-wrapping not-exist error, extend this
+// guard to match it.
 func isNotExist(err error) bool {
 	return os.IsNotExist(err)
 }

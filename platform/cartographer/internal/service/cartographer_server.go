@@ -243,6 +243,7 @@ func (s *CartographerServer) rejectFullChangeLog(ctx context.Context, txID strin
 func durableTransactionState(state *TransactionState) store.BranchTransactionState {
 	return store.BranchTransactionState{
 		MainHeadAtLastSync: state.MainHeadAtLastSync,
+		AppliedTimeout:     state.AppliedTimeout,
 		SchemaHash:         state.SchemaHash,
 		CommitStarted:      state.CommitStarted,
 		CommitCreated:      state.CommitCreated,
@@ -382,14 +383,18 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 			continue
 		}
 
-		// ponytail: Every recovered transaction gets the hard-max timeout (7 days)
-		// because the original requested timeout was not persisted to the branch DB.
-		// A recovered transaction that originally had a 30-minute timeout now lives
-		// for up to 7 days unless explicitly rolled back or ExtendTimeout is called
-		// with a shorter duration. Upgrade path: persist the requested timeout alongside
-		// the branch DB (e.g. a metadata file in the git branch or a sidecar record)
-		// and read it back here instead of using the hard maximum.
-		state, err := s.txManager.Create(txID, HardMaxTimeout, durableState.MainHeadAtLastSync)
+		// Recovery restores the transaction's originally-applied timeout (both
+		// BeginTransaction's granted timeout and any ExtendTimeout extension are
+		// persisted to the branch state at ApplyTime-affecting events) so a
+		// recovered transaction retains its true absolute lifetime bound instead of
+		// silently resetting to the 7-day hard maximum. A transaction whose branch
+		// record predates the persisted timeout (zero) still falls back to the hard
+		// maximum, matching the pre-persistence recovery behavior.
+		restoredTimeout := durableState.AppliedTimeout
+		if restoredTimeout <= 0 {
+			restoredTimeout = HardMaxTimeout
+		}
+		state, err := s.txManager.Create(txID, restoredTimeout, durableState.MainHeadAtLastSync)
 		if err != nil {
 			return fmt.Errorf("register recovered transaction %q: %w", txID, err)
 		}
@@ -2079,10 +2084,18 @@ func (s *CartographerServer) ExtendTimeout(
 	}
 	defer unlockTx()
 	duration := req.Duration.AsDuration()
-	if err := s.txManager.ExtendTimeout(req.TransactionId, duration); err != nil {
+	if err := s.txManager.ExtendTimeout(req.TransactionId, duration, func(state *TransactionState) error {
+		return s.persistTransactionState(ctx, state)
+	}); err != nil {
 		return nil, err
 	}
-	return &flowv1.ExtendTimeoutResponse{}, nil
+	// The server applies the requested duration verbatim (an over-limit
+	// extension is rejected with an error, never silently capped), so the
+	// applied timeout equals the granted duration. Mirror BeginTransaction's
+	// applied_timeout so the SDK surfaces the value the server granted.
+	return &flowv1.ExtendTimeoutResponse{
+		AppliedTimeout: durationpb.New(duration),
+	}, nil
 }
 
 // =========================================================================

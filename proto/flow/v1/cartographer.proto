@@ -227,7 +227,16 @@ message ExtendTimeoutRequest {
   google.protobuf.Duration duration = 2;
 }
 
-message ExtendTimeoutResponse {}
+// ExtendTimeoutResponse returns the timeout the server applied. The server
+// applies the requested duration verbatim (rejecting an extension that would
+// exceed the 7-day hard maximum with INVALID_ARGUMENT), so applied_timeout
+// equals the granted duration; it mirrors BeginTransaction's applied_timeout
+// so the SDK surfaces what the server granted rather than assuming it.
+message ExtendTimeoutResponse {
+  // The timeout, in total, actually applied to the transaction, matching the
+  // granted request duration. Present whenever the extension is accepted.
+  google.protobuf.Duration applied_timeout = 1;
+}
 
 // --- Reusable Entity Type ---
 

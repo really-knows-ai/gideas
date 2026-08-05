@@ -481,8 +481,10 @@ func (tx *Transaction) Rollback() error {
 }
 
 // ExtendTimeout extends the transaction timeout. The duration must be positive;
-// total lifetime (beginTime + all extensions) cannot exceed 7 days. Returns
-// the applied timeout (after capping).
+// total lifetime (beginTime + all extensions) cannot exceed 7 days. The server
+// rejects an over-limit extension (INVALID_ARGUMENT) rather than capping, and
+// otherwise applies the requested duration verbatim; this returns the applied
+// timeout the server granted (the requested duration, as no silent caps exist).
 func (tx *Transaction) ExtendTimeout(d time.Duration) (time.Duration, error) {
 	if err := tx.checkRolled(); err != nil {
 		return 0, err
@@ -491,25 +493,26 @@ func (tx *Transaction) ExtendTimeout(d time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("flow sdk: extend timeout duration must be positive")
 	}
 
+	var applied = d
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
-		_, callErr := tx.session.Cartographer.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
+		resp, callErr := tx.session.Cartographer.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
 			TransactionId: tx.id,
 			Duration:      durationpb.New(d),
 		})
-		return callErr
+		if callErr != nil {
+			return callErr
+		}
+		if resp.GetAppliedTimeout() != nil {
+			applied = resp.GetAppliedTimeout().AsDuration()
+		}
+		return nil
 	}, "")
 	if err != nil {
 		return 0, err
 	}
 
-	// ponytail: ExtendTimeoutResponse does not return AppliedTimeout.
-	// The server caps silently; return the requested duration as the
-	// best-effort approximation. Callers relying on the return value for
-	// timeout tracking will see the requested (possibly uncapped) value,
-	// not the server-enforced cap. A future proto update should add
-	// AppliedTimeout to ExtendTimeoutResponse.
-	tx.timeout = d
-	return d, nil
+	tx.timeout = applied
+	return applied, nil
 }
 
 // ---------------------------------------------------------------------------

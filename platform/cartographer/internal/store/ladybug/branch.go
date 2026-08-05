@@ -413,7 +413,8 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 			}
 			node, ok := m["n"].(lbug.Node)
 			if !ok {
-				continue
+				result.Close()
+				return fmt.Errorf("branch entity of type %q: unexpected node type %T", name, m["n"])
 			}
 			entity := entityFromNode(node, name)
 			// Ensure main's embedding column / vector index exists before
@@ -551,7 +552,8 @@ func (db *ladybugDB) DumpAllEntities(ctx context.Context, txID string) ([]store.
 			}
 			node, ok := m["n"].(lbug.Node)
 			if !ok {
-				continue
+				result.Close()
+				return nil, fmt.Errorf("dump entity type %q: unexpected node type %T", name, m["n"])
 			}
 			results = append(results, *entityFromNode(node, name))
 		}
@@ -743,7 +745,7 @@ func listEdgesOnConn(conn *lbug.Connection, edgeType string) ([]store.Edge, erro
 		fromID := fmt.Sprintf("%v", m["a.id"])
 		rel, ok := m["r"].(lbug.Relationship)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("edge row for %q: unexpected relationship type %T", edgeType, m["r"])
 		}
 		toID := fmt.Sprintf("%v", m["b.id"])
 		edges = append(edges, *edgeFromRel(rel, edgeType, fromID, toID))

@@ -766,6 +766,67 @@ func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
 	}
 }
 
+// TestCreateEntity_StructuralErrorBeforeDuplicateID asserts the check-order
+// "structural validation → data-integrity" (SPEC ~943): a duplicate explicit id
+// combined with an unknown or missing-required property must surface the
+// structurally-prior INVALID_ARGUMENT error, not ErrEntityAlreadyExists.
+func TestCreateEntity_StructuralErrorBeforeDuplicateID(t *testing.T) {
+	reqSchema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Component",
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string", Required: true},
+				},
+			},
+		},
+	}
+
+	id := uuid.New().String()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	// Seed an entity with the explicit id so a second create is a duplicate.
+	if _, err := s.CreateEntity(context.Background(), "Component", id,
+		map[string]string{"name": "first"}, nil, ""); err != nil {
+		t.Fatalf("seed CreateEntity: %v", err)
+	}
+
+	// Duplicate id + unknown property → ErrUnknownProperty (INVALID_ARGUMENT),
+	// not ErrEntityAlreadyExists.
+	_, err = s.CreateEntity(context.Background(), "Component", id,
+		map[string]string{"name": "second", "bogus": "x"}, nil, "")
+	if !errors.Is(err, store.ErrUnknownProperty) {
+		t.Fatalf("expected ErrUnknownProperty to take precedence, got %v", err)
+	}
+
+	// Duplicate id + missing required property → ErrMissingRequiredProperty
+	// (INVALID_ARGUMENT), not ErrEntityAlreadyExists. Uses a fresh store whose
+	// schema declares a required property.
+	s2, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s2)
+	if err := s2.ApplySchema(context.Background(), reqSchema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	id2 := uuid.New().String()
+	if _, err := s2.CreateEntity(context.Background(), "Component", id2,
+		map[string]string{"name": "first"}, nil, ""); err != nil {
+		t.Fatalf("seed CreateEntity (required): %v", err)
+	}
+	_, err = s2.CreateEntity(context.Background(), "Component", id2,
+		map[string]string{}, nil, "")
+	if !errors.Is(err, store.ErrMissingRequiredProperty) {
+		t.Fatalf("expected ErrMissingRequiredProperty to take precedence, got %v", err)
+	}
+}
+
 func TestGetEntity_Found(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {

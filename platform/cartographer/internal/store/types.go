@@ -95,12 +95,13 @@ type HealthResult struct {
 // BranchTransactionState is the durable transaction lifecycle record owned by
 // the branch store. Missing or unsupported records make recovery fail closed.
 type BranchTransactionState struct {
-	MainHeadAtLastSync string `json:"main_head_at_last_sync"`
-	SchemaHash         string `json:"schema_hash"`
-	CommitStarted      bool   `json:"commit_started"`
-	CommitCreated      bool   `json:"commit_created"`
-	CommitHydrated     bool   `json:"commit_hydrated"`
-	MainRehydrated     bool   `json:"main_rehydrated"`
-	MergeCompleted     bool   `json:"merge_completed"`
-	RollbackOnly       bool   `json:"rollback_only"`
+	MainHeadAtLastSync string        `json:"main_head_at_last_sync"`
+	AppliedTimeout     time.Duration `json:"applied_timeout_ns"`
+	SchemaHash         string        `json:"schema_hash"`
+	CommitStarted      bool          `json:"commit_started"`
+	CommitCreated      bool          `json:"commit_created"`
+	CommitHydrated     bool          `json:"commit_hydrated"`
+	MainRehydrated     bool          `json:"main_rehydrated"`
+	MergeCompleted     bool          `json:"merge_completed"`
+	RollbackOnly       bool          `json:"rollback_only"`
 }

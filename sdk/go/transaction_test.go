@@ -647,7 +647,11 @@ func TestExtendTimeout(t *testing.T) {
 		extendTimeout: func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error) {
 			capturedTxID = req.GetTransactionId()
 			capturedDuration = req.GetDuration()
-			return &flowv1.ExtendTimeoutResponse{}, nil
+			// The server applies the requested duration verbatim and returns
+			// it as applied_timeout (mirroring BeginTransaction).
+			return &flowv1.ExtendTimeoutResponse{
+				AppliedTimeout: durationpb.New(24 * time.Hour),
+			}, nil
 		},
 	}
 	tx := newMockTx(mock)
@@ -670,6 +674,31 @@ func TestExtendTimeout(t *testing.T) {
 	}
 	if tx.timeout != got {
 		t.Errorf("expected tx.timeout set to returned value %v, got %v", got, tx.timeout)
+	}
+}
+
+// TestExtendTimeout_SurfacesAppliedTimeout verifies the SDK returns the
+// server-granted applied_timeout from the response (mirroring BeginTransaction
+// applied_timeout), not a locally assumed requested value.
+func TestExtendTimeout_SurfacesAppliedTimeout(t *testing.T) {
+	mock := &mockCartographerClient{
+		extendTimeout: func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error) {
+			return &flowv1.ExtendTimeoutResponse{
+				AppliedTimeout: durationpb.New(48 * time.Hour),
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+
+	got, err := tx.ExtendTimeout(24 * time.Hour)
+	if err != nil {
+		t.Fatalf("ExtendTimeout returned error: %v", err)
+	}
+	if got != 48*time.Hour {
+		t.Errorf("expected surfaced applied timeout 48h, got %v", got)
+	}
+	if tx.timeout != 48*time.Hour {
+		t.Errorf("expected tx.timeout set to applied 48h, got %v", tx.timeout)
 	}
 }
 

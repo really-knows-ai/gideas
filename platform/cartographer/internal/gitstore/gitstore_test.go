@@ -3397,9 +3397,17 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 		if err != nil {
 			return fmt.Errorf("reopen worktree: %w", err)
 		}
+		oldBackend := gs.backend
 		gs.repo = reopened
 		gs.wt = wt
 		gs.fs = wt.Filesystem
+		gs.backend = reopened.Storer
+
+		// The reopened backend must be re-wired in step with repo/wt/fs, or a
+		// swap-in/memory storer would silently write to the pre-reopen backend.
+		if gs.backend == oldBackend || gs.backend != reopened.Storer {
+			return fmt.Errorf("backend not re-wired to reopened storer")
+		}
 
 		// Verify the data file exists
 		if _, err := gs.fs.Stat("data.txt"); err != nil {

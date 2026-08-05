@@ -46,22 +46,10 @@ func (db *ladybugDB) CreateEntity(
 		return nil, err
 	}
 
-	// Durable duplicate detection: a duplicate-ID create must return
-	// ErrEntityAlreadyExists regardless of the underlying DB's error text.
-	// LadybugDB's error message is a message, not a contract, so instead of
-	// substring-matching it we probe for an existing entity up-front. This is
-	// O(#entity_types) per create; CreateEntity is not hot enough to warrant
-	// an ID→type index for this (ponytail: upgrade path is a global ID→type
-	// index shared with findEntityByID).
-	if _, perr := findEntityByID(conn, typeDefs.entityTypeDefs, id); perr == nil {
-		return nil, fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, id)
-	} else if !errors.Is(perr, store.ErrEntityNotFound) {
-		// The probe itself failed for a non-"not found" reason — propagate it
-		// rather than masking a real read failure behind the INSERT.
-		return nil, perr
-	}
-
-	// Validate properties against schema.
+	// Structural validation runs before data-integrity checks (SPEC RPC
+	// check-order: CreateEntity: structural validation → data-integrity). An
+	// unknown or missing-required property is therefore reported as
+	// INVALID_ARGUMENT even when the explicit id already exists.
 	propDefs := make(map[string]bool)
 	for _, p := range def.Properties {
 		propDefs[p.Name] = true
@@ -77,6 +65,21 @@ func (db *ladybugDB) CreateEntity(
 				"%w: %q for entity type %q", store.ErrMissingRequiredProperty, property.Name, entityType,
 			)
 		}
+	}
+
+	// Durable duplicate detection: a duplicate-ID create must return
+	// ErrEntityAlreadyExists regardless of the underlying DB's error text.
+	// LadybugDB's error message is a message, not a contract, so instead of
+	// substring-matching it we probe for an existing entity up-front. This is
+	// O(#entity_types) per create; CreateEntity is not fast enough to warrant
+	// an ID→type index for this (ponytail: upgrade path is a global ID→type
+	// index shared with findEntityByID).
+	if _, perr := findEntityByID(conn, typeDefs.entityTypeDefs, id); perr == nil {
+		return nil, fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, id)
+	} else if !errors.Is(perr, store.ErrEntityNotFound) {
+		// The probe itself failed for a non-"not found" reason — propagate it
+		// rather than masking a real read failure behind the INSERT.
+		return nil, perr
 	}
 
 	// Determine the bootstrapped embedding dimension (0 if the vector column
@@ -521,7 +524,7 @@ func (db *ladybugDB) ListEdgesOfType(
 		fromID := fmt.Sprintf("%v", m["a.id"])
 		rel, ok := m["r"].(lbug.Relationship)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("edge row for %q: unexpected relationship type %T", edgeType, m["r"])
 		}
 		toID := fmt.Sprintf("%v", m["b.id"])
 		edges = append(edges, *edgeFromRel(rel, edgeType, fromID, toID))

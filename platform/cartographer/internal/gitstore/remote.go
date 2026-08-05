@@ -548,6 +548,7 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 	g.repo = reopened
 	g.wt = wt
 	g.fs = wt.Filesystem
+	g.backend = reopened.Storer
 
 	// Ensure entities/ and edges/ directories exist in the working tree.
 	// The remote repository may not contain these directories, but downstream

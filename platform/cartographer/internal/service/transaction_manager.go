@@ -234,7 +234,9 @@ func (tm *TransactionManager) ValidateActive(txID string) error {
 // split into a RLock-protected read phase followed by a Lock-protected write
 // phase with re-verification, but the write-lock-held duration is negligible so
 // this simpler approach is preferred.
-func (tm *TransactionManager) ExtendTimeout(txID string, duration time.Duration) error {
+func (tm *TransactionManager) ExtendTimeout(
+	txID string, duration time.Duration, persist func(*TransactionState) error,
+) error {
 	if duration <= 0 {
 		return errInvalidExtendTimeoutDuration("duration must be positive")
 	}
@@ -254,6 +256,12 @@ func (tm *TransactionManager) ExtendTimeout(txID string, duration time.Duration)
 	}
 
 	state.ExpiresAt = now.Add(duration)
+	state.AppliedTimeout = duration
+	if persist != nil {
+		if err := persist(state); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -919,6 +919,35 @@ func TestCapability_UnrecognizedSigner(t *testing.T) {
 	}
 }
 
+func TestCapability_MissingSignedBy(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	// Valid caps + signature + signed-at present, but the signed-by key is
+	// omitted entirely — no verification key can be selected, so verify must
+	// return PERMISSION_DENIED (SPEC error table: absent/empty signed-by).
+	payload := "READ:graph/entity/Component|1234567890"
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
+	md := metadata.Pairs(
+		MetadataKeyCapabilities, "READ:graph/entity/Component",
+		MetadataKeyCapabilitiesSignature, sig,
+		MetadataKeyCapabilitiesSignedAt, "1234567890",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	_, err := srv.verifier.verify(ctx)
+	if err == nil {
+		t.Fatal("expected error for missing signed-by, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
 func TestCapability_StaleCapability_UnaryInterceptorRejectsBeforeHandler(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := capabilityContextAt(
@@ -2365,12 +2394,18 @@ func TestTransaction_ExtendTimeout(t *testing.T) {
 	}
 	txID := beginResp.TransactionId
 
-	_, err = srv.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
+	extendResp, err := srv.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
 		TransactionId: txID,
 		Duration:      durationpb.New(10 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("ExtendTimeout failed: %v", err)
+	}
+	if extendResp.GetAppliedTimeout() == nil {
+		t.Fatal("expected applied_timeout to be set on ExtendTimeout response")
+	}
+	if extendResp.GetAppliedTimeout().AsDuration() != 10*time.Minute {
+		t.Errorf("expected applied timeout 10m, got %v", extendResp.GetAppliedTimeout().AsDuration())
 	}
 }
 
@@ -3864,6 +3899,90 @@ func TestRecoverOpenTransactionsAfterStoreRestart(t *testing.T) {
 	}
 	if _, err := os.Stat(branchMetadataPath); !os.IsNotExist(err) {
 		t.Fatalf("rollback did not remove branch schema metadata: %v", err)
+	}
+}
+
+func TestRecoverOpenTransactionsPersistsAppliedTimeout(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+		Timeout: durationpb.New(90 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	if begin.GetAppliedTimeout().AsDuration() != 90*time.Second {
+		t.Fatalf("expected applied timeout 90s, got %v", begin.GetAppliedTimeout().AsDuration())
+	}
+	// A mutation is required so the branch diff is non-empty and recovery does
+	// not treat the transaction as already-committed.
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "in-tx"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("create entity in transaction: %v", err)
+	}
+	// Extend the expiry to 2 minutes, then verify the granted value is
+	// persisted (mirroring durableTransactionState) so recovery restores it
+	// instead of silently defaulting to the 7-day hard maximum.
+	if _, err := srv.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
+		TransactionId: begin.TransactionId,
+		Duration:      durationpb.New(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("extend timeout: %v", err)
+	}
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	recovered, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("lookup recovered transaction: %v", err)
+	}
+	if recovered.AppliedTimeout != 2*time.Minute {
+		t.Fatalf("expected recovered applied timeout 2m, got %v", recovered.AppliedTimeout)
+	}
+	if time.Until(recovered.ExpiresAt) >= 24*time.Hour {
+		t.Fatalf("recovered transaction should not default to the 7-day hard max, ExpiresAt=%v", recovered.ExpiresAt)
 	}
 }
 
@@ -7036,6 +7155,38 @@ func TestCapability_EmptySignedAt(t *testing.T) {
 	}
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+func TestCapability_MalformedSignedAt(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	// signed-at is present but non-numeric ("abc"): the empty/len==0 guard is
+	// bypassed, the (assumed valid) signature verifies over the raw payload
+	// including "abc", and only then does ParseInt fail. Assert the resulting
+	// PERMISSION_DENIED for the malformed signed-at anti-replay branch.
+	payload := "READ:graph/entity/Component|abc"
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
+	md := metadata.Pairs(
+		MetadataKeyCapabilities, "READ:graph/entity/Component",
+		MetadataKeyCapabilitiesSignature, sig,
+		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		MetadataKeyCapabilitiesSignedAt, "abc",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	_, err := srv.verifier.verify(ctx)
+	if err == nil {
+		t.Fatal("expected error for malformed signed-at, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != "invalid capability signature" {
+		t.Fatalf("expected PermissionDenied invalid-signature, got %v", err)
 	}
 }
 

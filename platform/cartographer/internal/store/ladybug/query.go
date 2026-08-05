@@ -249,7 +249,7 @@ func (db *ladybugDB) searchIndexedType(
 		}
 		node, ok := m["node"].(lbug.Node)
 		if !ok {
-			continue
+			return true, false, nil, fmt.Errorf("vector result for %q: unexpected node type %T", t, m["node"])
 		}
 		var distance float64
 		switch d := m["distance"].(type) {
@@ -348,7 +348,8 @@ func (db *ladybugDB) FullTextSearch(
 			}
 			node, ok := m["node"].(lbug.Node)
 			if !ok {
-				continue
+				result.Close()
+				return nil, fmt.Errorf("fts result for %q: unexpected node type %T", t, m["node"])
 			}
 			results = append(results, *entityFromNode(node, t))
 		}
@@ -451,7 +452,7 @@ func (db *ladybugDB) ListEntities(
 		}
 		node, ok := m["n"].(lbug.Node)
 		if !ok {
-			continue
+			return nil, "", fmt.Errorf("entity row for %q: unexpected node type %T", entityType, m["n"])
 		}
 		entities = append(entities, *entityFromNode(node, entityType))
 		count++
