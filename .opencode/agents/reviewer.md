@@ -1,33 +1,35 @@
 ---
 description: "General-purpose review agent"
 mode: subagent
+hidden: true
 permission:
   read:
-    "/Users/jledrew/go/**": allow
-    "/tmp/**": allow
-    "/Users/jledrew/platform/**": allow
     "*": deny
+    "platform/**": allow
+    "plans/**": allow
+    "/tmp/**": allow
+    "/Users/jledrew/go/**": allow
   edit:
-    "/Users/jledrew/platform/plans/**": allow
-    "/Users/jledrew/go/**": deny
-    "/tmp/**": deny
-    "/Users/jledrew/platform/**": deny
     "*": deny
+    "plans/**": allow
   glob:
+    "*": deny
+    "platform/**": allow
+    "plans/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
-    "/Users/jledrew/platform/**": allow
-    "*": deny
   grep:
+    "*": deny
+    "platform/**": allow
+    "plans/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
-    "/Users/jledrew/platform/**": allow
-    "*": deny
   external_directory:
-    "/Users/jledrew/go/**": allow
-    "/tmp/**": allow
     "*": deny
+    "/tmp/**": allow
+    "/Users/jledrew/go/**": allow
   bash:
+    "*": deny
     "make test": allow
     "make test-*": allow
     "make test-operator": allow
@@ -38,11 +40,10 @@ permission:
     "go test *": allow
     "go vet *": allow
     "go list *": allow
-    "git status": allow
-    "git diff": allow
-    "git log": allow
-    "git show": allow
-    "*": deny
+    "git status*": allow
+    "git diff*": allow
+    "git log*": allow
+    "git show*": allow
 ---
 You are a review subagent. Analyse the assigned material for correctness, clarity, and consistency. Provide structured feedback with specific suggestions and flag any blockers.
 

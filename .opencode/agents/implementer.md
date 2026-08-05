@@ -1,32 +1,37 @@
 ---
 description: "General-purpose implementation agent"
 mode: subagent
+hidden: true
 permission:
   read:
-    "/Users/jledrew/go/**": allow
-    "/tmp/**": allow
-    "/Users/jledrew/platform/**": allow
     "*": deny
+    "platform/**": allow
+    "plans/**": allow
+    "/tmp/**": allow
+    "/Users/jledrew/go/**": allow
   edit:
-    "/Users/jledrew/go/**": deny
-    "/tmp/**": allow
-    "/Users/jledrew/platform/**": allow
     "*": deny
+    "platform/**": allow
+    "plans/**": allow
+    "/tmp/**": allow
   glob:
-    "/Users/jledrew/go/**": allow
-    "/tmp/**": allow
-    "/Users/jledrew/platform/**": allow
     "*": deny
+    "platform/**": allow
+    "plans/**": allow
+    "/tmp/**": allow
+    "/Users/jledrew/go/**": allow
   grep:
-    "/Users/jledrew/go/**": allow
-    "/tmp/**": allow
-    "/Users/jledrew/platform/**": allow
     "*": deny
+    "platform/**": allow
+    "plans/**": allow
+    "/tmp/**": allow
+    "/Users/jledrew/go/**": allow
   external_directory:
-    "/Users/jledrew/go/**": allow
-    "/tmp/**": allow
     "*": deny
+    "/tmp/**": allow
+    "/Users/jledrew/go/**": allow
   bash:
+    "*": deny
     "make verify": allow
     "make test": allow
     "make test-*": allow
@@ -45,11 +50,10 @@ permission:
     "go vet *": allow
     "go build *": allow
     "go list *": allow
-    "git status": allow
-    "git diff": allow
-    "git log": allow
-    "git show": allow
-    "*": deny
+    "git status*": allow
+    "git diff*": allow
+    "git log*": allow
+    "git show*": allow
 ---
 You are an implementation subagent. Execute the assigned task directly, make the smallest correct modification, run relevant verification, and report concrete results with any blockers.
 

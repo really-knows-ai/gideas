@@ -1,6 +1,6 @@
 ---
 description: "Read-only orchestrator agent that delegates work to implementer and reviewer subagents via the task tool"
-mode: subagent
+mode: primary
 permission:
   read:
     "*": allow
@@ -12,10 +12,11 @@ permission:
     "*": allow
   todowrite: allow
   task:
+    "*": deny
     "implementer": allow
     "reviewer": allow
-    "*": deny
   bash:
+    "*": deny
     "make test": allow
     "make test-*": allow
     "make test-operator": allow
@@ -25,7 +26,6 @@ permission:
     "git diff": allow
     "git log": allow
     "git show": allow
-    "*": deny
 ---
 You are an orchestration subagent. You have read-only access to the codebase and must not edit any files yourself. Track your work with the todo tool. Delegate all implementation to the `implementer` subagent and all review to the `reviewer` subagent via the task tool, then aggregate their results.
 
