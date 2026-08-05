@@ -357,29 +357,46 @@ keep only one copy.
 
 **Remove findings covered by LEARNINGS.md:**
 For each remaining finding, check whether it is an instance of a pattern
-already documented in `LEARNINGS.md`.  A finding IS covered (discard it)
-when BOTH conditions hold:
+already documented in `LEARNINGS.md`.  **Only Known Deviations and
+observation-type learnings prune findings.**  Defect-pattern learnings
+NEVER prune — a new instance of a defect pattern is a live bug and must
+stay in the checklist.
 
-- **Rule exists:** The learning states a concrete, actionable rule that
-  the finding violates (not a general observation about current state).
-- **Same category:** The finding would not exist if the rule in the
-  learning were followed — it is a new instance of a previously
-  identified category, not a previously unseen type of divergence.
+Distinguish the two kinds of learning:
+
+- **Known Deviations** (`## Known Deviations` section) — document an
+  *intentional* divergence that reviewers should skip.  A finding that
+  matches a Known Deviation is a false positive and IS pruned.  Example:
+  "health uses the empty-string wildcard" → a finding flagging the
+  empty-string health key is pruned.
+- **Defect-pattern learnings** (permanent learnings that prescribe a fix,
+  e.g. "I/O errors must not be silently discarded", "no production code
+  duplication", "code without a SPEC requirement must be removed") —
+  document a *class of bug that must be fixed*.  A finding that matches a
+  defect-pattern learning is a **new instance of a known bug at a specific
+  location** and is KEPT as an open item.  The learning documents the rule;
+  the finding points at the concrete spot that still violates it.  Both
+  are needed — the fixer works from the checklist, not by re-deriving
+  every learning against the code.  Pruning a defect-pattern instance
+  drops a live bug.
+- **Observation-type learnings** (e.g. "no existing codebase uses mTLS")
+  describe current state, not a rule.  They never prune.
 
 **Candidate patterns do NOT trigger pruning.**  The `## Candidate Patterns`
 section of LEARNINGS.md contains unproven patterns from fresh findings.
 Findings matching a candidate pattern are kept — the pattern needs
-verification through fixes before it can prune anything.  Only permanent
-learnings and Known Deviations trigger pruning.
+verification through fixes before it can prune anything.
 
 Examples:
 
 | Learning | Finding | Covered? |
 |----------|---------|----------|
-| "CRD YAML filenames use `flow.foundry.io` prefix" | "Line 55 references `flow.gideas.io_foundrygraphs.yaml`" | Yes — same category (wrong prefix), new location |
-| "Cross-phase interface alignment must be exact" | "SetRemote signature differs between Phase 3 and Phase 4" | Yes — same category (signature mismatch), new instance |
-| "No existing codebase uses mTLS" | "Plan introduces mTLS without accounting for first-use cost" | No — learning is an observation about current state, not a rule about what plans must do |
-| "Capability/auth infra must be built from scratch" | "Plan assumes Ed25519 key generation exists" | Yes — same category (assuming pre-existing auth infra) |
+| Known Deviation: "health uses empty-string wildcard" | "Line 68 probe requests `grpc.health.v1.Health`" | Yes — intentional deviation, prune |
+| Defect pattern: "I/O errors must not be silently discarded" | "`_ = CleanUntracked(ctx)` discards error in WipeGraph" | **No — live bug, KEEP** |
+| Defect pattern: "no production code duplication" | "`createNodeTable`/`createNodeTableOnConn` are near-identical" | **No — live bug, KEEP** |
+| Defect pattern: "code without a SPEC requirement must be removed" | "proto still declares orphaned `PushToRemote` RPC" | **No — live bug, KEEP** |
+| Observation: "no existing codebase uses mTLS" | "Plan introduces mTLS without accounting for first-use cost" | No — observation, not a rule |
+| Known Deviation: "ExtendTimeout strict `>` is correct" | "Line 90 uses `>` instead of `>=`" | Yes — intentional deviation, prune |
 
 When in doubt, KEEP the finding.  The consolidation audit (step 5a) will
 catch false negatives.
@@ -403,6 +420,44 @@ existing `[ ]` or `[!]` item (by file, line, and description):
 Existing `[ ]` and `[!]` items that are NOT re-discovered by the fresh
 review remain as-is — they are still open and unaddressed.
 
+### 5c. Consider impact and prune items not worth fixing (consolidation only)
+
+The fresh reviewers must NOT make this judgement — they produce a flat list
+of every divergence with no severity.  **Impact-sizing happens here, at
+consolidation, in the main agent only.**  The question at this step is:
+*given everything this review surfaced, is each item worth the cost of
+fixing it?*
+
+This is a judgement about **value, not validity**.  An item is a candidate
+for impact-pruning only when it is technically valid (a real divergence
+from criteria) but fixing it would cost more than it is worth — e.g. a
+fossilised formatting nit in generated code nobody reads, a doc-comment
+style inconsistency in an untouched file, or a speculative concern about a
+codepath that is provably unreachable in practice.
+
+**Rule of thumb — prune on impact only when ALL of the following hold:**
+
+- The finding is a true, verified divergence (do not impact-prune a finding
+  that is actually covered by a learning — that is a false positive handled
+  in step 5a).
+- The affected code/file is low-traffic or the issue has bounded blast
+  radius.
+- The fix is not load-bearing: no trust-boundary, data-loss, security, or
+  accessibility implication.  Those are never prunable by impact.
+- No downstream behaviour depends on the fix for correctness.
+
+Pruning by impact is a **last resort** and must be deliberate.  When in
+doubt, KEEP the item — the implementer can still mark it `[~]` wont-fix
+with a justification, which is the normal and preferred path for an
+unworthy-while-valid item.  Impact-pruning is only for items the
+consolidator is confident should not even surface as open work.
+
+**Transparency is mandatory.** Every item pruned here MUST be reported
+verbatim to the user in step 7 and recorded in the header as a
+pruned-by-impact list.  The report must make it unmistakably clear what
+was chosen to prune and why — this decision is exactly the kind of thing
+the user wants to see and veto.
+
 ### 5a. Consolidation audit
 
 After pruning learning-covered items and merging with existing items,
@@ -422,9 +477,25 @@ items have been pruned.  Check the remaining items for:
     may become learnings once fixed and verified in a future cycle, but
     fresh findings are unproven.  Report them as suggestions only.
 
-Be strict: if an item is a new instance of a known category (e.g. a
-different file using the wrong CRD prefix), it should have been pruned.
-If you find one, report it.
+**Pruning rule — only Known Deviations and observation-type learnings
+prune findings.  Defect-pattern learnings NEVER prune.**
+- A finding that matches a **Known Deviation** (an intentional divergence
+  documented in `## Known Deviations`) is a false positive — report it.
+- A finding that matches a **defect-pattern learning** (a permanent
+  learning prescribing a fix, e.g. "I/O errors must not be silently
+  discarded", "no production code duplication", "code without a SPEC
+  requirement must be removed") is a **new instance of a known bug at a
+  specific location** — it is a live bug and must be KEPT, not reported
+  as a false positive.  The learning documents the rule; the finding
+  points at the concrete spot that still violates it.  Do NOT report
+  defect-pattern instances as false positives.
+- A finding that matches an **observation-type learning** (describes
+  current state, not a rule) is not covered — keep it.
+
+Be strict about Known Deviations: if an item is a new instance of a
+documented intentional deviation (e.g. a different file using the
+empty-string health key), it should have been pruned.  If you find one,
+report it.
 
 **LEARNINGS.md:**
 [contents of LEARNINGS.md]
@@ -500,6 +571,14 @@ the review date, files/criteria reviewed, and summary counts:
 | `[ ]` Open | <count> |
 | `[!]` Re-opened | <count> |
 
+## Pruned by Impact (consolidation decision)
+
+The following items were valid findings but were pruned at consolidation
+as not worth the cost of fixing.  Review and veto if you disagree.
+
+- <file>:<line> — <verbatim description of the pruned item>
+  - Pruned by impact: <why it was not worth fixing>
+
 ## Open Items
 
 - [ ] [TAG] <file>:<line> — <description>
@@ -523,6 +602,9 @@ Report:
 - Number of fresh findings removed because covered by `LEARNINGS.md`
 - Number of false positives caught by consolidation audit
 - Number of duplicates caught by consolidation audit
+- Number of items pruned by impact at consolidation — and list each one
+  verbatim with its reason.  This is a decision the user must be able to
+  see and veto.
 - Final number of `[ ]` open items
 - Number of pre-existing `[ ]` items carried forward (if any)
 - Number of pre-existing `[!]` items carried forward (if any)
@@ -587,6 +669,10 @@ to `- [!]` with an explanation:
   to mark wont-fix.
 - The reviewer subagents are given the same instruction: no severity labels,
   no ranking, just divergences from criteria.
+- Impact-sizing is consolidation-only (step 5c) and never a reviewer job.
+  The individual reviewers always produce the full flat list; only the
+  consolidator weighs whether an item is worth fixing, and must report
+  every pruned-by-impact item verbatim so the user can veto.
 - If the user does not provide all three inputs (files, criteria, output
   path), ask for what's missing — do not guess.
 - The output file is always written to the provided path.  It may be
