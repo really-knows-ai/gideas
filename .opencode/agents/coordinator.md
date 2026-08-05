@@ -6,6 +6,7 @@ permission:
     "*": allow
   edit:
     "*": deny
+    "plans/**": allow
   glob:
     "*": allow
   grep:
