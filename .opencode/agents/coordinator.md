@@ -14,6 +14,11 @@ permission:
   grep:
     "*": allow
     ".opencode/**": allow
+  external_directory:
+    "*": deny
+    "/Users/jledrew/platform/plans/**": allow
+    "/tmp/**": allow
+    "/Users/jledrew/go/**": allow
   todowrite: allow
   task:
     "*": deny

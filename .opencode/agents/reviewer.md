@@ -75,6 +75,7 @@ permission:
     "/Users/jledrew/go/**": allow
   external_directory:
     "*": deny
+    "/Users/jledrew/platform/plans/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   bash:
