@@ -32,6 +32,8 @@ permission:
     "/Users/jledrew/go/**": allow
   bash:
     "*": deny
+    "ls *": allow
+    "find *": allow
     "make verify": allow
     "make test": allow
     "make test-*": allow
