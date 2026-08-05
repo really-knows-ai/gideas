@@ -16,6 +16,12 @@ import (
 
 const metadataEntityTypeKey = "x-flow-entity-type"
 
+// metadataEntityTypesKey is the plural read-path capability annotation key
+// (SPEC R3): ExecuteCypher annotates the entity types extracted from the
+// Cypher statement against this plural key, falling back to the
+// READ:graph/entity/* wildcard when extraction yields no labels.
+const metadataEntityTypesKey = "x-flow-entity-types"
+
 const (
 	clobberedIDProp   = "clobbered-id"
 	clobberedTypeProp = "ClobberedType"
@@ -256,6 +262,63 @@ func TestExecuteCypher(t *testing.T) {
 	}
 	g := newMockGraph(mock)
 	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+}
+
+// TestExecuteCypher_AnnotatesPluralEntityTypes verifies SPEC R3 on the Graph
+// read path: the SDK parses the Cypher, extracts the entity-type labels, and
+// annotates the plural "x-flow-entity-types" gRPC metadata key with the
+// comma-separated labels (joined by session.call via strings.Join).
+func TestExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypesKey)
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-types metadata")
+			}
+			if vals[0] != componentType+",Service" {
+				t.Errorf("expected metadata %s=%q, got %q",
+					metadataEntityTypesKey, componentType+",Service", vals[0])
+			}
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.ExecuteCypher("MATCH (c:"+componentType+")-[:DEPENDS_ON]->(s:Service) RETURN c, s", nil)
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+}
+
+// TestExecuteCypher_FallsBackToWildcard verifies R3's wildcard fallback on
+// the Graph read path: when label extraction yields no entity types (e.g. a
+// query with no MATCH clause), the annotation must carry the
+// READ:graph/entity/* wildcard instead of no annotation.
+func TestExecuteCypher_FallsBackToWildcard(t *testing.T) {
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypesKey)
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-types metadata")
+			}
+			if vals[0] != "*" {
+				t.Errorf("expected wildcard * in %s, got %q", metadataEntityTypesKey, vals[0])
+			}
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.ExecuteCypher("RETURN 1", nil)
 	if err != nil {
 		t.Fatalf("ExecuteCypher returned error: %v", err)
 	}

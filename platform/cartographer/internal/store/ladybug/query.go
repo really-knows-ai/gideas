@@ -128,11 +128,15 @@ func (db *ladybugDB) SearchNeighbors(
 	// found carries any results. Extracted to keep SearchNeighbors' cyclomatic
 	// complexity under the lint threshold.
 	dimensionMatched := false
+	indexedExists := false
 	var foundForType []store.NeighborResult
 	for _, t := range typesToSearch {
-		matched, found, err := db.searchIndexedType(conn, t, embedding, topK, entityType)
+		indexed, matched, found, err := db.searchIndexedType(conn, t, embedding, topK, entityType)
 		if err != nil {
 			return nil, err
+		}
+		if indexed {
+			indexedExists = true
 		}
 		if matched {
 			dimensionMatched = true
@@ -141,12 +145,16 @@ func (db *ladybugDB) SearchNeighbors(
 	}
 	results = foundForType
 
-	// Wildcard search where no indexed type's established dimension matches the
-	// query embedding: there was no matching-dimension type to aggregate from.
-	// The SPEC defines a query dimension that matches no established index (in
-	// the wildcard case) as an "Embedding dimension mismatch" error, so we
-	// surface it here after the loop rather than returning an empty result set.
-	if entityType == "" && !dimensionMatched {
+	// A wildcard search only fails with ErrEmbeddingDimension when a query
+	// embedding's dimension "matches no established index" — i.e. at least one
+	// indexed type has an actually bootstrapped index (indexedExists) but none
+	// dimension-matched this query. When no vector-indexed type is bootstrapped
+	// yet (an empty graph, or only not-yet-ever-written types whose dimension is
+	// still 0 and are silently skipped — see searchIndexedType), there is no
+	// established index to mismatch against: SPEC R5 requires a type-omitted
+	// (non-type-referencing) method to succeed on an empty graph, so the
+	// wildcard search returns an empty result set instead of erroring.
+	if entityType == "" && indexedExists && !dimensionMatched {
 		return nil, store.ErrEmbeddingDimension
 	}
 
@@ -164,18 +172,20 @@ func (db *ladybugDB) SearchNeighbors(
 }
 
 // searchIndexedType queries the vector index for a single entity type and
-// returns whether the type's established dimension matched the query
-// embedding (matched) and its aggregated results (found). A skipped type
-// (not bootstrapped, dimension mismatch in a wildcard search, or a node that
-// type-asserts to non-lbug.Node) yields matched==false with no results and no
-// error, letting the caller aggregate the other types.
+// returns indexed (whether the type has an established bootstrapped index, i.e.
+// a dimension > 0), matched (whether that established dimension matched the
+// query embedding, meaning data was searched) and its aggregated results
+// (found). A skipped type — not bootstrapped (indexed==false), or a dimension
+// mismatch in a wildcard search (indexed==true, matched==false) — yields no
+// results and no error, letting the caller distinguish "no index yet" from
+// "established index but dimension mismatch" and aggregate the other types.
 func (db *ladybugDB) searchIndexedType(
 	conn *lbug.Connection, t string, embedding []float32, topK int, entityType string,
-) (matched bool, found []store.NeighborResult, err error) {
+) (indexed bool, matched bool, found []store.NeighborResult, err error) {
 	// Check if the index is bootstrapped.
 	dim, derr := getEmbeddingDimension(conn, t)
 	if derr != nil {
-		return false, nil, fmt.Errorf("read embedding dimension for %q: %w", t, derr)
+		return false, false, nil, fmt.Errorf("read embedding dimension for %q: %w", t, derr)
 	}
 	// ponytail: A type whose vector index is not yet bootstrapped (dim == 0) is
 	// silently skipped rather than surfacing an error. The dimension is inferred
@@ -185,18 +195,19 @@ func (db *ladybugDB) searchIndexedType(
 	// so we skip silently while still surfacing real errors (dimension mismatch,
 	// read failures, etc.) where they exist.
 	if dim == 0 {
-		return false, nil, nil // no bootstrapped index yet
+		return false, false, nil, nil // no bootstrapped index yet
 	}
+	// A bootstrapped index exists from here on.
 	if len(embedding) != dim {
 		if entityType != "" {
 			// Single-type search: the queried type's established dimension is
 			// authoritative, so a mismatch is an error (SPEC error table row
 			// "Embedding dimension mismatch").
-			return false, nil, fmt.Errorf("%w: for entity type %q, expected dimension %d, got %d",
+			return true, false, nil, fmt.Errorf("%w: for entity type %q, expected dimension %d, got %d",
 				store.ErrEmbeddingDimension, t, dim, len(embedding))
 		}
 		// Wildcard search: skip this type, keep searching the others.
-		return false, nil, nil
+		return true, false, nil, nil
 	}
 	// Use QUERY_VECTOR_INDEX. Index name matches what CreateEntity creates.
 	idxName := t + "_vec"
@@ -209,7 +220,7 @@ func (db *ladybugDB) searchIndexedType(
 		// operational error for this type, not a transient "index absent"
 		// state. Propagate so the caller can distinguish the two instead of
 		// silently dropping this type's contribution.
-		return false, nil, fmt.Errorf("prepare vector index query for %q: %w", t, err)
+		return true, false, nil, fmt.Errorf("prepare vector index query for %q: %w", t, err)
 	}
 	// ponytail: The LadybugDB query-vector-index call expects the embedding
 	// as a FLOAT[] parameter. We pass it as a flat []any slice.
@@ -223,18 +234,18 @@ func (db *ladybugDB) searchIndexedType(
 		// The vector index query prepared successfully, so the index exists;
 		// an Execute failure here is operational. Surface it rather than
 		// silently dropping this type's contribution.
-		return false, nil, fmt.Errorf("execute vector index query for %q: %w", t, err)
+		return true, false, nil, fmt.Errorf("execute vector index query for %q: %w", t, err)
 	}
 	defer result.Close()
 	for result.HasNext() {
 		tuple, err := result.Next()
 		if err != nil {
-			return false, nil, fmt.Errorf("read vector result: %w", err)
+			return true, false, nil, fmt.Errorf("read vector result: %w", err)
 		}
 		m, err := tuple.GetAsMap()
 		tuple.Close()
 		if err != nil {
-			return false, nil, fmt.Errorf("parse vector result: %w", err)
+			return true, false, nil, fmt.Errorf("parse vector result: %w", err)
 		}
 		node, ok := m["node"].(lbug.Node)
 		if !ok {
@@ -247,9 +258,9 @@ func (db *ladybugDB) searchIndexedType(
 		case float32:
 			distance = float64(d)
 		case nil:
-			return false, nil, fmt.Errorf("vector result for %q missing distance", t)
+			return true, false, nil, fmt.Errorf("vector result for %q missing distance", t)
 		default:
-			return false, nil, fmt.Errorf("unexpected distance type for %q: got %T", t, m["distance"])
+			return true, false, nil, fmt.Errorf("unexpected distance type for %q: got %T", t, m["distance"])
 		}
 		entity := entityFromNode(node, t)
 		found = append(found, store.NeighborResult{
@@ -257,7 +268,7 @@ func (db *ladybugDB) searchIndexedType(
 			Distance: distance,
 		})
 	}
-	return true, found, nil
+	return true, true, found, nil
 }
 
 // --------------------------------------------------------------------------
@@ -384,6 +395,16 @@ func (db *ladybugDB) ListEntities(
 	// (keyset) scheme would be resilient, but that changes the page-token semantics
 	// and the SPEC does not document either approach or its fragility. Kept as-is
 	// until the SPEC is updated.
+	// ponytail: The emitted next-page token is computed as `offset + pageSize` with
+	// no overflow guard. A crafted non-negative offset near math.MaxInt64 is accepted
+	// (any non-negative int64 token passes ParseInt), so `offset + pageSize` wraps to a
+	// negative value; that negative token is then rejected by this same method as
+	// ErrInvalidPageToken on the follow-up call. Practically unreachable (it requires
+	// the graph to have many billions of rows at a huge SKIP offset — with fewer rows
+	// SKIP returns nothing so no next token is emitted), so it is left as-is rather than
+	// introducing arbitrary-precision offset arithmetic. Upgrade path: clamp the offset
+	// so offset+pageSize cannot overflow, or reject offsets that exceed the row count /
+	// a sane cursor bound, or switch to the cursor-based (keyset) scheme above.
 	offset := 0
 	if pageToken != "" {
 		data, err := base64.StdEncoding.DecodeString(pageToken)

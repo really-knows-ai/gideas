@@ -19,14 +19,12 @@ package controller
 import (
 	"context"
 	"errors"
-	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -370,9 +368,6 @@ func TestApplySchemaOnExistingDestructiveOrdering(t *testing.T) {
 		}
 	}
 }
-
-// mockExportGraphClient wraps the existing mockExportClient for the ApplySchemaOnExisting
-// success ordering test helper.
 
 func TestReconcileBlockedPathSetsDestructiveChangeBlocked(t *testing.T) {
 	s := scheme.Scheme
@@ -1219,7 +1214,7 @@ func (m *mockCartographerClient) ExportGraph(ctx context.Context, in *flowv1gen.
 	if m.exportGraphFn != nil {
 		return m.exportGraphFn(ctx, in)
 	}
-	return &mockExportGraphClient{}, nil
+	return nil, errors.New("mock CartographerClient.ExportGraph not configured")
 }
 
 func (m *mockCartographerClient) Close() error {
@@ -1228,13 +1223,3 @@ func (m *mockCartographerClient) Close() error {
 	}
 	return nil
 }
-
-type mockExportGraphClient struct{}
-
-func (mockExportGraphClient) Recv() (*flowv1gen.ExportGraphResponse, error) { return nil, io.EOF }
-func (mockExportGraphClient) Context() context.Context                      { return context.Background() }
-func (mockExportGraphClient) Header() (metadata.MD, error)                  { return nil, nil }
-func (mockExportGraphClient) Trailer() metadata.MD                          { return nil }
-func (mockExportGraphClient) CloseSend() error                              { return nil }
-func (mockExportGraphClient) SendMsg(any) error                             { return nil }
-func (mockExportGraphClient) RecvMsg(any) error                             { return nil }

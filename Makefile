@@ -189,8 +189,11 @@ tidy: ## Run go mod tidy in every workspace module.
 # $1 - target path with name of binary
 # $2 - package url which can be installed
 # $3 - specific version of package
+# The macro is idempotent: it skips install when the versioned binary $(1)-$(3) already exists, since the
+# trailing "ln -sf" re-asserts the $(1) symlink. (A prior BSD/readlink target-equality guard was
+# non-portable: macOS readlink lacks GNU "--" and forced a re-install on every repeated run.)
 define go-install-tool
-@[ -f "$(1)-$(3)" ] && [ "$$(readlink -- "$(1)" 2>/dev/null)" = "$(1)-$(3)" ] || { \
+@[ -f "$(1)-$(3)" ] || { \
 set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\

@@ -141,6 +141,62 @@ func TestTxExecuteCypher(t *testing.T) {
 	}
 }
 
+// TestTxExecuteCypher_AnnotatesPluralEntityTypes verifies SPEC R3 on the
+// Transaction read path: the SDK parses the Cypher, extracts the entity-type
+// labels, and annotates the plural "x-flow-entity-types" gRPC metadata key
+// with the comma-separated labels.
+func TestTxExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypesKey)
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-types metadata")
+			}
+			if vals[0] != componentType+",Service" {
+				t.Errorf("expected metadata %s=%q, got %q",
+					metadataEntityTypesKey, componentType+",Service", vals[0])
+			}
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	_, err := tx.ExecuteCypher("MATCH (c:"+componentType+")-[:DEPENDS_ON]->(s:Service) RETURN c, s", nil)
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+}
+
+// TestTxExecuteCypher_FallsBackToWildcard verifies R3's wildcard fallback on
+// the Transaction read path: when label extraction yields no entity types,
+// the annotation must carry the READ:graph/entity/* wildcard.
+func TestTxExecuteCypher_FallsBackToWildcard(t *testing.T) {
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypesKey)
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-types metadata")
+			}
+			if vals[0] != "*" {
+				t.Errorf("expected wildcard * in %s, got %q", metadataEntityTypesKey, vals[0])
+			}
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	_, err := tx.ExecuteCypher("RETURN 1", nil)
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+}
+
 func TestTxSearchNeighbors(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{

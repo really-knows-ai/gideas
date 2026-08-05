@@ -1504,6 +1504,53 @@ func TestDeleteEntity_Valid(t *testing.T) {
 	}
 }
 
+// TestDeleteEntity_NonTransactionalCascade verifies SPEC R7 §4 atomicity on the
+// main (non-transactional) path: deleting an entity outside a transaction must
+// remove all edges connected to it atomically with the entity. Only the
+// in-transaction cascade path was previously covered at the service layer.
+func TestDeleteEntity_NonTransactionalCascade(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
+	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, "")
+
+	edgeResp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType: "DEPENDS_ON", FromEntityId: svc.Id, ToEntityId: comp.Id,
+	})
+	if err != nil {
+		t.Fatalf("CreateEdge failed: %v", err)
+	}
+
+	// Non-transactional DeleteEntity applies directly to main.
+	if _, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: svc.Id}); err != nil {
+		t.Fatalf("non-transactional DeleteEntity failed: %v", err)
+	}
+
+	// The entity must be gone.
+	if _, err := srv.store.GetEntity(ctx, svc.Id, ""); err == nil {
+		t.Fatal("expected deleted entity to be gone")
+	}
+	// The connected edge must have been removed atomically with the entity.
+	remaining, err := srv.store.ListEdgesOfType(ctx, "DEPENDS_ON", "")
+	if err != nil {
+		t.Fatalf("ListEdgesOfType failed: %v", err)
+	}
+	for _, e := range remaining {
+		if e.Id == edgeResp.EdgeId {
+			t.Fatalf("expected cascade-deleted edge %q to be removed on main", edgeResp.EdgeId)
+		}
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("expected no DEPENDS_ON edges to remain, got %d", len(remaining))
+	}
+	// The other participant is untouched by the cascade.
+	if _, err := srv.store.GetEntity(ctx, comp.Id, ""); err != nil {
+		t.Fatalf("non-adjacent entity must survive the cascade: %v", err)
+	}
+}
+
 // TestDeleteEntity_TransactionRecordsCascadeEdgeDeletion verifies SPEC R7 §4
 // atomicity is preserved across a commit: deleting an entity inside a
 // transaction must also record the cascade-removed edges in the change log so
@@ -3307,6 +3354,55 @@ func TestSearchNeighbors_Valid(t *testing.T) {
 		t.Fatalf("SearchNeighbors failed: %v", err)
 	}
 	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one neighbor result")
+	}
+}
+
+// TestReadWildcardOnly_TypeOmittedSearchesSucceed covers the SPEC R3 success
+// path for the type-omitted read-search branch: a caller holding ONLY
+// READ:graph/entity/* must be able to run a type-omitted (empty entityType)
+// FullTextSearch and SearchNeighbors. The empty entityType request takes the
+// checkWildcardEntityCap branch (not the per-type branch), so an exclusive
+// wildcard holder must not be denied.
+func TestReadWildcardOnly_TypeOmittedSearchesSucceed(t *testing.T) {
+	srv, st := newTestServer(t)
+	// Caller holds ONLY READ:graph/entity/* (no WRITE, no per-type caps).
+	ctx := narrowCtx("READ:graph/entity/*")
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	// Seed data directly via the store (the caller holds no write capability).
+	_, _ = st.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "alpha"}, []float32{1.0, 0, 0}, "")
+	_, _ = st.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "beta"}, []float32{0.0, 1.0, 0.0}, "")
+
+	// FullTextSearch with EntityType omitted (wildcard branch).
+	fts, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "alpha"})
+	if err != nil {
+		t.Fatalf("FullTextSearch (type-omitted) denied for wildcard-only holder: %v", err)
+	}
+	if len(fts.Results) == 0 {
+		t.Fatal("expected at least one FullTextSearch result")
+	}
+
+	// SearchNeighbors with EntityType omitted (wildcard branch).
+	sn, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding: []float32{1.0, 0.0, 0.0},
+		TopK:      5,
+	})
+	if err != nil {
+		t.Fatalf("SearchNeighbors (type-omitted) with wildcard-only holder: %v", err)
+	}
+	if len(sn.Results) == 0 {
 		t.Fatal("expected at least one neighbor result")
 	}
 }
@@ -5364,6 +5460,46 @@ func TestCreateEdge_RuleViolation(t *testing.T) {
 	}
 }
 
+// TestCreateEdge_SelfReferencing verifies SPEC R1's self-referencing allowance
+// at the service layer: an entity type appearing in its own canConnectTo list
+// (Component → Component) must admit an edge, with the membership check treating
+// the declaring type the same as any other. Only Service → Component rule tests
+// were previously exercised at the service layer.
+func TestCreateEdge_SelfReferencing(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+
+	// Component declares a self-referencing rule via DEPENDS_ON.
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:       "Component",
+				Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}},
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+				},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+
+	from, _ := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "from"}, nil, "")
+	to, _ := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "to"}, nil, "")
+
+	resp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType: "DEPENDS_ON", FromEntityId: from.Id, ToEntityId: to.Id,
+	})
+	if err != nil {
+		t.Fatalf("self-referencing Component->Component edge must be allowed: %v", err)
+	}
+	if resp.EdgeId == "" {
+		t.Fatal("expected non-empty edge ID")
+	}
+}
+
 func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
 	srv, st := newTestServer(t)
 	ctx := testCtx()
@@ -6605,6 +6741,13 @@ func TestPullFromRemote_MapGitErrorRows(t *testing.T) {
 			err:        gitstore.ErrPullDiverged,
 			wantCode:   codes.FailedPrecondition,
 			wantSubstr: "pull would diverge",
+		},
+		{
+			name:       "push rejected non-fast-forward",
+			empty:      false,
+			err:        gitstore.ErrPushRejected,
+			wantCode:   codes.FailedPrecondition,
+			wantSubstr: "push rejected",
 		},
 	}
 	for _, tt := range tests {

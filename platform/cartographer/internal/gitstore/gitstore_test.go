@@ -2457,6 +2457,69 @@ func TestCloneSingleBranchInvalidScheme(t *testing.T) {
 	}
 }
 
+// TestRequiresAuth drives the requiresAuth helper directly for each URL class:
+// ssh:// always requires auth, https:// requires auth only when it embeds a
+// user (basic auth), and non-ssh/no-user URLs (public https remotes, file://
+// scratch paths, malformed inputs) do not. This mirrors the helper's exact
+// semantics (remote.go:56) rather than inserted intent.
+func TestRequiresAuth(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{"ssh always requires auth", "ssh://git@example.com/repo.git", true},
+		{"https with embedded user requires auth", "https://user@host/repo.git", true},
+		{"plain https public remote no auth", "https://host/repo.git", false},
+		{"file scratch path no auth", "file:///tmp/repo.git", false},
+		{"malformed url no auth", "://not-a-url", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiresAuth(tt.url); got != tt.want {
+				t.Fatalf("requiresAuth(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCloneSingleAuthConfigMissing verifies the authenticated-URL pre-flight
+// rejection: an ssh:// clone URL with no configured auth provider returns
+// ErrAuthConfigMissing before any fetch is attempted (SPEC R1/R10 Init).
+func TestCloneSingleAuthConfigMissing(t *testing.T) {
+	gs := setupTestStore(t)
+	if gs.authFn != nil {
+		t.Fatal("expected nil auth provider")
+	}
+	err := gs.WithGitLock(func() error {
+		err := gs.CloneSingleBranch(ctx(), "ssh://git@example.com/repo.git", "main")
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CloneSingleAuthConfigMissing: %v", err)
+	}
+}
+
+// TestPushRejectedSentinel guards the exported ErrPushRejected sentinel that
+// PushRemote maps from git.ErrNonFastForwardUpdate (remote.go:379). It cannot
+// be reached deterministically through a genuine push (go-git's receive-pack
+// does not wrap rejections in ErrNonFastForwardUpdate — see the ponytail at
+// remote.go:366), so this locks the sentinel's identity and its distinctness
+// from the sibling remote sentinels the service mapGitError must tell apart.
+func TestPushRejectedSentinel(t *testing.T) {
+	if ErrPushRejected == nil {
+		t.Fatal("ErrPushRejected must be a non-nil exported sentinel")
+	}
+	for _, other := range []error{ErrPullDiverged, ErrAuthConfigMissing, ErrNoRemote} {
+		if errors.Is(ErrPushRejected, other) {
+			t.Fatalf("ErrPushRejected aliases %v; sentinels must stay distinct", other)
+		}
+	}
+}
+
 // ============================================================================
 // T8: GitLogOneline
 // ============================================================================

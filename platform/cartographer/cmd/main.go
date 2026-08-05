@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -287,13 +288,16 @@ func main() {
 	// 15. Serve
 	// -----------------------------------------------------------------------
 	slog.Info("Cartographer ready")
-	if err := grpcServer.Serve(lis); err != nil {
+	if err := grpcServer.Serve(lis); isFatalServeError(err) {
 		slog.Error("gRPC serve error", "error", err)
 		os.Exit(1)
 	}
-	// Serve returns here because the shutdown goroutine called GracefulStop/Stop.
-	// Wait for that goroutine to finish its teardown before main returns, so the
-	// process does not exit (terminating the goroutine) mid-cleanup.
+	// Serve returns nil (or ErrServerStopped) once the shutdown goroutine called
+	// GracefulStop/Stop. Wait for that goroutine to finish its durability teardown
+	// (dbStore.Close, git RestoreMain/CleanUntracked, auditPub.Stop, event bus
+	// close) before main returns, so the process does not exit (terminating the
+	// goroutine) mid-cleanup and the terminationGracePeriodSeconds budget is
+	// honoured.
 	<-shutdownDone
 }
 
@@ -499,6 +503,16 @@ func buildResolveAuthFn(
 			return nil, gitstore.ErrUnsupportedURLScheme
 		}
 	}
+}
+
+// isFatalServeError reports whether a grpc.Server.Serve return is a genuine
+// serve failure that must abort the process. nil and grpc.ErrServerStopped are
+// the normal outcomes of the shutdown goroutine calling GracefulStop/Stop —
+// including the startup race where a signal lands before Serve is fully
+// registered (Serve then returns ErrServerStopped) — and must fall through to
+// the teardown join rather than exit 1.
+func isFatalServeError(err error) bool {
+	return err != nil && !errors.Is(err, grpc.ErrServerStopped)
 }
 
 func waitForShutdown(
