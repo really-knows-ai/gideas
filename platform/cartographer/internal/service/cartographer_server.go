@@ -753,13 +753,6 @@ func sortedProperties(properties []store.PropertyDef) []store.PropertyDef {
 	return result
 }
 
-func (s *CartographerServer) resolveBranch(txID string) string {
-	if txID == "" {
-		return ""
-	}
-	return txID
-}
-
 // checkEntityCap implements Mode 1 + Mode 2 capability checking for entity
 // operations. It first checks for a specific type (<prefix>:graph/entity/<type>),
 // then falls back to the wildcard (<prefix>:graph/entity/*).
@@ -865,7 +858,7 @@ func (s *CartographerServer) ExecuteCypher(
 			return nil, errCypherParamsNotAStruct()
 		}
 	}
-	rows, err := s.store.ExecuteCypher(ctx, req.Cypher, params, s.resolveBranch(req.TransactionId))
+	rows, err := s.store.ExecuteCypher(ctx, req.Cypher, params, req.TransactionId)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -953,7 +946,7 @@ func (s *CartographerServer) SearchNeighbors(
 	if entityType != "" && !s.store.TableExists(entityType) {
 		return nil, errUnknownEntityType(entityType)
 	}
-	results, err := s.store.SearchNeighbors(ctx, req.Embedding, req.EntityType, topK, s.resolveBranch(req.TransactionId))
+	results, err := s.store.SearchNeighbors(ctx, req.Embedding, req.EntityType, topK, req.TransactionId)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -991,7 +984,7 @@ func (s *CartographerServer) FullTextSearch(
 	if req.EntityType != "" && !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
-	results, err := s.store.FullTextSearch(ctx, req.Query, req.EntityType, s.resolveBranch(req.TransactionId))
+	results, err := s.store.FullTextSearch(ctx, req.Query, req.EntityType, req.TransactionId)
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
@@ -1030,7 +1023,7 @@ func (s *CartographerServer) ListEntities(
 		return nil, errInvalidPageSize(pageSize)
 	}
 	entities, nextToken, err := s.store.ListEntities(
-		ctx, req.EntityType, pageSize, req.PageToken, s.resolveBranch(req.TransactionId),
+		ctx, req.EntityType, pageSize, req.PageToken, req.TransactionId,
 	)
 	if err != nil {
 		return nil, mapStoreError(err)
@@ -1055,6 +1048,14 @@ func (s *CartographerServer) CreateEntity(
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
+	// SPEC order: structural validation precedes the capability check. An
+	// explicitly-supplied ID that is not a valid UUID v4 is structurally invalid
+	// and must yield INVALID_ARGUMENT even when the caller lacks write
+	// capability (mirrors UpdateEntity/DeleteEntity/DeleteEdge). An empty ID is
+	// valid — the store auto-generates it.
+	if req.Id != "" && !isValidUUID(req.Id) {
+		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
+	}
 	if err := s.checkEntityCap(ctx, "WRITE", req.EntityType); err != nil {
 		return nil, err
 	}
@@ -1063,7 +1064,7 @@ func (s *CartographerServer) CreateEntity(
 		return nil, err
 	}
 	defer unlockTx()
-	branch := s.resolveBranch(req.TransactionId)
+	branch := req.TransactionId
 
 	var ent *store.Entity
 	if req.TransactionId != "" {
@@ -1112,7 +1113,7 @@ func (s *CartographerServer) UpdateEntity(
 	}
 	defer unlockTx()
 	// Resolve entity type for capability check.
-	branch := s.resolveBranch(req.TransactionId)
+	branch := req.TransactionId
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
 	if resolveErr != nil {
 		return nil, mapStoreError(resolveErr)
@@ -1167,7 +1168,7 @@ func (s *CartographerServer) DeleteEntity(
 	}
 	defer unlockTx()
 	// Resolve entity type for capability check.
-	branch := s.resolveBranch(req.TransactionId)
+	branch := req.TransactionId
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
 	if resolveErr != nil {
 		return nil, mapStoreError(resolveErr)
@@ -1239,7 +1240,7 @@ func (s *CartographerServer) CreateEdge(
 	// SPEC order: structural (unknown edge type / rule) validation precedes
 	// entity-existence and capability checks, so an unknown edge type yields
 	// INVALID_ARGUMENT even when the caller lacks write capability.
-	branch := s.resolveBranch(req.TransactionId)
+	branch := req.TransactionId
 	if _, ok := s.store.EdgeType(req.EdgeType); !ok {
 		return nil, status.Errorf(codes.InvalidArgument,
 			"unknown edge type: %q", req.EdgeType)
@@ -1301,7 +1302,7 @@ func (s *CartographerServer) DeleteEdge(
 	}
 	defer unlockTx()
 	// Resolve source entity type for capability check.
-	branch := s.resolveBranch(req.TransactionId)
+	branch := req.TransactionId
 	existingEdge, edgeErr := s.store.GetEdge(ctx, req.Id, branch)
 	if edgeErr != nil {
 		return nil, mapStoreError(edgeErr)

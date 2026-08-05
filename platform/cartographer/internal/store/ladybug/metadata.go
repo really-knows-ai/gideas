@@ -254,6 +254,7 @@ func applySchemaMetadata(
 	edges := make(map[string]*store.EdgeTypeDef, len(metadata.EdgeTypes))
 	rules := make(map[string][]*flowv1.ConnectionRule, len(metadata.EntityTypes))
 	pairs := make(map[string][]fromToPair)
+	seen := make(map[string]map[string]bool) // edgeType -> "from|to" set
 	for i := range metadata.EntityTypes {
 		def := cloneEntityTypeDef(&metadata.EntityTypes[i])
 		entities[def.Name] = &def
@@ -265,6 +266,23 @@ func applySchemaMetadata(
 			rules[def.Name] = append(rules[def.Name], protoRule)
 			for _, edgeType := range rule.Using {
 				for _, targetType := range rule.CanConnectTo {
+					key := def.Name + "\x00" + targetType
+					// Dedup FROM/TO pairs exactly as collectFromToPairs does, so
+					// the pair set derived from metadata matches the rel table's
+					// actual endpoints. SPEC R1 merges the membership lists of
+					// multiple rules (OR semantics), so overlapping rules can
+					// legitimately produce the same pair twice; without dedup the
+					// reopened-store comparison (equalFromToPairs against the
+					// catalog, which stores each pair once) would fail closed.
+					se := seen[edgeType]
+					if se == nil {
+						se = make(map[string]bool)
+						seen[edgeType] = se
+					}
+					if se[key] {
+						continue
+					}
+					se[key] = true
 					pairs[edgeType] = append(pairs[edgeType], fromToPair{From: def.Name, To: targetType})
 				}
 			}

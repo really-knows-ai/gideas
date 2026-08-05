@@ -642,6 +642,43 @@ func TestTxUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 	}
 }
 
+// TestTxUpdateEntity_ResolvedTypeAnnotation proves SPEC R3's mode-1
+// resolution on the Transaction path: when the entity ID IS in the local
+// ID-to-type map, the capability annotation carries the resolved concrete
+// <type>, not the wildcard, enabling the Sidecar to block on a specific
+// type mismatch.
+func TestTxUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.UpdateEntityResponse{EntityId: req.GetId(), EntityType: componentType}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	// entity-1 IS in the tx map -> annotation must carry the resolved type.
+	tx.idTypeMap.store("entity-1", componentType)
+	_, err := tx.UpdateEntity("entity-1", nil, nil)
+	if err != nil {
+		t.Fatalf("UpdateEntity returned error: %v", err)
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+	}
+	if capturedValue != componentType {
+		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
+	}
+}
+
 func TestTxDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{

@@ -521,6 +521,59 @@ func TestReadAllEntityFilesEmptyDir(t *testing.T) {
 	}
 }
 
+// TestReadAllEntityFilesCorrupt asserts that a malformed .json element under
+// entities/<Type>/ surfaces an error from ReadAllEntityFiles (SPEC R8
+// corruption recovery). This is exercised via the in-memory memfs: JSON decode
+// of garbage bytes must fail rather than be silently ignored.
+func TestReadAllEntityFilesCorrupt(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+		eID := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: eID, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		path := "entities/Component/" + eID + ".json"
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate corrupt file: %w", err)
+		}
+		if _, err := f.Write([]byte("{not valid json")); err != nil {
+			return fmt.Errorf("write garbage: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close garbage file: %w", err)
+		}
+		if _, err := gs.ReadAllEntityFiles(ctx(), "Component"); err == nil {
+			return fmt.Errorf("expected error for corrupt entity file, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReadAllEntityFilesCorrupt: %v", err)
+	}
+}
+
+// TestWriteEntityFilesTypeMismatch asserts that writing an entity whose Type
+// differs from the batch type returns ErrEntityTypeMismatch (entity.go:111).
+func TestWriteEntityFilesTypeMismatch(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: validUUID(t), Type: "Service"},
+		})
+		if !errors.Is(err, ErrEntityTypeMismatch) {
+			return fmt.Errorf("expected ErrEntityTypeMismatch, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WriteEntityFilesTypeMismatch: %v", err)
+	}
+}
+
 func TestListEntityTypes(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -751,6 +804,70 @@ func TestReadAllEdgeFiles(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("ReadAllEdgeFiles: %v", err)
+	}
+}
+
+// TestReadAllEdgeFilesCorrupt verifies that a malformed .json element under
+// edges/<Type>/ surfaces an error from ReadAllEdgeFiles (SPEC R8 corruption
+// recovery). JSON decode of garbage bytes must fail rather than be silently
+// ignored.
+func TestReadAllEdgeFilesCorrupt(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		eID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		now := time.Now().UTC().Round(time.Millisecond)
+		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{
+				ID: eID, Type: "DEPENDS_ON",
+				FromEntityID: fromID, ToEntityID: toID,
+				CreatedAt: now, UpdatedAt: now,
+			},
+		}); err != nil {
+			return err
+		}
+		path := "edges/DEPENDS_ON/" + eID + ".json"
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate corrupt file: %w", err)
+		}
+		if _, err := f.Write([]byte("{not valid json")); err != nil {
+			return fmt.Errorf("write garbage: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close garbage file: %w", err)
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); err == nil {
+			return fmt.Errorf("expected error for corrupt edge file, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReadAllEdgeFilesCorrupt: %v", err)
+	}
+}
+
+// TestWriteEdgeFilesTypeMismatch asserts that writing an edge whose Type
+// differs from the batch type returns ErrEdgeTypeMismatch (edge.go:109).
+func TestWriteEdgeFilesTypeMismatch(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{
+				ID:           validUUID(t),
+				Type:         "CONNECTS_TO",
+				FromEntityID: validUUID(t),
+				ToEntityID:   validUUID(t),
+			},
+		})
+		if !errors.Is(err, ErrEdgeTypeMismatch) {
+			return fmt.Errorf("expected ErrEdgeTypeMismatch, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WriteEdgeFilesTypeMismatch: %v", err)
 	}
 }
 
@@ -1964,6 +2081,23 @@ func TestSetRemoteInvalidScheme(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("SetRemoteInvalidScheme: %v", err)
+	}
+}
+
+// TestSetRemoteNoHost verifies that a scheme-valid URL lacking a host
+// component (e.g. "https://") is rejected with ErrRemoteURLNoHost rather than
+// accepted (SPEC R9: validate the URL before configuring the remote).
+func TestSetRemoteNoHost(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		err := gs.SetRemote(ctx(), "https://", nil)
+		if !errors.Is(err, ErrRemoteURLNoHost) {
+			return fmt.Errorf("expected ErrRemoteURLNoHost, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("SetRemoteNoHost: %v", err)
 	}
 }
 

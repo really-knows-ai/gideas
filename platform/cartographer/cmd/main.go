@@ -594,20 +594,32 @@ func parseBoolEnv(key string, defaultVal bool) bool {
 }
 
 func loadVerificationKey(envVar string) ed25519.PublicKey {
+	// SPEC R5 fail-closed env guard: missing or malformed verification keys
+	// are fatal. The fail-closed decision (return an error) is factored into
+	// parseVerificationKey so it is unit-testable without os.Exit; the caller
+	// owns the process exit.
+	key, err := parseVerificationKey(envVar)
+	if err != nil {
+		slog.Error("Invalid verification key", "var", envVar, "error", err)
+		os.Exit(1)
+	}
+	return key
+}
+
+// parseVerificationKey returns the editor verification public key from a
+// environment variable, or an error if it is absent or malformed. The operator
+// provisions the public key as raw 32-byte Ed25519 bytes in the Secret's `key`
+// field (see operator foundrygraph_keys.go), so the env var holds the raw key —
+// no base64 decoding.
+func parseVerificationKey(envVar string) (ed25519.PublicKey, error) {
 	keyBytes := os.Getenv(envVar)
 	if keyBytes == "" {
-		slog.Error("Missing required environment variable", "var", envVar)
-		os.Exit(1)
+		return nil, fmt.Errorf("missing required environment variable %s", envVar)
 	}
-	// The operator provisions the public key as raw 32-byte Ed25519 bytes in
-	// the Secret's `key` field (see operator foundrygraph_keys.go), and the
-	// Deployment injects those raw bytes verbatim via secretKeyRef, so the env
-	// var holds the raw key — no base64 decoding.
 	if len(keyBytes) != ed25519.PublicKeySize {
-		slog.Error("Invalid verification key length", "var", envVar, "expected", ed25519.PublicKeySize, "got", len(keyBytes))
-		os.Exit(1)
+		return nil, fmt.Errorf("invalid verification key length: expected %d, got %d", ed25519.PublicKeySize, len(keyBytes))
 	}
-	return ed25519.PublicKey([]byte(keyBytes))
+	return ed25519.PublicKey([]byte(keyBytes)), nil
 }
 
 func newReadSecretFn(clientset *kubernetes.Clientset, namespace string) func(

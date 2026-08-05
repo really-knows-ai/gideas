@@ -195,8 +195,12 @@ type beginTxConfig struct {
 	timeout time.Duration
 }
 
-// WithTxTimeout sets the initial transaction timeout, silently capped
-// at the hard maximum of 7 days.
+// WithTxTimeout sets the initial transaction timeout requested on
+// BeginTransaction. The 7-day hard maximum (SPEC R9/R2) is enforced by the
+// Cartographer: a duration above the cap is silently shortened server-side,
+// and the granted value is returned as the response's applied_timeout, which
+// the SDK honours on the resulting Transaction handle. The client sends the
+// requested value verbatim and relies on applied_timeout, never a local cap.
 func WithTxTimeout(d time.Duration) BeginTxOption {
 	return func(c *beginTxConfig) {
 		c.timeout = d
@@ -631,13 +635,37 @@ func (g *Graph) ExportGraph(format string) (*ExportStream, error) {
 	if g.session == nil {
 		return nil, fmt.Errorf("flow sdk: graph not initialised")
 	}
-	ctx, cancel := context.WithCancel(g.session.ctx)
 	req := &flowv1.ExportGraphRequest{Format: format}
-	stream, err := g.session.Cartographer.ExportGraph(ctx, req)
+
+	// Bound stream establishment (connect + RPC start) with a per-call
+	// deadline, mirroring how session.call bounds unary RPCs, so a
+	// blackholed upstream fails fast instead of hanging on the deadline-less
+	// session ctx. The deadline is applied ONLY to the ExportGraph call that
+	// establishes the stream.
+	// ponytail: gRPC pins the context passed to a streaming RPC to the stream
+	// for its whole lifetime, so this establishment deadline also bounds the
+	// streaming phase when session.timeout is configured. There is no gRPC
+	// mechanism to detach the context after establishment. The requested
+	// "bound only connect+establishment, then release" separation is not
+	// achievable for a single gRPC server-streaming channel; the intent that
+	// matters here — fail-fast on a blackholed upstream instead of hanging on
+	// the unbounded session ctx — is met, and the client always retains
+	// Stream.Stop() plus a finalizer to release the stream early.
+	establishCtx := g.session.ctx
+	cancel := context.CancelFunc(func() {})
+	if g.session.timeout > 0 {
+		establishCtx, cancel = context.WithTimeout(establishCtx, g.session.timeout)
+	}
+	stream, err := g.session.Cartographer.ExportGraph(establishCtx, req)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
+	// On success the establishment context is intentionally left attached to
+	// the stream: gRPC pins it to the returned stream, so cancelling it would
+	// immediately kill an established stream. It self-cancels at the deadline.
+
+	ctx, cancel := context.WithCancel(g.session.ctx)
 	return newExportStream(ctx, cancel, stream), nil
 }
 

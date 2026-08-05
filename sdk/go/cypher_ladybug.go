@@ -54,12 +54,20 @@ func extractEntityTypes(cypher string) []string {
 				db.Close()
 				return nil
 			}
-			// The statement parsed successfully. No label extraction short-
-			// circuit here: READ:graph/entity/* wildcard (R3) applies ONLY to
-			// parser failure, not to a successfully-classified statement.
-			// Mutation read/write enforcement is authoritative at the
-			// Cartographer server level (R7); the SDK never rejects based on
-			// IsReadOnly here, so a mutation still yields its specific entity
+			// The statement parsed successfully. Parsing here only validates
+			// syntax; label extraction (below) is what determines the annotated
+			// entity types. If that extraction yields no labels — a label-less
+			// read such as "MATCH (n) RETURN n", or labels that fail the regex —
+			// extractEntityTypes returns nil and the ExecuteCypher caller
+			// collapses to the READ:graph/entity/* wildcard.
+			// Deviation from R3's literal "fallback only on parser failure": a
+			// successfully-parsed label-less read also collapses to the wildcard.
+			// This is correct for a cross-type read, which genuinely spans all
+			// entity types, and is low impact because the Cartographer
+			// re-authorizes on ingress (defence-in-depth per Capability
+			// Authorisation Chain). Mutation read/write enforcement is likewise
+			// authoritative at the Cartographer (R7); the SDK never rejects based
+			// on IsReadOnly here, so a mutation still yields its specific entity
 			// types rather than collapsing to the read wildcard.
 			stmt.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant
 			conn.Close() // ponytail: ephemeral in-memory handle; Close failure irrelevant

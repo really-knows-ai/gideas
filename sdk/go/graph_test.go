@@ -331,6 +331,68 @@ func TestSearchNeighbors_NaNRejection(t *testing.T) {
 	}
 }
 
+// TestSearchNeighbors_InfinityRejection verifies validateEmbedding rejects
+// +Inf and -Inf (SPEC error table "Embedding contains NaN or infinity").
+func TestSearchNeighbors_InfinityRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		emb  []float32
+	}{
+		{"positive", []float32{float32(math.Inf(1)), 1.0}},
+		{"negative", []float32{1.0, float32(math.Inf(-1))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newMockGraph(&mockCartographerClient{})
+			_, err := g.SearchNeighbors(tc.emb, componentType, 10)
+			if err == nil {
+				t.Fatal("expected error for infinity embedding")
+			}
+		})
+	}
+}
+
+// The SPEC error table ("Embedding contains NaN or infinity") applies the
+// NaN/infinity check to CreateEntity and UpdateEntity as well as
+// SearchNeighbors. These tests pin the SDK-side validation boundary on the
+// write paths, which call the same validateEmbedding guard.
+func TestCreateEntity_NaNInfinityRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		emb  []float32
+	}{
+		{"nan", []float32{float32(math.NaN())}},
+		{"positive-infinity", []float32{float32(math.Inf(1))}},
+		{"negative-infinity", []float32{float32(math.Inf(-1))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newMockGraph(&mockCartographerClient{})
+			_, err := g.CreateEntity(componentType, nil, nil, tc.emb)
+			if err == nil {
+				t.Fatal("expected error for NaN/infinity embedding on CreateEntity")
+			}
+		})
+	}
+}
+
+func TestUpdateEntity_NaNInfinityRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		emb  []float32
+	}{
+		{"nan", []float32{float32(math.NaN())}},
+		{"positive-infinity", []float32{float32(math.Inf(1))}},
+		{"negative-infinity", []float32{float32(math.Inf(-1))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newMockGraph(&mockCartographerClient{})
+			_, err := g.UpdateEntity("entity-1", nil, tc.emb)
+			if err == nil {
+				t.Fatal("expected error for NaN/finite embedding on UpdateEntity")
+			}
+		})
+	}
+}
+
 func TestFullTextSearch(t *testing.T) {
 	mock := &mockCartographerClient{
 		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
@@ -780,6 +842,36 @@ func TestExportGraph_Success(t *testing.T) {
 	}
 }
 
+// TestExportGraph_AppliesPerCallDeadlineToEstablishment verifies that the
+// per-call deadline configured via session timeout bounds the stream
+// ESTABLISHMENT call, mirroring how session.call bounds unary RPCs. A mock
+// that parks until its context deadline fires proves a blackholed upstream
+// is cut during establishment rather than hanging on the deadline-less
+// session ctx.
+func TestExportGraph_AppliesPerCallDeadlineToEstablishment(t *testing.T) {
+	mock := &mockCartographerClient{
+		exportGraph: func(ctx context.Context, _ *flowv1.ExportGraphRequest,
+		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+				return nil, errors.New("establishment deadline was not applied; call was not cut")
+			}
+		},
+	}
+	g := newMockGraph(mock)
+	g.session.timeout = 100 * time.Millisecond
+
+	_, err := g.ExportGraph("json")
+	if err == nil {
+		t.Fatal("expected ExportGraph establishment to be cut by the per-call deadline")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded to cut the call, got %v", err)
+	}
+}
+
 func TestGraphMethodsWithNilSession(t *testing.T) {
 	g := &Graph{}
 	tests := []struct {
@@ -937,6 +1029,43 @@ func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+// TestGraphUpdateEntity_ResolvedTypeAnnotation proves the capability
+// annotation carries the resolved concrete <type> (e.g. Component), not the
+// wildcard, when the entity ID IS present in the local ID-to-type map. This
+// is SPEC R3's mode-1 resolution: the Sidecar can then block on a specific
+// <type> mismatch instead of falling back to a wildcard best-effort check.
+func TestGraphUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no x-flow-entity-type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.UpdateEntityResponse{EntityId: req.GetId(), EntityType: componentType}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	// entity-1 IS in the map -> annotation must carry the resolved Component.
+	g.idTypeMap.store("entity-1", componentType)
+	_, err := g.UpdateEntity("entity-1", nil, nil)
+	if err != nil {
+		t.Fatalf("UpdateEntity returned error: %v", err)
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+	}
+	if capturedValue != componentType {
+		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
 	}
 }
 

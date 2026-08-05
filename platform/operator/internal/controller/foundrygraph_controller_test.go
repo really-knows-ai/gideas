@@ -37,7 +37,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -157,6 +159,74 @@ func TestIsFailedPrecondition(t *testing.T) {
 func applySchemaOnExistingDialer(wipeGraphFn func(context.Context, *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error)) func(ctx context.Context, endpoint string) (CartographerClient, error) {
 	return func(ctx context.Context, endpoint string) (CartographerClient, error) {
 		return &mockCartographerClient{wipeGraphFn: wipeGraphFn}, nil
+	}
+}
+
+// TestApplySchemaOnExistingDialFailure covers the dial-failure branch of applySchemaOnExisting
+// (item 3): the CartographerDialer returning an error before any RPC (HealthCheck, WipeGraph,
+// ApplySchema) must short-circuit with a wrapped error. The dialer returns nil along with the
+// error, so no client is created and no RPC can run.
+func TestApplySchemaOnExistingDialFailure(t *testing.T) {
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+
+	dialErr := errors.New("dial failed: connect refused")
+	dialer := func(ctx context.Context, endpoint string) (CartographerClient, error) {
+		// Dialing fails before any client exists.
+		return nil, dialErr
+	}
+	r := &FoundryGraphReconciler{CartographerDialer: dialer}
+
+	err := r.applySchemaOnExisting(context.Background(), fg, true)
+	if err == nil {
+		t.Fatal("expected an error when the dialer fails before any RPC")
+	}
+	if !strings.Contains(err.Error(), "dial existing cartographer") || !strings.Contains(err.Error(), "connect refused") {
+		t.Errorf("expected the dial error to be wrapped with context, got %v", err)
+	}
+}
+
+// TestReconcileDialFailureRequeues drives the dial-failure path at the Reconcile level (item 3):
+// a destructive diff whose CartographerDialer fails before any RPC must funnel into
+// setFailedCondition and return a non-nil error, so controller-runtime re-queues with backoff.
+func TestReconcileDialFailureRequeues(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	// Destructive diff: removed Widget entity drives the applySchemaOnExisting dial path.
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "flow-graph",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
+			},
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
+	r := &FoundryGraphReconciler{
+		Client:            fakeCli,
+		Scheme:            s,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return nil, errors.New("dial failed: cartographer unreachable")
+		},
+	}
+
+	ctx := context.Background()
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}}); err == nil {
+		t.Fatal("expected Reconcile to return an error (requeue with backoff) on dial failure")
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}, &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+		t.Errorf("expected Ready=False/ReconcileFailed after dial failure, got %v", ready)
 	}
 }
 
@@ -612,6 +682,55 @@ func TestUpdateStatusPopulatesStorageSize(t *testing.T) {
 	if got.Status.StorageSize.Value() != cap.Value() {
 		t.Errorf("expected status.storageSize=%v, got %v", cap.Value(), got.Status.StorageSize.Value())
 	}
+}
+
+// TestUpdateStatusPvcGetErrors distinguishes the two PVC Get outcomes in updateStatus
+// (item 1): an IsNotFound (no PVC provisioned yet) leaves storageSize absent while reconcile
+// still succeeds; any other Get error (RBAC/apiserver/transient) must surface to the requeue
+// path instead of being silently swallowed.
+func TestUpdateStatusPvcGetErrors(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	ctx := context.Background()
+	ns := "test-ns"
+
+	t.Run("pvc not found leaves storageSize absent", func(t *testing.T) {
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns}}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, CartographerPort: 50051}
+
+		if err := r.updateStatus(ctx, fg, &flowv1.FoundryGraphSpec{}); err != nil {
+			t.Fatalf("updateStatus must succeed when the PVC is not found, got: %v", err)
+		}
+		var got flowv1.FoundryGraph
+		if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: ns}, &got); err != nil {
+			t.Fatalf("get FoundryGraph: %v", err)
+		}
+		if got.Status.StorageSize != nil {
+			t.Error("expected status.storageSize to remain absent when the PVC is not found")
+		}
+	})
+
+	t.Run("pvc get error surfaces to the caller", func(t *testing.T) {
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns}}
+		interceptorFuncs := interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.PersistentVolumeClaim); ok {
+					return errors.New("apiserver unavailable")
+				}
+				return nil
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, CartographerPort: 50051}
+
+		if err := r.updateStatus(ctx, fg, &flowv1.FoundryGraphSpec{}); err == nil {
+			t.Fatal("expected updateStatus to surface the PVC Get error, not swallow it")
+		} else if !strings.Contains(err.Error(), "read pvc") {
+			t.Errorf("expected the PVC read error to be surfaced with context, got: %v", err)
+		}
+	})
 }
 
 // TestReconcileBlockedRecoversToReady covers the blocked→ready transition (item 4) and,

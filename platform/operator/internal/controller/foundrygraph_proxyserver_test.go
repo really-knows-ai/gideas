@@ -325,8 +325,73 @@ func TestExportGraphForwardingEmptyStream(t *testing.T) {
 	}
 }
 
-// mockExportClientErr returns a fixed error from Recv to simulate an upstream stream
-// failure (SPEC R11 mid-stream export failure → INTERNAL).
+// mockExportStreamSendErr is a server stream whose Send always returns an error, forcing the
+// proxy's stream.Send failure branch (foundrygraph_proxyserver.go:305-307). It yields a single
+// upstream chunk so Send is actually reached.
+type mockExportStreamSendErr struct {
+	ctx       context.Context
+	sendCalls int
+}
+
+func (m *mockExportStreamSendErr) Send(r *flowv1gen.ExportGraphResponse) error {
+	m.sendCalls++
+	return errors.New("client stream write failed")
+}
+
+func (m *mockExportStreamSendErr) SetHeader(metadata.MD) error  { return nil }
+func (m *mockExportStreamSendErr) SendHeader(metadata.MD) error { return nil }
+func (m *mockExportStreamSendErr) SetTrailer(metadata.MD)       {}
+func (m *mockExportStreamSendErr) Context() context.Context     { return m.ctx }
+func (m *mockExportStreamSendErr) SendMsg(any) error            { return nil }
+func (m *mockExportStreamSendErr) RecvMsg(any) error            { return nil }
+
+// TestExportGraphSendErrorIsCanceled asserts the proxy's stream.Send error branch: when the
+// client's stream write fails (e.g. the client has disconnected), the proxy must return a
+// codes.Canceled error to the caller rather than silently succeeding or forking a different
+// code.
+func TestExportGraphSendErrorIsCanceled(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					return &mockExportClientWithChunks{}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStreamSendErr{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if err == nil {
+		t.Fatal("expected an error when Send fails")
+	}
+	if status.Code(err) != codes.Canceled {
+		t.Errorf("expected codes.Canceled when client stream Send fails, got %v", status.Code(err))
+	}
+	if stream.sendCalls == 0 {
+		t.Fatal("expected Send to have been exercised")
+	}
+}
+
 type mockExportClientErr struct {
 	err error
 }

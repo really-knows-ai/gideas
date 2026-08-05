@@ -122,88 +122,32 @@ func (db *ladybugDB) SearchNeighbors(
 	}
 
 	var results []store.NeighborResult
+	// searchIndexedType handles a single entity type's contribution to a
+	// multi-type search. Returned matched reports whether the type's
+	// established dimension matched the query embedding (data was searched);
+	// found carries any results. Extracted to keep SearchNeighbors' cyclomatic
+	// complexity under the lint threshold.
+	dimensionMatched := false
+	var foundForType []store.NeighborResult
 	for _, t := range typesToSearch {
-		// Check if the index is bootstrapped.
-		dim, derr := getEmbeddingDimension(conn, t)
-		if derr != nil {
-			return nil, fmt.Errorf("read embedding dimension for %q: %w", t, derr)
+		matched, found, err := db.searchIndexedType(conn, t, embedding, topK, entityType)
+		if err != nil {
+			return nil, err
 		}
-		// ponytail: A type whose vector index is not yet bootstrapped (dim == 0) is
-		// silently skipped rather than surfacing an error. The dimension is inferred
-		// from the first embedding written for the type (lazy index bootstrap, see
-		// R7), so a type with no embeddings legitimately has no index yet and is
-		// simply not searchable. The SPEC does not define this as an error condition,
-		// so we skip silently while still surfacing real errors (dimension mismatch,
-		// read failures, etc.) where they exist.
-		if dim == 0 {
-			continue // no bootstrapped index yet
+		if matched {
+			dimensionMatched = true
+			foundForType = append(foundForType, found...)
 		}
-		if len(embedding) != dim {
-			return nil, fmt.Errorf("%w: for entity type %q, expected dimension %d, got %d",
-				store.ErrEmbeddingDimension, t, dim, len(embedding))
-		}
+	}
+	results = foundForType
 
-		// Use QUERY_VECTOR_INDEX. Index name matches what CreateEntity creates.
-		idxName := t + "_vec"
-		q := fmt.Sprintf("CALL QUERY_VECTOR_INDEX('%s', '%s', $emb, %d) RETURN node, distance ORDER BY distance;",
-			t, idxName, topK)
-		stmt, err := conn.Prepare(q)
-		if err != nil {
-			// The embedding column exists with a bootstrapped dimension (dim > 0),
-			// so the vector index should be present; a Prepare failure here is an
-			// operational error for this type, not a transient "index absent"
-			// state. Propagate so the caller can distinguish the two instead of
-			// silently dropping this type's contribution.
-			return nil, fmt.Errorf("prepare vector index query for %q: %w", t, err)
-		}
-		// ponytail: The LadybugDB query-vector-index call expects the embedding
-		// as a FLOAT[] parameter. We pass it as a flat []any slice.
-		embAny := make([]any, len(embedding))
-		for i, v := range embedding {
-			embAny[i] = v
-		}
-		result, err := conn.Execute(stmt, map[string]any{"emb": embAny})
-		stmt.Close()
-		if err != nil {
-			// The vector index query prepared successfully, so the index exists;
-			// an Execute failure here is operational. Surface it rather than
-			// silently dropping this type's contribution.
-			return nil, fmt.Errorf("execute vector index query for %q: %w", t, err)
-		}
-		for result.HasNext() {
-			tuple, err := result.Next()
-			if err != nil {
-				result.Close()
-				return nil, fmt.Errorf("read vector result: %w", err)
-			}
-			m, err := tuple.GetAsMap()
-			tuple.Close()
-			if err != nil {
-				result.Close()
-				return nil, fmt.Errorf("parse vector result: %w", err)
-			}
-			node, ok := m["node"].(lbug.Node)
-			if !ok {
-				continue
-			}
-			var distance float64
-			switch d := m["distance"].(type) {
-			case float64:
-				distance = d
-			case float32:
-				distance = float64(d)
-			case nil:
-				return nil, fmt.Errorf("vector result for %q missing distance", t)
-			default:
-				return nil, fmt.Errorf("unexpected distance type for %q: got %T", t, m["distance"])
-			}
-			entity := entityFromNode(node, t)
-			results = append(results, store.NeighborResult{
-				Entity:   *entity,
-				Distance: distance,
-			})
-		}
-		result.Close()
+	// Wildcard search where no indexed type's established dimension matches the
+	// query embedding: there was no matching-dimension type to aggregate from.
+	// The SPEC defines a query dimension that matches no established index (in
+	// the wildcard case) as an "Embedding dimension mismatch" error, so we
+	// surface it here after the loop rather than returning an empty result set.
+	if entityType == "" && !dimensionMatched {
+		return nil, store.ErrEmbeddingDimension
 	}
 
 	// Sort by distance ascending.
@@ -217,6 +161,103 @@ func (db *ladybugDB) SearchNeighbors(
 		results = []store.NeighborResult{}
 	}
 	return results, nil
+}
+
+// searchIndexedType queries the vector index for a single entity type and
+// returns whether the type's established dimension matched the query
+// embedding (matched) and its aggregated results (found). A skipped type
+// (not bootstrapped, dimension mismatch in a wildcard search, or a node that
+// type-asserts to non-lbug.Node) yields matched==false with no results and no
+// error, letting the caller aggregate the other types.
+func (db *ladybugDB) searchIndexedType(
+	conn *lbug.Connection, t string, embedding []float32, topK int, entityType string,
+) (matched bool, found []store.NeighborResult, err error) {
+	// Check if the index is bootstrapped.
+	dim, derr := getEmbeddingDimension(conn, t)
+	if derr != nil {
+		return false, nil, fmt.Errorf("read embedding dimension for %q: %w", t, derr)
+	}
+	// ponytail: A type whose vector index is not yet bootstrapped (dim == 0) is
+	// silently skipped rather than surfacing an error. The dimension is inferred
+	// from the first embedding written for the type (lazy index bootstrap, see
+	// R7), so a type with no embeddings legitimately has no index yet and is
+	// simply not searchable. The SPEC does not define this as an error condition,
+	// so we skip silently while still surfacing real errors (dimension mismatch,
+	// read failures, etc.) where they exist.
+	if dim == 0 {
+		return false, nil, nil // no bootstrapped index yet
+	}
+	if len(embedding) != dim {
+		if entityType != "" {
+			// Single-type search: the queried type's established dimension is
+			// authoritative, so a mismatch is an error (SPEC error table row
+			// "Embedding dimension mismatch").
+			return false, nil, fmt.Errorf("%w: for entity type %q, expected dimension %d, got %d",
+				store.ErrEmbeddingDimension, t, dim, len(embedding))
+		}
+		// Wildcard search: skip this type, keep searching the others.
+		return false, nil, nil
+	}
+	// Use QUERY_VECTOR_INDEX. Index name matches what CreateEntity creates.
+	idxName := t + "_vec"
+	q := fmt.Sprintf("CALL QUERY_VECTOR_INDEX('%s', '%s', $emb, %d) RETURN node, distance ORDER BY distance;",
+		t, idxName, topK)
+	stmt, err := conn.Prepare(q)
+	if err != nil {
+		// The embedding column exists with a bootstrapped dimension (dim > 0),
+		// so the vector index should be present; a Prepare failure here is an
+		// operational error for this type, not a transient "index absent"
+		// state. Propagate so the caller can distinguish the two instead of
+		// silently dropping this type's contribution.
+		return false, nil, fmt.Errorf("prepare vector index query for %q: %w", t, err)
+	}
+	// ponytail: The LadybugDB query-vector-index call expects the embedding
+	// as a FLOAT[] parameter. We pass it as a flat []any slice.
+	embAny := make([]any, len(embedding))
+	for i, v := range embedding {
+		embAny[i] = v
+	}
+	result, err := conn.Execute(stmt, map[string]any{"emb": embAny})
+	stmt.Close()
+	if err != nil {
+		// The vector index query prepared successfully, so the index exists;
+		// an Execute failure here is operational. Surface it rather than
+		// silently dropping this type's contribution.
+		return false, nil, fmt.Errorf("execute vector index query for %q: %w", t, err)
+	}
+	defer result.Close()
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return false, nil, fmt.Errorf("read vector result: %w", err)
+		}
+		m, err := tuple.GetAsMap()
+		tuple.Close()
+		if err != nil {
+			return false, nil, fmt.Errorf("parse vector result: %w", err)
+		}
+		node, ok := m["node"].(lbug.Node)
+		if !ok {
+			continue
+		}
+		var distance float64
+		switch d := m["distance"].(type) {
+		case float64:
+			distance = d
+		case float32:
+			distance = float64(d)
+		case nil:
+			return false, nil, fmt.Errorf("vector result for %q missing distance", t)
+		default:
+			return false, nil, fmt.Errorf("unexpected distance type for %q: got %T", t, m["distance"])
+		}
+		entity := entityFromNode(node, t)
+		found = append(found, store.NeighborResult{
+			Entity:   *entity,
+			Distance: distance,
+		})
+	}
+	return true, found, nil
 }
 
 // --------------------------------------------------------------------------

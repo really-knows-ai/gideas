@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -8,11 +9,21 @@ import (
 	"encoding/pem"
 	"errors"
 	"net"
+	"net/http"
 	"testing"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
-	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gogitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	gossh "golang.org/x/crypto/ssh"
+)
+
+// Test constants for the git remote auth URL-scheme resolver tests. They are
+// hoisted to constants to satisfy the goconst linter.
+const (
+	tSSHUser        = "git"
+	tSecretUsername = "secret-user"
+	tSecretPassword = "secret-pass"
 )
 
 type initPullGitStore struct {
@@ -196,9 +207,66 @@ func TestTryRemotePullOnInitCatchUpPushFailureNonBlocking(t *testing.T) {
 	}
 }
 
+// TestTryRemotePullOnInitStateCheckFailureNonBlocking verifies SPEC R10 Init:
+// a repository-state (IsEmpty) check failure on init is logged and non-fatal —
+// no clone is attempted, no error blocks startup, and it does not call os.Exit.
+func TestTryRemotePullOnInitStateCheckFailureNonBlocking(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true, initStateErr: errors.New("state check boom")}
+	if err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil); err != nil {
+		t.Fatalf("IsEmpty() failure blocked startup: %v", err)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls after state-check failure = %d, want 0", gs.cloneCalls)
+	}
+	if gs.pushCalls != 0 {
+		t.Fatalf("push calls after state-check failure = %d, want 0", gs.pushCalls)
+	}
+}
+
 // ---------------------------------------------------------------------------
-// buildResolveAuthFn tests
+// loadVerificationKey / parseVerificationKey tests
 // ---------------------------------------------------------------------------
+
+func TestParseVerificationKeyMissingEnv(t *testing.T) {
+	t.Setenv("OPERATOR_VERIFICATION_KEY", "")
+	got, err := parseVerificationKey("OPERATOR_VERIFICATION_KEY")
+	if err == nil {
+		t.Fatal("expected error for missing verification key env, got nil")
+	}
+	if got != nil {
+		t.Fatalf("expected nil key on error, got %v", got)
+	}
+}
+
+func TestParseVerificationKeyInvalidLength(t *testing.T) {
+	t.Setenv("OPERATOR_VERIFICATION_KEY", "too-short")
+	got, err := parseVerificationKey("OPERATOR_VERIFICATION_KEY")
+	if err == nil {
+		t.Fatal("expected error for malformed verification key, got nil")
+	}
+	if got != nil {
+		t.Fatalf("expected nil key on malformed input, got %v", got)
+	}
+}
+
+func TestParseVerificationKeyValid(t *testing.T) {
+	// A raw 32-byte key with no NUL bytes (env vars cannot hold NUL on POSIX).
+	key := bytes.Repeat([]byte{'a'}, ed25519.PublicKeySize)
+	t.Setenv("OPERATOR_VERIFICATION_KEY", string(key))
+	got, err := parseVerificationKey("OPERATOR_VERIFICATION_KEY")
+	if err != nil {
+		t.Fatalf("parseVerificationKey: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil key, got nil")
+	}
+	if len(got) != ed25519.PublicKeySize {
+		t.Fatalf("key length = %d, want %d", len(got), ed25519.PublicKeySize)
+	}
+	if !bytes.Equal(got, ed25519.PublicKey(key)) {
+		t.Fatal("parsed key does not match the raw env bytes")
+	}
+}
 
 func TestBuildResolveAuthFnMissingSSHKey(t *testing.T) {
 	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
@@ -253,11 +321,11 @@ func TestBuildResolveAuthFnSSHSigner(t *testing.T) {
 	if auth == nil {
 		t.Fatal("expected non-nil SSH auth, got nil")
 	}
-	signer, ok := auth.(*ssh.PublicKeys)
+	signer, ok := auth.(*gogitssh.PublicKeys)
 	if !ok {
-		t.Fatalf("expected *ssh.PublicKeys, got %T", auth)
+		t.Fatalf("expected *gogitssh.PublicKeys, got %T", auth)
 	}
-	if signer.User != "git" {
+	if signer.User != tSSHUser {
 		t.Fatalf("expected ssh user to default to 'git', got %q", signer.User)
 	}
 	// Without known_hosts, host-key verification falls back to
@@ -294,9 +362,9 @@ func TestBuildResolveAuthFnSSHKnownHostsFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ssh auth construction with known_hosts failed: %v", err)
 	}
-	signer, ok := auth.(*ssh.PublicKeys)
+	signer, ok := auth.(*gogitssh.PublicKeys)
 	if !ok {
-		t.Fatalf("expected *ssh.PublicKeys, got %T", auth)
+		t.Fatalf("expected *gogitssh.PublicKeys, got %T", auth)
 	}
 	if signer.HostKeyCallback == nil {
 		t.Fatal("expected non-nil HostKeyCallback when known_hosts is present (fail-closed), got nil")
@@ -304,5 +372,122 @@ func TestBuildResolveAuthFnSSHKnownHostsFailClosed(t *testing.T) {
 	// The configured callback must reject a host that is not in known_hosts.
 	if err := signer.HostKeyCallback("unknown-host", &net.TCPAddr{}, sshPub); err == nil {
 		t.Fatal("expected unknown-host rejection from fail-closed HostKeyCallback, got nil")
+	}
+}
+
+// TestBuildResolveAuthFnHTTPSBasicAuth verifies the https SUCCESS path (SPEC
+// R1): a valid https Secret (username + password) yields a usable
+// *http.BasicAuth with the expected Username and Password.
+func TestBuildResolveAuthFnHTTPSBasicAuth(t *testing.T) {
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"username": tSecretUsername, "password": tSecretPassword}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "https://example.com/repo.git")
+	auth, err := fn()
+	if err != nil {
+		t.Fatalf("https auth construction failed: %v", err)
+	}
+	basic, ok := auth.(*gogithttp.BasicAuth)
+	if !ok {
+		t.Fatalf("expected *http.BasicAuth, got %T", auth)
+	}
+	if basic.Username != tSecretUsername {
+		t.Fatalf("BasicAuth.Username = %q, want %q", basic.Username, tSecretUsername)
+	}
+	if basic.Password != tSecretPassword {
+		t.Fatalf("BasicAuth.Password = %q, want %q", basic.Password, tSecretPassword)
+	}
+	// The BasicAuth must be usable to set an outgoing request header.
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	basic.SetAuth(req)
+	user, pass, ok := req.BasicAuth()
+	if !ok || user != tSecretUsername || pass != tSecretPassword {
+		t.Fatalf("SetAuth produced header user=%q pass=%q ok=%v, want user=%q pass=%q ok=true",
+			user, pass, ok, tSecretUsername, tSecretPassword)
+	}
+}
+
+// TestBuildResolveAuthFnURLUserOverridesSecret verifies SPEC R1 precedence: a
+// username embedded in the https URL wins over the Secret's username key.
+func TestBuildResolveAuthFnURLUserOverridesSecret(t *testing.T) {
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"username": tSecretUsername, "password": tSecretPassword}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "https://url-user@example.com/repo.git")
+	auth, err := fn()
+	if err != nil {
+		t.Fatalf("https auth construction failed: %v", err)
+	}
+	basic, ok := auth.(*gogithttp.BasicAuth)
+	if !ok {
+		t.Fatalf("expected *http.BasicAuth, got %T", auth)
+	}
+	if basic.Username != "url-user" {
+		t.Fatalf("BasicAuth.Username = %q, want URL-embedded %q to win over Secret", basic.Username, "url-user")
+	}
+}
+
+// TestBuildResolveAuthFnURLUserFallsBackToSecret verifies that an https URL
+// without an embedded username falls back to the Secret's username key.
+func TestBuildResolveAuthFnURLUserFallsBackToSecret(t *testing.T) {
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"username": tSecretUsername, "password": tSecretPassword}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "https://example.com/repo.git")
+	auth, err := fn()
+	if err != nil {
+		t.Fatalf("https auth construction failed: %v", err)
+	}
+	basic, ok := auth.(*gogithttp.BasicAuth)
+	if !ok {
+		t.Fatalf("expected *http.BasicAuth, got %T", auth)
+	}
+	if basic.Username != tSecretUsername {
+		t.Fatalf("BasicAuth.Username = %q, want Secret fallback %q", basic.Username, tSecretUsername)
+	}
+}
+
+// TestBuildResolveAuthFnSSHDefaultUser verifies SPEC R1: an ssh:// URL with no
+// embedded user defaults the auth user to "git".
+func TestBuildResolveAuthFnSSHUserDefaultsToGit(t *testing.T) {
+	keyPEM := ed25519PEM(t)
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"ssh-privatekey": keyPEM}, nil
+	}
+	// No user in the URL — the resolver must fall back to "git".
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "ssh://example.com/org/repo.git")
+	auth, err := fn()
+	if err != nil {
+		t.Fatalf("ssh auth construction failed: %v", err)
+	}
+	signer, ok := auth.(*gogitssh.PublicKeys)
+	if !ok {
+		t.Fatalf("expected *gogitssh.PublicKeys, got %T", auth)
+	}
+	if signer.User != tSSHUser {
+		t.Fatalf("ssh user default = %q, want %q", signer.User, tSSHUser)
+	}
+}
+
+// TestBuildResolveAuthFnUnsupportedScheme verifies that a remote URL with an
+// unsupported scheme returns ErrUnsupportedURLScheme.
+func TestBuildResolveAuthFnUnsupportedScheme(t *testing.T) {
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"username": "user", "password": "pass"}, nil
+	}
+	for _, scheme := range []string{"ftp", "git", "file"} {
+		t.Run(scheme, func(t *testing.T) {
+			fn := buildResolveAuthFn("remote-auth", readSecretFn, scheme+"://example.com/repo.git")
+			auth, err := fn()
+			if auth != nil {
+				t.Fatalf("expected nil auth, got %v", auth)
+			}
+			if !errors.Is(err, gitstore.ErrUnsupportedURLScheme) {
+				t.Fatalf("expected ErrUnsupportedURLScheme, got %v", err)
+			}
+		})
 	}
 }

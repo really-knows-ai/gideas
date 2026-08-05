@@ -395,16 +395,25 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 }
 
 // alterRelTable applies additive ALTER DDL for new properties on an existing
-// rel table. Changing an edge's FROM/TO pairs (e.g. a rule change that
-// adds/removes a canConnectTo pair for an existing edge type) cannot be
-// expressed through ALTER — the rel table's endpoint clauses are fixed at
-// CREATE time. SPEC R2 treats a rule modification as non-destructive, so an
-// endpoint change that diverges from the table's persisted clauses is surfaced
-// as a destructive schema change (ErrDestructiveSchemaChange) that the caller
-// must resolve via WipeGraph — rather than silently updating the in-memory
-// rule/edge cache while the table keeps old endpoints (which would let a
-// CreateEdge on the new pair fail or be stored against a table that does not
-// permit it, and diverge from the persisted metadata on reopen).
+// rel table.
+// ponytail: SPEC R2/R6 treat a rule modification that changes an edge type's
+// FROM/TO membership as non-destructive ("modifying entity type rules"). Here
+// the rel table's FROM/TO endpoint clauses are fixed at CREATE time and cannot
+// be expressed through ALTER TABLE, so a rule that adds (or removes) a FROM/TO
+// pair on an existing edge type cannot be honoured additively. Consequences if
+// we proceeded anyway: silently updating the in-memory rule/edge cache would
+// let a CreateEdge on the new pair fail (or be stored) against a table that
+// does not permit those endpoints, and would leave the persisted schema
+// metadata — what validateMetadataAgainstCatalog re-checks on reopen —
+// diverging from the actual table structure, bricking the open. We therefore
+// classify single-pair endpoint changes as a destructive schema change
+// (ErrDestructiveSchemaChange) requiring WipeGraph, diverging from SPEC's
+// plain-rule wording: an added node type carrying a brand-new rel type is still
+// additive (that path uses createRelTable), only a change to an existing rel
+// type's endpoint set triggers the destructive classification. Upgrade path: if
+// LadybugDB gains endpoint ALTER support, or the rel model is rebuilt around
+// runtime FROM/TO enforcement instead of CREATE-time clauses, this check can be
+// lifted and rule modifications become non-destructive in the store as well.
 func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType, existing *store.EdgeTypeDef, pairs []fromToPair) error {
 	// Reconcile the requested FROM/TO pair set against the endpoints the rel
 	// table actually persist. A change the table cannot express is destructive

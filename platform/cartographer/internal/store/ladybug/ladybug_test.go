@@ -3110,6 +3110,168 @@ func TestApplySchema_AdditiveEdgeProperty(t *testing.T) {
 	}
 }
 
+// TestApplySchema_AddNewFromToPairOnExistingEdgeType_Rejected verifies the
+// deliberate, documented divergence between SPEC R1/R2 (which treats a rule
+// modification as non-destructive) and the storage engine: adding a rule that
+// introduces a NEW FROM/TO pair on an existing edge type changes the rel
+// table's endpoint clauses, which Ladybug fixes at CREATE time and cannot
+// ALTER. Such a change must therefore be rejected as a destructive schema
+// change, not silently applied.
+func TestApplySchema_AddNewFromToPairOnExistingEdgeType_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Initial schema: X connects to Y via edge R only.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "X", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Y"}, Using: []string{"R"}},
+			}},
+			{Name: "Y"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "R"}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Extend the schema with a second rule that adds a NEW FROM/TO pair
+	// (X→Z) on the EXISTING edge type R. SPEC R1 membership-OR makes this a
+	// valid schema; the rel table cannot express the added pair, so the store
+	// must reject it as a destructive change rather than silently accepting it.
+	schema2 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "X", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Y"}, Using: []string{"R"}},
+				{CanConnectTo: []string{"Z"}, Using: []string{"R"}},
+			}},
+			{Name: "Y"},
+			{Name: "Z"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "R"}},
+	}
+	err = s.ApplySchema(ctx, schema2)
+	if err == nil {
+		t.Fatal("expected destructive schema change for a new FROM/TO pair on an existing edge type")
+	}
+	if !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("expected ErrDestructiveSchemaChange, got %v", err)
+	}
+}
+
+// TestApplySchema_RedundantRulesDedupPairsSurviveReopen verifies that
+// overlapping/redundant rules (valid per SPEC R1 membership-OR semantics,
+// which merge the canConnectTo and using lists across rule entries) do NOT
+// brick the store. The pair-derivation paths must dedup consistently so the
+// metadata-derived pair set matches the rel table's endpoint clauses on reopen.
+func TestApplySchema_RedundantRulesDedupPairsSurviveReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Two identical overlapping rules both yield a (T→X) pair via DEPENDS_ON:
+	// the extraction produces exactly the same FROM/TO pair twice.
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "T",
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"X"}, Using: []string{"DEPENDS_ON"}},
+					{CanConnectTo: []string{"X"}, Using: []string{"DEPENDS_ON"}},
+				},
+			},
+			{Name: "X"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+
+	// Create a matching entity and edge so a reopen that silently corrupts the
+	// catalog comparison has observable data to lose.
+	src, err := s.CreateEntity(ctx, "T", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity T: %v", err)
+	}
+	tgt, err := s.CreateEntity(ctx, "X", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity X: %v", err)
+	}
+	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", src.Id, tgt.Id, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEdge: %v", err)
+	}
+
+	// Reopen — the pre-fix code derived duplicate pairs on the reopen path and
+	// failed the catalog comparison (equalFromToPairs), bricking the open.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen with redundant rules: %v", err)
+	}
+	defer closeStore(t, reopened)
+	if _, err := reopened.GetEdge(ctx, edge.Id, "main"); err != nil {
+		t.Fatalf("reopened edge missing: %v", err)
+	}
+}
+
+// TestSearchNeighbors_WildcardHeterogeneousDimensions verifies that a wildcard
+// (entityType == "") search skips entity types whose established vector
+// dimension does not match the query embedding and aggregates only the
+// matching-dimension types, instead of aborting on the first mismatched type.
+func TestSearchNeighbors_WildcardHeterogeneousDimensions(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "TypeA", EnableVectorIndex: true, Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+			{Name: "TypeB", EnableVectorIndex: true, Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	// Bootstrap TypeA to dimension 3 and TypeB to dimension 5.
+	if _, err := s.CreateEntity(ctx, "TypeA", "", map[string]string{"name": "a"}, []float32{1, 2, 3}, ""); err != nil {
+		t.Fatalf("bootstrap TypeA: %v", err)
+	}
+	if _, err := s.CreateEntity(
+		ctx, "TypeB", "", map[string]string{"name": "b"}, []float32{1, 2, 3, 4, 5}, "",
+	); err != nil {
+		t.Fatalf("bootstrap TypeB: %v", err)
+	}
+
+	// A dimension-3 query matches only TypeA; TypeB (dim 5) must be skipped,
+	// not treated as an error that aborts the whole search.
+	results, err := s.SearchNeighbors(ctx, []float32{0.9, 0, 0}, "", 10, "")
+	if err != nil {
+		t.Fatalf("SearchNeighbors with mixed dimensions: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected neighbors from the matching-dimension type")
+	}
+	for _, r := range results {
+		if r.Entity.Type == "TypeB" {
+			t.Fatalf("expected no TypeB neighbor (dimension 5) for a dimension-3 query, got %+v", r)
+		}
+	}
+}
+
 func TestApplySchema_DestructiveChange_Rejected(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {

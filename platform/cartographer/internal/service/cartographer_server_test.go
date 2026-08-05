@@ -506,6 +506,21 @@ func (s *mergeFailingGitStore) FastForwardMerge(ctx context.Context, branch, int
 	return s.GitStore.FastForwardMerge(ctx, branch, into)
 }
 
+// mergeDivergedGitStore surfaces ErrMergeDiverged from FastForwardMerge on the
+// first call, simulating the post-re-hydration commit-merge divergence path.
+type mergeDivergedGitStore struct {
+	gitstore.GitStore
+	diverged bool
+}
+
+func (s *mergeDivergedGitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
+	if s.diverged {
+		s.diverged = false
+		return gitstore.ErrMergeDiverged
+	}
+	return s.GitStore.FastForwardMerge(ctx, branch, into)
+}
+
 type gitAttemptStore struct {
 	gitstore.GitStore
 	mu        sync.Mutex
@@ -1665,6 +1680,72 @@ func TestDeleteEdge_InvalidUUID(t *testing.T) {
 	}
 }
 
+// TestCreateEntity_InvalidIDWinsOverMissingCapability asserts the SPEC
+// CreateEntity validation order (structural before capability): a caller lacking
+// WRITE capabilities but supplying a structurally-invalid explicit `id` gets
+// INVALID_ARGUMENT (not PERMISSION_DENIED) — mirroring
+// TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability.
+func TestCreateEntity_InvalidIDWinsOverMissingCapability(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	// Only READ capabilities — the caller holds no write capability at all.
+	noWriteCtx := capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")
+	_, err := srv.CreateEntity(noWriteCtx, &flowv1.CreateEntityRequest{
+		EntityType: "Component",
+		Id:         "not-a-uuid",
+		Properties: map[string]string{"name": "x"},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid entity ID, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected structural InvalidArgument to win over capability check, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestUpdateEntity_EmbeddingUpdateUnsupported drives UpdateEntity on an
+// established vector-indexed row and asserts the resulting gRPC code. The store
+// surfaces ErrEmbeddingUpdateUnsupported when the engine cannot rewrite an
+// embedding once the vector index exists; the service must map it to a defined
+// SPEC code (INVALID_ARGUMENT, not codes.Unimplemented which has no SPEC row).
+func TestUpdateEntity_EmbeddingUpdateUnsupported(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VecType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := srv.store.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	// Bootstrap a 3-dim vector index via CreateEntity with an embedding.
+	ent, err := srv.store.CreateEntity(
+		ctx, "VecType", "", map[string]string{"name": "seeded"}, []float32{1.0, 0.0, 0.0}, "",
+	)
+	if err != nil {
+		t.Fatalf("bootstrap CreateEntity: %v", err)
+	}
+	_, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id:         ent.Id,
+		Embedding:  []float32{0.0, 1.0, 0.0},
+		Properties: map[string]string{"name": "updated"},
+	})
+	if err == nil {
+		t.Fatal("expected embedding update on indexed row to be rejected, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for unsupported embedding update, got %v (%v)", status.Code(err), err)
+	}
+}
+
 // =========================================================================
 // 5. Transaction lifecycle tests
 // =========================================================================
@@ -2085,6 +2166,48 @@ func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
 	}
 	if _, err = base.GetEntity(ctx, created.EntityId, "main"); !errors.Is(err, store.ErrEntityNotFound) {
 		t.Fatalf("transaction entity remained visible after rollback: %v", err)
+	}
+}
+
+// TestCommitTransaction_MergeDivergedIsInternal asserts the SPEC R2 error-table
+// row "Commit merge failed (post-re-hydration) → INTERNAL". When Commit's
+// FastForwardMerge surfaces gitstore.ErrMergeDiverged, the handler must map it
+// to INTERNAL — not the distinct "Refresh conflict → ABORTED" code.
+func TestCommitTransaction_MergeDivergedIsInternal(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	divergingGit := &mergeDivergedGitStore{GitStore: gs, diverged: true}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, divergingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "item"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected merge-diverged commit to map to INTERNAL, got %v (%v)", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("expected commit-merge error message, got %q", err.Error())
 	}
 }
 

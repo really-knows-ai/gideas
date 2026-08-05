@@ -649,7 +649,13 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 		}
 	} else {
 		// Need at least one FROM/TO pair; create a placeholder _untyped node table.
-		_, _ = conn.Query("CREATE NODE TABLE IF NOT EXISTS " + untypedTableName + " (id STRING PRIMARY KEY);")
+		// The rel table's endpoint clauses reference this table by name, so a
+		// failure here would otherwise surface only second-hand (and unreliably)
+		// when the rel-table DDL references the missing table. Propagate it now.
+		stmt := "CREATE NODE TABLE IF NOT EXISTS " + untypedTableName + " (id STRING PRIMARY KEY);"
+		if _, err := conn.Query(stmt); err != nil {
+			return fmt.Errorf("create placeholder %s node table: %w", untypedTableName, err)
+		}
 		clauses = append(clauses, "FROM "+untypedTableName+" TO "+untypedTableName)
 	}
 

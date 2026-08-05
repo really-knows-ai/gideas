@@ -373,6 +373,12 @@ func (r *FoundryGraphReconciler) updateStatus(ctx context.Context, fg *flowv1.Fo
 			s := storage.DeepCopy()
 			fg.Status.StorageSize = &s
 		}
+	} else if !apierrors.IsNotFound(err) {
+		// Any real error (RBAC/apiserver/transient) reading the PVC must surface to the
+		// requeue path rather than silently leaving status.storageSize stale (SPEC R6 step 7).
+		// IsNotFound is the only swallowed case: no PVC yet means "absent", and the default
+		// storageSize remains.
+		return fmt.Errorf("read pvc for storageSize: %w", err)
 	}
 
 	// Persist the status block (endpoint, storageSize) via the status subresource. The

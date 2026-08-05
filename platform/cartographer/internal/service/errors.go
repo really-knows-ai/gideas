@@ -128,7 +128,7 @@ func mapStoreError(err error) error {
 	case errors.Is(err, store.ErrEmbeddingDimension):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrEmbeddingUpdateUnsupported):
-		return status.Error(codes.Unimplemented, err.Error())
+		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrDestructiveSchemaChange):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrDatabaseNotReady):
@@ -176,7 +176,7 @@ func mapGitError(err error) error {
 	case errors.Is(err, gitstore.ErrPullDiverged):
 		return status.Error(codes.FailedPrecondition, "remote pull would diverge")
 	case errors.Is(err, gitstore.ErrMergeDiverged):
-		return status.Error(codes.Aborted, "merge would diverge")
+		return status.Error(codes.Internal, "commit merge failed (post-re-hydration)")
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
