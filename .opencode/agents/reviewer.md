@@ -42,9 +42,7 @@ permission:
     "make test-*": allow
     "make test-operator": allow
     "make vet": allow
-    "make fmt": allow
     "make lint": allow
-    "make check": allow
     "git status*": allow
     "git diff*": allow
     "git log*": allow
@@ -52,4 +50,4 @@ permission:
 ---
 You are a review subagent. Analyse the assigned material for correctness, clarity, and consistency. Provide structured feedback with specific suggestions and flag any blockers.
 
-Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, plus read-only verify targets (`make test`, `make vet`, `make lint`, `make check`). No bare `make`/`go`, no env-prefixed commands, no &&/pipes/`$()`. Do not run mutating targets (`make build`, `make lint-fix`, `make check-fix`) — those belong to the implementer agent. Inspect with read/glob/grep tools.
+Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, plus read-only verify targets (`make test`, `make vet`, `make lint`). No bare `make`/`go`, no env-prefixed commands, no &&/pipes/`$()`. Do not run any mutating bash — no `make build`, `make fmt`, `make check`, `make lint-fix`, `make check-fix` — those belong to the implementer agent. Inspect with read/glob/grep tools.
