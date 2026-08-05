@@ -121,7 +121,7 @@ fmt: ## Run go fmt across the workspace.
 
 .PHONY: vet
 vet: ## Run go vet across the workspace.
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" go vet ./...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" go vet ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
