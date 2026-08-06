@@ -83,8 +83,11 @@ This determines which quality gate applies (see Hard Rules).
 
 ### 3. Dispatch one implementer per file group
 
-For each file group, dispatch one `@implementer` subagent.  All implementers
-run in parallel.  Each receives this prompt:
+For each file group, dispatch one `@implementer` subagent.  **Implementers
+must run SERIALLY — one at a time, waiting for each to complete before
+dispatching the next.**  Parallel implementers clash on the shared working
+tree and produce flaky builds and contradictory fixes.  Do not dispatch
+groups concurrently.  Each receives this prompt:
 
 ```
 You are responsible for fixing all review items assigned to <FILE>.
@@ -162,7 +165,8 @@ Handle them in the order listed below.
 - Report the quality gate outcome after your last item.
 ```
 
-Wait for all implementers to complete before proceeding.
+Wait for each implementer to complete before dispatching the next.  Only
+after all groups have been processed serially may you proceed.
 
 ### 4. Update the review checklist
 
@@ -259,6 +263,10 @@ wont-fix (claim wrong, spec contradicts, or fixing causes harm).
 ## Hard Rules
 
 - Fix exactly the items in the review.  Do not fix things not listed.
+- **Implementers run serially, never in parallel.**  Dispatch one file group
+  at a time and wait for it to complete before dispatching the next.
+  Parallel implementers clash on the shared working tree and produce flaky
+  builds and contradictory fixes.
 - Verify before acting.  Trust the code, not the reviewer.
 - `[x]` items left as-is — they were previously resolved and verified by
   `special-review`.  Do not re-fix them unless they were re-opened as `[!]`.

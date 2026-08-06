@@ -97,7 +97,7 @@ The special-review workflow produces a consolidated checklist of any divergences
 If the phase review produced any open items (`- [ ]` or `- [!]` in the review file), load the `special-fixer` skill and follow its workflow:
 
 - **Review file**: `plans/<project>/phase-XX-review.md`
-- The skill groups items by target file, dispatches implementers in parallel, and updates the review checklist with fix/wont-fix results.
+- The skill groups items by target file, dispatches implementers serially (one at a time), and updates the review checklist with fix/wont-fix results.
 
 #### 4c. Re-verify and re-review
 
@@ -203,7 +203,7 @@ Report:
 - **Skipping the special-review → special-fixer loop for phase reviews**: After each phase, always run `special-review` first, then `special-fixer` if issues exist. Do not skip to commit without a structured review artifact.
 - **Reviewing against phase files alone**: Phase reviews use `SPEC.md` + `PHASE_XX.md` as criteria, not just the phase file. The implementation must satisfy spec requirements, not just the phase's documented scope.
 - **Running the final review without loading `special-review`**: Do not inline-review the final implementation. Load the `special-review` skill and follow its workflow — it handles consolidation, deduplication, and learning pruning.
-- **Applying fixes without `special-fixer`**: When review issues exist, load `special-fixer` rather than dispatching ad-hoc implementers. The fixer groups items by file, dispatches in parallel, and tags results correctly.
+- **Applying fixes without `special-fixer`**: When review issues exist, load `special-fixer` rather than dispatching ad-hoc implementers. The fixer groups items by file, dispatches serially (one implementer at a time to avoid working-tree clashes), and tags results correctly.
 - **Running `special-review` without an output path**: Phase reviews always write to `phase-XX-review.md`; the final review writes to `REVIEW_ITEMS.md` (with criteria + pass log in `REVIEW.md`). Without a distinct path, per-phase review artifacts would overwrite each other.
 - **Ignoring `LEARNINGS.md` during implementation**: The learnings document captures patterns identified in prior review cycles. Implementers must cross-reference every relevant learning against their code. Known Deviations document what NOT to flag, so reviewers need them too. Treat `LEARNINGS.md` as co-equal with `SPEC.md` — both constrain what correct implementation looks like.
 - **Reviewing git history in the final review**: The final reviewer assesses the current implementation against `SPEC.md`.
