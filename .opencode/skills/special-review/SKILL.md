@@ -1,6 +1,6 @@
 ---
 name: special-review
-description: Review requested files against provided criteria and produce a flat checklist of issues. Verifies and prunes prior resolved/wont-fix items upfront, captures learnings, then runs a full fresh review with parallel subagents. Deduplicates against learnings and prior open items.
+description: Review requested files against provided criteria and produce a flat checklist of issues in REVIEW_ITEMS.md. REVIEW.md stores only the review criteria and a log line per pass. If REVIEW.md exists, the criteria is read from it; if not, this is a fresh review and the user confirms the criteria. Verifies and prunes prior resolved/wont-fix items upfront, captures learnings, then runs a full fresh review with parallel subagents. Deduplicates against learnings and prior open items.
 ---
 
 # Special Review
@@ -19,13 +19,22 @@ so the review always starts from a clean base.  Reviewers are provided with
 
 **Before any tool call**, answer these three questions in your initial response:
 
-1. Does REVIEW.md contain `[x]` or `[~]` items? → If yes, go to **Step 2**.
-   Do NOT read any plan files or code — only read REVIEW.md and LEARNINGS.md.
-2. Does the user's request include files, criteria, and an output path? →
-   If missing, ask. Do NOT proceed without them.
-   - **Implicit output path:** If the user references a project directory
-     (e.g. "cartographer") and `plans/<project>/REVIEW.md` already exists,
-     that file is the implicit output path. Do not ask.
+1. Does `plans/<project>/REVIEW.md` exist?
+   - **If yes** — read the `**Criteria:**` field from it. That is the
+     criteria for this review. Proceed to Step 1.
+   - **If no** — this is a **fresh review**. There is no criteria on file;
+     ask the user to confirm the criteria before proceeding. Do NOT read
+     any plan files or code — only read REVIEW_ITEMS.md and LEARNINGS.md
+     if they exist.
+2. Does the user's request include files, criteria (if fresh), and an output
+   path? →
+   - Files to review: required. If missing, ask.
+   - Criteria: if `REVIEW.md` exists, it comes from there. If not, confirm
+     with the user.
+   - Output path: implicit. `REVIEW_ITEMS.md` in the project directory is
+     the checklist output; `REVIEW.md` holds criteria + pass log. Do not ask
+     unless the user references a directory without an existing
+     `plans/<project>/` layout.
 3. Have you already read any target file (plan files, source code, etc.)? →
    If yes, stop. You have violated the skill. Report the error to the user.
 
@@ -33,23 +42,37 @@ so the review always starts from a clean base.  Reviewers are provided with
 
 **Never read target files yourself.** The subagents read them. Your job is
 dispatch, not investigation. If you find yourself reading anything other than
-REVIEW.md, LEARNINGS.md, or the criteria document, stop — you are violating
-the skill.
+REVIEW.md, REVIEW_ITEMS.md, LEARNINGS.md, or the criteria document, stop —
+you are violating the skill.
 
 ## Workflow
 
-### 1. Read REVIEW.md and determine what needs reviewing
+### 1. Read the review artifacts and determine what needs reviewing
 
-The existing REVIEW.md is the starting point.  If the output file path
-points to an existing REVIEW.md, read it:
+Two files live in the project directory:
 
-- **If REVIEW.md contains `[x]` or `[~]` items** — those claims need
-  verifying first.  Proceed to Step 2 (verify and prune).  Do NOT gather
+- **`REVIEW.md`** — the review criteria plus a pass log. One line is
+  appended per review pass.
+- **`REVIEW_ITEMS.md`** — the checklist of findings. This is the output
+  of the review and the input to `special-fixer`.
+
+**If `REVIEW.md` exists:** read it. The `**Criteria:**` field gives the
+criteria for this review — a statement of what is being reviewed and what
+it is reviewed against (it may reference a file path). The `## Pass
+Log` section records what each prior pass produced.
+
+**If `REVIEW.md` does not exist:** this is a fresh review. Confirm the
+criteria with the user in Step 3.
+
+Read `REVIEW_ITEMS.md` if it exists:
+
+- **If `REVIEW_ITEMS.md` contains `[x]` or `[~]` items** — those claims
+  need verifying first. Proceed to Step 2 (verify and prune). Do NOT gather
   criteria or target file lists yet; the verification subagents only need
   the file references in each item, not the full target set.
-- **If REVIEW.md has only `[ ]` and `[!]` items, or REVIEW.md does not
-  exist** — there is nothing to verify.  Skip to Step 3 (gather inputs for
-  fresh review).
+- **If `REVIEW_ITEMS.md` has only `[ ]` and `[!]` items, or `REVIEW_ITEMS.md`
+  does not exist** — there is nothing to verify. Skip to Step 3 (gather
+  inputs for fresh review).
 
 Read the companion `LEARNINGS.md` if it exists (same directory as
 REVIEW.md, named `LEARNINGS.md`).  LEARNINGS.md contains three kinds
@@ -59,8 +82,8 @@ findings in a prior cycle but have not yet had items fixed and verified.
 They do not cause pruning, but fresh reviewers should be aware of them
 to avoid re-discovering the same root causes.
 
-Parse the actual checklist entries in REVIEW.md (not the summary header
-counts, which may be stale):
+Parse the actual checklist entries in REVIEW_ITEMS.md (not the summary
+header counts, which may be stale):
 
 - `- [ ]` — open, not yet addressed
 - `- [x]` — previously fixed and approved
@@ -71,7 +94,7 @@ counts, which may be stale):
 ### 2. Verify and prune existing review (separate phase)
 
 This is a **separate phase** from the fresh review below.  It runs only when
-REVIEW.md contains `[x]` or `[~]` items.
+REVIEW_ITEMS.md contains `[x]` or `[~]` items.
 
 **Only the items listed in the file matter** — ignore the summary header
 counts.  If the file lists 10 items but the header says 233, you verify
@@ -126,7 +149,7 @@ Wait for all verification subagents to complete.
 
 **You may NOT proceed to Step 3 until the following four substeps (2a, 2b-i,
 2b-ii, 2c) are all complete.  A reading of the subagent reports is not enough
-— you must materially edit the review file and learnings file.**
+— you must materially edit REVIEW_ITEMS.md and LEARNINGS.md.**
 
 ### 2a. Process results
 
@@ -176,7 +199,7 @@ sections — if a candidate pattern matches, promote it: move the entry from
 **Do not** add a learning for a cluster of fewer than 3 items — it may be
 an isolated issue, not a pattern.
 
-**Note:** The verified items are deleted from the review file in step 2c
+**Note:** The verified items are deleted from REVIEW_ITEMS.md in step 2c
 below, so perform this scan *before* deleting them.  If you later prune
 fresh findings in step 5 as "covered by a learning," consider whether
 that learning needs tightening — a learning that matches many findings
@@ -232,15 +255,15 @@ invalid during verification (those were re-opened in step 2a).
 justification survives in LEARNINGS.md.  Fresh reviewers receive
 LEARNINGS.md in their prompt and will skip these documented deviations.
 
-### 2c. Delete verified items from the review file
+### 2c. Delete verified items from the review checklist
 
-Remove all verified `[x]` and `[~]` items from the review.  Re-opened `[!]`
-items and pre-existing `[ ]` items remain.  Their resolution history is
-preserved in git history.
+Remove all verified `[x]` and `[~]` items from REVIEW_ITEMS.md.  Re-opened
+`[!]` items and pre-existing `[ ]` items remain.  Their resolution history
+is preserved in git history.
 
 Only after all four substeps (2a, 2b-i, 2b-ii, 2c) are done should you proceed to Step 3.
 
-After this step, the review file contains only `[ ]` and `[!]` items.
+After this step, REVIEW_ITEMS.md contains only `[ ]` and `[!]` items.
 
 ### 3. Gather inputs for the full-rigour review
 
@@ -248,12 +271,15 @@ Before the fresh review can run, three things are needed:
 
 1. **Files to review** — a list of file paths (glob patterns accepted).
    The user typically provides these in their message.  If missing, ask.
-2. **Criteria** — what to check for.  This can be a file path (e.g. a
-   spec document), inline text, or a description of the review standard.
-3. **Output file path** — already known from Step 1.  If it was never
-   established, check whether the user referenced a project directory
-   with an existing `plans/<project>/REVIEW.md`.  If so, use that as the
-   implicit output path.  Otherwise, ask the user.
+2. **Criteria** — read from the `**Criteria:**` field of `REVIEW.md` if it
+   exists.  If `REVIEW.md` does not exist (fresh review), ask the user to
+   confirm the criteria.  It can be a file path (e.g. a spec document),
+   inline text, or a description of the review standard.
+3. **Output paths** — implicit from the project directory:
+   - `plans/<project>/REVIEW_ITEMS.md` — the checklist (written in Step 6).
+   - `plans/<project>/REVIEW.md` — criteria + pass log (created in Step 6).
+   Do not ask unless the user references a directory with no existing
+   `plans/<project>/` layout.
 
 Read the criteria.  If it is a file path, read the file.  If it is inline
 text, use it directly.  If it is a description, treat it as the review
@@ -401,8 +427,8 @@ Examples:
 When in doubt whether a finding is covered by a LEARNINGS.md Known
 Deviation / observation, KEEP it at this stage — removing a live finding
 from the digest is worse than the audit catching a false positive.  The
-consolidation audit (step 5a) catches those.  This "keep" applies only to
-the learning-coverage pass; it is separate from impact-sizing in step 5c,
+consolidation audit (step 5b) catches those.  This "keep" applies only to
+the learning-coverage pass; it is separate from impact-sizing in step 5a,
 where Tier-3 items are pruned.
 
 After pruning, check whether any learning was matched multiple times.
@@ -424,7 +450,7 @@ existing `[ ]` or `[!]` item (by file, line, and description):
 Existing `[ ]` and `[!]` items that are NOT re-discovered by the fresh
 review remain as-is — they are still open and unaddressed.
 
-### 5c. Consider impact and prune items not worth fixing (consolidation only)
+### 5a. Consider impact and prune items not worth fixing (consolidation only)
 
 The fresh reviewers must NOT make this judgement — they produce a flat list
 of every divergence with no ranking.  **Value-sizing happens here, at
@@ -495,10 +521,11 @@ names. Those are Tier 1 regardless of how small.
 verbatim to the user in step 7 and recorded in the header as a
 pruned-by-impact list, so the user can veto any of them.
 
-### 5a. Consolidation audit
+### 5b. Consolidation audit
 
-After pruning learning-covered items and merging with existing items,
-dispatch ONE reviewer subagent to audit the remaining list.  The subagent
+After deduplicating and pruning learning-covered items (step 5), pruning
+Tier-3 items by impact (step 5a), and merging with existing items, dispatch
+ONE reviewer subagent to audit the remaining list.  The subagent
 receives:
 
 ```
@@ -548,13 +575,13 @@ report it.
 ```
 
 Wait for the subagent to complete.  If it reports false positives or
-duplicates, remove them from the list and re-run step 5a until it
+duplicates, remove them from the list and re-run step 5b until it
 reports `ALL CLEAR`.  Do not proceed to step 6 until the list passes.
 False positives and duplicates must both be gone; learning suggestions
 do NOT block progress — they are written to LEARNINGS.md and the loop
 continues.
 
-### 5b. Write candidate patterns to LEARNINGS.md
+### 5c. Write candidate patterns to LEARNINGS.md
 
 After the consolidation audit passes (no false positives, no duplicates),
 take the `LEARNING-SUGGESTION` lines from the audit subagent's output and
@@ -591,15 +618,16 @@ permanent learning or Known Deviation.
 
 ### 6. Write the consolidated review
 
-Write the complete checklist to the output file path.  Include a header with
-the review date, files/criteria reviewed, and summary counts:
+Two files are written. The checklist goes to `REVIEW_ITEMS.md`; the criteria
+and pass log go to `REVIEW.md`.
+
+**Write the checklist to `plans/<project>/REVIEW_ITEMS.md`.**  Include a
+header with the review date and summary counts:
 
 ```markdown
-# Special Review
+# Review Items
 
 **Date:** <today's date>
-**Files reviewed:** <list of target files>
-**Criteria:** <criteria summary or file path>
 
 ## Summary
 
@@ -630,6 +658,28 @@ Where `TAG` is one of:
 
 Do not add commentary, summaries, or recommendations outside the checklist.
 
+**Update `plans/<project>/REVIEW.md`.**  If it does not exist, create it
+with the criteria and the first pass log line.  If it exists, preserve the
+criteria and append one pass log line:
+
+```markdown
+# Special Review
+
+**Criteria:** Review <what is being reviewed — e.g. the head of main (the code)> for compliance with <criteria document or standard>
+
+## Pass Log
+
+- <date> — <pass summary: files reviewed, N findings, N fixed, N pruned>
+```
+
+The `**Criteria:**` field must specify both key things: **what is being
+reviewed** and **what it is reviewed against** (e.g. "Review the head of
+`main` (the code) for compliance with plans/<project>/SPEC.md").
+
+Each pass appends exactly one log line.  The `**Criteria:**` field is set
+once at creation and does not change across passes unless the user redefines
+the review scope.
+
 ### 7. Report to the user
 
 Report:
@@ -649,7 +699,8 @@ Report:
 - Number of learnings added/updated in `LEARNINGS.md`
 - Number of candidate patterns written to/bumped in `LEARNINGS.md`
 - Number of learnings tightened during consolidation
-- Output file path
+- Output file paths: `REVIEW_ITEMS.md` (checklist) and `REVIEW.md`
+  (criteria + pass log)
 
 ## Checklist format rules
 
@@ -707,13 +758,14 @@ to `- [!]` with an explanation:
   to mark wont-fix.
 - The reviewer subagents are given the same instruction: no severity labels,
   no ranking, just divergences from criteria.
-- Impact-sizing is consolidation-only (step 5c) and never a reviewer job.
+- Impact-sizing is consolidation-only (step 5a) and never a reviewer job.
   The individual reviewers always produce the full flat list; only the
   consolidator weighs whether an item is worth fixing, and must report
   every pruned-by-impact item verbatim so the user can veto.
 - If the user does not provide all three inputs (files, criteria, output
   path), ask for what's missing — do not guess.
-- The output file is always written to the provided path.  It may be
+- The checklist is always written to `REVIEW_ITEMS.md` in the project
+  directory; the criteria and pass log to `REVIEW.md`.  These files may be
   gitignored (under `plans/`) or tracked — the skill does not commit.
-- The companion `LEARNINGS.md` is written to the same directory as the
-  review file.
+- The companion `LEARNINGS.md` is written to the same directory as
+  REVIEW.md and REVIEW_ITEMS.md.

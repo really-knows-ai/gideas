@@ -124,7 +124,9 @@ plans/<project-name>/
 ├── PLAN.md          # How to build it (phased breakdown, execution order)
 ├── PHASE_01.md      # Individual phase files (one per phase)
 ├── PHASE_02.md
-└── REVIEW.md        # Spec-compliance audit checklist
+├── REVIEW.md        # Review criteria + pass log (one line per review pass)
+├── REVIEW_ITEMS.md  # Spec-compliance audit checklist
+└── LEARNINGS.md     # Patterns, known deviations, and candidate patterns
 ```
 
 **Important:** `plans/` is gitignored by design — its contents are never committed. Because the Glob tool relies on the git index, it will not find files under `plans/`. You **must** use `ls` (via Bash) to list directory contents under `plans/`.
@@ -167,13 +169,13 @@ Run: `execute-phased-plan` skill.
 
 #### 4. Review (`special-review`)
 
-Review files against provided criteria. Verifies and prunes prior resolved/wont-fix items, captures learnings, then runs a full fresh review with parallel subagents. Every finding is classified with a remediation tag (`[FIX]` / `[PONYTAIL]` / `[IMPL-NOTE]`). Output: `REVIEW.md` checklist.
+Review files against provided criteria. The criteria is read from `REVIEW.md` if it exists; if not, it is a fresh review and the user confirms the criteria. Verifies and prunes prior resolved/wont-fix items, captures learnings, then runs a full fresh review with parallel subagents. Every finding is classified with a remediation tag (`[FIX]` / `[PONYTAIL]` / `[IMPL-NOTE]`). Output: `REVIEW_ITEMS.md` checklist; `REVIEW.md` criteria + pass log.
 
 Run: `special-review` skill.
 
 #### 5. Fix (`special-fixer`)
 
-Fix items from a `REVIEW.md` checklist. Groups items by target file, dispatches one implementer per group. Each implementer verifies the claim before acting, applies the fix matching the classification tag, or marks wont-fix with justification. Supports REPL-mode re-evaluation cycles.
+Fix items from a `REVIEW_ITEMS.md` checklist. Groups items by target file, dispatches one implementer per group. Each implementer verifies the claim before acting, applies the fix matching the classification tag, or marks wont-fix with justification. Supports REPL-mode re-evaluation cycles.
 
 Run: `special-fixer` skill.
 

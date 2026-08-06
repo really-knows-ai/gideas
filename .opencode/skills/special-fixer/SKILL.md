@@ -1,6 +1,6 @@
 ---
 name: special-fixer
-description: Fix items from a review checklist produced by special-review. Groups items by target file, then dispatches one implementer per file group to avoid stampedes and reduce redundant reads. Each implementer verifies the claim before acting — if they disagree they mark [~] wont-fix. Reads LEARNINGS.md from the companion review directory and provides it to implementers.
+description: Fix items from a review checklist (REVIEW_ITEMS.md) produced by special-review. Groups items by target file, then dispatches one implementer per file group to avoid stampedes and reduce redundant reads. Each implementer verifies the claim before acting — if they disagree they mark [~] wont-fix. Reads LEARNINGS.md from the companion review directory and provides it to implementers.
 ---
 
 # Special Fixer
@@ -42,16 +42,18 @@ Unclassified items (no tag prefix) default to `[FIX]` — the plan is assumed wr
 
 ## Workflow
 
-### 1. Select the review file
+### 1. Select the review checklist
 
-The user provides the path to a review checklist.  If they do not, ask for it.
-The file must exist and must contain at least one `- [ ]` or `- [!]` item.
+The user provides the path to a review checklist (`REVIEW_ITEMS.md` from
+`special-review`).  If they do not, ask for it.  The file must exist and
+must contain at least one `- [ ]` or `- [!]` item.
 If no open items exist, stop and report that there is nothing to fix.
 
-Read the full review file.  Note every item and its state.
+Read the full checklist file.  Note every item and its state.
 
-Also read the companion `LEARNINGS.md` file if it exists (same directory as
-the review file).  Its path will be included in the implementer prompt so
+Also read the companion `REVIEW.md` (same directory) for the review criteria
+and the `LEARNINGS.md` file if it exists (same directory as the checklist).
+`LEARNINGS.md`'s path will be included in the implementer prompt so
 implementers read it themselves and follow established patterns and constraints.
 
 Read `AGENTS.md` in the repository root (if it exists) for project-structure
@@ -102,7 +104,7 @@ Handle them in the order listed below.
 ...
 
 **Criteria:**
-[criteria from the review header]
+[criteria from REVIEW.md in the review directory]
 
 **Prior learnings (read this file and follow its rules during the fix):**
 [path to LEARNINGS.md in the review directory, if it exists — otherwise "None."]
@@ -183,10 +185,11 @@ For each implementer result:
     - Wont-fix: <why the implementer still disagrees despite the re-opening reason.>
   ```
 
-### 5. Write the updated review
+### 5. Write the updated checklist
 
-Write the modified review file back to its original path.  Do not add summary
-text — only update item states and append the fix/wont-fix detail lines.
+Write the modified checklist file back to its original path
+(`REVIEW_ITEMS.md`).  Do not add summary text — only update item states and
+append the fix/wont-fix detail lines.
 
 ### 6. Report to the user
 
@@ -195,7 +198,7 @@ Report:
 - Number of items marked wont-fix (`[ ]` → `[~]`)
 - Number of re-opened items fixed (`[!]` → `[x]`)
 - Number of re-opened items held (`[!]` → `[~]`)
-- Output file path
+- Output file path (`REVIEW_ITEMS.md`)
 
 List each item with its outcome and a one-line summary.
 
