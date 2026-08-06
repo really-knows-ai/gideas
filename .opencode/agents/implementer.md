@@ -119,6 +119,7 @@ permission:
     "make check": allow
     "make check-fix": allow
     "make check-fix-all": allow
+    "make proto": allow
     "git status*": allow
     "git diff*": allow
     "git log*": allow
@@ -131,4 +132,4 @@ The repo is always green. `make verify` must pass with zero failures before any 
 
 `.cache/**` is generated build-infra (produced by `tools/setup-ladybug.sh`). Do not hand-edit it — if a gate needs a generated file added/updated, run the generator (`make ladybug-lib`) or fix the source it derives from, not the `.cache` file itself.
 
-Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, as are the targeted make targets (test/build/vet/fmt/lint/check-fix/verify and their -variants). No bare `make`/`go`, no env-prefixed commands, no &&-, pipes, or `$()` — anything chained or unstructured is refused. Run the quality gate via `make verify`/`make test`, not raw `go`. Inspect the tree with the read/glob/grep tools; ls only via permission when needed. File deletion (`rm`) is permitted only for paths under `platform/` — use plain `rm platform/<path>`, no flags, no absolute path, nothing outside `platform/`.
+Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, as are the targeted make targets (test/build/vet/fmt/lint/check-fix/verify/proto and their -variants). No bare `make`/`go`, no env-prefixed commands, no &&-, pipes, or `$()` — anything chained or unstructured is refused. Run the quality gate via `make verify`/`make test`, not raw `go`. Regenerate proto with `make proto` — never hand-edit `gen/**`. Inspect the tree with the read/glob/grep tools; ls only via permission when needed. File deletion (`rm`) is permitted only for paths under `platform/` — use plain `rm platform/<path>`, no flags, no absolute path, nothing outside `platform/`.

@@ -160,8 +160,13 @@ Handle them in the order listed below.
 **Quality gate:**
 - If file category is "plan files": no build gate.  Verify only that the
   file parses as valid Markdown (e.g., no unclosed code fences).
-- If file category is "code files": run `make check-fix` and `go test ./...`
-  (or the relevant subset) on the changed code.
+- If file category is "code files": all verification runs through `make` —
+  bare `go`/`buf` and env-prefixed commands are denied by the implementer
+  agent's bash policy.  Run `make check-fix` plus the relevant test targets
+  (`make test-<service>` for the changed service, `make test-sdk`,
+  `make test-operator`, or `make verify`).  If a change touches `proto/**`,
+  run `make proto` first to regenerate `gen/**` — never hand-edit generated
+  code.
 - Report the quality gate outcome after your last item.
 ```
 
@@ -276,8 +281,12 @@ wont-fix (claim wrong, spec contradicts, or fixing causes harm).
 - **Quality gate depends on file category:**
   - **Plan files** (under `plans/`): no build gate.  Verify the file is
     valid Markdown (no unclosed code fences, broken tables, etc.).
-  - **Code files** (all other): run `make check-fix` and `go test ./...`
-    (or the relevant subset) on changed code before reporting a fix.
+  - **Code files** (all other): run `make check-fix` and the relevant
+    `make test-<service>` / `make test-sdk` / `make test-operator` targets
+    on changed code before reporting a fix.  All verification goes through
+    `make` — the implementer agent denies bare `go`/`buf` and env-prefixed
+    commands.  If the change touches `proto/**`, run `make proto` first to
+    regenerate `gen/**`.
 - Do not commit.  This skill only updates the review checklist and modifies
   source files.  Committing is a separate step.
 - No severity judgements in wont-fix justifications.  Just explain why the

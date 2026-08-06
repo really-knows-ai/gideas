@@ -20,7 +20,7 @@ If there are staged but uncommitted changes, ask whether to commit them with the
 Run the full quality gate:
 
 ```
-go test ./... && make check-fix
+make verify
 ```
 
 If it fails, report the failure and stop — do not proceed to the release.

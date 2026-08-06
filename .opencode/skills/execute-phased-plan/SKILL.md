@@ -137,10 +137,10 @@ Pass this summary to the next phase implementer.
 After every phase is committed, run the repository's full quality gate:
 
 ```
-go test ./... && make check-fix
+make verify
 ```
 
-These two commands are non-negotiable — see `AGENTS.md`. Fix failures through the same implementer-reviewer loop. Commit any final quality-gate fixes separately.
+This command is non-negotiable — see `AGENTS.md`. Fix failures through the same implementer-reviewer loop. Commit any final quality-gate fixes separately.
 
 ### 8. Final spec-fulfilment review
 
@@ -166,7 +166,7 @@ If the final review produced any open items, load the `special-fixer` skill and 
 #### 8c. Re-run quality gate and re-review
 
 After the fixer completes:
-1. Re-run the full quality gate (`go test ./... && make check-fix`).
+1. Re-run the full quality gate (`make verify`).
 2. If any items remain open, re-run special-review (step 8a) — it will prune newly-fixed items, verify wont-fix justifications, and produce a fresh checklist.
 3. Re-run the quality gate after any fixes.
 

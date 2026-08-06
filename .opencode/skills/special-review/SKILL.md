@@ -753,6 +753,10 @@ to `- [!]` with an explanation:
 ## Boundaries
 
 - This skill only reviews.  It does not fix anything.
+- Reviewers are read-only: they never run `make build`, `make check-fix`,
+  `make lint-fix`, `make proto`, or raw `go`/`buf` — no tree mutation.
+  Running the read-only gate `make verify-check` is permitted to confirm
+  the repo is green.
 - This skill makes no severity judgements.  Every divergence from criteria
   is listed.  The implementer decides what to fix, what to defer, and what
   to mark wont-fix.

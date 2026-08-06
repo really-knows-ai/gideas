@@ -81,10 +81,10 @@ review passes.
 
 ### 5. Run the quality gate
 
-Run:
+Run (via `make` — the implementer agent denies bare `go`):
 ```
-go test ./[affected_modules]/...
 make check-fix
+make test-<affected-service>   # or make test-sdk / make test-operator / make verify
 ```
 
 Both must pass. Fix failures through the same implementer → review loop.
