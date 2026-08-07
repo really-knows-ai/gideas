@@ -55,6 +55,9 @@ func (db *ladybugDB) SaveBranchTransactionState(
 func (db *ladybugDB) LoadBranchTransactionState(_ context.Context, txID string) (store.BranchTransactionState, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
+		return store.BranchTransactionState{}, fmt.Errorf("invalid branch ID %q", txID)
+	}
 	if state, ok := db.branchStates[txID]; ok {
 		return state, nil
 	}
@@ -103,6 +106,9 @@ func validateBranchTransactionState(state store.BranchTransactionState) error {
 func (db *ladybugDB) InvalidateBranchState(_ context.Context, txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
+		return fmt.Errorf("invalid branch ID %q", txID)
+	}
 	if db.path != "" {
 		if err := os.Remove(db.branchStatePath(txID)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("invalidate branch state: %w", err)

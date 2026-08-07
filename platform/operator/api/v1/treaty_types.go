@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // TreatySpec defines the desired state of Treaty.
@@ -99,5 +100,8 @@ type TreatyList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&Treaty{}, &TreatyList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &Treaty{}, &TreatyList{})
+		return nil
+	})
 }

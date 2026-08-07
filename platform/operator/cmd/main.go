@@ -100,7 +100,8 @@ func main() {
 	flag.StringVar(&cartographerImage, "cartographer-image", "",
 		"The Cartographer container image to deploy (default flow-operator:latest).")
 	flag.StringVar(&capabilityStalenessWindow, "capability-staleness-window", "",
-		"Staleness window for capability attestations (Go duration, e.g. \"30s\"; negative duration like \"-1s\" to disable; default 30s).")
+		"Staleness window for capability attestations (Go duration, e.g. \"30s\"; "+
+			"negative duration like \"-1s\" to disable; default 30s).")
 	flag.StringVar(&librarianAddr, "librarian-address", "",
 		"The address of the Librarian gRPC server for LawGroup sync (empty = disabled).")
 	flag.StringVar(&archivistAddr, "archivist-address", "",
@@ -314,7 +315,9 @@ func main() {
 		os.Exit(1)
 	}
 	// Connect to the Archivist for artefact state queries (required for exit contract validation).
-	var artefactQuerier func(ctx context.Context, workitemID string, governedArtefacts []string) ([]scheduler.ArtefactState, error)
+	var artefactQuerier func(
+		ctx context.Context, workitemID string, governedArtefacts []string,
+	) ([]scheduler.ArtefactState, error)
 	if archivistAddr != "" {
 		archConn, archErr := grpc.NewClient(
 			archivistAddr,
@@ -325,7 +328,9 @@ func main() {
 			os.Exit(1)
 		}
 		archClient := flowv1gen.NewArchivistServiceClient(archConn)
-		artefactQuerier = func(ctx context.Context, workitemID string, governedArtefacts []string) ([]scheduler.ArtefactState, error) {
+		artefactQuerier = func(
+			ctx context.Context, workitemID string, governedArtefacts []string,
+		) ([]scheduler.ArtefactState, error) {
 			resp, err := archClient.QueryArtefactState(ctx, &flowv1gen.QueryArtefactStateRequest{
 				WorkitemId:        workitemID,
 				GovernedArtefacts: governedArtefacts,
@@ -433,7 +438,9 @@ func main() {
 	}
 
 	// Generate (or re-read) the sidecar signing key pair on startup.
-	if err := controller.InitializeSidecarSigningKey(context.Background(), mgr.GetClient(), operatorNamespace); err != nil {
+	if err := controller.InitializeSidecarSigningKey(
+		context.Background(), mgr.GetClient(), operatorNamespace,
+	); err != nil {
 		setupLog.Error(err, "unable to initialize sidecar signing key")
 		os.Exit(1)
 	}

@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // GovernedArtefactSpec defines the desired state of GovernedArtefact.
@@ -72,5 +73,8 @@ type GovernedArtefactList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&GovernedArtefact{}, &GovernedArtefactList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &GovernedArtefact{}, &GovernedArtefactList{})
+		return nil
+	})
 }

@@ -25,7 +25,22 @@ import (
 const (
 	operatorLabelSelector = "app.kubernetes.io/name=operator"
 	defaultGraphName      = "flow-graph"
-	operatorProxyPort     = 50053
+
+	// operatorProxyPort is the default operator gRPC proxy port forwarded to
+	// by the CLI.
+	//
+	// ponytail: the proxy port is an operational knob with multiple drift
+	// surfaces. On the operator side it is set by --proxy-bind-address, then
+	// overridden by the OPERATOR_PROXY_PORT env var, then falls back to
+	// :50053; the CLI side reads OPERATOR_PROXY_PORT from the user's local
+	// machine, which cannot observe the operator deployment's configured
+	// proxy port, then falls back to the same hard-coded 50053. An operator
+	// started with a different --proxy-bind-address (e.g. :50054) is silently
+	// unreachable and the CLI cannot detect the divergence. Upgrade path: a
+	// discovery mechanism that queries the operator for its bound proxy
+	// address, or a shared source of truth for the port, instead of the env
+	// var + hard-coded fallback.
+	operatorProxyPort = 50053
 
 	// supportedExportFormats matches the Cartographer's accepted formats
 	// (see platform/cartographer/internal/service/export.go). The format is a
@@ -62,6 +77,12 @@ func resolveOperatorProxyPort() (int, error) {
 // newGraphExporterFn returns the graph exporter factory. Overridable in tests.
 var newGraphExporterFn func() (graphExporter, error) = func() (graphExporter, error) {
 	return newGraphExporter()
+}
+
+// newExportFileFn creates the --output file. Overridable in tests to inject
+// write/flush and close failures into the file-output path.
+var newExportFileFn func(path string) (io.WriteCloser, error) = func(path string) (io.WriteCloser, error) {
+	return os.Create(path)
 }
 
 func newGraphExportCmd() *cobra.Command {
@@ -117,7 +138,7 @@ func runGraphExport(cmd *cobra.Command, args []string) error {
 
 	// Output to a file: any stream or write failure removes the partial file so
 	// the caller doesn't mistake truncated data for a full graph.
-	f, err := os.Create(outputPath)
+	f, err := newExportFileFn(outputPath)
 	if err != nil {
 		return fmt.Errorf("create output file %q: %w", outputPath, err)
 	}
@@ -348,7 +369,7 @@ func (g *prodGraphExporter) dialOperatorStream(ctx context.Context, localPort in
 // removeStreamOutput closes and removes the partial output file written before
 // a stream failure, so the caller doesn't mistake truncated data for a complete
 // graph. It is a no-op for stdout output.
-func removeStreamOutput(outputFile *os.File, outputPath string) {
+func removeStreamOutput(outputFile io.Closer, outputPath string) {
 	if outputFile != nil {
 		outputFile.Close()
 		os.Remove(outputPath)

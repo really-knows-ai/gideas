@@ -1452,9 +1452,11 @@ func TestExecuteCypher_ReadOnly(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
-	name, ok := rows[0]["name"]
-	if !ok || name != "cypher-test" {
-		t.Errorf("name = %v, want cypher-test", name)
+	if len(rows[0].Values) != 1 {
+		t.Fatalf("expected 1 value, got %d", len(rows[0].Values))
+	}
+	if got := rows[0].Values[0]; got != "cypher-test" {
+		t.Errorf("name = %v, want cypher-test", got)
 	}
 }
 
@@ -1477,18 +1479,19 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 }
 
 // TestExecuteCypher_MutationClausesClassified asserts that each mutation/DDL
-// clause the SPEC R7 §5 and error-table row 910 enumerate (CREATE, SET, DELETE,
+// clause the SPEC R7 §5 and error-table row 913 enumerate (CREATE, SET, DELETE,
 // MERGE, REMOVE, DROP, DDL index/constraint, and FOREACH-as-mutation) is REJECTED
-// by ExecuteCypher — never executed as read-only — not just the single CREATE
-// clause the historical test covered.
+// by ExecuteCypher with ErrMutationCypher (mapped to PERMISSION_DENIED) — never
+// executed as read-only — not just the single CREATE clause the historical test
+// covered.
 //
 // LadybugDB v0.17.0's parser does not recognise the full Neo4j clause grammar:
 // forms like top-level FOREACH, `MATCH ... REMOVE ...`, and index/constraint DDL
-// fail at Prepare (surfacing ErrInvalidCypher) *before* the IsReadOnly guard runs,
-// so they cannot execute. The clauses its grammar does accept mutate (CREATE, SET,
-// DELETE, MERGE, DROP) are classified by IsReadOnly as non-read-only, returning
-// ErrMutationCypher. Both are rejections: the security property (no mutation may
-// execute through ExecuteCypher) holds for the entire SPEC-enumerated set.
+// fail at Prepare *before* the IsReadOnly guard runs. Such statements are still
+// mutations per SPEC:913 / SPEC:469-470, so they are classified by the
+// mutation-keyword fallback (isMutationCypher) and surface ErrMutationCypher
+// (PERMISSION_DENIED), not ErrInvalidCypher (INVALID_ARGUMENT). Genuinely
+// invalid read-only syntax (no mutation keyword) keeps ErrInvalidCypher.
 func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -1498,33 +1501,25 @@ func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 	applyTestSchema(t, s)
 
 	cases := []struct {
-		name          string
-		cypher        string
-		wantMutation  bool // grammar parses it; expects ErrMutationCypher (PERMISSION_DENIED)
-		wantRejection bool // grammar rejects it at Prepare; ErrInvalidCypher still blocks execution
+		name   string
+		cypher string
 	}{
-		{"create", "CREATE (n:Component {id: 'bad-uuid'})", true, false},
-		{"create-drop-entity", "CREATE (n:Component {id: 'bad-uuid'}) DROP n", false, true},
-		{"set", "MATCH (n:Component) SET n.name = 'x'", true, false},
-		{"delete", "MATCH (n:Component) DELETE n", true, false},
-		{"merge", "MERGE (n:Component {id: 'bad-uuid'})", true, false},
-		{"remove", "MATCH (n:Component) REMOVE n.name", false, true},
-		{"drop", "DROP TABLE Component", true, false},
-		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)", false, true},
-		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE", false, true},
-		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))", false, true},
+		{"create", "CREATE (n:Component {id: 'bad-uuid'})"},
+		{"create-drop-entity", "CREATE (n:Component {id: 'bad-uuid'}) DROP n"},
+		{"set", "MATCH (n:Component) SET n.name = 'x'"},
+		{"delete", "MATCH (n:Component) DELETE n"},
+		{"merge", "MERGE (n:Component {id: 'bad-uuid'})"},
+		{"remove", "MATCH (n:Component) REMOVE n.name"},
+		{"drop", "DROP TABLE Component"},
+		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)"},
+		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE"},
+		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.ExecuteCypher(context.Background(), tc.cypher, nil, "")
-			if err == nil {
-				t.Fatalf("expected mutation %q to be rejected, got nil", tc.cypher)
-			}
-			if tc.wantMutation && !errors.Is(err, store.ErrMutationCypher) {
+			if !errors.Is(err, store.ErrMutationCypher) {
 				t.Errorf("expected ErrMutationCypher for %q, got %v", tc.cypher, err)
-			}
-			if tc.wantRejection && !errors.Is(err, store.ErrInvalidCypher) {
-				t.Errorf("expected ErrInvalidCypher rejection for %q, got %v", tc.cypher, err)
 			}
 		})
 	}
@@ -1553,11 +1548,16 @@ func TestExecuteCypher_WithParams(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
-	if rows[0]["ver"] != "2" {
-		t.Errorf("ver = %v, want 2", rows[0]["ver"])
+	// SPEC R2: each row is one flat tuple in the order LadybugDB returns the
+	// columns — ver before name, matching the RETURN clause.
+	if len(rows[0].Values) != 2 {
+		t.Fatalf("expected 2 values, got %d", len(rows[0].Values))
 	}
-	if rows[0]["name"] != "param-test" {
-		t.Errorf("name = %v, want param-test", rows[0]["name"])
+	if rows[0].Values[0] != "2" {
+		t.Errorf("ver = %v, want 2", rows[0].Values[0])
+	}
+	if rows[0].Values[1] != "param-test" {
+		t.Errorf("name = %v, want param-test", rows[0].Values[1])
 	}
 }
 
@@ -5088,4 +5088,429 @@ func TestApplySchema_MidMultiTableDDLFailureFailsClosedOnReopen(t *testing.T) {
 		_ = reopened.Close()
 		t.Fatal("expected fail-closed Open after a mid-DDL partial schema apply")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Special-fixer: silent-drop / silent-identity read-path guards and missing
+// SPEC-branch tests
+// ---------------------------------------------------------------------------
+
+// An edge file whose from/to endpoint entities are absent from the graph must
+// fail loudly instead of silently vanishing: insertEdgeOnConn's
+// MATCH (a {id: $from}), (b {id: $to}) CREATE ... no-ops when an endpoint
+// matches nothing, so without the endpoint-existence guard the edge would be
+// dropped on the re-hydration read path with no error (learnings rule: never
+// silently drop a row or swallow a not-exist on a read path).
+func TestRehydrateMainFromFiles_EdgeWithMissingEndpointFailsLoudly(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Load one endpoint entity via files; the edge's `to` endpoint references
+	// an ID absent from the graph (orphaned edge file).
+	fromID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
+		"id": fromID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", uuid.NewString()+".json"), map[string]any{
+		"id": uuid.NewString(), "type": "DependsOn", "from": fromID, "to": uuid.NewString(),
+	})
+
+	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	if err == nil {
+		t.Fatal("expected loud failure for an edge whose endpoint entity is absent")
+	}
+	if !errors.Is(err, store.ErrSourceOrTargetNotFound) {
+		t.Fatalf("expected ErrSourceOrTargetNotFound, got %v", err)
+	}
+}
+
+// A JSON element file with a missing `id` key must fail loudly on every load
+// path (main/branch × entity/edge) instead of silently assigning a fresh UUID:
+// a generated ID changes the element's identity and diverges from its filename,
+// so the next serialisation would rewrite the element under a new name,
+// orphaning the original file. The sibling checks (missing `type`, type/directory
+// mismatch, unparseable content) all fail loudly; the missing `id` must too.
+func TestRehydrateFiles_MissingIDFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+		edge   bool
+		want   error
+	}{
+		{"main entity", false, false, store.ErrInvalidEntityDir},
+		{"main edge", false, true, store.ErrInvalidEdgeDir},
+		{"branch entity", true, false, store.ErrInvalidEntityDir},
+		{"branch edge", true, true, store.ErrInvalidEdgeDir},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			if tc.edge {
+				// Edge file with every required key except `id`.
+				writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", "edge.json"), map[string]any{
+					"type": "DependsOn", "from": uuid.NewString(), "to": uuid.NewString(),
+				})
+			} else {
+				// Entity file with every required key except `id`.
+				writeJSONFile(t, filepath.Join(entitiesDir, "Component", "ent.json"), map[string]any{
+					"type": "Component", "properties": map[string]string{"name": "no-id"},
+				})
+			}
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for a file missing the required 'id' key")
+			}
+			if !errors.Is(loadErr, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, loadErr)
+			}
+		})
+	}
+}
+
+// branchLocked and LoadBranchTransactionState build filesystem paths from txID;
+// a non-UUID branch string containing path separators would escape branches/ on
+// a file-backed store (path traversal on read). Every other branch-path builder
+// (CreateBranchDB, DropBranchDB, SaveBranchTransactionState) enforces
+// filepath.Base(txID) == txID; these two read paths must too — defense in depth,
+// since a future caller could skip the service-layer UUID-v4 gate.
+func TestBranchReadPaths_RejectPathTraversalTxID(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	db := s.(*ladybugDB)
+	ctx := context.Background()
+
+	// Plant files at the escaped paths the traversal would touch:
+	// filepath.Join(dir, "branches", "../escaped.lbug") resolves to
+	// dir/escaped.lbug, and the .state.json variant to dir/escaped.state.json.
+	// They must never be opened/read.
+	if err := os.WriteFile(filepath.Join(dir, "escaped.lbug"), []byte("not a database"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "escaped.state.json"), []byte("not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, txID := range []string{"../escaped", ".", ".."} {
+		db.mu.Lock()
+		_, err = db.branchLocked(txID)
+		db.mu.Unlock()
+		if err == nil || !strings.Contains(err.Error(), "invalid branch ID") {
+			t.Fatalf("branchLocked(%q): expected invalid-branch-ID rejection, got %v", txID, err)
+		}
+
+		_, err = s.LoadBranchTransactionState(ctx, txID)
+		if err == nil || !strings.Contains(err.Error(), "invalid branch ID") {
+			t.Fatalf("LoadBranchTransactionState(%q): expected invalid-branch-ID rejection, got %v", txID, err)
+		}
+	}
+}
+
+// InvalidateBranchState removes filesystem paths built from txID via os.Remove;
+// a non-UUID branch string containing path separators would escape branches/ on
+// a file-backed store (path traversal on delete). Every sibling path builder
+// (CreateBranchDB, DropBranchDB, SaveBranchTransactionState,
+// LoadBranchTransactionState, branchLocked) enforces filepath.Base(txID) == txID;
+// the destructive remove path must too — defense in depth, since a future caller
+// could skip the service-layer UUID-v4 gate.
+func TestInvalidateBranchState_RejectPathTraversalTxID(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Plant a file at the escaped path the traversal would delete:
+	// filepath.Join(dir, "branches", "../escaped.state.json") resolves to
+	// dir/escaped.state.json. It must never be removed.
+	escapedPath := filepath.Join(dir, "escaped.state.json")
+	if err := os.WriteFile(escapedPath, []byte("keep me"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, txID := range []string{"../escaped", ".", ".."} {
+		err := s.InvalidateBranchState(ctx, txID)
+		if err == nil || !strings.Contains(err.Error(), "invalid branch ID") {
+			t.Fatalf("InvalidateBranchState(%q): expected invalid-branch-ID rejection, got %v", txID, err)
+		}
+		if _, statErr := os.Stat(escapedPath); statErr != nil {
+			t.Fatalf("InvalidateBranchState(%q): escaped file %q was removed", txID, escapedPath)
+		}
+	}
+
+	// Happy path: a legitimately-named state file is removed and the in-memory
+	// record invalidated.
+	const txID = "legit-tx"
+	if err := s.CreateBranchDB(ctx, txID); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.SaveBranchTransactionState(ctx, txID, store.BranchTransactionState{
+		MainHeadAtLastSync: "head", SchemaHash: "schema",
+	}); err != nil {
+		t.Fatalf("SaveBranchTransactionState: %v", err)
+	}
+	statePath := filepath.Join(dir, "branches", txID+".state.json")
+	if _, statErr := os.Stat(statePath); statErr != nil {
+		t.Fatalf("state file %q was not written: %v", statePath, statErr)
+	}
+	if err := s.InvalidateBranchState(ctx, txID); err != nil {
+		t.Fatalf("InvalidateBranchState(%q): %v", txID, err)
+	}
+	if _, statErr := os.Stat(statePath); !os.IsNotExist(statErr) {
+		t.Fatalf("state file %q was not removed (stat err: %v)", statePath, statErr)
+	}
+	if _, err := s.LoadBranchTransactionState(ctx, txID); err == nil {
+		t.Fatal("invalidated branch state was accepted")
+	}
+}
+
+// Learnings rule "Sentinel errors over zero-value returns": a failed store must
+// surface ErrDatabaseNotReady from ListMainEntityTypes rather than silently
+// reporting an empty type list with a nil error.
+func TestListMainEntityTypes_FailedStoreReturnsSentinel(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	db := s.(*ladybugDB)
+	db.failed = true
+
+	types, err := s.ListMainEntityTypes()
+	if !errors.Is(err, store.ErrDatabaseNotReady) {
+		t.Fatalf("expected ErrDatabaseNotReady for failed store, got %v", err)
+	}
+	if types != nil {
+		t.Fatalf("expected nil types for failed store, got %v", types)
+	}
+}
+
+// SPEC R1 membership-OR rule composition (crud.go validateEdgeRulesFor): an
+// edge is permitted when ANY rule entry authorizes it — a second rule can
+// authorize a connection the first denies — and within a rule, canConnectTo and
+// using are ANDed. Pins the two previously-untested branches: the
+// OR-across-entries authorization, and the deny-by-using-mismatch (target type
+// present in a rule's canConnectTo but the edge type absent from that rule's
+// using).
+func TestCreateEdge_RuleComposition(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Service",
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+					{CanConnectTo: []string{"Document"}, Using: []string{"LINKS_TO"}},
+				},
+			},
+			{Name: "Component"},
+			{Name: "Document"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "DEPENDS_ON"},
+			{Name: "LINKS_TO"},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	svc, err := s.CreateEntity(ctx, "Service", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Service: %v", err)
+	}
+	comp, err := s.CreateEntity(ctx, "Component", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Component: %v", err)
+	}
+	doc, err := s.CreateEntity(ctx, "Document", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Document: %v", err)
+	}
+
+	// Rule 1 authorizes Service → Component via DEPENDS_ON.
+	if _, err := s.CreateEdge(ctx, "DEPENDS_ON", svc.Id, comp.Id, nil, "main"); err != nil {
+		t.Fatalf("rule 1 should authorize Service→Component via DEPENDS_ON: %v", err)
+	}
+
+	// OR across rule entries: rule 2 authorizes Service → Document via LINKS_TO
+	// even though rule 1 (which only names Component) denies it.
+	if _, err := s.CreateEdge(ctx, "LINKS_TO", svc.Id, doc.Id, nil, "main"); err != nil {
+		t.Fatalf("rule 2 should authorize Service→Document via LINKS_TO: %v", err)
+	}
+
+	// Deny by using-mismatch: Document appears in rule 2's canConnectTo, but
+	// DEPENDS_ON is absent from rule 2's using (and Document is absent from
+	// rule 1's canConnectTo), so the connection must be denied.
+	_, err = s.CreateEdge(ctx, "DEPENDS_ON", svc.Id, doc.Id, nil, "main")
+	if !errors.Is(err, store.ErrEdgeRuleViolation) {
+		t.Fatalf("expected ErrEdgeRuleViolation for using-mismatch, got %v", err)
+	}
+}
+
+// SPEC R2: "after bootstrap, entities created without an embedding store NULL
+// in the vector column". The pre-bootstrap ErrVectorBootstrap rejection
+// (TestEmbeddingBootstrap_FirstEntityNoEmbedding) applies only until the first
+// embedding establishes the dimension.
+func TestCreateEntity_PostBootstrapNilEmbeddingStoresNULL(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Bootstrap VectorType to dimension 3.
+	first, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "v1"}, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("bootstrap CreateEntity: %v", err)
+	}
+	if len(first.Embedding) != 3 {
+		t.Fatalf("expected bootstrapped embedding persisted, got %v", first.Embedding)
+	}
+
+	// A nil-embedding create after bootstrap succeeds and stores NULL: the
+	// returned entity's Embedding is nil, and GetEntity returns nil too.
+	plain, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "v2"}, nil, "")
+	if err != nil {
+		t.Fatalf("post-bootstrap nil-embedding create must succeed, got %v", err)
+	}
+	if plain.Embedding != nil {
+		t.Fatalf("expected nil Embedding on returned post-bootstrap entity, got %v", plain.Embedding)
+	}
+	got, err := s.GetEntity(ctx, plain.Id, "")
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	if got.Embedding != nil {
+		t.Fatalf("expected NULL embedding stored for post-bootstrap entity, got %v", got.Embedding)
+	}
+}
+
+// SPEC R7 (SPEC:442-443,480-481): a non-indexed entity type accepts an
+// embedding of any dimension but does not persist or index it — the returned
+// entity's Embedding and a subsequent GetEntity's embedding are both nil
+// (accept-and-discard).
+func TestCreateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Document is not vector-indexed in testSchema.
+	e, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "doc"}, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("non-indexed type must accept an embedding: %v", err)
+	}
+	if e.Embedding != nil {
+		t.Fatalf("expected nil Embedding on returned entity for non-indexed type, got %v", e.Embedding)
+	}
+	got, err := s.GetEntity(ctx, e.Id, "")
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	if got.Embedding != nil {
+		t.Fatalf("expected non-indexed type to discard the embedding, got %v", got.Embedding)
+	}
+}
+
+// SPEC:345-346: before the first ApplySchema (or on a graph with no
+// string-property types), a type-omitted (entityType == "") FullTextSearch is a
+// non-type-referencing method and must succeed on an empty/fresh graph — the
+// store's wildcard branch (query.go:297-301) must return an empty result set
+// with a nil error, mirroring SearchNeighbors' empty-graph behavior.
+func TestFullTextSearch_WildcardEmptyGraph_Succeeds(t *testing.T) {
+	t.Run("no schema applied", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStore(t, s)
+		ctx := context.Background()
+
+		results, err := s.FullTextSearch(ctx, "anything", "", "")
+		if err != nil {
+			t.Fatalf("wildcard FullTextSearch before ApplySchema should succeed, got %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected no results on an empty graph, got %d", len(results))
+		}
+	})
+
+	t.Run("schema with no string-property types", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStore(t, s)
+		ctx := context.Background()
+
+		// A property-less entity type creates a table with only the id column:
+		// no string properties → no FTS index → the type is legitimately
+		// unsearchable and is silently skipped, leaving an empty result set with
+		// a nil error.
+		if err := s.ApplySchema(ctx, &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{Name: "Empty"}},
+		}); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+
+		results, err := s.FullTextSearch(ctx, "anything", "", "")
+		if err != nil {
+			t.Fatalf("wildcard FullTextSearch on a schema without string-property types should succeed, got %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected no results, got %d", len(results))
+		}
+	})
 }

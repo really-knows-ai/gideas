@@ -28,7 +28,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -103,7 +102,7 @@ func NewCartographerServer(
 		// to NewTransactionManager, which stores it as tm.hardMaxTimeout. ExtendTimeout
 		// enforces the ceiling via that field, and RecoverOpenTransactions reuses the
 		// same const; all three share one source of truth.
-		txManager: NewTransactionManager(defaultTimeout, HardMaxTimeout, changeLogCap),
+		txManager: NewTransactionManager(HardMaxTimeout, changeLogCap),
 	}
 	for _, o := range opts {
 		o(srv)
@@ -832,7 +831,7 @@ func (s *CartographerServer) ExecuteCypher(
 ) (*flowv1.ExecuteCypherResponse, error) {
 	// Authoritative type-specific capability checking per SPEC R2/R3.
 	// When the SDK parses the Cypher query, it annotates gRPC metadata with
-	// entity type labels via "x-flow-entity-types". Check each extracted
+	// entity type labels via "entity_types". Check each extracted
 	// type individually; fall back to the wildcard when metadata is absent
 	// (e.g. system-to-system calls or pre-SDK clients).
 	entityTypes := extractEntityTypesFromMetadata(ctx)
@@ -867,51 +866,38 @@ func (s *CartographerServer) ExecuteCypher(
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
-	return &flowv1.ExecuteCypherResponse{Rows: rowsToTuples(rows)}, nil
+	return &flowv1.ExecuteCypherResponse{Rows: rowsToRows(rows)}, nil
 }
 
-// rowsToTuples converts a []map[string]any result from LadybugDB into a
-// []*flowv1.FlatTuple. Each map entry is stringified and wrapped in a
-// structpb.Value to produce flat tuples per SPEC §R2.
-//
-// Go map iteration order is randomised, so ranging over each row's map would
-// yield a nondeterministic, unaligned value order. To honour R2's "flat
-// tuples" deterministic contract, the column set is the sorted union of every
-// row's keys; each tuple lists values in that column order, emitting a null
-// for columns absent from that row. This makes value order and column
-// alignment identical across rows and across calls.
-func rowsToTuples(rows []map[string]any) []*flowv1.FlatTuple {
-	columns := make([]string, 0, len(rows))
-	seen := make(map[string]bool, len(rows))
+// rowsToRows converts ordered LadybugDB rows into the SPEC R2 flat-tuple Row
+// contract: each Row is one flat tuple of string values in the order LadybugDB
+// returns them — no column reordering and no cross-row alignment or
+// null-filling. Values are string-typed in v1 (all properties are type: string
+// per R1); non-string scalars and structured values are stringified.
+func rowsToRows(rows []store.CypherRow) []*flowv1.Row {
+	result := make([]*flowv1.Row, 0, len(rows))
 	for _, row := range rows {
-		for k := range row {
-			if !seen[k] {
-				seen[k] = true
-				columns = append(columns, k)
-			}
+		values := make([]string, 0, len(row.Values))
+		for _, v := range row.Values {
+			values = append(values, cypherValueString(v))
 		}
-	}
-	sort.Strings(columns)
-
-	nullVal := structpb.NewNullValue()
-	result := make([]*flowv1.FlatTuple, 0, len(rows))
-	for _, row := range rows {
-		values := make([]*structpb.Value, 0, len(columns))
-		for _, col := range columns {
-			v, ok := row[col]
-			if !ok {
-				values = append(values, nullVal)
-				continue
-			}
-			val, err := structpb.NewValue(v)
-			if err != nil {
-				val = structpb.NewStringValue(fmt.Sprintf("%v", v))
-			}
-			values = append(values, val)
-		}
-		result = append(result, &flowv1.FlatTuple{Values: values})
+		result = append(result, &flowv1.Row{Values: values})
 	}
 	return result
+}
+
+// cypherValueString stringifies one column value for the string-only v1 row
+// contract. Strings pass through verbatim; a null column (e.g. an absent
+// property in a RETURN) becomes the empty string, since the v1 wire carries no
+// null marker; every other value is formatted with its default representation.
+func cypherValueString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 func (s *CartographerServer) SearchNeighbors(
@@ -1462,6 +1448,14 @@ func (s *CartographerServer) BeginTransaction(
 		}
 		if err := s.store.DropBranchDB(ctx, txID); err != nil {
 			cleanups = append(cleanups, fmt.Sprintf("drop branch DB: %v", err))
+		}
+		// A timeout-validation rejection from Create (INVALID_ARGUMENT per SPEC
+		// error-table row "Invalid transaction timeout duration", applying to
+		// BeginTransaction) must propagate its code after cleanup — not be
+		// flattened into the admission-failure RESOURCE_EXHAUSTED below. Other
+		// Create failures (duplicate registration) remain admission failures.
+		if status.Code(err) == codes.InvalidArgument {
+			return nil, err
 		}
 		msg := fmt.Sprintf("register tx: %v", err)
 		if len(cleanups) > 0 {

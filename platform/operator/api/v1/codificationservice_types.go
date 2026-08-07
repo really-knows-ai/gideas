@@ -19,6 +19,7 @@ package v1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // CodificationServiceSpec defines the desired state of CodificationService.
@@ -129,5 +130,8 @@ func (c *CodificationService) GetConditions() []metav1.Condition   { return c.St
 func (c *CodificationService) SetConditions(cs []metav1.Condition) { c.Status.Conditions = cs }
 
 func init() {
-	SchemeBuilder.Register(&CodificationService{}, &CodificationServiceList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &CodificationService{}, &CodificationServiceList{})
+		return nil
+	})
 }

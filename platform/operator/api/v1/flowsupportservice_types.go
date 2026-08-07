@@ -19,6 +19,7 @@ package v1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // FlowSupportServiceSpec defines the desired state of FlowSupportService.
@@ -123,5 +124,8 @@ func (c *FlowSupportService) GetConditions() []metav1.Condition   { return c.Sta
 func (c *FlowSupportService) SetConditions(cs []metav1.Condition) { c.Status.Conditions = cs }
 
 func init() {
-	SchemeBuilder.Register(&FlowSupportService{}, &FlowSupportServiceList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &FlowSupportService{}, &FlowSupportServiceList{})
+		return nil
+	})
 }

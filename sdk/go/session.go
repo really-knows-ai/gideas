@@ -132,7 +132,7 @@ func (s *session) Close() error {
 // call annotates the context with entity type metadata, then invokes fn
 // with the annotated context. fn must be a closure over a typed
 // CartographerServiceClient method to preserve compile-time type safety.
-// key is the metadata key ("x-flow-entity-type" or "x-flow-entity-types")
+// key is the metadata key ("entity_type" or "entity_types")
 // per the operation-specific table. types are the entity type(s) required
 // for capability resolution by the Sidecar proxy.
 func (s *session) call(ctx context.Context, fn func(context.Context) error, key string, types ...string) error {

@@ -19,6 +19,7 @@ package v1
 import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // Contract is a map of governed artefact name to required stamp names.
@@ -367,5 +368,8 @@ type FoundryFlowList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&FoundryFlow{}, &FoundryFlowList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &FoundryFlow{}, &FoundryFlowList{})
+		return nil
+	})
 }

@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // WorkitemStatus defines the state of a Workitem.
@@ -142,5 +143,8 @@ type WorkitemList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&Workitem{}, &WorkitemList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &Workitem{}, &WorkitemList{})
+		return nil
+	})
 }

@@ -141,7 +141,7 @@ func (r *FoundryFlowReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// All validations passed and infrastructure reconciled — transition to Ready.
 	return r.setPhaseAndCondition(ctx, &flow, phaseReady,
-		metav1.ConditionTrue, "Reconciled", "Flow configuration is valid and reconciled")
+		metav1.ConditionTrue, reasonReconciled, "Flow configuration is valid and reconciled")
 }
 
 // validateGovernancePolicy checks governance policy internal consistency.

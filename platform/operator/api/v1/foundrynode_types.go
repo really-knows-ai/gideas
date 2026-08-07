@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // FoundryNodeSpec defines the desired state of FoundryNode.
@@ -173,5 +174,8 @@ type FoundryNodeList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&FoundryNode{}, &FoundryNodeList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &FoundryNode{}, &FoundryNodeList{})
+		return nil
+	})
 }

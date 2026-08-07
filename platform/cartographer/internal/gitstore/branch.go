@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// CreateBranch creates a branch from HEAD with the given txID.
+// CreateBranch creates a branch from main with the given txID.
 // Validates txID as a UUID v4. Returns ErrBranchAlreadyExists if the
 // branch already exists, ErrInvalidUUID if txID is not a valid UUID v4.
 func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
@@ -28,15 +28,19 @@ func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
 		return fmt.Errorf("create branch %s: %w", txID, err)
 	}
 
-	// CreateBranch only creates the ref; we need HEAD to point at it.
-	// Get HEAD hash and set the new branch ref to that hash.
-	headRef, err := g.repo.Reference(plumbing.HEAD, true)
+	// CreateBranch only creates the config entry; the ref must point at main
+	// explicitly. SPEC Hydration step 1 (SPEC:754) mandates that the
+	// transaction branch is created from main. Branching from HEAD would let an
+	// abandoned failed Commit (whose working tree is still checked out on the
+	// transaction branch) leak its committed changes into the next transaction
+	// via HardResetToBranch, breaking transaction isolation.
+	mainRef, err := g.repo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
 	if err != nil {
-		return fmt.Errorf("resolve HEAD: %w", err)
+		return fmt.Errorf("resolve main ref: %w", err)
 	}
 	branchRef := plumbing.NewHashReference(
 		plumbing.ReferenceName("refs/heads/"+txID),
-		headRef.Hash(),
+		mainRef.Hash(),
 	)
 	if err := g.backend.SetReference(branchRef); err != nil {
 		return fmt.Errorf("set branch ref %s: %w", txID, err)

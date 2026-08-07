@@ -139,7 +139,7 @@ func TestApplySchemaPushesCompleteSchema(t *testing.T) {
 		}},
 	}
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS},
 		Spec:       *spec.DeepCopy(),
 	}
 

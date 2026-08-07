@@ -457,53 +457,6 @@ func TestDiffSchema(t *testing.T) {
 	}
 }
 
-func TestSchemaDuplicateNames(t *testing.T) {
-	tests := []struct {
-		name string
-		spec *flowv1.FoundryGraphSpec
-		want string
-	}{
-		{
-			name: "no duplicates",
-			spec: &flowv1.FoundryGraphSpec{
-				EntityTypes: []flowv1.EntityTypeSpec{{Name: "A"}, {Name: "B"}},
-				EdgeTypes:   []flowv1.EdgeTypeSpec{{Name: "C"}},
-			},
-			want: "",
-		},
-		{
-			name: "duplicate entity name",
-			spec: &flowv1.FoundryGraphSpec{
-				EntityTypes: []flowv1.EntityTypeSpec{{Name: "A"}, {Name: "A"}},
-			},
-			want: "duplicate entity type name A",
-		},
-		{
-			name: "duplicate edge name",
-			spec: &flowv1.FoundryGraphSpec{
-				EdgeTypes: []flowv1.EdgeTypeSpec{{Name: "X"}, {Name: "X"}},
-			},
-			want: "duplicate edge type name X",
-		},
-		{
-			name: "cross-list overlap allowed",
-			spec: &flowv1.FoundryGraphSpec{
-				EntityTypes: []flowv1.EntityTypeSpec{{Name: "A"}},
-				EdgeTypes:   []flowv1.EdgeTypeSpec{{Name: "A"}},
-			},
-			want: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := schemaDuplicateNames(tt.spec); got != tt.want {
-				t.Errorf("schemaDuplicateNames() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestSpecSemanticallyEqual(t *testing.T) {
 	tests := []struct {
 		name string

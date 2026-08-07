@@ -71,7 +71,7 @@ func (r *GovernedArtefactReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	return SetStatusCondition(ctx, r.Client, &ga, conditionReady, metav1.ConditionTrue,
-		"Reconciled", "GovernedArtefact stamp vocabulary registered",
+		reasonReconciled, "GovernedArtefact stamp vocabulary registered",
 		func(ga *flowv1.GovernedArtefact) *[]metav1.Condition { return &ga.Status.Conditions },
 	)
 }

@@ -20,7 +20,7 @@ const (
 type graphNode struct {
 	ID         string            `json:"id"`
 	Type       string            `json:"type"`
-	Properties map[string]string `json:"properties,omitempty"`
+	Properties map[string]string `json:"properties"`
 }
 
 type graphEdge struct {
@@ -28,12 +28,12 @@ type graphEdge struct {
 	Type       string            `json:"type"`
 	From       string            `json:"from"`
 	To         string            `json:"to"`
-	Properties map[string]string `json:"properties,omitempty"`
+	Properties map[string]string `json:"properties"`
 }
 
 type graphJSON struct {
-	Nodes []graphNode `json:"nodes,omitempty"`
-	Edges []graphEdge `json:"edges,omitempty"`
+	Nodes []graphNode `json:"nodes"`
+	Edges []graphEdge `json:"edges"`
 }
 
 // collectExportData collects and serialises the full graph.
@@ -91,21 +91,15 @@ func serializeGraph(format string, entities []store.Entity, edges []store.Edge) 
 }
 
 func serializeJSON(entities []store.Entity, edges []store.Edge) ([]byte, error) {
-	g := graphJSON{}
+	g := graphJSON{Nodes: []graphNode{}, Edges: []graphEdge{}}
 	for _, e := range entities {
-		node := graphNode{ID: e.Id, Type: e.Type}
-		if len(e.Properties) > 0 {
-			node.Properties = make(map[string]string, len(e.Properties))
-			maps.Copy(node.Properties, e.Properties)
-		}
+		node := graphNode{ID: e.Id, Type: e.Type, Properties: map[string]string{}}
+		maps.Copy(node.Properties, e.Properties)
 		g.Nodes = append(g.Nodes, node)
 	}
 	for _, e := range edges {
-		edge := graphEdge{ID: e.Id, Type: e.Type, From: e.FromEntityID, To: e.ToEntityID}
-		if len(e.Properties) > 0 {
-			edge.Properties = make(map[string]string, len(e.Properties))
-			maps.Copy(edge.Properties, e.Properties)
-		}
+		edge := graphEdge{ID: e.Id, Type: e.Type, From: e.FromEntityID, To: e.ToEntityID, Properties: map[string]string{}}
+		maps.Copy(edge.Properties, e.Properties)
 		g.Edges = append(g.Edges, edge)
 	}
 	return json.Marshal(g)

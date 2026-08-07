@@ -74,7 +74,7 @@ func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 
 	if r.Librarian == nil {
 		err := fmt.Errorf("librarian client not configured")
-		r.setCondition(&law, "Ready", metav1.ConditionFalse, "LibrarianUnavailable", err.Error())
+		r.setCondition(&law, metav1.ConditionFalse, "LibrarianUnavailable", err.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &law)
 	}
 
@@ -82,7 +82,7 @@ func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		if controllerutil.ContainsFinalizer(&law, lawLibrarianSyncFinalizer) {
 			if _, err := r.Librarian.RetireLaw(ctx, &flowv1gen.RetireLawRequest{LawId: law.Name}); err != nil {
 				log.Error(err, "Failed to retire Law from Librarian", "name", law.Name)
-				r.setCondition(&law, "Ready", metav1.ConditionFalse, "RetireFailed", err.Error())
+				r.setCondition(&law, metav1.ConditionFalse, "RetireFailed", err.Error())
 				return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &law)
 			}
 			controllerutil.RemoveFinalizer(&law, lawLibrarianSyncFinalizer)
@@ -100,25 +100,25 @@ func (r *LawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 
 	// Validate appliesTo references against GovernedArtefacts.
 	if err := r.validateAppliesTo(ctx, &law); err != nil {
-		r.setCondition(&law, "Ready", metav1.ConditionFalse, "ValidationFailed", err.Error())
+		r.setCondition(&law, metav1.ConditionFalse, "ValidationFailed", err.Error())
 		return ctrl.Result{}, r.persistStatus(ctx, &law)
 	}
 
 	// Compute content hash from spec.
 	version, err := r.computeVersion(&law)
 	if err != nil {
-		r.setCondition(&law, "Ready", metav1.ConditionFalse, "HashFailed", err.Error())
+		r.setCondition(&law, metav1.ConditionFalse, "HashFailed", err.Error())
 		return ctrl.Result{}, r.persistStatus(ctx, &law)
 	}
 
 	law.Status.Version = version
 	if err := r.syncLaw(ctx, &law); err != nil {
 		log.Error(err, "Failed to sync Law to Librarian", "name", law.Name)
-		r.setCondition(&law, "Ready", metav1.ConditionFalse, "SyncFailed", err.Error())
+		r.setCondition(&law, metav1.ConditionFalse, "SyncFailed", err.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, r.persistStatus(ctx, &law)
 	}
 
-	r.setCondition(&law, "Ready", metav1.ConditionTrue, "Reconciled",
+	r.setCondition(&law, metav1.ConditionTrue, reasonReconciled,
 		fmt.Sprintf("Law version %s computed and synced", version))
 
 	return ctrl.Result{}, r.persistStatus(ctx, &law)
@@ -190,15 +190,15 @@ func (r *LawReconciler) computeVersion(law *flowv1.Law) (string, error) {
 	return fmt.Sprintf("%x", hash[:8]), nil
 }
 
-// setCondition sets a condition on the law's status (in memory only).
+// setCondition sets a condition on the law's status (in memory only). The law's
+// conditions are always Ready-typed, so the type is fixed.
 func (r *LawReconciler) setCondition(
 	law *flowv1.Law,
-	condType string,
 	status metav1.ConditionStatus,
 	reason, message string,
 ) {
 	meta.SetStatusCondition(&law.Status.Conditions, metav1.Condition{
-		Type:               condType,
+		Type:               "Ready",
 		Status:             status,
 		ObservedGeneration: law.Generation,
 		Reason:             reason,

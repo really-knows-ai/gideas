@@ -1116,6 +1116,86 @@ func TestCreateBranchDuplicate(t *testing.T) {
 	}
 }
 
+// TestCreateBranchFromMainWhenHeadNotOnMain pins SPEC Hydration step 1
+// (SPEC:754): CreateBranch must branch from main, not from the current HEAD.
+// After an abandoned failed Commit leaves the working tree checked out on a
+// transaction branch, a new transaction must not inherit that branch's commits
+// — branching from HEAD would leak the abandoned transaction's changes into
+// the next transaction via HardResetToBranch, breaking transaction isolation.
+func TestCreateBranchFromMainWhenHeadNotOnMain(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+
+		// Advance main by one commit so its tip differs from the init commit.
+		mainEntity := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: mainEntity, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "main data"); err != nil {
+			return err
+		}
+		mainHash, err := gs.BranchHEAD(ctx(), "main")
+		if err != nil {
+			return err
+		}
+
+		// Simulate an abandoned transaction: branch off main, check it out and
+		// commit on it — HEAD is now on the stale transaction branch, whose tip
+		// is strictly ahead of main.
+		staleTx := validUUID(t)
+		if err := gs.CreateBranch(ctx(), staleTx); err != nil {
+			return err
+		}
+		if err := gs.Checkout(ctx(), staleTx); err != nil {
+			return err
+		}
+		staleEntity := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: staleEntity, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "transaction:"+staleTx); err != nil {
+			return err
+		}
+		staleHash, err := gs.BranchHEAD(ctx(), staleTx)
+		if err != nil {
+			return err
+		}
+		if staleHash == mainHash {
+			return fmt.Errorf("test setup: stale branch tip must differ from main")
+		}
+
+		// A new transaction begun while HEAD is on the stale branch must still
+		// branch from main (SPEC Hydration step 1).
+		newTx := validUUID(t)
+		if err := gs.CreateBranch(ctx(), newTx); err != nil {
+			return err
+		}
+		newHash, err := gs.BranchHEAD(ctx(), newTx)
+		if err != nil {
+			return err
+		}
+		if newHash != mainHash {
+			return fmt.Errorf("new branch HEAD = %s, want main %s (SPEC Hydration step 1)", newHash, mainHash)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestCreateBranchFromMainWhenHeadNotOnMain: %v", err)
+	}
+}
+
 func TestCheckout(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -2097,9 +2177,18 @@ func TestFastForwardMergeNonDefaultInto(t *testing.T) {
 			return err
 		}
 
-		// Create branch B (from branch A) with another entity
+		// Create branch B, then pin it to branch A's tip (CreateBranch now
+		// branches from main per SPEC Hydration step 1, so the chain is
+		// rebuilt explicitly) with another entity.
 		branchB := validUUID(t)
 		if err := gs.CreateBranch(ctx(), branchB); err != nil {
+			return err
+		}
+		branchAHash, err := gs.BranchHEAD(ctx(), branchA)
+		if err != nil {
+			return err
+		}
+		if err := gs.SetBranchRef(ctx(), branchB, branchAHash); err != nil {
 			return err
 		}
 		if err := gs.Checkout(ctx(), branchB); err != nil {
@@ -4349,6 +4438,77 @@ func TestFetchAndMerge_Diverged(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("TestFetchAndMerge_Diverged: %v", err)
+	}
+}
+
+// TestFetchAndMerge_LocalAhead pins the local-ahead (remote strictly behind)
+// classification of FetchAndMerge: local main has advanced past the remote
+// (e.g. a fire-and-forget push that failed transiently — SPEC:788), so there
+// is nothing to pull and the call must succeed as up-to-date, never fail with
+// ErrPullDiverged. The remote-behind state is reached with distinct
+// local/remote tips by dropping the remote-tracking ref first (simulating a
+// remote (re)configuration on a repo that has not fetched since —
+// ensureRemoteExists deletes/recreates origin on URL change), forcing the
+// fetch to re-create the tracking ref from the remote's behind-local tip.
+func TestFetchAndMerge_LocalAhead(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	setupBareRemote(t, tmpDir, bareDir)
+	gs := cloneFromBare(t, tmpDir, bareDir)
+
+	// Local commits a change the remote has never seen — local main is now
+	// strictly ahead of the remote.
+	localFile, err := gs.wt.Filesystem.Create("local.txt")
+	if err != nil {
+		t.Fatalf("create local file: %v", err)
+	}
+	_, _ = localFile.Write([]byte("local content"))
+	_ = localFile.Close()
+	if _, err := gs.wt.Add("local.txt"); err != nil {
+		t.Fatalf("add local: %v", err)
+	}
+	localCommitHash, err := gs.wt.Commit("local ahead", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	})
+	if err != nil {
+		t.Fatalf("local commit: %v", err)
+	}
+
+	err = gs.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		// Drop the tracking ref so the fetch re-creates it from the remote's
+		// (behind-local) tip and the ancestry classification runs on distinct
+		// local/remote tips rather than short-circuiting as
+		// NoErrAlreadyUpToDate.
+		if err := gs.backend.RemoveReference(plumbing.ReferenceName("refs/remotes/origin/main")); err != nil {
+			return fmt.Errorf("remove tracking ref: %w", err)
+		}
+
+		newHash, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if err != nil {
+			return fmt.Errorf("FetchAndMerge local-ahead: %w", err)
+		}
+		if newHash != localCommitHash {
+			return fmt.Errorf("expected local hash %s, got %s", localCommitHash, newHash)
+		}
+
+		// Local main must be left unchanged — there is nothing to pull.
+		localRef, refErr := gs.repo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+		if refErr != nil {
+			return fmt.Errorf("resolve local ref: %w", refErr)
+		}
+		if localRef.Hash() != localCommitHash {
+			return fmt.Errorf("local main ref changed on local-ahead: got %s, want %s", localRef.Hash(), localCommitHash)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_LocalAhead: %v", err)
 	}
 }
 

@@ -128,22 +128,39 @@ func TestTxExecuteCypher(t *testing.T) {
 	mock := &mockCartographerClient{
 		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
 			capturedTxID = req.GetTransactionId()
-			return &flowv1.ExecuteCypherResponse{}, nil
+			// SPEC R2: each Row is one flat tuple of string values in the
+			// order LadybugDB returned them; the SDK exposes them
+			// positionally as col_<N>.
+			return &flowv1.ExecuteCypherResponse{
+				Rows: []*flowv1.Row{
+					{Values: []string{"id-1", "x"}},
+					{Values: []string{"id-2", "y"}},
+				},
+			}, nil
 		},
 	}
 	tx := newMockTx(mock)
-	_, err := tx.ExecuteCypher("MATCH (c:Component) RETURN c", nil)
+	rows, err := tx.ExecuteCypher("MATCH (c:Component) RETURN c", nil)
 	if err != nil {
 		t.Fatalf("ExecuteCypher returned error: %v", err)
 	}
 	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected transaction ID tx-1, got %q", capturedTxID)
 	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	if rows[0]["col_0"] != "id-1" || rows[0]["col_1"] != "x" {
+		t.Errorf("row 0 = %v, want map[col_0:id-1 col_1:x]", rows[0])
+	}
+	if rows[1]["col_0"] != "id-2" || rows[1]["col_1"] != "y" {
+		t.Errorf("row 1 = %v, want map[col_0:id-2 col_1:y]", rows[1])
+	}
 }
 
 // TestTxExecuteCypher_AnnotatesPluralEntityTypes verifies SPEC R3 on the
 // Transaction read path: the SDK parses the Cypher, extracts the entity-type
-// labels, and annotates the plural "x-flow-entity-types" gRPC metadata key
+// labels, and annotates the plural "entity_types" gRPC metadata key
 // with the comma-separated labels.
 func TestTxExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
 	mock := &mockCartographerClient{
@@ -154,7 +171,7 @@ func TestTxExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypesKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-types metadata")
+				t.Fatal("no entity_types metadata")
 			}
 			if vals[0] != componentType+",Service" {
 				t.Errorf("expected metadata %s=%q, got %q",
@@ -182,7 +199,7 @@ func TestTxExecuteCypher_FallsBackToWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypesKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-types metadata")
+				t.Fatal("no entity_types metadata")
 			}
 			if vals[0] != "*" {
 				t.Errorf("expected wildcard * in %s, got %q", metadataEntityTypesKey, vals[0])
@@ -780,7 +797,7 @@ func TestTxUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -794,7 +811,7 @@ func TestTxUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
@@ -816,7 +833,7 @@ func TestTxUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -831,7 +848,7 @@ func TestTxUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != componentType {
 		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
@@ -848,7 +865,7 @@ func TestTxDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -862,7 +879,7 @@ func TestTxDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
@@ -879,7 +896,7 @@ func TestTxCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -895,7 +912,7 @@ func TestTxCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
@@ -912,7 +929,7 @@ func TestTxDeleteEdge_SendsKeyAndWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -927,7 +944,7 @@ func TestTxDeleteEdge_SendsKeyAndWildcard(t *testing.T) {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)

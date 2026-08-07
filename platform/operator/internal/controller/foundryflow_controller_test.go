@@ -104,7 +104,7 @@ var _ = Describe("FoundryFlow Controller", func() {
 			readyCond := meta.FindStatusCondition(flow.Status.Conditions, "Ready")
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(readyCond.Reason).To(Equal("Reconciled"))
+			Expect(readyCond.Reason).To(Equal(reasonReconciled))
 		})
 	})
 

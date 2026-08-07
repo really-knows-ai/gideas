@@ -88,7 +88,7 @@ var _ = Describe("GovernedArtefact Controller", func() {
 			readyCond := meta.FindStatusCondition(ga.Status.Conditions, "Ready")
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(readyCond.Reason).To(Equal("Reconciled"))
+			Expect(readyCond.Reason).To(Equal(reasonReconciled))
 		})
 	})
 

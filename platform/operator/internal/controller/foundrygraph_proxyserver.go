@@ -76,6 +76,11 @@ func (s *ProxyServer) proxyUnimplemented(method string) error {
 	return status.Error(codes.Unimplemented, method+" is not available through the Operator proxy; use the SDK directly")
 }
 
+// defaultGraphName is the conventional singleton FoundryGraph name (SPEC R1: the
+// singleton is conventionally named "flow-graph"; other components reference this
+// conventional name).
+const defaultGraphName = "flow-graph"
+
 // extractRoutingMetadata reads x-flow-namespace and x-flow-graph-name from gRPC metadata.
 func (s *ProxyServer) extractRoutingMetadata(ctx context.Context) (namespace, name string, err error) {
 	md, ok := metadata.FromIncomingContext(ctx)
@@ -88,7 +93,7 @@ func (s *ProxyServer) extractRoutingMetadata(ctx context.Context) (namespace, na
 		return "", "", status.Error(codes.InvalidArgument, "missing routing namespace (x-flow-namespace)")
 	}
 
-	graphName := "flow-graph" // default per SPEC R1 singleton convention
+	graphName := defaultGraphName // SPEC R1 singleton convention
 	if gn := md.Get("x-flow-graph-name"); len(gn) > 0 && gn[0] != "" {
 		graphName = gn[0]
 	}
@@ -96,8 +101,11 @@ func (s *ProxyServer) extractRoutingMetadata(ctx context.Context) (namespace, na
 	return ns[0], graphName, nil
 }
 
-// authorize performs TokenReview + SubjectAccessReview for the caller.
-func (s *ProxyServer) authorize(ctx context.Context, namespace, name, verb string) error {
+// authorize performs TokenReview + SubjectAccessReview for the caller. The proxy only
+// ever authorizes the read capability the CLI path needs, so the verb is fixed to "get"
+// (SPEC Graph Export Flow step 3: SubjectAccessReview for READ:graph/entity/* against
+// the foundrygraphs resource).
+func (s *ProxyServer) authorize(ctx context.Context, namespace, name string) error {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return status.Error(codes.Unauthenticated, "missing gRPC metadata")
@@ -109,6 +117,7 @@ func (s *ProxyServer) authorize(ctx context.Context, namespace, name, verb strin
 	}
 
 	token := strings.TrimPrefix(authHeaders[0], "Bearer ")
+	const verb = "get"
 
 	// Check auth cache.
 	if s.authCache.Get(s.authCache.key(token, namespace, name, verb)) {
@@ -246,7 +255,7 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 	// unauthenticated/unprivileged caller could distinguish "no such (namespace, graph-name)"
 	// (Unavailable) from "registered" (proceed to auth). With auth-first, an unauthorized caller
 	// gets Unauthenticated/PermissionDenied regardless of whether the graph is registered.
-	if err := s.authorize(stream.Context(), ns, name, "get"); err != nil {
+	if err := s.authorize(stream.Context(), ns, name); err != nil {
 		return err
 	}
 
@@ -279,17 +288,17 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	client, err := s.dialer(dialCtx, endpoint)
+	cc, err := s.dialer(dialCtx, endpoint)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "cannot connect to cartographer: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = cc.Close() }()
 
 	// Establish and stream on the caller's ctx (the capability-injected outgoing context),
 	// NOT the dial deadline: a stream that outlives the 10s dial window must not be cut
 	// mid-stream. A broken upstream that surfaces after establishment is the SPEC R11
 	// INTERNAL case, not a dial-timeout Unavailable.
-	clientStream, err := client.ExportGraph(ctx, req)
+	clientStream, err := cc.ExportGraph(ctx, req)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "cannot start export stream: %v", err)
 	}

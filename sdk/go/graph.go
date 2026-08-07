@@ -3,7 +3,6 @@ package flow
 import (
 	"context"
 	"fmt"
-	"maps"
 	"math"
 	"runtime"
 	"sync"
@@ -108,14 +107,47 @@ func (s *ExportStream) Stop() {
 // ID-to-type mapping
 // ---------------------------------------------------------------------------
 
-// idTypeMap is a thread-safe map of entity ID to entity type.
+// idTypeMapMaxSize and idTypeMapTTL bound the SDK's local ID-to-type cache
+// (SPEC R3: "bounded local cache (TTL-bounded)"). The SPEC prescribes the
+// bounds but not their values; these pick a generous ceiling for a
+// best-effort capability cache.
+const (
+	idTypeMapMaxSize = 1000
+	idTypeMapTTL     = 10 * time.Minute
+)
+
+// idTypeMap is a thread-safe, size- and TTL-bounded cache of entity ID to
+// entity type (SPEC R3: "bounded local cache (TTL-bounded)"). Entries are
+// treated as unknown once they are older than idTypeMapTTL, and once the map
+// holds idTypeMapMaxSize IDs a new ID evicts the oldest entry.
+//
+// ponytail: Eviction is a linear scan for the oldest entry on an
+// over-capacity store, and expired entries are only physically removed when
+// such an eviction scan runs (they are excluded from resolve/snapshot
+// earlier). Both are O(n) in the map size, which is bounded by
+// idTypeMapMaxSize (1000), so the cost is acceptable for a best-effort cache
+// populated from the SDK's own traffic. Upgrade path: a container/heap keyed
+// by insertion time if the cache grows.
 type idTypeMap struct {
-	mu    sync.RWMutex
-	types map[string]string
+	mu      sync.RWMutex
+	entries map[string]idTypeEntry
+	ttl     time.Duration
+	maxSize int
+}
+
+// idTypeEntry is a single cached mapping with its insertion time for TTL
+// eviction.
+type idTypeEntry struct {
+	entityType string
+	insertedAt time.Time
 }
 
 func newIDTypeMap() *idTypeMap {
-	return &idTypeMap{types: make(map[string]string)}
+	return &idTypeMap{
+		entries: make(map[string]idTypeEntry),
+		ttl:     idTypeMapTTL,
+		maxSize: idTypeMapMaxSize,
+	}
 }
 
 func (m *idTypeMap) store(id, entityType string) {
@@ -124,14 +156,40 @@ func (m *idTypeMap) store(id, entityType string) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.types[id] = entityType
+	if _, ok := m.entries[id]; !ok && len(m.entries) >= m.maxSize {
+		m.evictOldestLocked()
+	}
+	// Re-storing an existing ID refreshes its TTL: the entity was seen again
+	// in the SDK's own traffic.
+	m.entries[id] = idTypeEntry{entityType: entityType, insertedAt: time.Now()}
+}
+
+// evictOldestLocked removes the entry with the earliest insertion time.
+// Caller must hold m.mu for writing.
+func (m *idTypeMap) evictOldestLocked() {
+	var oldestID string
+	var oldestAt time.Time
+	first := true
+	for id, e := range m.entries {
+		if first || e.insertedAt.Before(oldestAt) {
+			oldestID, oldestAt = id, e.insertedAt
+			first = false
+		}
+	}
+	delete(m.entries, oldestID)
 }
 
 func (m *idTypeMap) resolve(id string) (string, bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	t, ok := m.types[id]
-	return t, ok
+	e, ok := m.entries[id]
+	m.mu.RUnlock()
+	if !ok {
+		return "", false
+	}
+	if time.Since(e.insertedAt) > m.ttl {
+		return "", false // TTL-expired: treat as unknown (lazy eviction).
+	}
+	return e.entityType, true
 }
 
 // resolveOrWildcard returns the entity type for the given ID if present in the
@@ -148,18 +206,33 @@ func (m *idTypeMap) resolveOrWildcard(id string) string {
 func (m *idTypeMap) remove(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.types, id)
+	delete(m.entries, id)
 }
 
-// snapshot returns a shallow copy of the underlying map, safe for reading
-// without holding the lock. The caller is responsible for its own
+// snapshot returns a shallow copy of the live (non-expired) entries, safe for
+// reading without holding the lock. The caller is responsible for its own
 // synchronisation.
 func (m *idTypeMap) snapshot() map[string]string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	snap := make(map[string]string, len(m.types))
-	maps.Copy(snap, m.types)
+	snap := make(map[string]string, len(m.entries))
+	for id, e := range m.entries {
+		if time.Since(e.insertedAt) <= m.ttl {
+			snap[id] = e.entityType
+		}
+	}
 	return snap
+}
+
+// merge copies a snapshot (ID → type) into the cache, stamping each entry
+// with the current time so it gets a fresh TTL. Used by BeginTransaction to
+// seed a transaction's cache from the graph's current snapshot.
+func (m *idTypeMap) merge(snap map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, t := range snap {
+		m.entries[id] = idTypeEntry{entityType: t, insertedAt: time.Now()}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -197,9 +270,11 @@ type beginTxConfig struct {
 
 // WithTimeout sets the initial transaction timeout requested on
 // BeginTransaction. The 7-day hard maximum (SPEC R9/R2) is enforced by the
-// Cartographer: a duration above the cap is silently shortened server-side,
-// and the granted value is returned as the response's applied_timeout, which
-// the SDK honours on the resulting Transaction handle. The client sends the
+// Cartographer: a requested timeout exceeding the cap is rejected with
+// INVALID_ARGUMENT (matching ExtendTimeout — no silent capping; SPEC error
+// table row "Invalid transaction timeout duration"). Valid requests receive
+// the granted value in the response's applied_timeout, which the SDK
+// surfaces on the resulting Transaction handle. The client sends the
 // requested value verbatim and relies on applied_timeout, never a local cap.
 //
 // This is the SDK-surface BeginTxOption prescribed by SPEC R4/R9 as
@@ -254,19 +329,19 @@ func (g *Graph) ExecuteCypher(cypher string, params map[string]any) ([]map[strin
 		var callErr error
 		resp, callErr = g.session.Cartographer.ExecuteCypher(ctx, req)
 		return callErr
-	}, "x-flow-entity-types", labels...)
+	}, "entity_types", labels...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert proto rows to []map[string]any.
+	// Convert proto rows to []map[string]any. Each Row is one flat tuple of
+	// string values in the order LadybugDB returned them; expose them
+	// positionally as col_<N> (SPEC R2).
 	rows := make([]map[string]any, 0, len(resp.GetRows()))
 	for _, row := range resp.GetRows() {
 		m := make(map[string]any)
-		vals := row.GetValues()
-		for i, v := range vals {
-			key := fmt.Sprintf("col_%d", i)
-			m[key] = decodeProtoValue(v)
+		for i, v := range row.GetValues() {
+			m[fmt.Sprintf("col_%d", i)] = v
 		}
 		rows = append(rows, m)
 	}
@@ -461,7 +536,7 @@ func (g *Graph) UpdateEntity(id string, properties map[string]string, embedding 
 		var callErr error
 		resp, callErr = g.session.Cartographer.UpdateEntity(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", entityType)
+	}, "entity_type", entityType)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +572,7 @@ func (g *Graph) DeleteEntity(id string) (*Entity, error) {
 		var callErr error
 		resp, callErr = g.session.Cartographer.DeleteEntity(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", entityType)
+	}, "entity_type", entityType)
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +607,7 @@ func (g *Graph) CreateEdge(edgeType, fromEntityID, toEntityID string, properties
 		var callErr error
 		resp, callErr = g.session.Cartographer.CreateEdge(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", sourceType)
+	}, "entity_type", sourceType)
 	if err != nil {
 		return nil, err
 	}
@@ -558,13 +633,13 @@ func (g *Graph) DeleteEdge(id string) (*Edge, error) {
 	// Always annotate WRITE:graph/entity/* (Cartographer is authoritative for source type).
 	// ponytail: DeleteEdge always uses the wildcard "*" as the entity type
 	// because the edge's source entity type is resolved authoritatively by the
-	// Cartographer (R3). The metadata key "x-flow-entity-type" is used here
+	// Cartographer (R3). The metadata key "entity_type" is used here
 	// for consistency with other write-path wildcard annotations.
 	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
 		var callErr error
 		resp, callErr = g.session.Cartographer.DeleteEdge(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", "*")
+	}, "entity_type", "*")
 	if err != nil {
 		return nil, err
 	}
@@ -611,9 +686,7 @@ func (g *Graph) BeginTransaction(opts ...BeginTxOption) (*Transaction, error) {
 
 	// Snapshot the current ID-to-type map into the transaction.
 	txTypeMap := newIDTypeMap()
-	txTypeMap.mu.Lock()
-	maps.Copy(txTypeMap.types, g.idTypeMap.snapshot())
-	txTypeMap.mu.Unlock()
+	txTypeMap.merge(g.idTypeMap.snapshot())
 
 	return &Transaction{
 		session:   g.session,
@@ -655,22 +728,24 @@ func (g *Graph) ExportGraph(format string) (*ExportStream, error) {
 	// matters here — fail-fast on a blackholed upstream instead of hanging on
 	// the unbounded session ctx — is met, and the client always retains
 	// Stream.Stop() plus a finalizer to release the stream early.
-	establishCtx := g.session.ctx
-	cancel := context.CancelFunc(func() {})
+	// The stream is pinned to a child of ctx (timeout-bounded when
+	// configured); Stop()/the finalizer cancel the context the stream is
+	// actually pinned to — establishCtx itself when a deadline applies,
+	// else the cancellable ctx — so an established stream is released early.
+	ctx, cancel := context.WithCancel(g.session.ctx)
+	establishCtx := ctx
+	streamCancel := cancel
 	if g.session.timeout > 0 {
-		establishCtx, cancel = context.WithTimeout(establishCtx, g.session.timeout)
+		var establishCancel context.CancelFunc
+		establishCtx, establishCancel = context.WithTimeout(ctx, g.session.timeout)
+		streamCancel = establishCancel
 	}
 	stream, err := g.session.Cartographer.ExportGraph(establishCtx, req)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	// On success the establishment context is intentionally left attached to
-	// the stream: gRPC pins it to the returned stream, so cancelling it would
-	// immediately kill an established stream. It self-cancels at the deadline.
-
-	ctx, cancel := context.WithCancel(g.session.ctx)
-	return newExportStream(ctx, cancel, stream), nil
+	return newExportStream(establishCtx, streamCancel, stream), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -685,35 +760,4 @@ func validateEmbedding(embedding []float32) error {
 		}
 	}
 	return nil
-}
-
-// decodeProtoValue converts a protobuf Value to a Go value.
-func decodeProtoValue(v *structpb.Value) any {
-	if v == nil {
-		return nil
-	}
-	switch k := v.GetKind().(type) {
-	case *structpb.Value_NullValue:
-		return nil
-	case *structpb.Value_NumberValue:
-		return k.NumberValue
-	case *structpb.Value_StringValue:
-		return k.StringValue
-	case *structpb.Value_BoolValue:
-		return k.BoolValue
-	case *structpb.Value_StructValue:
-		m := make(map[string]any)
-		for k2, v2 := range k.StructValue.GetFields() {
-			m[k2] = decodeProtoValue(v2)
-		}
-		return m
-	case *structpb.Value_ListValue:
-		items := make([]any, 0, len(k.ListValue.GetValues()))
-		for _, item := range k.ListValue.GetValues() {
-			items = append(items, decodeProtoValue(item))
-		}
-		return items
-	default:
-		return nil
-	}
 }

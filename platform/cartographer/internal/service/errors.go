@@ -243,6 +243,10 @@ func errInvalidExtendTimeoutDuration(detail string) error {
 	return status.Errorf(codes.InvalidArgument, "invalid extend timeout duration: %s", detail)
 }
 
+func errInvalidTransactionTimeoutDuration(detail string) error {
+	return status.Errorf(codes.InvalidArgument, "invalid transaction timeout duration: %s", detail)
+}
+
 func errWipeGraphOpenTransactions() error {
 	return status.Error(codes.FailedPrecondition, "cannot wipe graph: open transactions exist")
 }

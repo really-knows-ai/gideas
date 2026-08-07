@@ -48,14 +48,16 @@ message ExecuteCypherRequest {
   string transaction_id = 3;
 }
 
-// FlatTuple represents a single row of scalar values from a Cypher query result.
-// Each value is a scalar (string, number, bool, or null) — never a nested list or struct.
-message FlatTuple {
-  repeated google.protobuf.Value values = 1;
+// Row represents a single row of string values from a Cypher query result.
+// Each Row is one flat tuple of the returned column values, in the order
+// LadybugDB returns them (SPEC R2). Values are string-typed in v1: all
+// properties are `type: string` per R1.
+message Row {
+  repeated string values = 1;
 }
 
 message ExecuteCypherResponse {
-  repeated FlatTuple rows = 1;
+  repeated Row rows = 1;
 }
 
 message SearchNeighborsRequest {

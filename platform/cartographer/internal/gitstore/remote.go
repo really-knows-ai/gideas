@@ -193,8 +193,11 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 //     push path needs the local branch to fast-forward onto the remote so the
 //     subsequent push is fast-forward. It only ever fast-forwards (or is
 //     already up-to-date), so in the normal case the fetch+ancestor-check
-//     below advances local main and the push succeeds. On true divergence it
-//     now also receives ErrPullDiverged and simply skips that push (logged +
+//     below advances local main and the push succeeds. A local-ahead state
+//     (remote strictly behind local) is treated as up-to-date — there is
+//     nothing to pull — so a failed fire-and-forget push leaves the retry
+//     path open on the next commit (SPEC:788). On true divergence it
+//     receives ErrPullDiverged and simply skips that push (logged +
 //     telemetry) rather than fabricating a merge commit on local main that
 //     mixes a peer's commits into the published timeline. The commit itself is
 //     unaffected — the push is fire-and-forget behind an already-returned
@@ -282,6 +285,21 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 			return plumbing.ZeroHash, err
 		}
 		return remoteHash, nil
+	}
+
+	// Local is ahead of the remote (remote strictly behind): the remote tip is
+	// an ancestor of the local commit. There is nothing to pull, so this is
+	// treated as up-to-date rather than ErrPullDiverged. This matters for the
+	// Commit step-14 pull-before-push: a fire-and-forget push that failed
+	// transiently leaves local main ahead of the remote, and the next commit's
+	// pull must not fail (which would skip the retried push, defeating SPEC:788
+	// "the next commit will retry the push").
+	remoteIsAncestor, err := remoteCommit.IsAncestor(localCommit)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("check remote ancestor: %w", err)
+	}
+	if remoteIsAncestor {
+		return localHash, nil
 	}
 
 	// Diverged: neither local nor remote is an ancestor of the other. The

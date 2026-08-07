@@ -70,7 +70,7 @@ type Store interface {
 	ListEdgesOfType(ctx context.Context, edgeType, branch string) ([]Edge, error)
 
 	// Query
-	ExecuteCypher(ctx context.Context, cypher string, params map[string]any, branch string) ([]map[string]any, error)
+	ExecuteCypher(ctx context.Context, cypher string, params map[string]any, branch string) ([]CypherRow, error)
 	SearchNeighbors(ctx context.Context, embedding []float32,
 		entityType string, topK int, branch string,
 	) ([]NeighborResult, error)
@@ -108,4 +108,12 @@ type Store interface {
 	ListEntityTypes(txID string) ([]string, error)
 
 	Close() error
+}
+
+// CypherRow is one flat result row: its values in the order LadybugDB returns
+// them (SPEC R2 ExecuteCypher — each Row is one flat tuple of the returned
+// column values). Column names are not retained: the wire Row carries only
+// values, and the SDK exposes them positionally.
+type CypherRow struct {
+	Values []any
 }

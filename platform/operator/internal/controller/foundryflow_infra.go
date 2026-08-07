@@ -494,7 +494,7 @@ func (r *FoundryFlowReconciler) reconcileOllama(ctx context.Context, flow *flowv
 						ContainerPort: int32(ollamaPort),
 						Protocol:      corev1.ProtocolTCP,
 					}},
-					Env: append(r.ollamaEnvVars(flow), corev1.EnvVar{
+					Env: append(r.ollamaEnvVars(), corev1.EnvVar{
 						Name:  "OLLAMA_API_KEY",
 						Value: os.Getenv("OLLAMA_API_KEY"),
 					}),
@@ -516,7 +516,7 @@ func (r *FoundryFlowReconciler) reconcileOllama(ctx context.Context, flow *flowv
 	return r.reconcileService(ctx, flow, ollamaSvcName, ollamaPort, "ollama")
 }
 
-func (r *FoundryFlowReconciler) ollamaEnvVars(flow *flowv1.FoundryFlow) []corev1.EnvVar {
+func (r *FoundryFlowReconciler) ollamaEnvVars() []corev1.EnvVar {
 	return []corev1.EnvVar{
 		{Name: "OLLAMA_HOST", Value: fmt.Sprintf("0.0.0.0:%d", ollamaPort)},
 	}

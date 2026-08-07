@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -46,14 +47,26 @@ import (
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
 
+// Shared test constants for the controller package's foundrygraph tests (goconst: the
+// repeated literals are hoisted to a single source of truth).
+const (
+	testNS              = "test-ns"
+	cartographerSvcName = "cartographer-flow-graph"
+	operatorTestNS      = "operator-system"
+	graphTestNS         = "graph-ns"
+	rpcApply            = "apply"
+	rpcHealth           = "health"
+	rpcWipe             = "wipe"
+)
+
 func TestFoundryGraphReconciler_CartographerServiceName(t *testing.T) {
 	r := &FoundryGraphReconciler{}
 	fg := &flowv1.FoundryGraph{}
-	fg.Name = "flow-graph"
-	fg.Namespace = "test-ns"
+	fg.Name = defaultGraphName
+	fg.Namespace = testNS
 
 	name := r.cartographerServiceName(fg)
-	if name != "cartographer-flow-graph" {
+	if name != cartographerSvcName {
 		t.Errorf("expected cartographer-flow-graph, got %q", name)
 	}
 }
@@ -66,12 +79,12 @@ func TestFoundryGraphReconciler_RegisterProxyRoute(t *testing.T) {
 	}
 
 	fg := &flowv1.FoundryGraph{}
-	fg.Name = "flow-graph"
-	fg.Namespace = "test-ns"
+	fg.Name = defaultGraphName
+	fg.Namespace = testNS
 
 	r.registerProxyRoute(fg)
 
-	endpoint, ok := rt.Lookup("test-ns", "flow-graph")
+	endpoint, ok := rt.Lookup(testNS, defaultGraphName)
 	if !ok {
 		t.Fatal("expected route to be registered")
 	}
@@ -88,28 +101,67 @@ func TestFoundryGraphReconciler_TearDown(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
+			Name:      defaultGraphName,
 			Namespace: ns,
 		},
 	}
 
+	// Seed every resource class tearDown deletes (SPEC R6 deletion flow: Deployment,
+	// Service, ServiceAccount, both Roles, both RoleBindings, and the PVC) so each
+	// deletion branch executes its real delete path rather than only the IsNotFound path.
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cartographer-flow-graph",
+			Name:      cartographerSvcName,
 			Namespace: ns,
 		},
 	}
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cartographer-flow-graph",
+			Name:      cartographerSvcName,
+			Namespace: ns,
+		},
+	}
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cartographerSvcName,
+			Namespace: ns,
+		},
+	}
+	keyRole := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cartographer-flow-graph-key-reader",
+			Namespace: ns,
+		},
+	}
+	keyRB := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cartographer-flow-graph-key-reader",
+			Namespace: ns,
+		},
+	}
+	remoteRole := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cartographer-flow-graph-remote-auth",
+			Namespace: ns,
+		},
+	}
+	remoteRB := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cartographer-flow-graph-remote-auth",
+			Namespace: ns,
+		},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "data-flow-graph",
 			Namespace: ns,
 		},
 	}
 
-	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(deploy, svc).Build()
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(deploy, svc, sa, keyRole, keyRB, remoteRole, remoteRB, pvc).Build()
 	rt := NewProxyRoutingTable()
 	r := &FoundryGraphReconciler{
 		Client:            fakeCli,
@@ -123,17 +175,31 @@ func TestFoundryGraphReconciler_TearDown(t *testing.T) {
 		t.Fatalf("tearDown returned error: %v", err)
 	}
 
-	var d appsv1.Deployment
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "cartographer-flow-graph", Namespace: ns}, &d); err == nil {
-		t.Fatal("expected Deployment to be deleted")
+	// Every seeded resource class must be deleted.
+	checks := []struct {
+		name string
+		obj  client.Object
+	}{
+		{"Deployment", deploy},
+		{"Service", svc},
+		{"ServiceAccount", sa},
+		{"key-reader Role", keyRole},
+		{"key-reader RoleBinding", keyRB},
+		{"remote-auth Role", remoteRole},
+		{"remote-auth RoleBinding", remoteRB},
+		{"PersistentVolumeClaim", pvc},
+	}
+	for _, c := range checks {
+		key := client.ObjectKeyFromObject(c.obj)
+		obj := c.obj.DeepCopyObject().(client.Object)
+		if err := fakeCli.Get(ctx, key, obj); err == nil {
+			t.Errorf("expected %s to be deleted", c.name)
+		} else if !apierrors.IsNotFound(err) {
+			t.Errorf("get %s after tearDown: %v", c.name, err)
+		}
 	}
 
-	var srv corev1.Service
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "cartographer-flow-graph", Namespace: ns}, &srv); err == nil {
-		t.Fatal("expected Service to be deleted")
-	}
-
-	if _, ok := rt.Lookup("test-ns", "flow-graph"); ok {
+	if _, ok := rt.Lookup(testNS, defaultGraphName); ok {
 		t.Fatal("expected route to be deregistered")
 	}
 }
@@ -166,7 +232,7 @@ func applySchemaOnExistingDialer(wipeGraphFn func(context.Context, *flowv1gen.Wi
 // ApplySchema) must short-circuit with a wrapped error. The dialer returns nil along with the
 // error, so no client is created and no RPC can run.
 func TestApplySchemaOnExistingDialFailure(t *testing.T) {
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 
 	dialErr := errors.New("dial failed: connect refused")
 	dialer := func(ctx context.Context, endpoint string) (CartographerClient, error) {
@@ -197,8 +263,8 @@ func TestReconcileDialFailureRequeues(t *testing.T) {
 	// Destructive diff: removed Widget entity drives the applySchemaOnExisting dial path.
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
-			Namespace: "test-ns",
+			Name:      defaultGraphName,
+			Namespace: testNS,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
 			},
@@ -215,77 +281,111 @@ func TestReconcileDialFailureRequeues(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}}); err == nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}); err == nil {
 		t.Fatal("expected Reconcile to return an error (requeue with backoff) on dial failure")
 	}
 
 	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}, &got); err != nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: testNS}, &got); err != nil {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
 		t.Errorf("expected Ready=False/ReconcileFailed after dial failure, got %v", ready)
 	}
 }
 
-// TestReconcileStaticInvalidSpecReachesTerminalState drives the static-invalid-input
-// path (SPEC R1 INVALID_ARGUMENT): a FoundryGraph whose entityTypes contain a duplicate
-// type name must set the terminal Ready=False/ReconcileFailed condition and return a
-// NIL error so controller-runtime does NOT requeue with exponential backoff — the invalid
-// spec can never succeed, so it must reach a terminal failing state rather than retry
-// indefinitely.
-func TestReconcileStaticInvalidSpecReachesTerminalState(t *testing.T) {
+// TestReconcileDuplicateTypeNameFailsPostProvisioning drives the SPEC R1 duplicate-name
+// failure mode end to end: duplicate type names (like duplicate property names) are
+// rejected at schema application time (INVALID_ARGUMENT) — NOT by an operator-side
+// pre-provisioning check. The Operator provisions the Cartographer (PVC, Deployment,
+// Service) and ApplySchema fails, surfacing via the ReconcileFailed status condition and
+// a requeue-with-backoff error.
+func TestReconcileDuplicateTypeNameFailsPostProvisioning(t *testing.T) {
 	s := scheme.Scheme
 	_ = flowv1.AddToScheme(s)
 	_ = appsv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
 		Spec: flowv1.FoundryGraphSpec{
 			EntityTypes: []flowv1.EntityTypeSpec{
 				{Name: "Widget"},
-				{Name: "Widget"}, // duplicate type name → statically invalid
+				{Name: "Widget"}, // duplicate type name — must fail at ApplySchema, post-provisioning
 			},
 		},
 	}
-	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+	// A ready Deployment so waitForReadiness returns immediately and the reconcile
+	// reaches the step-10 ApplySchema.
+	replicas := int32(1)
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
+	}
+
+	applyCalled := false
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
 	r := &FoundryGraphReconciler{
 		Client:            fakeCli,
 		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
 		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+					applyCalled = true
+					// SPEC R1: duplicate type names are rejected at schema application time.
+					return nil, status.Error(codes.InvalidArgument, "duplicate entity type name Widget")
+				},
+			}, nil
+		},
 	}
 
 	ctx := context.Background()
-	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: ns}})
-	if err != nil {
-		// A static invalid spec must reach a terminal state WITHOUT a requeue-with-backoff
-		// error (controller-runtime re-queues on a non-nil error).
-		t.Fatalf("expected no error for a statically-invalid spec (no requeue), got: %v", err)
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: ns}}); err == nil {
+		t.Fatal("expected Reconcile to return an error (requeue with backoff) when ApplySchema rejects the duplicate type name")
 	}
-	// ctrl.Result{} with a nil error means no requeue; Requeue (deprecated) is not set.
-	if res.RequeueAfter != 0 {
-		t.Errorf("expected no requeue for a statically-invalid spec, got result %+v", res)
+
+	// The duplicate type name must have reached the Cartographer — provisioning happened
+	// first (post-provisioning failure mode), so ApplySchema was actually invoked.
+	if !applyCalled {
+		t.Error("expected ApplySchema to be invoked with the duplicate-type spec (post-provisioning failure mode)")
 	}
 
 	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: ns}, &got); err != nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: ns}, &got); err != nil {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
 	if ready == nil {
 		t.Fatal("expected a Ready condition to be set for the invalid spec")
 	}
-	if ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
-		t.Errorf("expected Ready=False/ReconcileFailed for invalid spec, got %v", ready)
+	if ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
+		t.Errorf("expected Ready=False/ReconcileFailed for the rejected schema, got %v", ready)
+	}
+
+	// Provisioning must have occurred before the failure (the Cartographer exists and
+	// ApplySchema failed against it) — proving the operator-side pre-provisioning
+	// duplicate-type rejection is gone.
+	var pvc corev1.PersistentVolumeClaim
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "data-flow-graph", Namespace: ns}, &pvc); err != nil {
+		t.Errorf("expected the PVC to be provisioned before the schema-apply failure, got: %v", err)
 	}
 }
 
 func TestApplySchemaOnExistingWipeBlockedSentinel(t *testing.T) {
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 
 	// WipeGraph returning FAILED_PRECONDITION (open transactions) must map to the
 	// errWipeBlockedByOpenTransactions sentinel — the only condition that warrants
@@ -305,7 +405,7 @@ func TestApplySchemaOnExistingWipeBlockedSentinel(t *testing.T) {
 }
 
 func TestApplySchemaOnExistingNonBlockedWipeError(t *testing.T) {
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 
 	// A WipeGraph INTERNAL failure must NOT map to the open-transactions sentinel.
 	dialer := applySchemaOnExistingDialer(func(ctx context.Context, _ *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
@@ -326,7 +426,7 @@ func TestApplySchemaOnExistingNonBlockedWipeError(t *testing.T) {
 // a HealthCheck failure short-circuits before any WipeGraph (achieving
 // HealthCheck→WipeGraph→ApplySchema ordering) and is NOT treated as a blocked sentinel.
 func TestApplySchemaOnExistingHealthCheckFailure(t *testing.T) {
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 
 	wipeCalled := false
 	dialer := func(ctx context.Context, endpoint string) (CartographerClient, error) {
@@ -358,7 +458,7 @@ func TestApplySchemaOnExistingHealthCheckFailure(t *testing.T) {
 // non-destructive change: HealthCheck succeeds then ApplySchema fails → error propagated,
 // no WipeGraph is called (destructive=false).
 func TestApplySchemaOnExistingApplySchemaFailure(t *testing.T) {
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 
 	wipeCalled := false
 	dialer := func(ctx context.Context, endpoint string) (CartographerClient, error) {
@@ -390,21 +490,21 @@ func TestApplySchemaOnExistingApplySchemaFailure(t *testing.T) {
 // HealthCheck succeeds, then WipeGraph is called, then ApplySchema — verified via call
 // interleaving and that WipeGraph precedes ApplySchema.
 func TestApplySchemaOnExistingDestructiveOrdering(t *testing.T) {
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 
 	var order []string
 	dialer := func(ctx context.Context, endpoint string) (CartographerClient, error) {
 		return &mockCartographerClient{
 			healthCheckFn: func(ctx context.Context, req *flowv1gen.HealthCheckRequest) (*flowv1gen.HealthCheckResponse, error) {
-				order = append(order, "health")
+				order = append(order, rpcHealth)
 				return &flowv1gen.HealthCheckResponse{}, nil
 			},
 			wipeGraphFn: func(ctx context.Context, _ *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
-				order = append(order, "wipe")
+				order = append(order, rpcWipe)
 				return &flowv1gen.WipeGraphResponse{}, nil
 			},
 			applySchemaFn: func(ctx context.Context, _ *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
-				order = append(order, "apply")
+				order = append(order, rpcApply)
 				return &flowv1gen.ApplySchemaResponse{}, nil
 			},
 		}, nil
@@ -414,7 +514,7 @@ func TestApplySchemaOnExistingDestructiveOrdering(t *testing.T) {
 	if err := r.applySchemaOnExisting(context.Background(), fg, true); err != nil {
 		t.Fatalf("applySchemaOnExisting: %v", err)
 	}
-	want := []string{"health", "wipe", "apply"}
+	want := []string{rpcHealth, rpcWipe, rpcApply}
 	if len(order) != len(want) {
 		t.Fatalf("expected call order %v, got %v", want, order)
 	}
@@ -436,8 +536,8 @@ func TestReconcileBlockedPathSetsDestructiveChangeBlocked(t *testing.T) {
 	// spec with an entity type that has now been removed → destructive diff.
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
-			Namespace: "test-ns",
+			Name:      defaultGraphName,
+			Namespace: testNS,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
 			},
@@ -461,12 +561,12 @@ func TestReconcileBlockedPathSetsDestructiveChangeBlocked(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}}); err == nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}); err == nil {
 		t.Fatal("expected Reconcile to return an error for a blocked destructive change")
 	}
 
 	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}, &got); err != nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: testNS}, &got); err != nil {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	cond := meta.FindStatusCondition(got.Status.Conditions, "DestructiveChangeBlocked")
@@ -496,8 +596,8 @@ func TestReconcileNonDestructiveFailureSetsReconcileFailed(t *testing.T) {
 	// Old spec has an entity type; new spec adds a property only → non-destructive diff.
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
-			Namespace: "test-ns",
+			Name:      defaultGraphName,
+			Namespace: testNS,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget","properties":[{"name":"a"}]}]}`,
 			},
@@ -532,12 +632,12 @@ func TestReconcileNonDestructiveFailureSetsReconcileFailed(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}}); err == nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}); err == nil {
 		t.Fatal("expected Reconcile to return an error for a failed non-destructive change")
 	}
 
 	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}, &got); err != nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: testNS}, &got); err != nil {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
@@ -547,7 +647,7 @@ func TestReconcileNonDestructiveFailureSetsReconcileFailed(t *testing.T) {
 	if ready.Status != metav1.ConditionFalse {
 		t.Errorf("expected Ready=False, got %v", ready.Status)
 	}
-	if ready.Reason != "ReconcileFailed" {
+	if ready.Reason != reasonReconcileFailed {
 		t.Errorf("expected reason ReconcileFailed, got %q", ready.Reason)
 	}
 }
@@ -565,8 +665,8 @@ func TestReconcileDestructiveNonBlockedFailureSetsReconcileFailed(t *testing.T) 
 	// Destructive diff: old spec has an entity type that new spec removes.
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
-			Namespace: "test-ns",
+			Name:      defaultGraphName,
+			Namespace: testNS,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
 			},
@@ -592,19 +692,19 @@ func TestReconcileDestructiveNonBlockedFailureSetsReconcileFailed(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}}); err == nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}); err == nil {
 		t.Fatal("expected Reconcile to return an error for a non-blocked WipeGraph failure")
 	}
 
 	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}, &got); err != nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: testNS}, &got); err != nil {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	if blocked := meta.FindStatusCondition(got.Status.Conditions, "DestructiveChangeBlocked"); blocked != nil {
 		t.Errorf("expected no DestructiveChangeBlocked condition for non-blocked error, got %v", blocked)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
 		t.Errorf("expected Ready=False/ReconcileFailed, got %v", ready)
 	}
 }
@@ -622,14 +722,14 @@ func TestReconcileDeletionFinalizesRemoval(t *testing.T) {
 	now := metav1.Now()
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              "flow-graph",
-			Namespace:         "test-ns",
+			Name:              defaultGraphName,
+			Namespace:         testNS,
 			DeletionTimestamp: &now,
 			Finalizers:        []string{finalizerName},
 		},
 	}
 	// A deployment exists so the tear-down actually removes something.
-	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: "test-ns"}}
+	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: testNS}}
 
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, deploy).WithStatusSubresource(fg).Build()
 	r := &FoundryGraphReconciler{
@@ -639,13 +739,13 @@ func TestReconcileDeletionFinalizesRemoval(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}}); err != nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}); err != nil {
 		t.Fatalf("Reconcile on deletion returned error: %v", err)
 	}
 
 	// Tear-down must have deleted the Deployment.
 	var d appsv1.Deployment
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "cartographer-flow-graph", Namespace: "test-ns"}, &d); err == nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: cartographerSvcName, Namespace: testNS}, &d); err == nil {
 		t.Error("expected Deployment to be deleted during tear-down")
 	}
 }
@@ -660,13 +760,13 @@ func TestReconcileInfraFailureSetsReconcileFailed(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 	// Operator-namespace signing Secret is intentionally absent → reconcileSecrets fails.
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
 	r := &FoundryGraphReconciler{
 		Client:            fakeCli,
 		Scheme:            s,
-		OperatorNamespace: "operator-system",
+		OperatorNamespace: operatorTestNS,
 		CartographerPort:  50051,
 		ProxyRoutingTable: NewProxyRoutingTable(),
 		CartographerDialer: func(ctx context.Context, cfg string) (CartographerClient, error) {
@@ -675,17 +775,228 @@ func TestReconcileInfraFailureSetsReconcileFailed(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}}); err == nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}); err == nil {
 		t.Fatal("expected Reconcile to return an error on infra failure")
 	}
 
 	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: "test-ns"}, &got); err != nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: testNS}, &got); err != nil {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
 		t.Errorf("expected Ready=False/ReconcileFailed, got %v", ready)
+	}
+}
+
+// TestReconcileInfraGatingErrorBranches drives the gating-path error branches of
+// reconcilePVC, reconcileRBAC, reconcileDeployment, and reconcileService (item 8): each
+// provisioning step's failure must funnel into setFailedCondition, producing
+// Ready=False/ReconcileFailed and a non-nil error so controller-runtime re-queues with
+// backoff (SPEC R6 provisioning steps 1, 2, 3, 4).
+func TestReconcileInfraGatingErrorBranches(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	// Operator-namespace signing secrets so reconcileSecrets (which runs after PVC and
+	// before RBAC/Deployment/Service) succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+
+	cases := []struct {
+		name     string
+		failType client.Object // the resource type whose Create must fail
+		errMsg   string        // substring expected in the wrapped reconcile error
+	}{
+		{"reconcilePVC", &corev1.PersistentVolumeClaim{}, "reconcile PVC"},
+		{"reconcileRBAC", &corev1.ServiceAccount{}, "reconcile ServiceAccount"},
+		{"reconcileDeployment", &appsv1.Deployment{}, "reconcile Deployment"},
+		{"reconcileService", &corev1.Service{}, "reconcile Service"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
+			interceptorFuncs := interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if reflect.TypeOf(obj) == reflect.TypeOf(tc.failType) {
+						return errors.New("injected create failure")
+					}
+					return nil
+				},
+			}
+			fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign).WithStatusSubresource(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+			r := &FoundryGraphReconciler{
+				Client:            fakeCli,
+				Scheme:            s,
+				OperatorNamespace: "operator-ns",
+				ProxyRoutingTable: NewProxyRoutingTable(),
+				CartographerDialer: func(ctx context.Context, cfg string) (CartographerClient, error) {
+					return &mockCartographerClient{}, nil
+				},
+			}
+
+			ctx := context.Background()
+			_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: ns}})
+			if err == nil {
+				t.Fatalf("expected Reconcile to return an error when %s fails", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.errMsg) {
+				t.Errorf("expected the reconcile error to surface %q, got: %v", tc.errMsg, err)
+			}
+
+			var got flowv1.FoundryGraph
+			if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: ns}, &got); err != nil {
+				t.Fatalf("get FoundryGraph: %v", err)
+			}
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
+				t.Errorf("expected Ready=False/ReconcileFailed after %s failure, got %v", tc.name, ready)
+			}
+		})
+	}
+}
+
+// TestReconcileSingletonConflictSetsConditionAndDoesNotProvision pins SPEC R1 singleton
+// enforcement (item 1): a second FoundryGraph in a namespace must set the
+// FoundryGraphConflict condition and must NOT be provisioned (no PVC, Deployment, or
+// Service, and no status.endpoint), while the earliest-created resource remains the
+// provisioned owner.
+func TestReconcileSingletonConflictSetsConditionAndDoesNotProvision(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	// The owner: earliest-created FoundryGraph in the namespace.
+	owner := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              defaultGraphName,
+			Namespace:         ns,
+			CreationTimestamp: metav1.Time{Time: time.Now().Add(-time.Hour)},
+		},
+	}
+	// The conflict: a later-created second FoundryGraph.
+	second := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "second-graph",
+			Namespace:         ns,
+			CreationTimestamp: metav1.Time{Time: time.Now()},
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(owner, second).WithStatusSubresource(owner, second).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, ProxyRoutingTable: NewProxyRoutingTable()}
+
+	ctx := context.Background()
+	// Reconciling the conflicting resource must set FoundryGraphConflict and provision
+	// nothing — no error (no requeue-with-backoff; resolution is user action).
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "second-graph", Namespace: ns}}); err != nil {
+		t.Fatalf("expected no error for a singleton conflict (no backoff requeue), got: %v", err)
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "second-graph", Namespace: ns}, &got); err != nil {
+		t.Fatalf("get second FoundryGraph: %v", err)
+	}
+	conflict := meta.FindStatusCondition(got.Status.Conditions, "FoundryGraphConflict")
+	if conflict == nil || conflict.Status != metav1.ConditionTrue {
+		t.Fatalf("expected FoundryGraphConflict=True on the second FoundryGraph, got %v", conflict)
+	}
+	if got.Status.Endpoint.Host != "" || got.Status.Endpoint.Port != 0 {
+		t.Errorf("expected no status.endpoint on the conflicting FoundryGraph, got %+v", got.Status.Endpoint)
+	}
+	// No provisioning: no PVC, no Deployment, no Service for the second resource.
+	var pvc corev1.PersistentVolumeClaim
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "data-second-graph", Namespace: ns}, &pvc); err == nil {
+		t.Error("expected no PVC for the conflicting FoundryGraph")
+	}
+	var d appsv1.Deployment
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "cartographer-second-graph", Namespace: ns}, &d); err == nil {
+		t.Error("expected no Deployment for the conflicting FoundryGraph")
+	}
+	var svc corev1.Service
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "cartographer-second-graph", Namespace: ns}, &svc); err == nil {
+		t.Error("expected no Service for the conflicting FoundryGraph")
+	}
+}
+
+// TestReconcileSingletonOwnerPromotion pins the ownership transition (SPEC R1): after the
+// earliest-created FoundryGraph is deleted, the remaining resource becomes the namespace
+// owner and is provisioned to Ready, with the stale FoundryGraphConflict condition
+// cleared.
+func TestReconcileSingletonOwnerPromotion(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	// The sole remaining FoundryGraph carries a stale FoundryGraphConflict condition from
+	// when the (now deleted) owner still existed.
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "second-graph",
+			Namespace: ns,
+		},
+		Status: flowv1.FoundryGraphStatus{
+			Conditions: []metav1.Condition{{
+				Type:   "FoundryGraphConflict",
+				Status: metav1.ConditionTrue,
+			}},
+		},
+	}
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+	// A ready Deployment so waitForReadiness returns immediately.
+	replicas := int32(1)
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-second-graph", Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
+	ctx := context.Background()
+	nn := types.NamespacedName{Name: "second-graph", Namespace: ns}
+
+	r := &FoundryGraphReconciler{
+		Client:             fakeClient,
+		Scheme:             s,
+		OperatorNamespace:  "operator-ns",
+		CartographerPort:   50051,
+		CartographerImage:  "cartographer:latest",
+		ReadinessTimeout:   time.Second,
+		ProxyRoutingTable:  NewProxyRoutingTable(),
+		CartographerDialer: fullSuccessDialer,
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err != nil {
+		t.Fatalf("unexpected error on promoted-owner reconcile: %v", err)
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeClient.Get(ctx, nn, &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, "FoundryGraphConflict"); cond != nil {
+		t.Errorf("expected stale FoundryGraphConflict to be cleared on promotion, got %v", cond)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != reasonReconciled {
+		t.Errorf("expected Ready=True/Reconciled after promotion, got %v", ready)
+	}
+	// The promoted resource is now provisioned (SPEC R1: the owner triggers provisioning).
+	var d appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "cartographer-second-graph", Namespace: ns}, &d); err != nil {
+		t.Errorf("expected the promoted FoundryGraph to be provisioned with a Deployment, got: %v", err)
 	}
 }
 
@@ -704,7 +1015,7 @@ func TestUpdateStatusPopulatesStorageSize(t *testing.T) {
 	_ = flowv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	cap := resource.MustParse("5Gi")
 	// Seed a PVC with a bound capacity so updateStatus's storageSize read sees a real
 	// allocation diverging from any spec default.
@@ -714,7 +1025,7 @@ func TestUpdateStatusPopulatesStorageSize(t *testing.T) {
 			Capacity: corev1.ResourceList{corev1.ResourceStorage: cap},
 		},
 	}
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, pvc).WithStatusSubresource(fg).Build()
 	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, CartographerPort: 50051}
 
@@ -724,7 +1035,7 @@ func TestUpdateStatusPopulatesStorageSize(t *testing.T) {
 	}
 
 	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: ns}, &got); err != nil {
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: ns}, &got); err != nil {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	if got.Status.StorageSize == nil {
@@ -744,10 +1055,10 @@ func TestUpdateStatusPvcGetErrors(t *testing.T) {
 	_ = flowv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 	ctx := context.Background()
-	ns := "test-ns"
+	ns := testNS
 
 	t.Run("pvc not found leaves storageSize absent", func(t *testing.T) {
-		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns}}
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
 		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
 		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, CartographerPort: 50051}
 
@@ -755,7 +1066,7 @@ func TestUpdateStatusPvcGetErrors(t *testing.T) {
 			t.Fatalf("updateStatus must succeed when the PVC is not found, got: %v", err)
 		}
 		var got flowv1.FoundryGraph
-		if err := fakeCli.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: ns}, &got); err != nil {
+		if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: ns}, &got); err != nil {
 			t.Fatalf("get FoundryGraph: %v", err)
 		}
 		if got.Status.StorageSize != nil {
@@ -764,7 +1075,7 @@ func TestUpdateStatusPvcGetErrors(t *testing.T) {
 	})
 
 	t.Run("pvc get error surfaces to the caller", func(t *testing.T) {
-		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns}}
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
 		interceptorFuncs := interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 				if _, ok := obj.(*corev1.PersistentVolumeClaim); ok {
@@ -795,11 +1106,11 @@ func TestReconcileBlockedRecoversToReady(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	// Destructive diff: old annotation records a Widget entity type removed from spec.
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
+			Name:      defaultGraphName,
 			Namespace: ns,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
@@ -809,7 +1120,7 @@ func TestReconcileBlockedRecoversToReady(t *testing.T) {
 
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
 	ctx := context.Background()
-	nn := types.NamespacedName{Name: "flow-graph", Namespace: ns}
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
 
 	// First reconcile: destructive WipeGraph fails with FAILED_PRECONDITION → blocked.
 	blockedR := &FoundryGraphReconciler{
@@ -860,9 +1171,9 @@ func TestReconcileBlockedRecoversToReady(t *testing.T) {
 	// Pre-provision a ready Deployment so waitForReadiness returns immediately.
 	replicas := int32(1)
 	readyDeploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
-		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
 	}
 	if err := fakeClient.Create(ctx, readyDeploy); err != nil {
 		t.Fatalf("create ready Deployment: %v", err)
@@ -891,7 +1202,7 @@ func TestReconcileBlockedRecoversToReady(t *testing.T) {
 		t.Errorf("expected DestructiveChangeBlocked to be cleared on success, got %v", cond)
 	}
 	ready := meta.FindStatusCondition(finalCR.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != "Reconciled" {
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != reasonReconciled {
 		t.Errorf("expected Ready=True/Reconciled, got %v", ready)
 	}
 	// updateStatus (step 7) must have written the last-applied-spec annotation.
@@ -899,12 +1210,12 @@ func TestReconcileBlockedRecoversToReady(t *testing.T) {
 		t.Errorf("expected last-applied-spec annotation written by updateStatus")
 	}
 	// Step 8: proxy route registered.
-	if _, ok := successR.ProxyRoutingTable.Lookup(ns, "flow-graph"); !ok {
+	if _, ok := successR.ProxyRoutingTable.Lookup(ns, defaultGraphName); !ok {
 		t.Error("expected proxy route to be registered after successful reconcile")
 	}
 	// Step 4: Service must exist and be ClusterIP (SPEC R6 step 4).
 	var svc corev1.Service
-	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "cartographer-flow-graph", Namespace: ns}, &svc); err != nil {
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: cartographerSvcName, Namespace: ns}, &svc); err != nil {
 		t.Errorf("expected Service to exist after successful reconcile: %v", err)
 	}
 	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
@@ -912,7 +1223,7 @@ func TestReconcileBlockedRecoversToReady(t *testing.T) {
 	}
 	// Step 3: Deployment must exist.
 	var deployment appsv1.Deployment
-	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "cartographer-flow-graph", Namespace: ns}, &deployment); err != nil {
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: cartographerSvcName, Namespace: ns}, &deployment); err != nil {
 		t.Errorf("expected Deployment to exist after successful reconcile: %v", err)
 	}
 }
@@ -929,12 +1240,12 @@ func TestReconcileNonDestructiveSuccessReachesReady(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	// Old spec has Widget with property "a"; new spec adds property "b" → non-destructive
 	// diff (additive-only). applySchemaOnExisting must run with destructive=false.
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
+			Name:      defaultGraphName,
 			Namespace: ns,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget","properties":[{"name":"a"}]}]}`,
@@ -957,14 +1268,14 @@ func TestReconcileNonDestructiveSuccessReachesReady(t *testing.T) {
 	// A ready Deployment so waitForReadiness returns immediately.
 	replicas := int32(1)
 	readyDeploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
-		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
 	}
 
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
 	ctx := context.Background()
-	nn := types.NamespacedName{Name: "flow-graph", Namespace: ns}
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
 
 	// Record the RPC call order on the mock client; WipeGraph must never be invoked.
 	var order []string
@@ -979,15 +1290,15 @@ func TestReconcileNonDestructiveSuccessReachesReady(t *testing.T) {
 		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
 			return &mockCartographerClient{
 				healthCheckFn: func(context.Context, *flowv1gen.HealthCheckRequest) (*flowv1gen.HealthCheckResponse, error) {
-					order = append(order, "health")
+					order = append(order, rpcHealth)
 					return &flowv1gen.HealthCheckResponse{}, nil
 				},
 				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
-					order = append(order, "apply")
+					order = append(order, rpcApply)
 					return &flowv1gen.ApplySchemaResponse{}, nil
 				},
 				wipeGraphFn: func(context.Context, *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
-					order = append(order, "wipe")
+					order = append(order, rpcWipe)
 					return &flowv1gen.WipeGraphResponse{}, nil
 				},
 			}, nil
@@ -1000,12 +1311,12 @@ func TestReconcileNonDestructiveSuccessReachesReady(t *testing.T) {
 
 	// SPEC R6 non-destructive ordering: HealthCheck precedes ApplySchema; WipeGraph is
 	// never called. ApplySchema runs twice (on the existing pod and again at step 10 on
-	// the newly-ready pod), so assert the health→apply prefix and the absence of "wipe".
-	if len(order) < 2 || order[0] != "health" || order[1] != "apply" {
+	// the newly-ready pod), so assert the health→apply prefix and the absence of rpcWipe.
+	if len(order) < 2 || order[0] != rpcHealth || order[1] != rpcApply {
 		t.Errorf("expected RPC order to start [health, apply, ...], got %v", order)
 	}
 	for _, call := range order {
-		if call == "wipe" {
+		if call == rpcWipe {
 			t.Fatalf("non-destructive change must never call WipeGraph, got order %v", order)
 		}
 	}
@@ -1015,7 +1326,7 @@ func TestReconcileNonDestructiveSuccessReachesReady(t *testing.T) {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != "Reconciled" {
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != reasonReconciled {
 		t.Errorf("expected Ready=True/Reconciled, got %v", ready)
 	}
 	// updateStatus must persist the status block (endpoint) via the status subresource.
@@ -1040,7 +1351,7 @@ func TestReconcileCombinedSchemaAndStorageChange(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	// Old spec: Widget with property "a" and storage 1Gi. Build it as a real struct and
 	// marshal to JSON so resource.Quantity serialises correctly (the canonical JSON form,
 	// not the internal struct representation).
@@ -1058,7 +1369,7 @@ func TestReconcileCombinedSchemaAndStorageChange(t *testing.T) {
 
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
+			Name:      defaultGraphName,
 			Namespace: ns,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: string(oldSpecJSON),
@@ -1085,14 +1396,14 @@ func TestReconcileCombinedSchemaAndStorageChange(t *testing.T) {
 	// A ready Deployment so waitForReadiness returns immediately.
 	replicas := int32(1)
 	readyDeploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
-		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
 	}
 
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
 	ctx := context.Background()
-	nn := types.NamespacedName{Name: "flow-graph", Namespace: ns}
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
 
 	// Track RPC calls to verify sequencing: schema applied on existing pod BEFORE
 	// redeployment, then re-applied on the new pod after readiness.
@@ -1108,15 +1419,15 @@ func TestReconcileCombinedSchemaAndStorageChange(t *testing.T) {
 		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
 			return &mockCartographerClient{
 				healthCheckFn: func(context.Context, *flowv1gen.HealthCheckRequest) (*flowv1gen.HealthCheckResponse, error) {
-					order = append(order, "health")
+					order = append(order, rpcHealth)
 					return &flowv1gen.HealthCheckResponse{}, nil
 				},
 				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
-					order = append(order, "apply")
+					order = append(order, rpcApply)
 					return &flowv1gen.ApplySchemaResponse{}, nil
 				},
 				wipeGraphFn: func(context.Context, *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
-					order = append(order, "wipe")
+					order = append(order, rpcWipe)
 					return &flowv1gen.WipeGraphResponse{}, nil
 				},
 			}, nil
@@ -1134,16 +1445,16 @@ func TestReconcileCombinedSchemaAndStorageChange(t *testing.T) {
 		t.Fatalf("expected at least 4 RPC calls (schema-on-existing + schema-on-new), got %v", order)
 	}
 	// First pair: health+apply on existing pod.
-	if order[0] != "health" || order[1] != "apply" {
+	if order[0] != rpcHealth || order[1] != rpcApply {
 		t.Errorf("expected first RPC pair [health, apply] on existing pod, got %v", order[:2])
 	}
 	// Second pair: health+apply on new pod (step 10).
-	if order[2] != "health" || order[3] != "apply" {
+	if order[2] != rpcHealth || order[3] != rpcApply {
 		t.Errorf("expected second RPC pair [health, apply] on new pod, got %v", order[2:4])
 	}
 	// WipeGraph must never be called for non-destructive combined change.
 	for _, call := range order {
-		if call == "wipe" {
+		if call == rpcWipe {
 			t.Fatalf("non-destructive combined change must never call WipeGraph, got order %v", order)
 		}
 	}
@@ -1154,7 +1465,106 @@ func TestReconcileCombinedSchemaAndStorageChange(t *testing.T) {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != "Reconciled" {
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != reasonReconciled {
+		t.Errorf("expected Ready=True/Reconciled, got %v", ready)
+	}
+}
+
+// TestReconcileDestructiveSuccessReachesReady is the reconcile-level end-to-end test for
+// the SPEC R6 destructive spec-change SUCCESS flow (item 9): a destructive diff (removed
+// entity type) must run HealthCheck → WipeGraph → ApplySchema on the existing pod, then
+// redeploy (infra), wait for the new pod's readiness, re-apply the schema on the new pod
+// (step 10), and reach Ready=True with no DestructiveChangeBlocked condition.
+func TestReconcileDestructiveSuccessReachesReady(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	// Destructive diff: the last-applied annotation records a Widget entity type that the
+	// current spec removes.
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      defaultGraphName,
+			Namespace: ns,
+			Annotations: map[string]string{
+				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
+			},
+		},
+	}
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+	// A ready Deployment so waitForReadiness returns immediately after the redeploy.
+	replicas := int32(1)
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
+	ctx := context.Background()
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
+
+	// Record the RPC call order across both dials (existing pod + new pod at step 10).
+	var order []string
+	r := &FoundryGraphReconciler{
+		Client:            fakeClient,
+		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				healthCheckFn: func(context.Context, *flowv1gen.HealthCheckRequest) (*flowv1gen.HealthCheckResponse, error) {
+					order = append(order, rpcHealth)
+					return &flowv1gen.HealthCheckResponse{}, nil
+				},
+				wipeGraphFn: func(context.Context, *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
+					order = append(order, rpcWipe)
+					return &flowv1gen.WipeGraphResponse{}, nil
+				},
+				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+					order = append(order, rpcApply)
+					return &flowv1gen.ApplySchemaResponse{}, nil
+				},
+			}, nil
+		},
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err != nil {
+		t.Fatalf("unexpected error on successful destructive reconcile: %v", err)
+	}
+
+	// SPEC R6 destructive ordering: on the existing pod HealthCheck → WipeGraph →
+	// ApplySchema, then (after redeployment and new-pod readiness) the schema is
+	// re-applied at step 10 with HealthCheck → ApplySchema. Exactly one WipeGraph, and it
+	// precedes both ApplySchema calls.
+	want := []string{rpcHealth, rpcWipe, rpcApply, rpcHealth, rpcApply}
+	if len(order) != len(want) {
+		t.Fatalf("expected RPC order %v, got %v", want, order)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Errorf("expected order[%d]=%s, got %s (full: %v)", i, want[i], order[i], order)
+		}
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeClient.Get(ctx, nn, &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, "DestructiveChangeBlocked"); cond != nil {
+		t.Errorf("expected no DestructiveChangeBlocked on a successful destructive change, got %v", cond)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != reasonReconciled {
 		t.Errorf("expected Ready=True/Reconciled, got %v", ready)
 	}
 }
@@ -1175,8 +1585,8 @@ func TestReconcileStep10ApplySchemaFailure(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns}}
+	ns := testNS
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
 
 	// Operator-namespace signing secrets so reconcileSecrets succeeds; no schema diff so the
 	// reconcile skips applySchemaOnExisting and proceeds to the infra steps.
@@ -1184,14 +1594,14 @@ func TestReconcileStep10ApplySchemaFailure(t *testing.T) {
 	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
 	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
 	readyDeploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
-		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
 	}
 
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
 	ctx := context.Background()
-	nn := types.NamespacedName{Name: "flow-graph", Namespace: ns}
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
 
 	// The final ApplySchema (step 10) fails with a transient error.
 	r := &FoundryGraphReconciler{
@@ -1219,7 +1629,7 @@ func TestReconcileStep10ApplySchemaFailure(t *testing.T) {
 		t.Fatalf("get FoundryGraph: %v", err)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
 		t.Errorf("expected Ready=False/ReconcileFailed after step-10 ApplySchema failure, got %v", ready)
 	}
 }
@@ -1235,11 +1645,11 @@ func TestReconcileBlockedThenFailedClearsBlocked(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	// Destructive diff: removed Widget entity drives the WipeGraph path.
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
+			Name:      defaultGraphName,
 			Namespace: ns,
 			Annotations: map[string]string{
 				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
@@ -1248,7 +1658,7 @@ func TestReconcileBlockedThenFailedClearsBlocked(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
 	ctx := context.Background()
-	nn := types.NamespacedName{Name: "flow-graph", Namespace: ns}
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
 
 	// First reconcile: blocked (WipeGraph open transactions).
 	blockedR := &FoundryGraphReconciler{
@@ -1291,7 +1701,7 @@ func TestReconcileBlockedThenFailedClearsBlocked(t *testing.T) {
 		t.Errorf("expected stale DestructiveChangeBlocked to be cleared on failure, got %v", cond)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
 		t.Errorf("expected Ready=False/ReconcileFailed, got %v", ready)
 	}
 }
@@ -1309,14 +1719,14 @@ func TestWaitForReadinessTimeout(t *testing.T) {
 	// A Deployment whose desired replicas are never ready → the poll cannot succeed.
 	replicas := int32(1)
 	notReady := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: "test-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: testNS},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
 		Status:     appsv1.DeploymentStatus{ReadyReplicas: 0},
 	}
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(notReady).Build()
 	r := &FoundryGraphReconciler{Client: fakeCli, ReadinessTimeout: 100 * time.Millisecond}
 
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 	err := r.waitForReadiness(context.Background(), fg)
 	if err == nil {
 		t.Fatal("expected a readiness timeout error when the pod never becomes ready")
@@ -1339,7 +1749,7 @@ func TestWaitForReadinessCtxCancellation(t *testing.T) {
 
 	replicas := int32(1)
 	notReady := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph", Namespace: "test-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: testNS},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
 		Status:     appsv1.DeploymentStatus{ReadyReplicas: 0},
 	}
@@ -1348,7 +1758,7 @@ func TestWaitForReadinessCtxCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r := &FoundryGraphReconciler{Client: fakeCli, ReadinessTimeout: time.Minute}
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 	err := r.waitForReadiness(ctx, fg)
 	if err == nil {
 		t.Fatal("expected a context-cancellation error")
@@ -1359,7 +1769,10 @@ func TestWaitForReadinessCtxCancellation(t *testing.T) {
 }
 
 // TestAllReplicasReady asserts allReplicasReady's guard branches: nil replicas, zero
-// replicas, and partial readiness all report not-ready; equal readiness reports ready.
+// replicas, partial readiness, and ready-but-not-updated (the old ReplicaSet still
+// serving during a rollout) all report not-ready; equal readiness AND updated-replicas
+// reports ready. The UpdatedReplicas requirement is what guarantees the ready pod is the
+// NEW pod before the schema re-apply dials the Service (SPEC R6).
 func TestAllReplicasReady(t *testing.T) {
 	if allReplicasReady(&appsv1.Deployment{}) {
 		t.Error("expected nil replicas to be not ready")
@@ -1372,8 +1785,106 @@ func TestAllReplicasReady(t *testing.T) {
 	if allReplicasReady(&appsv1.Deployment{Spec: appsv1.DeploymentSpec{Replicas: &one}, Status: appsv1.DeploymentStatus{ReadyReplicas: 0}}) {
 		t.Error("expected fewer ready replicas than desired to be not ready")
 	}
-	if !allReplicasReady(&appsv1.Deployment{Spec: appsv1.DeploymentSpec{Replicas: &one}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}}) {
-		t.Error("expected all-replicas-ready to be ready")
+	// The old pod is ready but the new pod (matching the updated template) is not yet
+	// running: ReadyReplicas alone must NOT satisfy the check.
+	if allReplicasReady(&appsv1.Deployment{Spec: appsv1.DeploymentSpec{Replicas: &one}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1, UpdatedReplicas: 0}}) {
+		t.Error("expected a ready-but-not-updated replica (old ReplicaSet) to be not ready")
+	}
+	if !allReplicasReady(&appsv1.Deployment{Spec: appsv1.DeploymentSpec{Replicas: &one}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1, UpdatedReplicas: 1}}) {
+		t.Error("expected all-replicas-ready with the current template to be ready")
+	}
+}
+
+// TestWaitForReadinessRequiresUpdatedReplicas pins the SPEC R6 "new pod passes its
+// readiness probe" guarantee (item 3): during a spec-change rollout the old ReplicaSet
+// keeps ReadyReplicas>=1 while the new pod is still starting, so a readiness check based
+// on ReadyReplicas alone returns immediately and the step-10 ApplySchema dials the
+// ClusterIP Service, which may still serve the old pod. waitForReadiness must therefore
+// require the Deployment's UpdatedReplicas to cover every desired replica — only then is
+// the ready pod the NEW one.
+func TestWaitForReadinessRequiresUpdatedReplicas(t *testing.T) {
+	s := scheme.Scheme
+	_ = appsv1.AddToScheme(s)
+
+	t.Run("old replicaset ready but new pod not updated times out", func(t *testing.T) {
+		replicas := int32(1)
+		rolling := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: testNS},
+			Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+			// The old pod is ready (ReadyReplicas=1) but the new pod matching the
+			// updated template is not running yet (UpdatedReplicas=0).
+			Status: appsv1.DeploymentStatus{ReadyReplicas: 1, UpdatedReplicas: 0},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(rolling).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, ReadinessTimeout: 100 * time.Millisecond}
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+		if err := r.waitForReadiness(context.Background(), fg); err == nil {
+			t.Fatal("expected readiness to wait for the new (updated) pod, got immediate success")
+		}
+	})
+
+	t.Run("succeeds once the new pod is updated and ready", func(t *testing.T) {
+		// The Deployment starts in the rolling state (first Get: not ready); the second
+		// Get reflects the new pod having passed readiness (UpdatedReplicas=1,
+		// ReadyReplicas=1).
+		calls := 0
+		interceptorFuncs := interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				calls++
+				if calls == 1 {
+					return nil // zero-value Deployment: not ready, keep polling
+				}
+				if d, ok := obj.(*appsv1.Deployment); ok {
+					replicas := int32(1)
+					d.Spec.Replicas = &replicas
+					d.Status = appsv1.DeploymentStatus{ReadyReplicas: 1, UpdatedReplicas: 1}
+				}
+				return nil
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, ReadinessTimeout: 2 * time.Second}
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+		if err := r.waitForReadiness(context.Background(), fg); err != nil {
+			t.Fatalf("expected readiness once the new pod is updated and ready, got: %v", err)
+		}
+		if calls < 2 {
+			t.Errorf("expected the poll to continue until the new pod is updated, got %d Get calls", calls)
+		}
+	})
+}
+
+// TestWaitForReadinessTransientGetErrorKeepsPolling covers the transient Deployment-Get
+// error branch of waitForReadiness (item 8): a momentary Get failure (e.g. the
+// Deployment not yet visible after CreateOrUpdate) must not short-circuit the poll — the
+// loop keeps polling and succeeds once the Deployment is visible, updated, and ready.
+func TestWaitForReadinessTransientGetErrorKeepsPolling(t *testing.T) {
+	s := scheme.Scheme
+	_ = appsv1.AddToScheme(s)
+
+	calls := 0
+	interceptorFuncs := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			calls++
+			if calls == 1 {
+				return errors.New("transient: deployment not yet visible")
+			}
+			if d, ok := obj.(*appsv1.Deployment); ok {
+				replicas := int32(1)
+				d.Spec.Replicas = &replicas
+				d.Status = appsv1.DeploymentStatus{ReadyReplicas: 1, UpdatedReplicas: 1}
+			}
+			return nil
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptorFuncs).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, ReadinessTimeout: 2 * time.Second}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+	if err := r.waitForReadiness(context.Background(), fg); err != nil {
+		t.Fatalf("expected a transient Get error to keep polling until ready, got: %v", err)
+	}
+	if calls < 2 {
+		t.Errorf("expected the poll to continue past the transient Get error, got %d Get calls", calls)
 	}
 }
 

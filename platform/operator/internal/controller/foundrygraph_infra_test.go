@@ -40,7 +40,7 @@ func TestDeploymentEnvVars(t *testing.T) {
 	}
 
 	fg := &flowv1.FoundryGraph{}
-	fg.Name = "flow-graph"
+	fg.Name = defaultGraphName
 	fg.Spec.Versioning = &flowv1.VersioningSpec{
 		Remote: &flowv1.RemoteConfig{
 			URL: "https://github.com/org/repo.git",
@@ -93,7 +93,7 @@ func TestDeploymentEnvVarsRemoteAuthSecretRef(t *testing.T) {
 	}
 
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph"},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName},
 		Spec: flowv1.FoundryGraphSpec{
 			Versioning: &flowv1.VersioningSpec{
 				Remote: &flowv1.RemoteConfig{
@@ -128,7 +128,7 @@ func TestDeploymentEnvVarsNoRemoteAuthSecretRef(t *testing.T) {
 
 	// No auth config at all.
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph"},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName},
 		Spec: flowv1.FoundryGraphSpec{
 			Versioning: &flowv1.VersioningSpec{
 				Remote: &flowv1.RemoteConfig{
@@ -152,13 +152,13 @@ func TestDeploymentEnvVarsNoRemoteAuthSecretRef(t *testing.T) {
 func TestLabelsForCartographer(t *testing.T) {
 	r := &FoundryGraphReconciler{}
 	fg := &flowv1.FoundryGraph{}
-	fg.Name = "flow-graph"
+	fg.Name = defaultGraphName
 
 	labels := r.labelsForCartographer(fg)
 	if labels["app.kubernetes.io/component"] != "cartographer" {
 		t.Errorf("expected component=cartographer, got %q", labels["app.kubernetes.io/component"])
 	}
-	if labels["app.kubernetes.io/instance"] != "flow-graph" {
+	if labels["app.kubernetes.io/instance"] != defaultGraphName {
 		t.Errorf("expected instance=flow-graph, got %q", labels["app.kubernetes.io/instance"])
 	}
 	if labels["app.kubernetes.io/managed-by"] != managedByOperator {
@@ -169,10 +169,10 @@ func TestLabelsForCartographer(t *testing.T) {
 func TestCartographerServiceName(t *testing.T) {
 	r := &FoundryGraphReconciler{}
 	fg := &flowv1.FoundryGraph{}
-	fg.Name = "flow-graph"
+	fg.Name = defaultGraphName
 
 	name := r.cartographerServiceName(fg)
-	if name != "cartographer-flow-graph" {
+	if name != cartographerSvcName {
 		t.Errorf("expected cartographer-flow-graph, got %q", name)
 	}
 }
@@ -185,8 +185,8 @@ func TestCartographerPodSecurityContext(t *testing.T) {
 
 	fg := &flowv1.FoundryGraph{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "flow-graph",
-			Namespace: "test-ns",
+			Name:      defaultGraphName,
+			Namespace: testNS,
 		},
 	}
 
@@ -204,7 +204,7 @@ func TestCartographerPodSecurityContext(t *testing.T) {
 	}
 
 	var deploy appsv1.Deployment
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph", Namespace: "test-ns"}, &deploy); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: cartographerSvcName, Namespace: testNS}, &deploy); err != nil {
 		t.Fatalf("get Deployment: %v", err)
 	}
 
@@ -280,7 +280,7 @@ func TestReconcilePVCDefaultsToConstant(t *testing.T) {
 	_ = flowv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
 	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
 
@@ -290,7 +290,7 @@ func TestReconcilePVCDefaultsToConstant(t *testing.T) {
 	}
 
 	var pvc corev1.PersistentVolumeClaim
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: "test-ns"}, &pvc); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: testNS}, &pvc); err != nil {
 		t.Fatalf("get PVC: %v", err)
 	}
 	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
@@ -306,7 +306,7 @@ func TestReconcilePVCMinimumClamp(t *testing.T) {
 
 	tiny := resource.MustParse("100Ki")
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS},
 		Spec: flowv1.FoundryGraphSpec{
 			Storage: &flowv1.StorageSpec{Size: &tiny},
 		},
@@ -320,7 +320,7 @@ func TestReconcilePVCMinimumClamp(t *testing.T) {
 	}
 
 	var pvc corev1.PersistentVolumeClaim
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: "test-ns"}, &pvc); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: testNS}, &pvc); err != nil {
 		t.Fatalf("get PVC: %v", err)
 	}
 	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
@@ -340,7 +340,7 @@ func TestReconcilePVCNeverShrinks(t *testing.T) {
 	large := resource.MustParse("5Gi")
 	small := resource.MustParse("1Gi")
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS},
 		Spec: flowv1.FoundryGraphSpec{
 			Storage: &flowv1.StorageSpec{Size: &large},
 		},
@@ -348,7 +348,7 @@ func TestReconcilePVCNeverShrinks(t *testing.T) {
 
 	// Pre-seed an existing PVC already allocated at 5Gi.
 	existing := corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "data-flow-graph", Namespace: "test-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "data-flow-graph", Namespace: testNS},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
@@ -369,7 +369,7 @@ func TestReconcilePVCNeverShrinks(t *testing.T) {
 	}
 
 	var pvc corev1.PersistentVolumeClaim
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: "test-ns"}, &pvc); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "data-flow-graph", Namespace: testNS}, &pvc); err != nil {
 		t.Fatalf("get PVC: %v", err)
 	}
 	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
@@ -384,9 +384,9 @@ func TestReconcileRBACRemoteAuthTeardown(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
 		// Remote config present but secretRef empty → teardown path.
 		Spec: flowv1.FoundryGraphSpec{
 			Versioning: &flowv1.VersioningSpec{
@@ -427,9 +427,9 @@ func TestReconcileRBACCreation(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
 		Spec: flowv1.FoundryGraphSpec{
 			Versioning: &flowv1.VersioningSpec{
 				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: "remote-secret"}},
@@ -447,7 +447,7 @@ func TestReconcileRBACCreation(t *testing.T) {
 
 	// ServiceAccount created.
 	var sa corev1.ServiceAccount
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph", Namespace: ns}, &sa); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: cartographerSvcName, Namespace: ns}, &sa); err != nil {
 		t.Fatalf("expected ServiceAccount to be created: %v", err)
 	}
 
@@ -472,7 +472,7 @@ func TestReconcileRBACCreation(t *testing.T) {
 	if keyRB.RoleRef.Name != "cartographer-flow-graph-key-reader" {
 		t.Errorf("key-reader RoleBinding RoleRef mismatch: %q", keyRB.RoleRef.Name)
 	}
-	if len(keyRB.Subjects) != 1 || keyRB.Subjects[0].Name != "cartographer-flow-graph" {
+	if len(keyRB.Subjects) != 1 || keyRB.Subjects[0].Name != cartographerSvcName {
 		t.Errorf("key-reader RoleBinding must reference the operator ServiceAccount, got %+v", keyRB.Subjects)
 	}
 
@@ -503,9 +503,9 @@ func TestReconcileRBACRemoteAuthSecretChanged(t *testing.T) {
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
 		Spec: flowv1.FoundryGraphSpec{
 			Versioning: &flowv1.VersioningSpec{
 				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: "new-secret"}},
@@ -567,11 +567,11 @@ func TestDeploymentStorageSizeForcesRollout(t *testing.T) {
 	_ = appsv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 
-	ns := "test-ns"
+	ns := testNS
 	small := resource.MustParse("1Gi")
 	large := resource.MustParse("4Gi")
 	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
 		Spec:       flowv1.FoundryGraphSpec{Storage: &flowv1.StorageSpec{Size: &small}},
 	}
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
@@ -587,7 +587,7 @@ func TestDeploymentStorageSizeForcesRollout(t *testing.T) {
 		t.Fatalf("reconcileDeployment (first): %v", err)
 	}
 	var deploy appsv1.Deployment
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph", Namespace: ns}, &deploy); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: cartographerSvcName, Namespace: ns}, &deploy); err != nil {
 		t.Fatalf("get Deployment: %v", err)
 	}
 	first := deploy.Spec.Template.Annotations[cartographerStorageSizeAnnotation]
@@ -601,7 +601,7 @@ func TestDeploymentStorageSizeForcesRollout(t *testing.T) {
 	if err := r.reconcileDeployment(ctx, fg); err != nil {
 		t.Fatalf("reconcileDeployment (second): %v", err)
 	}
-	if err := fakeCli.Get(ctx, client.ObjectKey{Namespace: ns, Name: "cartographer-flow-graph"}, &deploy); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Namespace: ns, Name: cartographerSvcName}, &deploy); err != nil {
 		t.Fatalf("get Deployment after resize: %v", err)
 	}
 	second := deploy.Spec.Template.Annotations[cartographerStorageSizeAnnotation]
@@ -614,7 +614,7 @@ func TestDeploymentStorageSizeForcesRollout(t *testing.T) {
 	if err := r.reconcileDeployment(ctx, fg); err != nil {
 		t.Fatalf("reconcileDeployment (third, unchanged): %v", err)
 	}
-	if err := fakeCli.Get(ctx, client.ObjectKey{Namespace: ns, Name: "cartographer-flow-graph"}, &deploy); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Namespace: ns, Name: cartographerSvcName}, &deploy); err != nil {
 		t.Fatalf("get Deployment after stable reconcile: %v", err)
 	}
 	if got := deploy.Spec.Template.Annotations[cartographerStorageSizeAnnotation]; got != second {
@@ -645,7 +645,7 @@ func TestApplySchemaReFetchNotFoundSurfacesError(t *testing.T) {
 	}
 
 	// The in-memory zero-valued object stands in for the stale object the reconciler holds.
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: "test-ns"}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
 	err := r.applySchema(context.Background(), fg)
 	if err == nil {
 		t.Fatal("expected applySchema to surface the NotFound re-fetch, got nil")

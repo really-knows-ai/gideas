@@ -10,6 +10,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// Condition-reason constants shared across controllers. These are the standard
+// reasons set on Ready-type conditions and appear in many controllers and their
+// tests, so they are hoisted to a single source of truth.
+const (
+	reasonReconciled      = "Reconciled"
+	reasonReconcileFailed = "ReconcileFailed"
+)
+
 // SetStatusCondition sets a condition on the object and persists it via status
 // update. Uses a callback to access the type-specific Conditions slice since
 // each CRD struct differs.

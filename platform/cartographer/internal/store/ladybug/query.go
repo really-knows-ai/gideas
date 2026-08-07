@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,7 +20,7 @@ import (
 
 func (db *ladybugDB) ExecuteCypher(
 	ctx context.Context, cypher string, params map[string]any, branch string,
-) ([]map[string]any, error) {
+) ([]store.CypherRow, error) {
 	if cypher == "" {
 		return nil, store.ErrEmptyQuery
 	}
@@ -33,6 +34,17 @@ func (db *ladybugDB) ExecuteCypher(
 	// Prepare to parse and check read-only.
 	stmt, err := conn.Prepare(cypher)
 	if err != nil {
+		// Statements the LadybugDB v0.17.0 grammar cannot classify (e.g.
+		// `MATCH ... REMOVE ...`, index/constraint DDL, top-level FOREACH) fail
+		// at Prepare before the IsReadOnly guard runs. They are still
+		// mutation/DDL statements per SPEC error-table row "ExecuteCypher with
+		// mutation statement" and R7 §5 (FOREACH is treated as mutation per
+		// SPEC:469-470), so they must surface as PERMISSION_DENIED
+		// (ErrMutationCypher) rather than INVALID_ARGUMENT (ErrInvalidCypher).
+		// Genuinely-invalid read-only syntax keeps INVALID_ARGUMENT.
+		if isMutationCypher(cypher) {
+			return nil, store.ErrMutationCypher
+		}
 		return nil, fmt.Errorf("%w: prepare: %v", store.ErrInvalidCypher, err)
 	}
 	defer stmt.Close()
@@ -51,21 +63,23 @@ func (db *ladybugDB) ExecuteCypher(
 	}
 	defer result.Close()
 
-	var rows []map[string]any
+	var rows []store.CypherRow
 	for result.HasNext() {
 		tuple, err := result.Next()
 		if err != nil {
 			return nil, fmt.Errorf("read row: %w", err)
 		}
-		m, err := tuple.GetAsMap()
+		// GetAsSlice preserves the column order of the query result (SPEC R2:
+		// one flat tuple per row in the order LadybugDB returns them).
+		values, err := tuple.GetAsSlice()
 		tuple.Close()
 		if err != nil {
 			return nil, fmt.Errorf("parse row: %w", err)
 		}
-		rows = append(rows, m)
+		rows = append(rows, store.CypherRow{Values: values})
 	}
 	if rows == nil {
-		rows = []map[string]any{}
+		rows = []store.CypherRow{}
 	}
 	return rows, nil
 }
@@ -470,4 +484,31 @@ func (db *ladybugDB) ListEntities(
 		entities = []store.Entity{}
 	}
 	return entities, nextToken, nil
+}
+
+// --------------------------------------------------------------------------
+// ExecuteCypher mutation/DDL classification helpers
+// --------------------------------------------------------------------------
+
+// mutationCypherPattern matches the mutation/DDL clause keywords the SPEC
+// error-table row "ExecuteCypher with mutation statement" (SPEC:913) and R7 §5
+// enumerate: CREATE, SET, DELETE, MERGE, REMOVE, DROP, and FOREACH (SPEC:469-470
+// mandates treating FOREACH as mutation). DDL clause forms — index and
+// constraint operations — begin with CREATE, so they are covered by the CREATE
+// keyword.
+var mutationCypherPattern = regexp.MustCompile(`(?i)\b(create|set|delete|merge|remove|drop|foreach)\b`)
+
+// isMutationCypher reports whether a statement that the grammar could not
+// prepare contains a mutation/DDL clause keyword.
+// ponytail: keyword containment is a heuristic fallback for statements the
+// LadybugDB v0.17.0 grammar cannot parse — it cannot distinguish a mutation
+// keyword inside a string literal (e.g. WHERE n.name = 'SET') from a real
+// clause, so a read-only query quoting a mutation keyword fails closed with
+// PERMISSION_DENIED. This is acceptable: the ceiling is a defensive rejection
+// of a read-only query, never an execution of a mutation, and the SPEC mandates
+// PERMISSION_DENIED for the whole SPEC-enumerated mutation set. Upgrade path: a
+// parser accepting the full Neo4j clause grammar (or a lexer that skips string
+// literals) would classify by AST/clause position instead of keyword containment.
+func isMutationCypher(cypher string) bool {
+	return mutationCypherPattern.MatchString(cypher)
 }

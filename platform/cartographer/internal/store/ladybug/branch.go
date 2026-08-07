@@ -14,7 +14,6 @@ import (
 
 	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/store"
-	"github.com/google/uuid"
 )
 
 // --------------------------------------------------------------------------
@@ -133,6 +132,9 @@ func (db *ladybugDB) branchPath(txID string) string {
 func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
 	if db.closed || db.failed {
 		return nil, store.ErrDatabaseNotReady
+	}
+	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
+		return nil, fmt.Errorf("invalid branch ID %q", txID)
 	}
 	if br, ok := db.branches[txID]; ok {
 		br.mu.Lock()
@@ -722,6 +724,37 @@ func insertEntityOnConn(conn *lbug.Connection, entityType string, entity *store.
 }
 
 func insertEdgeOnConn(conn *lbug.Connection, edgeType string, edge *store.Edge) error {
+	// Verify both endpoints exist before creating the edge. The
+	// MATCH (a {id: $from}), (b {id: $to}) CREATE ... statement silently no-ops
+	// when an endpoint matches nothing — creating no edge and no error — so an
+	// edge whose source or target entity is absent would vanish from the graph
+	// with no signal on the re-hydration read path. The load path fails loudly
+	// on every other corruption (unparseable files, missing keys, type/directory
+	// mismatch); an absent endpoint must fail loudly too (never silently drop a
+	// row or swallow a not-exist on a read path).
+	for _, endpoint := range []struct {
+		id   string
+		role string
+	}{
+		{edge.FromEntityID, "from"},
+		{edge.ToEntityID, "to"},
+	} {
+		stmt, err := conn.Prepare("MATCH (n {id: $id}) RETURN n;")
+		if err != nil {
+			return fmt.Errorf("prepare edge %s endpoint lookup: %w", endpoint.role, err)
+		}
+		result, err := conn.Execute(stmt, map[string]any{"id": endpoint.id})
+		stmt.Close()
+		if err != nil {
+			return fmt.Errorf("look up edge %s endpoint %q: %w", endpoint.role, endpoint.id, err)
+		}
+		found := result.HasNext()
+		result.Close()
+		if !found {
+			return fmt.Errorf("%w: edge %q %s endpoint entity %q not found",
+				store.ErrSourceOrTargetNotFound, edge.Id, endpoint.role, endpoint.id)
+		}
+	}
 	relProps := make([]string, 0, 1+len(edge.Properties))
 	params := map[string]any{"from": edge.FromEntityID, "to": edge.ToEntityID, "id": edge.Id}
 	relProps = append(relProps, "id: $id")
@@ -931,7 +964,8 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
 			}
 			if je.ID == "" {
-				je.ID = uuid.New().String()
+				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
+					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
 			}
 			if len(je.Embedding) > 0 {
 				if err := db.ensureEmbeddingLoadSchema(db.conn, typeName, je.Embedding, entDefs); err != nil {
@@ -1011,7 +1045,8 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
 			}
 			if je.ID == "" {
-				je.ID = uuid.New().String()
+				return fmt.Errorf("%w: edge file %q is missing required key 'id'",
+					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
 			}
 			if je.Type != typeName {
 				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
@@ -1090,7 +1125,8 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
 			}
 			if je.ID == "" {
-				je.ID = uuid.New().String()
+				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
+					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
 			}
 			if len(je.Embedding) > 0 {
 				if err := db.ensureEmbeddingLoadSchema(conn, typeName, je.Embedding, entDefs); err != nil {
@@ -1171,7 +1207,8 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
 			}
 			if je.ID == "" {
-				je.ID = uuid.New().String()
+				return fmt.Errorf("%w: edge file %q is missing required key 'id'",
+					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
 			}
 			if je.Type != typeName {
 				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",

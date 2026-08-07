@@ -10,17 +10,19 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-const metadataEntityTypeKey = "x-flow-entity-type"
+const metadataEntityTypeKey = "entity_type"
 
 // metadataEntityTypesKey is the plural read-path capability annotation key
 // (SPEC R3): ExecuteCypher annotates the entity types extracted from the
 // Cypher statement against this plural key, falling back to the
 // READ:graph/entity/* wildcard when extraction yields no labels.
-const metadataEntityTypesKey = "x-flow-entity-types"
+const metadataEntityTypesKey = "entity_types"
 
 const (
 	clobberedIDProp   = "clobbered-id"
@@ -257,19 +259,36 @@ func TestExecuteCypher(t *testing.T) {
 			if req.GetCypher() == "" {
 				t.Error("expected non-empty cypher")
 			}
-			return &flowv1.ExecuteCypherResponse{}, nil
+			// SPEC R2: each Row is one flat tuple of string values in the
+			// order LadybugDB returned them; the SDK exposes them
+			// positionally as col_<N>.
+			return &flowv1.ExecuteCypherResponse{
+				Rows: []*flowv1.Row{
+					{Values: []string{"id-1", "x"}},
+					{Values: []string{"id-2", "y"}},
+				},
+			}, nil
 		},
 	}
 	g := newMockGraph(mock)
-	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
+	rows, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
 	if err != nil {
 		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	if rows[0]["col_0"] != "id-1" || rows[0]["col_1"] != "x" {
+		t.Errorf("row 0 = %v, want map[col_0:id-1 col_1:x]", rows[0])
+	}
+	if rows[1]["col_0"] != "id-2" || rows[1]["col_1"] != "y" {
+		t.Errorf("row 1 = %v, want map[col_0:id-2 col_1:y]", rows[1])
 	}
 }
 
 // TestExecuteCypher_AnnotatesPluralEntityTypes verifies SPEC R3 on the Graph
 // read path: the SDK parses the Cypher, extracts the entity-type labels, and
-// annotates the plural "x-flow-entity-types" gRPC metadata key with the
+// annotates the plural "entity_types" gRPC metadata key with the
 // comma-separated labels (joined by session.call via strings.Join).
 func TestExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
 	mock := &mockCartographerClient{
@@ -280,7 +299,7 @@ func TestExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypesKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-types metadata")
+				t.Fatal("no entity_types metadata")
 			}
 			if vals[0] != componentType+",Service" {
 				t.Errorf("expected metadata %s=%q, got %q",
@@ -309,7 +328,7 @@ func TestExecuteCypher_FallsBackToWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypesKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-types metadata")
+				t.Fatal("no entity_types metadata")
 			}
 			if vals[0] != "*" {
 				t.Errorf("expected wildcard * in %s, got %q", metadataEntityTypesKey, vals[0])
@@ -1060,6 +1079,50 @@ func TestIDTypeMap_Remove(t *testing.T) {
 	}
 }
 
+// TestIDTypeMap_EvictsOldestAtCapacity verifies the size bound (SPEC R3:
+// "bounded local cache"): once the map holds maxSize IDs, storing a new ID
+// evicts the oldest entry.
+func TestIDTypeMap_EvictsOldestAtCapacity(t *testing.T) {
+	m := newIDTypeMap()
+	m.maxSize = 3
+	m.store("id-1", "Component")
+	m.store("id-2", "Service")
+	m.store("id-3", "Component")
+	m.store("id-4", "Service")
+	// id-1 was inserted first and must have been evicted at capacity.
+	if _, ok := m.resolve("id-1"); ok {
+		t.Error("expected id-1 (oldest) to be evicted at capacity")
+	}
+	for _, id := range []string{"id-2", "id-3", "id-4"} {
+		if _, ok := m.resolve(id); !ok {
+			t.Errorf("expected %s to remain in the map", id)
+		}
+	}
+}
+
+// TestIDTypeMap_TTLExpiry verifies the TTL bound (SPEC R3: "TTL-bounded"):
+// an entry older than the TTL resolves as unknown and is excluded from
+// snapshots, while re-storing an ID refreshes its TTL.
+func TestIDTypeMap_TTLExpiry(t *testing.T) {
+	m := newIDTypeMap()
+	m.ttl = 5 * time.Millisecond
+	m.store("id-1", "Component")
+	m.store("id-2", "Service")
+	time.Sleep(20 * time.Millisecond)
+	if _, ok := m.resolve("id-1"); ok {
+		t.Error("expected id-1 to expire after TTL")
+	}
+	if snap := m.snapshot(); len(snap) != 0 {
+		t.Errorf("expected empty snapshot after TTL expiry, got %v", snap)
+	}
+	// Re-storing refreshes the TTL.
+	m.store("id-1", componentType)
+	typ, ok := m.resolve("id-1")
+	if !ok || typ != componentType {
+		t.Errorf("expected id-1 to resolve again after re-store, got %q (ok=%v)", typ, ok)
+	}
+}
+
 func TestIDTypeMap_ResolveUnknown(t *testing.T) {
 	m := newIDTypeMap()
 	_, ok := m.resolve("unknown")
@@ -1148,7 +1211,7 @@ func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -1162,7 +1225,7 @@ func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
@@ -1184,7 +1247,7 @@ func TestGraphUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -1199,7 +1262,7 @@ func TestGraphUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != componentType {
 		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
@@ -1216,7 +1279,7 @@ func TestGraphDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -1230,7 +1293,7 @@ func TestGraphDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
@@ -1247,7 +1310,7 @@ func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -1263,7 +1326,7 @@ func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
@@ -1280,7 +1343,7 @@ func TestGraphDeleteEdge_SendsWildcardAndKey(t *testing.T) {
 			}
 			vals := md.Get(metadataEntityTypeKey)
 			if len(vals) == 0 {
-				t.Fatal("no x-flow-entity-type metadata")
+				t.Fatal("no entity_type metadata")
 			}
 			capturedKey = metadataEntityTypeKey
 			capturedValue = vals[0]
@@ -1295,7 +1358,7 @@ func TestGraphDeleteEdge_SendsWildcardAndKey(t *testing.T) {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}
 	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key x-flow-entity-type, got %q", capturedKey)
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
@@ -1370,6 +1433,47 @@ func TestExportStream_Stop(t *testing.T) {
 	}
 }
 
+// TestExportStream_StopCancelsStream pins the documented "Stop cancels the
+// stream" behaviour: the context the gRPC stream was established on must be
+// cancelled by Stop(). This fails if Stop only cancels a detached local
+// context, which would leak the stream until session close or server
+// completion. Both session-timeout configurations are exercised: the stream
+// is pinned to the cancellable context directly, or to its timeout-bounded
+// child.
+func TestExportStream_StopCancelsStream(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+	}{
+		{"no session timeout", 0},
+		{"with session timeout", time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var streamCtx context.Context
+			mock := &mockCartographerClient{
+				exportGraph: func(ctx context.Context, _ *flowv1.ExportGraphRequest,
+				) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
+					streamCtx = ctx
+					return &mockStream{chunks: []*flowv1.ExportGraphResponse{{Chunk: []byte("data")}}}, nil
+				},
+			}
+			g := newMockGraph(mock)
+			g.session.timeout = tc.timeout
+			stream, err := g.ExportGraph("json")
+			if err != nil {
+				t.Fatalf("ExportGraph returned error: %v", err)
+			}
+			stream.Stop()
+			if streamCtx == nil {
+				t.Fatal("ExportGraph was not called")
+			}
+			if streamCtx.Err() == nil {
+				t.Error("expected the stream's pinned context to be cancelled after Stop")
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // WithTimeout / ListEntitiesOption tests
 // ---------------------------------------------------------------------------
@@ -1401,37 +1505,60 @@ func TestWithTimeout(t *testing.T) {
 	}
 }
 
+// TestBeginTransaction_WithTimeout pins the SPEC R2/R9 rejection model
+// (error-table row "Invalid transaction timeout duration"): a requested
+// timeout exceeding the 7-day hard maximum is rejected with INVALID_ARGUMENT
+// by the server — never silently capped — and the SDK surfaces that
+// rejection. The client sends the requested value verbatim (no local cap).
 func TestBeginTransaction_WithTimeout(t *testing.T) {
 	var captured *durationpb.Duration
 	mock := &mockCartographerClient{
 		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
 			captured = req.GetTimeout()
-			return &flowv1.BeginTransactionResponse{
-				TransactionId:  "11111111-1111-4111-8111-111111111111",
-				AppliedTimeout: durationpb.New(48 * time.Hour),
-			}, nil
+			return nil, status.Error(codes.InvalidArgument, "invalid transaction timeout duration")
 		},
 	}
 	g := newMockGraph(mock)
 	tx, err := g.BeginTransaction(WithTimeout(10 * 24 * time.Hour))
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
+	if err == nil {
+		t.Fatal("expected INVALID_ARGUMENT rejection for over-cap timeout")
 	}
-	if tx == nil {
-		t.Fatal("expected non-nil transaction")
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected INVALID_ARGUMENT, got %v", status.Code(err))
+	}
+	if tx != nil {
+		t.Error("expected no transaction to be returned on rejection")
 	}
 	if captured == nil {
 		t.Fatal("expected timeout to be set on request")
 	}
 	if captured.AsDuration() != 10*24*time.Hour {
-		t.Errorf("expected requested timeout 10d, got %v", captured.AsDuration())
+		t.Errorf("expected requested timeout 10d sent verbatim, got %v", captured.AsDuration())
+	}
+}
+
+// TestBeginTransaction_SurfacesAppliedTimeout verifies that on a valid (in-cap)
+// request the SDK surfaces the server's applied_timeout on the Transaction
+// handle (SPEC R2; learnings rule: no silent capping — surface the
+// server-applied timeout from BeginTransaction).
+func TestBeginTransaction_SurfacesAppliedTimeout(t *testing.T) {
+	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{
+				TransactionId:  "11111111-1111-4111-8111-111111111111",
+				AppliedTimeout: durationpb.New(30 * time.Minute),
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	tx, err := g.BeginTransaction(WithTimeout(48 * time.Hour))
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
 	}
 	if tx.ID() != "11111111-1111-4111-8111-111111111111" {
 		t.Errorf("expected tx ID %q, got %q", "11111111-1111-4111-8111-111111111111", tx.ID())
 	}
-	// SPEC R2: the applied timeout may be shorter than the requested. The
-	// Transaction must reflect the server's applied_timeout.
-	if tx.timeout != 48*time.Hour {
-		t.Errorf("expected tx.timeout to equal server applied timeout 48h, got %v", tx.timeout)
+	if tx.timeout != 30*time.Minute {
+		t.Errorf("expected tx.timeout to equal server applied timeout 30m, got %v", tx.timeout)
 	}
 }

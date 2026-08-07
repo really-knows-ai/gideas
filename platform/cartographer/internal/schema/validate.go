@@ -24,6 +24,15 @@ const maxNameLength = 255
 //  7. Property type must be "string"
 //  8. Rule validation (undeclared references, empty lists)
 func Validate(schema *flowv1.Schema) error {
+	// An omitted schema (nil proto3 message field — e.g. an
+	// ApplySchemaRequest without a schema, forwarded unguarded by the handler)
+	// is equivalent to an empty schema: SPEC:86 permits an empty or omitted
+	// entityTypes/edgeTypes array, so a fully omitted schema is valid too.
+	// Guard before any field access so Validate never panics on a nil pointer.
+	if schema == nil {
+		return nil
+	}
+
 	// 1. Duplicate type names
 	entityTypeNames := make(map[string]bool, len(schema.EntityTypes))
 	for _, et := range schema.EntityTypes {

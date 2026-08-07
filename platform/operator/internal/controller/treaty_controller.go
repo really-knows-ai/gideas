@@ -82,7 +82,7 @@ func (r *TreatyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// All validations passed.
 	return SetStatusCondition(ctx, r.Client, &treaty, conditionReady, metav1.ConditionTrue,
-		"Reconciled", fmt.Sprintf("Treaty with remote %q (%s) validated", treaty.Spec.RemoteName, treaty.Spec.Direction),
+		reasonReconciled, fmt.Sprintf("Treaty with remote %q (%s) validated", treaty.Spec.RemoteName, treaty.Spec.Direction),
 		func(t *flowv1.Treaty) *[]metav1.Condition { return &t.Status.Conditions },
 	)
 }

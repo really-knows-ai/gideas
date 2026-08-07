@@ -9,6 +9,15 @@ spec:
     requests:
       storage: 1Gi
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  # The Deployment below references serviceAccountName: cartographer. In the
+  # Operator path this ServiceAccount is created by the Operator (SPEC R6 step 2);
+  # this reference template defines it so a standalone `kubectl apply` schedules
+  # the pod instead of failing with "serviceaccount not found".
+  name: cartographer
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -145,7 +154,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: cartographer
+  # cartographer-<fg-name>, conventionally cartographer-flow-graph (SPEC R5):
+  # a manual deploy must be reachable at the SPEC-mandated discovery DNS
+  # cartographer-<fg-name>.<namespace>.svc.cluster.local, which is also what the
+  # Operator renders as the Service name (foundrygraph_infra.go cartographerServiceName).
+  name: cartographer-flow-graph
 spec:
   selector:
     app: cartographer

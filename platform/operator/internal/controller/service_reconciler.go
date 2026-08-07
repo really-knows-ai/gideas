@@ -75,13 +75,13 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request, new
 	}
 	if reconcileErr != nil {
 		return r.persistStatus(ctx, svc, phaseDegraded, 0, conditionReady,
-			metav1.ConditionFalse, "ReconcileFailed", reconcileErr.Error(), newObj)
+			metav1.ConditionFalse, reasonReconcileFailed, reconcileErr.Error(), newObj)
 	}
 
 	phase := r.determinePhase(svc, availableReplicas)
 
 	condStatus := metav1.ConditionTrue
-	reason := "Reconciled"
+	reason := reasonReconciled
 	message := fmt.Sprintf("%s reconciled with %d available replicas", r.TypeName, availableReplicas)
 	if phase != phaseReady {
 		condStatus = metav1.ConditionFalse

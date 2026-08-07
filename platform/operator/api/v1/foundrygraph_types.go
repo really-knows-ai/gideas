@@ -19,6 +19,7 @@ package v1
 import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:object:root=true
@@ -55,7 +56,10 @@ type FoundryGraphList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&FoundryGraph{}, &FoundryGraphList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &FoundryGraph{}, &FoundryGraphList{})
+		return nil
+	})
 }
 
 // FoundryGraphSpec defines the desired state.

@@ -17,15 +17,20 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
@@ -63,8 +68,8 @@ func TestReconcileSecretsCreatesPerNamespaceKeys(t *testing.T) {
 	_ = flowv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 
-	operatorNS := "operator-system"
-	targetNS := "graph-ns"
+	operatorNS := operatorTestNS
+	targetNS := graphTestNS
 
 	// Operator namespace holds the shared signing-key secrets.
 	operatorKey := &corev1.Secret{
@@ -82,7 +87,7 @@ func TestReconcileSecretsCreatesPerNamespaceKeys(t *testing.T) {
 		},
 	}
 
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: targetNS}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: targetNS}}
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(operatorKey, sidecarKey).Build()
 	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, OperatorNamespace: operatorNS}
 
@@ -114,8 +119,8 @@ func TestReconcileSecretsIdempotentWhenPresent(t *testing.T) {
 	_ = flowv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 
-	operatorNS := "operator-system"
-	targetNS := "graph-ns"
+	operatorNS := operatorTestNS
+	targetNS := graphTestNS
 	// Operator-namespace signing secrets (reconciled FROM) must exist now that
 	// reconcileSecrets always reads them.
 	operatorKey := &corev1.Secret{
@@ -136,7 +141,7 @@ func TestReconcileSecretsIdempotentWhenPresent(t *testing.T) {
 		Data:       map[string][]byte{"key": []byte("existing-op")},
 	}
 
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: targetNS}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: targetNS}}
 	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(operatorKey, sidecarKey, sd, op).Build()
 	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, OperatorNamespace: operatorNS}
 
@@ -165,10 +170,10 @@ func TestReconcileSecretsPropagatesKeyRotation(t *testing.T) {
 	_ = flowv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 
-	operatorNS := "operator-system"
-	targetNS := "graph-ns"
+	operatorNS := operatorTestNS
+	targetNS := graphTestNS
 
-	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: targetNS}}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: targetNS}}
 
 	// Old per-namespace operator key (stale, from a previous key generation).
 	staleOp := &corev1.Secret{
@@ -214,5 +219,152 @@ func TestReconcileSecretsPropagatesKeyRotation(t *testing.T) {
 	}
 	if string(perNS.Data["key"]) != "rotated-pub" {
 		t.Errorf("expected per-namespace operator key reconciled to rotated public key, got %q", perNS.Data["key"])
+	}
+}
+
+// TestInitializeOperatorSigningKeyCreatesOnceAndReuses covers the create-once /
+// reuse-on-restart preamble (SPEC R6): the first call generates and persists the operator
+// signing key Secret with data keys "key" (public) and "private-key" (private); a second
+// call must read the existing Secret and return the SAME private key — a new signing key
+// is not generated per restart or per FoundryGraph resource.
+func TestInitializeOperatorSigningKeyCreatesOnceAndReuses(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	fakeCli := fake.NewClientBuilder().WithScheme(s).Build()
+	ctx := context.Background()
+
+	key1, err := InitializeOperatorSigningKey(ctx, fakeCli, "operator-ns")
+	if err != nil {
+		t.Fatalf("InitializeOperatorSigningKey (first): %v", err)
+	}
+	if len(key1) != ed25519.PrivateKeySize {
+		t.Errorf("expected a 64-byte Ed25519 private key, got %d bytes", len(key1))
+	}
+	// The generated Secret must carry both data keys with valid key material.
+	var secret corev1.Secret
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, &secret); err != nil {
+		t.Fatalf("get generated operator signing key Secret: %v", err)
+	}
+	if len(secret.Data["key"]) != ed25519.PublicKeySize {
+		t.Errorf("expected data key %q to hold a 32-byte public key, got %d bytes", "key", len(secret.Data["key"]))
+	}
+	if len(secret.Data["private-key"]) != ed25519.PrivateKeySize {
+		t.Errorf("expected data key %q to hold a 64-byte private key, got %d bytes", "private-key", len(secret.Data["private-key"]))
+	}
+
+	// Restart: a second call must reuse the persisted key, not generate a new one.
+	key2, err := InitializeOperatorSigningKey(ctx, fakeCli, "operator-ns")
+	if err != nil {
+		t.Fatalf("InitializeOperatorSigningKey (second): %v", err)
+	}
+	if !bytes.Equal(key1, key2) {
+		t.Error("expected the signing key to be reused across restarts, got a different key")
+	}
+}
+
+// TestInitializeOperatorSigningKeyEmptyPrivateKeyError covers the empty-private-key
+// branch: a pre-existing Secret whose data key "private-key" is empty is a corrupted
+// state and must fail loudly (SPEC R6 persists the private key under "private-key").
+func TestInitializeOperatorSigningKeyEmptyPrivateKeyError(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	// Secret exists but carries no private-key data.
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"},
+		Data:       map[string][]byte{"key": []byte("pub")},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
+
+	_, err := InitializeOperatorSigningKey(context.Background(), fakeCli, "operator-ns")
+	if err == nil {
+		t.Fatal("expected an error for a Secret with an empty private-key")
+	}
+	if !strings.Contains(err.Error(), "empty private-key") {
+		t.Errorf("expected the empty-private-key error, got: %v", err)
+	}
+}
+
+// TestInitializeOperatorSigningKeyGetError covers the non-NotFound Get error branch: an
+// apiserver/RBAC error on the Get must surface (wrapped), not be treated as "not found"
+// and overwritten with a freshly generated key.
+func TestInitializeOperatorSigningKeyGetError(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	interceptorFuncs := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Secret); ok {
+				return errors.New("apiserver unavailable")
+			}
+			return nil
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptorFuncs).Build()
+
+	_, err := InitializeOperatorSigningKey(context.Background(), fakeCli, "operator-ns")
+	if err == nil {
+		t.Fatal("expected the non-NotFound Get error to surface")
+	}
+	if !strings.Contains(err.Error(), "get operator signing key Secret") {
+		t.Errorf("expected the wrapped Get error, got: %v", err)
+	}
+}
+
+// TestInitializeSidecarSigningKeyCreatesOnce covers the create-once preamble for the
+// sidecar signing key (SPEC R6): the first call generates the Secret with data keys
+// "key" and "private-key"; a second call succeeds without regenerating (the persisted
+// data is unchanged).
+func TestInitializeSidecarSigningKeyCreatesOnce(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	fakeCli := fake.NewClientBuilder().WithScheme(s).Build()
+	ctx := context.Background()
+
+	if err := InitializeSidecarSigningKey(ctx, fakeCli, "operator-ns"); err != nil {
+		t.Fatalf("InitializeSidecarSigningKey (first): %v", err)
+	}
+	var secret corev1.Secret
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, &secret); err != nil {
+		t.Fatalf("get generated sidecar signing key Secret: %v", err)
+	}
+	if len(secret.Data["key"]) != ed25519.PublicKeySize || len(secret.Data["private-key"]) != ed25519.PrivateKeySize {
+		t.Errorf("expected sidecar Secret data keys key/private-key with valid Ed25519 material, got %d/%d bytes",
+			len(secret.Data["key"]), len(secret.Data["private-key"]))
+	}
+	before := map[string][]byte{"key": secret.Data["key"], "private-key": secret.Data["private-key"]}
+
+	// Restart: no error, and the persisted key material is unchanged (create-once).
+	if err := InitializeSidecarSigningKey(ctx, fakeCli, "operator-ns"); err != nil {
+		t.Fatalf("InitializeSidecarSigningKey (second): %v", err)
+	}
+	var afterSecret corev1.Secret
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, &afterSecret); err != nil {
+		t.Fatalf("get sidecar signing key Secret after restart: %v", err)
+	}
+	if !bytes.Equal(before["key"], afterSecret.Data["key"]) || !bytes.Equal(before["private-key"], afterSecret.Data["private-key"]) {
+		t.Error("expected the sidecar signing key to be reused across restarts, not regenerated")
+	}
+}
+
+// TestInitializeSidecarSigningKeyGetError covers the non-NotFound Get error branch: an
+// apiserver/RBAC error on the Get must surface (wrapped), not be treated as "not found".
+func TestInitializeSidecarSigningKeyGetError(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	interceptorFuncs := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Secret); ok {
+				return errors.New("apiserver unavailable")
+			}
+			return nil
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptorFuncs).Build()
+
+	err := InitializeSidecarSigningKey(context.Background(), fakeCli, "operator-ns")
+	if err == nil {
+		t.Fatal("expected the non-NotFound Get error to surface")
+	}
+	if !strings.Contains(err.Error(), "get sidecar signing key Secret") {
+		t.Errorf("expected the wrapped Get error, got: %v", err)
 	}
 }

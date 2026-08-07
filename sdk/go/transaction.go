@@ -71,16 +71,19 @@ func (tx *Transaction) ExecuteCypher(cypher string, params map[string]any) ([]ma
 		var callErr error
 		resp, callErr = tx.session.Cartographer.ExecuteCypher(ctx, req)
 		return callErr
-	}, "x-flow-entity-types", labels...)
+	}, "entity_types", labels...)
 	if err != nil {
 		return nil, err
 	}
 
+	// Convert proto rows to []map[string]any. Each Row is one flat tuple of
+	// string values in the order LadybugDB returned them; expose them
+	// positionally as col_<N> (SPEC R2).
 	rows := make([]map[string]any, 0, len(resp.GetRows()))
 	for _, row := range resp.GetRows() {
 		m := make(map[string]any)
 		for i, v := range row.GetValues() {
-			m[fmt.Sprintf("col_%d", i)] = decodeProtoValue(v)
+			m[fmt.Sprintf("col_%d", i)] = v
 		}
 		rows = append(rows, m)
 	}
@@ -272,7 +275,7 @@ func (tx *Transaction) UpdateEntity(id string, properties map[string]string, emb
 		var callErr error
 		resp, callErr = tx.session.Cartographer.UpdateEntity(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", entityType)
+	}, "entity_type", entityType)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +310,7 @@ func (tx *Transaction) DeleteEntity(id string) (*Entity, error) {
 		var callErr error
 		resp, callErr = tx.session.Cartographer.DeleteEntity(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", entityType)
+	}, "entity_type", entityType)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +347,7 @@ func (tx *Transaction) CreateEdge(
 		var callErr error
 		resp, callErr = tx.session.Cartographer.CreateEdge(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", sourceType)
+	}, "entity_type", sourceType)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +377,7 @@ func (tx *Transaction) DeleteEdge(id string) (*Edge, error) {
 		var callErr error
 		resp, callErr = tx.session.Cartographer.DeleteEdge(ctx, req)
 		return callErr
-	}, "x-flow-entity-type", "*")
+	}, "entity_type", "*")
 	if err != nil {
 		return nil, err
 	}

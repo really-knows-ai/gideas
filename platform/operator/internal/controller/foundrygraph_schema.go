@@ -33,28 +33,6 @@ const (
 	SchemaDiffDestructive                            // removed types, removed/changed properties, enableVectorIndex true->false
 )
 
-// schemaDuplicateNames returns the first duplicated entity or edge type name in the spec,
-// or "" if none. SPEC requires duplicates within entityTypes/edgeTypes to be rejected
-// (INVALID_ARGUMENT) at schema application. Namespaces are independent across the two lists
-// (an entity type and an edge type may share a name), so each list is checked separately.
-func schemaDuplicateNames(spec *flowv1.FoundryGraphSpec) string {
-	entitySeen := make(map[string]bool, len(spec.EntityTypes))
-	for _, et := range spec.EntityTypes {
-		if entitySeen[et.Name] {
-			return "duplicate entity type name " + et.Name
-		}
-		entitySeen[et.Name] = true
-	}
-	edgeSeen := make(map[string]bool, len(spec.EdgeTypes))
-	for _, et := range spec.EdgeTypes {
-		if edgeSeen[et.Name] {
-			return "duplicate edge type name " + et.Name
-		}
-		edgeSeen[et.Name] = true
-	}
-	return ""
-}
-
 // diffSchema compares old and new FoundryGraphSpec and returns the type of schema change.
 // The old spec is from the last-applied annotation; new is the current CR spec.
 // Only compares EntityTypes and EdgeTypes (schema-relevant fields).
@@ -63,127 +41,10 @@ func diffSchema(oldSpec, newSpec *flowv1.FoundryGraphSpec) SchemaDiffResult {
 		return SchemaDiffNone
 	}
 
-	// Build maps for entity types by name.
-	oldEntityTypes := make(map[string]flowv1.EntityTypeSpec, len(oldSpec.EntityTypes))
-	for _, et := range oldSpec.EntityTypes {
-		oldEntityTypes[et.Name] = et
-	}
-	newEntityTypes := make(map[string]flowv1.EntityTypeSpec, len(newSpec.EntityTypes))
-	for _, et := range newSpec.EntityTypes {
-		newEntityTypes[et.Name] = et
-	}
-
-	hasDestructive := false
-	hasNonDestructive := false
-
-	// Check for removed entity types (destructive).
-	for name := range oldEntityTypes {
-		if _, exists := newEntityTypes[name]; !exists {
-			hasDestructive = true
-		}
-	}
-
-	// Check for added entity types (non-destructive) and property-level changes.
-	for name, newET := range newEntityTypes {
-		oldET, exists := oldEntityTypes[name]
-		if !exists {
-			hasNonDestructive = true
-			continue
-		}
-
-		// Check enableVectorIndex change.
-		if oldET.EnableVectorIndex && !newET.EnableVectorIndex {
-			hasDestructive = true
-		}
-		if !oldET.EnableVectorIndex && newET.EnableVectorIndex {
-			hasNonDestructive = true
-		}
-
-		// Build property maps by name.
-		oldProps := make(map[string]flowv1.PropertySpec, len(oldET.Properties))
-		for _, p := range oldET.Properties {
-			oldProps[p.Name] = p
-		}
-		newProps := make(map[string]flowv1.PropertySpec, len(newET.Properties))
-		for _, p := range newET.Properties {
-			newProps[p.Name] = p
-		}
-
-		// Check for removed or changed properties (destructive).
-		for name, oldP := range oldProps {
-			newP, exists := newProps[name]
-			if !exists {
-				hasDestructive = true
-			} else if oldP.Type != newP.Type || oldP.Required != newP.Required {
-				hasDestructive = true
-			}
-		}
-
-		// Check for added properties (non-destructive).
-		for name := range newProps {
-			if _, exists := oldProps[name]; !exists {
-				hasNonDestructive = true
-			}
-		}
-
-		// Check for rule changes (non-destructive).
-		if !rulesEqual(oldET.Rules, newET.Rules) {
-			hasNonDestructive = true
-		}
-	}
-
-	// Build maps for edge types by name.
-	oldEdgeTypes := make(map[string]flowv1.EdgeTypeSpec, len(oldSpec.EdgeTypes))
-	for _, et := range oldSpec.EdgeTypes {
-		oldEdgeTypes[et.Name] = et
-	}
-	newEdgeTypes := make(map[string]flowv1.EdgeTypeSpec, len(newSpec.EdgeTypes))
-	for _, et := range newSpec.EdgeTypes {
-		newEdgeTypes[et.Name] = et
-	}
-
-	// Check for removed edge types (destructive).
-	for name := range oldEdgeTypes {
-		if _, exists := newEdgeTypes[name]; !exists {
-			hasDestructive = true
-		}
-	}
-
-	// Check for added edge types (non-destructive) and property changes.
-	for name, newET := range newEdgeTypes {
-		oldET, exists := oldEdgeTypes[name]
-		if !exists {
-			hasNonDestructive = true
-			continue
-		}
-
-		// Build property maps.
-		oldProps := make(map[string]flowv1.PropertySpec, len(oldET.Properties))
-		for _, p := range oldET.Properties {
-			oldProps[p.Name] = p
-		}
-		newProps := make(map[string]flowv1.PropertySpec, len(newET.Properties))
-		for _, p := range newET.Properties {
-			newProps[p.Name] = p
-		}
-
-		// Check for removed or changed properties.
-		for name, oldP := range oldProps {
-			newP, exists := newProps[name]
-			if !exists {
-				hasDestructive = true
-			} else if oldP.Type != newP.Type || oldP.Required != newP.Required {
-				hasDestructive = true
-			}
-		}
-
-		// Check for added properties.
-		for name := range newProps {
-			if _, exists := oldProps[name]; !exists {
-				hasNonDestructive = true
-			}
-		}
-	}
+	hasDestructive, hasNonDestructive := diffEntityTypes(oldSpec, newSpec)
+	d, nd := diffEdgeTypes(oldSpec, newSpec)
+	hasDestructive = hasDestructive || d
+	hasNonDestructive = hasNonDestructive || nd
 
 	if hasDestructive {
 		return SchemaDiffDestructive
@@ -192,6 +53,113 @@ func diffSchema(oldSpec, newSpec *flowv1.FoundryGraphSpec) SchemaDiffResult {
 		return SchemaDiffNonDestructive
 	}
 	return SchemaDiffNone
+}
+
+// diffEntityTypes compares the entity-type sets between old and new specs. Removed
+// entity types, removed or changed existing type properties, and enableVectorIndex
+// true→false are destructive; added types, added properties, and rule changes are
+// non-destructive (SPEC R6: additive-only schema changes are non-destructive).
+func diffEntityTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, nonDestructive bool) {
+	oldTypes := make(map[string]flowv1.EntityTypeSpec, len(oldSpec.EntityTypes))
+	for _, et := range oldSpec.EntityTypes {
+		oldTypes[et.Name] = et
+	}
+	newTypes := make(map[string]flowv1.EntityTypeSpec, len(newSpec.EntityTypes))
+	for _, et := range newSpec.EntityTypes {
+		newTypes[et.Name] = et
+	}
+
+	// Removed entity types are destructive.
+	for name := range oldTypes {
+		if _, exists := newTypes[name]; !exists {
+			destructive = true
+		}
+	}
+
+	// Added types, property changes, and rule changes per surviving type.
+	for name, newET := range newTypes {
+		oldET, exists := oldTypes[name]
+		if !exists {
+			nonDestructive = true
+			continue
+		}
+
+		if oldET.EnableVectorIndex && !newET.EnableVectorIndex {
+			destructive = true
+		}
+		if !oldET.EnableVectorIndex && newET.EnableVectorIndex {
+			nonDestructive = true
+		}
+
+		d, nd := diffProperties(oldET.Properties, newET.Properties)
+		destructive = destructive || d
+		nonDestructive = nonDestructive || nd
+
+		if !rulesEqual(oldET.Rules, newET.Rules) {
+			nonDestructive = true
+		}
+	}
+	return destructive, nonDestructive
+}
+
+// diffEdgeTypes compares the edge-type sets between old and new specs with the same
+// semantics as diffEntityTypes (edge types carry no enableVectorIndex flag).
+func diffEdgeTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, nonDestructive bool) {
+	oldTypes := make(map[string]flowv1.EdgeTypeSpec, len(oldSpec.EdgeTypes))
+	for _, et := range oldSpec.EdgeTypes {
+		oldTypes[et.Name] = et
+	}
+	newTypes := make(map[string]flowv1.EdgeTypeSpec, len(newSpec.EdgeTypes))
+	for _, et := range newSpec.EdgeTypes {
+		newTypes[et.Name] = et
+	}
+
+	for name := range oldTypes {
+		if _, exists := newTypes[name]; !exists {
+			destructive = true
+		}
+	}
+	for name, newET := range newTypes {
+		oldET, exists := oldTypes[name]
+		if !exists {
+			nonDestructive = true
+			continue
+		}
+		d, nd := diffProperties(oldET.Properties, newET.Properties)
+		destructive = destructive || d
+		nonDestructive = nonDestructive || nd
+	}
+	return destructive, nonDestructive
+}
+
+// diffProperties reports whether a property-set change is destructive (a property was
+// removed or an existing property's Type/Required declaration changed) or
+// non-destructive (properties were added). SPEC R6 defines destructive as "removed or
+// changed existing type properties"; adding new properties is additive-only.
+func diffProperties(oldProps, newProps []flowv1.PropertySpec) (destructive, nonDestructive bool) {
+	oldMap := make(map[string]flowv1.PropertySpec, len(oldProps))
+	for _, p := range oldProps {
+		oldMap[p.Name] = p
+	}
+	newMap := make(map[string]flowv1.PropertySpec, len(newProps))
+	for _, p := range newProps {
+		newMap[p.Name] = p
+	}
+
+	for name, oldP := range oldMap {
+		newP, exists := newMap[name]
+		if !exists {
+			destructive = true
+		} else if oldP.Type != newP.Type || oldP.Required != newP.Required {
+			destructive = true
+		}
+	}
+	for name := range newMap {
+		if _, exists := oldMap[name]; !exists {
+			nonDestructive = true
+		}
+	}
+	return destructive, nonDestructive
 }
 
 // rulesEqual compares two ConnectionRule slices. Per SPEC R1, both the `rules` list entries

@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // LawGroupSpec defines the desired state of LawGroup.
@@ -81,5 +82,8 @@ type LawGroupList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&LawGroup{}, &LawGroupList{})
+	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
+		scheme.AddKnownTypes(GroupVersion, &LawGroup{}, &LawGroupList{})
+		return nil
+	})
 }

@@ -99,6 +99,23 @@ func (db *ladybugDB) CreateEntity(
 	}
 
 	// Bootstrap embedding column and vector index on first entity with embedding.
+	// ponytail: SPEC R2 says ApplySchema reserves the FLOAT[] vector-embedding
+	// column (ALTER TABLE ADD COLUMN) for enableVectorIndex types at
+	// schema-application time. Here the column is created lazily on this first
+	// embedding write instead (mirrored in UpdateEntity and the file/branch load
+	// paths), because the vector dimension is inferred from the embedding and the
+	// SPEC exposes no dimension field to size the column at apply time.
+	// Consequences of the divergence: until the first embedding the type's table
+	// has no embedding column (table_info shows none), so the physical schema
+	// does not match the SPEC's stated reservation mechanism; the DDL also runs
+	// on the write path rather than at apply time, so an embedding write is the
+	// first mutation that can fail on a column/index DDL error (surfaced loudly,
+	// marking the store failed). Every SPEC-observable behavior holds: the index
+	// stays lazy, the dimension locks on the first embedding,
+	// ErrVectorBootstrap rejects pre-bootstrap no-embedding creates, and
+	// post-bootstrap no-embedding creates store NULL. Upgrade path: reserve the
+	// column at ApplySchema once the SPEC defines a dimension or LadybugDB
+	// accepts a dimensionless FLOAT[] column, and drop this lazy ALTER.
 	if def.EnableVectorIndex && len(embedding) > 0 {
 		if dim == 0 {
 			// No embedding column yet — bootstrap it.

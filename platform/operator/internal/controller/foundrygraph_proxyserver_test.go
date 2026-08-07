@@ -55,16 +55,16 @@ func TestProxyServerExtractRoutingMetadata(t *testing.T) {
 	t.Run("valid namespace with default graph name", func(t *testing.T) {
 		s := &ProxyServer{}
 		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-			"x-flow-namespace", "test-ns",
+			"x-flow-namespace", testNS,
 		))
 		gotNS, name, err := s.extractRoutingMetadata(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if gotNS != "test-ns" {
+		if gotNS != testNS {
 			t.Errorf("expected namespace test-ns, got %q", gotNS)
 		}
-		if name != "flow-graph" {
+		if name != defaultGraphName {
 			t.Errorf("expected default graph name flow-graph, got %q", name)
 		}
 	})
@@ -72,7 +72,7 @@ func TestProxyServerExtractRoutingMetadata(t *testing.T) {
 	t.Run("valid namespace with custom graph name", func(t *testing.T) {
 		s := &ProxyServer{}
 		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-			"x-flow-namespace", "test-ns",
+			"x-flow-namespace", testNS,
 			"x-flow-graph-name", "my-graph",
 		))
 		_, name, err := s.extractRoutingMetadata(ctx)
@@ -148,7 +148,7 @@ func TestAuthorizeMissingAuthHeader(t *testing.T) {
 		authCache: newAuthCache(30 * time.Second),
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs())
-	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unauthenticated {
+	if err := s.authorize(ctx, "ns", "graph"); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("expected Unauthenticated for missing auth header, got %v", status.Code(err))
 	}
 }
@@ -159,7 +159,7 @@ func TestAuthorizeInvalidToken(t *testing.T) {
 		authCache: newAuthCache(30 * time.Second),
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer bad-token"))
-	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unauthenticated {
+	if err := s.authorize(ctx, "ns", "graph"); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("expected Unauthenticated for invalid token, got %v", status.Code(err))
 	}
 }
@@ -170,7 +170,7 @@ func TestAuthorizeDenied(t *testing.T) {
 		authCache: newAuthCache(30 * time.Second),
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
-	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.PermissionDenied {
+	if err := s.authorize(ctx, "ns", "graph"); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
 	}
 }
@@ -181,11 +181,11 @@ func TestAuthorizeAllowedAndCached(t *testing.T) {
 		authCache: newAuthCache(30 * time.Second),
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer valid"))
-	if err := s.authorize(ctx, "ns", "graph", "get"); err != nil {
+	if err := s.authorize(ctx, "ns", "graph"); err != nil {
 		t.Fatalf("expected authorize to succeed: %v", err)
 	}
 	// Second call must be served from the auth cache (no token/sar re-evaluation).
-	if err := s.authorize(ctx, "ns", "graph", "get"); err != nil {
+	if err := s.authorize(ctx, "ns", "graph"); err != nil {
 		t.Fatalf("expected cached authorize to succeed: %v", err)
 	}
 }
@@ -905,7 +905,7 @@ func TestAuthorizeTokenReviewFailure(t *testing.T) {
 
 	s := &ProxyServer{k8sClient: fakeCli, authCache: newAuthCache(30 * time.Second)}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
-	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unavailable {
+	if err := s.authorize(ctx, "ns", "graph"); status.Code(err) != codes.Unavailable {
 		t.Fatalf("expected Unavailable on TokenReview failure, got %v", status.Code(err))
 	}
 }
@@ -929,7 +929,7 @@ func TestAuthorizeSARFailure(t *testing.T) {
 
 	s := &ProxyServer{k8sClient: fakeCli, authCache: newAuthCache(30 * time.Second)}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
-	if err := s.authorize(ctx, "ns", "graph", "get"); status.Code(err) != codes.Unavailable {
+	if err := s.authorize(ctx, "ns", "graph"); status.Code(err) != codes.Unavailable {
 		t.Fatalf("expected Unavailable on SAR failure, got %v", status.Code(err))
 	}
 }

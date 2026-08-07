@@ -64,6 +64,9 @@ type fakeGraphExporter struct {
 	tokenErr   error
 	streamFn   func() graphExportStream
 	streamErr  error
+	// dialedFormat records the format passed to dialOperatorStream, so tests
+	// can pin the format default that reaches the wire.
+	dialedFormat string
 }
 
 var _ graphExporter = (*fakeGraphExporter)(nil)
@@ -91,7 +94,8 @@ func (f *fakeGraphExporter) forwardOperatorPod(context.Context, string, string) 
 
 func (f *fakeGraphExporter) bearerToken() (string, error) { return f.token, f.tokenErr }
 
-func (f *fakeGraphExporter) dialOperatorStream(context.Context, int, string, string, string, string) (graphExportStream, func(), error) {
+func (f *fakeGraphExporter) dialOperatorStream(_ context.Context, _ int, _, _, _, format string) (graphExportStream, func(), error) {
+	f.dialedFormat = format
 	if f.streamErr != nil {
 		return nil, func() {}, f.streamErr
 	}
@@ -133,24 +137,77 @@ func testParams() graphExportParams {
 	return graphExportParams{namespace: "flow-system", graphName: "flow-graph", format: "json"}
 }
 
-// runGraphExportToFile exercises the file-output path in runGraphExport by
-// creating a cobra.Command with the given flags and injecting a fake exporter.
-// This allows testing os.Create failure, flush failure, close failure, and
-// partial-file cleanup without requiring a real Kubernetes cluster.
-func runGraphExportToFile(t *testing.T, exporter graphExporter, outputPath string, params graphExportParams) error {
+// runGraphExportCmd executes the graph export command with the given args and
+// an injected exporter, exercising the real command wiring (flag defaults,
+// namespace resolution, stdout/file output) without a Kubernetes cluster.
+func runGraphExportCmd(t *testing.T, exporter graphExporter, args ...string) error {
 	t.Helper()
 	origFn := newGraphExporterFn
 	newGraphExporterFn = func() (graphExporter, error) { return exporter, nil }
 	t.Cleanup(func() { newGraphExporterFn = origFn })
 
 	cmd := newGraphExportCmd()
-	cmd.SetArgs([]string{
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+// runGraphExportToFile exercises the file-output path in runGraphExport by
+// creating a cobra.Command with the given flags and injecting a fake exporter.
+// This allows testing os.Create failure, flush failure, close failure, and
+// partial-file cleanup without requiring a real Kubernetes cluster.
+func runGraphExportToFile(t *testing.T, exporter graphExporter, outputPath string, params graphExportParams) error {
+	return runGraphExportCmd(t, exporter,
 		"--format", params.format,
 		"--namespace", params.namespace,
 		"--graph-name", params.graphName,
 		"--output", outputPath,
+	)
+}
+
+// scriptedFile is an io.WriteCloser wrapping a real output file whose Write and
+// Close can be forced to fail, so runGraphExport's flush/close-failure branches
+// are driven directly against a real file on disk.
+type scriptedFile struct {
+	*os.File
+	writeErr error
+	closeErr error
+}
+
+func (s *scriptedFile) Write(p []byte) (int, error) {
+	if s.writeErr != nil {
+		return 0, s.writeErr
+	}
+	return s.File.Write(p)
+}
+
+func (s *scriptedFile) Close() error {
+	if s.closeErr != nil {
+		_ = s.File.Close()
+		return s.closeErr
+	}
+	return s.File.Close()
+}
+
+// captureStdout redirects os.Stdout to a pipe and returns a function that
+// closes the write end and returns everything written to stdout so far.
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = orig
+		_ = w.Close()
+		_ = r.Close()
 	})
-	return cmd.Execute()
+	return func() string {
+		_ = w.Close()
+		data, _ := io.ReadAll(r)
+		return string(data)
+	}
 }
 
 // ─── Format pre-validation ──────────────────────────────────────────────────
@@ -425,25 +482,71 @@ func TestRunGraphExport_OutputCreateFails(t *testing.T) {
 	}
 }
 
-func TestRunGraphExport_FlushFailureCleansUp(t *testing.T) {
-	// Directly exercise removeStreamOutput: when a stream or write failure
-	// occurs, the partial file is closed and removed so the caller doesn't
-	// mistake truncated data for a complete graph.
+func TestRunGraphExport_FlushFailureCleansUpOutputFile(t *testing.T) {
+	// Drive runGraphExport's flush-failure branch directly: the stream
+	// succeeds, the buffered data fails to flush to the underlying file, and
+	// the partial file must be removed.
 	dir := t.TempDir()
 	outPath := filepath.Join(dir, "flush-fail.json")
 
-	f, err := os.Create(outPath)
-	if err != nil {
-		t.Fatalf("create: %v", err)
+	origFileFn := newExportFileFn
+	newExportFileFn = func(path string) (io.WriteCloser, error) {
+		f, err := os.Create(path)
+		if err != nil {
+			return nil, err
+		}
+		return &scriptedFile{File: f, writeErr: errors.New("flush boom")}, nil
 	}
-	// Write partial data directly, then removeStreamOutput should close and
-	// delete the file.
-	if _, err := f.WriteString("partial"); err != nil {
-		t.Fatalf("write: %v", err)
+	t.Cleanup(func() { newExportFileFn = origFileFn })
+
+	e := successExporter()
+	e.streamFn = func() graphExportStream { return chunkStream("partial") }
+
+	err := runGraphExportToFile(t, e, outPath, testParams())
+	if err == nil {
+		t.Fatal("expected error, got nil")
 	}
-	removeStreamOutput(f, outPath)
+	for _, want := range []string{"flush output file", "flush boom"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("expected error to contain %q, got: %v", want, err)
+		}
+	}
 	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
-		t.Errorf("expected file to be removed after removeStreamOutput, but it still exists")
+		t.Errorf("expected partial output file to be removed after flush failure, but it still exists")
+	}
+}
+
+func TestRunGraphExport_CloseFailureCleansUpOutputFile(t *testing.T) {
+	// Drive runGraphExport's close-failure branch directly: the stream and
+	// flush succeed, the file close fails, and the output must be removed so
+	// the caller doesn't mistake it for a complete graph.
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "close-fail.json")
+
+	origFileFn := newExportFileFn
+	newExportFileFn = func(path string) (io.WriteCloser, error) {
+		f, err := os.Create(path)
+		if err != nil {
+			return nil, err
+		}
+		return &scriptedFile{File: f, closeErr: errors.New("close boom")}, nil
+	}
+	t.Cleanup(func() { newExportFileFn = origFileFn })
+
+	e := successExporter()
+	e.streamFn = func() graphExportStream { return chunkStream("partial") }
+
+	err := runGraphExportToFile(t, e, outPath, testParams())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	for _, want := range []string{"close output file", "close boom"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("expected error to contain %q, got: %v", want, err)
+		}
+	}
+	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+		t.Errorf("expected output file to be removed after close failure, but it still exists")
 	}
 }
 
@@ -500,5 +603,98 @@ func TestRunGraphExport_StreamFailureCleanupOnFile(t *testing.T) {
 
 	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
 		t.Errorf("expected partial output file to be removed after stream failure, but it still exists")
+	}
+}
+
+// ─── Item: R11 CLI defaults (SPEC: "defaults: json to stdout") ─────────────
+
+func TestGraphExportCmd_DefaultFormatIsJSON(t *testing.T) {
+	cmd := newGraphExportCmd()
+	format, err := cmd.Flags().GetString("format")
+	if err != nil {
+		t.Fatalf("get format flag: %v", err)
+	}
+	if format != formatJSON {
+		t.Errorf("expected default --format %q, got %q", formatJSON, format)
+	}
+	output, err := cmd.Flags().GetString("output")
+	if err != nil {
+		t.Fatalf("get output flag: %v", err)
+	}
+	if output != "" {
+		t.Errorf("expected default --output to be empty (stdout), got %q", output)
+	}
+}
+
+func TestRunGraphExport_DefaultFormatReachesDial(t *testing.T) {
+	// No --format flag: the default "json" must reach the operator stream.
+	e := successExporter()
+	e.streamFn = func() graphExportStream { return eofStream() }
+
+	if err := runGraphExportCmd(t, e, "--namespace", "flow-system"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if e.dialedFormat != formatJSON {
+		t.Errorf("expected default format %q on the wire, got %q", formatJSON, e.dialedFormat)
+	}
+}
+
+func TestRunGraphExport_OmittedOutputWritesToStdout(t *testing.T) {
+	// No --output flag: the graph stream must be written to stdout.
+	e := successExporter()
+	e.streamFn = func() graphExportStream { return chunkStream("graph-data") }
+
+	out := captureStdout(t)
+	if err := runGraphExportCmd(t, e, "--namespace", "flow-system"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := out(); got != "graph-data" {
+		t.Errorf("expected graph data on stdout, got %q", got)
+	}
+}
+
+func TestRunGraphExport_DashOutputWritesToStdout(t *testing.T) {
+	// --output -: an explicit dash means stdout.
+	e := successExporter()
+	e.streamFn = func() graphExportStream { return chunkStream("graph-data") }
+
+	out := captureStdout(t)
+	if err := runGraphExportCmd(t, e, "--namespace", "flow-system", "--output", "-"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := out(); got != "graph-data" {
+		t.Errorf("expected graph data on stdout, got %q", got)
+	}
+}
+
+// ─── Item: resolveOperatorProxyPort branches ───────────────────────────────
+
+func TestResolveOperatorProxyPort_Default(t *testing.T) {
+	t.Setenv("OPERATOR_PROXY_PORT", "")
+	port, err := resolveOperatorProxyPort()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if port != operatorProxyPort {
+		t.Errorf("expected default port %d, got %d", operatorProxyPort, port)
+	}
+}
+
+func TestResolveOperatorProxyPort_EnvOverride(t *testing.T) {
+	t.Setenv("OPERATOR_PROXY_PORT", "50054")
+	port, err := resolveOperatorProxyPort()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if port != 50054 {
+		t.Errorf("expected env-override port 50054, got %d", port)
+	}
+}
+
+func TestResolveOperatorProxyPort_ParseError(t *testing.T) {
+	t.Setenv("OPERATOR_PROXY_PORT", "not-a-port")
+	_, err := resolveOperatorProxyPort()
+	if err == nil || !strings.Contains(err.Error(), "OPERATOR_PROXY_PORT parse error") {
+		t.Fatalf("expected parse error, got: %v", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -1172,7 +1173,7 @@ func TestWipeGraph_ExpiredTxDoesNotBlock(t *testing.T) {
 	}
 
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
 	_, _ = srv.txManager.Create("test-tx", 1*time.Minute, "head")
 
 	// Advance past the transaction deadline without GC: the transaction is
@@ -1248,53 +1249,45 @@ func TestExecuteCypher_ValidQuery(t *testing.T) {
 	}
 }
 
-// TestRowsToTuplesDeterministicColumnAligned asserts R2's deterministic
-// "flat tuples" contract: value order is a stable sorted column set, and every
-// tuple lists values in that same column order (null-filling absent columns),
-// independent of Go's randomised map iteration order.
-func TestRowsToTuplesDeterministicColumnAligned(t *testing.T) {
-	rows := []map[string]any{
-		{"b": 2, "a": "x", "c": 3.5},
-		{"b": 4, "a": "y"},
-		{"c": false},
+// TestRowsToRowsOneTuplePerRow asserts the SPEC R2 flat-tuple Row contract:
+// each Row is one flat tuple of string values in the order the caller supplied
+// (LadybugDB return order) — no sorted column schema, no cross-row alignment
+// or null-filling, and non-string values stringified. A null column (an absent
+// property in a RETURN) becomes the empty string, since the v1 wire carries no
+// null marker.
+func TestRowsToRowsOneTuplePerRow(t *testing.T) {
+	rows := []store.CypherRow{
+		{Values: []any{"id-1", "x", int64(2)}},
+		{Values: []any{"id-2"}},
 	}
-	tuples := rowsToTuples(rows)
-	if len(tuples) != 3 {
-		t.Fatalf("expected 3 tuples, got %d", len(tuples))
+	got := rowsToRows(rows)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(got))
 	}
-	cases := []struct {
-		values []any // nil => null column
-	}{
-		{[]any{"x", float64(2), 3.5}},
-		{[]any{"y", float64(4), nil}},
-		{[]any{nil, nil, false}},
+	want := [][]string{
+		{"id-1", "x", "2"},
+		{"id-2"},
 	}
-	wantCols := []string{"a", "b", "c"}
-	for i, tc := range cases {
-		if len(tuples[i].Values) != 3 {
-			t.Fatalf("tuple %d: expected 3 values, got %d", i, len(tuples[i].Values))
+	for i, row := range got {
+		if len(row.Values) != len(want[i]) {
+			t.Fatalf("row %d: expected %d values, got %d", i, len(want[i]), len(row.Values))
 		}
-		for j, want := range wantCols {
-			got := tuples[i].Values[j]
-			switch wantVal := tc.values[j].(type) {
-			case nil:
-				if _, ok := got.Kind.(*structpb.Value_NullValue); !ok {
-					t.Fatalf("tuple %d col %q: expected null, got kind %T", i, want, got.Kind)
-				}
-			case string:
-				if got.GetStringValue() != wantVal {
-					t.Fatalf("tuple %d col %q: expected string %q, got val %q", i, want, wantVal, got.GetStringValue())
-				}
-			case bool:
-				if got.GetBoolValue() != wantVal {
-					t.Fatalf("tuple %d col %q: expected bool %v, got %v", i, want, wantVal, got.GetBoolValue())
-				}
-			case float64:
-				if got.GetNumberValue() != wantVal {
-					t.Fatalf("tuple %d col %q: expected number %v, got %v", i, want, wantVal, got.GetNumberValue())
-				}
+		for j, w := range want[i] {
+			if row.Values[j] != w {
+				t.Fatalf("row %d value %d: expected %q, got %q", i, j, w, row.Values[j])
 			}
 		}
+	}
+}
+
+// TestCypherValueStringNullIsEmpty asserts a null column value stringifies to
+// the empty string on the string-only v1 row wire.
+func TestCypherValueStringNullIsEmpty(t *testing.T) {
+	if got, want := cypherValueString(nil), ""; got != want {
+		t.Fatalf("cypherValueString(nil) = %q, want %q", got, want)
+	}
+	if got, want := cypherValueString("hello"), "hello"; got != want {
+		t.Fatalf("cypherValueString(\"hello\") = %q, want %q", got, want)
 	}
 }
 
@@ -1303,20 +1296,18 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 	ctx := testCtx()
 	applyTestSchema(ctx, t, st)
 
-	// Each mutation/DDL clause the SPEC R7 §5 and error-table row 910 enumerate
+	// Each mutation/DDL clause the SPEC R7 §5 and error-table row 913 enumerate
 	// (CREATE, SET, DELETE, MERGE, REMOVE, DROP, DDL index/constraint, and
-	// FOREACH-as-mutation) must be rejected by ExecuteCypher so no mutation ever
-	// executes through the read-only RPC.
+	// FOREACH-as-mutation) must be rejected by ExecuteCypher with
+	// PERMISSION_DENIED so no mutation ever executes through the read-only RPC.
 	//
 	// LadybugDB v0.17.0's parser recognises CREATE/SET/DELETE/MERGE/DROP and
 	// classifies each as non-read-only, surfacing ErrMutationCypher which the
 	// service maps to PERMISSION_DENIED. Its grammar does not parse top-level
-	// FOREACH, `MATCH ... REMOVE ...`, or index/constraint DDL, so those fail at
-	// Prepare with ErrInvalidCypher (which the service maps to INVALID_ARGUMENT)
-	// before the read-only guard runs — they cannot execute either. The security
-	// property (a mutation can never execute through ExecuteCypher) holds for the
-	// whole set; the error code varies by whether the grammar can classify the AST
-	// root as a mutation.
+	// FOREACH, `MATCH ... REMOVE ...`, or index/constraint DDL; those are now
+	// classified as mutations by the store's keyword fallback and surface the
+	// same PERMISSION_DENIED — the SPEC-mandated code for the whole set
+	// (SPEC:913, SPEC:469-470, SPEC:874), never INVALID_ARGUMENT.
 	cases := []struct {
 		name           string
 		cypher         string
@@ -1327,10 +1318,11 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 		{"delete", "MATCH (n:Component) DELETE n", codes.PermissionDenied},
 		{"merge", "MERGE (n:Component {id: '11111111-1111-1111-1111-111111111111'})", codes.PermissionDenied},
 		{"drop", "DROP TABLE Component", codes.PermissionDenied},
-		{"remove", "MATCH (n:Component) REMOVE n.name", codes.InvalidArgument},
-		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)", codes.InvalidArgument},
-		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE", codes.InvalidArgument},
-		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))", codes.InvalidArgument},
+		{"remove", "MATCH (n:Component) REMOVE n.name", codes.PermissionDenied},
+		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)", codes.PermissionDenied},
+		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE",
+			codes.PermissionDenied},
+		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))", codes.PermissionDenied},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2444,7 +2436,7 @@ func TestTransaction_TimedOut(t *testing.T) {
 
 	// Replace with fake clock so we can control time.
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
 		Timeout: durationpb.New(1 * time.Minute),
@@ -3496,6 +3488,73 @@ func TestReadWildcardOnly_TypeOmittedSearchesSucceed(t *testing.T) {
 	if len(sn.Results) == 0 {
 		t.Fatal("expected at least one neighbor result")
 	}
+}
+
+// TestReadMethods_BeforeFirstApplySchema pins the SPEC R5 (SPEC:345-346) read
+// boundary: before the first ApplySchema, non-type-referencing read methods
+// (ExecuteCypher without type labels, type-omitted FullTextSearch and
+// SearchNeighbors) succeed on an empty graph, while methods referencing a
+// specific type return INVALID_ARGUMENT specifically because no schema has been
+// applied.
+func TestReadMethods_BeforeFirstApplySchema(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	t.Run("non-type-referencing methods succeed on an empty graph", func(t *testing.T) {
+		// ExecuteCypher with no type reference.
+		resp, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (n) RETURN n"})
+		if err != nil {
+			t.Fatalf("ExecuteCypher without a type reference should succeed on an empty graph, got %v", err)
+		}
+		if len(resp.Rows) != 0 {
+			t.Fatalf("expected no rows on an empty graph, got %d", len(resp.Rows))
+		}
+
+		// FullTextSearch with entityType omitted (wildcard branch).
+		fts, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "anything"})
+		if err != nil {
+			t.Fatalf("type-omitted FullTextSearch should succeed on an empty graph, got %v", err)
+		}
+		if len(fts.Results) != 0 {
+			t.Fatalf("expected no FullTextSearch results on an empty graph, got %d", len(fts.Results))
+		}
+
+		// SearchNeighbors with entityType omitted (wildcard branch).
+		sn, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+			Embedding: []float32{1.0, 2.0, 3.0},
+			TopK:      5,
+		})
+		if err != nil {
+			t.Fatalf("type-omitted SearchNeighbors should succeed on an empty graph, got %v", err)
+		}
+		if len(sn.Results) != 0 {
+			t.Fatalf("expected no neighbor results on an empty graph, got %d", len(sn.Results))
+		}
+	})
+
+	t.Run("type-referencing methods return INVALID_ARGUMENT", func(t *testing.T) {
+		// ExecuteCypher referencing a specific type label.
+		_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (n:Component) RETURN n"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for ExecuteCypher referencing an unapplied type, got %v", err)
+		}
+
+		// FullTextSearch / SearchNeighbors / ListEntities with an explicit type.
+		_, err = srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "x", EntityType: "Component"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for type-referencing FullTextSearch, got %v", err)
+		}
+		_, err = srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+			Embedding: []float32{1.0, 2.0, 3.0}, EntityType: "Component", TopK: 5,
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for type-referencing SearchNeighbors, got %v", err)
+		}
+		_, err = srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: "Component", PageSize: 10})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for type-referencing ListEntities, got %v", err)
+		}
+	})
 }
 
 func TestRefreshTransaction_NoConflicts(t *testing.T) {
@@ -5032,7 +5091,7 @@ func TestExtendTimeout_AcceptedAt7DayBoundary(t *testing.T) {
 
 	// Replace with a fake clock so the boundary is deterministic.
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
 		Timeout: durationpb.New(1 * time.Minute),
@@ -5076,27 +5135,51 @@ func TestRollbackTransaction_NotFound(t *testing.T) {
 // 15. BeginTransaction error-path tests
 // =========================================================================
 
-func TestBeginTransaction_TimeoutCapping(t *testing.T) {
+// TestBeginTransaction_TimeoutValidation asserts the SPEC R2 (SPEC:207), R9
+// (SPEC:557-559), and error-table row 917 contract for BeginTransaction: a
+// requested timeout that is non-positive or exceeds the 7-day hard maximum is
+// rejected with INVALID_ARGUMENT — no silent capping (the previous behavior)
+// and no silent default-substitution — mirroring ExtendTimeout. Exactly 7 days
+// is accepted (strict > comparison, matching TestExtendTimeout_AcceptedAt7DayBoundary).
+func TestBeginTransaction_TimeoutValidation(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
 	st, _ := ladybug.OpenInMemory()
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
-	// Use a short default timeout so capping at hard max (7 days) is visible.
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
 	ctx := testCtx()
 
-	// Request a timeout far exceeding the hard max (7 days).
-	resp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+	// Request a timeout far exceeding the hard max (7 days): rejected, not capped.
+	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
 		Timeout: durationpb.New(14 * 24 * time.Hour),
 	})
-	if err != nil {
-		t.Fatalf("BeginTransaction failed: %v", err)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for over-max timeout, got %v (%v)", status.Code(err), err)
 	}
-	// The applied timeout must not exceed 7 days.
-	if resp.AppliedTimeout.AsDuration() > 7*24*time.Hour {
-		t.Fatalf("expected applied timeout capped at 7 days, got %v", resp.AppliedTimeout.AsDuration())
+
+	// Non-positive timeouts are rejected, not silently defaulted.
+	for _, d := range []time.Duration{0, -1 * time.Minute} {
+		_, err = srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+			Timeout: durationpb.New(d),
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for timeout %v, got %v (%v)", d, status.Code(err), err)
+		}
+	}
+
+	// Exactly 7 days is the accepted boundary, and the applied timeout surfaces
+	// the granted value verbatim.
+	resp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+		Timeout: durationpb.New(7 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("expected 7-day-boundary begin to be accepted, got %v", err)
+	}
+	if resp.AppliedTimeout.AsDuration() != 7*24*time.Hour {
+		t.Fatalf("expected applied timeout 7d, got %v", resp.AppliedTimeout.AsDuration())
 	}
 }
 
@@ -6252,6 +6335,94 @@ func TestExportGraph_EmptyGraph(t *testing.T) {
 	}
 }
 
+// TestExportGraph_JSONShape pins the SPEC R11 (SPEC:619) JSON export shape: the
+// graph always serialises with top-level "nodes" and "edges" arrays — an empty
+// graph is {"nodes":[],"edges":[]}, not {} — and every node/edge entry carries a
+// top-level "properties" key, an empty object when the element has no properties.
+func TestExportGraph_JSONShape(t *testing.T) {
+	t.Run("empty graph serialises with empty arrays", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")}
+		handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)
+		if err != nil {
+			t.Fatalf("export empty graph failed: %v", err)
+		}
+		if !handlerInvoked {
+			t.Fatal("stream interceptor did not invoke ExportGraph")
+		}
+		if got, want := string(stream.data), `{"nodes":[],"edges":[]}`; got != want {
+			t.Fatalf("empty-graph JSON = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("entries always carry a properties key", func(t *testing.T) {
+		srv, st := newTestServer(t)
+		ctx := context.Background()
+		if err := st.ApplySchema(ctx, &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{
+				{
+					Name: "Loose",
+					// No declared properties, so a property-less entity has a
+					// genuinely empty properties map (a declared-but-unset
+					// property would be materialised by the store instead).
+					Rules: []*flowv1.ConnectionRule{{
+						CanConnectTo: []string{"Loose"}, Using: []string{"DEPENDS_ON"},
+					}},
+				},
+			},
+			EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}},
+		}); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		// Create an entity with no properties and an edge with no properties.
+		ent, err := st.CreateEntity(ctx, "Loose", "", nil, nil, "")
+		if err != nil {
+			t.Fatalf("CreateEntity: %v", err)
+		}
+		other, err := st.CreateEntity(ctx, "Loose", "", nil, nil, "")
+		if err != nil {
+			t.Fatalf("CreateEntity other: %v", err)
+		}
+		if _, err := st.CreateEdge(ctx, "DEPENDS_ON", ent.Id, other.Id, nil, ""); err != nil {
+			t.Fatalf("CreateEdge: %v", err)
+		}
+
+		stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")}
+		if _, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream); err != nil {
+			t.Fatalf("export failed: %v", err)
+		}
+		var out struct {
+			Nodes []map[string]any `json:"nodes"`
+			Edges []map[string]any `json:"edges"`
+		}
+		if err := json.Unmarshal(stream.data, &out); err != nil {
+			t.Fatalf("invalid export JSON: %v", err)
+		}
+		if len(out.Nodes) != 2 {
+			t.Fatalf("expected 2 nodes, got %d", len(out.Nodes))
+		}
+		for _, node := range out.Nodes {
+			props, ok := node["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("node entry missing object properties key: %+v", node)
+			}
+			if len(props) != 0 {
+				t.Fatalf("expected empty properties object for property-less node, got %v", props)
+			}
+		}
+		if len(out.Edges) != 1 {
+			t.Fatalf("expected 1 edge, got %d", len(out.Edges))
+		}
+		props, ok := out.Edges[0]["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("edge entry missing object properties key: %+v", out.Edges[0])
+		}
+		if len(props) != 0 {
+			t.Fatalf("expected empty properties object for property-less edge, got %v", props)
+		}
+	})
+}
+
 func TestExportGraph_MidStreamFailure(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
@@ -6592,7 +6763,7 @@ func TestTransactionGC_ExcludesConcurrentMainWriteDuringRehydration(t *testing.T
 	ctx := testCtx()
 	applyTestSchema(ctx, t, base)
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
 	_, err = srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{Timeout: durationpb.New(time.Minute)})
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
@@ -6644,7 +6815,7 @@ func TestTelemetry_TransactionGC(t *testing.T) {
 	srv.dbReady.Store(true)
 
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(30*time.Minute, 7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
 	_, _ = srv.txManager.Create("test-tx-id", 1*time.Minute, "head")
 
 	fc.Advance(2 * time.Minute)
@@ -7301,7 +7472,7 @@ func TestExecuteCypher_NoEntityTypesMetadataReadOnlyDenied(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := noReadCtx() // WRITE-only capabilities, no READ.
 
-	// No x-flow-entity-types metadata: ExecuteCypher falls back to the wildcard
+	// No entity_types metadata: ExecuteCypher falls back to the wildcard
 	// READ capability check, which a write-only caller lacks.
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (n) RETURN n"})
 	if err == nil {

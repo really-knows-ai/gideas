@@ -35,7 +35,6 @@ func (r *realTicker) Stop()               { r.t.Stop() }
 type TransactionManager struct {
 	mu                  sync.RWMutex
 	active              map[string]*TransactionState
-	defaultTimeout      time.Duration
 	hardMaxTimeout      time.Duration // 7 days
 	changeLogCap        int           // 100000
 	clock               Clock
@@ -136,12 +135,11 @@ func (tm *TransactionManager) lockRegistered(txID string) (*TransactionState, fu
 
 // NewTransactionManager creates a manager with the real clock.
 func NewTransactionManager(
-	defaultTimeout, hardMaxTimeout time.Duration, changeLogCap int,
+	hardMaxTimeout time.Duration, changeLogCap int,
 	opts ...func(*TransactionManager),
 ) *TransactionManager {
 	tm := &TransactionManager{
 		active:         make(map[string]*TransactionState),
-		defaultTimeout: defaultTimeout,
 		hardMaxTimeout: hardMaxTimeout,
 		changeLogCap:   changeLogCap,
 		clock:          &realClock{},
@@ -158,27 +156,32 @@ func WithClock(c Clock) func(*TransactionManager) {
 }
 
 // Create registers a new transaction with the given ID and requested timeout.
-// The timeout is capped at the hard maximum. Returns the transaction state.
+// The requested timeout is applied verbatim: a non-positive value or one that
+// exceeds the 7-day hard maximum is rejected with INVALID_ARGUMENT (SPEC error
+// table row "Invalid transaction timeout duration", applying to both
+// BeginTransaction and ExtendTimeout) — no silent capping and no silent
+// default-substitution. The omitted-timeout default is applied by the
+// BeginTransaction handler before Create is called, so a non-positive value
+// reaching Create is an explicit client request.
 func (tm *TransactionManager) Create(
 	txID string, requestedTimeout time.Duration, mainHeadAtLastSync string,
 ) (*TransactionState, error) {
-	cappedTimeout := requestedTimeout
-	if cappedTimeout <= 0 {
-		cappedTimeout = tm.defaultTimeout
+	if requestedTimeout <= 0 {
+		return nil, errInvalidTransactionTimeoutDuration("duration must be positive")
 	}
-	if cappedTimeout > tm.hardMaxTimeout {
-		cappedTimeout = tm.hardMaxTimeout
+	if requestedTimeout > tm.hardMaxTimeout {
+		return nil, errInvalidTransactionTimeoutDuration("total lifetime would exceed 7-day maximum")
 	}
 
 	now := tm.clock.Now()
 	state := &TransactionState{
 		ID:                 txID,
 		CreatedAt:          now,
-		ExpiresAt:          now.Add(cappedTimeout),
+		ExpiresAt:          now.Add(requestedTimeout),
 		ChangeLog:          gitstore.NewChangeLogWithCap(tm.changeLogCap),
 		StoreBranch:        txID,
 		GitBranch:          txID,
-		AppliedTimeout:     cappedTimeout,
+		AppliedTimeout:     requestedTimeout,
 		MainHeadAtLastSync: mainHeadAtLastSync,
 	}
 

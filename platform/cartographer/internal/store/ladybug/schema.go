@@ -513,10 +513,26 @@ func (db *ladybugDB) rebuildSchemaCacheLocked() error {
 }
 
 // createNodeTable translates an entity type into a PropertyDef list and runs
-// the shared node-table DDL builder (see createNodeTableOnConn). If the entity
-// type has EnableVectorIndex, the embedding column is NOT created here — it is
-// bootstrapped lazily on the first CreateEntity with an embedding. An FTS index
-// is created on all string properties for full-text search.
+// the shared node-table DDL builder (see createNodeTableOnConn).
+// ponytail: SPEC R2 states ApplySchema "reserves columns for vector embeddings"
+// for entity types with enableVectorIndex — i.e. the FLOAT[] embedding column is
+// created (via ALTER TABLE ADD COLUMN) at schema-application time. Here no
+// FLOAT[n] column is reserved at table creation: it is bootstrapped lazily on
+// the first CreateEntity with an embedding (crud.go), because the vector
+// dimension is inferred from that first embedding and the SPEC exposes no
+// dimension field. Consequences of the divergence: until the first embedding
+// write the type's table carries no embedding column (table_info shows none), so
+// any tool or path that introspects the physical schema before bootstrap sees a
+// column layout the SPEC's reservation mechanism would not produce; the
+// bootstrap's ALTER TABLE + CREATE_VECTOR_INDEX then mutate the table
+// in-place on the write path rather than at apply time. Every SPEC-observable
+// behavior holds: the vector index stays lazy, the dimension locks on the first
+// embedding, a pre-bootstrap no-embedding create returns ErrVectorBootstrap, and
+// a post-bootstrap no-embedding create stores NULL. Upgrade path: if the SPEC
+// gains a dimension field (or LadybugDB accepts a dimensionless FLOAT[] column),
+// reserve the column at ApplySchema via ALTER TABLE ADD embedding FLOAT[n] and
+// drop the lazy ALTER in CreateEntity/UpdateEntity and the load paths. An FTS
+// index is created on all string properties for full-text search.
 func (db *ladybugDB) createNodeTable(et *flowv1.EntityType) error {
 	return createNodeTableOnConn(db.conn, et.Name, propsFromEntity(et))
 }
@@ -667,7 +683,12 @@ func (db *ladybugDB) TableExists(entityType string) bool {
 }
 
 func (db *ladybugDB) ListMainEntityTypes() ([]string, error) {
-	return db.EntityTypeNames(), nil
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.failed {
+		return nil, store.ErrDatabaseNotReady
+	}
+	return sortedKeys(db.entityTypeDefs), nil
 }
 
 func (db *ladybugDB) ValidateSchema(_ context.Context, s *flowv1.Schema) error {

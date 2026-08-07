@@ -325,6 +325,45 @@ func TestValidate_InvalidPropertyType(t *testing.T) {
 	}
 }
 
+// SPEC:890 "Invalid property type in schema" applies to edge properties just
+// as it does to entity properties (validate.go validateEdgeType §7), so a
+// non-string edge property must be rejected and a string-typed one accepted.
+func TestValidate_EdgePropertyType(t *testing.T) {
+	t.Run("non-string edge property rejected", func(t *testing.T) {
+		s := &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{
+				{
+					Name: "DEPENDS_ON",
+					Properties: []*flowv1.Property{
+						{Name: "weight", Type: "int"},
+					},
+				},
+			},
+		}
+		if err := Validate(s); err == nil {
+			t.Fatal("expected ErrInvalidPropertyType, got nil")
+		} else if !errors.Is(err, ErrInvalidPropertyType) {
+			t.Fatalf("expected ErrInvalidPropertyType, got: %v", err)
+		}
+	})
+
+	t.Run("string-typed edge property accepted", func(t *testing.T) {
+		s := &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{
+				{
+					Name: "DEPENDS_ON",
+					Properties: []*flowv1.Property{
+						{Name: "weight", Type: "string"},
+					},
+				},
+			},
+		}
+		if err := Validate(s); err != nil {
+			t.Fatalf("expected nil error for string-typed edge property, got: %v", err)
+		}
+	})
+}
+
 func TestValidate_UndeclaredEntityInCanConnectTo(t *testing.T) {
 	s := &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
@@ -399,6 +438,39 @@ func TestValidate_EmptySchema(t *testing.T) {
 	s := &flowv1.Schema{}
 	if err := Validate(s); err != nil {
 		t.Fatalf("expected nil error for empty schema, got: %v", err)
+	}
+}
+
+// A nil schema (unset proto3 message field — an ApplySchemaRequest without a
+// schema is forwarded unguarded to Validate by the handler) is equivalent to
+// an empty schema: SPEC:86 permits empty or omitted entityTypes/edgeTypes
+// arrays, so a fully omitted schema must validate, not panic. Nil
+// EntityTypes/EdgeTypes fields on a non-nil schema must likewise be treated
+// as empty lists.
+func TestValidate_NilSchema(t *testing.T) {
+	if err := Validate(nil); err != nil {
+		t.Fatalf("expected nil error for nil schema, got: %v", err)
+	}
+
+	// Nil EntityTypes / EdgeTypes fields treated as empty lists.
+	s := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+		},
+		EdgeTypes: nil,
+	}
+	if err := Validate(s); err != nil {
+		t.Fatalf("expected nil error for nil EdgeTypes, got: %v", err)
+	}
+
+	s = &flowv1.Schema{
+		EntityTypes: nil,
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "DEPENDS_ON"},
+		},
+	}
+	if err := Validate(s); err != nil {
+		t.Fatalf("expected nil error for nil EntityTypes, got: %v", err)
 	}
 }
 

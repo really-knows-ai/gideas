@@ -59,16 +59,14 @@ func TestProxyRoutingTable(t *testing.T) {
 		var wg sync.WaitGroup
 
 		// Concurrently register, lookup, and deregister.
-		for i := range 50 {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
+		for range 50 {
+			wg.Go(func() {
 				ns := "ns"
 				name := "graph"
 				rt.Register(ns, name, "addr:50051")
 				rt.Lookup(ns, name)
 				rt.Deregister(ns, name)
-			}(i)
+			})
 		}
 		wg.Wait()
 	})

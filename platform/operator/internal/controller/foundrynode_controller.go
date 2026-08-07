@@ -157,13 +157,13 @@ func (r *FoundryNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Reconcile the workload (Deployment or StatefulSet).
 	if useStatefulSet {
 		if err := r.reconcileStatefulSet(ctx, &node, fedEnabled); err != nil {
-			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "ReconcileFailed", err.Error(),
+			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, reasonReconcileFailed, err.Error(),
 				func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
 			)
 		}
 	} else {
 		if err := r.reconcileDeployment(ctx, &node, fedEnabled); err != nil {
-			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, "ReconcileFailed", err.Error(),
+			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, reasonReconcileFailed, err.Error(),
 				func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
 			)
 		}
@@ -178,7 +178,7 @@ func (r *FoundryNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionTrue, "Reconciled", "Node workload reconciled successfully",
+	return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionTrue, reasonReconciled, "Node workload reconciled successfully",
 		func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
 	)
 }

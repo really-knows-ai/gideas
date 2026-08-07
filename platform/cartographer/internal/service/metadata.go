@@ -15,7 +15,7 @@ const (
 	MetadataKeyCapabilitiesSignedBy  = "x-flow-capabilities-signed-by"
 	// MetadataKeyEntityTypes carries entity type labels extracted from
 	// Cypher queries by the SDK. Passed as gRPC metadata values keyed by
-	// "x-flow-entity-types". The Cartographer uses this to perform
+	// "entity_types" (SPEC R3). The Cartographer uses this to perform
 	// authoritative type-specific capability checking.
-	MetadataKeyEntityTypes = "x-flow-entity-types"
+	MetadataKeyEntityTypes = "entity_types"
 )

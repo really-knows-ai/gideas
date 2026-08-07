@@ -124,21 +124,14 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	// Reject duplicate type names — SPEC requires duplicates within entityTypes/edgeTypes
-	// to fail schema application (INVALID_ARGUMENT). The operator-side diff would otherwise
-	// silently deduplicate them (last wins), so reject before diffing.
-	if dup := schemaDuplicateNames(&fg.Spec); dup != "" {
-		// Static-invalid spec (SPEC R1 INVALID_ARGUMENT): duplicates within
-		// entityTypes/edgeTypes can never succeed on retry, so they must not be
-		// re-queued with exponential backoff. Set the terminal failure condition and
-		// return without an error; the static error is recomputed on the next
-		// (non-backoff) reconcile/resync. The condition is what makes the failure
-		// observable on the CR; discarding setFailedCondition's result drops the
-		// backoff requeue the item targets, with the periodic resync as the recorded
-		// safety net for a transient status-update failure that leaves the condition
-		// unpersisted.
-		_, _ = r.setFailedCondition(ctx, &fg, fmt.Errorf("invalid schema: %s", dup))
-		return ctrl.Result{}, nil
+	// Step 3.5: R1 singleton enforcement — at most one FoundryGraph per namespace. The
+	// earliest-created FoundryGraph is the namespace owner and is provisioned; any later
+	// one is a conflict: the Operator does not provision a Cartographer for it, does not
+	// populate status.endpoint, and sets a FoundryGraphConflict condition (SPEC R1).
+	if conflict, err := r.enforceSingleton(ctx, &fg); err != nil {
+		return r.setFailedCondition(ctx, &fg, err)
+	} else if conflict {
+		return r.setConflictCondition(ctx, &fg)
 	}
 
 	// Determine schema diff if a previous spec exists.
@@ -224,16 +217,64 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return r.setReadyCondition(ctx, &fg)
 }
 
+// enforceSingleton reports whether this FoundryGraph is a namespace singleton conflict
+// (SPEC R1: at most one FoundryGraph per namespace). The earliest-created FoundryGraph
+// in the namespace is the owner and is provisioned; every other one is a conflict and
+// must not be provisioned. Creation timestamp ordering with name as tiebreak keeps the
+// owner deterministic when two resources are created together (or in the zero-timestamp
+// fake-client case).
+func (r *FoundryGraphReconciler) enforceSingleton(ctx context.Context, fg *flowv1.FoundryGraph) (bool, error) {
+	var list flowv1.FoundryGraphList
+	if err := r.List(ctx, &list, client.InNamespace(fg.Namespace)); err != nil {
+		return false, fmt.Errorf("list FoundryGraphs for singleton enforcement: %w", err)
+	}
+	if len(list.Items) <= 1 {
+		return false, nil
+	}
+	ownerName := ""
+	var ownerTime metav1.Time
+	for i := range list.Items {
+		it := &list.Items[i]
+		if ownerName == "" || it.CreationTimestamp.Before(&ownerTime) ||
+			(it.CreationTimestamp.Equal(&ownerTime) && it.Name < ownerName) {
+			ownerName = it.Name
+			ownerTime = it.CreationTimestamp
+		}
+	}
+	return fg.Name != ownerName, nil
+}
+
+// setConflictCondition sets the FoundryGraphConflict condition on a FoundryGraph that is
+// not the namespace's singleton owner (SPEC R1) and returns without an error so the
+// conflict is not re-queued with exponential backoff — resolution is user action (delete
+// one of the FoundryGraphs), and the periodic resync (10m) re-evaluates ownership.
+func (r *FoundryGraphReconciler) setConflictCondition(ctx context.Context, fg *flowv1.FoundryGraph) (ctrl.Result, error) {
+	if err := r.Get(ctx, client.ObjectKeyFromObject(fg), fg); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	meta.SetStatusCondition(&fg.Status.Conditions, metav1.Condition{
+		Type:               "FoundryGraphConflict",
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: fg.Generation,
+		Reason:             "SingletonViolation",
+		Message:            fmt.Sprintf("a FoundryGraph already exists in namespace %s; a namespace may contain at most one FoundryGraph", fg.Namespace),
+	})
+	if err := r.Status().Update(ctx, fg); err != nil {
+		return ctrl.Result{}, fmt.Errorf("set conflict condition: %w", err)
+	}
+	return ctrl.Result{}, nil
+}
+
 // applySchemaOnExisting applies schema changes to the existing Cartographer pod.
 // If destructive is true, calls WipeGraph first.
 func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *flowv1.FoundryGraph, destructive bool) error {
 	// Dial the existing cartographer pod.
 	endpoint := fmt.Sprintf("%s.%s.svc.cluster.local:%d", r.cartographerServiceName(fg), fg.Namespace, r.CartographerPort)
-	client, err := r.CartographerDialer(ctx, endpoint)
+	cc, err := r.CartographerDialer(ctx, endpoint)
 	if err != nil {
 		return fmt.Errorf("dial existing cartographer: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = cc.Close() }()
 
 	// Bound the RPC phase with a per-call deadline: the reconcile ctx has no deadline (only
 	// manager cancellation), so without this a blackholed Cartographer hangs the reconcile
@@ -242,13 +283,13 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 	defer rpcCancel()
 
 	// HealthCheck
-	if _, err := client.HealthCheck(rpcCtx, &flowv1gen.HealthCheckRequest{}); err != nil {
+	if _, err := cc.HealthCheck(rpcCtx, &flowv1gen.HealthCheckRequest{}); err != nil {
 		return fmt.Errorf("health check on existing pod: %w", err)
 	}
 
 	if destructive {
 		// WipeGraph
-		if _, err := client.WipeGraph(rpcCtx, &flowv1gen.WipeGraphRequest{}); err != nil {
+		if _, err := cc.WipeGraph(rpcCtx, &flowv1gen.WipeGraphRequest{}); err != nil {
 			if isFailedPrecondition(err) {
 				// DISTINCT SENTINEL: only this case (WipeGraph blocked by open
 				// transactions) deserves the DestructiveChangeBlocked condition.
@@ -260,7 +301,7 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 
 	// ApplySchema
 	schema := r.schemaFromCRD(&fg.Spec)
-	if _, err := client.ApplySchema(rpcCtx, &flowv1gen.ApplySchemaRequest{Schema: schema}); err != nil {
+	if _, err := cc.ApplySchema(rpcCtx, &flowv1gen.ApplySchemaRequest{Schema: schema}); err != nil {
 		return fmt.Errorf("apply schema on existing pod: %w", err)
 	}
 
@@ -283,7 +324,7 @@ func (r *FoundryGraphReconciler) applySchema(ctx context.Context, fg *flowv1.Fou
 	if err != nil {
 		return fmt.Errorf("dial cartographer: %w", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// Bound the RPC phase with a per-call deadline (the reconcile ctx has no deadline).
 	rpcCtx, rpcCancel := context.WithTimeout(ctx, grpcCallTimeout)
@@ -308,9 +349,13 @@ func isFailedPrecondition(err error) bool {
 	return status.Code(err) == codes.FailedPrecondition
 }
 
-// waitForReadiness polls the Deployment until it is ready or the timeout elapses. The
-// readiness timeout is the sole termination condition: transient Get errors (e.g. a
-// Deployment momentarily not yet visible after CreateOrUpdate) do not short-circuit the poll.
+// waitForReadiness polls the Deployment until every desired replica is ready on the
+// current pod template or the timeout elapses. The readiness timeout is the sole
+// termination condition: transient Get errors (e.g. a Deployment momentarily not yet
+// visible after CreateOrUpdate) do not short-circuit the poll. allReplicasReady requires
+// UpdatedReplicas so a spec-change rollout waits for the NEW pod to pass readiness rather
+// than counting the old ReplicaSet's ready pod (SPEC R6: schema re-apply runs only after
+// the new pod passes its readiness probe).
 func (r *FoundryGraphReconciler) waitForReadiness(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	log := logf.FromContext(ctx)
 	deployName := "cartographer-" + fg.Name
@@ -343,15 +388,22 @@ func (r *FoundryGraphReconciler) waitForReadiness(ctx context.Context, fg *flowv
 	return fmt.Errorf("readiness timeout (%v) exceeded for deployment %s", r.ReadinessTimeout, deployName)
 }
 
-// allReplicasReady reports whether every desired replica is ready (SPEC: "all replicas
-// ready, readiness probe passing"). Using Replicas/ReadyReplicas rather than
+// allReplicasReady reports whether every desired replica is ready AND running the current
+// pod template (SPEC: "all replicas ready, readiness probe passing"; R6 spec-change flow:
+// "After the new pod passes its readiness probe, the Operator re-applies the current
+// schema"). Requiring UpdatedReplicas is what guarantees the ready pod is the NEW one: on
+// a spec-change rollout the old ReplicaSet keeps ReadyReplicas>=1 while the new pod is
+// still starting, so ReadyReplicas alone would let the step-10 ApplySchema dial the
+// ClusterIP Service and hit the old pod — the new pod would start without the updated
+// rules until the next resync. Using Replicas/ReadyReplicas/UpdatedReplicas rather than
 // AvailableReplicas > 0 keeps the check correct even if the replica count ever diverges
 // from the hardcoded value in the Deployment.
 func allReplicasReady(deploy *appsv1.Deployment) bool {
 	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas == 0 {
 		return false
 	}
-	return deploy.Status.ReadyReplicas >= *deploy.Spec.Replicas
+	return deploy.Status.ReadyReplicas >= *deploy.Spec.Replicas &&
+		deploy.Status.UpdatedReplicas >= *deploy.Spec.Replicas
 }
 
 // updateStatus sets the endpoint, storageSize, and last-applied-spec annotation.
@@ -461,13 +513,16 @@ func (r *FoundryGraphReconciler) setReadyCondition(ctx context.Context, fg *flow
 
 	// Clear prior blocking conditions.
 	// Remove any stale DestructiveChangeBlocked condition set by a previous
-	// destructive-change attempt that has since recovered.
+	// destructive-change attempt that has since recovered, and any stale
+	// FoundryGraphConflict set while this resource was not the namespace singleton
+	// owner (SPEC R1) — reaching Ready means it is provisioned as the owner.
 	meta.RemoveStatusCondition(&fg.Status.Conditions, "DestructiveChangeBlocked")
+	meta.RemoveStatusCondition(&fg.Status.Conditions, "FoundryGraphConflict")
 	meta.SetStatusCondition(&fg.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: fg.Generation,
-		Reason:             "Reconciled",
+		Reason:             reasonReconciled,
 		Message:            "FoundryGraph reconciliation completed successfully",
 	})
 
@@ -491,13 +546,17 @@ func (r *FoundryGraphReconciler) setFailedCondition(ctx context.Context, fg *flo
 	// blocked FoundryGraph that later fails for an unrelated reason does not retain a
 	// blocked condition that no longer describes the current reconcile (SPEC R6:
 	// blocking conditions belong only to the WipeGraph open-transaction error class).
+	// Clear any stale FoundryGraphConflict too: reaching a failure here means this
+	// resource passed singleton enforcement (it is the owner), so a conflict condition
+	// from a prior conflicting state is stale (SPEC R1).
 	meta.RemoveStatusCondition(&fg.Status.Conditions, "DestructiveChangeBlocked")
+	meta.RemoveStatusCondition(&fg.Status.Conditions, "FoundryGraphConflict")
 
 	meta.SetStatusCondition(&fg.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: fg.Generation,
-		Reason:             "ReconcileFailed",
+		Reason:             reasonReconcileFailed,
 		Message:            reconcileErr.Error(),
 	})
 
@@ -522,6 +581,9 @@ func (r *FoundryGraphReconciler) setBlockedCondition(ctx context.Context, fg *fl
 	// until open transactions finish), not a Ready-worthy failure, and the spec only mandates
 	// the DestructiveChangeBlocked condition. A fixed consumer that requires Ready=False
 	// here should treat either DestructiveChangeBlocked=True, Ready=True as "not applying".
+	// A stale FoundryGraphConflict is cleared: reaching the blocked path means this
+	// resource is the singleton owner being provisioned (SPEC R1).
+	meta.RemoveStatusCondition(&fg.Status.Conditions, "FoundryGraphConflict")
 	meta.SetStatusCondition(&fg.Status.Conditions, metav1.Condition{
 		Type:               "DestructiveChangeBlocked",
 		Status:             metav1.ConditionTrue,
