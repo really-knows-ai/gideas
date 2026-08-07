@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -20,10 +21,12 @@ import (
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/foundry/flow/cartographer/internal/service"
 	"github.com/foundry/flow/cartographer/internal/store"
+	"github.com/foundry/flow/cartographer/internal/store/ladybug"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/pkg/eventbus"
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gogitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"github.com/google/uuid"
 	gossh "golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -435,6 +438,198 @@ func TestTryRemotePullOnInitStateCheckFailureNonBlocking(t *testing.T) {
 	}
 	if gs.pushCalls != 0 {
 		t.Fatalf("push calls after state-check failure = %d, want 0", gs.pushCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SPEC R8 startup corruption-recovery re-hydration (rehydrateMainAfterRecovery)
+// ---------------------------------------------------------------------------
+
+// recoveryGitStore is a gitstore stub for rehydrateMainAfterRecovery that
+// reports the repository's commit state and hydration directories.
+type recoveryGitStore struct {
+	gitstore.GitStore
+	isEmpty  bool
+	stateErr error
+	dirs     [2]string
+}
+
+func (g *recoveryGitStore) IsEmpty(context.Context) (bool, error) { return g.isEmpty, g.stateErr }
+func (g *recoveryGitStore) HydrationDirs() (string, string)       { return g.dirs[0], g.dirs[1] }
+
+// recoveryStore is a store.Store stub that reports whether main holds graph
+// data (via the same count queries rehydrateMainAfterRecovery issues) and
+// counts RehydrateMainFromFiles invocations.
+type recoveryStore struct {
+	store.Store
+	hasEntities    bool
+	hasEdges       bool
+	cypherErr      error
+	rehydrateCalls int
+	rehydrateErr   error
+}
+
+func (s *recoveryStore) ExecuteCypher(
+	_ context.Context, cypher string, _ map[string]any, _ string,
+) ([]store.CypherRow, error) {
+	if s.cypherErr != nil {
+		return nil, s.cypherErr
+	}
+	count := float64(0)
+	if strings.Contains(cypher, "-[r]->") {
+		if s.hasEdges {
+			count = 1
+		}
+	} else if s.hasEntities {
+		count = 1
+	}
+	return []store.CypherRow{{Values: []any{count}}}, nil
+}
+
+func (s *recoveryStore) RehydrateMainFromFiles(context.Context, string, string) error {
+	s.rehydrateCalls++
+	return s.rehydrateErr
+}
+
+// TestRehydrateMainAfterRecovery pins the SPEC R8 gating of the startup
+// re-hydration: it must run only when the git repository has commits AND main
+// holds no graph data, and any failure must be surfaced (fail loudly) rather
+// than silently serving a vacuous graph.
+func TestRehydrateMainAfterRecovery(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty git repo skips re-hydration (fresh install)", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: true}
+		st := &recoveryStore{}
+		if err := rehydrateMainAfterRecovery(ctx, st, gs); err != nil {
+			t.Fatalf("rehydrateMainAfterRecovery: %v", err)
+		}
+		if st.rehydrateCalls != 0 {
+			t.Fatalf("re-hydration ran for an empty git repo: %d calls", st.rehydrateCalls)
+		}
+	})
+
+	t.Run("populated main skips re-hydration (protects uncommitted writes)", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: false}
+		st := &recoveryStore{hasEntities: true}
+		if err := rehydrateMainAfterRecovery(ctx, st, gs); err != nil {
+			t.Fatalf("rehydrateMainAfterRecovery: %v", err)
+		}
+		if st.rehydrateCalls != 0 {
+			t.Fatalf("re-hydration ran for a populated main: %d calls", st.rehydrateCalls)
+		}
+	})
+
+	t.Run("main holding only edges also skips re-hydration", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: false}
+		st := &recoveryStore{hasEdges: true}
+		if err := rehydrateMainAfterRecovery(ctx, st, gs); err != nil {
+			t.Fatalf("rehydrateMainAfterRecovery: %v", err)
+		}
+		if st.rehydrateCalls != 0 {
+			t.Fatalf("re-hydration ran for a main holding edges: %d calls", st.rehydrateCalls)
+		}
+	})
+
+	t.Run("empty main with committed git re-hydrates", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: false, dirs: [2]string{"entities", "edges"}}
+		st := &recoveryStore{}
+		if err := rehydrateMainAfterRecovery(ctx, st, gs); err != nil {
+			t.Fatalf("rehydrateMainAfterRecovery: %v", err)
+		}
+		if st.rehydrateCalls != 1 {
+			t.Fatalf("re-hydration calls = %d, want 1", st.rehydrateCalls)
+		}
+	})
+
+	t.Run("re-hydration failure is surfaced (fail loudly)", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: false}
+		st := &recoveryStore{rehydrateErr: errors.New("rehydrate boom")}
+		err := rehydrateMainAfterRecovery(ctx, st, gs)
+		if err == nil {
+			t.Fatal("expected re-hydration failure to be surfaced, got nil")
+		}
+		if !strings.Contains(err.Error(), "rehydrate boom") {
+			t.Fatalf("error does not carry the re-hydration failure: %v", err)
+		}
+	})
+
+	t.Run("git state check failure is surfaced", func(t *testing.T) {
+		gs := &recoveryGitStore{stateErr: errors.New("state boom")}
+		st := &recoveryStore{}
+		err := rehydrateMainAfterRecovery(ctx, st, gs)
+		if err == nil {
+			t.Fatal("expected git state-check failure to be surfaced, got nil")
+		}
+		if st.rehydrateCalls != 0 {
+			t.Fatalf("re-hydration ran after git state-check failure: %d calls", st.rehydrateCalls)
+		}
+	})
+
+	t.Run("count-query failure is surfaced", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: false}
+		st := &recoveryStore{cypherErr: errors.New("count boom")}
+		err := rehydrateMainAfterRecovery(ctx, st, gs)
+		if err == nil {
+			t.Fatal("expected count-query failure to be surfaced, got nil")
+		}
+		if st.rehydrateCalls != 0 {
+			t.Fatalf("re-hydration ran after count-query failure: %d calls", st.rehydrateCalls)
+		}
+	})
+}
+
+// TestRehydrateMainAfterRecoveryRestoresCommittedGraph pins SPEC R8 with real
+// components: a file-backed git repository holding a committed file-per-element
+// entity, and a freshly-opened (empty) file-backed main.lbug — the exact state
+// ladybug.Open's corruption recovery produces (delete main.lbug, re-open
+// empty). rehydrateMainAfterRecovery must restore the committed entity into
+// main so the service does not serve a vacuous graph. This also pins that the
+// emptiness probe (count queries) succeeds on a fresh, table-less database.
+func TestRehydrateMainAfterRecoveryRestoresCommittedGraph(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	gs, err := gitstore.New(root)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	entityID := uuid.NewString()
+	now := time.Now().UTC().Round(time.Millisecond)
+	if err := gs.WithGitLock(func() error {
+		if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{
+			{ID: entityID, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx, "."); err != nil {
+			return err
+		}
+		return gs.Commit(ctx, "transaction:recovery-test")
+	}); err != nil {
+		t.Fatalf("commit entity: %v", err)
+	}
+	empty, err := gs.IsEmpty(ctx)
+	if err != nil || empty {
+		t.Fatalf("fixture: expected non-empty git repo, empty=%v err=%v", empty, err)
+	}
+
+	dbStore, err := ladybug.Open(root)
+	if err != nil {
+		t.Fatalf("ladybug.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	if err := rehydrateMainAfterRecovery(ctx, dbStore, gs); err != nil {
+		t.Fatalf("rehydrateMainAfterRecovery: %v", err)
+	}
+
+	ent, err := dbStore.GetEntity(ctx, entityID, "")
+	if err != nil {
+		t.Fatalf("committed entity was not restored into main: %v", err)
+	}
+	if ent.Type != "Component" {
+		t.Fatalf("restored entity type = %q, want %q", ent.Type, "Component")
 	}
 }
 

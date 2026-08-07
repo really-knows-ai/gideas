@@ -832,10 +832,10 @@ func listEdgesOnConn(conn *lbug.Connection, edgeType string) ([]store.Edge, erro
 // --------------------------------------------------------------------------
 
 // ensureEntityLoadSchema makes the entity table exist before entities are
-// loaded from files. When no schema is applied (empty entDefs), the table is
-// inferred on demand from the directory structure (SPEC R8). It also (re)creates
-// the FTS index on the type's string properties so re-hydration restores the
-// full search state (SPEC R8).
+// loaded from files. When the type is absent from the applied schema (including
+// an empty applied schema), the table is inferred on demand from the directory
+// structure (SPEC R8). It also (re)creates the FTS index on the type's string
+// properties so re-hydration restores the full search state (SPEC R8).
 func (db *ladybugDB) ensureEntityLoadSchema(
 	conn *lbug.Connection, typeName, typeDir string, entDefs map[string]*store.EntityTypeDef,
 ) error {
@@ -901,8 +901,9 @@ func (db *ladybugDB) ensureEntityLoadSchema(
 }
 
 // ensureEdgeLoadSchema makes the rel table exist before edges are loaded from
-// files. When no schema is applied (empty edgeDefs), the table is inferred on
-// demand from the directory structure (SPEC R8), mirroring
+// files. When the type is absent from the applied schema (including an empty
+// applied schema), the table is inferred on demand from the directory structure
+// (SPEC R8), mirroring
 // ensureEntityLoadSchema: the union of property names across the type's JSON
 // files becomes real columns so a property-bearing file's
 // `CREATE (a)-[:T {col: $v}]->(b)` does not target a non-existent column. The
@@ -1081,9 +1082,11 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 			continue
 		}
 		typeName := entry.Name()
-		if _, ok := entDefs[typeName]; !ok && len(entDefs) > 0 {
-			continue
-		}
+		// No schema-absent skip: a type directory present in the git
+		// file-per-element representation but absent from the applied schema is
+		// inferred from the directory structure by ensureEntityLoadSchema so
+		// re-hydration recovers the full graph state (SPEC R8). Silently
+		// skipping committed files would drop rows on the read path.
 		typeDir := filepath.Join(dir, typeName)
 		if err := db.ensureEntityLoadSchema(db.conn, typeName, typeDir, entDefs); err != nil {
 			return err
@@ -1164,9 +1167,11 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 			continue
 		}
 		typeName := entry.Name()
-		if _, ok := edgeDefs[typeName]; !ok && len(edgeDefs) > 0 {
-			continue
-		}
+		// No schema-absent skip: a type directory present in the git
+		// file-per-element representation but absent from the applied schema is
+		// inferred from the directory structure by ensureEdgeLoadSchema so
+		// re-hydration recovers the full graph state (SPEC R8). Silently
+		// skipping committed files would drop rows on the read path.
 		typeDir := filepath.Join(dir, typeName)
 		if err := db.ensureEdgeLoadSchema(db.conn, typeName, typeDir, edgeDefs); err != nil {
 			return err
@@ -1245,9 +1250,11 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			continue
 		}
 		typeName := entry.Name()
-		if _, ok := entDefs[typeName]; !ok && len(entDefs) > 0 {
-			continue
-		}
+		// No schema-absent skip: a type directory present in the git
+		// file-per-element representation but absent from the applied schema is
+		// inferred from the directory structure by ensureEntityLoadSchema so
+		// re-hydration recovers the full graph state (SPEC R8). Silently
+		// skipping committed files would drop rows on the read path.
 		typeDir := filepath.Join(dir, typeName)
 		if err := db.ensureEntityLoadSchema(conn, typeName, typeDir, entDefs); err != nil {
 			return err
@@ -1329,9 +1336,11 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			continue
 		}
 		typeName := entry.Name()
-		if _, ok := edgeDefs[typeName]; !ok && len(edgeDefs) > 0 {
-			continue
-		}
+		// No schema-absent skip: a type directory present in the git
+		// file-per-element representation but absent from the applied schema is
+		// inferred from the directory structure by ensureEdgeLoadSchema so
+		// re-hydration recovers the full graph state (SPEC R8). Silently
+		// skipping committed files would drop rows on the read path.
 		typeDir := filepath.Join(dir, typeName)
 		if err := db.ensureEdgeLoadSchema(conn, typeName, typeDir, edgeDefs); err != nil {
 			return err

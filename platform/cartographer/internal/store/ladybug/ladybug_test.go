@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/store"
@@ -23,6 +24,10 @@ import (
 // strengthValue is the test value for the DependsOn edge's strength property,
 // shared across the CRUD, branch, and re-hydration tests.
 const strengthValue = "strong"
+
+// inferredValue is the test property value for schema-absent types inferred
+// from the directory structure, shared across the re-hydration inference tests.
+const inferredValue = "inferred"
 
 func TestOpenClose(t *testing.T) {
 	s, err := OpenInMemory()
@@ -1611,6 +1616,157 @@ func TestExecuteCypher_WithParams(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ExtractEntityTypes (SPEC R3 server-authoritative statement analysis seam)
+// ---------------------------------------------------------------------------
+
+// extractTestSchema applies a schema with a Component and a Service entity
+// type plus a DEPENDS_ON edge type — the label set the multi-type extraction
+// tests reference (mirroring the service-layer test schema).
+func extractTestSchema(t *testing.T, s store.Store) {
+	t.Helper()
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+			{Name: "Service", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}}}},
+	}
+	if err := s.ApplySchema(context.Background(), schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+}
+
+// TestExtractEntityTypes pins the store's server-authoritative statement
+// analysis seam directly — the layer that produces the extraction must carry
+// the tests (R3 test-discipline). Error classification must match
+// ExecuteCypher's exactly so the SPEC check order "empty query → Cypher
+// syntax → read-only enforcement → capability" (SPEC:958) holds.
+func TestExtractEntityTypes(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	extractTestSchema(t, s)
+
+	t.Run("empty query returns ErrEmptyQuery", func(t *testing.T) {
+		_, err := s.ExtractEntityTypes(ctx, "")
+		if !errors.Is(err, store.ErrEmptyQuery) {
+			t.Errorf("expected ErrEmptyQuery, got %v", err)
+		}
+	})
+
+	t.Run("invalid syntax returns ErrInvalidCypher", func(t *testing.T) {
+		_, err := s.ExtractEntityTypes(ctx, "this is not valid cypher {{")
+		if !errors.Is(err, store.ErrInvalidCypher) {
+			t.Errorf("expected ErrInvalidCypher, got %v", err)
+		}
+	})
+
+	// Each mutation/DDL clause the SPEC R7 §5 and error-table row 913
+	// enumerate must surface ErrMutationCypher — either via IsReadOnly (the
+	// grammar classifies CREATE/SET/DELETE/MERGE/DROP) or via the
+	// mutation-keyword fallback for statements the v0.17.0 grammar cannot
+	// prepare (REMOVE, FOREACH, index/constraint DDL) — never
+	// ErrInvalidCypher, so read-only enforcement precedes capability.
+	mutations := []struct {
+		name   string
+		cypher string
+	}{
+		{"create", "CREATE (n:Component {id: 'bad-uuid'})"},
+		{"set", "MATCH (n:Component) SET n.name = 'x'"},
+		{"delete", "MATCH (n:Component) DELETE n"},
+		{"merge", "MERGE (n:Component {id: 'bad-uuid'})"},
+		{"remove-keyword-fallback", "MATCH (n:Component) REMOVE n.name"},
+		{"drop", "DROP TABLE Component"},
+		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))"},
+	}
+	for _, tc := range mutations {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.ExtractEntityTypes(ctx, tc.cypher)
+			if !errors.Is(err, store.ErrMutationCypher) {
+				t.Errorf("expected ErrMutationCypher for %q, got %v", tc.cypher, err)
+			}
+		})
+	}
+
+	t.Run("valid read-only single type", func(t *testing.T) {
+		labels, err := s.ExtractEntityTypes(ctx, "MATCH (n:Component) RETURN n")
+		if err != nil {
+			t.Fatalf("ExtractEntityTypes: %v", err)
+		}
+		if !slices.Equal(labels, []string{"Component"}) {
+			t.Errorf("expected [Component], got %v", labels)
+		}
+	})
+
+	t.Run("valid read-only multi type", func(t *testing.T) {
+		labels, err := s.ExtractEntityTypes(ctx,
+			"MATCH (a:Component)-[:DEPENDS_ON]->(b:Service) RETURN b")
+		if err != nil {
+			t.Fatalf("ExtractEntityTypes: %v", err)
+		}
+		if !slices.Equal(labels, []string{"Component", "Service"}) {
+			t.Errorf("expected [Component Service], got %v", labels)
+		}
+	})
+
+	t.Run("unlabelled match yields empty slice not error", func(t *testing.T) {
+		labels, err := s.ExtractEntityTypes(ctx, "MATCH (n) RETURN n")
+		if err != nil {
+			t.Fatalf("ExtractEntityTypes: %v", err)
+		}
+		if labels != nil {
+			t.Errorf("expected nil labels, got %v", labels)
+		}
+	})
+}
+
+// TestExtractEntityTypeLabels pins the pure-Go label analyzer directly — the
+// pattern shapes (named/anonymous/multi-label nodes, inline property maps,
+// relationship patterns, comment/string-literal stripping) that the
+// server-side extraction depends on.
+func TestExtractEntityTypeLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		cypher   string
+		expected []string
+	}{
+		{"single", "MATCH (c:Component) RETURN c", []string{"Component"}},
+		{"multi-type", "MATCH (a:Component)-[:DEPENDS_ON]->(b:Service) RETURN a, b",
+			[]string{"Component", "Service"}},
+		{"anonymous-node", "MATCH (a:Component) WHERE (a)--(:Service) RETURN a",
+			[]string{"Component", "Service"}},
+		{"multi-label", "MATCH (c:Component:Service) RETURN c", []string{"Component", "Service"}},
+		{"property-map", "MATCH (c:Component {name: 'x'}) RETURN c", []string{"Component"}},
+		{"property-map-compact", "MATCH (c:Component{name:'x'}) RETURN c", []string{"Component"}},
+		{"nested-property-map", "MATCH (c:Component {meta: {a: 1}}) RETURN c", []string{"Component"}},
+		{"line-comment-stripped",
+			"MATCH (c:Component) RETURN c // (b:Service)", []string{"Component"}},
+		{"block-comment-stripped",
+			"MATCH (c:Component) RETURN c /* (b:Service) */", []string{"Component"}},
+		{"string-literal-colon-stripped",
+			"MATCH (c:Component {name: 'x:Service'}) RETURN c", []string{"Component"}},
+		{"string-literal-node-shape-stripped",
+			"MATCH (c:Component) RETURN '(:Service)' AS s", []string{"Component"}},
+		{"duplicate-labels-deduped",
+			"MATCH (a:Component)-->(b:Component) RETURN a, b", []string{"Component"}},
+		{"multiple-match-clauses",
+			"MATCH (c:Component) MATCH (s:Service) RETURN c, s", []string{"Component", "Service"}},
+		{"unlabelled-nodes-nil", "MATCH (n) RETURN n", nil},
+		{"no-match-nil", "RETURN 1", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			labels := extractEntityTypeLabels(tc.cypher)
+			if !slices.Equal(labels, tc.expected) {
+				t.Errorf("expected %v, got %v", tc.expected, labels)
+			}
+		})
+	}
+}
+
 func TestListEntities_DefaultPageSize(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -2994,7 +3150,10 @@ func TestBranchTransactionState_InMemoryLifecycle(t *testing.T) {
 	if _, err := s.LoadBranchTransactionState(context.Background(), "tx-state"); err == nil {
 		t.Fatal("unregistered branch state was accepted")
 	}
-	want := store.BranchTransactionState{MainHeadAtLastSync: "head", SchemaHash: "schema", RollbackOnly: true}
+	want := store.BranchTransactionState{
+		MainHeadAtLastSync: "head", SchemaHash: "schema", AppliedTimeout: 5 * time.Minute,
+		RollbackOnly: true,
+	}
 	if err := s.SaveBranchTransactionState(context.Background(), "tx-state", want); err != nil {
 		t.Fatalf("SaveBranchTransactionState: %v", err)
 	}
@@ -3020,7 +3179,7 @@ func TestBranchTransactionState_MissingRecordFailsClosed(t *testing.T) {
 		t.Fatalf("CreateBranchDB: %v", err)
 	}
 	if err := s.SaveBranchTransactionState(context.Background(), "tx-state", store.BranchTransactionState{
-		MainHeadAtLastSync: "head", SchemaHash: "schema",
+		MainHeadAtLastSync: "head", SchemaHash: "schema", AppliedTimeout: 5 * time.Minute,
 	}); err != nil {
 		t.Fatalf("SaveBranchTransactionState: %v", err)
 	}
@@ -3051,7 +3210,8 @@ func TestBranchTransactionState_PersistsAndRejectsCorruption(t *testing.T) {
 	}
 	want := store.BranchTransactionState{
 		MainHeadAtLastSync: "original-head", SchemaHash: "original-schema",
-		CommitStarted: true, CommitCreated: true, CommitHydrated: true,
+		AppliedTimeout: 5 * time.Minute,
+		CommitStarted:  true, CommitCreated: true, CommitHydrated: true,
 		MainRehydrated: true, RollbackOnly: true,
 	}
 	if err := s.SaveBranchTransactionState(context.Background(), "tx-state", want); err != nil {
@@ -4086,6 +4246,86 @@ func TestApplySchema_AdditiveEntityProperty(t *testing.T) {
 	}
 	if got2.Properties["title"] != "doc1" {
 		t.Fatalf("expected title=doc1 after reopen, got %v", got2.Properties)
+	}
+}
+
+// TestCheckBranchSchemaCompatibility pins the SPEC R9 commit flow step 1 check:
+// the branch DB's schema is validated against the current (main) schema.
+// Additive changes (new properties, new types) and rule modifications are
+// non-destructive (SPEC R2/R6) and pass; a property or type the branch's data
+// lives under that is removed from the current schema is incompatible
+// (ErrDestructiveSchemaChange).
+func TestCheckBranchSchemaCompatibility(t *testing.T) {
+	ctx := context.Background()
+	opened, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	db := opened.(*ladybugDB)
+
+	if err := db.ApplySchema(ctx, &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Component",
+			Properties: []*flowv1.Property{
+				{Name: "name", Type: "string"},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if err := db.CreateBranchDB(ctx, "tx1"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := db.ReplicateSchemaToBranch(ctx, "tx1"); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	// Additive push (new property, new entity type with rules, new edge type):
+	// non-destructive per SPEC R2/R6, must not fail the compatibility check.
+	additive := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Component",
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string"},
+					{Name: "version", Type: "string"},
+				},
+			},
+			{
+				Name: "Service", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+				Rules: []*flowv1.ConnectionRule{{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}}},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}}},
+		},
+	}
+	if err := db.ApplySchema(ctx, additive); err != nil {
+		t.Fatalf("ApplySchema additive: %v", err)
+	}
+	if err := db.CheckBranchSchemaCompatibility(ctx, "tx1"); err != nil {
+		t.Fatalf("additive schema push must be compatible, got %v", err)
+	}
+
+	// A property the branch's data lives under removed from the current schema
+	// is incompatible. ApplySchema rejects destructive changes outright, so the
+	// incompatible state is simulated directly — the check guards the state, not
+	// the path that produced it.
+	db.mu.Lock()
+	db.entityTypeDefs["Component"].Properties = []store.PropertyDef{{Name: "version", Type: "string"}}
+	db.mu.Unlock()
+	if err := db.CheckBranchSchemaCompatibility(ctx, "tx1"); !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("removed property must be incompatible, got %v", err)
+	}
+
+	// A type the branch's data lives under removed from the current schema is
+	// incompatible.
+	db.mu.Lock()
+	delete(db.entityTypeDefs, "Component")
+	db.mu.Unlock()
+	if err := db.CheckBranchSchemaCompatibility(ctx, "tx1"); !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("removed type must be incompatible, got %v", err)
 	}
 }
 
@@ -6207,6 +6447,154 @@ func TestRehydrateFiles_UnparseableJSONFailsLoudly(t *testing.T) {
 			}
 			if !errors.Is(loadErr, tc.want) {
 				t.Fatalf("expected %v, got %v", tc.want, loadErr)
+			}
+		})
+	}
+}
+
+// A committed file under a type directory absent from the applied schema must
+// be inferred from the directory structure (SPEC R8) on every load path
+// (main/branch × entity/edge), never silently skipped: the applied schema and
+// the git file-per-element representation can diverge (corrupt main.lbug
+// recovery, lost schema metadata, partial wipe), and R8 re-hydration must
+// "recover the full graph state". Regression: the loaders skipped any type
+// directory absent from a non-empty applied schema
+// (`if _, ok := defs[typeName]; !ok && len(defs) > 0 { continue }`), dropping
+// committed rows with no error and no inference — directory inference only ran
+// when the applied schema was entirely empty.
+func TestRehydrateFiles_InferredTypeWithAppliedSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+		edge   bool
+	}{
+		{"main entity", false, false},
+		{"main edge", false, true},
+		{"branch entity", true, false},
+		{"branch edge", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			// Non-empty applied schema (Component/VectorType/Document/DependsOn);
+			// the loaded types below are absent from it and must be inferred.
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			fromID := uuid.NewString()
+			toID := uuid.NewString()
+			// Endpoint entities under a schema-known type so an inferred edge
+			// type's files pass insertEdgeOnConn's endpoint-existence guard.
+			writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
+				"id": fromID, "type": "Component",
+			})
+			writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
+				"id": toID, "type": "Component",
+			})
+			var loadedType, elementID string
+			if tc.edge {
+				// Edge under a type dir absent from the applied schema.
+				loadedType, elementID = "Links", uuid.NewString()
+				writeJSONFile(t, filepath.Join(edgesDir, loadedType, elementID+".json"), map[string]any{
+					"id": elementID, "type": loadedType, "from": fromID, "to": toID,
+					"properties": map[string]string{"strength": strengthValue},
+				})
+			} else {
+				// Entity under a type dir absent from the applied schema.
+				loadedType, elementID = "Widget", uuid.NewString()
+				writeJSONFile(t, filepath.Join(entitiesDir, loadedType, elementID+".json"), map[string]any{
+					"id": elementID, "type": loadedType,
+					"properties": map[string]string{"name": inferredValue},
+				})
+				// Empty edges dir so the main path's completeness check
+				// (entities dir exists ⇒ edges dir must exist) passes.
+				if err := os.MkdirAll(edgesDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr != nil {
+				t.Fatalf("re-hydration with schema-absent type dir: %v", loadErr)
+			}
+
+			// The schema-absent type was inferred and its elements loaded —
+			// nothing was silently dropped. ListEntities/ListEdgesOfType read the
+			// branch-scoped type caches and reject unregistered types, proving
+			// the inferred type was registered on the load path itself.
+			if tc.branch {
+				if tc.edge {
+					if _, err := s.ListEdgesOfType(ctx, loadedType, branch); err != nil {
+						t.Fatalf("inferred edge type %q not registered on branch: %v", loadedType, err)
+					}
+					edge, err := s.GetEdge(ctx, elementID, branch)
+					if err != nil {
+						t.Fatalf("inferred edge %q not loaded on branch: %v", elementID, err)
+					}
+					if edge.Properties["strength"] != strengthValue {
+						t.Fatalf("inferred edge property strength = %q, want %q",
+							edge.Properties["strength"], strengthValue)
+					}
+				} else {
+					if _, _, err := s.ListEntities(ctx, loadedType, 10, "", branch); err != nil {
+						t.Fatalf("inferred entity type %q not registered on branch: %v", loadedType, err)
+					}
+					ent, err := s.GetEntity(ctx, elementID, branch)
+					if err != nil {
+						t.Fatalf("inferred entity %q not loaded on branch: %v", elementID, err)
+					}
+					if ent.Properties["name"] != inferredValue {
+						t.Fatalf("inferred entity property name = %q, want %q",
+							ent.Properties["name"], inferredValue)
+					}
+				}
+			} else {
+				if tc.edge {
+					if _, ok := s.EdgeType(loadedType); !ok {
+						t.Fatalf("expected edge type %q to be inferred on main", loadedType)
+					}
+					edge, err := s.GetEdge(ctx, elementID, "main")
+					if err != nil {
+						t.Fatalf("inferred edge %q not loaded on main: %v", elementID, err)
+					}
+					if edge.Properties["strength"] != strengthValue {
+						t.Fatalf("inferred edge property strength = %q, want %q",
+							edge.Properties["strength"], strengthValue)
+					}
+				} else {
+					if _, ok := s.EntityType(loadedType); !ok {
+						t.Fatalf("expected entity type %q to be inferred on main", loadedType)
+					}
+					ent, err := s.GetEntity(ctx, elementID, "main")
+					if err != nil {
+						t.Fatalf("inferred entity %q not loaded on main: %v", elementID, err)
+					}
+					if ent.Properties["name"] != inferredValue {
+						t.Fatalf("inferred entity property name = %q, want %q",
+							ent.Properties["name"], inferredValue)
+					}
+				}
 			}
 		})
 	}

@@ -2,7 +2,7 @@ package store
 
 import "errors"
 
-// Store-layer sentinel errors. Each maps to a gRPC status code in Phase 4's service layer.
+// Store-layer sentinel errors. Each maps to a gRPC status code in the service layer.
 // These are defined here (not in a shared errors package) because they are gRPC-agnostic
 // and specific to the store domain.
 

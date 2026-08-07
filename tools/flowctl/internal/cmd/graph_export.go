@@ -228,8 +228,23 @@ func runGraphExportWith(ctx context.Context, exporter graphExporter, params grap
 	// Resolve the operator namespace and open the port-forward.
 	operatorNS, err := exporter.resolveOperatorNamespace(ctx)
 	if err != nil {
-		// ponytail: cluster-wide list pods RBAC is required. The List call
-		// returns an empty result when RBAC filters it (not a 403).
+		// ponytail: resolving the operator namespace relies on a
+		// cluster-wide Pod List, which Kubernetes RBAC-filters instead of
+		// rejecting: an identity without pod-list access gets an empty
+		// result (not a 403), so ResolveNamespace reports the same "no Ready
+		// operator pod found" error as a genuinely absent operator. Failure
+		// modes: (1) a namespace-scoped kubeconfig identity silently fails
+		// export and is misled into checking operator health; (2) a real
+		// empty cluster and an RBAC-filtered list are indistinguishable.
+		// Consequence: every flowctl user needs cluster-wide pod-list RBAC
+		// even though the operator deploys to the well-known foundry-system
+		// namespace (see manifestfs/operator/deployment.yaml), and the
+		// misdiagnosis wastes debugging time. Ceiling: the cluster-wide
+		// label scan is the only resolution path. Upgrade path: resolve the
+		// operator namespace from the embedded manifest's foundry-system
+		// deployment (namespaced pod-list RBAC) with the cluster scan as
+		// fallback, or query the operator proxy for its own namespace over
+		// gRPC.
 		return fmt.Errorf("cannot resolve operator namespace: %w\n"+
 			"Ensure the operator is running and your kubeconfig identity has "+
 			"cluster-wide 'list' permission on pods.", err)

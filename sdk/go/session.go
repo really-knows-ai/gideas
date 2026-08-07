@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -129,15 +128,23 @@ func (s *session) Close() error {
 	return firstErr
 }
 
-// call annotates the context with entity type metadata, then invokes fn
-// with the annotated context. fn must be a closure over a typed
+// call invokes fn with the given context, annotating it with entity-type
+// metadata when a key is supplied. fn must be a closure over a typed
 // CartographerServiceClient method to preserve compile-time type safety.
-// key is the metadata key ("entity_type" or "entity_types")
-// per the operation-specific table. types are the entity type(s) required
-// for capability resolution by the Sidecar proxy.
+// key is the metadata key ("entity_type") per the operation-specific table;
+// it is empty for RPCs that annotate nothing. types are the entity type(s)
+// required for capability resolution by the Sidecar proxy. Each type is
+// appended as its own metadata value.
+// ExecuteCypher passes no key and no types: the SDK attaches no entity-type
+// metadata for it (SPEC R3 — the Cartographer derives the types from its own
+// server-side parse of the statement).
 func (s *session) call(ctx context.Context, fn func(context.Context) error, key string, types ...string) error {
 	if len(types) > 0 && key != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, key, strings.Join(types, ","))
+		kv := make([]string, 0, 2*len(types))
+		for _, t := range types {
+			kv = append(kv, key, t)
+		}
+		ctx = metadata.AppendToOutgoingContext(ctx, kv...)
 	}
 	// Apply per-call timeout from the session config.
 	// ponytail: The timeout and maxRetries fields already exist on the

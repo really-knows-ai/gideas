@@ -5,10 +5,10 @@ import "time"
 // Entity represents a single knowledge-graph entity with its identifier,
 // type, properties, optional vector embedding, and creation/update timestamps.
 // ponytail: CreatedAt and UpdatedAt are store-domain fields not present in the
-// proto Entity message (PHASE_01.md:315-320). The proto Entity carries only
-// entity_id, entity_type, properties, and embedding. The service layer must
-// populate the proto response without timestamp fields; timestamps are used
-// internally by the store and by transaction diff/recovery logic.
+// proto Entity message (proto/flow/v1/cartographer.proto). The proto Entity
+// carries only entity_id, entity_type, properties, and embedding. The service
+// layer must populate the proto response without timestamp fields; timestamps
+// are used internally by the store and by transaction diff/recovery logic.
 type Entity struct {
 	Id         string
 	Type       string
@@ -48,8 +48,9 @@ type PropertyDef struct {
 // EntityTypeDef describes a known entity type in the graph schema.
 // This is distinct from the proto EntityType message used by ApplySchema;
 // it is the store's domain type for schema introspection by consumers
-// such as gitstore (Phase 3). Named EntityTypeDef (not EntityType) to avoid
-// collision with flowv1.EntityType from the generated proto types.
+// such as the service's computeSchemaHash and graph export. Named
+// EntityTypeDef (not EntityType) to avoid collision with flowv1.EntityType
+// from the generated proto types.
 type EntityTypeDef struct {
 	Name              string
 	Properties        []PropertyDef
@@ -64,17 +65,19 @@ type ConnectionRuleDef struct {
 
 // EdgeTypeDef describes a known edge type in the graph schema.
 // This is the store's domain type for schema introspection by consumers
-// such as gitstore (Phase 3). Named EdgeTypeDef (not EdgeType) to avoid
-// collision with flowv1.EdgeType from the generated proto types.
+// such as the service's computeSchemaHash and graph export. Named
+// EdgeTypeDef (not EdgeType) to avoid collision with flowv1.EdgeType
+// from the generated proto types.
 type EdgeTypeDef struct {
 	Name       string
 	Properties []PropertyDef
 }
 
 // SchemaProvider is the subset of the store API that schema consumers
-// (e.g., gitstore in Phase 3) depend on. The Store interface includes
-// these methods directly; SchemaProvider is a narrower consumer-facing
-// interface. The concrete ladybugDB type satisfies both interfaces.
+// (e.g., the service's computeSchemaHash and graph export) depend on.
+// The Store interface includes these methods directly; SchemaProvider is
+// a narrower consumer-facing interface. The concrete ladybugDB type
+// satisfies both interfaces.
 type SchemaProvider interface {
 	EntityTypeNames() []string
 	EdgeTypeNames() []string

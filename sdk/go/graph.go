@@ -278,8 +278,9 @@ type beginTxConfig struct {
 // is rejected locally by BeginTransaction (matching ExtendTimeout's local
 // rejection — no silent capping). Valid requests receive
 // the granted value in the response's applied_timeout, which the SDK
-// surfaces on the resulting Transaction handle. The client sends the
-// requested value verbatim and relies on applied_timeout, never a local cap.
+// surfaces on the resulting Transaction handle via Timeout(). The client
+// sends the requested value verbatim and relies on applied_timeout, never a
+// local cap.
 //
 // This is the SDK-surface BeginTxOption prescribed by SPEC R4/R9 as
 // `graph.BeginTransaction(graph.WithTimeout(48 * time.Hour))`. It is distinct
@@ -322,19 +323,16 @@ func (g *Graph) ExecuteCypher(cypher string, params map[string]any) ([]map[strin
 		Params: paramsProto,
 	}
 
-	labels := extractEntityTypes(cypher)
-	if len(labels) == 0 {
-		// Parser failed to extract entity types — fall back to the
-		// READ:graph/entity/* wildcard capability (R3).
-		labels = []string{"*"}
-	}
-
+	// No entity-type capability metadata is attached (SPEC R3): the SDK
+	// performs no Cypher parsing and cannot influence the authorization
+	// decision. The Cartographer parses the statement server-side and checks
+	// the caller's capabilities against each referenced type.
 	var resp *flowv1.ExecuteCypherResponse
 	err := g.session.call(g.session.ctx, func(ctx context.Context) error {
 		var callErr error
 		resp, callErr = g.session.Cartographer.ExecuteCypher(ctx, req)
 		return callErr
-	}, "entity_types", labels...)
+	}, "")
 	if err != nil {
 		return nil, err
 	}

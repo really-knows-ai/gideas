@@ -2602,15 +2602,17 @@ func TestPushRemoteWithAuth(t *testing.T) {
 			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
 		}
 
-		// Set authFn that returns an error → ErrRemoteAuthResolutionFailed
+		// Set authFn that returns an error (readSecretFn failure / invalid
+		// credential) → ErrAuthConfigMissing (SPEC error row "Remote auth
+		// config missing (PullFromRemote)", line 932 → FAILED_PRECONDITION)
 		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", func() (transport.AuthMethod, error) {
 			return nil, fmt.Errorf("auth resolution failure")
 		}); err != nil {
 			return err
 		}
 		err = gs.PushRemote(ctx())
-		if !errors.Is(err, ErrRemoteAuthResolutionFailed) {
-			return fmt.Errorf("expected ErrRemoteAuthResolutionFailed, got %v", err)
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
 		}
 
 		// Set authFn that returns nil auth → ErrAuthConfigMissing
@@ -2926,12 +2928,12 @@ func TestCloneSingleAuthConfigMissingHTTPS(t *testing.T) {
 	}
 }
 
-// TestCloneSingleAuthSentinelPreserved verifies that CloneSingleBranch preserves
-// a genuine ErrAuthConfigMissing returned by a configured authFn (remote.go:486)
-// instead of collapsing it into ErrRemoteAuthResolutionFailed. CloneSingleBranch
-// is the PullFromRemote empty-repo path, so a missing credential must surface as
-// ErrAuthConfigMissing for mapGitError to return FAILED_PRECONDITION (SPEC error
-// row "Remote auth config missing (PullFromRemote)", line 929).
+// TestCloneSingleAuthSentinelPreserved verifies that CloneSingleBranch
+// preserves the ErrAuthConfigMissing sentinel returned by a configured authFn
+// — the missing-expected-key sub-case of the SPEC error-table row "Remote auth
+// config missing (PullFromRemote)". CloneSingleBranch is the PullFromRemote
+// empty-repo path, so the credential failure must surface as
+// ErrAuthConfigMissing for mapGitError to return FAILED_PRECONDITION.
 func TestCloneSingleAuthSentinelPreserved(t *testing.T) {
 	gs := setupTestStore(t)
 	gs.authFn = func() (transport.AuthMethod, error) {
@@ -2942,13 +2944,33 @@ func TestCloneSingleAuthSentinelPreserved(t *testing.T) {
 		if !errors.Is(err, ErrAuthConfigMissing) {
 			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
 		}
-		if errors.Is(err, ErrRemoteAuthResolutionFailed) {
-			return fmt.Errorf("expected not ErrRemoteAuthResolutionFailed, got %v", err)
-		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("CloneSingleAuthSentinelPreserved: %v", err)
+	}
+}
+
+// TestCloneSingleAuthFnFailureCollapsesToAuthConfigMissing verifies that
+// CloneSingleBranch surfaces ErrAuthConfigMissing when a configured authFn
+// returns a generic (non-sentinel) error — the readSecretFn-failure (Secret
+// missing) and invalid-credential (unparseable ssh-privatekey PEM) sub-cases
+// of the SPEC error-table row "Remote auth config missing (PullFromRemote)"
+// on the PullFromRemote empty-repo path.
+func TestCloneSingleAuthFnFailureCollapsesToAuthConfigMissing(t *testing.T) {
+	gs := setupTestStore(t)
+	gs.authFn = func() (transport.AuthMethod, error) {
+		return nil, fmt.Errorf("secrets: secret %q not found", "cartographer-remote-auth")
+	}
+	err := gs.WithGitLock(func() error {
+		err := gs.CloneSingleBranch(ctx(), "ssh://git@example.com/repo.git", "main")
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestCloneSingleAuthFnFailureCollapsesToAuthConfigMissing: %v", err)
 	}
 }
 

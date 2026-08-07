@@ -86,6 +86,18 @@ const finalizerName = "flow.foundry.io/cartographer-cleanup"
 // condition (SPEC R1/R6).
 var errWipeBlockedByOpenTransactions = errors.New("wipe blocked by open transactions")
 
+// errExistingPodUnreachable is the sentinel returned by applySchemaOnExisting when the
+// existing Cartographer pod cannot be reached (dial failure or HealthCheck failure). It
+// is the one schema-diff error class that must NOT short-circuit the reconcile: the pod
+// may be unreachable precisely because the Deployment is missing (deleted or failed to
+// schedule), and returning early at the schema-diff branch would wedge every requeue
+// before reconcileDeployment is reached — the Deployment could never be recreated. The
+// Reconcile schema-diff branch falls through to the infra steps on this sentinel so the
+// Deployment is restored and the step-10 ApplySchema applies the (possibly updated)
+// schema on the new pod (SPEC R6 reconcile-to-desired-state; the 10m periodic resync is
+// the independent safety net).
+var errExistingPodUnreachable = errors.New("existing cartographer pod unreachable")
+
 // grpcCallTimeout bounds each Cartographer RPC phase issued by the reconciler. The
 // controller-runtime reconcile ctx carries no per-reconcile deadline (only manager
 // cancellation), so a slow or blackholed Cartographer would otherwise hang the reconcile
@@ -188,11 +200,27 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if errors.Is(err, errWipeBlockedByOpenTransactions) {
 				return r.setBlockedCondition(ctx, &fg, err)
 			}
+			if errors.Is(err, errExistingPodUnreachable) {
+				// The existing pod is unreachable (dial or HealthCheck failed) — the
+				// Deployment may be missing (deleted or failed to schedule). Do NOT
+				// short-circuit: fall through to the infra steps so reconcileDeployment
+				// restores it, then the step-10 ApplySchema applies the (possibly
+				// updated) schema on the new pod. Returning early here would wedge every
+				// requeue before reconcileDeployment is reached — the Deployment could
+				// never be recreated (SPEC R6 reconcile-to-desired-state; the 10m
+				// periodic resync is the independent safety net).
+				log.Info("Existing Cartographer pod unreachable during schema change; continuing to reconcile infrastructure", "err", err)
+				break
+			}
 			return r.setFailedCondition(ctx, &fg, err)
 		}
 	case SchemaDiffNonDestructive:
 		// Non-destructive: HealthCheck -> ApplySchema on existing pod.
 		if err := r.applySchemaOnExisting(ctx, &fg, false); err != nil {
+			if errors.Is(err, errExistingPodUnreachable) {
+				log.Info("Existing Cartographer pod unreachable during schema change; continuing to reconcile infrastructure", "err", err)
+				break
+			}
 			return r.setFailedCondition(ctx, &fg, err)
 		}
 	}
@@ -297,7 +325,10 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 	endpoint := fmt.Sprintf("%s.%s.svc.cluster.local:%d", r.cartographerServiceName(fg), fg.Namespace, r.CartographerPort)
 	cc, err := r.CartographerDialer(ctx, endpoint)
 	if err != nil {
-		return fmt.Errorf("dial existing cartographer: %w", err)
+		// Marked with errExistingPodUnreachable: the pod may be down because the
+		// Deployment is missing, so Reconcile must not short-circuit on this error —
+		// it falls through to the infra steps to restore the Deployment.
+		return fmt.Errorf("%w: dial existing cartographer: %v", errExistingPodUnreachable, err)
 	}
 	defer func() { _ = cc.Close() }()
 
@@ -309,7 +340,7 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 
 	// HealthCheck
 	if _, err := cc.HealthCheck(rpcCtx, &flowv1gen.HealthCheckRequest{}); err != nil {
-		return fmt.Errorf("health check on existing pod: %w", err)
+		return fmt.Errorf("%w: health check on existing pod: %v", errExistingPodUnreachable, err)
 	}
 
 	if destructive {

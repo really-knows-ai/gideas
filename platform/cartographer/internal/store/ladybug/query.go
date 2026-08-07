@@ -84,6 +84,232 @@ func (db *ladybugDB) ExecuteCypher(
 	return rows, nil
 }
 
+// ExtractEntityTypes parses and validates a Cypher statement and returns the
+// distinct entity-type labels its node patterns reference. It is the
+// server-authoritative statement-analysis seam for the ExecuteCypher
+// capability check (SPEC R3): the Cartographer derives the referenced types
+// from its own parse of the statement it is about to execute, so a client can
+// neither omit nor forge the type set.
+//
+// Error classification is identical to ExecuteCypher's, so the SPEC check
+// order "empty query → Cypher syntax → read-only enforcement → capability"
+// (SPEC:958) holds: an empty statement returns ErrEmptyQuery, a statement the
+// grammar rejects returns ErrMutationCypher (via the mutation-keyword
+// fallback, for mutation/DDL clauses the v0.17.0 grammar cannot classify) or
+// ErrInvalidCypher, and a non-read-only statement returns ErrMutationCypher —
+// all before any capability decision.
+//
+// Extraction itself is best-effort and never an error: a parseable read-only
+// statement whose patterns yield no labels returns an empty slice and the
+// service falls back to the READ:graph/entity/* wildcard check (SPEC R3).
+func (db *ladybugDB) ExtractEntityTypes(ctx context.Context, cypher string) ([]string, error) {
+	if cypher == "" {
+		return nil, store.ErrEmptyQuery
+	}
+
+	conn, _, unlock, err := db.lockForRead("")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	// Prepare to parse and check read-only — the same seam ExecuteCypher uses,
+	// including the mutation-keyword fallback for statements the grammar
+	// cannot classify.
+	stmt, err := conn.Prepare(cypher)
+	if err != nil {
+		if isMutationCypher(cypher) {
+			return nil, store.ErrMutationCypher
+		}
+		return nil, fmt.Errorf("%w: prepare: %v", store.ErrInvalidCypher, err)
+	}
+	defer stmt.Close()
+
+	if !stmt.IsReadOnly() {
+		return nil, store.ErrMutationCypher
+	}
+
+	return extractEntityTypeLabels(cypher), nil
+}
+
+// extractEntityTypeLabels derives the distinct entity-type labels referenced
+// by node patterns in a known-parseable, read-only Cypher statement. It
+// strips `//` and `/* */` comments and string literals, then finds node
+// patterns `(v:Label)`, `(:Label)` (anonymous nodes), and multi-label
+// `(v:A:B)`, handling inline property maps and relationship patterns —
+// e.g. `MATCH (a:Component)-[:DEPENDS_ON]->(b:Service)` yields
+// [Component Service]. Node-pattern-shaped text inside comments, string
+// literals, or non-node parenthesised expressions is ignored; node patterns
+// outside MATCH clauses (e.g. a `WHERE (a)--(:Service)` pattern expression)
+// ARE extracted, since they reference the same labels.
+//
+// The analyzer is deliberately not a full Cypher parser: the SPEC check order
+// runs syntax validation (Prepare) before this point, so it only classifies
+// the pattern structure of a statement already known to parse.
+//
+// ponytail: The analyzer handles the common labelled-node shapes — named and
+// anonymous nodes, multi-label nodes, inline property maps, and relationship
+// patterns — but cannot classify exotic constructs: backtick-quoted labels
+// (`(n:\`Label With Space\`)`), parameterised labels (`(n:$label)`), dynamic
+// labels, or labels embedded in parenthesised expressions the matcher cannot
+// balance. Each miss under-approximates the referenced set and yields the
+// wildcard fallback (an empty slice), which is fail-closed for a per-type
+// holder (availability: PERMISSION_DENIED) — but a partial extraction that
+// includes SOME labels and misses others lets a caller holding only the
+// extracted subset execute a query that also touches a missed type, widening
+// access relative to the every-referenced-type rule (SPEC R3). This
+// under-approximation risk is bounded by the analyzer's coverage of common
+// shapes and is the SPEC-mandated best-effort trade-off ("Extraction is
+// best-effort and never an error"; SPEC:251). Upgrade path: a server-side cgo
+// binding of a real Cypher parser (e.g. libcypher-parser) exposing the
+// statement AST would make extraction exact; per the SPEC discussion this is
+// deferred while the regex-state-machine coverage is sufficient.
+func extractEntityTypeLabels(cypher string) []string {
+	s := stripCommentsAndStrings(cypher)
+	seen := make(map[string]struct{})
+	var labels []string
+	i := 0
+	for i < len(s) {
+		open := strings.IndexByte(s[i:], '(')
+		if open < 0 {
+			break
+		}
+		open += i
+		close, ok := matchingParen(s, open)
+		if !ok {
+			break
+		}
+		i = close + 1
+		inner := s[open+1 : close]
+		// A node pattern carries labels from its first ':' (after the optional
+		// variable) up to any '{' (inline property map) or the closing paren.
+		colon := strings.IndexByte(inner, ':')
+		if colon < 0 {
+			continue // unlabelled node (e.g. "(n)") — no labels
+		}
+		rest := inner[colon:]
+		if brace := strings.IndexByte(rest, '{'); brace >= 0 {
+			rest = rest[:brace]
+		}
+		for part := range strings.SplitSeq(rest, ":") {
+			label := strings.TrimSpace(part)
+			if !isCypherIdentifier(label) {
+				continue
+			}
+			if _, dup := seen[label]; dup {
+				continue
+			}
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	return labels
+}
+
+// matchingParen returns the index of the ')' matching the '(' at open, or
+// ok=false if no match exists. Inline property maps ({...}) are skipped in
+// balanced fashion so a ')' or '(' inside a map value never terminates or
+// mis-nests the pattern scan.
+func matchingParen(s string, open int) (int, bool) {
+	depth := 0
+	for j := open; j < len(s); j++ {
+		switch s[j] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return j, true
+			}
+		case '{':
+			bDepth := 0
+			for j < len(s) {
+				switch s[j] {
+				case '{':
+					bDepth++
+				case '}':
+					bDepth--
+				}
+				if bDepth == 0 {
+					// Stop with j on the closing '}' so the outer loop's j++
+					// advances to the character after the map (the node's
+					// closing ')') instead of skipping it.
+					break
+				}
+				j++
+			}
+		}
+	}
+	return 0, false
+}
+
+// isCypherIdentifier reports whether s is a bare Cypher identifier (letters,
+// digits after the first character, and underscores) — the only label form the
+// analyzer can classify (see the extractEntityTypeLabels ponytail for the
+// unclassified forms).
+func isCypherIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+		case i > 0 && c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// stripCommentsAndStrings removes `//` line comments, `/* */` block comments,
+// and single/double-quoted string literals (honouring backslash escapes) from
+// a Cypher statement, so node-pattern-shaped text inside them is never
+// misread as a referenced entity-type label. The statement is known to parse,
+// so strings and comments are well-formed; the guards simply bound the scan.
+func stripCommentsAndStrings(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		switch {
+		case c == '\'' || c == '"':
+			quote := c
+			i++
+			for i < len(s) {
+				if s[i] == '\\' {
+					i += 2
+					continue
+				}
+				if s[i] == quote {
+					i++
+					break
+				}
+				i++
+			}
+		case c == '/' && i+1 < len(s) && s[i+1] == '/':
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(s) && s[i+1] == '*':
+			i += 2
+			for i+1 < len(s) && (s[i] != '*' || s[i+1] != '/') {
+				i++
+			}
+			i += 2
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
 // --------------------------------------------------------------------------
 // SearchNeighbors
 // --------------------------------------------------------------------------

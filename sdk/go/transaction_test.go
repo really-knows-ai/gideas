@@ -160,62 +160,6 @@ func TestTxExecuteCypher(t *testing.T) {
 	}
 }
 
-// TestTxExecuteCypher_AnnotatesPluralEntityTypes verifies SPEC R3 on the
-// Transaction read path: the SDK parses the Cypher, extracts the entity-type
-// labels, and annotates the plural "entity_types" gRPC metadata key
-// with the comma-separated labels.
-func TestTxExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypesKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_types metadata")
-			}
-			if vals[0] != componentType+",Service" {
-				t.Errorf("expected metadata %s=%q, got %q",
-					metadataEntityTypesKey, componentType+",Service", vals[0])
-			}
-			return &flowv1.ExecuteCypherResponse{}, nil
-		},
-	}
-	tx := newMockTx(mock)
-	_, err := tx.ExecuteCypher("MATCH (c:"+componentType+")-[:DEPENDS_ON]->(s:Service) RETURN c, s", nil)
-	if err != nil {
-		t.Fatalf("ExecuteCypher returned error: %v", err)
-	}
-}
-
-// TestTxExecuteCypher_FallsBackToWildcard verifies R3's wildcard fallback on
-// the Transaction read path: when label extraction yields no entity types,
-// the annotation must carry the READ:graph/entity/* wildcard.
-func TestTxExecuteCypher_FallsBackToWildcard(t *testing.T) {
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypesKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_types metadata")
-			}
-			if vals[0] != "*" {
-				t.Errorf("expected wildcard * in %s, got %q", metadataEntityTypesKey, vals[0])
-			}
-			return &flowv1.ExecuteCypherResponse{}, nil
-		},
-	}
-	tx := newMockTx(mock)
-	_, err := tx.ExecuteCypher("RETURN 1", nil)
-	if err != nil {
-		t.Fatalf("ExecuteCypher returned error: %v", err)
-	}
-}
-
 // TestTxExecuteCypher_ParamsConvertedToStructpb pins SPEC R2's optional
 // params parameter on the Transaction layer: when params are present, the SDK
 // converts them to a structpb.Value and the request carries them on the wire.
@@ -267,6 +211,33 @@ func TestTxExecuteCypher_InvalidParams(t *testing.T) {
 	}
 	if called {
 		t.Error("expected ExecuteCypher RPC not to be called for invalid params")
+	}
+}
+
+// TestTxExecuteCypher_NoEntityTypeMetadata pins SPEC R3's amended contract
+// for ExecuteCypher on the Transaction layer (SPEC.md:247, :651 — "statement
+// only — no entity-type metadata"): the SDK attaches no entity-type
+// capability metadata, so the outgoing gRPC context carries neither
+// entity_type nor entity_types metadata keys.
+//
+//nolint:dupl // Transaction and Graph no-annotation metadata tests share structure.
+func TestTxExecuteCypher_NoEntityTypeMetadata(t *testing.T) {
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			md, _ := metadata.FromOutgoingContext(ctx)
+			if vals := md.Get(metadataEntityTypeKey); len(vals) > 0 {
+				t.Errorf("expected no %s metadata on ExecuteCypher outgoing context, got %v", metadataEntityTypeKey, vals)
+			}
+			if vals := md.Get(metadataEntityTypesKey); len(vals) > 0 {
+				t.Errorf("expected no %s metadata on ExecuteCypher outgoing context, got %v", metadataEntityTypesKey, vals)
+			}
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	_, err := tx.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
 	}
 }
 

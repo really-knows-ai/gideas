@@ -91,20 +91,41 @@ func main() {
 	// 4. Fail closed on main.lbug open failure (SPEC R8 corruption-only recovery)
 	// -----------------------------------------------------------------------
 	// SPEC R8 corruption recovery is scoped entirely to a genuinely corrupted
-	// main.lbug. ladybug.Open already performs that recovery itself: on a
-	// readable-but-unparseable file (corruptionCandidates) it removes main.lbug
-	// and re-opens a fresh database internally, returning nil error. Any
-	// non-nil error returned here is therefore an operational (IO/permission)
-	// or post-open failure (OpenConnection / extension LOAD / rebuildSchemaCache
-	// / restoreMainSchemaMetadata) — it does NOT prove main.lbug is corrupt.
-	// The store deliberately refuses to delete a database it cannot prove
-	// corrupt (see corruptionCandidate in ladybug.go), so deleting main.lbug
-	// here would permanently destroy durable non-transactional writes from a
-	// possibly-valid database. Fail closed without touching the file.
+	// main.lbug. ladybug.Open performs the destructive half of that recovery:
+	// on a readable-but-unparseable file (corruptionCandidates) it removes
+	// main.lbug and re-opens a fresh, empty database internally, returning nil
+	// error. The re-hydration half — restoring the committed graph from the git
+	// file-per-element representation — is NOT done by Open; it runs in
+	// rehydrateMainAfterRecovery below. Any non-nil error returned here is
+	// therefore an operational (IO/permission) or post-open failure
+	// (OpenConnection / extension LOAD / rebuildSchemaCache /
+	// restoreMainSchemaMetadata) — it does NOT prove main.lbug is corrupt. The
+	// store deliberately refuses to delete a database it cannot prove corrupt
+	// (see corruptionCandidate in ladybug.go), so deleting main.lbug here would
+	// permanently destroy durable non-transactional writes from a possibly-valid
+	// database. Fail closed without touching the file.
 	if dbErr != nil {
 		slog.Error("Failed to open main.lbug; refusing to delete database (failure is not proven corruption)",
 			"path", filepath.Join(ladybugDBPath, "main.lbug"),
 			"error", dbErr,
+		)
+		os.Exit(1)
+	}
+
+	// SPEC R8 (SPEC.md:509-519): after ladybug.Open recovered a corrupted
+	// main.lbug by deleting and re-opening it fresh, main holds schema metadata
+	// but no graph data. When the git repository has commits, re-hydrate main
+	// from the file-per-element representation so the service does not serve a
+	// vacuous empty graph while committed data exists. A normal open of a
+	// populated main.lbug is never re-hydrated (its data may include durable
+	// non-transactional writes that git does not yet contain — wiping them on
+	// every restart would be silent data loss), and a fresh install is a no-op
+	// (an empty git repo has no committed state to recover). A failure here is
+	// fatal: serving an empty graph after a corrupt-reopen silently drops all
+	// committed data, so fail loudly instead.
+	if err := rehydrateMainAfterRecovery(context.Background(), dbStore, gs); err != nil {
+		slog.Error("Failed to re-hydrate main from git after open (SPEC R8 recovery)",
+			"error", err,
 		)
 		os.Exit(1)
 	}
@@ -319,6 +340,79 @@ func main() {
 	// goroutine) mid-cleanup and the terminationGracePeriodSeconds budget is
 	// honoured.
 	<-shutdownDone
+}
+
+// rehydrateMainAfterRecovery re-synchronizes main LadybugDB from the git
+// working tree when the startup open left main holding no graph data but the
+// git repository has commits (SPEC R8 corruption recovery, SPEC.md:509-519).
+// ladybug.Open performs the destructive half of R8 recovery — deleting a
+// corrupted main.lbug and re-opening a fresh, empty database — but does not
+// restore the committed graph; that is this function's job. Re-hydration is
+// gated so a normal open of a populated main.lbug is never re-hydrated: its
+// data may include durable non-transactional writes that git does not yet
+// contain (SPEC Data Flow: mutations outside transactions go through main.lbug
+// directly), and wiping them on every restart would be silent data loss. A
+// fresh install is a no-op (an empty git repo has no committed state to
+// recover). Any error is propagated so the caller can fail startup loudly.
+func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs gitstore.GitStore) error {
+	empty, err := gs.IsEmpty(ctx)
+	if err != nil {
+		return fmt.Errorf("check git repo state for recovery: %w", err)
+	}
+	if empty {
+		return nil
+	}
+	hasData, err := mainHasGraphData(ctx, dbStore)
+	if err != nil {
+		return fmt.Errorf("inspect main graph state: %w", err)
+	}
+	if hasData {
+		return nil
+	}
+	entitiesDir, edgesDir := gs.HydrationDirs()
+	if err := dbStore.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		return fmt.Errorf("re-hydrate main from git files: %w", err)
+	}
+	slog.Info("Main re-hydrated from git working tree (SPEC R8 recovery)")
+	return nil
+}
+
+// mainHasGraphData reports whether main holds any entities or edges. It is the
+// discriminator between a corruption-recovery reopen (schema metadata restored,
+// data lost — re-hydration required) and a normal open of a populated database
+// (data present — re-hydration would destroy uncommitted non-transactional
+// writes). Count queries are engine-side aggregations returning a single row,
+// so the check is cheap enough to run on every startup.
+func mainHasGraphData(ctx context.Context, dbStore store.Store) (bool, error) {
+	for _, q := range []string{"MATCH (n) RETURN count(n);", "MATCH ()-[r]->() RETURN count(r);"} {
+		rows, err := dbStore.ExecuteCypher(ctx, q, nil, "")
+		if err != nil {
+			return false, err
+		}
+		if len(rows) == 1 && len(rows[0].Values) == 1 && countValueIsPositive(rows[0].Values[0]) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// countValueIsPositive reports whether a LadybugDB count() result value is
+// greater than zero. The go-ladybug wrapper surfaces DuckDB numerics as
+// float64; the other numeric kinds are handled defensively because treating a
+// count of a populated database as zero would wrongly re-hydrate (and wipe) it.
+func countValueIsPositive(v any) bool {
+	switch n := v.(type) {
+	case float64:
+		return n > 0
+	case int64:
+		return n > 0
+	case uint64:
+		return n > 0
+	case int:
+		return n > 0
+	default:
+		return false
+	}
 }
 
 func tryRemotePullOnInit(

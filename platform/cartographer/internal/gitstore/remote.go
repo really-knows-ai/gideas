@@ -187,7 +187,7 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 //   - Explicit pull (branch "main"): SPEC R10 mandates that when main has
 //     diverged from the remote, PullFromRemote fails with FAILED_PRECONDITION
 //     ("Remote pull diverged" — error table row "Remote pull diverged", SPEC
-//     R10, line 926). On divergence this method returns ErrPullDiverged, which
+//     R10, line 929). On divergence this method returns ErrPullDiverged, which
 //     service mapGitError maps to FAILED_PRECONDITION; the local main ref is
 //     left unchanged (no merge commit is fabricated), so the SPEC-mandated
 //     divergence failure is reachable.
@@ -306,7 +306,7 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 
 	// Diverged: neither local nor remote is an ancestor of the other. The
 	// explicit pull path must fail FAILED_PRECONDITION (SPEC R10, error-table
-	// row "Remote pull diverged", line 926) rather than fabricate a merge
+	// row "Remote pull diverged", line 929) rather than fabricate a merge
 	// commit on local main that masks the divergence. mapGitError maps
 	// ErrPullDiverged to FAILED_PRECONDITION.
 	return plumbing.ZeroHash, ErrPullDiverged
@@ -455,16 +455,15 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 	if g.authFn != nil {
 		auth, err = g.authFn()
 		if err != nil {
-			// Preserve the typed ErrAuthConfigMissing sentinel instead of
-			// collapsing it into ErrRemoteAuthResolutionFailed (mirroring
-			// resolveAuth). CloneSingleBranch is the PullFromRemote empty-repo
-			// path, so a missing credential must surface as ErrAuthConfigMissing
-			// for mapGitError to return FAILED_PRECONDITION (SPEC error row
+			// Any authFn failure — a readSecretFn error (the referenced Secret
+			// does not exist), an invalid credential (an unparseable
+			// ssh-privatekey PEM), or the ErrAuthConfigMissing sentinel
+			// (missing expected key) — means the git operation cannot be
+			// attempted. CloneSingleBranch is the PullFromRemote empty-repo
+			// path, so all of them surface as ErrAuthConfigMissing for
+			// mapGitError to return FAILED_PRECONDITION (SPEC error-table row
 			// "Remote auth config missing (PullFromRemote)").
-			if errors.Is(err, ErrAuthConfigMissing) {
-				return err
-			}
-			return ErrRemoteAuthResolutionFailed
+			return ErrAuthConfigMissing
 		}
 	}
 	// nil auth is OK for anonymous public remotes
@@ -635,13 +634,16 @@ func (g *gitStore) ensureRemoteExists() error {
 
 // resolveAuth calls the configured auth provider and returns typed errors.
 // allowAnonymous only permits an explicit nil result, not a missing provider.
+// Any authFn failure — a readSecretFn error (the referenced Secret does not
+// exist), an invalid credential (an unparseable ssh-privatekey PEM), or the
+// ErrAuthConfigMissing sentinel (missing expected key for the URL scheme) —
+// means the git operation cannot be attempted, so all of them surface as
+// ErrAuthConfigMissing for mapGitError to return FAILED_PRECONDITION (SPEC
+// error-table row "Remote auth config missing (PullFromRemote)").
 func (g *gitStore) resolveAuth(allowAnonymous bool) (transport.AuthMethod, error) {
 	auth, err := g.authFn()
 	if err != nil {
-		if errors.Is(err, ErrAuthConfigMissing) {
-			return nil, err
-		}
-		return nil, ErrRemoteAuthResolutionFailed
+		return nil, ErrAuthConfigMissing
 	}
 	if auth == nil && !allowAnonymous {
 		return nil, ErrAuthConfigMissing

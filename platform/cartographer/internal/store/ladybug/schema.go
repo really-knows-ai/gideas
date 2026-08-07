@@ -353,6 +353,82 @@ func (db *ladybugDB) diffSchemaAgainstCatalog(s *flowv1.Schema) error {
 	return nil
 }
 
+// CheckBranchSchemaCompatibility validates the branch DB's schema against the
+// current (main) schema — the SPEC R9 Commit flow step 1 check ("validate the
+// branch LadybugDB state against the current schema"). The branch's tables were
+// created from the schema in effect when the transaction began
+// (ReplicateSchemaToBranch) or was last refreshed (resetBranchStoreFromWorkingTree
+// in the service layer), so this is a baseline-vs-current comparison. A change
+// is incompatible when a type or property the transaction's data lives under
+// has been removed or changed, or a vector index has been disabled; those
+// conditions return ErrDestructiveSchemaChange. Additive changes (new types,
+// new properties) and entity-type rule modifications are non-destructive (SPEC
+// R2/R6) and never fail the check, so a transaction begun under an older schema
+// can still commit after a compatible schema push; a refreshed transaction is
+// re-hydrated onto the current schema and always passes.
+func (db *ladybugDB) CheckBranchSchemaCompatibility(_ context.Context, txID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	br, err := db.branchLocked(txID)
+	if err != nil {
+		return err
+	}
+	br.mu.Lock()
+	defer br.mu.Unlock()
+	if br.failed {
+		return store.ErrDatabaseNotReady
+	}
+	for name, branchDef := range br.entityTypeDefs {
+		mainDef, ok := db.entityTypeDefs[name]
+		if !ok {
+			return fmt.Errorf("%w: entity type %q no longer exists in the current schema",
+				store.ErrDestructiveSchemaChange, name)
+		}
+		if branchDef.EnableVectorIndex && !mainDef.EnableVectorIndex {
+			return fmt.Errorf("%w: entity type %q vector index would be disabled",
+				store.ErrDestructiveSchemaChange, name)
+		}
+		if err := branchPropertiesCompatible(name, "entity type", branchDef.Properties, mainDef.Properties); err != nil {
+			return err
+		}
+	}
+	for name, branchDef := range br.edgeTypeDefs {
+		mainDef, ok := db.edgeTypeDefs[name]
+		if !ok {
+			return fmt.Errorf("%w: edge type %q no longer exists in the current schema",
+				store.ErrDestructiveSchemaChange, name)
+		}
+		if err := branchPropertiesCompatible(name, "edge type", branchDef.Properties, mainDef.Properties); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// branchPropertiesCompatible verifies that every property of a branch type still
+// exists in the current schema with a compatible (equal mapped) type, mirroring
+// diffSchemaAgainstCatalog's property-level checks in the branch-vs-current
+// direction: removed properties and type changes are destructive, added
+// properties are not.
+func branchPropertiesCompatible(typeName, kind string, branchProps, currentProps []store.PropertyDef) error {
+	current := make(map[string]store.PropertyDef, len(currentProps))
+	for _, p := range currentProps {
+		current[p.Name] = p
+	}
+	for _, bp := range branchProps {
+		cp, ok := current[bp.Name]
+		if !ok {
+			return fmt.Errorf("%w: %s %q property %q no longer exists in the current schema",
+				store.ErrDestructiveSchemaChange, kind, typeName, bp.Name)
+		}
+		if ladybugType(cp.Type) != ladybugType(bp.Type) {
+			return fmt.Errorf("%w: %s %q property %q type change from %q to %q",
+				store.ErrDestructiveSchemaChange, kind, typeName, bp.Name, bp.Type, cp.Type)
+		}
+	}
+	return nil
+}
+
 // alterNodeTable applies additive ALTER DDL for new properties on an existing
 // node table. It does not handle destructive changes (those are rejected by
 // diffSchemaAgainstCatalog).

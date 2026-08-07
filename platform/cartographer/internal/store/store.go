@@ -77,6 +77,16 @@ type Store interface {
 
 	// Query
 	ExecuteCypher(ctx context.Context, cypher string, params map[string]any, branch string) ([]CypherRow, error)
+	// ExtractEntityTypes parses and validates a Cypher statement — empty query,
+	// syntax, and read-only enforcement, exactly as ExecuteCypher classifies
+	// them — and returns the distinct entity-type labels its node patterns
+	// reference. It is the server-authoritative statement-analysis seam for the
+	// ExecuteCypher capability check (SPEC R3): the service derives the
+	// referenced types from its own parse instead of trusting client metadata.
+	// Extraction is best-effort: a parseable, read-only statement whose
+	// patterns yield no labels returns an empty slice (never an error) and the
+	// caller falls back to the READ:graph/entity/* wildcard check.
+	ExtractEntityTypes(ctx context.Context, cypher string) ([]string, error)
 	SearchNeighbors(ctx context.Context, embedding []float32,
 		entityType string, topK int, branch string,
 	) ([]NeighborResult, error)
@@ -95,6 +105,14 @@ type Store interface {
 	LoadBranchTransactionState(ctx context.Context, txID string) (BranchTransactionState, error)
 	InvalidateBranchState(ctx context.Context, txID string) error
 	ReplicateSchemaToBranch(ctx context.Context, txID string) error
+	// CheckBranchSchemaCompatibility validates the branch DB's schema against the
+	// current (main) schema (SPEC R9 Commit flow step 1). Returns
+	// ErrDestructiveSchemaChange when the current schema is incompatible with the
+	// branch's — a type or property the transaction's data lives under has been
+	// removed or changed, or a vector index has been disabled. Additive changes
+	// (new types, new properties) and entity-type rule modifications are
+	// non-destructive (SPEC R2/R6) and never fail this check.
+	CheckBranchSchemaCompatibility(ctx context.Context, txID string) error
 	RehydrateFromBranch(ctx context.Context, txID string) error
 	RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error
 	HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error

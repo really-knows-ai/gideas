@@ -69,7 +69,10 @@ spec:
         name: manager
         env:
         - name: OLLAMA_API_KEY
-          value: "9de147e88aaa408b98865170b2d20f45.BIRBE7eQGD_B5wnHn-ZyB6gr"
+          valueFrom:
+            secretKeyRef:
+              name: ollama-api-key
+              key: api-key
         ports: []
         securityContext:
           readOnlyRootFilesystem: true

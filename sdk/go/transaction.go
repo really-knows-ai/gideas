@@ -34,6 +34,11 @@ func (tx *Transaction) checkRolled() error {
 // ID returns the transaction ID.
 func (tx *Transaction) ID() string { return tx.id }
 
+// Timeout returns the server-applied transaction timeout — the value the
+// Cartographer granted in the applied_timeout of the BeginTransaction or
+// ExtendTimeout response (SPEC R9/R2; no silent capping).
+func (tx *Transaction) Timeout() time.Duration { return tx.timeout }
+
 // ---------------------------------------------------------------------------
 // Read path methods (with transactionId injection)
 // ---------------------------------------------------------------------------
@@ -59,19 +64,16 @@ func (tx *Transaction) ExecuteCypher(cypher string, params map[string]any) ([]ma
 		TransactionId: tx.id,
 	}
 
-	labels := extractEntityTypes(cypher)
-	if len(labels) == 0 {
-		// Parser failed to extract entity types — fall back to the
-		// READ:graph/entity/* wildcard capability (R3).
-		labels = []string{"*"}
-	}
-
+	// No entity-type capability metadata is attached (SPEC R3): the SDK
+	// performs no Cypher parsing and cannot influence the authorization
+	// decision. The Cartographer parses the statement server-side and checks
+	// the caller's capabilities against each referenced type.
 	var resp *flowv1.ExecuteCypherResponse
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
 		var callErr error
 		resp, callErr = tx.session.Cartographer.ExecuteCypher(ctx, req)
 		return callErr
-	}, "entity_types", labels...)
+	}, "")
 	if err != nil {
 		return nil, err
 	}

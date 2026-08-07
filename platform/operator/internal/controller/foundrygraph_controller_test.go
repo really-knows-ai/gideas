@@ -259,48 +259,111 @@ func TestApplySchemaOnExistingDialFailure(t *testing.T) {
 	}
 }
 
-// TestReconcileDialFailureRequeues drives the dial-failure path at the Reconcile level (item 3):
-// a destructive diff whose CartographerDialer fails before any RPC must funnel into
-// setFailedCondition and return a non-nil error, so controller-runtime re-queues with backoff.
-func TestReconcileDialFailureRequeues(t *testing.T) {
+// TestReconcileSchemaDiffUnreachablePodFallsThroughToInfra pins item 10: a pending schema
+// diff (destructive or non-destructive) while the Cartographer pod is unreachable (dial
+// failure — the observable state of a missing Deployment) must NOT wedge the reconcile at
+// the schema-diff branch. The reconcile falls through to the infra steps, so
+// reconcileDeployment runs (recreating the missing Deployment) and the reconcile proceeds
+// to the readiness gate instead of returning the dial error. This is the SPEC R6
+// reconcile-to-desired-state contract (the 10m periodic resync is the independent safety
+// net): a transient condition must never become a permanent backoff loop.
+func TestReconcileSchemaDiffUnreachablePodFallsThroughToInfra(t *testing.T) {
 	s := scheme.Scheme
 	_ = flowv1.AddToScheme(s)
 	_ = appsv1.AddToScheme(s)
 	_ = corev1.AddToScheme(s)
 	_ = rbacv1.AddToScheme(s)
 
-	// Destructive diff: removed Widget entity drives the applySchemaOnExisting dial path.
-	fg := &flowv1.FoundryGraph{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      defaultGraphName,
-			Namespace: testNS,
-			Annotations: map[string]string{
-				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
+	ns := testNS
+	// Operator-namespace signing secrets so reconcileSecrets succeeds once the reconcile
+	// falls through to the infra steps.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+
+	cases := []struct {
+		name string
+		fg   *flowv1.FoundryGraph
+	}{
+		{
+			name: "destructive diff",
+			fg: &flowv1.FoundryGraph{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      defaultGraphName,
+					Namespace: ns,
+					Annotations: map[string]string{
+						lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
+					},
+				},
+			},
+		},
+		{
+			name: "non-destructive diff",
+			fg: &flowv1.FoundryGraph{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      defaultGraphName,
+					Namespace: ns,
+					Annotations: map[string]string{
+						lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget","properties":[{"name":"a"}]}]}`,
+					},
+				},
+				Spec: flowv1.FoundryGraphSpec{
+					EntityTypes: []flowv1.EntityTypeSpec{{
+						Name: "Widget",
+						Properties: []flowv1.PropertySpec{
+							{Name: "a"},
+							{Name: "b"},
+						},
+					}},
+				},
 			},
 		},
 	}
-	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).Build()
-	r := &FoundryGraphReconciler{
-		Client:            fakeCli,
-		Scheme:            s,
-		ProxyRoutingTable: NewProxyRoutingTable(),
-		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
-			return nil, errors.New("dial failed: cartographer unreachable")
-		},
-	}
 
-	ctx := context.Background()
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}); err == nil {
-		t.Fatal("expected Reconcile to return an error (requeue with backoff) on dial failure")
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The Deployment is MISSING (deleted) — the existing pod is unreachable, so
+			// the dialer fails. reconcileDeployment must still run and recreate it.
+			fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(tc.fg, osign, ssign).WithStatusSubresource(tc.fg).Build()
+			r := &FoundryGraphReconciler{
+				Client:            fakeClient,
+				Scheme:            s,
+				OperatorNamespace: "operator-ns",
+				CartographerPort:  50051,
+				CartographerImage: "cartographer:latest",
+				ReadinessTimeout:  time.Second,
+				ProxyRoutingTable: NewProxyRoutingTable(),
+				CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+					return nil, errors.New("dial failed: cartographer unreachable")
+				},
+			}
 
-	var got flowv1.FoundryGraph
-	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: testNS}, &got); err != nil {
-		t.Fatalf("get FoundryGraph: %v", err)
-	}
-	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
-		t.Errorf("expected Ready=False/ReconcileFailed after dial failure, got %v", ready)
+			ctx := context.Background()
+			nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
+			_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+			if err == nil {
+				t.Fatal("expected the reconcile to return an error (readiness requeue)")
+			}
+			// The schema-diff branch must NOT wedge the reconcile: the error must not be
+			// the dial failure — the reconcile proceeded past it, through the infra steps,
+			// to the readiness gate (the created Deployment has no ready status yet).
+			if strings.Contains(err.Error(), "dial existing cartographer") {
+				t.Errorf("expected the reconcile to proceed past the unreachable-pod dial failure, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "readiness") {
+				t.Errorf("expected the reconcile to reach the readiness gate, got: %v", err)
+			}
+
+			// reconcileDeployment ran: the missing Deployment was recreated.
+			var d appsv1.Deployment
+			if err := fakeClient.Get(ctx, types.NamespacedName{Name: cartographerSvcName, Namespace: ns}, &d); err != nil {
+				t.Errorf("expected the Deployment to be (re)created despite the unreachable pod, got: %v", err)
+			}
+			// Infra reconciliation is reachable: the PVC was provisioned too.
+			var pvc corev1.PersistentVolumeClaim
+			if err := fakeClient.Get(ctx, types.NamespacedName{Name: "data-" + defaultGraphName, Namespace: ns}, &pvc); err != nil {
+				t.Errorf("expected the PVC to be provisioned, got: %v", err)
+			}
+		})
 	}
 }
 

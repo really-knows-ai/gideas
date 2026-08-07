@@ -19,11 +19,17 @@ import (
 
 const metadataEntityTypeKey = "entity_type"
 
-// metadataEntityTypesKey is the plural read-path capability annotation key
-// (SPEC R3): ExecuteCypher annotates the entity types extracted from the
-// Cypher statement against this plural key, falling back to the
-// READ:graph/entity/* wildcard when extraction yields no labels.
+// metadataEntityTypesKey is the plural legacy annotation key the SDK no
+// longer attaches to any RPC (SPEC R3: the Cartographer is the sole authority
+// for per-type capability validation on ExecuteCypher). Pinned by the
+// no-annotation ExecuteCypher tests.
 const metadataEntityTypesKey = "entity_types"
+
+// componentType and serviceType are the entity-type names used across the
+// Graph and Transaction test suites.
+const componentType = "Component"
+
+const serviceType = "Service"
 
 const (
 	clobberedIDProp   = "clobbered-id"
@@ -287,63 +293,6 @@ func TestExecuteCypher(t *testing.T) {
 	}
 }
 
-// TestExecuteCypher_AnnotatesPluralEntityTypes verifies SPEC R3 on the Graph
-// read path: the SDK parses the Cypher, extracts the entity-type labels, and
-// annotates the plural "entity_types" gRPC metadata key with the
-// comma-separated labels (joined by session.call via strings.Join).
-func TestExecuteCypher_AnnotatesPluralEntityTypes(t *testing.T) {
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypesKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_types metadata")
-			}
-			if vals[0] != componentType+",Service" {
-				t.Errorf("expected metadata %s=%q, got %q",
-					metadataEntityTypesKey, componentType+",Service", vals[0])
-			}
-			return &flowv1.ExecuteCypherResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.ExecuteCypher("MATCH (c:"+componentType+")-[:DEPENDS_ON]->(s:Service) RETURN c, s", nil)
-	if err != nil {
-		t.Fatalf("ExecuteCypher returned error: %v", err)
-	}
-}
-
-// TestExecuteCypher_FallsBackToWildcard verifies R3's wildcard fallback on
-// the Graph read path: when label extraction yields no entity types (e.g. a
-// query with no MATCH clause), the annotation must carry the
-// READ:graph/entity/* wildcard instead of no annotation.
-func TestExecuteCypher_FallsBackToWildcard(t *testing.T) {
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypesKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_types metadata")
-			}
-			if vals[0] != "*" {
-				t.Errorf("expected wildcard * in %s, got %q", metadataEntityTypesKey, vals[0])
-			}
-			return &flowv1.ExecuteCypherResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.ExecuteCypher("RETURN 1", nil)
-	if err != nil {
-		t.Fatalf("ExecuteCypher returned error: %v", err)
-	}
-}
-
 // TestExecuteCypher_ParamsConvertedToStructpb pins SPEC R2's optional params
 // parameter (ExecuteCypher(cypher, params?)) on the Graph layer: when params
 // are present, the SDK converts them to a structpb.Value and the request
@@ -396,6 +345,36 @@ func TestExecuteCypher_InvalidParams(t *testing.T) {
 	}
 	if called {
 		t.Error("expected ExecuteCypher RPC not to be called for invalid params")
+	}
+}
+
+// TestExecuteCypher_NoEntityTypeMetadata pins SPEC R3's amended contract for
+// ExecuteCypher (SPEC.md:247, :651 — "statement only — no entity-type
+// metadata"): the Cartographer is the sole authority for per-type capability
+// validation, and the SDK performs no Cypher parsing and attaches no
+// entity-type capability metadata. The outgoing gRPC context must carry
+// neither entity_type nor entity_types metadata keys — the inverse of the
+// write-path annotation tests (CreateEdge/UpdateEntity/DeleteEntity), which
+// keep the singular annotation per SPEC.md:243.
+//
+//nolint:dupl // Graph and Transaction no-annotation metadata tests share structure.
+func TestExecuteCypher_NoEntityTypeMetadata(t *testing.T) {
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			md, _ := metadata.FromOutgoingContext(ctx)
+			if vals := md.Get(metadataEntityTypeKey); len(vals) > 0 {
+				t.Errorf("expected no %s metadata on ExecuteCypher outgoing context, got %v", metadataEntityTypeKey, vals)
+			}
+			if vals := md.Get(metadataEntityTypesKey); len(vals) > 0 {
+				t.Errorf("expected no %s metadata on ExecuteCypher outgoing context, got %v", metadataEntityTypesKey, vals)
+			}
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
 	}
 }
 
@@ -1889,6 +1868,30 @@ func TestBeginTransaction_SurfacesAppliedTimeout(t *testing.T) {
 	}
 	if tx.timeout != 30*time.Minute {
 		t.Errorf("expected tx.timeout to equal server applied timeout 30m, got %v", tx.timeout)
+	}
+}
+
+// TestBeginTransaction_TimeoutAccessor pins the WithTimeout doc claim that
+// the server-applied timeout is surfaced on the resulting Transaction
+// handle: the granted applied_timeout must be readable by SDK callers via
+// the public Timeout() accessor (the underlying field is unexported, so
+// in-package reads alone do not surface it).
+func TestBeginTransaction_TimeoutAccessor(t *testing.T) {
+	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{
+				TransactionId:  "tx-1",
+				AppliedTimeout: durationpb.New(45 * time.Minute),
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	tx, err := g.BeginTransaction(WithTimeout(24 * time.Hour))
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	if got := tx.Timeout(); got != 45*time.Minute {
+		t.Errorf("expected Timeout() to surface server-applied 45m, got %v", got)
 	}
 }
 

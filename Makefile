@@ -26,15 +26,11 @@ ladybug-lib: ## Provision the LadybugDB C library and headers for CGo linking.
 CGO_TEST_SERVICES = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: test
-test: test-sdk test-sdk-ladybug test-sidecar test-flowctl $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
+test: test-sdk test-sidecar test-flowctl $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
 	CGO_ENABLED=1 go test -v ./sdk/go/...
-
-.PHONY: test-sdk-ladybug
-test-sdk-ladybug: ladybug-lib ## Run SDK unit tests with LadybugDB parser (validates R3 fallback).
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" CGO_ENABLED=1 go test -v -tags ladybug ./sdk/go/...
 
 .PHONY: test-sidecar
 test-sidecar: ## Run Sidecar unit tests.
@@ -172,12 +168,25 @@ proto: ## Regenerate Go code from proto definitions using buf.
 
 .PHONY: flowctl-manifests
 flowctl-manifests: ## Regenerate flowctl's embedded manifests from operator sources.
+	# The embedded directories are exact snapshots of their sources: drop any
+	# pre-existing copies first so a renamed or removed source file never
+	# lingers (e.g. the stale flow.gideas.io_* CRD names).
+	rm -f tools/flowctl/manifestfs/crd/*.yaml tools/flowctl/manifestfs/operator/*.yaml
 	cp platform/operator/config/crd/bases/*.yaml tools/flowctl/manifestfs/crd/
 	# manager.yaml is a multi-document stream (Namespace + Deployment); extract
 	# the single Deployment document (the doc after the first `---` separator)
 	# and rewrite its namespace from "system" to "foundry-system" so the
 	# embedded copy keeps the single-doc shape manifestfs parses at init.
 	sed '1,/^---$$/d; s/namespace: system/namespace: foundry-system/' platform/operator/config/manager/manager.yaml > tools/flowctl/manifestfs/operator/deployment.yaml
+	# namespace.yaml is the leading Namespace document of manager.yaml with its
+	# name rewritten from "system" to "foundry-system".
+	sed -n '1,/^---$$/{/^---$$/d;s/name: system/name: foundry-system/;p}' platform/operator/config/manager/manager.yaml > tools/flowctl/manifestfs/operator/namespace.yaml
+	# The ClusterRole is cluster-scoped, so a verbatim copy of config/rbac/role.yaml.
+	cp platform/operator/config/rbac/role.yaml tools/flowctl/manifestfs/operator/role.yaml
+	# The ClusterRoleBinding's subject and the ServiceAccount live in the
+	# foundry-system namespace, so their "system" reference is rewritten.
+	sed 's/namespace: system/namespace: foundry-system/' platform/operator/config/rbac/role_binding.yaml > tools/flowctl/manifestfs/operator/rolebinding.yaml
+	sed 's/namespace: system/namespace: foundry-system/' platform/operator/config/rbac/service_account.yaml > tools/flowctl/manifestfs/operator/serviceaccount.yaml
 
 # ---------------------------------------------------------------------------
 ##@ Housekeeping

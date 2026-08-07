@@ -116,34 +116,43 @@ func TestFetchAndMergeAuthConfigMissing(t *testing.T) {
 	}
 }
 
-// TestFetchAndMergeAuthResolutionFailure verifies that FetchAndMerge surfaces
-// ErrRemoteAuthResolutionFailed when the configured authFn returns a generic
-// (non-sentinel) error — the SPEC error-table row "Remote auth resolution
-// failed (PullFromRemote)". This is distinct from ErrAuthConfigMissing
-// (nil authFn) and ErrAuthFailed (typed transport sentinel from the server).
-func TestFetchAndMergeAuthResolutionFailure(t *testing.T) {
+// TestFetchAndMergeAuthFnFailureCollapsesToAuthConfigMissing verifies that
+// FetchAndMerge surfaces ErrAuthConfigMissing when the configured authFn
+// returns a generic (non-sentinel) error — the readSecretFn-failure (Secret
+// missing) and invalid-credential (unparseable ssh-privatekey PEM) sub-cases
+// of the SPEC error-table row "Remote auth config missing (PullFromRemote)",
+// which mandates FAILED_PRECONDITION for "Secret missing, invalid, or missing
+// expected key for the URL scheme". This is distinct from ErrAuthConfigMissing
+// (nil authFn), ErrAuthFailed (typed transport sentinel from the server), and
+// the missing-expected-key sub-case (pinned by
+// TestFetchAndMergeAuthConfigMissingFromFn).
+func TestFetchAndMergeAuthFnFailureCollapsesToAuthConfigMissing(t *testing.T) {
 	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		gs.remoteURL = testRemoteURL
+	for _, authErr := range []error{
+		fmt.Errorf("secrets: secret %q not found", "cartographer-remote-auth"),
+		fmt.Errorf("ssh: parse private key: asn1: structure error"),
+	} {
 		gs.authFn = func() (transport.AuthMethod, error) {
-			return nil, fmt.Errorf("vault: credential lookup failed")
+			return nil, authErr
 		}
-		_, err := gs.FetchAndMerge(ctx(), "origin", "main")
-		if !errors.Is(err, ErrRemoteAuthResolutionFailed) {
-			return fmt.Errorf("expected ErrRemoteAuthResolutionFailed, got %v", err)
+		err := gs.WithGitLock(func() error {
+			gs.remoteURL = testRemoteURL
+			_, err := gs.FetchAndMerge(ctx(), "origin", "main")
+			if !errors.Is(err, ErrAuthConfigMissing) {
+				return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("TestFetchAndMergeAuthFnFailureCollapsesToAuthConfigMissing: %v", err)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("TestFetchAndMergeAuthResolutionFailure: %v", err)
 	}
 }
 
 // TestFetchAndMergeAuthConfigMissingFromFn verifies that FetchAndMerge preserves
-// the ErrAuthConfigMissing sentinel returned by the authFn itself (resolveAuth
-// at remote.go:594) instead of collapsing it into ErrRemoteAuthResolutionFailed.
-// This is the SPEC error-table row "Remote auth config missing (PullFromRemote)"
-// on the authFn-returns-sentinel path.
+// the ErrAuthConfigMissing sentinel returned by the authFn itself (resolveAuth)
+// — the missing-expected-key sub-case of the SPEC error-table row "Remote auth
+// config missing (PullFromRemote)".
 func TestFetchAndMergeAuthConfigMissingFromFn(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -155,15 +164,75 @@ func TestFetchAndMergeAuthConfigMissingFromFn(t *testing.T) {
 		if !errors.Is(err, ErrAuthConfigMissing) {
 			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
 		}
-		if errors.Is(err, ErrRemoteAuthResolutionFailed) {
-			return fmt.Errorf("expected not ErrRemoteAuthResolutionFailed, got %v", err)
-		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("TestFetchAndMergeAuthConfigMissingFromFn: %v", err)
 	}
 }
+
+// TestResolveAuthBranches pins the full construction of resolveAuth's branches
+// (per the git-remote-auth resolver learning): every authFn failure — a
+// readSecretFn error (Secret missing), an invalid credential (unparseable
+// ssh-privatekey PEM), or the ErrAuthConfigMissing sentinel (missing expected
+// key) — collapses to ErrAuthConfigMissing so mapGitError returns
+// FAILED_PRECONDITION (SPEC error-table row "Remote auth config missing
+// (PullFromRemote)"). The success branches return the resolved auth unchanged,
+// and nil for an explicit anonymous public remote when allowed.
+func TestResolveAuthBranches(t *testing.T) {
+	gs := setupTestStore(t)
+
+	// Error branches: all authFn failures collapse to ErrAuthConfigMissing.
+	for _, authErr := range []error{
+		fmt.Errorf("secrets: secret not found"),
+		fmt.Errorf("ssh: parse private key: asn1: structure error"),
+		ErrAuthConfigMissing,
+	} {
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return nil, authErr
+		}
+		auth, err := gs.resolveAuth(true)
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			t.Fatalf("resolveAuth(authFn err %v) = %v, want ErrAuthConfigMissing", authErr, err)
+		}
+		if auth != nil {
+			t.Fatalf("resolveAuth(authFn err %v) returned auth %v, want nil", authErr, auth)
+		}
+	}
+
+	// Success branch: a valid auth is returned unchanged.
+	want := stubAuth{}
+	gs.authFn = func() (transport.AuthMethod, error) {
+		return want, nil
+	}
+	auth, err := gs.resolveAuth(true)
+	if err != nil {
+		t.Fatalf("resolveAuth(valid auth) error = %v, want nil", err)
+	}
+	if auth != want {
+		t.Fatalf("resolveAuth(valid auth) = %v, want %v", auth, want)
+	}
+
+	// Success branch: an explicit nil auth is anonymous access, permitted only
+	// with allowAnonymous=true.
+	gs.authFn = func() (transport.AuthMethod, error) {
+		return nil, nil
+	}
+	auth, err = gs.resolveAuth(true)
+	if err != nil || auth != nil {
+		t.Fatalf("resolveAuth(nil auth, allowAnonymous=true) = (%v, %v), want (nil, nil)", auth, err)
+	}
+	if _, err := gs.resolveAuth(false); !errors.Is(err, ErrAuthConfigMissing) {
+		t.Fatalf("resolveAuth(nil auth, allowAnonymous=false) = %v, want ErrAuthConfigMissing", err)
+	}
+}
+
+// stubAuth is a minimal transport.AuthMethod used to drive resolveAuth's
+// success branch.
+type stubAuth struct{}
+
+func (stubAuth) Name() string   { return "stub" }
+func (stubAuth) String() string { return "stub-auth" }
 
 // fakeNetTimeout implements net.Error with Timeout()==true to drive the
 // typed timeout branch of isRemoteUnreachable.

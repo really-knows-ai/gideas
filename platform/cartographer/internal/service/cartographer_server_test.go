@@ -152,6 +152,36 @@ func (w *wipeFailingStore) WipeSchema(ctx context.Context) error {
 	return fmt.Errorf("simulated WipeSchema failure")
 }
 
+// wipeFailingGitStore fails a configurable git operation to exercise the
+// git-side mid-wipe error paths of WipeGraph (git rm, wipe commit, clean).
+type wipeFailingGitStore struct {
+	gitstore.GitStore
+	failGitRm  bool
+	failCommit bool
+	failClean  bool
+}
+
+func (g *wipeFailingGitStore) GitRm(ctx context.Context, path string) error {
+	if g.failGitRm {
+		return fmt.Errorf("simulated GitRm failure")
+	}
+	return g.GitStore.GitRm(ctx, path)
+}
+
+func (g *wipeFailingGitStore) Commit(ctx context.Context, message string) error {
+	if g.failCommit {
+		return fmt.Errorf("simulated wipe commit failure")
+	}
+	return g.GitStore.Commit(ctx, message)
+}
+
+func (g *wipeFailingGitStore) CleanUntracked(ctx context.Context) error {
+	if g.failClean {
+		return fmt.Errorf("simulated clean untracked failure")
+	}
+	return g.GitStore.CleanUntracked(ctx)
+}
+
 // failOnCreateBranchDBStore fails on CreateBranchDB, used to test
 // RESOURCE_EXHAUSTED in BeginTransaction.
 type failOnCreateBranchDBStore struct {
@@ -1214,6 +1244,11 @@ func TestExecuteCypher_EmptyQuery(t *testing.T) {
 func TestExecuteCypher_ParamsNotAStruct(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
+	// Schema is applied so the statement parses server-side; the params
+	// validation then fires (the SPEC check order runs the parse before the
+	// capability/params gates, so an unparseable statement would otherwise
+	// surface its syntax error first).
+	applyTestSchema(ctx, t, srv.store)
 
 	// Wrap a list in Params: GetStructValue() is nil for a list, hitting the
 	// not-a-struct branch rather than an absent-Params fast path.
@@ -3290,10 +3325,15 @@ func TestRecoverOpenTransactionsPreservesDivergenceAndSchemaBaselines(t *testing
 		name          string
 		advanceMain   bool
 		advanceSchema bool
+		commitOK      bool
 		wantMessage   string
 	}{
 		{name: "main advanced", advanceMain: true, wantMessage: "main has advanced"},
-		{name: "schema advanced", advanceSchema: true, wantMessage: "schema changed"},
+		// A purely additive schema push (new types, new properties, rule
+		// additions — SPEC R2/R6 non-destructive) does not make the branch DB
+		// incompatible with the current schema, so the transaction commits
+		// normally instead of being wedged in FAILED_PRECONDITION.
+		{name: "schema advanced", advanceSchema: true, commitOK: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := testCtx()
@@ -3317,10 +3357,11 @@ func TestRecoverOpenTransactionsPreservesDivergenceAndSchemaBaselines(t *testing
 			if err != nil {
 				t.Fatalf("BeginTransaction: %v", err)
 			}
-			if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+			created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 				EntityType: "Component", Properties: map[string]string{"name": "pending"},
 				TransactionId: begin.TransactionId,
-			}); err != nil {
+			})
+			if err != nil {
 				t.Fatalf("CreateEntity: %v", err)
 			}
 			original, err := srv.txManager.Lookup(begin.TransactionId)
@@ -3382,6 +3423,20 @@ func TestRecoverOpenTransactionsPreservesDivergenceAndSchemaBaselines(t *testing
 			if recovered.MainHeadAtLastSync != originalHead || recovered.SchemaHash != originalSchema {
 				t.Fatalf("baselines changed: got head=%q schema=%q want head=%q schema=%q",
 					recovered.MainHeadAtLastSync, recovered.SchemaHash, originalHead, originalSchema)
+			}
+			if tc.commitOK {
+				// The additive schema push is compatible with the branch DB
+				// (SPEC R2/R6 non-destructive): the recovered transaction
+				// commits normally and its data lands on main.
+				if _, err = restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+					TransactionId: begin.TransactionId,
+				}); err != nil {
+					t.Fatalf("CommitTransaction after additive schema push: %v", err)
+				}
+				if _, err := reopened.GetEntity(ctx, created.EntityId, "main"); err != nil {
+					t.Fatalf("committed entity missing from main after additive schema push: %v", err)
+				}
+				return
 			}
 			if _, err = restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 				TransactionId: begin.TransactionId,
@@ -4566,7 +4621,13 @@ func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
 	}
 }
 
-func TestRecoverOpenTransactionsRestoresSchemaBaseline(t *testing.T) {
+// TestRecoverOpenTransactionsSchemaPushDoesNotBlockCommit pins recovery's
+// restoration of the schema baseline together with the SPEC R9 commit flow
+// step 1 semantics: a schema push after recovery that is additive (a property
+// flag change, a new type) does not make the branch DB incompatible with the
+// current schema, so the recovered transaction commits normally instead of
+// being wedged in FAILED_PRECONDITION.
+func TestRecoverOpenTransactionsSchemaPushDoesNotBlockCommit(t *testing.T) {
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -4587,10 +4648,11 @@ func TestRecoverOpenTransactionsRestoresSchemaBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin transaction: %v", err)
 	}
-	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType: "Component", Properties: map[string]string{"name": "persisted"},
 		TransactionId: begin.TransactionId,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create transaction entity: %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -4617,6 +4679,9 @@ func TestRecoverOpenTransactionsRestoresSchemaBaseline(t *testing.T) {
 	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
 		t.Fatalf("recover transactions: %v", err)
 	}
+	// Additive push after recovery: an existing property's required flag and a
+	// new entity type. Non-destructive per SPEC R2/R6 (the store's diff ignores
+	// the Required flag and new types are additive), so the commit must proceed.
 	if err := reopened.ApplySchema(ctx, &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
 			{Name: "Component", Properties: []*flowv1.Property{
@@ -4627,6 +4692,7 @@ func TestRecoverOpenTransactionsRestoresSchemaBaseline(t *testing.T) {
 				Name: "Service", Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}},
 				Rules: []*flowv1.ConnectionRule{{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}}},
 			},
+			{Name: "Added", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
 		},
 		EdgeTypes: []*flowv1.EdgeType{{
 			Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}},
@@ -4636,8 +4702,11 @@ func TestRecoverOpenTransactionsRestoresSchemaBaseline(t *testing.T) {
 	}
 	if _, err := restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 		TransactionId: begin.TransactionId,
-	}); status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "schema changed") {
-		t.Fatalf("commit with changed schema should fail: %v", err)
+	}); err != nil {
+		t.Fatalf("commit after additive schema push should succeed: %v", err)
+	}
+	if _, err := reopened.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("committed entity missing from main after additive schema push: %v", err)
 	}
 }
 
@@ -5253,8 +5322,16 @@ func TestCommitTransaction_Divergence(t *testing.T) {
 	}
 }
 
-func TestCommitTransaction_SchemaIncompatible(t *testing.T) {
-	srv, _ := newTestServer(t)
+// TestCommitTransaction_AdditiveSchemaPushDoesNotBlockCommit pins the SPEC R9
+// commit flow step 1 semantics: a schema push that is additive (new types, new
+// properties, rule modifications — SPEC R2/R6 non-destructive) does not make the
+// branch DB state incompatible with the current schema, so an in-flight
+// transaction commits normally. The previous full-schema-hash equality check
+// rejected any schema change — and, because RefreshTransaction never refreshed
+// the begin-time hash, permanently wedged the transaction in
+// FAILED_PRECONDITION, forcing a rollback.
+func TestCommitTransaction_AdditiveSchemaPushDoesNotBlockCommit(t *testing.T) {
+	srv, st := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
@@ -5267,7 +5344,7 @@ func TestCommitTransaction_SchemaIncompatible(t *testing.T) {
 	txID := beginResp.TransactionId
 
 	// Add a change so we're not zero-mutation.
-	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType:    "Component",
 		Properties:    map[string]string{"name": "test"},
 		TransactionId: txID,
@@ -5276,8 +5353,8 @@ func TestCommitTransaction_SchemaIncompatible(t *testing.T) {
 		t.Fatalf("CreateEntity failed: %v", err)
 	}
 
-	// Change schema between begin and commit by adding a new entity type.
-	// This changes the schema hash (computed from type names, not properties).
+	// Push an additive schema between begin and commit: a new property on an
+	// existing type, a new entity type, and rule/edge declarations.
 	alteredSchema := &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
 			{
@@ -5306,12 +5383,56 @@ func TestCommitTransaction_SchemaIncompatible(t *testing.T) {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
 
-	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: txID})
-	if err == nil {
-		t.Fatal("expected error for schema changed incompatibly, got nil")
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: txID}); err != nil {
+		t.Fatalf("commit after additive schema push should succeed: %v", err)
 	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
+	if _, err := st.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("committed entity missing from main after additive schema push: %v", err)
+	}
+}
+
+// incompatibleBranchSchemaStore simulates a branch whose schema is incompatible
+// with the current (main) schema. The store's own ApplySchema rejects
+// destructive changes (ErrDestructiveSchemaChange), so this state cannot arise
+// through public APIs; the wrapper pins the commit-time mapping of the store's
+// detection to the SPEC error-table row "Schema changed incompatibly during tx"
+// (FAILED_PRECONDITION).
+type incompatibleBranchSchemaStore struct {
+	store.Store
+}
+
+func (s *incompatibleBranchSchemaStore) CheckBranchSchemaCompatibility(context.Context, string) error {
+	return fmt.Errorf("%w: simulated incompatible schema", store.ErrDestructiveSchemaChange)
+}
+
+func TestCommitTransaction_IncompatibleSchemaBlocksCommit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+
+	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+	txID := beginResp.TransactionId
+
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "test"},
+		TransactionId: txID,
+	}); err != nil {
+		t.Fatalf("CreateEntity failed: %v", err)
+	}
+
+	// From here on the store reports an incompatible branch schema, exercising
+	// the service's mapping of ErrDestructiveSchemaChange to the SPEC
+	// FAILED_PRECONDITION row.
+	srv.store = &incompatibleBranchSchemaStore{Store: srv.store}
+
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: txID})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "schema changed incompatibly") {
+		t.Fatalf("expected FailedPrecondition schema-incompatible error, got %v", err)
 	}
 }
 
@@ -6628,6 +6749,43 @@ func TestWipeGraph_MidWipeFailure(t *testing.T) {
 	}
 }
 
+// TestWipeGraph_GitSideMidWipeFailure pins SPEC error-table row 940 ("WipeGraph
+// mid-wipe failure → INTERNAL") for the git-side wipe steps: git rm entities,
+// the "wipe" commit, and clean untracked. These failures were previously
+// returned as raw plain errors, which grpc-go converted to codes.Unknown; only
+// the store-side failure produced INTERNAL.
+func TestWipeGraph_GitSideMidWipeFailure(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, _ := generateTestKey()
+	for _, tc := range []struct {
+		name      string
+		configure func(*wipeFailingGitStore)
+	}{
+		{"git rm entities", func(g *wipeFailingGitStore) { g.failGitRm = true }},
+		{"wipe commit", func(g *wipeFailingGitStore) { g.failCommit = true }},
+		{"clean untracked", func(g *wipeFailingGitStore) { g.failClean = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, _ := ladybug.OpenInMemory()
+			t.Cleanup(func() { _ = st.Close() })
+			gs, _ := gitstore.New(t.TempDir())
+			failingGit := &wipeFailingGitStore{GitStore: gs}
+			tc.configure(failingGit)
+			srv := NewCartographerServer(st, failingGit, opPub, scPub, nil, "",
+				30*time.Second, "test-ns", 30*time.Minute, 100000)
+			srv.MarkDBReady()
+
+			_, err := srv.WipeGraph(context.Background(), &flowv1.WipeGraphRequest{})
+			if err == nil {
+				t.Fatal("expected error for git-side mid-wipe failure, got nil")
+			}
+			if status.Code(err) != codes.Internal {
+				t.Fatalf("expected Internal, got %v", status.Code(err))
+			}
+		})
+	}
+}
+
 // =========================================================================
 // 24. ApplySchema error-path tests
 // =========================================================================
@@ -6930,6 +7088,11 @@ func TestExecuteCypher_MissingReadCapability(t *testing.T) {
 
 	// Only WRITE capabilities, no READ.
 	ctx := capabilityContext("WRITE:graph/entity/*,WRITE:graph/tx", scPriv, "sidecar")
+
+	// Schema is applied so the unlabelled query parses server-side; the
+	// no-labels statement then falls back to the READ:graph/entity/* check,
+	// which a write-only caller lacks (SPEC R3 server-authoritative path).
+	applyTestSchema(ctx, t, srv.store)
 
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (n) RETURN n"})
 	if err == nil {
@@ -7994,12 +8157,15 @@ func TestCapability_MalformedSignedAt(t *testing.T) {
 // 35. ExecuteCypher read-only caller without entity-types metadata
 // =========================================================================
 
-func TestExecuteCypher_NoEntityTypesMetadataReadOnlyDenied(t *testing.T) {
+// TestExecuteCypher_NoLabelsFallsBackToWildcard asserts the SPEC R3 wildcard
+// fallback on the server-authoritative path: a statement that parses as a
+// read-only cross-type read but yields no labels (an unlabelled MATCH) is
+// checked against READ:graph/entity/* — which a write-only caller lacks.
+func TestExecuteCypher_NoLabelsFallsBackToWildcard(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := noReadCtx() // WRITE-only capabilities, no READ.
+	applyTestSchema(ctx, t, srv.store)
 
-	// No entity_types metadata: ExecuteCypher falls back to the wildcard
-	// READ capability check, which a write-only caller lacks.
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (n) RETURN n"})
 	if err == nil {
 		t.Fatal("expected PermissionDenied for write-only caller, got nil")
@@ -8009,41 +8175,16 @@ func TestExecuteCypher_NoEntityTypesMetadataReadOnlyDenied(t *testing.T) {
 	}
 }
 
-// entityTypesCtx returns a context with the given capabilities verified and
-// stored (interceptor-style) plus SPEC R3 `entity_types` gRPC metadata values
-// injected, simulating the SDK's Cypher MATCH label-set annotation. Each label
-// is carried as its own metadata value so md.Get(MetadataKeyEntityTypes)
-// returns the full set in order.
-func entityTypesCtx(capsStr string, caps []string, entityTypes ...string) context.Context {
-	initTestKey()
-	sig, signedAt := signCapabilities(capsStr, testSidecarPriv)
-	pairs := make([]string, 0, 8+2*len(entityTypes))
-	pairs = append(pairs,
-		MetadataKeyCapabilities, capsStr,
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
-	)
-	for _, et := range entityTypes {
-		pairs = append(pairs, MetadataKeyEntityTypes, et)
-	}
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(pairs...))
-	return StoreCapabilitiesInContext(ctx, &Capabilities{Caps: caps, SignedBy: "sidecar"})
-}
-
-// TestExecuteCypher_EntityTypesMetadataSubsetRejected asserts SPEC R3 (SPEC:245):
-// when the SDK annotates entity_types metadata with the full label set of a
-// multi-type Cypher query, the Cartographer's authoritative re-check validates
-// the caller against EVERY referenced type. A caller holding read capability
+// TestExecuteCypher_MultiTypeSubsetRejected asserts SPEC R3 (SPEC:249): the
+// Cartographer derives the referenced entity-type labels from its own
+// server-side parse of the statement, and a caller holding read capability
 // for only a subset of the referenced types is rejected with PERMISSION_DENIED
 // — the specific-type check must not fall back to the wildcard.
-func TestExecuteCypher_EntityTypesMetadataSubsetRejected(t *testing.T) {
+func TestExecuteCypher_MultiTypeSubsetRejected(t *testing.T) {
 	srv, _ := newTestServer(t)
-	ctx := entityTypesCtx(
-		"READ:graph/entity/Component,READ:graph/tx",
-		[]string{"READ:graph/entity/Component", "READ:graph/tx"},
-		"Component", "Service",
-	)
+	ctx := narrowCtx("READ:graph/entity/Component", "READ:graph/tx")
+	applyTestSchema(ctx, t, srv.store)
+
 	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
 		Cypher: "MATCH (a:Component)-[:DEPENDS_ON]->(b:Service) RETURN b",
 	})
@@ -8055,20 +8196,16 @@ func TestExecuteCypher_EntityTypesMetadataSubsetRejected(t *testing.T) {
 	}
 }
 
-// TestExecuteCypher_EntityTypesMetadataSpecificTypePasses asserts SPEC R3: a
-// caller holding READ:graph/entity/Component passes the per-type re-check when
-// entity_types metadata lists exactly Component, and the query executes
-// successfully (the metadata branch is not a blanket rejection).
-func TestExecuteCypher_EntityTypesMetadataSpecificTypePasses(t *testing.T) {
+// TestExecuteCypher_SingleTypeSpecificCapabilityPasses asserts SPEC R3: a
+// caller holding READ:graph/entity/Component passes the server-side per-type
+// check for a single-type query referencing exactly Component, and the query
+// executes successfully (the per-type branch is not a blanket rejection).
+func TestExecuteCypher_SingleTypeSpecificCapabilityPasses(t *testing.T) {
 	srv, _ := newTestServer(t)
-	applyTestSchema(testCtx(), t, srv.store)
+	ctx := narrowCtx("READ:graph/entity/Component", "READ:graph/tx")
+	applyTestSchema(ctx, t, srv.store)
 	_, _ = srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "x"}, nil, "")
 
-	ctx := entityTypesCtx(
-		"READ:graph/entity/Component",
-		[]string{"READ:graph/entity/Component"},
-		"Component",
-	)
 	resp, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
 		Cypher: "MATCH (n:Component) RETURN n",
 	})
@@ -8080,22 +8217,19 @@ func TestExecuteCypher_EntityTypesMetadataSpecificTypePasses(t *testing.T) {
 	}
 }
 
-// TestExecuteCypher_EntityTypesMetadataWildcardPasses asserts SPEC R3: a caller
-// holding READ:graph/entity/* passes the per-type re-check regardless of the
-// label set in entity_types metadata (consistent with the parser-failure
-// fallback), and the query executes successfully.
-func TestExecuteCypher_EntityTypesMetadataWildcardPasses(t *testing.T) {
+// TestExecuteCypher_WildcardHolderPassesMultiType asserts SPEC R3 (SPEC:249):
+// a caller holding READ:graph/entity/* passes regardless of the label set the
+// server extracts from its own parse, and the query executes successfully.
+func TestExecuteCypher_WildcardHolderPassesMultiType(t *testing.T) {
 	srv, _ := newTestServer(t)
-	applyTestSchema(testCtx(), t, srv.store)
-	_, _ = srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "x"}, nil, "")
+	ctx := narrowCtx("READ:graph/entity/*", "READ:graph/tx")
+	applyTestSchema(ctx, t, srv.store)
+	comp, _ := srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "x"}, nil, "")
+	svc, _ := srv.store.CreateEntity(testCtx(), "Service", "", map[string]string{"name": "s"}, nil, "")
+	_, _ = srv.store.CreateEdge(testCtx(), "DEPENDS_ON", svc.Id, comp.Id, nil, "")
 
-	ctx := entityTypesCtx(
-		"READ:graph/entity/*,READ:graph/tx",
-		[]string{"READ:graph/entity/*", "READ:graph/tx"},
-		"Component", "Service",
-	)
 	resp, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
-		Cypher: "MATCH (n:Component) RETURN n",
+		Cypher: "MATCH (a:Service)-[:DEPENDS_ON]->(b:Component) RETURN b",
 	})
 	if err != nil {
 		t.Fatalf("ExecuteCypher failed: %v", err)

@@ -25,7 +25,6 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -809,32 +808,33 @@ func (s *CartographerServer) checkWildcardEntityCap(ctx context.Context, prefix 
 	return nil
 }
 
-// extractEntityTypesFromMetadata reads entity type annotations from gRPC
-// metadata (set by the SDK from Cypher MATCH patterns) and returns them as
-// a string slice. When no entity type metadata is present (system-to-system
-// calls, or the SDK could not parse the Cypher), an empty slice is returned.
-func extractEntityTypesFromMetadata(ctx context.Context) []string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil
-	}
-	return md.Get(MetadataKeyEntityTypes)
-}
-
 // =========================================================================
 // Read Path
 // =========================================================================
 
+// ExecuteCypher implements the SPEC RPC check order for ExecuteCypher
+// (SPEC:958): empty query → Cypher syntax → read-only enforcement →
+// capability. The Cartographer is the sole authority for per-type capability
+// validation (SPEC R3): the store parses the statement (the same Prepare path
+// ExecuteCypher uses) and derives the referenced entity-type labels
+// server-side; the caller's capabilities are then checked against each
+// distinct label, falling back to READ:graph/entity/* when the statement
+// yields no labels. The SDK attaches no entity-type metadata and cannot
+// influence the authorization decision.
 func (s *CartographerServer) ExecuteCypher(
 	ctx context.Context,
 	req *flowv1.ExecuteCypherRequest,
 ) (*flowv1.ExecuteCypherResponse, error) {
-	// Authoritative type-specific capability checking per SPEC R2/R3.
-	// When the SDK parses the Cypher query, it annotates gRPC metadata with
-	// entity type labels via "entity_types". Check each extracted
-	// type individually; fall back to the wildcard when metadata is absent
-	// (e.g. system-to-system calls or pre-SDK clients).
-	entityTypes := extractEntityTypesFromMetadata(ctx)
+	if req.Cypher == "" {
+		return nil, errEmptyExecuteCypherQuery()
+	}
+	// Syntax and read-only enforcement surface before the capability check:
+	// ErrMutationCypher maps to PERMISSION_DENIED, ErrInvalidCypher to
+	// INVALID_ARGUMENT (mapStoreError), matching the SPEC error table.
+	entityTypes, err := s.store.ExtractEntityTypes(ctx, req.Cypher)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
 	if len(entityTypes) > 0 {
 		for _, et := range entityTypes {
 			if err := s.checkEntityCap(ctx, "READ", et); err != nil {
@@ -842,12 +842,12 @@ func (s *CartographerServer) ExecuteCypher(
 			}
 		}
 	} else {
+		// No labels extracted — the statement is a cross-type read (e.g. an
+		// unlabelled MATCH) or a pattern the analyzer cannot classify: fall
+		// back to the READ:graph/entity/* wildcard check.
 		if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
 			return nil, err
 		}
-	}
-	if req.Cypher == "" {
-		return nil, errEmptyExecuteCypherQuery()
 	}
 	unlockTx, err := s.lockTransaction(req.TransactionId)
 	if err != nil {
@@ -1531,10 +1531,20 @@ func (s *CartographerServer) CommitTransaction(
 		return &flowv1.CommitTransactionResponse{}, nil
 	}
 
-	// Schema compatibility check.
-	currentHash := computeSchemaHash(s.store)
-	if state.SchemaHash != "" && state.SchemaHash != currentHash {
-		return nil, errSchemaChangedIncompatibly("schema changed since tx began")
+	// Schema compatibility check (SPEC R9 commit flow step 1): the branch
+	// LadybugDB's schema is validated against the current schema. Only a change
+	// that makes the branch's data incompatible with the current schema — a type
+	// or property the transaction's data lives under removed or changed, or a
+	// vector index disabled — fails the commit (FAILED_PRECONDITION, error-table
+	// row "Schema changed incompatibly during tx"). Additive changes (new types,
+	// new properties) and rule modifications are non-destructive (SPEC R2/R6) and
+	// do not block commit; RefreshTransaction re-hydrates the branch from latest
+	// main, re-baselining it on the current schema.
+	if err := s.store.CheckBranchSchemaCompatibility(ctx, req.TransactionId); err != nil {
+		if errors.Is(err, store.ErrDestructiveSchemaChange) {
+			return nil, errSchemaChangedIncompatibly(err.Error())
+		}
+		return nil, mapStoreError(err)
 	}
 
 	var commitErr error
@@ -2047,9 +2057,18 @@ func (s *CartographerServer) RefreshTransaction(
 			return err
 		}
 		oldMainHead := state.MainHeadAtLastSync
+		oldSchemaHash := state.SchemaHash
 		state.MainHeadAtLastSync = mainHash
+		// The branch DB has been reset and re-hydrated from latest main, so the
+		// schema baseline is refreshed to the current schema: a refreshed
+		// transaction is re-based on main's schema and can commit even after a
+		// schema push (SPEC R2/R6 non-destructive changes no longer block the
+		// commit-time compatibility check, and a destructive change would be
+		// re-detected against the refreshed baseline).
+		state.SchemaHash = computeSchemaHash(s.store)
 		if err := s.persistTransactionState(ctx, state); err != nil {
 			state.MainHeadAtLastSync = oldMainHead
+			state.SchemaHash = oldSchemaHash
 			return fmt.Errorf("persist refreshed transaction: %w", err)
 		}
 		return nil
@@ -2188,7 +2207,15 @@ func (s *CartographerServer) WipeGraph(
 		return nil
 	})
 	if wipeErr != nil {
-		return nil, wipeErr
+		// The open-transactions guard is its own SPEC error (FAILED_PRECONDITION,
+		// error-table row 918). Every other git-side failure (git rm entities/edges,
+		// wipe commit, clean untracked) is a mid-wipe failure — the graph may be
+		// partially cleaned — and maps to INTERNAL per error-table row 940,
+		// mirroring the store-side mid-wipe path below (errWipeGraphMidWipe).
+		if status.Code(wipeErr) == codes.FailedPrecondition {
+			return nil, wipeErr
+		}
+		return nil, errWipeGraphMidWipe(wipeErr.Error())
 	}
 	if lockErr != nil {
 		return nil, mapGitError(lockErr)
