@@ -193,7 +193,8 @@ func isSchemaError(err error) bool {
 		errors.Is(err, schemaerrors.ErrImplicitColumnCollision) ||
 		errors.Is(err, schemaerrors.ErrInvalidPropertyType) ||
 		errors.Is(err, schemaerrors.ErrEmptyRuleList) ||
-		errors.Is(err, schemaerrors.ErrUndeclaredTypeRef)
+		errors.Is(err, schemaerrors.ErrUndeclaredTypeRef) ||
+		errors.Is(err, schemaerrors.ErrNilElement)
 }
 
 // Convenience constructors matching the SPEC error table.

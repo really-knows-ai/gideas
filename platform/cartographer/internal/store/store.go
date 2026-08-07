@@ -9,13 +9,19 @@
 // log; implementers adding transaction-scoped features must use
 // TransactionManager.AddChangeEntry and gitstore.ChangeLog directly.
 //
-// SPEC divergence note (~839): SPEC.md describes the 100K change-log cap
+// ponytail: SPEC divergence (~839). SPEC.md describes the 100K change-log cap
 // (ErrChangeLogFull → RESOURCE_EXHAUSTED) as "a hard-coded constant in the
-// Cartographer store layer." In the implementation the constant, sentinel, and
-// enforcement live in the gitstore package (gitstore/changelog.go) and the
-// service-layer TransactionManager (cartographer_server.go), not in this Store
-// layer. The Store has no awareness of the change log — this is the intended
-// design boundary, not a defect.
+// Cartographer store layer." In the implementation the constant
+// (gitstore.DefaultChangeLogCap, gitstore/changelog.go) and the sentinel
+// (gitstore.ErrChangeLogFull) live in the gitstore package; the cap is enforced
+// by ChangeLog.Add/CheckCapacity plus the service-layer TransactionManager
+// (transaction_manager.go), which routes entries and surfaces overflow as
+// RESOURCE_EXHAUSTED with a full transaction rollback (rejectFullChangeLog in
+// cartographer_server.go). The Store layer has no awareness of the change log —
+// this is the intended design boundary, not a defect. The trade-off: the
+// constant is owned by gitstore, so the store layer cannot tune it. Upgrade
+// path: if SPEC:842's placement is ever enforced, centralize the constant in
+// this store layer and have gitstore import it.
 package store
 
 import (

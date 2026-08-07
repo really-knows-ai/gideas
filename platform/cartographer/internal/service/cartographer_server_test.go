@@ -3558,7 +3558,22 @@ func TestReadMethods_BeforeFirstApplySchema(t *testing.T) {
 }
 
 func TestRefreshTransaction_NoConflicts(t *testing.T) {
-	srv, _ := newTestServer(t)
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
 	ctx := testCtx()
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -3571,6 +3586,74 @@ func TestRefreshTransaction_NoConflicts(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("RefreshTransaction failed: %v", err)
+	}
+}
+
+// TestRefreshTransaction_EmptyRefreshThenMutateAndCommit pins the SPEC R9
+// refresh flow for a zero-mutation refresh: the branch must be reset and
+// re-hydrated from latest main even when the change log is empty, so a
+// subsequent mutate+commit produces the clean refresh-then-commit outcome. The
+// previous empty-refresh short-circuit only advanced MainHeadAtLastSync: the
+// branch DB stayed on its stale begin-time snapshot, so a mutate after the
+// refresh committed against the stale branch, re-hydrated main from files
+// missing the interim entity, and the fast-forward merge failed with INTERNAL,
+// leaving main LadybugDB and git main divergent.
+func TestRefreshTransaction_EmptyRefreshThenMutateAndCommit(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+
+	// Main advances while the (empty) transaction is open.
+	mainEntityID := testMutationEntityID
+	commitGitEntity(ctx, t, gs, mainEntityID, "main")
+
+	// Empty refresh: must reset-and-re-hydrate the branch from the new main.
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction (empty): %v", err)
+	}
+
+	// Mutate after the empty refresh, then commit.
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity after empty refresh: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CommitTransaction after empty refresh: %v", err)
+	}
+
+	// Both the interim main entity and the transaction's own entity must be
+	// present on main, with the git fast-forward merge having succeeded.
+	if _, err := base.GetEntity(ctx, mainEntityID, "main"); err != nil {
+		t.Fatalf("interim main entity missing after refresh-then-commit: %v", err)
+	}
+	if _, err := base.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("transaction entity missing from main after commit: %v", err)
 	}
 }
 
@@ -5112,6 +5195,67 @@ func TestExtendTimeout_AcceptedAt7DayBoundary(t *testing.T) {
 	}
 }
 
+// TestExtendTimeout_PersistFailureRevertsInMemoryState pins the
+// revert-on-persist-failure contract for ExtendTimeout: when the durable branch
+// state write fails, the RPC reports the failure and the in-memory
+// ExpiresAt/AppliedTimeout mutations are reverted, so no silent
+// in-memory/durable divergence exists (recovery on restart restores the
+// persisted, un-extended timeout — the in-memory state must match it).
+func TestExtendTimeout_PersistFailureRevertsInMemoryState(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingStore := &transactionStateFailingStore{
+		Store: base,
+		// Fail only the ExtendTimeout persist (the state carrying the extended
+		// 10m AppliedTimeout), not BeginTransaction's own initial persist.
+		fail: func(state store.BranchTransactionState) bool {
+			return state.AppliedTimeout == 10*time.Minute
+		},
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(failingStore, gs, opPub, initTestKey(), nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+	ctx := testCtx()
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+		Timeout: durationpb.New(5 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	txID := begin.TransactionId
+	state, err := srv.txManager.Lookup(txID)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	oldExpiresAt := state.ExpiresAt
+	oldAppliedTimeout := state.AppliedTimeout
+
+	_, err = srv.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
+		TransactionId: txID,
+		Duration:      durationpb.New(10 * time.Minute),
+	})
+	if err == nil {
+		t.Fatal("expected persist failure to be reported, got nil")
+	}
+	if state.ExpiresAt != oldExpiresAt || state.AppliedTimeout != oldAppliedTimeout {
+		t.Fatalf("in-memory expiry mutated despite persist failure: expiresAt=%v (want %v) applied=%v (want %v)",
+			state.ExpiresAt, oldExpiresAt, state.AppliedTimeout, oldAppliedTimeout)
+	}
+	// The transaction must still be usable with its original expiry.
+	if err := srv.txManager.ValidateActive(txID); err != nil {
+		t.Fatalf("transaction unusable after reverted extend failure: %v", err)
+	}
+}
+
 // =========================================================================
 // 14. RollbackTransaction NOT_FOUND test
 // =========================================================================
@@ -5530,6 +5674,55 @@ func TestSearchNeighbors_InvalidTopK(t *testing.T) {
 	}
 }
 
+// TestSearchNeighbors_TopKZeroDefaultsTo10 pins the SPEC error-table boundary
+// "topK is negative (zero is treated as omitted and defaults to 10)" (row
+// "Invalid topK in SearchNeighbors"): a zero topK is accepted and behaves like
+// the default of 10, not an error. Verified against a graph with more indexed
+// entities than the default: all 10 nearest neighbors are returned and no
+// more.
+func TestSearchNeighbors_TopKZeroDefaultsTo10(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	// 12 indexed entities so the result set exceeds the default topK of 10.
+	// Each embedding is distinct; the query embedding matches the first, whose
+	// distance 0 is the nearest.
+	for i := range 12 {
+		vec := make([]float32, 12)
+		vec[i] = 1.0
+		if _, err := srv.store.CreateEntity(ctx, "VectorType", "",
+			map[string]string{"name": fmt.Sprintf("entity-%d", i)}, vec, ""); err != nil {
+			t.Fatalf("CreateEntity %d: %v", i, err)
+		}
+	}
+	query := make([]float32, 12)
+	query[0] = 1.0
+
+	resp, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  query,
+		EntityType: "VectorType",
+		TopK:       0,
+	})
+	if err != nil {
+		t.Fatalf("SearchNeighbors with zero topK failed: %v", err)
+	}
+	if len(resp.Results) != 10 {
+		t.Fatalf("expected 10 results with zero topK (default), got %d", len(resp.Results))
+	}
+}
+
 func TestSearchNeighbors_NaNEmbedding(t *testing.T) {
 	srv, st := newTestServer(t)
 	ctx := testCtx()
@@ -5648,6 +5841,37 @@ func TestListEntities_InvalidPageSize(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
+// TestListEntities_PageSizeZeroDefaultsTo1000 pins the SPEC error-table
+// boundary "pageSize of 0 is treated as omitted and defaults to 1000" (row
+// "Invalid pageSize in ListEntities"): a zero pageSize is accepted and behaves
+// like the default, not an error. Verified by listing a graph larger than the
+// default page size and asserting every entity is returned.
+func TestListEntities_PageSizeZeroDefaultsTo1000(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	// 1005 entities exceeds the 1000 default page size.
+	for i := range 1005 {
+		_, err := srv.store.CreateEntity(ctx, "Component", "",
+			map[string]string{"name": fmt.Sprintf("entity-%d", i)}, nil, "")
+		if err != nil {
+			t.Fatalf("CreateEntity %d: %v", i, err)
+		}
+	}
+
+	resp, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: "Component"})
+	if err != nil {
+		t.Fatalf("ListEntities with zero pageSize failed: %v", err)
+	}
+	if len(resp.Entities) != 1000 {
+		t.Fatalf("expected 1000 entities with zero pageSize (default), got %d", len(resp.Entities))
+	}
+	if resp.NextPageToken == "" {
+		t.Fatal("expected a next-page token when the graph exceeds the default page size")
 	}
 }
 
@@ -6891,6 +7115,38 @@ func TestCreateEdge_SourceNotFound_CapCheckOrder(t *testing.T) {
 	}
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound, got %v", status.Code(err))
+	}
+}
+
+// TestCreateEdge_TargetNotFound_CapCheckOrder verifies the SPEC RPC check-order
+// (CreateEdge: structural → entity existence → type-specific capability →
+// edge-rule auth) and error-table row "Source or target entity not found on
+// CreateEdge → NOT_FOUND" for the TARGET endpoint: a request with a missing
+// target from a caller lacking WRITE:graph/entity/<source-type> must return
+// NOT_FOUND, not PERMISSION_DENIED. The target's existence is verified before
+// the capability gate so the SPEC error code wins regardless of the caller's
+// capability.
+func TestCreateEdge_TargetNotFound_CapCheckOrder(t *testing.T) {
+	srv, _ := newTestServer(t)
+	// Caller holds write capability for neither Service nor Component — only
+	// the (irrelevant) tx capability, so any capability-absence rejection would
+	// surface as PERMISSION_DENIED.
+	ctx := narrowCtx("WRITE:graph/tx")
+
+	applyTestSchema(ctx, t, srv.store)
+	// Only the source exists; the target ID is a valid UUID referencing nothing.
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
+
+	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:     "DEPENDS_ON",
+		FromEntityId: svc.Id,
+		ToEntityId:   "22222222-2222-4222-8222-222222222222",
+	})
+	if err == nil {
+		t.Fatal("expected error for not-found target, got nil")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for missing target despite missing capability, got %v", status.Code(err))
 	}
 }
 

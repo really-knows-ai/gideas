@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const metadataEntityTypeKey = "entity_type"
@@ -340,6 +341,61 @@ func TestExecuteCypher_FallsBackToWildcard(t *testing.T) {
 	_, err := g.ExecuteCypher("RETURN 1", nil)
 	if err != nil {
 		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+}
+
+// TestExecuteCypher_ParamsConvertedToStructpb pins SPEC R2's optional params
+// parameter (ExecuteCypher(cypher, params?)) on the Graph layer: when params
+// are present, the SDK converts them to a structpb.Value and the request
+// carries them on the wire.
+//
+//nolint:dupl // Graph and Transaction params-conversion tests share structure.
+func TestExecuteCypher_ParamsConvertedToStructpb(t *testing.T) {
+	var capturedParams *structpb.Value
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			capturedParams = req.GetParams()
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", map[string]any{"limit": int64(5), "name": "x"})
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+	if capturedParams == nil {
+		t.Fatal("expected params to be set on request")
+	}
+	s := capturedParams.GetStructValue()
+	if s == nil {
+		t.Fatalf("expected struct params, got %v", capturedParams)
+	}
+	if s.Fields["limit"].GetNumberValue() != 5 {
+		t.Errorf("expected limit=5 in params, got %v", s.Fields["limit"])
+	}
+	if s.Fields["name"].GetStringValue() != "x" {
+		t.Errorf("expected name=x in params, got %v", s.Fields["name"])
+	}
+}
+
+// TestExecuteCypher_InvalidParams pins the SDK's "invalid params" error
+// branch (graph.go): a params value that cannot be converted to structpb
+// must surface an error instead of reaching the wire.
+func TestExecuteCypher_InvalidParams(t *testing.T) {
+	called := false
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			called = true
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", map[string]any{"bad": make(chan int)})
+	if err == nil {
+		t.Fatal("expected error for params that cannot convert to structpb")
+	}
+	if called {
+		t.Error("expected ExecuteCypher RPC not to be called for invalid params")
 	}
 }
 
@@ -862,6 +918,69 @@ func TestListEntities_LosslessIdentityLikeProperties(t *testing.T) {
 	}
 }
 
+// TestFullTextSearch_ReturnsEmbedding pins the read-search conversion
+// surfacing the proto Entity message's embedding field (SPEC R2 Entity
+// message; proto/flow/v1/cartographer.proto Entity.embedding), matching the
+// write-path conversions (CreateEntity/UpdateEntity/DeleteEntity) so the
+// read-search paths do not silently drop data the server sent.
+func TestFullTextSearch_ReturnsEmbedding(t *testing.T) {
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			return &flowv1.FullTextSearchResponse{
+				Results: []*flowv1.Entity{
+					{
+						EntityId:   "f1",
+						EntityType: componentType,
+						Embedding:  []float32{0.1, 0.2, 0.3},
+					},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	results, err := g.FullTextSearch("query", componentType)
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if len(results[0].Embedding) != 3 || results[0].Embedding[0] != 0.1 || results[0].Embedding[2] != 0.3 {
+		t.Errorf("expected embedding [0.1 0.2 0.3], got %v", results[0].Embedding)
+	}
+}
+
+// TestListEntities_ReturnsEmbedding pins the ListEntities conversion
+// surfacing the proto Entity message's embedding field, matching the
+// write-path conversions.
+func TestListEntities_ReturnsEmbedding(t *testing.T) {
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			return &flowv1.ListEntitiesResponse{
+				Entities: []*flowv1.Entity{
+					{
+						EntityId:   "e1",
+						EntityType: componentType,
+						Embedding:  []float32{0.4, 0.5},
+					},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	page, err := g.ListEntities(componentType)
+	if err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if len(page.Entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(page.Entities))
+	}
+	if len(page.Entities[0].Embedding) != 2 ||
+		page.Entities[0].Embedding[0] != 0.4 || page.Entities[0].Embedding[1] != 0.5 {
+		t.Errorf("expected embedding [0.4 0.5], got %v", page.Entities[0].Embedding)
+	}
+}
+
 func TestCreateEdge(t *testing.T) {
 	mock := &mockCartographerClient{
 		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
@@ -1154,6 +1273,66 @@ func TestListEntities_PopulatesMap(t *testing.T) {
 	typ, ok = g.idTypeMap.resolve("e2")
 	if !ok || typ != "Service" {
 		t.Errorf("expected Service for e2, got %q (ok=%v)", typ, ok)
+	}
+}
+
+// TestSearchNeighbors_PopulatesMap pins SPEC R3's ID-to-type cache
+// population from query results on the Graph layer: SearchNeighbors results
+// carry the entity type, which the SDK records keyed by entity ID.
+func TestSearchNeighbors_PopulatesMap(t *testing.T) {
+	mock := &mockCartographerClient{
+		searchNeighbors: func(ctx context.Context,
+			req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
+			return &flowv1.SearchNeighborsResponse{
+				Results: []*flowv1.SearchNeighborResult{
+					{EntityId: "n1", EntityType: "Component", Score: 0.9},
+					{EntityId: "n2", EntityType: "Service", Score: 0.8},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.SearchNeighbors([]float32{0.1, 0.2}, componentType, 10)
+	if err != nil {
+		t.Fatalf("SearchNeighbors returned error: %v", err)
+	}
+	typ, ok := g.idTypeMap.resolve("n1")
+	if !ok || typ != componentType {
+		t.Errorf("expected Component for n1, got %q (ok=%v)", typ, ok)
+	}
+	typ, ok = g.idTypeMap.resolve("n2")
+	if !ok || typ != serviceType {
+		t.Errorf("expected Service for n2, got %q (ok=%v)", typ, ok)
+	}
+}
+
+// TestFullTextSearch_PopulatesMap pins SPEC R3's ID-to-type cache population
+// from query results on the Graph layer: FullTextSearch results carry the
+// entity type, which the SDK records keyed by entity ID.
+func TestFullTextSearch_PopulatesMap(t *testing.T) {
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			return &flowv1.FullTextSearchResponse{
+				Results: []*flowv1.Entity{
+					{EntityId: "f1", EntityType: "Component"},
+					{EntityId: "f2", EntityType: "Service"},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	_, err := g.FullTextSearch("query", componentType)
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	typ, ok := g.idTypeMap.resolve("f1")
+	if !ok || typ != componentType {
+		t.Errorf("expected Component for f1, got %q (ok=%v)", typ, ok)
+	}
+	typ, ok = g.idTypeMap.resolve("f2")
+	if !ok || typ != serviceType {
+		t.Errorf("expected Service for f2, got %q (ok=%v)", typ, ok)
 	}
 }
 
@@ -1560,5 +1739,42 @@ func TestBeginTransaction_SurfacesAppliedTimeout(t *testing.T) {
 	}
 	if tx.timeout != 30*time.Minute {
 		t.Errorf("expected tx.timeout to equal server applied timeout 30m, got %v", tx.timeout)
+	}
+}
+
+// TestBeginTransaction_RejectsNonPositiveTimeout pins the SPEC error-table
+// row "Invalid transaction timeout duration" ("Timeout duration is
+// non-positive ... Applies to: ExtendTimeout, BeginTransaction") on the SDK
+// boundary: a non-positive WithTimeout value must be rejected locally by
+// BeginTransaction (mirroring ExtendTimeout's local rejection — no silent
+// capping), never silently discarded before reaching the wire.
+func TestBeginTransaction_RejectsNonPositiveTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		d    time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -1 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			mock := &mockCartographerClient{
+				beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+					called = true
+					return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+				},
+			}
+			g := newMockGraph(mock)
+			tx, err := g.BeginTransaction(WithTimeout(tc.d))
+			if err == nil {
+				t.Fatal("expected error for non-positive timeout")
+			}
+			if tx != nil {
+				t.Error("expected no transaction to be returned on rejection")
+			}
+			if called {
+				t.Error("expected BeginTransaction RPC not to be called for non-positive timeout")
+			}
+		})
 	}
 }

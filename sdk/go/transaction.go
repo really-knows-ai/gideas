@@ -157,6 +157,7 @@ func (tx *Transaction) FullTextSearch(query, entityType string) ([]Entity, error
 			ID:         e.GetEntityId(),
 			Type:       e.GetEntityType(),
 			Properties: e.GetProperties(),
+			Embedding:  e.GetEmbedding(),
 		})
 		tx.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
 	}
@@ -197,6 +198,7 @@ func (tx *Transaction) ListEntities(entityType string, opts ...ListEntitiesOptio
 			ID:         e.GetEntityId(),
 			Type:       e.GetEntityType(),
 			Properties: e.GetProperties(),
+			Embedding:  e.GetEmbedding(),
 		})
 		tx.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
 	}

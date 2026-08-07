@@ -1250,6 +1250,17 @@ func (s *CartographerServer) CreateEdge(
 	if resolveErr != nil {
 		return nil, mapStoreError(resolveErr)
 	}
+	// SPEC RPC check-order (CreateEdge: structural → entity existence →
+	// type-specific capability → edge-rule auth) and error-table row "Source or
+	// target entity not found on CreateEdge → NOT_FOUND" require BOTH endpoint
+	// entities' existence to be verified before the capability gate, so a
+	// missing target yields NOT_FOUND even when the caller lacks
+	// WRITE:graph/entity/<source-type> (the store's CreateEdge also verifies the
+	// target, but only after this capability gate, which would surface
+	// PERMISSION_DENIED first).
+	if _, resolveErr := s.store.ResolveEntityType(ctx, req.ToEntityId, branch); resolveErr != nil {
+		return nil, mapStoreError(resolveErr)
+	}
 	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
 		return nil, err
 	}
@@ -1701,7 +1712,11 @@ func (s *CartographerServer) CommitTransaction(
 				// forget). FetchAndMerge is an extra, unspecified git operation
 				// on the local `main` working tree performed to reduce
 				// non-fast-forward push rejections when the remote has advanced
-				// since the last sync. Failure modes/consequences:
+				// since the last sync. It also contradicts R10's own divergence
+				// handling: an explicit PullFromRemote fails loudly with
+				// FAILED_PRECONDITION on divergence, while this post-commit path
+				// silently merges a diverged remote into local main (see (2)).
+				// Failure modes/consequences:
 				//   (1) FetchAndMerge can itself advance local `main` via
 				//       setLocalRefAndCheckout, so a rejected push still
 				//       leaves local main ahead of (or diverged from) what the
@@ -1800,26 +1815,6 @@ func (s *CartographerServer) RollbackTransaction(
 		return nil, mapGitError(err)
 	}
 	return &flowv1.RollbackTransactionResponse{}, nil
-}
-
-func (s *CartographerServer) refreshEmptyTransactionHead(
-	ctx context.Context, state *TransactionState,
-) error {
-	var mainHead string
-	if err := s.withGitLock(func() error {
-		var err error
-		mainHead, err = s.gitstore.BranchHEAD(ctx, "main")
-		return err
-	}); err != nil {
-		return err
-	}
-	oldMainHead := state.MainHeadAtLastSync
-	state.MainHeadAtLastSync = mainHead
-	if err := s.persistTransactionState(ctx, state); err != nil {
-		state.MainHeadAtLastSync = oldMainHead
-		return fmt.Errorf("persist refreshed transaction: %w", err)
-	}
-	return nil
 }
 
 func (s *CartographerServer) reapplyTransactionChanges(
@@ -1988,13 +1983,17 @@ func (s *CartographerServer) RefreshTransaction(
 		return nil, status.Error(codes.FailedPrecondition, "transaction commit is already in progress")
 	}
 
-	if state.ChangeLog.Len() == 0 {
-		if err := s.refreshEmptyTransactionHead(ctx, state); err != nil {
-			return nil, mapGitError(err)
-		}
-		return &flowv1.RefreshTransactionResponse{}, nil
-	}
-
+	// SPEC R9 Refresh flow applies to every refresh, empty or not: the branch is
+	// reset to and re-hydrated from latest main, then each transaction change is
+	// validated and re-applied. For a zero-mutation transaction the validate and
+	// re-apply steps below are no-ops, so the flow reduces to reset-and-re-hydrate
+	// — which is still required. The previous empty-refresh short-circuit only
+	// advanced MainHeadAtLastSync, leaving the branch DB on its stale begin-time
+	// snapshot: a subsequent mutate+commit then passed the divergence check
+	// (sync head == main), committed against the stale branch, re-hydrated main
+	// from files missing the entities added to main in the interim, and the
+	// fast-forward merge failed (INTERNAL) with main LadybugDB and git main left
+	// divergent.
 	var mainHash string
 	if err := s.withGitLock(func() error {
 		if err := s.gitstore.HardResetToBranch(ctx, req.TransactionId); err != nil {

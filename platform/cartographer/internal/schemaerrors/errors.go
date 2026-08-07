@@ -11,4 +11,5 @@ var (
 	ErrInvalidPropertyType     = errors.New("property type must be 'string'")
 	ErrEmptyRuleList           = errors.New("rule entry has empty canConnectTo or using list")
 	ErrUndeclaredTypeRef       = errors.New("rule references undeclared type")
+	ErrNilElement              = errors.New("schema contains a nil element")
 )

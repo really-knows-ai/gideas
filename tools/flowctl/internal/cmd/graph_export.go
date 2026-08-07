@@ -11,6 +11,7 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/tools/flowctl/internal/api"
+	"github.com/foundry/flow/tools/flowctl/manifestfs"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -23,8 +24,7 @@ import (
 )
 
 const (
-	operatorLabelSelector = "app.kubernetes.io/name=operator"
-	defaultGraphName      = "flow-graph"
+	defaultGraphName = "flow-graph"
 
 	// operatorProxyPort is the default operator gRPC proxy port forwarded to
 	// by the CLI.
@@ -49,6 +49,13 @@ const (
 	formatJSON    = "json"
 	formatGraphML = "graphml"
 )
+
+// operatorLabelSelector identifies the deployed operator pod for namespace
+// resolution and pod lookup. It is sourced from the embedded operator
+// deployment manifest (manifestfs.OperatorPodLabelSelector) rather than a
+// hand-written literal, so it cannot silently drift from the deployed
+// manager.yaml pod label.
+var operatorLabelSelector = manifestfs.OperatorPodLabelSelector
 
 func validateExportFormat(format string) error {
 	switch format {

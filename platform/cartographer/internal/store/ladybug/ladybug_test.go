@@ -20,6 +20,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// strengthValue is the test value for the DependsOn edge's strength property,
+// shared across the CRUD, branch, and re-hydration tests.
+const strengthValue = "strong"
+
 func TestOpenClose(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -1038,7 +1042,7 @@ func TestCreateEdge_Valid(t *testing.T) {
 	}
 
 	edge, err := s.CreateEdge(context.Background(), "DependsOn", src.Id, tgt.Id,
-		map[string]string{"strength": "strong"}, "")
+		map[string]string{"strength": strengthValue}, "")
 	if err != nil {
 		t.Fatalf("CreateEdge: %v", err)
 	}
@@ -1051,8 +1055,8 @@ func TestCreateEdge_Valid(t *testing.T) {
 	if edge.ToEntityID != tgt.Id {
 		t.Errorf("ToEntityID = %q, want %q", edge.ToEntityID, tgt.Id)
 	}
-	if edge.Properties["strength"] != "strong" {
-		t.Errorf("strength = %q, want %q", edge.Properties["strength"], "strong")
+	if edge.Properties["strength"] != strengthValue {
+		t.Errorf("strength = %q, want %q", edge.Properties["strength"], strengthValue)
 	}
 }
 
@@ -2807,6 +2811,109 @@ func TestDeleteEntity_CascadeDeletesEdges(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ResolveEntityType — SPEC R3 authoritative source-entity-type lookup
+// ---------------------------------------------------------------------------
+
+// ResolveEntityType is the store primitive backing SPEC R3's authoritative
+// source-entity-type lookup for the DeleteEdge/UpdateEntity/DeleteEntity
+// capability checks (cartographer_server.go:1108/1163/1249/1345): the server
+// resolves the entity's type, then checks the caller's capabilities against
+// that type. Pins the found branch: an existing entity resolves to its type.
+func TestResolveEntityType_Found(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	e, err := s.CreateEntity(context.Background(), "Component", "",
+		map[string]string{"name": "resolvable"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	entityType, err := s.ResolveEntityType(context.Background(), e.Id, "")
+	if err != nil {
+		t.Fatalf("ResolveEntityType: %v", err)
+	}
+	if entityType != e.Type {
+		t.Errorf("resolved type = %q, want %q", entityType, e.Type)
+	}
+}
+
+// Pins the not-found branch: an absent entity must surface the ErrEntityNotFound
+// sentinel (learnings rule "Sentinel errors over zero-value returns") rather
+// than a zero-value ("", nil).
+func TestResolveEntityType_NotFound(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	_, err = s.ResolveEntityType(context.Background(), uuid.NewString(), "")
+	if err == nil {
+		t.Fatal("expected error for non-existent entity")
+	}
+	if !errors.Is(err, store.ErrEntityNotFound) {
+		t.Errorf("expected ErrEntityNotFound, got %v", err)
+	}
+}
+
+// Pins the branch-scoped path: with a txID argument the lookup resolves against
+// that transaction's isolated LadybugDB instance (SPEC R2), never main. An
+// entity created on the branch is resolvable on the branch and NOT on main; an
+// entity on main is resolvable on main and NOT on the branch.
+func TestResolveEntityType_BranchScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	const branch = "tx1"
+	if err := s.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	mainEntity, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "main-only"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity on main: %v", err)
+	}
+	branchEntity, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "branch-only"}, nil, branch)
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+
+	// Each scope resolves its own data.
+	mainType, err := s.ResolveEntityType(ctx, mainEntity.Id, "")
+	if err != nil || mainType != "Document" {
+		t.Fatalf("resolve main entity on main: type=%q err=%v", mainType, err)
+	}
+	branchType, err := s.ResolveEntityType(ctx, branchEntity.Id, branch)
+	if err != nil || branchType != branchEntity.Type {
+		t.Fatalf("resolve branch entity on branch: type=%q err=%v", branchType, err)
+	}
+
+	// Isolation: branch data is invisible to main and vice versa.
+	if _, err := s.ResolveEntityType(ctx, branchEntity.Id, ""); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("branch entity resolvable on main, want ErrEntityNotFound, got %v", err)
+	}
+	if _, err := s.ResolveEntityType(ctx, mainEntity.Id, branch); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("main entity resolvable on branch, want ErrEntityNotFound, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Branch tests (file-backed)
 // ---------------------------------------------------------------------------
 
@@ -3000,7 +3107,7 @@ func TestBranch_HydrationRoundTrip(t *testing.T) {
 		t.Fatalf("CreateEntity tgt: %v", err)
 	}
 	edge, err := s.CreateEdge(context.Background(), "DependsOn", src.Id, tgt.Id,
-		map[string]string{"strength": "strong"}, "tx1")
+		map[string]string{"strength": strengthValue}, "tx1")
 	if err != nil {
 		t.Fatalf("CreateEdge: %v", err)
 	}
@@ -3049,6 +3156,359 @@ func TestBranch_HydrationRoundTrip(t *testing.T) {
 	_, err = s.GetEdge(context.Background(), edge.Id, "")
 	if err != nil {
 		t.Fatalf("GetEdge on main after hydration: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Branch-scoped read/write-path coverage (SPEC R2)
+//
+// SPEC R2: "All read- and write-path methods accept an optional transactionId
+// parameter. When present, the operation is scoped to that transaction's
+// isolated LadybugDB instance. When absent, the operation is applied directly
+// to main." The branch-scoped CreateEntity/CreateEdge/GetEntity/DumpAll*
+// coverage exists above; these tests extend it to the remaining methods,
+// each proving isolation by writing branch-only data and asserting it is
+// invisible to main (or vice versa).
+// ---------------------------------------------------------------------------
+
+// setupBranch is the shared branch-test setup: apply the test schema and open
+// a branch DB replicated from main's schema.
+func setupBranch(t *testing.T, s store.Store) {
+	t.Helper()
+	applyTestSchema(t, s)
+	ctx := context.Background()
+	if err := s.CreateBranchDB(ctx, "tx1"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, "tx1"); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+}
+
+func TestBranch_ExecuteCypherScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	branchOnly, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "cypher-branch"}, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	mainOnly, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "cypher-main"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity on main: %v", err)
+	}
+
+	// The branch query sees only branch data.
+	branchRows, err := s.ExecuteCypher(ctx, "MATCH (n:Component) RETURN n.id AS id", nil, "tx1")
+	if err != nil {
+		t.Fatalf("ExecuteCypher on branch: %v", err)
+	}
+	if len(branchRows) != 1 || branchRows[0].Values[0] != branchOnly.Id {
+		t.Fatalf("branch ExecuteCypher must see only branch data, got %+v", branchRows)
+	}
+	// Main's query sees only main data.
+	mainRows, err := s.ExecuteCypher(ctx, "MATCH (n:Component) RETURN n.id AS id", nil, "")
+	if err != nil {
+		t.Fatalf("ExecuteCypher on main: %v", err)
+	}
+	if len(mainRows) != 1 || mainRows[0].Values[0] != mainOnly.Id {
+		t.Fatalf("main ExecuteCypher must see only main data, got %+v", mainRows)
+	}
+}
+
+func TestBranch_SearchNeighborsScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	// Bootstrap VectorType to dimension 3 on the branch (branch-scoped
+	// dimension lock, SPEC R7) and on main.
+	if _, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "branch-v"}, []float32{1, 2, 3}, "tx1"); err != nil {
+		t.Fatalf("bootstrap branch vector: %v", err)
+	}
+	if _, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "main-v"}, []float32{1, 2, 3}, ""); err != nil {
+		t.Fatalf("bootstrap main vector: %v", err)
+	}
+
+	// A branch-scoped search sees only the branch's vector entity.
+	branchResults, err := s.SearchNeighbors(ctx, []float32{1, 2, 3}, "VectorType", 10, "tx1")
+	if err != nil {
+		t.Fatalf("SearchNeighbors on branch: %v", err)
+	}
+	if len(branchResults) != 1 || branchResults[0].Entity.Properties["name"] != "branch-v" {
+		t.Fatalf("branch SearchNeighbors must see only branch data, got %+v", branchResults)
+	}
+	// A main search sees only the main entity.
+	mainResults, err := s.SearchNeighbors(ctx, []float32{1, 2, 3}, "VectorType", 10, "")
+	if err != nil {
+		t.Fatalf("SearchNeighbors on main: %v", err)
+	}
+	if len(mainResults) != 1 || mainResults[0].Entity.Properties["name"] != "main-v" {
+		t.Fatalf("main SearchNeighbors must see only main data, got %+v", mainResults)
+	}
+}
+
+func TestBranch_FullTextSearchScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	if _, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "needle-branch", "body": "branch body"}, nil, "tx1"); err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	if _, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "needle-main", "body": "main body"}, nil, ""); err != nil {
+		t.Fatalf("CreateEntity on main: %v", err)
+	}
+
+	branchResults, err := s.FullTextSearch(ctx, "needle", "Document", "tx1")
+	if err != nil {
+		t.Fatalf("FullTextSearch on branch: %v", err)
+	}
+	if len(branchResults) != 1 || branchResults[0].Properties["title"] != "needle-branch" {
+		t.Fatalf("branch FullTextSearch must see only branch data, got %+v", branchResults)
+	}
+	mainResults, err := s.FullTextSearch(ctx, "needle", "Document", "")
+	if err != nil {
+		t.Fatalf("FullTextSearch on main: %v", err)
+	}
+	if len(mainResults) != 1 || mainResults[0].Properties["title"] != "needle-main" {
+		t.Fatalf("main FullTextSearch must see only main data, got %+v", mainResults)
+	}
+}
+
+func TestBranch_ListEntitiesScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	branchOnly, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "list-branch"}, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	mainOnly, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "list-main"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity on main: %v", err)
+	}
+
+	branchEnts, _, err := s.ListEntities(ctx, "Component", 0, "", "tx1")
+	if err != nil {
+		t.Fatalf("ListEntities on branch: %v", err)
+	}
+	if len(branchEnts) != 1 || branchEnts[0].Id != branchOnly.Id {
+		t.Fatalf("branch ListEntities must see only branch data, got %+v", branchEnts)
+	}
+	mainEnts, _, err := s.ListEntities(ctx, "Component", 0, "", "")
+	if err != nil {
+		t.Fatalf("ListEntities on main: %v", err)
+	}
+	if len(mainEnts) != 1 || mainEnts[0].Id != mainOnly.Id {
+		t.Fatalf("main ListEntities must see only main data, got %+v", mainEnts)
+	}
+}
+
+// TestBranch_UpdateEntityScoped verifies a branch-scoped UpdateEntity mutates
+// only the transaction's isolated instance: the change is visible on the branch
+// but not on main.
+func TestBranch_UpdateEntityScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	// Create the entity on both main and the branch (replicated schema, so the
+	// same id is valid in both scopes).
+	e, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "shared", "version": "1"}, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	if _, err := s.CreateEntity(ctx, "Component", e.Id,
+		map[string]string{"name": "shared", "version": "1"}, nil, ""); err != nil {
+		t.Fatalf("CreateEntity on main: %v", err)
+	}
+
+	updated, err := s.UpdateEntity(ctx, e.Id, map[string]string{"version": "2"}, nil, "tx1")
+	if err != nil {
+		t.Fatalf("UpdateEntity on branch: %v", err)
+	}
+	if updated.Properties["version"] != "2" {
+		t.Fatalf("branch update version = %q, want %q", updated.Properties["version"], "2")
+	}
+
+	// The branch sees the update; main still holds the original value.
+	branchGot, err := s.GetEntity(ctx, e.Id, "tx1")
+	if err != nil {
+		t.Fatalf("GetEntity on branch: %v", err)
+	}
+	if branchGot.Properties["version"] != "2" {
+		t.Fatalf("branch entity version = %q, want %q", branchGot.Properties["version"], "2")
+	}
+	mainGot, err := s.GetEntity(ctx, e.Id, "")
+	if err != nil {
+		t.Fatalf("GetEntity on main: %v", err)
+	}
+	if mainGot.Properties["version"] != "1" {
+		t.Fatalf("main entity version = %q, want %q (update must not leak)", mainGot.Properties["version"], "1")
+	}
+}
+
+// TestBranch_DeleteEntityScoped verifies a branch-scoped DeleteEntity removes
+// the entity from the transaction's isolated instance only: gone on the branch,
+// still present on main.
+func TestBranch_DeleteEntityScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	e, err := s.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "to-delete"}, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	if _, err := s.CreateEntity(ctx, "Component", e.Id,
+		map[string]string{"name": "to-delete"}, nil, ""); err != nil {
+		t.Fatalf("CreateEntity on main: %v", err)
+	}
+
+	deleted, err := s.DeleteEntity(ctx, e.Id, "tx1")
+	if err != nil {
+		t.Fatalf("DeleteEntity on branch: %v", err)
+	}
+	if deleted.Id != e.Id {
+		t.Fatalf("deleted entity Id = %q, want %q", deleted.Id, e.Id)
+	}
+
+	if _, err := s.GetEntity(ctx, e.Id, "tx1"); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("branch entity survived branch-scoped delete, want ErrEntityNotFound, got %v", err)
+	}
+	if _, err := s.GetEntity(ctx, e.Id, ""); err != nil {
+		t.Fatalf("main entity must survive a branch-scoped delete: %v", err)
+	}
+}
+
+// TestBranch_DeleteEdgeScoped verifies a branch-scoped DeleteEdge removes the
+// edge from the transaction's isolated instance only: gone on the branch, still
+// present on main.
+func TestBranch_DeleteEdgeScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	// Create endpoints on the branch and an edge between them.
+	src, err := s.CreateEntity(ctx, "Component", "", nil, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity src on branch: %v", err)
+	}
+	tgt, err := s.CreateEntity(ctx, "Component", "", nil, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity tgt on branch: %v", err)
+	}
+	edge, err := s.CreateEdge(ctx, "DependsOn", src.Id, tgt.Id,
+		map[string]string{"strength": strengthValue}, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEdge on branch: %v", err)
+	}
+	// Mirror the endpoints and edge on main so the delete targets a live edge.
+	if _, err := s.CreateEntity(ctx, "Component", src.Id, nil, nil, ""); err != nil {
+		t.Fatalf("CreateEntity src on main: %v", err)
+	}
+	if _, err := s.CreateEntity(ctx, "Component", tgt.Id, nil, nil, ""); err != nil {
+		t.Fatalf("CreateEntity tgt on main: %v", err)
+	}
+	mainEdge, err := s.CreateEdge(ctx, "DependsOn", src.Id, tgt.Id,
+		map[string]string{"strength": strengthValue}, "")
+	if err != nil {
+		t.Fatalf("CreateEdge on main: %v", err)
+	}
+
+	deleted, err := s.DeleteEdge(ctx, edge.Id, "tx1")
+	if err != nil {
+		t.Fatalf("DeleteEdge on branch: %v", err)
+	}
+	if deleted.Id != edge.Id {
+		t.Fatalf("deleted edge Id = %q, want %q", deleted.Id, edge.Id)
+	}
+
+	if _, err := s.GetEdge(ctx, edge.Id, "tx1"); !errors.Is(err, store.ErrEdgeNotFound) {
+		t.Fatalf("branch edge survived branch-scoped delete, want ErrEdgeNotFound, got %v", err)
+	}
+	if _, err := s.GetEdge(ctx, mainEdge.Id, ""); err != nil {
+		t.Fatalf("main edge must survive a branch-scoped delete: %v", err)
+	}
+}
+
+// TestBranch_GetEdgeScoped verifies a branch-scoped GetEdge reads the
+// transaction's isolated instance: the branch sees its own edge, and a main
+// read of the branch's edge ID fails.
+func TestBranch_GetEdgeScoped(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	setupBranch(t, s)
+	ctx := context.Background()
+
+	src, err := s.CreateEntity(ctx, "Component", "", nil, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity src on branch: %v", err)
+	}
+	tgt, err := s.CreateEntity(ctx, "Component", "", nil, nil, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEntity tgt on branch: %v", err)
+	}
+	edge, err := s.CreateEdge(ctx, "DependsOn", src.Id, tgt.Id,
+		map[string]string{"strength": strengthValue}, "tx1")
+	if err != nil {
+		t.Fatalf("CreateEdge on branch: %v", err)
+	}
+
+	got, err := s.GetEdge(ctx, edge.Id, "tx1")
+	if err != nil {
+		t.Fatalf("GetEdge on branch: %v", err)
+	}
+	if got.Id != edge.Id {
+		t.Fatalf("edge Id = %q, want %q", got.Id, edge.Id)
+	}
+	// The branch edge is not visible on main.
+	if _, err := s.GetEdge(ctx, edge.Id, ""); !errors.Is(err, store.ErrEdgeNotFound) {
+		t.Fatalf("branch edge visible on main, want ErrEdgeNotFound, got %v", err)
 	}
 }
 
@@ -3248,6 +3708,192 @@ func TestRehydrateMainFromFiles_InferredTypeWithProperties(t *testing.T) {
 	}
 }
 
+// TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties verifies SPEC R8's
+// directory-inference scope covers edge types as well as entity types: when
+// re-hydrating with an empty applied schema (the corrupt main.lbug / lost
+// schema.json recovery corner), an edge type absent from the applied schema
+// must have its rel table (and endpoint pair) inferred from the directory
+// structure so its files load instead of failing with a raw engine error
+// against a non-existent rel table. Regression: the edge loaders called
+// insertEdgeOnConn directly with no rel-table creation, so every edge insert
+// for an inferred type failed with a raw engine error and re-hydration could
+// not recover edge data.
+func TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply an explicit empty schema so edgeDefs has length 0 — forcing the
+	// inferred-type path during rehydration.
+	if err := s.ApplySchema(ctx, &flowv1.Schema{}); err != nil {
+		t.Fatalf("ApplySchema empty: %v", err)
+	}
+
+	fromID := uuid.NewString()
+	toID := uuid.NewString()
+	edgeID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
+		"id": fromID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
+		"id": toID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", edgeID+".json"), map[string]any{
+		"id": edgeID, "type": "DependsOn", "from": fromID, "to": toID,
+		"properties": map[string]string{"strength": strengthValue},
+	})
+
+	if err := s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+
+	// The edge with all properties must have been persisted.
+	got, err := s.GetEdge(ctx, edgeID, "main")
+	if err != nil {
+		t.Fatalf("GetEdge: %v", err)
+	}
+	if got.FromEntityID != fromID || got.ToEntityID != toID {
+		t.Fatalf("edge endpoints = %q -> %q, want %q -> %q",
+			got.FromEntityID, got.ToEntityID, fromID, toID)
+	}
+	if got.Properties["strength"] != strengthValue {
+		t.Fatalf("strength = %q, want %q", got.Properties["strength"], strengthValue)
+	}
+	if _, ok := s.EdgeType("DependsOn"); !ok {
+		t.Fatal("expected DependsOn edge type to be inferred")
+	}
+}
+
+// TestHydrateBranchFromFiles_InferredEdgeTypeWithProperties pins the same SPEC
+// R8 directory-inference scope on the branch hydration path: an edge type
+// absent from the applied schema must have its rel table inferred so the
+// branch's edge files load instead of failing with a raw engine error.
+func TestHydrateBranchFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply an explicit empty schema so edgeDefs has length 0 — forcing the
+	// inferred-type path during branch hydration.
+	if err := s.ApplySchema(ctx, &flowv1.Schema{}); err != nil {
+		t.Fatalf("ApplySchema empty: %v", err)
+	}
+	const branch = "tx1"
+	if err := s.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	fromID := uuid.NewString()
+	toID := uuid.NewString()
+	edgeID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
+		"id": fromID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
+		"id": toID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", edgeID+".json"), map[string]any{
+		"id": edgeID, "type": "DependsOn", "from": fromID, "to": toID,
+		"properties": map[string]string{"strength": strengthValue},
+	})
+
+	if err := s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("HydrateBranchFromFiles: %v", err)
+	}
+
+	got, err := s.GetEdge(ctx, edgeID, branch)
+	if err != nil {
+		t.Fatalf("GetEdge on branch: %v", err)
+	}
+	if got.FromEntityID != fromID || got.ToEntityID != toID {
+		t.Fatalf("edge endpoints = %q -> %q, want %q -> %q",
+			got.FromEntityID, got.ToEntityID, fromID, toID)
+	}
+	if got.Properties["strength"] != strengthValue {
+		t.Fatalf("strength = %q, want %q", got.Properties["strength"], strengthValue)
+	}
+	// EdgeType() reads main's cache only; the branch's inferred type is proven
+	// by listing the type's edges on the branch (ListEdgesOfType reads the
+	// branch's edge-type cache and rejects unknown types).
+	if _, err := s.ListEdgesOfType(ctx, "DependsOn", branch); err != nil {
+		t.Fatalf("ListEdgesOfType on branch: %v", err)
+	}
+}
+
+// TestRehydrateMainFromFiles_InferredTypeSurvivesFileBackedReopen pins the
+// file-backed write-and-reopen cycle for an inferred type (SPEC R8): the
+// inferred property type must be persisted to schema.json as the proto type
+// "string" so the next Open's validateSchemaMetadata reconstructs a schema that
+// schema.Validate accepts. Regression: the inference point used to store the
+// catalog type "STRING", which validateSchemaMetadata fed back into
+// schema.Validate and got rejected with ErrInvalidPropertyType — bricking the
+// next file-backed Open.
+func TestRehydrateMainFromFiles_InferredTypeSurvivesFileBackedReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dir, err)
+	}
+	ctx := context.Background()
+
+	// Force the inferred-type path: empty applied schema.
+	if err := s.ApplySchema(ctx, &flowv1.Schema{}); err != nil {
+		t.Fatalf("ApplySchema empty: %v", err)
+	}
+
+	docID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Document", docID+".json"), map[string]any{
+		"id": docID, "type": "Document",
+		"properties": map[string]string{"title": "inferred"},
+	})
+	if err := os.MkdirAll(edgesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen the file-backed store: must succeed and the inferred property must
+	// survive as the proto type "string".
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen Open(%q): %v", dir, err)
+	}
+	defer closeStore(t, s2)
+
+	def, ok := s2.EntityType("Document")
+	if !ok {
+		t.Fatal("expected Document type to survive reopen")
+	}
+	for _, p := range def.Properties {
+		if p.Name == "title" && p.Type != "string" {
+			t.Fatalf("inferred property title type = %q, want %q", p.Type, "string")
+		}
+	}
+}
+
 // TestRehydrateMainFromFiles_InferredTypePromotesEnableVectorIndex verifies
 // the re-hydration metadata parity (Finding 12): when a vector-capable entity
 // is loaded on the file-based re-hydration path for a type that was inferred
@@ -3394,6 +4040,87 @@ func TestApplySchema_AdditiveEntityProperty(t *testing.T) {
 	}
 	if got2.Properties["title"] != "doc1" {
 		t.Fatalf("expected title=doc1 after reopen, got %v", got2.Properties)
+	}
+}
+
+// TestEntityPropertiesNamedToAndType pins SPEC R1's implicit-column-collision
+// scope: from/to/type are reserved only for *edge* properties and embedding
+// only for vector-enabled entity types, so a NODE table declaring a property
+// named `to` or `type` is SPEC-valid and passes schema.Validate. The schema
+// cache must retain such columns as real properties (not drop them as if they
+// were structural rel-table columns), or CreateEntity rejects the property with
+// ErrUnknownProperty and a file-backed reopen fails closed when the metadata
+// property is absent from the catalog.
+func TestEntityPropertiesNamedToAndType(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "to", Type: "string"},
+				{Name: "type", Type: "string"},
+				{Name: "title", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+
+	// The properties must be present in the schema cache and usable by
+	// CreateEntity (which rejects unknown properties with ErrUnknownProperty).
+	doc, err := s.CreateEntity(ctx, "Document", "", map[string]string{
+		"to": "someone", "type": "note", "title": "doc1",
+	}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity with to/type properties: %v", err)
+	}
+	if doc.Properties["to"] != "someone" || doc.Properties["type"] != "note" {
+		t.Fatalf("created entity lost to/type properties: %+v", doc.Properties)
+	}
+
+	// Close and reopen: the properties must survive the catalog rebuild and the
+	// metadata/catalog cross-check (validateMetadataAgainstCatalog).
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, s2)
+
+	def, ok := s2.EntityType("Document")
+	if !ok {
+		t.Fatal("Document entity type missing after reopen")
+	}
+	found := make(map[string]bool)
+	for _, p := range def.Properties {
+		found[p.Name] = true
+	}
+	if !found["to"] || !found["type"] {
+		t.Fatalf("to/type properties dropped from schema cache after reopen: %v", def.Properties)
+	}
+
+	got, err := s2.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity after reopen: %v", err)
+	}
+	if got.Properties["to"] != "someone" || got.Properties["type"] != "note" {
+		t.Fatalf("to/type property values lost after reopen: %+v", got.Properties)
+	}
+
+	// A create against the reopened store must still accept the properties.
+	if _, err := s2.CreateEntity(ctx, "Document", "", map[string]string{
+		"to": "someone-else", "type": "memo",
+	}, nil, "main"); err != nil {
+		t.Fatalf("CreateEntity with to/type properties after reopen: %v", err)
 	}
 }
 

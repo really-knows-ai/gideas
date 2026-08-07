@@ -76,6 +76,16 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf("edge file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
 			}
+			// Guard against the embedded type conflicting with the directory it
+			// is read from. writeEdgeFile rejects this mismatch
+			// (ErrEdgeTypeMismatch), and re-hydration enumerates files per type
+			// via the directory — a file whose embedded type disagrees with its
+			// directory (external corruption) must surface the same sentinel
+			// rather than load under a never-written type.
+			if edgeType != ej.Type {
+				_ = f.Close()
+				return EdgeFile{}, fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, edgeType, ej.Type)
+			}
 			// A Close error signals an I/O problem reading the file; propagating it
 			// prevents a clean-but-corrupt read from silently passing.
 			if err := f.Close(); err != nil {

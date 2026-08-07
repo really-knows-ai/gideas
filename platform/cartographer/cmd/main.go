@@ -47,21 +47,22 @@ func main() {
 	// -----------------------------------------------------------------------
 	ladybugDBPath := getEnv("LADYBUG_DB_PATH", "/data")
 	cartographerPort := getEnv("CARTOGRAPHER_PORT", "50051")
-	transactionTimeoutStr := getEnv("TRANSACTION_TIMEOUT", "30m")
 	remoteURL := os.Getenv("REMOTE_URL")
 	remoteAuthSecretRef := os.Getenv("REMOTE_AUTH_SECRET_REF")
 	remotePullOnInit := parseBoolEnv("REMOTE_PULL_ON_INIT", false)
 	podNamespace := getEnv("POD_NAMESPACE", "default")
-	stalenessWindowStr := getEnv("CAPABILITY_STALENESS_WINDOW", "30s")
 	eventBusAddress := os.Getenv("EVENT_BUS_ADDRESS")
 
-	transactionTimeout, err := time.ParseDuration(transactionTimeoutStr)
+	// SPEC R5 fail-fast env guard: an unparseable duration is fatal. The
+	// fail-fast decision (return an error) is factored into parseDurationEnv
+	// so it is unit-testable without os.Exit; the caller owns the process exit.
+	transactionTimeout, err := parseDurationEnv("TRANSACTION_TIMEOUT", "30m")
 	if err != nil {
 		slog.Error("invalid TRANSACTION_TIMEOUT", "error", err)
 		os.Exit(1)
 	}
 
-	stalenessWindow, err := time.ParseDuration(stalenessWindowStr)
+	stalenessWindow, err := parseDurationEnv("CAPABILITY_STALENESS_WINDOW", "30s")
 	if err != nil {
 		slog.Error("invalid CAPABILITY_STALENESS_WINDOW", "error", err)
 		os.Exit(1)
@@ -268,8 +269,10 @@ func main() {
 	// -----------------------------------------------------------------------
 	// 12. Create gRPC server with health probe, capability interceptor, reflection
 	// -----------------------------------------------------------------------
-	healthSrv := health.NewServer()
-	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	// SPEC R5: before the first ApplySchema, the standard health service
+	// reports SERVING. The setup is factored into newHealthServer so the
+	// startup health state is unit-testable without booting main.
+	healthSrv := newHealthServer()
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(server.Verifier().VerifyInterceptor),
@@ -645,6 +648,16 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
+// newHealthServer returns the standard gRPC health service with the empty
+// (whole-server) service reported as SERVING. SPEC R5 requires the health
+// service to report SERVING before the first ApplySchema, so main registers
+// this state at startup; the shutdown path flips it to NOT_SERVING.
+func newHealthServer() *health.Server {
+	srv := health.NewServer()
+	srv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	return srv
+}
+
 // parseBoolEnv parses a boolean environment variable case-insensitively via
 // strconv.ParseBool (accepts "true"/"false"/"1"/"0"/"t"/"f"), falling back to
 // defaultVal on empty or unparseable values instead of silently dropping
@@ -660,6 +673,18 @@ func parseBoolEnv(key string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return b
+}
+
+// parseDurationEnv parses a duration environment variable via
+// time.ParseDuration, falling back to defaultVal on an empty value. An
+// unparseable value returns an error (SPEC R5 fail-fast: the caller exits the
+// process rather than silently running with a wrong timeout/window).
+func parseDurationEnv(key, defaultVal string) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return time.ParseDuration(defaultVal)
+	}
+	return time.ParseDuration(v)
 }
 
 func loadVerificationKey(envVar string) ed25519.PublicKey {

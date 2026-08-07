@@ -9,6 +9,7 @@ import (
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func newMockTx(mock *mockCartographerClient) *Transaction {
@@ -214,6 +215,60 @@ func TestTxExecuteCypher_FallsBackToWildcard(t *testing.T) {
 	}
 }
 
+// TestTxExecuteCypher_ParamsConvertedToStructpb pins SPEC R2's optional
+// params parameter on the Transaction layer: when params are present, the SDK
+// converts them to a structpb.Value and the request carries them on the wire.
+//
+//nolint:dupl // Transaction and Graph params-conversion tests share structure.
+func TestTxExecuteCypher_ParamsConvertedToStructpb(t *testing.T) {
+	var capturedParams *structpb.Value
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			capturedParams = req.GetParams()
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	_, err := tx.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", map[string]any{"limit": int64(5), "name": "x"})
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+	if capturedParams == nil {
+		t.Fatal("expected params to be set on request")
+	}
+	s := capturedParams.GetStructValue()
+	if s == nil {
+		t.Fatalf("expected struct params, got %v", capturedParams)
+	}
+	if s.Fields["limit"].GetNumberValue() != 5 {
+		t.Errorf("expected limit=5 in params, got %v", s.Fields["limit"])
+	}
+	if s.Fields["name"].GetStringValue() != "x" {
+		t.Errorf("expected name=x in params, got %v", s.Fields["name"])
+	}
+}
+
+// TestTxExecuteCypher_InvalidParams pins the Transaction-layer "invalid
+// params" error branch: a params value that cannot be converted to structpb
+// must surface an error instead of reaching the wire.
+func TestTxExecuteCypher_InvalidParams(t *testing.T) {
+	called := false
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			called = true
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	_, err := tx.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", map[string]any{"bad": make(chan int)})
+	if err == nil {
+		t.Fatal("expected error for params that cannot convert to structpb")
+	}
+	if called {
+		t.Error("expected ExecuteCypher RPC not to be called for invalid params")
+	}
+}
+
 func TestTxSearchNeighbors(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{
@@ -394,6 +449,127 @@ func TestTxListEntities_LosslessIdentityLikeProperties(t *testing.T) {
 	}
 	if e.Properties["entity_type"] != clobberedTypeProp {
 		t.Errorf("expected identity-like property entity_type preserved, got %q", e.Properties["entity_type"])
+	}
+}
+
+// TestTxSearchNeighbors_PopulatesMap pins SPEC R3's ID-to-type cache
+// population from query results on the Transaction layer: SearchNeighbors
+// results carry the entity type, which the SDK records keyed by entity ID.
+func TestTxSearchNeighbors_PopulatesMap(t *testing.T) {
+	mock := &mockCartographerClient{
+		searchNeighbors: func(ctx context.Context,
+			req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
+			return &flowv1.SearchNeighborsResponse{
+				Results: []*flowv1.SearchNeighborResult{
+					{EntityId: "tn1", EntityType: "Component", Score: 0.9},
+					{EntityId: "tn2", EntityType: "Service", Score: 0.8},
+				},
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	_, err := tx.SearchNeighbors([]float32{0.1}, "Component", 10)
+	if err != nil {
+		t.Fatalf("SearchNeighbors returned error: %v", err)
+	}
+	typ, ok := tx.idTypeMap.resolve("tn1")
+	if !ok || typ != componentType {
+		t.Errorf("expected Component for tn1, got %q (ok=%v)", typ, ok)
+	}
+	typ, ok = tx.idTypeMap.resolve("tn2")
+	if !ok || typ != serviceType {
+		t.Errorf("expected Service for tn2, got %q (ok=%v)", typ, ok)
+	}
+}
+
+// TestTxFullTextSearch_PopulatesMap pins SPEC R3's ID-to-type cache
+// population from query results on the Transaction layer: FullTextSearch
+// results carry the entity type, which the SDK records keyed by entity ID.
+func TestTxFullTextSearch_PopulatesMap(t *testing.T) {
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			return &flowv1.FullTextSearchResponse{
+				Results: []*flowv1.Entity{
+					{EntityId: "tf1", EntityType: "Component"},
+					{EntityId: "tf2", EntityType: "Service"},
+				},
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	_, err := tx.FullTextSearch("query", "Component")
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	typ, ok := tx.idTypeMap.resolve("tf1")
+	if !ok || typ != componentType {
+		t.Errorf("expected Component for tf1, got %q (ok=%v)", typ, ok)
+	}
+	typ, ok = tx.idTypeMap.resolve("tf2")
+	if !ok || typ != serviceType {
+		t.Errorf("expected Service for tf2, got %q (ok=%v)", typ, ok)
+	}
+}
+
+// TestTxFullTextSearch_ReturnsEmbedding pins the Transaction-layer
+// FullTextSearch conversion surfacing the proto Entity message's embedding
+// field, matching the write-path conversions.
+func TestTxFullTextSearch_ReturnsEmbedding(t *testing.T) {
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			return &flowv1.FullTextSearchResponse{
+				Results: []*flowv1.Entity{
+					{
+						EntityId:   "tf1",
+						EntityType: componentType,
+						Embedding:  []float32{0.1, 0.2, 0.3},
+					},
+				},
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	results, err := tx.FullTextSearch("query", "Component")
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if len(results[0].Embedding) != 3 || results[0].Embedding[0] != 0.1 || results[0].Embedding[2] != 0.3 {
+		t.Errorf("expected embedding [0.1 0.2 0.3], got %v", results[0].Embedding)
+	}
+}
+
+// TestTxListEntities_ReturnsEmbedding pins the Transaction-layer
+// ListEntities conversion surfacing the proto Entity message's embedding
+// field, matching the write-path conversions.
+func TestTxListEntities_ReturnsEmbedding(t *testing.T) {
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			return &flowv1.ListEntitiesResponse{
+				Entities: []*flowv1.Entity{
+					{
+						EntityId:   "te1",
+						EntityType: componentType,
+						Embedding:  []float32{0.4, 0.5},
+					},
+				},
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	page, err := tx.ListEntities("Component")
+	if err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if len(page.Entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(page.Entities))
+	}
+	if len(page.Entities[0].Embedding) != 2 ||
+		page.Entities[0].Embedding[0] != 0.4 || page.Entities[0].Embedding[1] != 0.5 {
+		t.Errorf("expected embedding [0.4 0.5], got %v", page.Entities[0].Embedding)
 	}
 }
 

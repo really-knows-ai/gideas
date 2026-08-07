@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -147,6 +148,169 @@ func TestDeploymentEnvVarsNoRemoteAuthSecretRef(t *testing.T) {
 	if _, ok := envMap["REMOTE_AUTH_SECRET_REF"]; ok {
 		t.Error("REMOTE_AUTH_SECRET_REF must not be set when secretRef is absent")
 	}
+}
+
+// TestDeploymentEnvVarsRemoteURLAbsent exercises the REMOTE_URL-absent branch
+// (foundrygraph_infra.go: REMOTE_URL is appended only when the remote URL is non-empty):
+// a FoundryGraph without versioning.remote.url must not render the env var at all (SPEC
+// R5: REMOTE_URL has no default).
+func TestDeploymentEnvVarsRemoteURLAbsent(t *testing.T) {
+	r := &FoundryGraphReconciler{
+		CartographerPort:          50051,
+		CapabilityStalenessWindow: "30s",
+	}
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName},
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{
+					Auth: &flowv1.RemoteAuth{SecretRef: "remote-creds"},
+				},
+			},
+		},
+	}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	if _, ok := envMap["REMOTE_URL"]; ok {
+		t.Error("REMOTE_URL must be omitted when versioning.remote.url is empty (SPEC R5: no default)")
+	}
+	// The auth secret ref (independent branch) must still be rendered.
+	if e, ok := envMap["REMOTE_AUTH_SECRET_REF"]; !ok || e.Value != "remote-creds" {
+		t.Errorf("expected REMOTE_AUTH_SECRET_REF=remote-creds alongside the absent REMOTE_URL, got %+v (present=%v)", e, ok)
+	}
+}
+
+// TestDeploymentEnvVarsEventBusAddressPresent exercises the EVENT_BUS_ADDRESS-present
+// branch (foundrygraph_infra.go: EVENT_BUS_ADDRESS is appended from the reconciler's
+// runtime configuration when non-empty): the operator's EventBusAddress must be rendered
+// as the env var value (SPEC R5/R6 step 3).
+func TestDeploymentEnvVarsEventBusAddressPresent(t *testing.T) {
+	r := &FoundryGraphReconciler{
+		CartographerPort:          50051,
+		EventBusAddress:           "eventbus.foundry-flow.svc.cluster.local:50054",
+		CapabilityStalenessWindow: "30s",
+	}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName}}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	if e, ok := envMap["EVENT_BUS_ADDRESS"]; !ok || e.Value != "eventbus.foundry-flow.svc.cluster.local:50054" {
+		t.Errorf("expected EVENT_BUS_ADDRESS from the operator's runtime configuration, got %+v (present=%v)", e, ok)
+	}
+}
+
+// TestDeploymentEnvVarsEventBusAddressAbsent exercises the EVENT_BUS_ADDRESS-absent
+// branch: when the reconciler's EventBusAddress is empty the env var must be omitted
+// (SPEC R5: EVENT_BUS_ADDRESS has no default — the Cartographer's proxy is disabled).
+func TestDeploymentEnvVarsEventBusAddressAbsent(t *testing.T) {
+	r := &FoundryGraphReconciler{
+		CartographerPort:          50051,
+		CapabilityStalenessWindow: "30s",
+	}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName}}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	if _, ok := envMap["EVENT_BUS_ADDRESS"]; ok {
+		t.Error("EVENT_BUS_ADDRESS must be omitted when the operator has no Event Bus address (SPEC R5: no default)")
+	}
+}
+
+// TestDeploymentEnvVarsCapabilityStalenessWindowFallback exercises the "30s" default
+// fallback branch of CAPABILITY_STALENESS_WINDOW (foundrygraph_infra.go): when the
+// reconciler's CapabilityStalenessWindow is empty the env var must fall back to the SPEC
+// R5 default "30s".
+func TestDeploymentEnvVarsCapabilityStalenessWindowFallback(t *testing.T) {
+	r := &FoundryGraphReconciler{
+		CartographerPort: 50051,
+		// CapabilityStalenessWindow left empty → the "30s" fallback must apply.
+	}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName}}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	if e, ok := envMap["CAPABILITY_STALENESS_WINDOW"]; !ok || e.Value != "30s" {
+		t.Errorf("expected CAPABILITY_STALENESS_WINDOW to fall back to the SPEC R5 default 30s, got %+v (present=%v)", e, ok)
+	}
+}
+
+// TestDeploymentEnvVarsCapabilityStalenessWindowConfigured exercises the configured-value
+// branch: a non-empty reconciler CapabilityStalenessWindow must be rendered verbatim
+// rather than the default.
+func TestDeploymentEnvVarsCapabilityStalenessWindowConfigured(t *testing.T) {
+	r := &FoundryGraphReconciler{
+		CartographerPort:          50051,
+		CapabilityStalenessWindow: "1m",
+	}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName}}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	if e, ok := envMap["CAPABILITY_STALENESS_WINDOW"]; !ok || e.Value != "1m" {
+		t.Errorf("expected CAPABILITY_STALENESS_WINDOW to carry the configured value 1m, got %+v (present=%v)", e, ok)
+	}
+}
+
+// TestDeploymentEnvVarsTransactionTimeout exercises the two TRANSACTION_TIMEOUT branches
+// (foundrygraph_infra.go: the spec duration is forwarded as the env value when set; the
+// SPEC R5 default "30m" applies when absent): a wrong value in either branch must fail
+// the test.
+func TestDeploymentEnvVarsTransactionTimeout(t *testing.T) {
+	t.Run("spec duration forwarded as the env value", func(t *testing.T) {
+		r := &FoundryGraphReconciler{CartographerPort: 50051, CapabilityStalenessWindow: "30s"}
+		fg := &flowv1.FoundryGraph{
+			ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName},
+			Spec: flowv1.FoundryGraphSpec{
+				Versioning: &flowv1.VersioningSpec{
+					TransactionTimeout: &metav1.Duration{Duration: 45 * time.Minute},
+				},
+			},
+		}
+
+		env := r.deploymentEnvVars(fg)
+		envMap := make(map[string]corev1.EnvVar, len(env))
+		for _, e := range env {
+			envMap[e.Name] = e
+		}
+		if e, ok := envMap["TRANSACTION_TIMEOUT"]; !ok || e.Value != "45m0s" {
+			t.Errorf("expected TRANSACTION_TIMEOUT to forward the spec duration 45m0s, got %+v (present=%v)", e, ok)
+		}
+	})
+
+	t.Run("30m fallback when the spec omits transactionTimeout", func(t *testing.T) {
+		r := &FoundryGraphReconciler{CartographerPort: 50051, CapabilityStalenessWindow: "30s"}
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName}}
+
+		env := r.deploymentEnvVars(fg)
+		envMap := make(map[string]corev1.EnvVar, len(env))
+		for _, e := range env {
+			envMap[e.Name] = e
+		}
+		if e, ok := envMap["TRANSACTION_TIMEOUT"]; !ok || e.Value != transactionTimeoutDefault {
+			t.Errorf("expected TRANSACTION_TIMEOUT to fall back to the SPEC R5 default 30m, got %+v (present=%v)", e, ok)
+		}
+	})
 }
 
 func TestLabelsForCartographer(t *testing.T) {
@@ -416,6 +580,25 @@ func TestReconcileRBACRemoteAuthTeardown(t *testing.T) {
 	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}, &gotRole); err == nil {
 		t.Fatal("expected remote-auth Role to be deleted when secretRef is removed")
 	}
+
+	// SPEC R6: "The verification key Role and RoleBinding are unaffected by either
+	// change." Tearing down the remote-auth set must leave the key-reader Role and
+	// RoleBinding in place, still referencing both verification-key Secrets.
+	var keyRole rbacv1.Role
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: keyReaderRoleName, Namespace: ns}, &keyRole); err != nil {
+		t.Fatalf("expected the key-reader Role to survive the remote-auth teardown: %v", err)
+	}
+	if len(keyRole.Rules) != 1 || len(keyRole.Rules[0].ResourceNames) != 2 ||
+		keyRole.Rules[0].ResourceNames[0] != operatorKeySecretName || keyRole.Rules[0].ResourceNames[1] != sidecarKeySecretName {
+		t.Errorf("key-reader Role must still reference both verification key Secrets, got %+v", keyRole.Rules)
+	}
+	var keyRB rbacv1.RoleBinding
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: keyReaderRoleName, Namespace: ns}, &keyRB); err != nil {
+		t.Fatalf("expected the key-reader RoleBinding to survive the remote-auth teardown: %v", err)
+	}
+	if keyRB.RoleRef.Name != keyReaderRoleName {
+		t.Errorf("key-reader RoleBinding RoleRef mismatch after teardown: %q", keyRB.RoleRef.Name)
+	}
 }
 
 // TestReconcileRBACCreation verifies the CREATE path (item 8): reconcileRBAC creates the
@@ -453,23 +636,23 @@ func TestReconcileRBACCreation(t *testing.T) {
 
 	// Key-reader Role created with get on the verification-key Secrets.
 	var keyRole rbacv1.Role
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-key-reader", Namespace: ns}, &keyRole); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: keyReaderRoleName, Namespace: ns}, &keyRole); err != nil {
 		t.Fatalf("expected key-reader Role to be created: %v", err)
 	}
 	if len(keyRole.Rules) != 1 {
 		t.Fatalf("expected 1 rule on key-reader Role, got %d", len(keyRole.Rules))
 	}
 	names := keyRole.Rules[0].ResourceNames
-	if len(names) != 2 || names[0] != "cartographer-operator-key" || names[1] != "cartographer-sidecar-key" {
+	if len(names) != 2 || names[0] != operatorKeySecretName || names[1] != sidecarKeySecretName {
 		t.Errorf("key-reader Role must reference the two verification key Secrets, got %v", names)
 	}
 
 	// Key-reader RoleBinding bound to the ServiceAccount.
 	var keyRB rbacv1.RoleBinding
-	if err := fakeCli.Get(ctx, client.ObjectKey{Name: "cartographer-flow-graph-key-reader", Namespace: ns}, &keyRB); err != nil {
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: keyReaderRoleName, Namespace: ns}, &keyRB); err != nil {
 		t.Fatalf("expected key-reader RoleBinding to be created: %v", err)
 	}
-	if keyRB.RoleRef.Name != "cartographer-flow-graph-key-reader" {
+	if keyRB.RoleRef.Name != keyReaderRoleName {
 		t.Errorf("key-reader RoleBinding RoleRef mismatch: %q", keyRB.RoleRef.Name)
 	}
 	if len(keyRB.Subjects) != 1 || keyRB.Subjects[0].Name != cartographerSvcName {
@@ -553,6 +736,26 @@ func TestReconcileRBACRemoteAuthSecretChanged(t *testing.T) {
 	}
 	if gotRB.RoleRef.Name != "cartographer-flow-graph-remote-auth" {
 		t.Errorf("remote-auth RoleBinding RoleRef changed unexpectedly: %q", gotRB.RoleRef.Name)
+	}
+
+	// SPEC R6: "The verification key Role and RoleBinding are unaffected by either
+	// change." Updating the remote-auth set for a new Secret name must leave the
+	// key-reader Role and RoleBinding untouched, still referencing both verification-key
+	// Secrets.
+	var keyRole rbacv1.Role
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: keyReaderRoleName, Namespace: ns}, &keyRole); err != nil {
+		t.Fatalf("expected the key-reader Role to survive the remote-auth Secret change: %v", err)
+	}
+	if len(keyRole.Rules) != 1 || len(keyRole.Rules[0].ResourceNames) != 2 ||
+		keyRole.Rules[0].ResourceNames[0] != operatorKeySecretName || keyRole.Rules[0].ResourceNames[1] != sidecarKeySecretName {
+		t.Errorf("key-reader Role must still reference both verification key Secrets, got %+v", keyRole.Rules)
+	}
+	var keyRB rbacv1.RoleBinding
+	if err := fakeCli.Get(ctx, client.ObjectKey{Name: keyReaderRoleName, Namespace: ns}, &keyRB); err != nil {
+		t.Fatalf("expected the key-reader RoleBinding to survive the remote-auth Secret change: %v", err)
+	}
+	if keyRB.RoleRef.Name != keyReaderRoleName {
+		t.Errorf("key-reader RoleBinding RoleRef mismatch after Secret change: %q", keyRB.RoleRef.Name)
 	}
 }
 

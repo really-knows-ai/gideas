@@ -474,6 +474,53 @@ func TestValidate_NilSchema(t *testing.T) {
 	}
 }
 
+// A nil element inside a repeated field (nil *EntityType, *EdgeType, *Property,
+// or *ConnectionRule) must be rejected with ErrNilElement, never panicked on.
+// Validate guards every repeated-field element before dereferencing it
+// (validate.go), so a malformed ApplySchema request forwarded to Validate is
+// an INVALID_ARGUMENT, not a crash.
+func TestValidate_NilElements(t *testing.T) {
+	tests := []struct {
+		name string
+		s    *flowv1.Schema
+	}{
+		{"nil entity type element", &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{nil},
+		}},
+		{"nil edge type element", &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{nil},
+		}},
+		{"nil property element in entity type", &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{
+				Name:       "Component",
+				Properties: []*flowv1.Property{nil},
+			}},
+		}},
+		{"nil property element in edge type", &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{{
+				Name:       "DEPENDS_ON",
+				Properties: []*flowv1.Property{nil},
+			}},
+		}},
+		{"nil rule element", &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{
+				Name:  "Component",
+				Rules: []*flowv1.ConnectionRule{nil},
+			}},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Validate(tc.s)
+			if err == nil {
+				t.Fatal("expected ErrNilElement, got nil")
+			} else if !errors.Is(err, ErrNilElement) {
+				t.Fatalf("expected ErrNilElement, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidate_SelfReferencingRule(t *testing.T) {
 	s := &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
@@ -627,6 +674,85 @@ func TestValidate_CypherIdentifierBoundaryCases(t *testing.T) {
 			}
 			if !tc.valid && err == nil {
 				t.Fatalf("expected error for %q, got nil", tc.typeName)
+			}
+		})
+	}
+}
+
+// The Cypher-identifier regex requirement (SPEC R1, error-table row "Name
+// violates Cypher identifier regex" → INVALID_ARGUMENT, SPEC:888) applies to
+// edge type names and edge property names exactly as it does to entity type
+// names and entity property names (validate.go validateEdgeType). TestValidate_
+// CypherIdentifierBoundaryCases above exercises only entity type names, so pin
+// the edge-side regex branches here, mirroring that test's shape.
+func TestValidate_CypherIdentifierBoundaryCasesEdgeType(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeName string
+		valid    bool
+	}{
+		{"single letter", "a", true},
+		{"underscore only", "_", true},
+		{"trailing digits", "type42", true},
+		{"starts with digit", "1type", false},
+		{"contains hyphen", "my-type", false},
+		{"empty string", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &flowv1.Schema{
+				EdgeTypes: []*flowv1.EdgeType{
+					{Name: tc.typeName},
+				},
+			}
+			err := Validate(s)
+			if tc.valid && err != nil {
+				t.Fatalf("expected nil error for %q, got: %v", tc.typeName, err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatalf("expected error for %q, got nil", tc.typeName)
+			}
+			if !tc.valid && err != nil && !errors.Is(err, ErrInvalidName) {
+				t.Fatalf("expected ErrInvalidName for %q, got: %v", tc.typeName, err)
+			}
+		})
+	}
+}
+
+func TestValidate_CypherIdentifierBoundaryCasesEdgeProperty(t *testing.T) {
+	tests := []struct {
+		name         string
+		propertyName string
+		valid        bool
+	}{
+		{"single letter", "a", true},
+		{"underscore only", "_", true},
+		{"trailing digits", "prop42", true},
+		{"starts with digit", "1prop", false},
+		{"contains hyphen", "my-prop", false},
+		{"empty string", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &flowv1.Schema{
+				EdgeTypes: []*flowv1.EdgeType{
+					{
+						Name: "DEPENDS_ON",
+						Properties: []*flowv1.Property{
+							{Name: tc.propertyName, Type: "string"},
+						},
+					},
+				},
+			}
+			err := Validate(s)
+			if tc.valid && err != nil {
+				t.Fatalf("expected nil error for %q, got: %v", tc.propertyName, err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatalf("expected error for %q, got nil", tc.propertyName)
+			}
+			if !tc.valid && err != nil && !errors.Is(err, ErrInvalidName) {
+				t.Fatalf("expected ErrInvalidName for %q, got: %v", tc.propertyName, err)
 			}
 		})
 	}

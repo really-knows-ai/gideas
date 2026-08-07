@@ -31,10 +31,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -88,6 +91,25 @@ var errWipeBlockedByOpenTransactions = errors.New("wipe blocked by open transact
 // cancellation), so a slow or blackholed Cartographer would otherwise hang the reconcile
 // indefinitely rather than failing fast into the SPEC R6 requeue-with-backoff path.
 const grpcCallTimeout = 30 * time.Second
+
+// readinessBackoffBase and readinessBackoffMax are the SPEC R6 step-5 readiness-failure
+// backoff parameters: exponential backoff with an initial delay of ~5s, doubling per
+// attempt, capped at 5m ("Reconcile() returns an error — controller-runtime re-queues the
+// request with exponential backoff (initial delay ~5s, doubling per attempt, capped at
+// 5m)"). Configured on the FoundryGraph controller's workqueue rate limiter below so the
+// deployed operator uses these parameters instead of controller-runtime's defaults (5ms
+// initial, 1000s cap).
+const (
+	readinessBackoffBase = 5 * time.Second
+	readinessBackoffMax  = 5 * time.Minute
+)
+
+// readinessRateLimiter returns the workqueue rate limiter for the FoundryGraph
+// controller's error requeues, implementing the SPEC R6 step-5 backoff parameters
+// (initial ~5s, doubling per attempt, capped at 5m).
+func readinessRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
+	return workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](readinessBackoffBase, readinessBackoffMax)
+}
 
 // Reconcile implements the main reconciliation loop for FoundryGraph.
 func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -247,7 +269,10 @@ func (r *FoundryGraphReconciler) enforceSingleton(ctx context.Context, fg *flowv
 // setConflictCondition sets the FoundryGraphConflict condition on a FoundryGraph that is
 // not the namespace's singleton owner (SPEC R1) and returns without an error so the
 // conflict is not re-queued with exponential backoff — resolution is user action (delete
-// one of the FoundryGraphs), and the periodic resync (10m) re-evaluates ownership.
+// one of the FoundryGraphs). The 10m RequeueAfter matches the Ready path cadence so owner
+// promotion is re-evaluated promptly after the namespace owner is deleted instead of
+// waiting for the manager's informer resync (controller-runtime default ~10h) with a
+// stale FoundryGraphConflict condition in the meantime.
 func (r *FoundryGraphReconciler) setConflictCondition(ctx context.Context, fg *flowv1.FoundryGraph) (ctrl.Result, error) {
 	if err := r.Get(ctx, client.ObjectKeyFromObject(fg), fg); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -262,7 +287,7 @@ func (r *FoundryGraphReconciler) setConflictCondition(ctx context.Context, fg *f
 	if err := r.Status().Update(ctx, fg); err != nil {
 		return ctrl.Result{}, fmt.Errorf("set conflict condition: %w", err)
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 }
 
 // applySchemaOnExisting applies schema changes to the existing Cartographer pod.
@@ -611,5 +636,9 @@ func (r *FoundryGraphReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&corev1.Secret{}).
 		Named("foundrygraph").
+		// SPEC R6 steps 5-6 and the destructive-change flow require error requeues to
+		// use the documented exponential backoff (initial ~5s, doubling, 5m cap) rather
+		// than controller-runtime's default per-item limiter (5ms initial, 1000s cap).
+		WithOptions(controller.Options{RateLimiter: readinessRateLimiter()}).
 		Complete(r)
 }

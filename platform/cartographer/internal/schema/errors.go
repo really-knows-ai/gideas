@@ -11,4 +11,5 @@ var (
 	ErrInvalidPropertyType     = schemaerrors.ErrInvalidPropertyType
 	ErrEmptyRuleList           = schemaerrors.ErrEmptyRuleList
 	ErrUndeclaredTypeRef       = schemaerrors.ErrUndeclaredTypeRef
+	ErrNilElement              = schemaerrors.ErrNilElement
 )

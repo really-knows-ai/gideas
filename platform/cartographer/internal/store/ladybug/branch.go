@@ -230,7 +230,7 @@ func rebuildBranchSchemaCache(conn *lbug.Connection) (
 			continue
 		}
 		name, kind := fmt.Sprint(values[1]), strings.ToUpper(fmt.Sprint(values[2]))
-		properties, err := tablePropertiesOnConn(conn, name)
+		properties, err := tablePropertiesOnConn(conn, name, kind, vectorIndexes[name])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -270,13 +270,33 @@ func vectorIndexesOnConn(conn *lbug.Connection) (map[string]bool, error) {
 	return indexes, nil
 }
 
-func tablePropertiesOnConn(conn *lbug.Connection, table string) ([]store.PropertyDef, error) {
+// tablePropertiesOnConn reads a table's column definitions via table_info.
+// Structural column skipping is table-kind-dependent (see getTableProperties):
+// REL tables skip their from/to/type endpoint columns; vector-indexed NODE
+// tables skip their embedding column. SPEC-valid entity properties named
+// from/to/type (or embedding on a non-vector entity type) are real properties
+// and are retained. vectorIndexed reports whether the NODE table carries an
+// HNSW vector index (the embedding column and its index are bootstrapped
+// together, so an index implies a structural embedding column).
+func tablePropertiesOnConn(
+	conn *lbug.Connection, table, tableType string, vectorIndexed bool,
+) ([]store.PropertyDef, error) {
 	result, err := conn.Query(fmt.Sprintf("CALL table_info('%s') RETURN *;", table))
 	if err != nil {
 		return nil, err
 	}
 	defer result.Close()
-	skip := map[string]bool{"id": true, "embedding": true, "from": true, "to": true, "type": true}
+	skip := map[string]bool{"id": true}
+	switch strings.ToUpper(tableType) {
+	case "NODE":
+		if vectorIndexed {
+			skip["embedding"] = true
+		}
+	case "REL":
+		skip["from"] = true
+		skip["to"] = true
+		skip["type"] = true
+	}
 	properties := []store.PropertyDef{}
 	for result.HasNext() {
 		tuple, err := result.Next()
@@ -856,7 +876,14 @@ func (db *ladybugDB) ensureEntityLoadSchema(
 			}
 		}
 		for name := range names {
-			props = append(props, store.PropertyDef{Name: name, Type: colTypeString})
+			// Store the proto type ("string"), not the catalog type (colTypeString):
+			// PropertyDef.Type is the proto type everywhere else, and schema.json
+			// persists it verbatim — validateSchemaMetadata reconstructs a proto
+			// schema from it on reopen, and schema.Validate rejects any type other
+			// than "string" (ErrInvalidPropertyType), which would brick the next
+			// file-backed Open (SPEC R8 corruption-recovery flow). createNodeTableOnConn
+			// maps it to the catalog type via ladybugType, so DDL is unaffected.
+			props = append(props, store.PropertyDef{Name: name, Type: "string"})
 		}
 		slices.SortFunc(props, func(a, b store.PropertyDef) int {
 			return strings.Compare(a.Name, b.Name)
@@ -871,6 +898,130 @@ func (db *ladybugDB) ensureEntityLoadSchema(
 		entDefs[typeName] = &store.EntityTypeDef{Name: typeName, Properties: props}
 	}
 	return nil
+}
+
+// ensureEdgeLoadSchema makes the rel table exist before edges are loaded from
+// files. When no schema is applied (empty edgeDefs), the table is inferred on
+// demand from the directory structure (SPEC R8), mirroring
+// ensureEntityLoadSchema: the union of property names across the type's JSON
+// files becomes real columns so a property-bearing file's
+// `CREATE (a)-[:T {col: $v}]->(b)` does not target a non-existent column. The
+// FROM/TO endpoint pairs are inferred by resolving each edge file's from/to
+// entity IDs to their node labels — entities are loaded before edges on both
+// the main and branch paths, so the endpoint tables already exist. This is
+// required, not cosmetic: a rel table whose FROM/TO clauses do not name the
+// endpoint node types silently drops the CREATE (no error, no edge), so the
+// _untyped placeholder fallback would lose every inferred edge.
+// ponytail: inferred property types are always "string" (same rationale as
+// ensureEntityLoadSchema). If a future file representation carries non-string
+// property values, inference here would need corresponding handling.
+func (db *ladybugDB) ensureEdgeLoadSchema(
+	conn *lbug.Connection, typeName, typeDir string, edgeDefs map[string]*store.EdgeTypeDef,
+) error {
+	if _, known := edgeDefs[typeName]; known {
+		// The rel table already exists (created by ApplySchema or restored from
+		// schema metadata); only types absent from the applied schema need
+		// inference.
+		return nil
+	}
+	names := make(map[string]bool)
+	pairs := make(map[string]fromToPair) // "from|to" -> pair
+	if files, err := db.readDir(typeDir); err == nil {
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
+			if err != nil {
+				continue
+			}
+			var je struct {
+				From       string            `json:"from"`
+				To         string            `json:"to"`
+				Properties map[string]string `json:"properties"`
+			}
+			if err := json.Unmarshal(data, &je); err != nil {
+				continue
+			}
+			for k := range je.Properties {
+				names[k] = true
+			}
+			if je.From == "" || je.To == "" {
+				continue
+			}
+			fromType, err := nodeLabelOnConn(conn, je.From)
+			if err != nil {
+				return fmt.Errorf("resolve edge %q from endpoint %q: %w", typeName, je.From, err)
+			}
+			toType, err := nodeLabelOnConn(conn, je.To)
+			if err != nil {
+				return fmt.Errorf("resolve edge %q to endpoint %q: %w", typeName, je.To, err)
+			}
+			pairs[fromType+"|"+toType] = fromToPair{From: fromType, To: toType}
+		}
+	}
+	var props []store.PropertyDef
+	for name := range names {
+		// Store the proto type ("string"), not the catalog type (colTypeString):
+		// PropertyDef.Type is the proto type everywhere else, and schema.json
+		// persists it verbatim (see ensureEntityLoadSchema for the full
+		// rationale). createRelTableOnConn maps it to the catalog type via
+		// ladybugType, so DDL is unaffected.
+		props = append(props, store.PropertyDef{Name: name, Type: "string"})
+	}
+	slices.SortFunc(props, func(a, b store.PropertyDef) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	var pairList []fromToPair
+	for _, p := range pairs {
+		pairList = append(pairList, p)
+	}
+	slices.SortFunc(pairList, func(a, b fromToPair) int {
+		if c := strings.Compare(a.From, b.From); c != 0 {
+			return c
+		}
+		return strings.Compare(a.To, b.To)
+	})
+	if err := createRelTableOnConn(conn, typeName, props, pairList); err != nil {
+		return fmt.Errorf("create edge table %q for load: %w", typeName, err)
+	}
+	// Infer schema from the directory structure: register the type so
+	// subsequent files of the same type are treated as known.
+	edgeDefs[typeName] = &store.EdgeTypeDef{Name: typeName, Properties: props}
+	return nil
+}
+
+// nodeLabelOnConn resolves an entity ID to its node label (type name). The
+// entity tables are created before edge tables on both the main and branch
+// file-load paths, so the node is findable here.
+func nodeLabelOnConn(conn *lbug.Connection, id string) (string, error) {
+	stmt, err := conn.Prepare("MATCH (n {id: $id}) RETURN n;")
+	if err != nil {
+		return "", err
+	}
+	result, err := conn.Execute(stmt, map[string]any{"id": id})
+	stmt.Close()
+	if err != nil {
+		return "", err
+	}
+	defer result.Close()
+	if !result.HasNext() {
+		return "", fmt.Errorf("endpoint entity %q not found", id)
+	}
+	tuple, err := result.Next()
+	if err != nil {
+		return "", err
+	}
+	m, err := tuple.GetAsMap()
+	tuple.Close()
+	if err != nil {
+		return "", err
+	}
+	node, ok := m["n"].(lbug.Node)
+	if !ok {
+		return "", fmt.Errorf("endpoint entity %q: unexpected node type %T", id, m["n"])
+	}
+	return node.Label, nil
 }
 
 // ensureEmbeddingLoadSchema adds the embedding column (and vector index) to the
@@ -1017,6 +1168,9 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
+		if err := db.ensureEdgeLoadSchema(db.conn, typeName, typeDir, edgeDefs); err != nil {
+			return err
+		}
 		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
@@ -1179,6 +1333,9 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			continue
 		}
 		typeDir := filepath.Join(dir, typeName)
+		if err := db.ensureEdgeLoadSchema(conn, typeName, typeDir, edgeDefs); err != nil {
+			return err
+		}
 		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read edges dir %q: %w", typeDir, err)

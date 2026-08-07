@@ -108,8 +108,17 @@ func vectorIndexExists(conn *lbug.Connection, table string) bool {
 }
 
 // getTableProperties queries table_info for the given table and returns its
-// column definitions (excluding hidden/system columns).
-func (db *ladybugDB) getTableProperties(tableName string) ([]store.PropertyDef, error) {
+// column definitions (excluding hidden/system columns). Which columns are
+// structural (and therefore not user properties) depends on the table kind:
+// REL tables carry structural from/to/type endpoint columns, and vector-indexed
+// NODE tables carry a structural embedding column. SPEC R1 reserves those names
+// only in those positions — an entity property named from/to/type is not a
+// reserved word and passes schema.Validate, and a non-vector entity type may
+// declare a property named embedding — so they must be retained as real
+// properties on NODE tables. vectorIndexed reports whether the NODE table
+// carries an HNSW vector index (the embedding column and its index are
+// bootstrapped together, so an index implies a structural embedding column).
+func (db *ladybugDB) getTableProperties(tableName, tableType string, vectorIndexed bool) ([]store.PropertyDef, error) {
 	q := fmt.Sprintf("CALL table_info('%s') RETURN *;", tableName)
 	result, err := db.conn.Query(q)
 	if err != nil {
@@ -118,12 +127,16 @@ func (db *ladybugDB) getTableProperties(tableName string) ([]store.PropertyDef, 
 	defer result.Close()
 
 	// Skip implicit/self-managed columns that we don't expose as user properties.
-	skip := map[string]bool{
-		"id":        true,
-		"embedding": true,
-		"from":      true,
-		"to":        true,
-		"type":      true,
+	skip := map[string]bool{"id": true}
+	switch strings.ToUpper(tableType) {
+	case tableTypeNode:
+		if vectorIndexed {
+			skip["embedding"] = true
+		}
+	case tableTypeRel:
+		skip["from"] = true
+		skip["to"] = true
+		skip["type"] = true
 	}
 
 	var props []store.PropertyDef
@@ -487,7 +500,7 @@ func (db *ladybugDB) rebuildSchemaCacheLocked() error {
 		tableName := fmt.Sprintf("%v", vals[1])
 		tableType := fmt.Sprintf("%v", vals[2])
 
-		props, err := db.getTableProperties(tableName)
+		props, err := db.getTableProperties(tableName, tableType, hasVectorIdx[tableName])
 		if err != nil {
 			return err
 		}

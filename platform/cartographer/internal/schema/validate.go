@@ -14,15 +14,15 @@ var cypherIdentifierRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 const maxNameLength = 255
 
 // Validate validates the given schema and returns the first validation error found.
-// Validation is performed in the order specified in PHASE_02.md §E:
-//  1. Duplicate type names
-//  2. Duplicate property names
-//  3. Name format and length
-//  4. Reserved words
-//  5. Implicit-column collision (entities)
-//  6. Implicit-column collision (edges)
-//  7. Property type must be "string"
-//  8. Rule validation (undeclared references, empty lists)
+// Validation runs in this order:
+//  1. Duplicate type names (entity types, then edge types)
+//  2. Per type, in list order: the type name's format and reserved-word status
+//  3. Per property within a type, in declaration order: duplicate property
+//     names, property name format, reserved-word status, implicit-column
+//     collision (entity: id/embedding when vector index enabled; edge:
+//     id/from/to/type), and property type must be "string"
+//  4. Rule validation (undeclared references, empty lists), after each entity
+//     type's properties pass
 func Validate(schema *flowv1.Schema) error {
 	// An omitted schema (nil proto3 message field — e.g. an
 	// ApplySchemaRequest without a schema, forwarded unguarded by the handler)
@@ -35,7 +35,10 @@ func Validate(schema *flowv1.Schema) error {
 
 	// 1. Duplicate type names
 	entityTypeNames := make(map[string]bool, len(schema.EntityTypes))
-	for _, et := range schema.EntityTypes {
+	for i, et := range schema.EntityTypes {
+		if et == nil {
+			return fmt.Errorf("%w: entity type %d is nil", ErrNilElement, i)
+		}
 		if entityTypeNames[et.Name] {
 			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
 		}
@@ -43,7 +46,10 @@ func Validate(schema *flowv1.Schema) error {
 	}
 
 	edgeTypeNames := make(map[string]bool, len(schema.EdgeTypes))
-	for _, et := range schema.EdgeTypes {
+	for i, et := range schema.EdgeTypes {
+		if et == nil {
+			return fmt.Errorf("%w: edge type %d is nil", ErrNilElement, i)
+		}
 		if edgeTypeNames[et.Name] {
 			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
 		}
@@ -80,7 +86,10 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 
 	// 2. Duplicate property names within this type
 	propNames := make(map[string]bool, len(et.Properties))
-	for _, p := range et.Properties {
+	for i, p := range et.Properties {
+		if p == nil {
+			return fmt.Errorf("%w: property %d in entity type %q is nil", ErrNilElement, i, et.Name)
+		}
 		if propNames[p.Name] {
 			return fmt.Errorf("%w: duplicate property %q in entity type %q", ErrDuplicatePropertyName, p.Name, et.Name)
 		}
@@ -129,7 +138,10 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 
 	// 2. Duplicate property names within this type
 	propNames := make(map[string]bool, len(et.Properties))
-	for _, p := range et.Properties {
+	for i, p := range et.Properties {
+		if p == nil {
+			return fmt.Errorf("%w: property %d in edge type %q is nil", ErrNilElement, i, et.Name)
+		}
 		if propNames[p.Name] {
 			return fmt.Errorf("%w: duplicate property %q in edge type %q", ErrDuplicatePropertyName, p.Name, et.Name)
 		}
@@ -163,6 +175,9 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 func validateRules(rules []*flowv1.ConnectionRule, entityTypeNames,
 	edgeTypeNames map[string]bool, entityTypeName string) error {
 	for i, rule := range rules {
+		if rule == nil {
+			return fmt.Errorf("%w: rule %d in entity type %q is nil", ErrNilElement, i, entityTypeName)
+		}
 		if len(rule.CanConnectTo) == 0 {
 			return fmt.Errorf("%w: rule %d in entity type %q has empty canConnectTo", ErrEmptyRuleList, i, entityTypeName)
 		}

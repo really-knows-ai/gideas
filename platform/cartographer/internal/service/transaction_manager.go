@@ -258,10 +258,20 @@ func (tm *TransactionManager) ExtendTimeout(
 		return errInvalidExtendTimeoutDuration("total lifetime would exceed 7-day maximum")
 	}
 
+	oldExpiresAt := state.ExpiresAt
+	oldAppliedTimeout := state.AppliedTimeout
 	state.ExpiresAt = now.Add(duration)
 	state.AppliedTimeout = duration
 	if persist != nil {
 		if err := persist(state); err != nil {
+			// Revert the in-memory mutations on persist failure so the RPC's
+			// reported failure is not contradicted by a live extended expiry
+			// (recovery on restart restores the persisted, un-extended timeout —
+			// the in-memory/durable divergence would otherwise be silent until
+			// then). Mirrors the revert-on-persist-failure pattern used in
+			// RefreshTransaction's MainHeadAtLastSync update.
+			state.ExpiresAt = oldExpiresAt
+			state.AppliedTimeout = oldAppliedTimeout
 			return err
 		}
 	}

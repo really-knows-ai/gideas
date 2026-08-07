@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -57,6 +58,11 @@ const (
 	rpcApply            = "apply"
 	rpcHealth           = "health"
 	rpcWipe             = "wipe"
+	// keyReaderRoleName is the verification-key Role/RoleBinding name rendered for the
+	// conventional flow-graph name ("cartographer-<fg-name>-key-reader").
+	keyReaderRoleName = "cartographer-flow-graph-key-reader"
+	// transactionTimeoutDefault is the SPEC R5 TRANSACTION_TIMEOUT fallback ("30m").
+	transactionTimeoutDefault = "30m"
 )
 
 func TestFoundryGraphReconciler_CartographerServiceName(t *testing.T) {
@@ -378,6 +384,97 @@ func TestReconcileDuplicateTypeNameFailsPostProvisioning(t *testing.T) {
 	// Provisioning must have occurred before the failure (the Cartographer exists and
 	// ApplySchema failed against it) — proving the operator-side pre-provisioning
 	// duplicate-type rejection is gone.
+	var pvc corev1.PersistentVolumeClaim
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "data-flow-graph", Namespace: ns}, &pvc); err != nil {
+		t.Errorf("expected the PVC to be provisioned before the schema-apply failure, got: %v", err)
+	}
+}
+
+// TestReconcileDuplicatePropertyNameFailsPostProvisioning mirrors the duplicate-type-name
+// test for duplicate property names (SPEC R1: "Duplicate name values within a properties
+// list ... are rejected at schema application time (INVALID_ARGUMENT)", post-provisioning
+// — the API server accepts the CR because the CRD-level validation covers only maxLength
+// and the Cypher-identifier regex). The Operator provisions the Cartographer and
+// ApplySchema fails, surfacing via the ReconcileFailed status condition and a
+// requeue-with-backoff error.
+func TestReconcileDuplicatePropertyNameFailsPostProvisioning(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
+		Spec: flowv1.FoundryGraphSpec{
+			EntityTypes: []flowv1.EntityTypeSpec{{
+				Name: "Widget",
+				Properties: []flowv1.PropertySpec{
+					{Name: "sku", Type: "string"},
+					{Name: "sku", Type: "string"}, // duplicate property name — must fail at ApplySchema, post-provisioning
+				},
+			}},
+		},
+	}
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+	// A ready Deployment so waitForReadiness returns immediately and the reconcile
+	// reaches the step-10 ApplySchema.
+	replicas := int32(1)
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
+	}
+
+	applyCalled := false
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
+	r := &FoundryGraphReconciler{
+		Client:            fakeCli,
+		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+					applyCalled = true
+					// SPEC R1: duplicate property names are rejected at schema application time.
+					return nil, status.Error(codes.InvalidArgument, "duplicate property name sku")
+				},
+			}, nil
+		},
+	}
+
+	ctx := context.Background()
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: ns}}); err == nil {
+		t.Fatal("expected Reconcile to return an error (requeue with backoff) when ApplySchema rejects the duplicate property name")
+	}
+
+	// The duplicate property name must have reached the Cartographer — provisioning
+	// happened first (post-provisioning failure mode), so ApplySchema was invoked.
+	if !applyCalled {
+		t.Error("expected ApplySchema to be invoked with the duplicate-property spec (post-provisioning failure mode)")
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeCli.Get(ctx, types.NamespacedName{Name: defaultGraphName, Namespace: ns}, &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil {
+		t.Fatal("expected a Ready condition to be set for the invalid spec")
+	}
+	if ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
+		t.Errorf("expected Ready=False/ReconcileFailed for the rejected schema, got %v", ready)
+	}
+
+	// Provisioning must have occurred before the failure.
 	var pvc corev1.PersistentVolumeClaim
 	if err := fakeCli.Get(ctx, types.NamespacedName{Name: "data-flow-graph", Namespace: ns}, &pvc); err != nil {
 		t.Errorf("expected the PVC to be provisioned before the schema-apply failure, got: %v", err)
@@ -895,9 +992,15 @@ func TestReconcileSingletonConflictSetsConditionAndDoesNotProvision(t *testing.T
 
 	ctx := context.Background()
 	// Reconciling the conflicting resource must set FoundryGraphConflict and provision
-	// nothing — no error (no requeue-with-backoff; resolution is user action).
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "second-graph", Namespace: ns}}); err != nil {
+	// nothing — no error (no requeue-with-backoff; resolution is user action), but a
+	// RequeueAfter on the same 10m cadence as the Ready path so owner promotion is
+	// re-evaluated promptly after the namespace owner is deleted (SPEC R1).
+	result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "second-graph", Namespace: ns}})
+	if err != nil {
 		t.Fatalf("expected no error for a singleton conflict (no backoff requeue), got: %v", err)
+	}
+	if result.RequeueAfter != 10*time.Minute {
+		t.Errorf("expected the conflict result to requeue after 10m (owner-promotion re-evaluation cadence), got %+v", result)
 	}
 
 	var got flowv1.FoundryGraph
@@ -1006,6 +1109,75 @@ func fullSuccessDialer(ctx context.Context, endpoint string) (CartographerClient
 	return &mockCartographerClient{}, nil
 }
 
+// TestEnforceSingletonListError covers the r.List error branch of enforceSingleton
+// (SPEC R1 singleton enforcement): a list failure (RBAC/apiserver/transient) must be
+// surfaced as an error (funnelling into setFailedCondition in Reconcile) rather than
+// silently treating the namespace as empty, which would let a duplicate FoundryGraph be
+// provisioned.
+func TestEnforceSingletonListError(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+	interceptorFuncs := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			return errors.New("apiserver unavailable")
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+	conflict, err := r.enforceSingleton(context.Background(), fg)
+	if err == nil {
+		t.Fatal("expected enforceSingleton to surface the List error")
+	}
+	if conflict {
+		t.Error("expected conflict=false when the list itself failed")
+	}
+	if !strings.Contains(err.Error(), "list FoundryGraphs for singleton enforcement") {
+		t.Errorf("expected the list error to be wrapped with context, got: %v", err)
+	}
+}
+
+// TestEnforceSingletonEqualTimestampNameTiebreak covers the equal-CreationTimestamp
+// name-tiebreak branch of enforceSingleton: when two FoundryGraphs share a creation
+// timestamp (created together, or the zero-timestamp fake-client case), the owner is the
+// lexicographically-earlier name and the other resource is the conflict.
+func TestEnforceSingletonEqualTimestampNameTiebreak(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+
+	// Both resources share the same creation timestamp; "a-graph" sorts before
+	// "z-graph" and must be the owner.
+	ts := metav1.Now()
+	a := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "a-graph", Namespace: testNS, CreationTimestamp: ts}}
+	z := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: "z-graph", Namespace: testNS, CreationTimestamp: ts}}
+
+	t.Run("later name is the conflict", func(t *testing.T) {
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(a, z).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+		conflict, err := r.enforceSingleton(context.Background(), z)
+		if err != nil {
+			t.Fatalf("enforceSingleton: %v", err)
+		}
+		if !conflict {
+			t.Error("expected the lexicographically-later name to be the conflict on equal timestamps")
+		}
+	})
+
+	t.Run("earlier name is the owner", func(t *testing.T) {
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(a, z).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+		conflict, err := r.enforceSingleton(context.Background(), a)
+		if err != nil {
+			t.Fatalf("enforceSingleton: %v", err)
+		}
+		if conflict {
+			t.Error("expected the lexicographically-earlier name to be the owner, not a conflict")
+		}
+	})
+}
+
 // TestUpdateStatusPopulatesStorageSize verifies updateStatus publishes the PVC's actual
 // capacity as status.storageSize (SPEC R6 step 7: "status.storageSize" reflects the PVC's
 // status.capacity.storage). The reconciler's earlier happy-path tests never provision a PVC
@@ -1043,6 +1215,52 @@ func TestUpdateStatusPopulatesStorageSize(t *testing.T) {
 	}
 	if got.Status.StorageSize.Value() != cap.Value() {
 		t.Errorf("expected status.storageSize=%v, got %v", cap.Value(), got.Status.StorageSize.Value())
+	}
+}
+
+// TestReadinessRateLimiterPinsSpecParameters pins the SPEC R6 step-5 backoff parameters
+// (exponential backoff with "initial delay ~5s, doubling per attempt, capped at 5m"):
+// the first failure waits 5s, each subsequent failure doubles the wait, and the wait is
+// capped at 5m. This is the rate limiter the FoundryGraph controller is configured with
+// in SetupWithManager, replacing controller-runtime's default (5ms initial, 1000s cap).
+func TestReadinessRateLimiterPinsSpecParameters(t *testing.T) {
+	limiter := readinessRateLimiter()
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: defaultGraphName, Namespace: testNS}}
+
+	// Initial delay ~5s.
+	if got := limiter.When(req); got != 5*time.Second {
+		t.Errorf("expected initial backoff of 5s (SPEC R6 step 5), got %v", got)
+	}
+	// Doubling per attempt: 10s, then 20s, then 40s.
+	for _, want := range []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second} {
+		if got := limiter.When(req); got != want {
+			t.Errorf("expected backoff %v (doubling per attempt), got %v", want, got)
+		}
+	}
+	// Capped at 5m: keep doubling (80s, 160s, 320s → 5m20s) until the cap holds, then
+	// assert every further attempt waits exactly 5m — the SPEC R6 step-5 cap, not
+	// controller-runtime's 1000s default.
+	got := limiter.When(req)
+	for got < 5*time.Minute {
+		want := 2 * got
+		got = limiter.When(req)
+		if got > 5*time.Minute {
+			t.Errorf("expected backoff capped at 5m (SPEC R6 step 5), got %v", got)
+			break
+		}
+		if want < 5*time.Minute && got != want {
+			t.Errorf("expected backoff %v (doubling per attempt), got %v", want, got)
+		}
+	}
+	for range 20 {
+		if got := limiter.When(req); got != 5*time.Minute {
+			t.Errorf("expected backoff capped at 5m (SPEC R6 step 5), got %v", got)
+		}
+	}
+	// A distinct item must restart from the 5s base delay (per-item limiting).
+	other := reconcile.Request{NamespacedName: types.NamespacedName{Name: "other-graph", Namespace: testNS}}
+	if got := limiter.When(other); got != 5*time.Second {
+		t.Errorf("expected a new item to start at the 5s base delay, got %v", got)
 	}
 }
 
@@ -1091,6 +1309,55 @@ func TestUpdateStatusPvcGetErrors(t *testing.T) {
 			t.Fatal("expected updateStatus to surface the PVC Get error, not swallow it")
 		} else if !strings.Contains(err.Error(), "read pvc") {
 			t.Errorf("expected the PVC read error to be surfaced with context, got: %v", err)
+		}
+	})
+}
+
+// TestUpdateStatusUpdateAndStatusErrors covers the two remaining updateStatus failure
+// branches (reconcile step 7): the main r.Update error (the last-applied-spec annotation
+// write) and the r.Status().Update error (the endpoint/storageSize status-block write).
+// The sibling Get-error branches are pinned by TestUpdateStatusPvcGetErrors.
+func TestUpdateStatusUpdateAndStatusErrors(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	ctx := context.Background()
+	ns := testNS
+
+	t.Run("main update error surfaces to the caller", func(t *testing.T) {
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
+		interceptorFuncs := interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*flowv1.FoundryGraph); ok {
+					return errors.New("apiserver unavailable")
+				}
+				return nil
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, CartographerPort: 50051}
+
+		if err := r.updateStatus(ctx, fg, &flowv1.FoundryGraphSpec{}); err == nil {
+			t.Fatal("expected updateStatus to surface the main Update (annotation write) error")
+		} else if !strings.Contains(err.Error(), "update FoundryGraph") {
+			t.Errorf("expected the main Update error to be surfaced with context, got: %v", err)
+		}
+	})
+
+	t.Run("status update error surfaces to the caller", func(t *testing.T) {
+		fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
+		interceptorFuncs := interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				return errors.New("apiserver unavailable")
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithStatusSubresource(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, CartographerPort: 50051}
+
+		if err := r.updateStatus(ctx, fg, &flowv1.FoundryGraphSpec{}); err == nil {
+			t.Fatal("expected updateStatus to surface the Status().Update (status block) error")
+		} else if !strings.Contains(err.Error(), "update FoundryGraph status") {
+			t.Errorf("expected the Status().Update error to be surfaced with context, got: %v", err)
 		}
 	})
 }

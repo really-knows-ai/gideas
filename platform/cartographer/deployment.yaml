@@ -84,6 +84,24 @@ spec:
           # must vary.
           env:
             - name: LADYBUG_DB_PATH
+              # ponytail: "/data" here is one of four copies of the database
+              # path that must stay in sync: (1) this Deployment env value,
+              # (2) the main.go getEnv("LADYBUG_DB_PATH", "/data") fallback
+              # (platform/cartographer/cmd/main.go), (3) this template's
+              # volumeMount mountPath "/data" (below), and (4) the
+              # Operator-rendered Deployment's PVC mount path, which sets
+              # LADYBUG_DB_PATH to the mount path per SPEC R6 step 3
+              # (foundrygraph_infra.go hardcodes "/data" on both the env and
+              # the MountPath). The env value and the mount path are only
+              # accidentally coupled: changing the mountPath without the env
+              # change silently opens a fresh database on the wrong mount —
+              # main.lbug/graph-repo/ get created at the old path while PVC
+              # writes land at the new one, and the next boot finds an empty
+              # graph with no error. Ceiling: four typed literals with no
+              # single source of truth or compile-time guard. Upgrade path:
+              # hoist the path to one shared constant (or a shared annotation)
+              # read by this template and the Operator, so a mount-path change
+              # is one edit, not four.
               value: /data
             - name: CARTOGRAPHER_PORT
               value: "50051"
@@ -125,6 +143,26 @@ spec:
             #   value: ""
             # - name: CAPABILITY_STALENESS_WINDOW
             #   value: "30s"
+            #   # ponytail: "30s" here is one of four copies of the capability
+            #   # staleness-window default that must stay in sync: (1) this
+            #   # commented Optional entry, (2) the main.go
+            #   # parseDurationEnv("CAPABILITY_STALENESS_WINDOW", "30s") fallback
+            #   # (platform/cartographer/cmd/main.go), (3) the SPEC R5 default
+            #   # `30s` (plans/cartographer/SPEC.md), and (4) the Operator's
+            #   # runtime config fallback "30s" (foundrygraph_infra.go), which
+            #   # renders this env from the CRD per SPEC R6 step 3. Changing the
+            #   # default in any one place silently diverges the others: a
+            #   # Cartographer pod that omits this env falls back to main.go's
+            #   # hardcoded default, so the anti-replay window enforced at the
+            #   # Cartographer drifts from the SPEC's and from whatever the
+            #   # Operator configures — a stale signature that should be rejected
+            #   # may be accepted (or vice versa) with no error. Like REMOTE_PULL_ON_INIT
+            #   # below, this entry is commented out on purpose because the Operator
+            #   # renders the real Deployment from the CRD; a manual deploy that
+            #   # wants a non-default window must uncomment it, and that value then
+            #   # becomes another copy to keep in sync. Ceiling: four typed literals
+            #   # with no single source of truth or compile-time guard. Upgrade path:
+            #   # hoist the default to one shared constant read by all surfaces.
             # - name: REMOTE_PULL_ON_INIT
             #   value: "false"
             #   # ponytail: REMOTE_PULL_ON_INIT is a CRD-owned knob (SPEC R6 step 3

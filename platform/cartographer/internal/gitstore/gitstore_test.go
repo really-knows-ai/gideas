@@ -119,11 +119,18 @@ func setupTestStore(t *testing.T) *gitStore {
 		t.Fatalf("create edges dir: %v", err)
 	}
 
-	// Commit init
+	// Commit init, mirroring New()'s init commit (gitstore.go): isInitCommit
+	// (remote.go) requires the "cartographer" author, so a "test"-authored
+	// init would make IsEmpty report non-empty for an init-only repo, breaking
+	// the SPEC R10 clone-vs-pull decision.
 	if _, err := wt.Commit("init", &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "test",
-			Email: "test@test",
+			Name:  "cartographer",
+			Email: "cartographer@foundry.flow",
+		},
+		Committer: &object.Signature{
+			Name:  "cartographer",
+			Email: "cartographer@foundry.flow",
 		},
 	}); err != nil {
 		t.Fatalf("Commit init: %v", err)
@@ -607,6 +614,57 @@ func TestReadAllEntityFilesIDFilenameConflict(t *testing.T) {
 		t.Fatalf("TestReadAllEntityFilesIDFilenameConflict: %v", err)
 	}
 }
+
+// TestReadAllEntityFilesTypeDirectoryMismatch: a JSON entity file under
+// entities/<Type>/ whose embedded type disagrees with the directory (external
+// corruption) must surface ErrEntityTypeMismatch, not be silently loaded under
+// a never-written type. This mirrors the write path (writeEntityFile rejects
+// the mismatch) and the id-vs-filename guard above.
+func TestReadAllEntityFilesTypeDirectoryMismatch(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+		eID := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: eID, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		// Rewrite the file's embedded type to a different type under the
+		// original directory, simulating type/body divergence.
+		path := "entities/Component/" + eID + ".json"
+		ej := struct {
+			ID         uuid.UUID         `json:"id"`
+			Type       string            `json:"type"`
+			Properties map[string]string `json:"properties,omitempty"`
+			CreatedAt  time.Time         `json:"created_at"`
+			UpdatedAt  time.Time         `json:"updated_at"`
+		}{ID: uuid.MustParse(eID), Type: "Service", CreatedAt: now, UpdatedAt: now}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate type-mismatched entity file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write type-mismatched entity file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close type-mismatched entity file: %w", err)
+		}
+		_, err = gs.ReadAllEntityFiles(ctx(), "Component")
+		if !errors.Is(err, ErrEntityTypeMismatch) {
+			return fmt.Errorf("expected ErrEntityTypeMismatch, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEntityFilesTypeDirectoryMismatch: %v", err)
+	}
+}
 func TestWriteEntityFilesTypeMismatch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -954,6 +1012,68 @@ func TestReadAllEdgeFilesIDFilenameConflict(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("TestReadAllEdgeFilesIDFilenameConflict: %v", err)
+	}
+}
+
+// TestReadAllEdgeFilesTypeDirectoryMismatch: a JSON edge file under
+// edges/<Type>/ whose embedded type disagrees with the directory (external
+// corruption) must surface ErrEdgeTypeMismatch, not be silently loaded under a
+// never-written type. This mirrors the write path (writeEdgeFile rejects the
+// mismatch) and the id-vs-filename guard above.
+func TestReadAllEdgeFilesTypeDirectoryMismatch(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		eID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		now := time.Now().UTC().Round(time.Millisecond)
+		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{ID: eID, Type: "DEPENDS_ON", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		// Rewrite the file's embedded type to a different type under the
+		// original directory, simulating type/body divergence.
+		path := "edges/DEPENDS_ON/" + eID + ".json"
+		ej := struct {
+			ID           uuid.UUID         `json:"id"`
+			Type         string            `json:"type"`
+			FromEntityID uuid.UUID         `json:"from_entity_id"`
+			ToEntityID   uuid.UUID         `json:"to_entity_id"`
+			Properties   map[string]string `json:"properties,omitempty"`
+			CreatedAt    time.Time         `json:"created_at"`
+			UpdatedAt    time.Time         `json:"updated_at"`
+		}{
+			ID:           uuid.MustParse(eID),
+			Type:         "CONNECTS_TO",
+			FromEntityID: uuid.MustParse(fromID),
+			ToEntityID:   uuid.MustParse(toID),
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate type-mismatched edge file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write type-mismatched edge file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close type-mismatched edge file: %w", err)
+		}
+		_, err = gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON")
+		if !errors.Is(err, ErrEdgeTypeMismatch) {
+			return fmt.Errorf("expected ErrEdgeTypeMismatch, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEdgeFilesTypeDirectoryMismatch: %v", err)
 	}
 }
 
@@ -2299,10 +2419,15 @@ func TestSetRemoteNoHost(t *testing.T) {
 	}
 }
 
+// TestIsEmpty pins the SPEC R10 clone-vs-pull / empty-repo classification:
+// a fresh init-only repo (only New()'s "init" commit authored by cartographer)
+// is empty; any repo with a data commit, a wipe commit, or an "init"-message
+// commit from a different author is not. Each branch must be asserted for real
+// — the WithGitLock result is propagated, never discarded.
 func TestIsEmpty(t *testing.T) {
 	t.Run("fresh init returns true", func(t *testing.T) {
 		gs := setupTestStore(t)
-		_ = gs.WithGitLock(func() error {
+		err := gs.WithGitLock(func() error {
 			empty, err := gs.IsEmpty(ctx())
 			if err != nil {
 				return err
@@ -2312,11 +2437,14 @@ func TestIsEmpty(t *testing.T) {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Fatalf("fresh init: %v", err)
+		}
 	})
 
 	t.Run("with data commit returns false", func(t *testing.T) {
 		gs := setupTestStore(t)
-		_ = gs.WithGitLock(func() error {
+		err := gs.WithGitLock(func() error {
 			now := time.Now().UTC().Round(time.Millisecond)
 			e1ID := validUUID(t)
 
@@ -2341,13 +2469,22 @@ func TestIsEmpty(t *testing.T) {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Fatalf("with data commit: %v", err)
+		}
 	})
 
 	t.Run("wiped-but-committed returns false", func(t *testing.T) {
 		gs := setupTestStore(t)
-		_ = gs.WithGitLock(func() error {
-			// Commit a "wipe" message on top of init — simulates WipeGraph
-			if err := gs.AddAll(ctx(), "."); err != nil {
+		err := gs.WithGitLock(func() error {
+			// Commit a "wipe" commit on top of init, mirroring the production
+			// WipeGraph sequence (git rm -r entities+edges, commit "wipe"):
+			// a wipe commit must be classified as data (not empty), so the
+			// SPEC R10 clone-vs-pull decision never re-clones a wiped repo.
+			if err := gs.GitRm(ctx(), "entities"); err != nil {
+				return err
+			}
+			if err := gs.GitRm(ctx(), "edges"); err != nil {
 				return err
 			}
 			if err := gs.Commit(ctx(), "wipe"); err != nil {
@@ -2363,14 +2500,28 @@ func TestIsEmpty(t *testing.T) {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Fatalf("wiped-but-committed: %v", err)
+		}
 	})
 
 	t.Run("remote init commit with different author returns false", func(t *testing.T) {
 		gs := setupTestStore(t)
-		_ = gs.WithGitLock(func() error {
+		err := gs.WithGitLock(func() error {
 			// Simulate a commit whose message is "init" but from a different
 			// author (e.g. a cloned remote's initial commit). This must NOT
-			// be treated as New()'s init commit.
+			// be treated as New()'s init commit. A content change is required
+			// first: committing on a clean tree would be ErrEmptyCommit and
+			// would not create the commit at all.
+			now := time.Now().UTC().Round(time.Millisecond)
+			if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+				{ID: validUUID(t), Type: "Component", CreatedAt: now, UpdatedAt: now},
+			}); err != nil {
+				return err
+			}
+			if err := gs.AddAll(ctx(), "."); err != nil {
+				return err
+			}
 			if _, err := gs.wt.Commit("init", &git.CommitOptions{
 				Author: &object.Signature{
 					Name:  "developer",
@@ -2389,6 +2540,9 @@ func TestIsEmpty(t *testing.T) {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Fatalf("remote init commit with different author: %v", err)
+		}
 	})
 }
 

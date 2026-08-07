@@ -266,13 +266,16 @@ type BeginTxOption func(*beginTxConfig)
 
 type beginTxConfig struct {
 	timeout time.Duration
+	set     bool
 }
 
 // WithTimeout sets the initial transaction timeout requested on
 // BeginTransaction. The 7-day hard maximum (SPEC R9/R2) is enforced by the
 // Cartographer: a requested timeout exceeding the cap is rejected with
 // INVALID_ARGUMENT (matching ExtendTimeout — no silent capping; SPEC error
-// table row "Invalid transaction timeout duration"). Valid requests receive
+// table row "Invalid transaction timeout duration"). A non-positive duration
+// is rejected locally by BeginTransaction (matching ExtendTimeout's local
+// rejection — no silent capping). Valid requests receive
 // the granted value in the response's applied_timeout, which the SDK
 // surfaces on the resulting Transaction handle. The client sends the
 // requested value verbatim and relies on applied_timeout, never a local cap.
@@ -283,6 +286,7 @@ type beginTxConfig struct {
 func WithTimeout(d time.Duration) BeginTxOption {
 	return func(c *beginTxConfig) {
 		c.timeout = d
+		c.set = true
 	}
 }
 
@@ -415,6 +419,7 @@ func (g *Graph) FullTextSearch(query, entityType string) ([]Entity, error) {
 			ID:         e.GetEntityId(),
 			Type:       e.GetEntityType(),
 			Properties: e.GetProperties(),
+			Embedding:  e.GetEmbedding(),
 		})
 		// Populate ID-to-type map.
 		g.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
@@ -455,6 +460,7 @@ func (g *Graph) ListEntities(entityType string, opts ...ListEntitiesOption) (*En
 			ID:         e.GetEntityId(),
 			Type:       e.GetEntityType(),
 			Properties: e.GetProperties(),
+			Embedding:  e.GetEmbedding(),
 		})
 		// Populate ID-to-type map.
 		g.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
@@ -664,8 +670,18 @@ func (g *Graph) BeginTransaction(opts ...BeginTxOption) (*Transaction, error) {
 		o(cfg)
 	}
 
+	// Reject a non-positive requested timeout locally (SPEC error table row
+	// "Invalid transaction timeout duration": "Timeout duration is non-positive
+	// ... Applies to: ExtendTimeout, BeginTransaction"), mirroring
+	// ExtendTimeout's local rejection — no silent capping. An absent option
+	// (cfg.set == false) leaves the timeout unset and the server default
+	// applies.
+	if cfg.set && cfg.timeout <= 0 {
+		return nil, fmt.Errorf("flow sdk: begin transaction timeout must be positive")
+	}
+
 	req := &flowv1.BeginTransactionRequest{}
-	if cfg.timeout > 0 {
+	if cfg.set {
 		req.Timeout = durationpb.New(cfg.timeout)
 	}
 

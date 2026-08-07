@@ -7,6 +7,8 @@ import (
 
 const componentType = "Component"
 
+const serviceType = "Service"
+
 func TestExtractLabels_SimpleMatch(t *testing.T) {
 	labels := extractEntityTypes("MATCH (c:Component) RETURN c")
 	if len(labels) != 1 || labels[0] != componentType {
