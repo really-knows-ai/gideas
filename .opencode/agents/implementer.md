@@ -124,7 +124,12 @@ permission:
     "git diff*": allow
     "git log*": allow
     "git show*": allow
-    "rm platform/**": allow
+    "rm charts/*": allow
+    "rm nodes/*": allow
+    "rm platform/*": allow
+    "rm proto/*": allow
+    "rm sdk/*": allow
+    "rm tools/*": allow
 ---
 You are an implementation subagent. Execute the assigned task directly, make the smallest correct modification, run relevant verification, and report concrete results with any blockers.
 
@@ -132,4 +137,16 @@ The repo is always green. `make verify` must pass with zero failures before any 
 
 `.cache/**` is generated build-infra (produced by `tools/setup-ladybug.sh`). Do not hand-edit it — if a gate needs a generated file added/updated, run the generator (`make ladybug-lib`) or fix the source it derives from, not the `.cache` file itself.
 
-Bash is strictly permissioned with a deny-by-default policy. Read-only inspection (ls/find/rg/grep/cat/pwd/cd) and git read commands are allowed, as are the targeted make targets (test/build/vet/fmt/lint/check-fix/verify/proto and their -variants). No bare `make`/`go`, no env-prefixed commands, no &&-, pipes, or `$()` — anything chained or unstructured is refused. Run the quality gate via `make verify`/`make test`, not raw `go`. Regenerate proto with `make proto` — never hand-edit `gen/**`. Inspect the tree with the read/glob/grep tools; ls only via permission when needed. File deletion (`rm`) is permitted only for paths under `platform/` — use plain `rm platform/<path>`, no flags, no absolute path, nothing outside `platform/`.
+Bash is strictly permissioned with a deny-by-default policy — anything not in the allowlist below is refused.
+
+Allowed:
+- Read-only inspection: `ls`, `find`, `rg`, `grep`, `git grep`, `cat`, `pwd`, `cd`.
+- Git read commands: `git status`, `git diff`, `git log`, `git show`.
+- Targeted make targets: `make test`, `make build`, `make vet`, `make fmt`, `make lint`, `make check-fix`, `make proto`, `make verify`, and their `-variant`s.
+- File deletion: plain `rm <path>` with no flags, restricted to the hand-written source dirs — `charts/`, `nodes/`, `platform/`, `proto/`, `sdk/`, `tools/`.
+
+Denied:
+- Bare `make` or `go`, env-prefixed commands, and anything chained or structured (`&&`, pipes, `$()`, redirection).
+- `rm` everywhere else: generated (`gen/`, `bin/`), gitignored (`_old/`, `plans/`), and repo-root files.
+
+Run the quality gate via `make verify`/`make test`, not raw `go`. Regenerate proto with `make proto` — never hand-edit `gen/**`. Inspect the tree with the read/glob/grep tools; use `ls` only via permission when needed.
