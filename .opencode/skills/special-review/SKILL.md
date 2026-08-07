@@ -201,7 +201,7 @@ an isolated issue, not a pattern.
 
 **Note:** The verified items are deleted from REVIEW_ITEMS.md in step 2c
 below, so perform this scan *before* deleting them.  If you later prune
-fresh findings in step 5 as "covered by a learning," consider whether
+fresh findings in step 5c as "covered by a learning," consider whether
 that learning needs tightening — a learning that matches many findings
 per pass is too broad and may need splitting into narrower sub-rules.
 
@@ -374,102 +374,94 @@ If you find no divergences, respond with "No findings."
 
 Wait for all subagents to complete before proceeding.
 
-### 5. Collect, deduplicate, and consolidate findings
+### 5. Dispatch consolidation sub-agents (sequential pipeline)
 
-**Deduplicate across reviewers:**
-Gather all findings from the subagents.  Compare by file, line, and
-description.  If the same finding appears in multiple reviewer outputs,
-keep only one copy.
+All consolidation work runs in dedicated `reviewer` sub-agents, strictly
+sequential — each stage's output feeds the next.  The main agent only
+dispatches, forwards inputs/outputs, and writes artifacts.  Do NOT process
+findings yourself between sub-agent stages.
 
-**Remove findings covered by LEARNINGS.md:**
-For each remaining finding, check whether it is an instance of a pattern
-already documented in `LEARNINGS.md`.  **Only Known Deviations and
-observation-type learnings prune findings.**  Defect-pattern learnings
-NEVER prune — a new instance of a defect pattern is a live bug and must
-stay in the checklist.
+#### 5a. Dedupe + Merge
 
-Distinguish the two kinds of learning:
+Dispatch ONE reviewer subagent with all raw findings from the fresh-review
+subagents (Step 4) plus the pre-existing `[ ]` and `[!]` items carried
+forward from Step 2c.  The subagent receives:
 
-- **Known Deviations** (`## Known Deviations` section) — document an
-  *intentional* divergence that reviewers should skip.  A finding that
-  matches a Known Deviation is a false positive and IS pruned.  Example:
-  "health uses the empty-string wildcard" → a finding flagging the
-  empty-string health key is pruned.
-- **Defect-pattern learnings** (permanent learnings that prescribe a fix,
-  e.g. "I/O errors must not be silently discarded", "no production code
-  duplication", "code without a SPEC requirement must be removed") —
-  document a *class of bug that must be fixed*.  A finding that matches a
-  defect-pattern learning is a **new instance of a known bug at a specific
-  location** and is KEPT as an open item.  The learning documents the rule;
-  the finding points at the concrete spot that still violates it.  Both
-  are needed — the fixer works from the checklist, not by re-deriving
-  every learning against the code.  Pruning a defect-pattern instance
-  drops a live bug.
-- **Observation-type learnings** (e.g. "no existing codebase uses mTLS")
-  describe current state, not a rule.  They never prune.
+```
+You are the consolidation dedupe-and-merge stage.  You receive all raw
+findings from multiple fresh-review subagents plus any open items carried
+forward from prior review passes.  Produce a single numbered master list.
 
-**Candidate patterns do NOT trigger pruning.**  The `## Candidate Patterns`
-section of LEARNINGS.md contains unproven patterns from fresh findings.
-Findings matching a candidate pattern are kept — the pattern needs
-verification through fixes before it can prune anything.
+**Task:**
 
-Examples:
+1. **Deduplicate fresh findings across reviewers.**  Compare by file, line,
+   and description.  If the same finding appears in multiple reviewer
+   outputs, keep one copy — prefer the most specific.  Do not drop a
+   genuine finding that only one reviewer reported.
 
-| Learning | Finding | Covered? |
-|----------|---------|----------|
-| Known Deviation: "health uses empty-string wildcard" | "Line 68 probe requests `grpc.health.v1.Health`" | Yes — intentional deviation, prune |
-| Defect pattern: "I/O errors must not be silently discarded" | "`_ = CleanUntracked(ctx)` discards error in WipeGraph" | **No — live bug, KEEP** |
-| Defect pattern: "no production code duplication" | "`createNodeTable`/`createNodeTableOnConn` are near-identical" | **No — live bug, KEEP** |
-| Defect pattern: "code without a SPEC requirement must be removed" | "proto still declares orphaned `PushToRemote` RPC" | **No — live bug, KEEP** |
-| Observation: "no existing codebase uses mTLS" | "Plan introduces mTLS without accounting for first-use cost" | No — observation, not a rule |
-| Known Deviation: "ExtendTimeout strict `>` is correct" | "Line 90 uses `>` instead of `>=`" | Yes — intentional deviation, prune |
+2. **Check fresh findings against carried items.**  The carried items are
+   pre-existing `[ ]` and `[!]` items from REVIEW_ITEMS.md.  For each
+   fresh finding, check whether it matches a carried item by file, line,
+   and description:
+   - Matches a carried `[ ]` or `[!]` → keep the existing item and fold
+     any additional detail from the fresh finding into it.  Do not create a
+     new duplicate.
+   - No match → append the fresh finding as a new `- [ ] [TAG] ...` item,
+     preserving the classification tag (`[FIX]`, `[PONYTAIL]`, `[IMPL-NOTE]`)
+     from the reviewer's output.
 
-When in doubt whether a finding is covered by a LEARNINGS.md Known
-Deviation / observation, KEEP it at this stage — removing a live finding
-from the digest is worse than the audit catching a false positive.  The
-consolidation audit (step 5b) catches those.  This "keep" applies only to
-the learning-coverage pass; it is separate from impact-sizing in step 5a,
-where Tier-3 items are pruned.
+3. **Carried-only items remain.**  Pre-existing `[ ]` and `[!]` items that
+   are NOT re-discovered by any fresh finding remain as-is — they were
+   not addressed and are still open.
 
-After pruning, check whether any learning was matched multiple times.
-If so, consider tightening its wording — a learning that catches many
-instances per pass is too broad and will generate more findings next
-round.  Split broad learnings into narrower sub-rules or add qualifying
-conditions.
+4. **Number the master list.**  Assign each item a stable index (1, 2, 3,
+   …).  The numbers are a communication convenience for downstream stages;
+   they do not appear in the final REVIEW_ITEMS.md.
 
-**Merge with existing open items:**
-Take the pre-existing `[ ]` and `[!]` items (carried forward from step 2).
-For each finding from the fresh review, check whether it matches an
-existing `[ ]` or `[!]` item (by file, line, and description):
+**Carried items (from REVIEW_ITEMS.md):**
+[all pre-existing [ ] and [!] items, verbatim]
 
-- If a matching `[ ]` item exists → keep the existing item (don't duplicate).
-- If a matching `[!]` item exists → keep the existing item (don't duplicate).
-- If no matching item exists → append the new `- [ ] [TAG] ...` item,
-  preserving the classification tag from the subagent's output.
+**Raw fresh-review findings (from Step 4 subagents):**
+[all findings from every fresh-review subagent, verbatim]
 
-Existing `[ ]` and `[!]` items that are NOT re-discovered by the fresh
-review remain as-is — they are still open and unaddressed.
+**Output:**
 
-### 5a. Consider impact and prune items not worth fixing (consolidation only)
+For each item that absorbed a fresh duplicate:
+`FOLDED <#> <carried state + description> — absorbed fresh finding <description of the fresh duplicate>`
 
-The fresh reviewers must NOT make this judgement — they produce a flat list
-of every divergence with no ranking.  **Value-sizing happens here, at
-consolidation, in the main agent only.**  The question at this step is:
-*for every valid finding, is the cost of fixing it worth the benefit?*
+For each genuinely new item:
+`NEW <#> - [ ] [TAG] <file>:<line> — <description>`
 
-This is a judgement about **value, not validity**.  A finding is valid if
-it is a true divergence from criteria.  It may still be not worth fixing:
-the cost (code churn, test surface, review effort, risk of regression)
-exceeds the benefit (removed dead code, a marginal regression-safety test,
-a doc nit nobody reads).  Such findings must be pruned, not kept open.
+For each carried item not re-discovered:
+`CARRIED <#> <carried state + description>`
 
-**Tier every valid finding (reviewers don't — you do), then prune the
-low-return tier.**
+Then the complete numbered master list:
+```
+1. [ ]/[!] [TAG] <file>:<line> — <description>
+2. [ ] [TAG] <file>:<line> — <description>
+...
+```
+```
 
-Assign each finding a tier:
+Wait for the subagent to complete.  Its output is the numbered master list
+— the input to the next stage.
 
-- **Tier 1 — must fix (always keep).** The fix is load-bearing or a
-  concrete defect:
+#### 5b. Impact-tier
+
+Dispatch ONE reviewer subagent with the numbered master list from 5a.  The
+subagent assigns a tier to every item and prunes Tier-3 items with reasons.
+This is the only stage that makes value judgements about fix-worthiness;
+fresh-review reviewers never do this.  The subagent receives:
+
+```
+You are the consolidation impact-tiering stage.  Assign a tier to every item
+in the numbered master list and prune Tier-3 items.
+
+**Tier every item.**  The question is: for each valid finding, is the cost of
+fixing it worth the benefit?  This is a judgement about value, not validity.
+
+- **Tier 1 — must fix (always keep).** The fix is load-bearing or a concrete
+  defect:
   - A real bug: behaviour is wrong, a CLI/API is broken, a spec-mandated
     error code or check-order is surfaced incorrectly, data can be lost or
     corrupted.
@@ -487,8 +479,7 @@ Assign each finding a tier:
 
 - **Tier 3 — should be pruned (prune).** The finding is technically valid
   but the cost of fixing it outweighs the benefit. A "nice-to-have" that
-  the repo does not need, created when its cost is only real churn.
-  Typical Tier 3 forms:
+  the repo does not need. Typical Tier 3 forms:
   - A doc/SPEC wording mismatch or layering note with no behaviour change.
   - Re-flagging a trade-off that already carries a `ponytail:` (the finding
     just restates the ponytail).
@@ -496,92 +487,168 @@ Assign each finding a tier:
   - A niche/edge-case test that nobody will run or that protects a branch
     with no plausible regression.
   - A cosmetic/style nit in an untouched file.
-  Tier 3 items are pruned, not kept on the board by default.
 
-The vast majority of a flat reviewer list is Tier 2 (a reviewer flags
-genuine divergences); Tier 3 is the minority. But Tier 3 items **must be
-pruned** — the default posture is that an item which does not pull its
-weight is removed at consolidation.
+**Pruning rules:**
+- Tier 3 items MUST be pruned.  For each, give a one-line reason.
+- Between Tier 2 and Tier 3, default to prune.  If you cannot defend an
+  item's value, it is Tier 3.
+- NEVER prune a real bug, ANY security / trust-boundary / data-loss /
+  accessibility item, a spec-mandated error code or check-order issued by
+  wrong code, or a missing test for a behaviour the criteria explicitly
+  names.  Those are Tier 1 regardless of size.
 
-**Prune exactly the Tier 3 items.** Remove them from the open-items list
-and record each one verbatim in the `## Pruned by Impact` header section
-with a one-line reason — the user can veto and restore it.
+**Numbered master list:**
+[the full output from 5a]
 
-**When in doubt between Tier 2 and Tier 3, prune.** A finding kept only
-because "I might regress it someday", whose fix is real churn, is Tier 3.
-If you cannot defend an item's value, prune it. This is the opposite of
-the old "when in doubt, KEEP" default that let nice-to-haves pile up.
+**Output:**
 
-**Never prune:** a real bug, ANY security / trust-boundary / data-loss /
-accessibility item, a spec-mandated error code or check-order issued by
-wrong code, and a missing test for a behaviour the criteria explicitly
-names. Those are Tier 1 regardless of how small.
+For each kept item:
+`KEEP <#> TIER:<1|2> <description>`
 
-**Transparency is mandatory.** Every item pruned here MUST be reported
-verbatim to the user in step 7 and recorded in the header as a
-pruned-by-impact list, so the user can veto any of them.
+For each pruned item:
+`PRUNE <#> TIER-3 <description>
+  - Reason: <one-line justification>`
 
-### 5b. Consolidation audit
+Then the pruned numbered list (kept items only, with original numbers):
+```
+1. TIER:1 <description>
+2. TIER:2 <description>
+...
+```
+```
 
-After deduplicating and pruning learning-covered items (step 5), pruning
-Tier-3 items by impact (step 5a), and merging with existing items, dispatch
-ONE reviewer subagent to audit the remaining list.  The subagent
-receives:
+Wait for the subagent to complete.  The pruned list is the input to the
+next stage.  Save the PRUNE lines verbatim — they will be recorded in the
+`## Pruned by Impact` section of REVIEW_ITEMS.md.
+
+#### 5c. Learning-prune
+
+Dispatch ONE reviewer subagent with the impact-pruned list from 5b and the
+path to LEARNINGS.md.  The subagent prunes items covered by Known Deviations
+or observation-type learnings, but never prunes defect-pattern instances.
+The subagent receives:
 
 ```
-You are auditing a consolidated review checklist after learning-covered
-items have been pruned.  Check the remaining items for:
+You are the consolidation learning-pruning stage.  Remove items from the
+impact-pruned list that are covered by Known Deviations or observation-type
+learnings in LEARNINGS.md.  Defect-pattern learnings NEVER prune.
+
+**Pruning rules:**
+
+- **Known Deviations** (`## Known Deviations` section) — document an
+  *intentional* divergence that reviewers should skip.  A finding that
+  matches a Known Deviation IS pruned.  Example: "health uses the
+  empty-string wildcard" → a finding flagging the empty-string health key.
+
+- **Defect-pattern learnings** (permanent learnings prescribing a fix,
+  e.g. "I/O errors must not be silently discarded", "no production code
+  duplication") — document a *class of bug that must be fixed*.  A finding
+  that matches a defect-pattern learning is a NEW INSTANCE of a known bug
+  at a specific location — it is a live bug and MUST BE KEPT.  Pruning a
+  defect-pattern instance drops a live bug.
+
+- **Observation-type learnings** (e.g. "no existing codebase uses mTLS")
+  describe current state, not a rule.  They never prune.
+
+- **Candidate patterns** do NOT trigger pruning.  `## Candidate Patterns`
+  contains unproven patterns from fresh findings; findings matching a
+  candidate are kept.
+
+Examples:
+
+| Learning | Finding | Covered? |
+|----------|---------|----------|
+| Known Deviation: "health uses empty-string wildcard" | "Line 68 probe requests `grpc.health.v1.Health`" | Yes — prune |
+| Defect pattern: "I/O errors must not be silently discarded" | "`_ = CleanUntracked(ctx)` discards error in WipeGraph" | **No — live bug, KEEP** |
+| Defect pattern: "no production code duplication" | "`createNodeTable`/`createNodeTableOnConn` near-identical" | **No — live bug, KEEP** |
+| Observation: "no existing codebase uses mTLS" | "Plan introduces mTLS" | No — observation, not a rule |
+| Known Deviation: "ExtendTimeout strict `>` is correct" | "Line 90 uses `>` instead of `>=`" | Yes — prune |
+
+**When in doubt whether a finding is covered by a Known Deviation, KEEP it**
+— removing a live finding is worse than the downstream audit catching a
+false positive.
+
+After pruning, note if any learning was matched multiple times.  A learning
+that catches many instances per pass is too broad — flag it for tightening.
+
+**LEARNINGS.md:**
+[path to LEARNINGS.md]
+
+**Impact-pruned list:**
+[the pruned numbered list from 5b]
+
+**Output:**
+
+For each kept item:
+`KEEP <#> <description>`
+
+For each pruned-by-learning:
+`PRUNE-LEARNING <#> <description>
+  - Covered by: <learning title from LEARNINGS.md>`
+
+For each learning that matched 3+ items:
+`TIGHTEN <learning title> — matched <N> instances, consider splitting`
+
+Then the final keep list (numbered, kept items only):
+```
+1. <description>
+2. <description>
+...
+```
+```
+
+Wait for the subagent to complete.  The final keep list is the input to the
+audit.  Save PRUNE-LEARNING lines — they will be recorded in REVIEW_ITEMS.md.
+
+#### 5d. Consolidation audit
+
+Dispatch ONE reviewer subagent with the final keep list from 5c and the
+path to LEARNINGS.md.  This is the final gate — the audit catches any
+false positives, duplicates, or missed learning-coverage items.  The
+subagent receives:
+
+```
+You are auditing a consolidated review checklist after deduplication,
+impact-tiering, and learning-pruning.  Check the remaining items for:
 
 1. **Any item that IS covered by a learning in LEARNINGS.md** but was
    not pruned.  If found, report it as a false positive.
 2. **Any pair of items that describe the same divergence** (same issue,
    different wording or line numbers).  If found, report the duplicate.
 3. **Any cluster of 3+ related findings** that share a root-cause category
-    not yet covered by LEARNINGS.md.  These are *candidate* patterns — they
-    may become learnings once fixed and verified in a future cycle, but
-    fresh findings are unproven.  Report them as suggestions only.
+   not yet covered by LEARNINGS.md.  These are *candidate* patterns — they
+   may become learnings once fixed and verified in a future cycle, but
+   fresh findings are unproven.  Report them as suggestions only.
 
 **Pruning rule — only Known Deviations and observation-type learnings
 prune findings.  Defect-pattern learnings NEVER prune.**
-- A finding that matches a **Known Deviation** (an intentional divergence
-  documented in `## Known Deviations`) is a false positive — report it.
-- A finding that matches a **defect-pattern learning** (a permanent
-  learning prescribing a fix, e.g. "I/O errors must not be silently
-  discarded", "no production code duplication", "code without a SPEC
-  requirement must be removed") is a **new instance of a known bug at a
-  specific location** — it is a live bug and must be KEPT, not reported
-  as a false positive.  The learning documents the rule; the finding
-  points at the concrete spot that still violates it.  Do NOT report
-  defect-pattern instances as false positives.
-- A finding that matches an **observation-type learning** (describes
-  current state, not a rule) is not covered — keep it.
-
-Be strict about Known Deviations: if an item is a new instance of a
-documented intentional deviation (e.g. a different file using the
-empty-string health key), it should have been pruned.  If you find one,
-report it.
+- A finding that matches a **Known Deviation** is a false positive — report it.
+- A finding that matches a **defect-pattern learning** is a new instance of a
+  known bug at a specific location — it is a live bug and must be KEPT, not
+  reported as a false positive.
+- A finding that matches an **observation-type learning** is not covered — keep it.
 
 **LEARNINGS.md:**
 [contents of LEARNINGS.md]
 
 **Remaining findings:**
-[numbered list of remaining findings]
+[the numbered final keep list from 5c]
 
 **Output:**
-- For each false positive: `FALSE-POSITIVE <description> — <reason it is covered by a learning>`
-- For each duplicate: `DUPLICATE <description> — <reason it duplicates another item>`
-- For each learning suggestion: `LEARNING-SUGGESTION <proposed title> — <pattern observed, e.g., "3+ findings about missing context.Context on I/O methods">` followed by the concrete rule text on the next line: `  Rule: <actionable rule using "must" or "must not">`
+- `FALSE-POSITIVE <description> — <reason it is covered by a learning>`
+- `DUPLICATE <description> — <reason it duplicates another item>`
+- `LEARNING-SUGGESTION <proposed title> — <pattern observed>`
+  `  Rule: <actionable rule using "must" or "must not">`
 - If all items pass and no learning suggestions: `ALL CLEAR`
 ```
 
 Wait for the subagent to complete.  If it reports false positives or
-duplicates, remove them from the list and re-run step 5b until it
+duplicates, remove them and re-run step 5d with the updated list until it
 reports `ALL CLEAR`.  Do not proceed to step 6 until the list passes.
-False positives and duplicates must both be gone; learning suggestions
-do NOT block progress — they are written to LEARNINGS.md and the loop
-continues.
+Learning suggestions do NOT block progress — they are written to
+LEARNINGS.md in the next step.
 
-### 5c. Write candidate patterns to LEARNINGS.md
+#### 5e. Write candidate patterns to LEARNINGS.md
 
 After the consolidation audit passes (no false positives, no duplicates),
 take the `LEARNING-SUGGESTION` lines from the audit subagent's output and
@@ -762,10 +829,11 @@ to `- [!]` with an explanation:
   to mark wont-fix.
 - The reviewer subagents are given the same instruction: no severity labels,
   no ranking, just divergences from criteria.
-- Impact-sizing is consolidation-only (step 5a) and never a reviewer job.
-  The individual reviewers always produce the full flat list; only the
-  consolidator weighs whether an item is worth fixing, and must report
-  every pruned-by-impact item verbatim so the user can veto.
+- Impact-sizing is done by a dedicated consolidation-reviewer subagent
+  (step 5b).  The fresh-review reviewers (step 4) always produce the full
+  flat list with no rankings.  The consolidation reviewer (5b) weighs
+  whether an item is worth fixing and reports every pruned-by-impact item
+  verbatim so the user can veto.
 - If the user does not provide all three inputs (files, criteria, output
   path), ask for what's missing — do not guess.
 - The checklist is always written to `REVIEW_ITEMS.md` in the project
