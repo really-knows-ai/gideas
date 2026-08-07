@@ -199,8 +199,11 @@ func (g *gitStore) FastForwardMerge(ctx context.Context, branch, into string) er
 }
 
 // GitLogOneline iterates commits on the current branch and returns the
-// messages (formatted as "<hash> <message>") for commits whose message
-// starts with the given prefix. Results are most recent first.
+// first message lines (formatted as "<hash> <subject>") for commits whose
+// first message line starts with the given prefix — matching git log
+// --oneline semantics (per SPEC Commit retry, which inspects git log
+// --oneline for the transaction:<tx-id> prefix). Results are most recent
+// first.
 func (g *gitStore) GitLogOneline(ctx context.Context, prefix string) ([]string, error) {
 	log, err := g.repo.Log(&git.LogOptions{})
 	if err != nil {
@@ -210,8 +213,10 @@ func (g *gitStore) GitLogOneline(ctx context.Context, prefix string) ([]string, 
 
 	var results []string
 	if err := log.ForEach(func(commit *object.Commit) error {
-		if strings.HasPrefix(commit.Message, prefix) {
-			results = append(results, commit.Hash.String()+" "+commit.Message)
+		firstLine, _, _ := strings.Cut(commit.Message, "\n")
+		firstLine = strings.TrimRight(firstLine, "\r")
+		if strings.HasPrefix(firstLine, prefix) {
+			results = append(results, commit.Hash.String()+" "+firstLine)
 		}
 		return nil
 	}); err != nil {

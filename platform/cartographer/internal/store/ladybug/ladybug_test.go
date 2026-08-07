@@ -829,6 +829,43 @@ func TestCreateEntity_StructuralErrorBeforeDuplicateID(t *testing.T) {
 	if !errors.Is(err, store.ErrMissingRequiredProperty) {
 		t.Fatalf("expected ErrMissingRequiredProperty to take precedence, got %v", err)
 	}
+
+	// The structural-before-data-integrity ordering (SPEC:946) extends to
+	// embedding validation: a duplicate-ID create carrying an invalid
+	// embedding must surface the structural INVALID_ARGUMENT, never
+	// ErrEntityAlreadyExists. testSchema's VectorType is vector-indexed; seed a
+	// VectorType entity with the same id to (a) make the second create a
+	// duplicate and (b) bootstrap the dimension to 3.
+	vecID := uuid.New().String()
+	if _, err := s.CreateEntity(context.Background(), "VectorType", vecID,
+		map[string]string{"name": "vec-first"}, []float32{1, 2, 3}, ""); err != nil {
+		t.Fatalf("seed VectorType CreateEntity: %v", err)
+	}
+
+	// Duplicate id + NaN embedding → ErrNaNOrInfEmbedding (structural), not
+	// ErrEntityAlreadyExists.
+	_, err = s.CreateEntity(context.Background(), "VectorType", vecID,
+		map[string]string{"name": "second"}, []float32{float32(math.NaN()), 0, 0}, "")
+	if !errors.Is(err, store.ErrNaNOrInfEmbedding) {
+		t.Fatalf("expected ErrNaNOrInfEmbedding to take precedence over duplicate id, got %v", err)
+	}
+
+	// Duplicate id + wrong-dimension embedding → ErrEmbeddingDimension
+	// (structural), not ErrEntityAlreadyExists. VectorType's dimension is
+	// locked to 3 by the seed above.
+	_, err = s.CreateEntity(context.Background(), "VectorType", vecID,
+		map[string]string{"name": "second"}, []float32{1, 2, 3, 4}, "")
+	if !errors.Is(err, store.ErrEmbeddingDimension) {
+		t.Fatalf("expected ErrEmbeddingDimension to take precedence over duplicate id, got %v", err)
+	}
+
+	// A duplicate-id create whose embedding is structurally valid still
+	// surfaces the data-integrity check — matching dimension, no NaN.
+	_, err = s.CreateEntity(context.Background(), "VectorType", vecID,
+		map[string]string{"name": "second"}, []float32{4, 5, 6}, "")
+	if !errors.Is(err, store.ErrEntityAlreadyExists) {
+		t.Fatalf("expected ErrEntityAlreadyExists for structurally-valid duplicate create, got %v", err)
+	}
 }
 
 func TestGetEntity_Found(t *testing.T) {
@@ -1306,6 +1343,15 @@ func TestDeleteEdge_Valid(t *testing.T) {
 	_, err = s.GetEdge(context.Background(), edge.Id, "")
 	if err == nil {
 		t.Error("expected error after edge deletion")
+	}
+
+	// SPEC R7 point 3: "Edge deletion does not cascade to any entity" — both
+	// endpoints must survive the edge's removal.
+	if _, err := s.GetEntity(context.Background(), src.Id, ""); err != nil {
+		t.Fatalf("source entity must survive edge deletion: %v", err)
+	}
+	if _, err := s.GetEntity(context.Background(), tgt.Id, ""); err != nil {
+		t.Fatalf("target entity must survive edge deletion: %v", err)
 	}
 }
 
@@ -5299,6 +5345,54 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	}
 }
 
+// SPEC R7 parity (crud.go:271-283): a post-bootstrap UpdateEntity supplying an
+// embedding whose dimension MATCHES the established dimension (dim > 0,
+// len(embedding) == dim) falls through both bootstrap (dim != 0) and the
+// dimension-mismatch guard, and surfaces the defined
+// ErrEmbeddingUpdateUnsupported sentinel — the vector index prevents rewriting
+// an existing row's embedding. This is the third distinct branch of the
+// sentinel, distinct from TestUpdateEntity_EmbeddingBootstrap (dim == 0
+// bootstrap-then-reject) and TestUpdateEntity_EmbeddingDimensionMismatch
+// (dim > 0, mismatched length).
+func TestUpdateEntity_EmbeddingMatchingDimensionUnsupported(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Bootstrap VectorType to dimension 3 via a create.
+	e, err := s.CreateEntity(ctx, "VectorType", "",
+		map[string]string{"name": "v"}, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("bootstrap CreateEntity: %v", err)
+	}
+	if !s.IsVectorIndexBootstrapped("VectorType", "") {
+		t.Fatal("expected VectorType bootstrapped after create")
+	}
+
+	// Matching-dimension update: the dimension guard passes (3 == 3) and the
+	// sentinel surfaces without any bootstrap DDL.
+	_, err = s.UpdateEntity(ctx, e.Id, nil, []float32{4, 5, 6}, "")
+	if !errors.Is(err, store.ErrEmbeddingUpdateUnsupported) {
+		t.Fatalf("expected ErrEmbeddingUpdateUnsupported for matching-dimension embedding, got %v", err)
+	}
+	// The dimension is unchanged (already locked by the create) and the entity
+	// survives the rejected update.
+	if dim, derr := s.GetEstablishedDimension("VectorType", ""); derr != nil || dim != 3 {
+		t.Fatalf("dimension = %d, error = %v, want 3", dim, derr)
+	}
+	got, err := s.GetEntity(ctx, e.Id, "")
+	if err != nil {
+		t.Fatalf("GetEntity after rejected embedding update: %v", err)
+	}
+	if got.Properties["name"] != "v" {
+		t.Fatalf("entity properties changed by rejected update: %+v", got.Properties)
+	}
+}
+
 func TestSearchNeighbors_ZeroTopKDefaults(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -5927,6 +6021,197 @@ func TestRehydrateFiles_MissingIDFailsLoudly(t *testing.T) {
 	}
 }
 
+// A JSON entity file whose `id` key is present but whose required `type` key
+// is absent must fail loudly on every load path (branch.go:1113-1116 main,
+// branch.go:1277-1280 branch → ErrInvalidEntityDir): a type-less file cannot
+// be tied to its directory label, so the sibling missing-`id` guard's
+// protection would be incomplete without it.
+func TestRehydrateFiles_MissingTypeFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+	}{
+		{"main entity", false},
+		{"branch entity", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			// Entity file with every required key except `type`.
+			writeJSONFile(t, filepath.Join(entitiesDir, "Component", "ent.json"), map[string]any{
+				"id": uuid.NewString(), "properties": map[string]string{"name": "no-type"},
+			})
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for a file missing the required 'type' key")
+			}
+			if !errors.Is(loadErr, store.ErrInvalidEntityDir) {
+				t.Fatalf("expected ErrInvalidEntityDir, got %v", loadErr)
+			}
+		})
+	}
+}
+
+// A JSON edge file missing any of the required `type`/`from`/`to` keys must
+// fail loudly on every load path (branch.go:1197-1200 main,
+// branch.go:1362-1365 branch → ErrInvalidEdgeDir), even when the `id` key is
+// present.
+func TestRehydrateFiles_MissingEdgeKeysFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+		file   map[string]any
+	}{
+		{"main missing type", false, map[string]any{
+			"id": uuid.NewString(), "from": uuid.NewString(), "to": uuid.NewString(),
+		}},
+		{"main missing endpoints", false, map[string]any{
+			"id": uuid.NewString(), "type": "DependsOn",
+		}},
+		{"branch missing type", true, map[string]any{
+			"id": uuid.NewString(), "from": uuid.NewString(), "to": uuid.NewString(),
+		}},
+		{"branch missing endpoints", true, map[string]any{
+			"id": uuid.NewString(), "type": "DependsOn",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", "edge.json"), tc.file)
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for an edge file missing type/from/to keys")
+			}
+			if !errors.Is(loadErr, store.ErrInvalidEdgeDir) {
+				t.Fatalf("expected ErrInvalidEdgeDir, got %v", loadErr)
+			}
+		})
+	}
+}
+
+// An unparseable JSON element file must fail loudly on every load path
+// (branch.go:1109-1112 and 1193-1196 → ErrInvalidEntityDir/ErrInvalidEdgeDir)
+// — the file guards treat unparseable content as a corrupt element file, never
+// skipping or silently accepting it.
+func TestRehydrateFiles_UnparseableJSONFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+		edge   bool
+		want   error
+	}{
+		{"main entity", false, false, store.ErrInvalidEntityDir},
+		{"main edge", false, true, store.ErrInvalidEdgeDir},
+		{"branch entity", true, false, store.ErrInvalidEntityDir},
+		{"branch edge", true, true, store.ErrInvalidEdgeDir},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			if tc.edge {
+				path := filepath.Join(edgesDir, "DependsOn", "edge.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("{ not json"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				path := filepath.Join(entitiesDir, "Component", "ent.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("{ not json"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for an unparseable JSON element file")
+			}
+			if !errors.Is(loadErr, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, loadErr)
+			}
+		})
+	}
+}
+
 // branchLocked and LoadBranchTransactionState build filesystem paths from txID;
 // a non-UUID branch string containing path separators would escape branches/ on
 // a file-backed store (path traversal on read). Every other branch-path builder
@@ -6115,6 +6400,70 @@ func TestCreateEdge_RuleComposition(t *testing.T) {
 	_, err = s.CreateEdge(ctx, "DEPENDS_ON", svc.Id, doc.Id, nil, "main")
 	if !errors.Is(err, store.ErrEdgeRuleViolation) {
 		t.Fatalf("expected ErrEdgeRuleViolation for using-mismatch, got %v", err)
+	}
+}
+
+// SPEC R1:133 — "Only the source entity type's rules are evaluated — the
+// target entity type's rules play no role in edge authorization." Source
+// permits Source→Target via LINKS; Target's own rules authorize only
+// Target→Source via a different edge type (REVERSES). If the target's rules
+// were consulted for the Source→Target LINKS edge, the connection would be
+// denied — it must succeed, proving the target's rules are never evaluated.
+// (Target's rules must use a different edge type than Source's so the LINKS
+// rel table has a single FROM label — LadybugDB rejects a rel table whose
+// endpoint clauses bind multiple node labels.)
+func TestCreateEdge_TargetRulesNotEvaluated(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Source",
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"Target"}, Using: []string{"LINKS"}},
+				},
+			},
+			{
+				Name: "Target",
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"Source"}, Using: []string{"REVERSES"}},
+				},
+			},
+		},
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "LINKS"},
+			{Name: "REVERSES"},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	src, err := s.CreateEntity(ctx, "Source", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Source: %v", err)
+	}
+	tgt, err := s.CreateEntity(ctx, "Target", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Target: %v", err)
+	}
+
+	// The source's rules authorize the connection; the target's rules (which
+	// never name LINKS) must not be consulted for an edge into Target.
+	if _, err := s.CreateEdge(ctx, "LINKS", src.Id, tgt.Id, nil, "main"); err != nil {
+		t.Fatalf("edge authorized by source rules must succeed regardless of target rules, got %v", err)
+	}
+
+	// Directionality proof: the target's rules DO govern edges originating
+	// from Target — a LINKS edge from Target is denied even though LINKS is a
+	// declared edge type — while the same rules play no role for edges into
+	// Target (asserted above).
+	if _, err := s.CreateEdge(ctx, "LINKS", tgt.Id, src.Id, nil, "main"); !errors.Is(err, store.ErrEdgeRuleViolation) {
+		t.Fatalf("expected ErrEdgeRuleViolation for LINKS from Target (its own rules govern its outgoing edges), got %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/foundry/flow/cartographer/internal/service"
 	"github.com/foundry/flow/cartographer/internal/store"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/pkg/eventbus"
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gogitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -258,6 +261,73 @@ func TestTryRemotePullOnInitUnsupportedSchemeFailsClosed(t *testing.T) {
 	}
 }
 
+// TestTryRemotePullOnInitHTTPSMissingPasswordFailsClosed verifies the
+// https missing/empty-password branch of tryRemotePullOnInit's pre-flight auth
+// resolver: an https remote whose Secret lacks a password fails closed with
+// gitstore.ErrAuthConfigMissing before any git operation is attempted.
+func TestTryRemotePullOnInitHTTPSMissingPasswordFailsClosed(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return map[string]string{"username": "user"}, nil
+		}, nil, nil)
+	if !errors.Is(err, gitstore.ErrAuthConfigMissing) {
+		t.Fatalf("https-missing-password pre-flight error = %v, want ErrAuthConfigMissing", err)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls after https-missing-password rejection = %d, want 0", gs.cloneCalls)
+	}
+}
+
+// TestTryRemotePullOnInitParseURLFailureFailsClosed verifies the url.Parse
+// error branch of tryRemotePullOnInit's pre-flight auth resolver: a remote URL
+// the parser rejects surfaces the parse error (never a sentinel, never a silent
+// fall-through to anonymous/unauthenticated access) and stays in the error
+// branch before any git operation.
+func TestTryRemotePullOnInitParseURLFailureFailsClosed(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	// malformedURL contains an invalid percent-escape, which url.Parse rejects
+	// ("net/url: invalid URL escape \"%zz\"").
+	malformedURL := "https://host/%zz"
+	// Guard the fixture: this must actually be a URL url.Parse rejects, or the
+	// test is asserting the wrong branch.
+	//nolint:staticcheck // the fixture is intentionally an invalid URL so the
+	// parse-error branch of the pre-flight resolver is exercised; the guard
+	// asserts that url.Parse genuinely rejects it (see the test comment above).
+	if _, err := url.Parse(malformedURL); err == nil {
+		t.Fatalf("test fixture %q unexpectedly parses; pick a URL url.Parse rejects", malformedURL)
+	}
+	err := tryRemotePullOnInit(gs, malformedURL, "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return map[string]string{"password": "pass"}, nil
+		}, nil, nil)
+	if err == nil {
+		t.Fatal("expected a url.Parse error for malformed URL, got nil")
+	}
+	var parseErr *url.Error
+	if !errors.As(err, &parseErr) {
+		t.Fatalf("expected a *url.Error from the parse branch, got %T: %v", err, err)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls after parse failure = %d, want 0", gs.cloneCalls)
+	}
+}
+
+// TestTryRemotePullOnInitNilReadSecretFailsClosed verifies the
+// non-empty-secretRef-with-nil-readSecretFn branch of tryRemotePullOnInit's
+// pre-flight auth resolver: a configured Secret ref with no way to read it
+// fails closed with gitstore.ErrAuthConfigMissing before any git operation.
+func TestTryRemotePullOnInitNilReadSecretFailsClosed(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", nil, nil, nil)
+	if !errors.Is(err, gitstore.ErrAuthConfigMissing) {
+		t.Fatalf("nil-readSecretFn pre-flight error = %v, want ErrAuthConfigMissing", err)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls after nil-readSecretFn rejection = %d, want 0", gs.cloneCalls)
+	}
+}
+
 func TestTryRemotePullOnInitPrivateRemoteAuthFailureIsNonBlocking(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true, cloneErr: gitstore.ErrAuthFailed}
 	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
@@ -331,6 +401,27 @@ func TestTryRemotePullOnInitCatchUpPushFailureNonBlocking(t *testing.T) {
 	}
 }
 
+// TestTryRemotePullOnInitCatchUpPushSecretFailureDeferred verifies SPEC R10
+// Init: on the catch-up-push path (non-empty local repo) a missing or invalid
+// Secret must log and defer — it never aborts startup. Pre-flight auth
+// failures are scoped to the clone path only, so a non-empty repo booting with
+// pullOnInit: true and a failing readSecretFn still attempts the push.
+func TestTryRemotePullOnInitCatchUpPushSecretFailureDeferred(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: false}
+	secretErr := errors.New("secret unavailable")
+	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) { return nil, secretErr }, nil, nil)
+	if err != nil {
+		t.Fatalf("secret failure on catch-up-push path blocked startup: %v", err)
+	}
+	if gs.pushCalls != 1 {
+		t.Fatalf("catch-up push calls = %d, want 1 (push still attempted)", gs.pushCalls)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls on non-empty repo = %d, want 0", gs.cloneCalls)
+	}
+}
+
 // TestTryRemotePullOnInitStateCheckFailureNonBlocking verifies SPEC R10 Init:
 // a repository-state (IsEmpty) check failure on init is logged and non-fatal —
 // no clone is attempted, no error blocks startup, and it does not call os.Exit.
@@ -344,6 +435,116 @@ func TestTryRemotePullOnInitStateCheckFailureNonBlocking(t *testing.T) {
 	}
 	if gs.pushCalls != 0 {
 		t.Fatalf("push calls after state-check failure = %d, want 0", gs.pushCalls)
+	}
+}
+
+// telemetrySpy implements flowv1.FlowEventBusServiceClient, capturing every
+// PublishRequest so tests can assert the telemetry events tryRemotePullOnInit
+// submits on startup failures (SPEC R1/R10).
+type telemetrySpy struct {
+	flowv1.FlowEventBusServiceClient
+
+	mu    sync.Mutex
+	calls []*flowv1.PublishRequest
+}
+
+func (s *telemetrySpy) Publish(
+	_ context.Context, req *flowv1.PublishRequest, _ ...grpc.CallOption,
+) (*flowv1.PublishResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, req)
+	return &flowv1.PublishResponse{Acknowledged: true}, nil
+}
+
+func (s *telemetrySpy) getCalls() []*flowv1.PublishRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*flowv1.PublishRequest, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+// newTestAuditPub builds a real AsyncPublisher over a telemetrySpy so
+// tryRemotePullOnInit's telemetry-publish branches are exercised end to end.
+// The publisher drains asynchronously, so callers poll waitForTelemetry.
+func newTestAuditPub(t *testing.T) (*telemetrySpy, *eventbus.AsyncPublisher) {
+	t.Helper()
+	spy := &telemetrySpy{}
+	pub := eventbus.NewAsyncPublisher(spy, eventbus.WithBufferSize(10))
+	t.Cleanup(pub.Stop)
+	return spy, pub
+}
+
+// waitForTelemetry polls the spy until a PublishRequest with the given event
+// type is published, then returns it.
+func waitForTelemetry(t *testing.T, spy *telemetrySpy, eventType string) *flowv1.PublishRequest {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, req := range spy.getCalls() {
+			if req.GetEvent().GetEventType() == eventType {
+				return req
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no telemetry event %q published within deadline; got %d publish calls",
+		eventType, len(spy.getCalls()))
+	return nil
+}
+
+// TestTryRemotePullOnInitCloneFailurePublishesTelemetry verifies SPEC R1: a
+// startup clone failure publishes a "cartographer.clone_failed" telemetry
+// event on the Event Bus (via the async publisher) while startup stays
+// non-blocking.
+func TestTryRemotePullOnInitCloneFailurePublishesTelemetry(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true, cloneErr: errors.New("clone boom")}
+	spy, pub := newTestAuditPub(t)
+	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return map[string]string{"password": "expired"}, nil
+		}, pub, nil)
+	if err != nil {
+		t.Fatalf("clone failure blocked startup: %v", err)
+	}
+	if gs.cloneCalls != 1 {
+		t.Fatalf("clone calls = %d, want 1", gs.cloneCalls)
+	}
+	req := waitForTelemetry(t, spy, "cartographer.clone_failed")
+	if req.GetChannel() != "telemetry" {
+		t.Fatalf("telemetry channel = %q, want %q", req.GetChannel(), "telemetry")
+	}
+	if got := req.GetEvent().GetAttributes()["url"]; got != "https://private.example/repo.git" {
+		t.Fatalf("telemetry url attribute = %q, want the remote URL", got)
+	}
+	if got := req.GetEvent().GetAttributes()["error"]; got != "clone boom" {
+		t.Fatalf("telemetry error attribute = %q, want %q", got, "clone boom")
+	}
+}
+
+// TestTryRemotePullOnInitPushFailurePublishesTelemetry verifies SPEC R10: a
+// failed catch-up push on init publishes a "cartographer.push_failed"
+// telemetry event while startup stays non-blocking.
+func TestTryRemotePullOnInitPushFailurePublishesTelemetry(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: false, pushErr: errors.New("push boom")}
+	spy, pub := newTestAuditPub(t)
+	err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, pub, nil)
+	if err != nil {
+		t.Fatalf("catch-up push failure blocked startup: %v", err)
+	}
+	if gs.pushCalls != 1 {
+		t.Fatalf("push calls = %d, want 1", gs.pushCalls)
+	}
+	req := waitForTelemetry(t, spy, "cartographer.push_failed")
+	if req.GetChannel() != "telemetry" {
+		t.Fatalf("telemetry channel = %q, want %q", req.GetChannel(), "telemetry")
+	}
+	if got := req.GetEvent().GetAttributes()["url"]; got != "https://public.example/repo.git" {
+		t.Fatalf("telemetry url attribute = %q, want the remote URL", got)
+	}
+	if got := req.GetEvent().GetAttributes()["error"]; got != "push boom" {
+		t.Fatalf("telemetry error attribute = %q, want %q", got, "push boom")
 	}
 }
 
@@ -496,6 +697,44 @@ func TestBuildResolveAuthFnSSHKnownHostsFailClosed(t *testing.T) {
 	// The configured callback must reject a host that is not in known_hosts.
 	if err := signer.HostKeyCallback("unknown-host", &net.TCPAddr{}, sshPub); err == nil {
 		t.Fatal("expected unknown-host rejection from fail-closed HostKeyCallback, got nil")
+	}
+}
+
+// TestBuildResolveAuthFnSSHKnownHostsEmptyFailsClosed verifies SPEC R1's
+// present-key rule: a present-but-empty known_hosts Secret value fails closed
+// instead of degrading to InsecureIgnoreHostKey. An empty known_hosts means
+// there are no known hosts, so every host is unknown and the callback must
+// reject it — mirroring the missing-expected-key rule applied to
+// ssh-privatekey (a present-but-empty data key is equivalent to an absent one).
+func TestBuildResolveAuthFnSSHKnownHostsEmptyFailsClosed(t *testing.T) {
+	keyPEM := ed25519PEM(t)
+	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate host key: %v", err)
+	}
+	sshPub, err := gossh.NewPublicKey(hostPriv.Public())
+	if err != nil {
+		t.Fatalf("marshal host public key: %v", err)
+	}
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"ssh-privatekey": keyPEM, "known_hosts": ""}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "ssh://git@example.com/org/repo.git")
+	auth, err := fn()
+	if err != nil {
+		t.Fatalf("ssh auth construction with empty known_hosts failed: %v", err)
+	}
+	signer, ok := auth.(*gogitssh.PublicKeys)
+	if !ok {
+		t.Fatalf("expected *gogitssh.PublicKeys, got %T", auth)
+	}
+	if signer.HostKeyCallback == nil {
+		t.Fatal("expected non-nil HostKeyCallback when known_hosts key is present (fail-closed), got nil")
+	}
+	// A present-but-empty known_hosts must NOT degrade to InsecureIgnoreHostKey:
+	// the callback must reject an unknown host.
+	if err := signer.HostKeyCallback("unknown-host", &net.TCPAddr{}, sshPub); err == nil {
+		t.Fatal("expected unknown-host rejection from fail-closed HostKeyCallback for empty known_hosts, got nil")
 	}
 }
 

@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -332,6 +333,51 @@ func TestTxSearchNeighbors_LosslessIdentityLikeProperties(t *testing.T) {
 	}
 	if r.Similarity != 0.7 {
 		t.Errorf("expected similarity 0.7, got %v", r.Similarity)
+	}
+}
+
+// The SPEC error table ("Embedding contains NaN or infinity") applies the
+// NaN/infinity check to CreateEntity, UpdateEntity, and SearchNeighbors.
+// These tests pin the SDK-side rejection boundary on the Transaction layer,
+// which calls the same validateEmbedding guard (transaction.go) as the
+// Graph layer — the Graph-layer tests alone do not cover this boundary.
+func TestTxEmbeddingNaNInfinityRejection(t *testing.T) {
+	bad := []struct {
+		name string
+		emb  []float32
+	}{
+		{"nan", []float32{float32(math.NaN())}},
+		{"positive-infinity", []float32{float32(math.Inf(1))}},
+		{"negative-infinity", []float32{float32(math.Inf(-1))}},
+	}
+	methods := []struct {
+		name string
+		fn   func(tx *Transaction, emb []float32) error
+	}{
+		{"CreateEntity", func(tx *Transaction, emb []float32) error {
+			_, err := tx.CreateEntity(componentType, nil, nil, emb)
+			return err
+		}},
+		{"UpdateEntity", func(tx *Transaction, emb []float32) error {
+			_, err := tx.UpdateEntity("entity-1", nil, emb)
+			return err
+		}},
+		{"SearchNeighbors", func(tx *Transaction, emb []float32) error {
+			_, err := tx.SearchNeighbors(emb, componentType, 10)
+			return err
+		}},
+	}
+	for _, m := range methods {
+		t.Run(m.name, func(t *testing.T) {
+			for _, tc := range bad {
+				t.Run(tc.name, func(t *testing.T) {
+					tx := newMockTx(&mockCartographerClient{})
+					if err := m.fn(tx, tc.emb); err == nil {
+						t.Errorf("expected error for NaN/infinity embedding on %s", m.name)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -1092,6 +1138,85 @@ func TestTxCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+// TestTxDeleteEntity_ResolvedTypeAnnotation proves SPEC R3's mode-1
+// resolution on the Transaction write path: when the entity ID IS in the
+// local ID-to-type map, DeleteEntity's capability annotation carries the
+// resolved concrete <type>, not the wildcard, enabling the Sidecar to block
+// on a specific <type> mismatch.
+//
+//nolint:dupl // Transaction and Graph resolved-type metadata tests share structure.
+func TestTxDeleteEntity_ResolvedTypeAnnotation(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no entity_type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	// entity-1 IS in the tx map -> annotation must carry the resolved type.
+	tx.idTypeMap.store("entity-1", componentType)
+	_, err := tx.DeleteEntity("entity-1")
+	if err != nil {
+		t.Fatalf("DeleteEntity returned error: %v", err)
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
+	}
+	if capturedValue != componentType {
+		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
+	}
+}
+
+// TestTxCreateEdge_ResolvedTypeAnnotation proves SPEC R3's mode-1 resolution
+// on the Transaction write path: CreateEdge resolves the SOURCE entity type
+// from the local ID-to-type map, so when the from-entity ID IS known the
+// annotation carries the resolved concrete <type>, not the wildcard.
+//
+//nolint:dupl // Transaction and Graph resolved-type metadata tests share structure.
+func TestTxCreateEdge_ResolvedTypeAnnotation(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no entity_type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.CreateEdgeResponse{
+				EdgeId: "edge-1", FromEntityId: req.GetFromEntityId(), ToEntityId: req.GetToEntityId(),
+			}, nil
+		},
+	}
+	tx := newMockTx(mock)
+	// from-1 IS in the tx map -> annotation must carry the resolved type.
+	tx.idTypeMap.store("from-1", componentType)
+	_, err := tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	if err != nil {
+		t.Fatalf("CreateEdge returned error: %v", err)
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
+	}
+	if capturedValue != componentType {
+		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
 	}
 }
 

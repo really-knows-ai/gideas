@@ -39,6 +39,31 @@ func TestExtractLabels_RelationshipPattern(t *testing.T) {
 	}
 }
 
+// TestExtractLabels_PropertyMapPattern pins the property-map node-pattern
+// shape (SPEC R3): MATCH (c:Component {name: 'x'}) must still extract its
+// labels. If the regex misses the shape, extractEntityTypes returns nil and
+// the ExecuteCypher callers collapse to the READ:graph/entity/* wildcard,
+// blocking a caller that holds only READ:graph/entity/Component under the
+// Sidecar's mode-1 check.
+func TestExtractLabels_PropertyMapPattern(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		cypher   string
+		expected []string
+	}{
+		{"spaced", "MATCH (c:Component {name: 'x'}) RETURN c", []string{componentType}},
+		{"compact", "MATCH (c:Component{name:'x'}) RETURN c", []string{componentType}},
+		{"multi-label", "MATCH (c:Component:Service {name: 'x'}) RETURN c", []string{componentType, "Service"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			labels := extractEntityTypes(tc.cypher)
+			if !slices.Equal(labels, tc.expected) {
+				t.Errorf("expected %v, got %v", tc.expected, labels)
+			}
+		})
+	}
+}
+
 func TestExtractLabels_InvalidCypher(t *testing.T) {
 	labels := extractEntityTypes("NOT VALID {{ syntax")
 	if labels != nil {

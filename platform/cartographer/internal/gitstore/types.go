@@ -35,7 +35,7 @@ type EdgeJSON struct {
 }
 
 // Entity is the domain type for batch WriteEntityFiles / WriteEdgeFiles.
-// UUIDs are stored as their canonical string form for JSON interop with Phase 4.
+// UUIDs are stored as their canonical string form for JSON interop.
 type Entity struct {
 	ID         string
 	Type       string

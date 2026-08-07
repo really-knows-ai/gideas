@@ -1177,6 +1177,17 @@ func (s *CartographerServer) DeleteEntity(
 		// cascade-deleted edges never reach the log and their git files are not
 		// removed on commit, breaking SPEC R7 §4 atomicity ("edges are removed
 		// atomically with the entity") across a commit.
+		// ponytail: this enumeration is an un-paginated full-edge-table scan —
+		// DumpAllEdges(ctx, branch) loads every edge in the branch into memory
+		// to filter those connected to the deleted entity, so a single delete
+		// costs O(E) and D deletes inside one transaction cost O(D×E) (and
+		// O(D×E) transient heap for the intermediate allEdges slice). On a
+		// graph with a very large edge count and a transaction that deletes
+		// many entities this becomes a quadratic stall on the write path,
+		// amplified per replica by branch-DB re-hydration. Upgrade path:
+		// add a store primitive that lists edges by endpoint (FROM/TO id),
+		// or have the store's DeleteEntity return the cascade set it already
+		// removes, eliminating the scan entirely.
 		var cascadeEdges []store.Edge
 		allEdges, dumpErr := s.store.DumpAllEdges(ctx, branch)
 		if dumpErr != nil {

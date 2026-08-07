@@ -9,7 +9,7 @@
 // Run `make flowctl-manifests` to refresh these copies.
 //
 //go:generate cp ../../platform/operator/config/crd/bases/*.yaml crd/
-//go:generate cp ../../platform/operator/config/manager/manager.yaml operator/deployment.yaml
+//go:generate sed '1,/^---$/d; s/namespace: system/namespace: foundry-system/' ../../platform/operator/config/manager/manager.yaml > operator/deployment.yaml
 package manifestfs
 
 import (

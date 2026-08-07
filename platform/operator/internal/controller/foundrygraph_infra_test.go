@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +31,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
@@ -599,6 +602,150 @@ func TestReconcileRBACRemoteAuthTeardown(t *testing.T) {
 	if keyRB.RoleRef.Name != keyReaderRoleName {
 		t.Errorf("key-reader RoleBinding RoleRef mismatch after teardown: %q", keyRB.RoleRef.Name)
 	}
+}
+
+// TestReconcileRBACRemoteAuthTeardownGetError covers the non-NotFound Get-error branches of
+// the remote-auth teardown path (foundrygraph_infra.go:225-226, 234-235): when the
+// remote-auth Role or RoleBinding cannot be read for any reason other than absence, the
+// teardown must surface the error rather than silently skipping the deletion (SPEC R6:
+// "If secretRef is removed entirely ... the Operator tears down only the remote-auth-specific
+// Role and RoleBinding" — a read failure must not be swallowed as if the resource were gone).
+func TestReconcileRBACRemoteAuthTeardownGetError(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
+		// Remote config present but secretRef empty → teardown path.
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: ""}},
+			},
+		},
+	}
+
+	t.Run("role get error surfaces", func(t *testing.T) {
+		interceptorFuncs := interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				// Only the remote-auth Role read fails; everything else (the key-reader
+				// CreateOrUpdate Gets and the RoleBinding Get) delegates to the real
+				// fake client so NotFound/Create semantics are preserved.
+				if key.Name == remoteAuthRoleName {
+					if _, ok := obj.(*rbacv1.Role); ok {
+						return errors.New("apiserver unavailable")
+					}
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+		err := r.reconcileRBAC(context.Background(), fg)
+		if err == nil {
+			t.Fatal("expected the remote-auth Role Get error to surface from the teardown")
+		}
+		if !strings.Contains(err.Error(), "get remote-auth Role") {
+			t.Errorf("expected the error to name the remote-auth Role, got: %v", err)
+		}
+	})
+
+	t.Run("rolebinding get error surfaces", func(t *testing.T) {
+		interceptorFuncs := interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if key.Name == remoteAuthRoleName {
+					if _, ok := obj.(*rbacv1.RoleBinding); ok {
+						return errors.New("apiserver unavailable")
+					}
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+		err := r.reconcileRBAC(context.Background(), fg)
+		if err == nil {
+			t.Fatal("expected the remote-auth RoleBinding Get error to surface from the teardown")
+		}
+		if !strings.Contains(err.Error(), "get remote-auth RoleBinding") {
+			t.Errorf("expected the error to name the remote-auth RoleBinding, got: %v", err)
+		}
+	})
+}
+
+// TestReconcileRBACRemoteAuthTeardownDeleteError covers the Delete-failure branches of the
+// remote-auth teardown path (foundrygraph_infra.go:222-223, 231-232): a remote-auth Role or
+// RoleBinding that exists but cannot be deleted must surface the error so the reconcile
+// requeues with backoff instead of silently leaving the stale Role/RoleBinding in place
+// (SPEC R6 removal flow — the teardown must be loud on failure, never a silent partial
+// cleanup).
+func TestReconcileRBACRemoteAuthTeardownDeleteError(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns},
+		// Remote config present but secretRef empty → teardown path.
+		Spec: flowv1.FoundryGraphSpec{
+			Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: ""}},
+			},
+		},
+	}
+
+	t.Run("role delete error surfaces", func(t *testing.T) {
+		// The remote-auth Role exists (Get succeeds) but its Delete fails.
+		remoteRole := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}}
+		interceptorFuncs := interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*rbacv1.Role); ok {
+					return errors.New("delete denied")
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, remoteRole).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+		err := r.reconcileRBAC(context.Background(), fg)
+		if err == nil {
+			t.Fatal("expected the remote-auth Role Delete error to surface from the teardown")
+		}
+		if !strings.Contains(err.Error(), "delete remote-auth Role") {
+			t.Errorf("expected the error to name the remote-auth Role delete, got: %v", err)
+		}
+	})
+
+	t.Run("rolebinding delete error surfaces", func(t *testing.T) {
+		// Both exist; the Role delete succeeds and the RoleBinding delete fails.
+		remoteRole := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}}
+		remoteRB := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "cartographer-flow-graph-remote-auth", Namespace: ns}}
+		interceptorFuncs := interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*rbacv1.RoleBinding); ok {
+					return errors.New("delete denied")
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}
+		fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, remoteRole, remoteRB).WithInterceptorFuncs(interceptorFuncs).Build()
+		r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s}
+
+		err := r.reconcileRBAC(context.Background(), fg)
+		if err == nil {
+			t.Fatal("expected the remote-auth RoleBinding Delete error to surface from the teardown")
+		}
+		if !strings.Contains(err.Error(), "delete remote-auth RoleBinding") {
+			t.Errorf("expected the error to name the remote-auth RoleBinding delete, got: %v", err)
+		}
+	})
 }
 
 // TestReconcileRBACCreation verifies the CREATE path (item 8): reconcileRBAC creates the

@@ -559,6 +559,41 @@ func TestSpecSemanticallyEqual(t *testing.T) {
 			}},
 			want: false,
 		},
+		// nil-vs-set subfield branches inside non-nil containers (foundrygraph_schema.go):
+		// each is a distinct false-returning branch that gates the SPEC R6
+		// redeploy-vs-apply decision and must be pinned directly — a set subfield on one
+		// side and nil on the other is a semantic difference even when the container is
+		// non-nil on both sides.
+		{
+			name: "storage.size nil vs set within non-nil storage - not equal",
+			a:    &flowv1.FoundryGraphSpec{Storage: &flowv1.StorageSpec{}},
+			b:    specWithStorage("1Gi"),
+			want: false,
+		},
+		{
+			name: "versioning.transactionTimeout nil vs set within non-nil versioning - not equal (R6 redeploy)",
+			a:    &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{}},
+			b:    specWithVersioning(30),
+			want: false,
+		},
+		{
+			name: "versioning.remote nil vs set within non-nil versioning - not equal (R6 redeploy)",
+			a:    &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{}},
+			b: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{URL: "https://github.com/org/repo.git"},
+			}},
+			want: false,
+		},
+		{
+			name: "versioning.remote.auth nil vs set within non-nil remote - not equal (R6 redeploy/teardown)",
+			a: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{},
+			}},
+			b: &flowv1.FoundryGraphSpec{Versioning: &flowv1.VersioningSpec{
+				Remote: &flowv1.RemoteConfig{Auth: &flowv1.RemoteAuth{SecretRef: "secret-a"}},
+			}},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {

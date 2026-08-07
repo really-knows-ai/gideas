@@ -170,6 +170,15 @@ verify-check: test vet lint ## Read-only quality gate: run tests, vet, and lint 
 proto: ## Regenerate Go code from proto definitions using buf.
 	buf generate
 
+.PHONY: flowctl-manifests
+flowctl-manifests: ## Regenerate flowctl's embedded manifests from operator sources.
+	cp platform/operator/config/crd/bases/*.yaml tools/flowctl/manifestfs/crd/
+	# manager.yaml is a multi-document stream (Namespace + Deployment); extract
+	# the single Deployment document (the doc after the first `---` separator)
+	# and rewrite its namespace from "system" to "foundry-system" so the
+	# embedded copy keeps the single-doc shape manifestfs parses at init.
+	sed '1,/^---$$/d; s/namespace: system/namespace: foundry-system/' platform/operator/config/manager/manager.yaml > tools/flowctl/manifestfs/operator/deployment.yaml
+
 # ---------------------------------------------------------------------------
 ##@ Housekeeping
 # ---------------------------------------------------------------------------

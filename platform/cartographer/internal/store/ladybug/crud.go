@@ -67,21 +67,6 @@ func (db *ladybugDB) CreateEntity(
 		}
 	}
 
-	// Durable duplicate detection: a duplicate-ID create must return
-	// ErrEntityAlreadyExists regardless of the underlying DB's error text.
-	// LadybugDB's error message is a message, not a contract, so instead of
-	// substring-matching it we probe for an existing entity up-front. This is
-	// O(#entity_types) per create; CreateEntity is not fast enough to warrant
-	// an ID→type index for this (ponytail: upgrade path is a global ID→type
-	// index shared with findEntityByID).
-	if _, perr := findEntityByID(conn, typeDefs.entityTypeDefs, id); perr == nil {
-		return nil, fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, id)
-	} else if !errors.Is(perr, store.ErrEntityNotFound) {
-		// The probe itself failed for a non-"not found" reason — propagate it
-		// rather than masking a real read failure behind the INSERT.
-		return nil, perr
-	}
-
 	// Determine the bootstrapped embedding dimension (0 if the vector column
 	// has not been created yet for this entity type).
 	dim := 0
@@ -96,6 +81,31 @@ func (db *ladybugDB) CreateEntity(
 	// Validate embedding (dimension check requires bootstrapped column).
 	if err := validateEmbeddingForCreate(embedding, def, dim); err != nil {
 		return nil, err
+	}
+	// An established-dimension mismatch is structural too (SPEC R7:
+	// INVALID_ARGUMENT). It is checked here so the data-integrity probe below
+	// never masks it (SPEC:946 CreateEntity check-order: structural validation
+	// → data-integrity).
+	if def.EnableVectorIndex && len(embedding) > 0 && dim != 0 && len(embedding) != dim {
+		return nil, fmt.Errorf("%w: expected dimension %d, got %d", store.ErrEmbeddingDimension, dim, len(embedding))
+	}
+
+	// Durable duplicate detection: a duplicate-ID create must return
+	// ErrEntityAlreadyExists regardless of the underlying DB's error text.
+	// LadybugDB's error message is a message, not a contract, so instead of
+	// substring-matching it we probe for an existing entity up-front. This is
+	// O(#entity_types) per create; CreateEntity is not fast enough to warrant
+	// an ID→type index for this (ponytail: upgrade path is a global ID→type
+	// index shared with findEntityByID). The probe is the data-integrity check
+	// of the SPEC:946 check-order — every structural check (type, id format,
+	// properties, embedding) has already run — and it sits before the
+	// write-path DDL so a duplicate-ID create never locks the vector dimension.
+	if _, perr := findEntityByID(conn, typeDefs.entityTypeDefs, id); perr == nil {
+		return nil, fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, id)
+	} else if !errors.Is(perr, store.ErrEntityNotFound) {
+		// The probe itself failed for a non-"not found" reason — propagate it
+		// rather than masking a real read failure behind the INSERT.
+		return nil, perr
 	}
 
 	// Bootstrap embedding column and vector index on first entity with embedding.
@@ -144,8 +154,6 @@ func (db *ladybugDB) CreateEntity(
 					return nil, fmt.Errorf("persist vector schema metadata: %w", err)
 				}
 			}
-		} else if len(embedding) != dim {
-			return nil, fmt.Errorf("%w: expected dimension %d, got %d", store.ErrEmbeddingDimension, dim, len(embedding))
 		}
 	}
 

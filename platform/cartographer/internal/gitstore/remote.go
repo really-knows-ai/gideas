@@ -107,8 +107,10 @@ func (g *gitStore) FetchRemote(ctx context.Context) error {
 // FetchAndMerge fetches from the remote and merges the remote tracking branch
 // into the local branch. If the local branch does not exist, it is created
 // pointing at the remote tracking ref. If fast-forward is possible, the local
-// ref is advanced. Otherwise a merge commit is created with two parents.
-// Returns the new HEAD hash.
+// ref is advanced. If the local branch is strictly ahead of the remote, it is
+// left unchanged (treated as up-to-date). On true divergence ErrPullDiverged
+// is returned and local main is left unchanged — no merge commit is
+// fabricated. Returns the new HEAD hash.
 // mapFetchError converts common fetch errors to typed package sentinels.
 // Classification is based on typed errors (go-git sentinels and the standard
 // library's net error types) — never on matching library error message text,

@@ -2335,6 +2335,216 @@ func TestCommitTransaction_MergeDivergedIsInternal(t *testing.T) {
 	}
 }
 
+// pushTrackingGitStore wraps a gitstore to observe the post-commit fire-and-forget
+// remote push (FetchAndMerge → PushRemote) and inject failures into it. WithGitLock
+// runs fn inline so the asynchronous push goroutine can be driven deterministically;
+// pushDone closes only after the push attempt's WithGitLock returns — i.e. after the
+// goroutine's telemetry/log tail — so a test unblocking on pushDone can rely on all
+// push side effects being observable. Only the post-commit push invokes
+// FetchAndMerge/PushRemote, so the counters and pushStarted flag cannot be polluted
+// by the commit flow itself.
+type pushTrackingGitStore struct {
+	gitstore.GitStore
+	mu          sync.Mutex
+	fetchCalls  int
+	pushCalls   int
+	fetchErr    error
+	pushErr     error
+	pushStarted bool
+	pushDone    chan struct{}
+}
+
+func (s *pushTrackingGitStore) WithGitLock(fn func() error) error {
+	err := fn()
+	s.mu.Lock()
+	started := s.pushStarted
+	s.pushStarted = false
+	s.mu.Unlock()
+	if started {
+		close(s.pushDone)
+	}
+	return err
+}
+
+func (s *pushTrackingGitStore) FetchAndMerge(ctx context.Context, remote, branch string) (plumbing.Hash, error) {
+	s.mu.Lock()
+	s.fetchCalls++
+	err := s.fetchErr
+	s.pushStarted = true
+	s.mu.Unlock()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return plumbing.ZeroHash, nil
+}
+
+func (s *pushTrackingGitStore) PushRemote(ctx context.Context) error {
+	s.mu.Lock()
+	s.pushCalls++
+	err := s.pushErr
+	s.mu.Unlock()
+	return err
+}
+
+// TestCommitTransaction_RemotePushSuccess exercises the SPEC R10 / Commit
+// step-14 post-commit push on its success path: with a remote configured, a
+// successful commit fans out a goroutine that performs FetchAndMerge("origin",
+// "main") then PushRemote. The commit response is unaffected by the push, no
+// cartographer.push_failed telemetry is emitted, and both remote operations are
+// observed exactly once.
+func TestCommitTransaction_RemotePushSuccess(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	pushGit := &pushTrackingGitStore{GitStore: gs, pushDone: make(chan struct{})}
+	mockPub := &mockTelemetryPublisher{}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, pushGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+		30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithAuditPublisher(mockPub),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "pushed"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CommitTransaction: %v", err)
+	}
+	select {
+	case <-pushGit.pushDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for post-commit push")
+	}
+	pushGit.mu.Lock()
+	fetchCalls, pushCalls := pushGit.fetchCalls, pushGit.pushCalls
+	pushGit.mu.Unlock()
+	if fetchCalls != 1 {
+		t.Fatalf("expected 1 FetchAndMerge call, got %d", fetchCalls)
+	}
+	if pushCalls != 1 {
+		t.Fatalf("expected 1 PushRemote call, got %d", pushCalls)
+	}
+	for _, e := range mockPub.Events() {
+		if e.Event != nil && e.Event.EventType == "cartographer.push_failed" {
+			t.Fatal("push_failed telemetry emitted on successful push")
+		}
+	}
+}
+
+// TestCommitTransaction_RemotePushFailureTelemetry exercises the SPEC R10 /
+// Commit step-14 failure semantics: a failed post-commit push is fire-and-forget
+// — the commit is NOT rolled back — and the failure is logged and surfaced as a
+// `cartographer.push_failed` telemetry event. Both failure branches of the push
+// goroutine (FetchAndMerge error, and PushRemote error) are covered. The event
+// is polled for after pushDone because the goroutine's telemetry tail runs
+// after its WithGitLock returns (fire-and-forget by design).
+func TestCommitTransaction_RemotePushFailureTelemetry(t *testing.T) {
+	cases := []struct {
+		name     string
+		fetchErr error
+		pushErr  error
+	}{
+		{name: "fetch fails", fetchErr: errors.New("simulated fetch failure")},
+		{name: "push fails", pushErr: errors.New("simulated push rejection")},
+	}
+	waitForPushFailedEvent := func(t *testing.T, pub *mockTelemetryPublisher) bool {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, e := range pub.Events() {
+				if e.Event != nil && e.Event.EventType == "cartographer.push_failed" {
+					return true
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return false
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base, err := ladybug.OpenInMemory()
+			if err != nil {
+				t.Fatalf("OpenInMemory: %v", err)
+			}
+			t.Cleanup(func() { _ = base.Close() })
+			gs, err := gitstore.New(t.TempDir())
+			if err != nil {
+				t.Fatalf("gitstore.New: %v", err)
+			}
+			pushGit := &pushTrackingGitStore{
+				GitStore: gs, fetchErr: tc.fetchErr, pushErr: tc.pushErr,
+				pushDone: make(chan struct{}),
+			}
+			mockPub := &mockTelemetryPublisher{}
+			opPub, _ := generateTestKey()
+			srv := NewCartographerServer(
+				base, pushGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+				30*time.Second, "test-ns", 30*time.Minute, 100000,
+				WithAuditPublisher(mockPub),
+			)
+			srv.MarkDBReady()
+			ctx := testCtx()
+			applyTestSchema(ctx, t, base)
+			begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err != nil {
+				t.Fatalf("BeginTransaction: %v", err)
+			}
+			if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": "pushed"}, TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("CreateEntity: %v", err)
+			}
+			// The push failure must not surface on the RPC: the commit is already
+			// complete and fire-and-forget by design (SPEC R10, Commit step 14).
+			if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+				TransactionId: begin.TransactionId,
+			}); err != nil {
+				t.Fatalf("CommitTransaction must succeed despite push failure: %v", err)
+			}
+			select {
+			case <-pushGit.pushDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for post-commit push")
+			}
+			if !waitForPushFailedEvent(t, mockPub) {
+				t.Fatal("expected cartographer.push_failed telemetry event")
+			}
+			// The failed push was attempted on the expected branch of the goroutine.
+			pushGit.mu.Lock()
+			fetchCalls, pushCalls := pushGit.fetchCalls, pushGit.pushCalls
+			pushGit.mu.Unlock()
+			if fetchCalls != 1 {
+				t.Fatalf("expected 1 FetchAndMerge call, got %d", fetchCalls)
+			}
+			wantPushCalls := 0
+			if tc.fetchErr == nil {
+				wantPushCalls = 1
+			}
+			if pushCalls != wantPushCalls {
+				t.Fatalf("expected %d PushRemote calls, got %d", wantPushCalls, pushCalls)
+			}
+		})
+	}
+}
+
 func TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit(t *testing.T) {
 	srv, _ := newTestServer(t)
 	srv.gitstore = &mergeFailingGitStore{GitStore: srv.gitstore, failMerge: true}
@@ -7592,6 +7802,66 @@ func TestReadPathTransactionID_Rejected(t *testing.T) {
 	})
 }
 
+// TestMutationTransactionID_Rejected verifies SPEC R2's error-table rows
+// "Invalid transaction ID format" (INVALID_ARGUMENT) and "Transaction not
+// found" (NOT_FOUND) cover the write path exactly as the read path (SPEC:167-175
+// states both rows "cover both read- and write-path operations"): every
+// mutation RPC (CreateEntity, UpdateEntity, DeleteEntity, CreateEdge,
+// DeleteEdge) rejects a malformed transactionId with INVALID_ARGUMENT and an
+// unknown-but-valid transactionId with NOT_FOUND via lockTransactionMutation.
+func TestMutationTransactionID_Rejected(t *testing.T) {
+	validID := "11111111-1111-4111-8111-111111111111"
+	tests := []struct {
+		name string
+		call func(context.Context, *CartographerServer, string) error
+	}{
+		{"CreateEntity", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": "x"}, TransactionId: txID,
+			})
+			return err
+		}},
+		{"UpdateEntity", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+				Id: validID, Properties: map[string]string{"version": "2"}, TransactionId: txID,
+			})
+			return err
+		}},
+		{"DeleteEntity", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: validID, TransactionId: txID})
+			return err
+		}},
+		{"CreateEdge", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+				EdgeType: "DEPENDS_ON", FromEntityId: validID, ToEntityId: validID, TransactionId: txID,
+			})
+			return err
+		}},
+		{"DeleteEdge", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: validID, TransactionId: txID})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"/invalid transaction id", func(t *testing.T) {
+			srv, _ := newTestServer(t)
+			applyTestSchema(testCtx(), t, srv.store)
+			err := tt.call(testCtx(), srv, "not-a-uuid")
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+			}
+		})
+		t.Run(tt.name+"/unknown transaction id", func(t *testing.T) {
+			srv, _ := newTestServer(t)
+			applyTestSchema(testCtx(), t, srv.store)
+			err := tt.call(testCtx(), srv, validID)
+			if status.Code(err) != codes.NotFound {
+				t.Fatalf("expected NotFound, got %v (%v)", status.Code(err), err)
+			}
+		})
+	}
+}
+
 // =========================================================================
 // 33. HealthCheck propagates store errors (SPEC R1/R5)
 // =========================================================================
@@ -7736,6 +8006,102 @@ func TestExecuteCypher_NoEntityTypesMetadataReadOnlyDenied(t *testing.T) {
 	}
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// entityTypesCtx returns a context with the given capabilities verified and
+// stored (interceptor-style) plus SPEC R3 `entity_types` gRPC metadata values
+// injected, simulating the SDK's Cypher MATCH label-set annotation. Each label
+// is carried as its own metadata value so md.Get(MetadataKeyEntityTypes)
+// returns the full set in order.
+func entityTypesCtx(capsStr string, caps []string, entityTypes ...string) context.Context {
+	initTestKey()
+	sig, signedAt := signCapabilities(capsStr, testSidecarPriv)
+	pairs := make([]string, 0, 8+2*len(entityTypes))
+	pairs = append(pairs,
+		MetadataKeyCapabilities, capsStr,
+		MetadataKeyCapabilitiesSignature, sig,
+		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
+		MetadataKeyCapabilitiesSignedBy, "sidecar",
+	)
+	for _, et := range entityTypes {
+		pairs = append(pairs, MetadataKeyEntityTypes, et)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(pairs...))
+	return StoreCapabilitiesInContext(ctx, &Capabilities{Caps: caps, SignedBy: "sidecar"})
+}
+
+// TestExecuteCypher_EntityTypesMetadataSubsetRejected asserts SPEC R3 (SPEC:245):
+// when the SDK annotates entity_types metadata with the full label set of a
+// multi-type Cypher query, the Cartographer's authoritative re-check validates
+// the caller against EVERY referenced type. A caller holding read capability
+// for only a subset of the referenced types is rejected with PERMISSION_DENIED
+// — the specific-type check must not fall back to the wildcard.
+func TestExecuteCypher_EntityTypesMetadataSubsetRejected(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := entityTypesCtx(
+		"READ:graph/entity/Component,READ:graph/tx",
+		[]string{"READ:graph/entity/Component", "READ:graph/tx"},
+		"Component", "Service",
+	)
+	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "MATCH (a:Component)-[:DEPENDS_ON]->(b:Service) RETURN b",
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for subset capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestExecuteCypher_EntityTypesMetadataSpecificTypePasses asserts SPEC R3: a
+// caller holding READ:graph/entity/Component passes the per-type re-check when
+// entity_types metadata lists exactly Component, and the query executes
+// successfully (the metadata branch is not a blanket rejection).
+func TestExecuteCypher_EntityTypesMetadataSpecificTypePasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	applyTestSchema(testCtx(), t, srv.store)
+	_, _ = srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "x"}, nil, "")
+
+	ctx := entityTypesCtx(
+		"READ:graph/entity/Component",
+		[]string{"READ:graph/entity/Component"},
+		"Component",
+	)
+	resp, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "MATCH (n:Component) RETURN n",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteCypher failed: %v", err)
+	}
+	if len(resp.Rows) == 0 {
+		t.Fatal("expected at least one row")
+	}
+}
+
+// TestExecuteCypher_EntityTypesMetadataWildcardPasses asserts SPEC R3: a caller
+// holding READ:graph/entity/* passes the per-type re-check regardless of the
+// label set in entity_types metadata (consistent with the parser-failure
+// fallback), and the query executes successfully.
+func TestExecuteCypher_EntityTypesMetadataWildcardPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	applyTestSchema(testCtx(), t, srv.store)
+	_, _ = srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "x"}, nil, "")
+
+	ctx := entityTypesCtx(
+		"READ:graph/entity/*,READ:graph/tx",
+		[]string{"READ:graph/entity/*", "READ:graph/tx"},
+		"Component", "Service",
+	)
+	resp, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "MATCH (n:Component) RETURN n",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteCypher failed: %v", err)
+	}
+	if len(resp.Rows) == 0 {
+		t.Fatal("expected at least one row")
 	}
 }
 

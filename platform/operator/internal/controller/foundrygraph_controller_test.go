@@ -61,6 +61,9 @@ const (
 	// keyReaderRoleName is the verification-key Role/RoleBinding name rendered for the
 	// conventional flow-graph name ("cartographer-<fg-name>-key-reader").
 	keyReaderRoleName = "cartographer-flow-graph-key-reader"
+	// remoteAuthRoleName is the remote-auth Role/RoleBinding name rendered for the
+	// conventional flow-graph name ("cartographer-<fg-name>-remote-auth").
+	remoteAuthRoleName = "cartographer-flow-graph-remote-auth"
 	// transactionTimeoutDefault is the SPEC R5 TRANSACTION_TIMEOUT fallback ("30m").
 	transactionTimeoutDefault = "30m"
 )
@@ -1572,8 +1575,15 @@ func TestReconcileNonDestructiveSuccessReachesReady(t *testing.T) {
 		},
 	}
 
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err != nil {
+	// SPEC R6 step 5: "The periodic resync (10m interval) is an independent safety net" —
+	// a fully successful reconcile ends in setReadyCondition, whose 10m RequeueAfter is the
+	// Ready-path cadence that makes the resync independent of error-driven backoff requeues.
+	result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+	if err != nil {
 		t.Fatalf("unexpected error on successful non-destructive reconcile: %v", err)
+	}
+	if result.RequeueAfter != 10*time.Minute {
+		t.Errorf("expected the Ready path to requeue after 10m (SPEC R6 periodic resync), got %+v", result)
 	}
 
 	// SPEC R6 non-destructive ordering: HealthCheck precedes ApplySchema; WipeGraph is

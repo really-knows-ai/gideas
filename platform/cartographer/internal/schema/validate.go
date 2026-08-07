@@ -56,14 +56,14 @@ func Validate(schema *flowv1.Schema) error {
 		edgeTypeNames[et.Name] = true
 	}
 
-	// 2-7. Validate each entity type
+	// 2-4. Validate each entity type (doc steps 2: name, 3: properties, 4: rules)
 	for _, et := range schema.EntityTypes {
 		if err := validateEntityType(et, entityTypeNames, edgeTypeNames); err != nil {
 			return err
 		}
 	}
 
-	// 2-7. Validate each edge type
+	// 2-3. Validate each edge type (doc steps 2: name, 3: properties)
 	for _, et := range schema.EdgeTypes {
 		if err := validateEdgeType(et); err != nil {
 			return err
@@ -74,17 +74,17 @@ func Validate(schema *flowv1.Schema) error {
 }
 
 func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames map[string]bool) error {
-	// 3. Name format and length
+	// 2. Name format and length
 	if err := validateName(et.Name); err != nil {
 		return err
 	}
 
-	// 4. Reserved word check
+	// 2. Reserved word check
 	if reservedWords[strings.ToUpper(et.Name)] {
 		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
 	}
 
-	// 2. Duplicate property names within this type
+	// 3. Duplicate property names within this type
 	propNames := make(map[string]bool, len(et.Properties))
 	for i, p := range et.Properties {
 		if p == nil {
@@ -100,12 +100,12 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 			return fmt.Errorf("%w: property %q in entity type %q", err, p.Name, et.Name)
 		}
 
-		// 4. Reserved word check for property name
+		// 3. Reserved word check for property name
 		if reservedWords[strings.ToUpper(p.Name)] {
 			return fmt.Errorf("%w: property %q in entity type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
 		}
 
-		// 5. Implicit-column collision (entities)
+		// 3. Implicit-column collision (entities)
 		if p.Name == "id" {
 			return fmt.Errorf("%w: property %q in entity type %q collides with reserved column",
 				ErrImplicitColumnCollision, p.Name, et.Name)
@@ -115,28 +115,28 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 				ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 
-		// 7. Property type must be "string"
+		// 3. Property type must be "string"
 		if p.Type != "string" {
 			return fmt.Errorf("%w: property %q in entity type %q has type %q", ErrInvalidPropertyType, p.Name, et.Name, p.Type)
 		}
 	}
 
-	// 8. Rule validation
+	// 4. Rule validation
 	return validateRules(et.Rules, entityTypeNames, edgeTypeNames, et.Name)
 }
 
 func validateEdgeType(et *flowv1.EdgeType) error {
-	// 3. Name format
+	// 2. Name format
 	if err := validateName(et.Name); err != nil {
 		return err
 	}
 
-	// 4. Reserved word check
+	// 2. Reserved word check
 	if reservedWords[strings.ToUpper(et.Name)] {
 		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
 	}
 
-	// 2. Duplicate property names within this type
+	// 3. Duplicate property names within this type
 	propNames := make(map[string]bool, len(et.Properties))
 	for i, p := range et.Properties {
 		if p == nil {
@@ -152,18 +152,18 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 			return fmt.Errorf("%w: property %q in edge type %q", err, p.Name, et.Name)
 		}
 
-		// 4. Reserved word check for property name
+		// 3. Reserved word check for property name
 		if reservedWords[strings.ToUpper(p.Name)] {
 			return fmt.Errorf("%w: property %q in edge type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
 		}
 
-		// 6. Implicit-column collision (edges)
+		// 3. Implicit-column collision (edges)
 		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" {
 			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column",
 				ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 
-		// 7. Property type must be "string"
+		// 3. Property type must be "string"
 		if p.Type != "string" {
 			return fmt.Errorf("%w: property %q in edge type %q has type %q", ErrInvalidPropertyType, p.Name, et.Name, p.Type)
 		}

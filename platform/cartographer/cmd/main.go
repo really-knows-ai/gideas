@@ -329,40 +329,6 @@ func tryRemotePullOnInit(
 	auditPub *eventbus.AsyncPublisher,
 	rehydrate func() error,
 ) error {
-	authFn := func() error {
-		if remoteAuthSecretRef == "" {
-			return nil
-		}
-		if readSecretFn == nil {
-			return gitstore.ErrAuthConfigMissing
-		}
-		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
-		if err != nil {
-			return fmt.Errorf("pre-flight auth: read secret: %w", err)
-		}
-		parsedURL, parseErr := url.Parse(remoteURL)
-		if parseErr != nil {
-			return fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
-		}
-		switch parsedURL.Scheme {
-		case "ssh":
-			// Spec missing-expected-key rule: a present-but-empty data key is
-			// equivalent to an absent one — fail closed on either.
-			if len(data["ssh-privatekey"]) == 0 {
-				return gitstore.ErrAuthConfigMissing
-			}
-		case "https":
-			if len(data["password"]) == 0 {
-				return gitstore.ErrAuthConfigMissing
-			}
-		default:
-			return gitstore.ErrUnsupportedURLScheme
-		}
-		return nil
-	}
-	if authErr := authFn(); authErr != nil {
-		return authErr
-	}
 	empty, err := gs.IsEmpty(context.Background())
 	if err != nil {
 		// SPEC R10 Init: repository-state check failures are logged, not fatal.
@@ -370,6 +336,46 @@ func tryRemotePullOnInit(
 		return nil
 	}
 	if empty {
+		// SPEC R10 Init: pre-flight config failures (missing Secret) prevent
+		// clone and fail startup. The pre-flight check is scoped to the clone
+		// path only: on the catch-up-push path (non-empty repo) a missing or
+		// invalid Secret surfaces at push time as a runtime failure that is
+		// logged and deferred — it never aborts startup ("failures logged and
+		// deferred", R10 Init).
+		authFn := func() error {
+			if remoteAuthSecretRef == "" {
+				return nil
+			}
+			if readSecretFn == nil {
+				return gitstore.ErrAuthConfigMissing
+			}
+			data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
+			if err != nil {
+				return fmt.Errorf("pre-flight auth: read secret: %w", err)
+			}
+			parsedURL, parseErr := url.Parse(remoteURL)
+			if parseErr != nil {
+				return fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
+			}
+			switch parsedURL.Scheme {
+			case "ssh":
+				// Spec missing-expected-key rule: a present-but-empty data key is
+				// equivalent to an absent one — fail closed on either.
+				if len(data["ssh-privatekey"]) == 0 {
+					return gitstore.ErrAuthConfigMissing
+				}
+			case "https":
+				if len(data["password"]) == 0 {
+					return gitstore.ErrAuthConfigMissing
+				}
+			default:
+				return gitstore.ErrUnsupportedURLScheme
+			}
+			return nil
+		}
+		if authErr := authFn(); authErr != nil {
+			return authErr
+		}
 		slog.Info("Pulling from remote on init", "url", remoteURL)
 		if err := gs.WithGitLock(func() error {
 			return gs.CloneSingleBranch(context.Background(), remoteURL, "main")
@@ -494,7 +500,12 @@ func buildResolveAuthFn(
 				}
 				// SPEC R1: if known_hosts is present, reject connections to
 				// unknown hosts (fail closed). If absent, skip verification.
-				if kh, hasKnownHosts := data["known_hosts"]; hasKnownHosts && kh != "" {
+				// Presence alone — even an empty value — fails closed: an empty
+				// known_hosts means there are no known hosts, so every host is
+				// unknown. This matches the missing-expected-key rule applied to
+				// ssh-privatekey above (a present-but-empty data key is
+				// equivalent to an absent one).
+				if kh, hasKnownHosts := data["known_hosts"]; hasKnownHosts {
 					tmp, tmpErr := os.CreateTemp("", "known_hosts-*")
 					if tmpErr != nil {
 						return nil, tmpErr

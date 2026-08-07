@@ -899,27 +899,45 @@ func TestResolveOperatorProxyPort_ParseError(t *testing.T) {
 	}
 }
 
-// ─── Item 35: Operator pod selector sourced from embedded manifest ──────────
+// ─── Item 35: Operator pod selector pinned to the deployed manager.yaml ─────
 
-func TestOperatorLabelSelectorMatchesEmbeddedDeployment(t *testing.T) {
-	// The CLI's operator pod selector must match the pod label in the embedded
-	// operator deployment manifest (a copy of the deployed manager.yaml), so
-	// pod identification cannot silently drift from what `flowctl init`
-	// deploys.
-	data, err := manifestfs.Manifests.ReadFile("operator/deployment.yaml")
+func TestOperatorLabelSelectorMatchesDeployedManagerManifest(t *testing.T) {
+	// The CLI's operator pod selector must match the pod-template label in the
+	// deployed operator manager.yaml (the kustomize-deployed manifest that
+	// flowctl embeds as operator/deployment.yaml). Pin the embedded copy
+	// against that source file rather than against itself, so the embedded
+	// copy silently drifting from the source is caught here.
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "platform", "operator", "config", "manager", "manager.yaml"))
+	if err != nil {
+		t.Fatalf("read source manager.yaml: %v", err)
+	}
+	// manager.yaml is a multi-document stream (Namespace + Deployment); the
+	// Deployment document is the one after the first `---` separator.
+	parts := strings.SplitN(string(source), "\n---\n", 2)
+	if len(parts) != 2 {
+		t.Fatal("source manager.yaml is missing the document separator before the Deployment document")
+	}
+	var srcDep appsv1.Deployment
+	if err := yaml.Unmarshal([]byte(parts[1]), &srcDep); err != nil {
+		t.Fatalf("parse source manager.yaml Deployment document: %v", err)
+	}
+	srcLabel := srcDep.Spec.Template.Labels["app.kubernetes.io/name"]
+	if srcLabel == "" {
+		t.Fatal("source manager.yaml Deployment pod template is missing the app.kubernetes.io/name label")
+	}
+
+	embedded, err := manifestfs.Manifests.ReadFile("operator/deployment.yaml")
 	if err != nil {
 		t.Fatalf("read embedded operator deployment: %v", err)
 	}
 	var dep appsv1.Deployment
-	if err := yaml.Unmarshal(data, &dep); err != nil {
+	if err := yaml.Unmarshal(embedded, &dep); err != nil {
 		t.Fatalf("parse embedded operator deployment: %v", err)
 	}
-	label := dep.Spec.Template.Labels["app.kubernetes.io/name"]
-	if label == "" {
-		t.Fatal("embedded operator deployment pod template is missing the app.kubernetes.io/name label")
+	if got := dep.Spec.Template.Labels["app.kubernetes.io/name"]; got != srcLabel {
+		t.Errorf("embedded deployment.yaml pod-template label = %q, want %q (from source manager.yaml)", got, srcLabel)
 	}
-	want := "app.kubernetes.io/name=" + label
-	if operatorLabelSelector != want {
-		t.Errorf("operatorLabelSelector = %q, want %q (sourced from embedded deployment.yaml)", operatorLabelSelector, want)
+	if want := "app.kubernetes.io/name=" + srcLabel; operatorLabelSelector != want {
+		t.Errorf("operatorLabelSelector = %q, want %q (sourced from deployed manager.yaml)", operatorLabelSelector, want)
 	}
 }

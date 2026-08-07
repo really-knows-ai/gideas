@@ -1069,6 +1069,77 @@ func TestPullFromRemote(t *testing.T) {
 	}
 }
 
+// TestGraphPullFromRemote_AnnotatesWildcard pins SPEC R3's
+// WRITE:graph/entity/* requirement for PullFromRemote at the SDK layer: the
+// RPC requires the wildcard capability and its request carries no
+// entity-type field for the Sidecar to read from the body, so the SDK must
+// annotate the fixed wildcard entity_type metadata (mirroring DeleteEdge).
+func TestGraphPullFromRemote_AnnotatesWildcard(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		pullFromRemote: func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no entity_type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.PullFromRemoteResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	if err := g.PullFromRemote(); err != nil {
+		t.Fatalf("PullFromRemote returned error: %v", err)
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
+	}
+	if capturedValue != "*" {
+		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+// TestGraphExportGraph_AnnotatesWildcard pins SPEC R3's READ:graph/entity/*
+// requirement for ExportGraph at the SDK layer: the RPC requires the
+// wildcard capability and its request carries no entity-type field for the
+// Sidecar to read from the body, so the SDK must annotate the fixed
+// wildcard entity_type metadata on the stream-establishing call.
+func TestGraphExportGraph_AnnotatesWildcard(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		exportGraph: func(ctx context.Context, req *flowv1.ExportGraphRequest,
+		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no entity_type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &mockStream{chunks: []*flowv1.ExportGraphResponse{{Chunk: []byte("{}")}}}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	stream, err := g.ExportGraph("json")
+	if err != nil {
+		t.Fatalf("ExportGraph returned error: %v", err)
+	}
+	defer stream.Stop()
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
+	}
+	if capturedValue != "*" {
+		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
 func TestExportGraph_NilSession(t *testing.T) {
 	g := &Graph{}
 	_, err := g.ExportGraph("json")
@@ -1509,6 +1580,85 @@ func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 	}
 	if capturedValue != "*" {
 		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+// TestGraphDeleteEntity_ResolvedTypeAnnotation proves SPEC R3's mode-1
+// resolution on the Graph write path: when the entity ID IS in the local
+// ID-to-type map, DeleteEntity's capability annotation carries the resolved
+// concrete <type> (e.g. Component), not the wildcard, enabling the Sidecar
+// to block on a specific <type> mismatch.
+//
+//nolint:dupl // Graph and Transaction resolved-type metadata tests share structure.
+func TestGraphDeleteEntity_ResolvedTypeAnnotation(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no entity_type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	// entity-1 IS in the map -> annotation must carry the resolved Component.
+	g.idTypeMap.store("entity-1", componentType)
+	_, err := g.DeleteEntity("entity-1")
+	if err != nil {
+		t.Fatalf("DeleteEntity returned error: %v", err)
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
+	}
+	if capturedValue != componentType {
+		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
+	}
+}
+
+// TestGraphCreateEdge_ResolvedTypeAnnotation proves SPEC R3's mode-1
+// resolution on the Graph write path: CreateEdge resolves the SOURCE entity
+// type from the local ID-to-type map, so when the from-entity ID IS known
+// the annotation carries the resolved concrete <type>, not the wildcard.
+//
+//nolint:dupl // Graph and Transaction resolved-type metadata tests share structure.
+func TestGraphCreateEdge_ResolvedTypeAnnotation(t *testing.T) {
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no entity_type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.CreateEdgeResponse{
+				EdgeId: "edge-1", FromEntityId: req.GetFromEntityId(), ToEntityId: req.GetToEntityId(),
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	// from-1 IS in the map -> annotation must carry the resolved Component.
+	g.idTypeMap.store("from-1", componentType)
+	_, err := g.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	if err != nil {
+		t.Fatalf("CreateEdge returned error: %v", err)
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
+	}
+	if capturedValue != componentType {
+		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
 	}
 }
 

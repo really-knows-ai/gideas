@@ -86,7 +86,7 @@ func extractEntityTypes(cypher string) []string {
 		return nil
 	}
 
-	nodeRe := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)((?::[a-zA-Z_][a-zA-Z0-9_]*)*)\)`)
+	nodeRe := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)((?::[a-zA-Z_][a-zA-Z0-9_]*)*)(\s*\{[^{}]*\})?\)`)
 	matches := nodeRe.FindAllStringSubmatch(cypher, -1)
 	if len(matches) == 0 {
 		return nil
