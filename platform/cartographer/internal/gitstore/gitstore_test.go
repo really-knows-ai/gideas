@@ -2523,23 +2523,42 @@ func TestPushRemoteNoRemote(t *testing.T) {
 	}
 }
 
-// TestPushRemoteWithAuth verifies PushRemote returns expected errors
-// for auth-related issues.
+// TestPushRemoteWithAuth verifies PushRemote's auth contract: ErrAuthConfigMissing
+// is returned only when the operation cannot be attempted — a URL that demands
+// credentials (ssh:// or an https:// URL embedding a user) with no auth provider
+// configured, or a configured authFn that errors. A public remote (no credentials
+// demanded) is pushed anonymously: a nil authFn and a nil-auth authFn result both
+// proceed past the auth guard, so the failure is a transport error, never the
+// mislabelled auth-config sentinel. (The push itself is driven against port 1 on
+// loopback — connection refused, no network — so the guard-pass is observable as a
+// non-auth failure; the full anonymous-push success path is pinned by
+// TestPushRemoteAnonymous.)
 func TestPushRemoteWithAuth(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", nil); err != nil {
+		// A URL that demands credentials (embedded user) with no auth provider
+		// → ErrAuthConfigMissing via the requiresAuth pre-flight.
+		if err := gs.SetRemote(ctx(), "https://user@example.com/repo.git", nil); err != nil {
 			return err
 		}
-		// authFn is nil → ErrAuthConfigMissing
 		err := gs.PushRemote(ctx())
 		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+			return fmt.Errorf("expected ErrAuthConfigMissing for credentials-requiring URL with nil authFn, got %v", err)
+		}
+
+		// An ssh URL always demands credentials → ErrAuthConfigMissing with a
+		// nil authFn.
+		if err := gs.SetRemote(ctx(), "ssh://git@example.com/repo.git", nil); err != nil {
+			return err
+		}
+		err = gs.PushRemote(ctx())
+		if !errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected ErrAuthConfigMissing for ssh URL with nil authFn, got %v", err)
 		}
 
 		// Set authFn that returns an error (readSecretFn failure / invalid
 		// credential) → ErrAuthConfigMissing (SPEC error row "Remote auth
-		// config missing (Sync)", line 932 → FAILED_PRECONDITION)
+		// config missing (Sync)" → FAILED_PRECONDITION)
 		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", func() (transport.AuthMethod, error) {
 			return nil, fmt.Errorf("auth resolution failure")
 		}); err != nil {
@@ -2550,21 +2569,129 @@ func TestPushRemoteWithAuth(t *testing.T) {
 			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
 		}
 
-		// Set authFn that returns nil auth → ErrAuthConfigMissing
-		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", func() (transport.AuthMethod, error) {
+		// A plain public https URL (no credentials demanded) with a nil authFn:
+		// the anonymous push is attempted — the failure is a transport error,
+		// never ErrAuthConfigMissing.
+		if err := gs.SetRemote(ctx(), "https://127.0.0.1:1/repo.git", nil); err != nil {
+			return err
+		}
+		err = gs.PushRemote(ctx())
+		if err == nil || errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected transport failure for public remote with nil authFn, got %v", err)
+		}
+
+		// Same for a configured authFn returning nil — an explicit anonymous
+		// selection (e.g. the production buildResolveAuthFn closure for a public
+		// remote with no secretRef).
+		if err := gs.SetRemote(ctx(), "https://127.0.0.1:1/repo.git", func() (transport.AuthMethod, error) {
 			return nil, nil
 		}); err != nil {
 			return err
 		}
 		err = gs.PushRemote(ctx())
-		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing (nil auth), got %v", err)
+		if err == nil || errors.Is(err, ErrAuthConfigMissing) {
+			return fmt.Errorf("expected transport failure for anonymous-selecting authFn, got %v", err)
 		}
 
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("PushRemoteWithAuth: %v", err)
+	}
+}
+
+// TestPushRemoteAnonymous verifies the operator requirement: a remote configured
+// without a secretRef must push anonymously (SPEC R10 "remote configured ⇒ pushes
+// happen"). Both a nil authFn (auth not configured) and a configured authFn
+// returning nil (explicit anonymous selection) must push successfully to a remote
+// that does not demand credentials. Uses the local-bare-repo technique from
+// TestRemotePushPull: a file:// URL demands no credentials (requiresAuth false,
+// exactly like a plain public https URL), so the anonymous push is driven
+// end-to-end without the network, and the remote ref must advance.
+func TestPushRemoteAnonymous(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	// Create a bare remote repo
+	_, err := git.PlainInitWithOptions(bareDir, &git.PlainInitOptions{
+		Bare: true,
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("init bare remote: %v", err)
+	}
+
+	localDir := filepath.Join(tmpDir, "local")
+	store, err := New(localDir)
+	if err != nil {
+		t.Fatalf("New local: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	gs := store.(*gitStore)
+
+	for _, tc := range []struct {
+		name   string
+		authFn func() (transport.AuthMethod, error)
+	}{
+		{name: "nil authFn", authFn: nil},
+		{name: "authFn selecting anonymous access", authFn: func() (transport.AuthMethod, error) {
+			return nil, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := store.WithGitLock(func() error {
+				gs.remoteURL = "file://" + bareDir
+				gs.authFn = tc.authFn
+
+				// Create the "origin" remote directly on the go-git repo
+				// (file:// is not a valid SetRemote scheme).
+				_, err := gs.repo.CreateRemote(&config.RemoteConfig{
+					Name: "origin",
+					URLs: []string{gs.remoteURL},
+				})
+				if err != nil && !errors.Is(err, git.ErrRemoteExists) {
+					return fmt.Errorf("create remote: %w", err)
+				}
+
+				// Make a commit on local
+				now := time.Now().UTC().Round(time.Millisecond)
+				if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+					{ID: validUUID(t), Type: "Component", CreatedAt: now, UpdatedAt: now},
+				}); err != nil {
+					return err
+				}
+				if err := gs.AddAll(ctx(), "."); err != nil {
+					return err
+				}
+				if err := gs.Commit(ctx(), "transaction:anonymous-push"); err != nil {
+					return err
+				}
+
+				// Push anonymously to the remote
+				if err := gs.PushRemote(ctx()); err != nil {
+					return fmt.Errorf("anonymous push: %w", err)
+				}
+
+				// Verify the remote ref advanced
+				remoteRepo, err := git.PlainOpen(bareDir)
+				if err != nil {
+					return fmt.Errorf("open remote: %w", err)
+				}
+				ref, err := remoteRepo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+				if err != nil {
+					return fmt.Errorf("remote ref: %w", err)
+				}
+				if ref.Hash().IsZero() {
+					return fmt.Errorf("expected non-zero hash on remote after anonymous push")
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("TestPushRemoteAnonymous[%s]: %v", tc.name, err)
+			}
+		})
 	}
 }
 
@@ -3360,7 +3487,7 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 			return noopAuth{}, nil
 		}
 
-		auth, err := gs.resolveAuth(false)
+		auth, err := gs.resolveAuth()
 		if err != nil {
 			return fmt.Errorf("resolve auth: %w", err)
 		}

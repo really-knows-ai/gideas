@@ -272,7 +272,14 @@ func main() {
 	// Create and start the background sync worker if a remote URL is configured.
 	var syncW *service.SyncWorker
 	if remoteURL != "" {
-		syncW = service.NewSyncWorker(remoteURL, gs, dbStore, service.RealClock{})
+		// Permanent sync failures emit an operator-visible Event Bus telemetry
+		// event (SPEC R10 / GIT_PLAN "log loudly + telemetry"), so the worker
+		// shares the server's audit publisher when one is configured.
+		var syncOpts []service.SyncWorkerOption
+		if auditPub != nil {
+			syncOpts = append(syncOpts, service.SyncWorkerWithAuditPublisher(auditPub))
+		}
+		syncW = service.NewSyncWorker(remoteURL, gs, dbStore, service.RealClock{}, syncOpts...)
 		opts = append(opts, service.WithSyncWorker(syncW))
 		go syncW.Run()
 		slog.Info("Background sync worker started")

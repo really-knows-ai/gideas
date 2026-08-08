@@ -2251,10 +2251,24 @@ func (s *CartographerServer) Sync(ctx context.Context, req *flowv1.SyncRequest) 
 	if s.syncWorker == nil {
 		return nil, status.Error(codes.Internal, "sync worker not initialised")
 	}
-	if err := s.syncWorker.WakeAndWait(ctx); err != nil {
-		return nil, mapGitError(err)
+	// SPEC R10 Sync: only a non-recoverable cycle error surfaces to the caller
+	// ("If the cycle encounters a non-recoverable error, returns the worker's
+	// last error"). A recoverable-exhausted cycle (all retries failed) was
+	// already logged + telemetry'd by the worker; Sync reports success and the
+	// push flag stays set for the next cycle. WithAck callers keep the full
+	// error (SPEC R10: an acked commit returns an error whenever the flag is
+	// still set).
+	completed, class, err := s.syncWorker.WakeAndWaitClassified(ctx)
+	if err == nil {
+		return &flowv1.SyncResponse{}, nil
 	}
-	return &flowv1.SyncResponse{}, nil
+	if !completed {
+		return nil, status.FromContextError(err).Err()
+	}
+	if class != syncNonRecoverable {
+		return &flowv1.SyncResponse{}, nil
+	}
+	return nil, mapGitError(err)
 }
 
 // ExportGraph streams the serialised graph.

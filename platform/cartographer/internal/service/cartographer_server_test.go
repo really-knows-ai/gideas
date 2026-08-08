@@ -2455,7 +2455,7 @@ func TestSyncWorkerFetchAndPushCycle(t *testing.T) {
 	}
 	pushGit := &pushTrackingGitStore{GitStore: gs, pushDone: make(chan struct{})}
 	mockPub := &mockTelemetryPublisher{}
-	sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{})
+	sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{}, SyncWorkerWithAuditPublisher(mockPub))
 	sw.SetPushNeeded()
 	sw.runSyncCycle()
 	if sw.pushNeeded.Load() {
@@ -2474,6 +2474,150 @@ func TestSyncWorkerFetchAndPushCycle(t *testing.T) {
 		if e.Event != nil && e.Event.EventType == "cartographer.push_failed" {
 			t.Fatal("push_failed telemetry emitted on successful push")
 		}
+	}
+}
+
+// rehydrateTrackingStore wraps a store.Store to count RehydrateMainFromFiles
+// invocations, pinning the SPEC R10 re-hydration condition ("if new data was
+// pulled re-hydrates main.lbug").
+type rehydrateTrackingStore struct {
+	store.Store
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *rehydrateTrackingStore) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return r.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+}
+
+func (r *rehydrateTrackingStore) hydrateCalls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// TestSyncWorker_RehydrateOnlyWhenNewDataPulled pins the SPEC R10 re-hydration
+// condition ("if new data was pulled re-hydrates main.lbug"; GIT_PLAN.md:30,84):
+// an up-to-date fetch (unchanged HEAD) must not re-hydrate, while a fetch that
+// advances HEAD must.
+func TestSyncWorker_RehydrateOnlyWhenNewDataPulled(t *testing.T) {
+	t.Run("unchanged HEAD does not re-hydrate", func(t *testing.T) {
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		base, err := ladybug.OpenInMemory()
+		if err != nil {
+			t.Fatalf("OpenInMemory: %v", err)
+		}
+		t.Cleanup(func() { _ = base.Close() })
+		syncGit := &syncMockGitStore{GitStore: gs} // ZeroHash = remote up-to-date
+		rt := &rehydrateTrackingStore{Store: base}
+		sw := NewSyncWorker("https://example.com/repo.git", syncGit, rt, RealClock{})
+		sw.SetPushNeeded()
+		sw.runSyncCycle()
+		if calls := rt.hydrateCalls(); calls != 0 {
+			t.Fatalf("expected no re-hydration on an up-to-date fetch, got %d", calls)
+		}
+		if syncGit.fetchCalls != 1 {
+			t.Fatalf("expected the fetch to run, got %d calls", syncGit.fetchCalls)
+		}
+	})
+
+	t.Run("changed HEAD re-hydrates", func(t *testing.T) {
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		base, err := ladybug.OpenInMemory()
+		if err != nil {
+			t.Fatalf("OpenInMemory: %v", err)
+		}
+		t.Cleanup(func() { _ = base.Close() })
+		preHead, err := gs.BranchHEAD(context.Background(), "main")
+		if err != nil {
+			t.Fatalf("BranchHEAD: %v", err)
+		}
+		// A different valid hash: the new-data signal FetchAndMerge returns
+		// when the remote advanced main.
+		fetchHash := "1" + preHead[1:]
+		if fetchHash == preHead {
+			fetchHash = "2" + preHead[1:]
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchHash: plumbing.NewHash(fetchHash)}
+		rt := &rehydrateTrackingStore{Store: base}
+		sw := NewSyncWorker("https://example.com/repo.git", syncGit, rt, RealClock{})
+		sw.runSyncCycle()
+		if calls := rt.hydrateCalls(); calls != 1 {
+			t.Fatalf("expected exactly one re-hydration after new data, got %d", calls)
+		}
+	})
+}
+
+// TestSyncWorker_RehydrateRestoresMainBeforeReadingTree pins the
+// transaction-isolation invariant (SPEC R10 / GIT_PLAN Phase 2 step 3): with
+// the working tree checked out on a transaction branch carrying an uncommitted
+// entity file, a new-data cycle must restore main (and clean the tree) before
+// RehydrateMainFromFiles so the uncommitted file can never be published into
+// main.lbug.
+func TestSyncWorker_RehydrateRestoresMainBeforeReadingTree(t *testing.T) {
+	ctx := context.Background()
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+
+	const leakedID = "22222222-2222-4222-8222-222222222222"
+	// Simulate an open transaction whose commit is in flight: the working tree
+	// is checked out on the transaction branch and WriteEntityFiles has dropped
+	// an (uncommitted, unstaged) file there (BeginTransaction →
+	// HardResetToBranch; CommitTransaction → Checkout(tx) → WriteEntityFiles).
+	if err := gs.WithGitLock(func() error {
+		if err := gs.CreateBranch(ctx, testMutationEntityID); err != nil {
+			return err
+		}
+		if err := gs.HardResetToBranch(ctx, testMutationEntityID); err != nil {
+			return err
+		}
+		return gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{{
+			ID: leakedID, Type: "Component", Properties: map[string]string{"name": "uncommitted"},
+		}})
+	}); err != nil {
+		t.Fatalf("set up transaction-branch working tree: %v", err)
+	}
+
+	// Sanity: the uncommitted file is present in the working tree on the
+	// transaction branch — the leak scenario is real.
+	files, err := gs.ReadAllEntityFiles(ctx, "Component")
+	if err != nil {
+		t.Fatalf("ReadAllEntityFiles: %v", err)
+	}
+	if len(files) != 1 || files[0].ID != leakedID {
+		t.Fatalf("expected the uncommitted entity file on the transaction branch, got %+v", files)
+	}
+
+	preHead, err := gs.BranchHEAD(ctx, "main")
+	if err != nil {
+		t.Fatalf("BranchHEAD: %v", err)
+	}
+	fetchHash := "1" + preHead[1:]
+	if fetchHash == preHead {
+		fetchHash = "2" + preHead[1:]
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, fetchHash: plumbing.NewHash(fetchHash)}
+	sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, RealClock{})
+	sw.runSyncCycle()
+
+	if _, err := base.GetEntity(ctx, leakedID, ""); err == nil {
+		t.Fatal("uncommitted transaction data leaked into main.lbug")
 	}
 }
 
@@ -2526,6 +2670,59 @@ func TestSyncWorkerPushFailureLeavesFlagSet(t *testing.T) {
 	}
 }
 
+// TestSyncWorker_FailureEmitsTelemetry pins the SPEC R10 / GIT_PLAN telemetry
+// contract ("log loudly + telemetry": "An operator-visible telemetry event
+// fires on each permanent failure"): every permanent sync failure — a
+// non-recoverable error or retries exhausted, for fetch or push — emits
+// exactly one "cartographer.push_failed" Event Bus event.
+func TestSyncWorker_FailureEmitsTelemetry(t *testing.T) {
+	cases := []struct {
+		name      string
+		fetchErr  error
+		pushErr   error
+		operation string
+	}{
+		{name: "fetch non-recoverable", fetchErr: gitstore.ErrAuthFailed, operation: "fetch"},
+		{name: "fetch retries exhausted", fetchErr: gitstore.ErrRemoteUnreachable, operation: "fetch"},
+		{name: "push non-recoverable", pushErr: gitstore.ErrAuthFailed, operation: "push"},
+		{name: "push retries exhausted", pushErr: gitstore.ErrRemoteUnreachable, operation: "push"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gs, err := gitstore.New(t.TempDir())
+			if err != nil {
+				t.Fatalf("gitstore.New: %v", err)
+			}
+			base, err := ladybug.OpenInMemory()
+			if err != nil {
+				t.Fatalf("OpenInMemory: %v", err)
+			}
+			t.Cleanup(func() { _ = base.Close() })
+			syncGit := &syncMockGitStore{GitStore: gs, fetchErr: tc.fetchErr, pushErr: tc.pushErr}
+			mockPub := &mockTelemetryPublisher{}
+			sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, RealClock{},
+				SyncWorkerWithAuditPublisher(mockPub))
+			sw.backoffFn = func(int) time.Duration { return 0 }
+			sw.SetPushNeeded()
+			sw.runSyncCycle()
+
+			events := mockPub.Events()
+			if len(events) != 1 {
+				t.Fatalf("expected exactly 1 telemetry event, got %d", len(events))
+			}
+			if events[0].Event == nil || events[0].Event.EventType != "cartographer.push_failed" {
+				t.Fatalf("expected a cartographer.push_failed event, got %+v", events[0])
+			}
+			if got := events[0].Event.Attributes["operation"]; got != tc.operation {
+				t.Fatalf("expected operation %q, got %q", tc.operation, got)
+			}
+			if events[0].Event.Attributes["error"] == "" {
+				t.Fatal("expected the failure error in the telemetry attributes")
+			}
+		})
+	}
+}
+
 // syncMockGitStore drives the SyncWorker deterministically: WithGitLock runs
 // fn inline, FetchAndMerge/PushRemote are programmable, and an optional push
 // gate parks a push attempt until the test releases it (for blocking/ack
@@ -2538,6 +2735,7 @@ type syncMockGitStore struct {
 	pushCalls   int
 	fetchErr    error
 	pushErr     error
+	fetchHash   plumbing.Hash // returned on a successful fetch; ZeroHash = up-to-date
 	order       []string
 	pushEntered chan struct{} // closed when a gated push begins
 	pushRelease chan struct{} // closing it unblocks the gated push
@@ -2550,11 +2748,19 @@ func (s *syncMockGitStore) FetchAndMerge(ctx context.Context, remote, branch str
 	s.fetchCalls++
 	s.order = append(s.order, "fetch")
 	err := s.fetchErr
+	hash := s.fetchHash
 	s.mu.Unlock()
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	return plumbing.ZeroHash, nil
+	return hash, nil
+}
+
+func (s *syncMockGitStore) RestoreMain(ctx context.Context) error {
+	s.mu.Lock()
+	s.order = append(s.order, "restore")
+	s.mu.Unlock()
+	return s.GitStore.RestoreMain(ctx)
 }
 
 func (s *syncMockGitStore) PushRemote(ctx context.Context) error {
@@ -2720,6 +2926,128 @@ func TestSyncWorker_WithAck_BlocksUntilPush(t *testing.T) {
 	}
 	if sw.pushNeeded.Load() {
 		t.Fatal("push flag not cleared after successful push")
+	}
+}
+
+// ctxWithTimeout returns a context that times out after 10 seconds; a waiter
+// blocked by a bug then surfaces a test failure instead of hanging the suite.
+func ctxWithTimeout(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// TestSyncWorker_WithAck_ConcurrentWaitersBothComplete pins per-waiter
+// completion-channel ownership (SPEC R10 WithAck): two concurrent
+// WakeAndWait callers each own their channel — the second must not overwrite
+// the first. The first waiter is satisfied by the cycle that delivers the push;
+// the second, registered while that cycle is in flight, is satisfied by the
+// follow-up cycle the buffered wakeCh triggers.
+func TestSyncWorker_WithAck_ConcurrentWaitersBothComplete(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	fc := newFakeClock(time.Now())
+	sw := newSyncWorker(t, syncGit, fc)
+	go sw.Run()
+	t.Cleanup(sw.Stop)
+	t.Cleanup(syncGit.releasePush)
+
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	sw.SetPushNeeded()
+	wakeDone := make([]chan error, 2)
+	for i := range wakeDone {
+		wakeDone[i] = make(chan error, 1)
+	}
+	// First waiter wakes the worker; the cycle parks in the push gate.
+	go func() { wakeDone[0] <- sw.WakeAndWait(ctxWithTimeout(t)) }()
+	select {
+	case <-syncGit.pushEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("push never started")
+	}
+	// Second waiter registers while the first cycle is in flight.
+	go func() { wakeDone[1] <- sw.WakeAndWait(ctxWithTimeout(t)) }()
+	for i := range wakeDone {
+		select {
+		case err := <-wakeDone[i]:
+			t.Fatalf("waiter %d returned before the push completed: %v", i, err)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	syncGit.releasePush()
+	for i := range wakeDone {
+		if err := <-wakeDone[i]; err != nil {
+			t.Fatalf("waiter %d returned error: %v", i, err)
+		}
+	}
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after successful push")
+	}
+}
+
+// TestSyncWorker_WithAck_TimerCycleInFlightDoesNotSatisfyFreshWaiter pins the
+// GIT_PLAN WithAck/timer-race edge case: a WithAck waiter registered while a
+// timer-driven cycle is in flight must not be satisfied by that cycle (whose
+// waiter snapshot predates the registration). The waiter stays blocked until a
+// push is actually delivered; the follow-up cycle then unblocks it.
+func TestSyncWorker_WithAck_TimerCycleInFlightDoesNotSatisfyFreshWaiter(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	fc := newFakeClock(time.Now())
+	sw := newSyncWorker(t, syncGit, fc)
+	go sw.Run()
+	t.Cleanup(sw.Stop)
+	t.Cleanup(syncGit.releasePush)
+
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	// Flag the push and fire the timer: the timer-driven cycle parks in the
+	// push gate.
+	sw.SetPushNeeded()
+	fc.FireTicker()
+	select {
+	case <-syncGit.pushEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timer cycle never reached the push")
+	}
+
+	// A WithAck waiter registered while the timer cycle is in flight.
+	wakeDone := make(chan error, 1)
+	go func() { wakeDone <- sw.WakeAndWait(ctxWithTimeout(t)) }()
+
+	// The waiter must not be satisfied by the in-flight cycle: it stays
+	// blocked while that cycle is still parked at the push gate.
+	select {
+	case err := <-wakeDone:
+		t.Fatalf("WakeAndWait returned while the in-flight cycle was still parked: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Deliver the push: the in-flight cycle completes it, and the follow-up
+	// cycle (woken by the buffered wakeCh) satisfies the waiter.
+	syncGit.releasePush()
+	if err := <-wakeDone; err != nil {
+		t.Fatalf("WakeAndWait returned error: %v", err)
+	}
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after the push was delivered")
 	}
 }
 
@@ -2960,6 +3288,37 @@ func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 		}
 		if status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("expected Unauthenticated for auth failure, got %v (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("recoverable-exhausted does not surface", func(t *testing.T) {
+		// SPEC R10 Sync: "If the cycle encounters a non-recoverable error,
+		// returns the worker's last error" — a recoverable-exhausted cycle
+		// (all retries failed) is logged + telemetry in the worker and must
+		// not surface as an RPC error.
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrRemoteUnreachable}
+		base, err := ladybug.OpenInMemory()
+		if err != nil {
+			t.Fatalf("OpenInMemory: %v", err)
+		}
+		t.Cleanup(func() { _ = base.Close() })
+		fc := newFakeClock(time.Now())
+		sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, fc)
+		sw.backoffFn = func(int) time.Duration { return 0 }
+		go sw.Run()
+		t.Cleanup(sw.Stop)
+		opPub, _ := generateTestKey()
+		srv := NewCartographerServer(base, syncGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+			30*time.Second, "test-ns", 30*time.Minute, 100000, WithSyncWorker(sw))
+		srv.MarkDBReady()
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+		if _, err := srv.Sync(testCtx(), &flowv1.SyncRequest{}); err != nil {
+			t.Fatalf("Sync must not surface a recoverable-exhausted cycle error: %v", err)
 		}
 	})
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-git/go-git/v5"
@@ -96,24 +97,75 @@ func TestMapFetchError(t *testing.T) {
 	}
 }
 
-// TestFetchAndMergeAuthConfigMissing verifies that FetchAndMerge with a nil
-// authFn returns ErrAuthConfigMissing — the SPEC error-table row "Remote auth
-// config missing (Sync)". The divergent path is covered by
-// TestFetchAndMerge_Diverged; this pins the pre-fetch auth-guard branch.
+// TestFetchAndMergeAuthConfigMissing pins FetchAndMerge's auth contract: the
+// SPEC error-table row "Remote auth config missing (Sync)" applies only when
+// the operation cannot be attempted. A URL that demands credentials with a nil
+// authFn returns ErrAuthConfigMissing via the requiresAuth pre-flight; a
+// public remote (no credentials demanded) is pulled anonymously — a nil
+// authFn must never produce ErrAuthConfigMissing. The divergent path is
+// covered by TestFetchAndMerge_Diverged.
 func TestFetchAndMergeAuthConfigMissing(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		// Configure remote but leave authFn nil
-		gs.remoteURL = testRemoteURL
-		_, err := gs.FetchAndMerge(ctx(), "origin", "main")
-		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+	t.Run("credentials-requiring URL with nil authFn", func(t *testing.T) {
+		gs := setupTestStore(t)
+		err := gs.WithGitLock(func() error {
+			// URL embeds a user (demands credentials) but no authFn is
+			// configured → pre-flight ErrAuthConfigMissing, no network touched.
+			gs.remoteURL = "https://user@example.com/repo.git"
+			_, err := gs.FetchAndMerge(ctx(), "origin", "main")
+			if !errors.Is(err, ErrAuthConfigMissing) {
+				return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("TestFetchAndMergeAuthConfigMissing[credentials-requiring]: %v", err)
 		}
-		return nil
 	})
-	if err != nil {
-		t.Fatalf("TestFetchAndMergeAuthConfigMissing: %v", err)
-	}
+
+	t.Run("plain public https URL with nil authFn proceeds", func(t *testing.T) {
+		gs := setupTestStore(t)
+		err := gs.WithGitLock(func() error {
+			// No credentials demanded (no user in the https URL): the fetch is
+			// attempted with nil auth, so the failure is a transport error
+			// (port 1 on loopback is connection-refused — no network), never
+			// the mislabelled auth-config sentinel.
+			gs.remoteURL = "https://127.0.0.1:1/repo.git"
+			_, err := gs.FetchAndMerge(ctx(), "origin", "main")
+			if err == nil {
+				return fmt.Errorf("expected fetch failure against unreachable host")
+			}
+			if errors.Is(err, ErrAuthConfigMissing) {
+				return fmt.Errorf("expected fetch attempt, got ErrAuthConfigMissing")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("TestFetchAndMergeAuthConfigMissing[plain-https]: %v", err)
+		}
+	})
+
+	t.Run("public remote with nil authFn pulls anonymously", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		bareDir := filepath.Join(tmpDir, "remote.git")
+		setupBareRemote(t, tmpDir, bareDir)
+		gs := cloneFromBare(t, tmpDir, bareDir)
+
+		err := gs.WithGitLock(func() error {
+			gs.remoteURL = "file://" + bareDir
+			gs.authFn = nil
+			newHash, err := gs.FetchAndMerge(ctx(), "origin", "main")
+			if err != nil {
+				return fmt.Errorf("anonymous FetchAndMerge: %w", err)
+			}
+			if want := remoteHEAD(t, bareDir); newHash != want {
+				return fmt.Errorf("FetchAndMerge returned %s, want remote HEAD %s", newHash, want)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("TestFetchAndMergeAuthConfigMissing[anonymous-pull]: %v", err)
+		}
+	})
 }
 
 // TestFetchAndMergeAuthFnFailureCollapsesToAuthConfigMissing verifies that
@@ -177,8 +229,10 @@ func TestFetchAndMergeAuthConfigMissingFromFn(t *testing.T) {
 // ssh-privatekey PEM), or the ErrAuthConfigMissing sentinel (missing expected
 // key) — collapses to ErrAuthConfigMissing so mapGitError returns
 // FAILED_PRECONDITION (SPEC error-table row "Remote auth config missing
-// (Sync)"). The success branches return the resolved auth unchanged,
-// and nil for an explicit anonymous public remote when allowed.
+// (Sync)"). The success branches return the resolved auth unchanged, nil for
+// a nil authFn (no auth configured), and nil for an explicit anonymous
+// selection — the caller's requiresAuth pre-flight decides whether the remote
+// can be accessed anonymously.
 func TestResolveAuthBranches(t *testing.T) {
 	gs := setupTestStore(t)
 
@@ -191,7 +245,7 @@ func TestResolveAuthBranches(t *testing.T) {
 		gs.authFn = func() (transport.AuthMethod, error) {
 			return nil, authErr
 		}
-		auth, err := gs.resolveAuth(true)
+		auth, err := gs.resolveAuth()
 		if !errors.Is(err, ErrAuthConfigMissing) {
 			t.Fatalf("resolveAuth(authFn err %v) = %v, want ErrAuthConfigMissing", authErr, err)
 		}
@@ -205,7 +259,7 @@ func TestResolveAuthBranches(t *testing.T) {
 	gs.authFn = func() (transport.AuthMethod, error) {
 		return want, nil
 	}
-	auth, err := gs.resolveAuth(true)
+	auth, err := gs.resolveAuth()
 	if err != nil {
 		t.Fatalf("resolveAuth(valid auth) error = %v, want nil", err)
 	}
@@ -213,17 +267,21 @@ func TestResolveAuthBranches(t *testing.T) {
 		t.Fatalf("resolveAuth(valid auth) = %v, want %v", auth, want)
 	}
 
-	// Success branch: an explicit nil auth is anonymous access, permitted only
-	// with allowAnonymous=true.
+	// Success branch: an explicit nil auth is anonymous access.
 	gs.authFn = func() (transport.AuthMethod, error) {
 		return nil, nil
 	}
-	auth, err = gs.resolveAuth(true)
+	auth, err = gs.resolveAuth()
 	if err != nil || auth != nil {
-		t.Fatalf("resolveAuth(nil auth, allowAnonymous=true) = (%v, %v), want (nil, nil)", auth, err)
+		t.Fatalf("resolveAuth(nil auth) = (%v, %v), want (nil, nil)", auth, err)
 	}
-	if _, err := gs.resolveAuth(false); !errors.Is(err, ErrAuthConfigMissing) {
-		t.Fatalf("resolveAuth(nil auth, allowAnonymous=false) = %v, want ErrAuthConfigMissing", err)
+
+	// Success branch: a nil authFn (auth not configured) selects anonymous
+	// access; the requiresAuth pre-flight guards at the call site.
+	gs.authFn = nil
+	auth, err = gs.resolveAuth()
+	if err != nil || auth != nil {
+		t.Fatalf("resolveAuth(nil authFn) = (%v, %v), want (nil, nil)", auth, err)
 	}
 }
 

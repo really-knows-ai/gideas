@@ -4857,6 +4857,225 @@ func TestApplySchema_DestructiveChange_Rejected(t *testing.T) {
 	}
 }
 
+// TestApplySchema_RemovedEntityType_Rejected pins the removed-entity-type
+// branch of the ApplySchema catalog diff (schema.go diffSchemaAgainstCatalog).
+// SPEC:86,205 name type removal as destructive (a subset schema constitutes
+// removal of the omitted type) and SPEC:930 maps the resulting table-structure
+// mismatch to FAILED_PRECONDITION; the store surfaces it as
+// ErrDestructiveSchemaChange.
+func TestApplySchema_RemovedEntityType_Rejected(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply initial schema with two entity types.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Document", Properties: []*flowv1.Property{{Name: "title", Type: "string"}}},
+			{Name: "Note", Properties: []*flowv1.Property{{Name: "body", Type: "string"}}},
+		},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Destructive: omit the applied "Note" entity type from the new schema.
+	destructive := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Document", Properties: []*flowv1.Property{{Name: "title", Type: "string"}}},
+		},
+	}
+	err = s.ApplySchema(ctx, destructive)
+	if err == nil {
+		t.Fatal("expected error for removed entity type")
+	}
+	if !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("expected ErrDestructiveSchemaChange, got %v", err)
+	}
+
+	// WipeSchema then ApplySchema should succeed.
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	if err := s.ApplySchema(ctx, destructive); err != nil {
+		t.Fatalf("ApplySchema after WipeSchema: %v", err)
+	}
+	if !s.TableExists("Document") {
+		t.Fatal("Document table should exist after wipe+apply")
+	}
+}
+
+// TestApplySchema_RemovedEdgeType_Rejected pins the removed-edge-type branch of
+// the ApplySchema catalog diff (schema.go diffSchemaAgainstCatalog). SPEC:86
+// permits an empty or omitted edgeTypes array; a schema that omits an applied
+// edge type constitutes its removal, which SPEC:205/930 name destructive
+// (table-structure mismatch → FAILED_PRECONDITION), surfaced by the store as
+// ErrDestructiveSchemaChange.
+func TestApplySchema_RemovedEdgeType_Rejected(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply initial schema with an edge type under a FROM/TO rule.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+			}},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Destructive: omit the applied DEPENDS_ON edge type (and the rule that
+	// references it) from the new schema.
+	destructive := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service"},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{},
+	}
+	err = s.ApplySchema(ctx, destructive)
+	if err == nil {
+		t.Fatal("expected error for removed edge type")
+	}
+	if !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("expected ErrDestructiveSchemaChange, got %v", err)
+	}
+
+	// WipeSchema then ApplySchema should succeed.
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	if err := s.ApplySchema(ctx, destructive); err != nil {
+		t.Fatalf("ApplySchema after WipeSchema: %v", err)
+	}
+	if !s.TableExists("Service") {
+		t.Fatal("Service table should exist after wipe+apply")
+	}
+}
+
+// TestApplySchema_ChangedEntityPropertyType_Rejected pins the changed-property-
+// type branch of the ApplySchema catalog diff (schema.go diffSchemaAgainstCatalog,
+// entity side). SPEC:930's "existing column has a different type than declared"
+// condition is a destructive table-structure mismatch (FAILED_PRECONDITION →
+// ErrDestructiveSchemaChange). The physical column can only carry a non-string
+// type via a drifted catalog state (schema.Validate accepts only "string"
+// properties, so no public API creates such a column), so the cached catalog
+// type is drifted directly — the same simulation pattern as
+// TestCheckBranchSchemaCompatibility — and ApplySchema must reject the
+// re-application with the sentinel.
+func TestApplySchema_ChangedEntityPropertyType_Rejected(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply initial schema.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "title", Type: "string"},
+				{Name: "num", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Drift the cached catalog type so the physical column no longer matches
+	// the declared "string" (SPEC:930's different-column-type condition).
+	db := s.(*ladybugDB)
+	db.mu.Lock()
+	db.entityTypeDefs["Document"].Properties[1].Type = "INT64"
+	db.mu.Unlock()
+
+	err = s.ApplySchema(ctx, schema1)
+	if err == nil {
+		t.Fatal("expected error for changed property type")
+	}
+	if !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("expected ErrDestructiveSchemaChange, got %v", err)
+	}
+
+	// WipeSchema clears the drifted cache; ApplySchema should succeed.
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("ApplySchema after WipeSchema: %v", err)
+	}
+}
+
+// TestApplySchema_ChangedEdgePropertyType_Rejected pins the changed-property-
+// type branch of the ApplySchema catalog diff (schema.go diffSchemaAgainstCatalog,
+// edge side), mirroring the entity-side test: SPEC:930's different-column-type
+// condition is destructive (FAILED_PRECONDITION → ErrDestructiveSchemaChange).
+func TestApplySchema_ChangedEdgePropertyType_Rejected(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Apply initial schema with an edge type carrying a property.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+			}},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{
+			Name: "DEPENDS_ON",
+			Properties: []*flowv1.Property{
+				{Name: "weight", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Drift the cached catalog type so the physical column no longer matches
+	// the declared "string".
+	db := s.(*ladybugDB)
+	db.mu.Lock()
+	db.edgeTypeDefs["DEPENDS_ON"].Properties[0].Type = "INT64"
+	db.mu.Unlock()
+
+	err = s.ApplySchema(ctx, schema1)
+	if err == nil {
+		t.Fatal("expected error for changed property type")
+	}
+	if !errors.Is(err, store.ErrDestructiveSchemaChange) {
+		t.Fatalf("expected ErrDestructiveSchemaChange, got %v", err)
+	}
+
+	// WipeSchema clears the drifted cache; ApplySchema should succeed.
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("ApplySchema after WipeSchema: %v", err)
+	}
+}
+
 func TestApplySchema_DestructiveChange_VectorDisable(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {

@@ -20,8 +20,8 @@ import (
 // Validates the URL scheme (must be https:// or ssh://) and returns
 // ErrUnsupportedURLScheme otherwise. authFn is called on each remote operation
 // so credentials can be refreshed on every call. A configured authFn returning
-// nil credentials explicitly selects anonymous access for fetch and pull;
-// a nil authFn means auth was not configured.
+// nil credentials explicitly selects anonymous access for clone, pull, and
+// push; a nil authFn means auth was not configured.
 func (g *gitStore) SetRemote(ctx context.Context, rawURL string, authFn func() (transport.AuthMethod, error)) error {
 	if err := validateRemoteURL(rawURL); err != nil {
 		return err
@@ -176,7 +176,11 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 	if g.remoteURL == "" {
 		return plumbing.ZeroHash, ErrNoRemote
 	}
-	if g.authFn == nil {
+	// Pre-flight: only a remote that demands credentials (ssh:// or an https://
+	// URL embedding a user) with no auth provider configured cannot be pulled.
+	// A public remote is pulled anonymously with nil auth — the same policy as
+	// CloneSingleBranch and PushRemote.
+	if requiresAuth(g.remoteURL) && g.authFn == nil {
 		return plumbing.ZeroHash, ErrAuthConfigMissing
 	}
 
@@ -184,7 +188,7 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 		return plumbing.ZeroHash, err
 	}
 
-	auth, err := g.resolveAuth(true)
+	auth, err := g.resolveAuth()
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
@@ -275,14 +279,29 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 }
 
 // PushRemote pushes the main branch to the remote origin.
-// Returns ErrNoRemote if no remote is configured, ErrAuthConfigMissing
-// if no auth provider is configured, and typed errors for auth, network,
-// and rejection failures.
+// Returns ErrNoRemote if no remote is configured, ErrAuthConfigMissing when
+// the operation cannot be attempted, and typed errors for auth, network, and
+// rejection failures. Anonymous access mirrors CloneSingleBranch: a remote
+// that does not demand credentials is pushed with nil auth — a nil authFn
+// result from a configured provider is an explicit anonymous selection, and a
+// nil authFn means auth was not configured (go-git surfaces
+// ErrAuthenticationRequired/ErrAuthorizationFailed from the server, already
+// mapped to ErrAuthFailed, if the remote actually demands credentials).
+// ErrAuthConfigMissing remains for (a) a URL that demands credentials (ssh://
+// or an https:// URL embedding a user) with no authFn configured, and (b) an
+// authFn that errors (readSecretFn failure, invalid PEM, missing expected
+// key) — in both cases the push cannot be attempted.
 func (g *gitStore) PushRemote(ctx context.Context) error {
 	if g.remoteURL == "" {
 		return ErrNoRemote
 	}
-	if g.authFn == nil {
+	// Pre-flight: only a remote that demands credentials (ssh:// or an https://
+	// URL embedding a user) with no auth provider configured cannot be pushed.
+	// A public remote is pushed anonymously — mirroring CloneSingleBranch's
+	// pre-flight — so a remote configured without a secretRef (the production
+	// buildResolveAuthFn closure in cmd/main.go returns nil, nil) pushes just
+	// like it clones and pulls.
+	if requiresAuth(g.remoteURL) && g.authFn == nil {
 		return ErrAuthConfigMissing
 	}
 
@@ -290,7 +309,7 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 		return err
 	}
 
-	auth, err := g.resolveAuth(false)
+	auth, err := g.resolveAuth()
 	if err != nil {
 		return err
 	}
@@ -346,9 +365,7 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 	}
 
 	// Resolve auth: nil authFn or nil return means anonymous access to public
-	// remotes. Unlike PushRemote (which requires a configured auth provider),
-	// this path explicitly allows anonymous clone for the initial remote
-	// bootstrap.
+	// remotes — the same policy as FetchAndMerge and PushRemote.
 	var auth transport.AuthMethod
 	var err error
 	if g.authFn != nil {
@@ -532,19 +549,21 @@ func (g *gitStore) ensureRemoteExists() error {
 }
 
 // resolveAuth calls the configured auth provider and returns typed errors.
-// allowAnonymous only permits an explicit nil result, not a missing provider.
-// Any authFn failure — a readSecretFn error (the referenced Secret does not
-// exist), an invalid credential (an unparseable ssh-privatekey PEM), or the
-// ErrAuthConfigMissing sentinel (missing expected key for the URL scheme) —
-// means the git operation cannot be attempted, so all of them surface as
-// ErrAuthConfigMissing for mapGitError to return FAILED_PRECONDITION (SPEC
-// error-table row "Remote auth config missing").
-func (g *gitStore) resolveAuth(allowAnonymous bool) (transport.AuthMethod, error) {
+// A nil authFn (no auth configured) and a configured authFn returning a nil
+// result (explicit anonymous selection) both select anonymous access; the
+// caller's requiresAuth pre-flight decides whether the remote can be accessed
+// that way. Any authFn failure — a readSecretFn error (the referenced Secret
+// does not exist), an invalid credential (an unparseable ssh-privatekey PEM),
+// or the ErrAuthConfigMissing sentinel (missing expected key for the URL
+// scheme) — means the git operation cannot be attempted, so all of them
+// surface as ErrAuthConfigMissing for mapGitError to return
+// FAILED_PRECONDITION (SPEC error-table row "Remote auth config missing").
+func (g *gitStore) resolveAuth() (transport.AuthMethod, error) {
+	if g.authFn == nil {
+		return nil, nil
+	}
 	auth, err := g.authFn()
 	if err != nil {
-		return nil, ErrAuthConfigMissing
-	}
-	if auth == nil && !allowAnonymous {
 		return nil, ErrAuthConfigMissing
 	}
 	return auth, nil
