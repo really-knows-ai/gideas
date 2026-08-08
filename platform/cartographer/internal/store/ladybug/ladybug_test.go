@@ -1623,6 +1623,97 @@ func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 	}
 }
 
+// TestExecuteCypher_ReadOnlyClausesClassified asserts that each read-only
+// clause form the SPEC R7 §5 read-only clause set enumerates (SPEC:480-481 —
+// WITH, UNWIND, LOAD CSV, CALL with read-only procedures, alongside the
+// MATCH/RETURN forms the historical tests pinned) passes the stmt.IsReadOnly()
+// guard and executes through the real ExecuteCypher store path. The existing
+// read-only success tests cover only MATCH ... RETURN forms; this test pins
+// the rest of the SPEC-enumerated clause set.
+//
+// WITH, UNWIND, and read-only CALL clauses (show_tables, table_info) prepare
+// and execute end-to-end on LadybugDB v0.17.0. LOAD CSV is the one clause in
+// the SPEC set the v0.17.0 grammar does not parse: `LOAD CSV FROM ...` fails
+// at Prepare with a parser exception, so it cannot be executed end-to-end.
+// What is pinned for it is the classification — a read-only clause must never
+// be rejected as a mutation, so LOAD CSV surfaces ErrInvalidCypher
+// (INVALID_ARGUMENT), never ErrMutationCypher (PERMISSION_DENIED).
+func TestExecuteCypher_ReadOnlyClausesClassified(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	// A Component entity gives WITH/MATCH clauses a row to project.
+	if _, err := s.CreateEntity(context.Background(), "Component", "",
+		map[string]string{"name": "cypher-test"}, nil, ""); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	t.Run("executable read-only clauses", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			cypher   string
+			wantRows int
+			// wantValue, when non-empty, is the expected first column of the
+			// first row (a deterministic projection).
+			wantValue string
+		}{
+			{"with", "MATCH (n:Component) WITH n.name AS name RETURN name", 1, "cypher-test"},
+			{"unwind", "UNWIND [1, 2, 3] AS x RETURN x", 3, ""},
+			{"call-show-tables", "CALL show_tables() RETURN *", 0, ""},
+			{"call-table-info", "CALL table_info('Component') RETURN *", 0, ""},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				rows, err := s.ExecuteCypher(context.Background(), tc.cypher, nil, "")
+				if err != nil {
+					t.Fatalf("ExecuteCypher(%q): %v", tc.cypher, err)
+				}
+				// Catalog calls (show_tables/table_info) have engine-defined row
+				// counts; pin only that they execute and return rows. The
+				// projection cases pin exact counts and the projected value.
+				if tc.wantRows > 0 {
+					if len(rows) != tc.wantRows {
+						t.Fatalf("expected %d rows, got %d", tc.wantRows, len(rows))
+					}
+				} else if len(rows) == 0 {
+					t.Fatalf("expected at least 1 row, got 0")
+				}
+				if tc.wantValue != "" {
+					if len(rows[0].Values) == 0 {
+						t.Fatalf("expected a value in row 0, got %v", rows[0].Values)
+					}
+					if got := fmt.Sprintf("%v", rows[0].Values[0]); got != tc.wantValue {
+						t.Errorf("row 0 value = %q, want %q", got, tc.wantValue)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("load-csv-classified-read-only", func(t *testing.T) {
+		// The SPEC R7 §5 read-only clause set lists LOAD CSV (SPEC:481), but
+		// LadybugDB v0.17.0's grammar does not parse Neo4j's LOAD CSV clause
+		// (`LOAD CSV FROM ...` fails at Prepare with "Parser exception"). The
+		// store cannot execute it end-to-end, so the pinnable property is the
+		// classification: LOAD CSV is a read-only clause and must never be
+		// rejected as a mutation. It surfaces ErrInvalidCypher (INVALID_ARGUMENT)
+		// via the Prepare failure — the v0.17.0 grammar limitation — not
+		// ErrMutationCypher (PERMISSION_DENIED).
+		_, err := s.ExecuteCypher(context.Background(),
+			"LOAD CSV FROM 'file:///tmp/rows.csv' AS row RETURN row", nil, "")
+		if errors.Is(err, store.ErrMutationCypher) {
+			t.Fatalf("LOAD CSV is a read-only clause per SPEC R7 §5 and must not be classified as mutation, got %v", err)
+		}
+		if !errors.Is(err, store.ErrInvalidCypher) {
+			t.Fatalf("LOAD CSV must surface ErrInvalidCypher (v0.17.0 grammar cannot parse it), got %v", err)
+		}
+	})
+}
+
 func TestExecuteCypher_WithParams(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {

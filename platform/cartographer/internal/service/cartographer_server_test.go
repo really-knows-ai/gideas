@@ -2499,6 +2499,33 @@ func (r *rehydrateTrackingStore) hydrateCalls() int {
 	return r.calls
 }
 
+// flakyRehydrateStore wraps a store.Store whose RehydrateMainFromFiles fails
+// for the first failAt calls, pinning the GIT_PLAN.md:139 retry contract: a
+// failed post-fetch re-hydration must be retried by the next sync cycle.
+type flakyRehydrateStore struct {
+	store.Store
+	mu     sync.Mutex
+	calls  int
+	failAt int // the first failAt calls fail
+}
+
+func (f *flakyRehydrateStore) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
+	f.mu.Lock()
+	f.calls++
+	fail := f.calls <= f.failAt
+	f.mu.Unlock()
+	if fail {
+		return errors.New("disk full")
+	}
+	return f.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+}
+
+func (f *flakyRehydrateStore) rehydrateCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 // TestSyncWorker_RehydrateOnlyWhenNewDataPulled pins the SPEC R10 re-hydration
 // condition ("if new data was pulled re-hydrates main.lbug"; GIT_PLAN.md:30,84):
 // an up-to-date fetch (unchanged HEAD) must not re-hydrate, while a fetch that
@@ -2555,6 +2582,61 @@ func TestSyncWorker_RehydrateOnlyWhenNewDataPulled(t *testing.T) {
 			t.Fatalf("expected exactly one re-hydration after new data, got %d", calls)
 		}
 	})
+}
+
+// TestSyncWorker_RehydrateRetriesOnNextCycle pins the GIT_PLAN.md:139 retry
+// contract: "The next sync cycle retries the re-hydration — the git files are
+// already merged, re-hydration is a read from the working tree". A re-hydration
+// that fails after a successful fetch (e.g. disk full) is retried by the next
+// cycle even though HEAD no longer advances.
+func TestSyncWorker_RehydrateRetriesOnNextCycle(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	preHead, err := gs.BranchHEAD(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("BranchHEAD: %v", err)
+	}
+	fetchHash := "1" + preHead[1:]
+	if fetchHash == preHead {
+		fetchHash = "2" + preHead[1:]
+	}
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	syncGit := &syncMockGitStore{GitStore: gs, fetchHash: plumbing.NewHash(fetchHash)}
+	flaky := &flakyRehydrateStore{Store: base, failAt: 1}
+	sw := NewSyncWorker("https://example.com/repo.git", syncGit, flaky, RealClock{})
+
+	// Cycle 1: fetch advances HEAD, re-hydration fails (disk full).
+	sw.runSyncCycle()
+	if calls := flaky.rehydrateCalls(); calls != 1 {
+		t.Fatalf("expected 1 re-hydration attempt in the first cycle, got %d", calls)
+	}
+	sw.cycleMu.Lock()
+	cycleErr := sw.cycleErr
+	sw.cycleMu.Unlock()
+	if cycleErr == nil {
+		t.Fatal("expected the first cycle to surface the re-hydration failure")
+	}
+
+	// Cycle 2: the remote is now up-to-date (fetch returns the unchanged HEAD),
+	// but the failed re-hydration must still be retried — and succeed once the
+	// underlying cause clears (GIT_PLAN.md:139).
+	syncGit.fetchHash = plumbing.NewHash(preHead) // unchanged local HEAD: new-data signal absent
+	sw.runSyncCycle()
+	if calls := flaky.rehydrateCalls(); calls != 2 {
+		t.Fatalf("expected the next cycle to retry re-hydration, got %d calls", calls)
+	}
+	sw.cycleMu.Lock()
+	cycleErr = sw.cycleErr
+	sw.cycleMu.Unlock()
+	if cycleErr != nil {
+		t.Fatalf("expected the retried re-hydration to succeed, got %v", cycleErr)
+	}
 }
 
 // TestSyncWorker_RehydrateRestoresMainBeforeReadingTree pins the
@@ -2701,7 +2783,7 @@ func TestSyncWorker_FailureEmitsTelemetry(t *testing.T) {
 			syncGit := &syncMockGitStore{GitStore: gs, fetchErr: tc.fetchErr, pushErr: tc.pushErr}
 			mockPub := &mockTelemetryPublisher{}
 			sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, RealClock{},
-				SyncWorkerWithAuditPublisher(mockPub))
+				SyncWorkerWithAuditPublisher(mockPub), SyncWorkerWithPodNamespace("test-ns"))
 			sw.backoffFn = func(int) time.Duration { return 0 }
 			sw.SetPushNeeded()
 			sw.runSyncCycle()
@@ -2712,6 +2794,9 @@ func TestSyncWorker_FailureEmitsTelemetry(t *testing.T) {
 			}
 			if events[0].Event == nil || events[0].Event.EventType != "cartographer.push_failed" {
 				t.Fatalf("expected a cartographer.push_failed event, got %+v", events[0])
+			}
+			if events[0].Event.FlowNamespace != "test-ns" {
+				t.Fatalf("expected FlowNamespace %q, got %q", "test-ns", events[0].Event.FlowNamespace)
 			}
 			if got := events[0].Event.Attributes["operation"]; got != tc.operation {
 				t.Fatalf("expected operation %q, got %q", tc.operation, got)
@@ -3291,6 +3376,93 @@ func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 		}
 	})
 
+	t.Run("propagates divergence as FailedPrecondition", func(t *testing.T) {
+		// SPEC error-table row "Sync diverged" (SPEC:967): FetchAndMerge
+		// detecting divergence surfaces FAILED_PRECONDITION through Sync().
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrPullDiverged}
+		srv, fc := newSyncServer(t, syncGit)
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+		_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+		if err == nil {
+			t.Fatal("expected Sync to propagate the divergence error")
+		}
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expected FailedPrecondition for divergence, got %v (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("propagates auth-config-missing as FailedPrecondition", func(t *testing.T) {
+		// SPEC error-table row "Remote auth config missing (Sync)" (SPEC:975):
+		// gitstore.ErrAuthConfigMissing — the pre-flight guard when the remote
+		// demands credentials but no auth provider is configured — is classified
+		// non-recoverable by the worker and surfaces FAILED_PRECONDITION through
+		// Sync() (classifySyncError → mapGitError, errors.go:168).
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrAuthConfigMissing}
+		srv, fc := newSyncServer(t, syncGit)
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+		_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+		if err == nil {
+			t.Fatal("expected Sync to propagate the auth-config-missing error")
+		}
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expected FailedPrecondition for missing remote auth config, got %v (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("propagates re-hydration failure as Internal", func(t *testing.T) {
+		// SPEC error-table row "Sync re-hydration failed" (SPEC:973): a fetch
+		// that advances main whose RehydrateMainFromFiles then fails (e.g. disk
+		// full) is a non-recoverable hydrateError in the worker and surfaces
+		// INTERNAL through Sync() (sync_worker.go fetchAttempt → mapGitError
+		// default branch).
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		preHead, err := gs.BranchHEAD(context.Background(), "main")
+		if err != nil {
+			t.Fatalf("BranchHEAD: %v", err)
+		}
+		fetchHash := "1" + preHead[1:]
+		if fetchHash == preHead {
+			fetchHash = "2" + preHead[1:]
+		}
+		base, err := ladybug.OpenInMemory()
+		if err != nil {
+			t.Fatalf("OpenInMemory: %v", err)
+		}
+		t.Cleanup(func() { _ = base.Close() })
+		flaky := &flakyRehydrateStore{Store: base, failAt: 100000}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchHash: plumbing.NewHash(fetchHash)}
+		fc := newFakeClock(time.Now())
+		sw := NewSyncWorker("https://example.com/repo.git", syncGit, flaky, fc)
+		go sw.Run()
+		t.Cleanup(sw.Stop)
+		opPub, _ := generateTestKey()
+		srv := NewCartographerServer(flaky, syncGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+			30*time.Second, "test-ns", 30*time.Minute, 100000, WithSyncWorker(sw))
+		srv.MarkDBReady()
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+		_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+		if err == nil {
+			t.Fatal("expected Sync to propagate the re-hydration failure")
+		}
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal for re-hydration failure, got %v (%v)", status.Code(err), err)
+		}
+	})
+
 	t.Run("recoverable-exhausted does not surface", func(t *testing.T) {
 		// SPEC R10 Sync: "If the cycle encounters a non-recoverable error,
 		// returns the worker's last error" — a recoverable-exhausted cycle
@@ -3347,6 +3519,33 @@ func TestSync_WakesWorkerAndReturnsSuccess(t *testing.T) {
 	}
 	if pushCalls != 0 {
 		t.Fatalf("expected no push without a push flag, got %d", pushCalls)
+	}
+}
+
+// TestSync_RemoteNotConfigured covers the SPEC error-table row "Remote not
+// configured" (SPEC:972): Sync() on a server with no remote configured must
+// return FAILED_PRECONDITION. Every other Sync test uses newSyncServer, which
+// always configures a remote, so this branch is otherwise uncovered.
+func TestSync_RemoteNotConfigured(t *testing.T) {
+	srv, _ := newTestServer(t) // remoteURL == ""
+
+	_, err := srv.Sync(testCtx(), &flowv1.SyncRequest{})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestSync_MissingWriteCapability covers SPEC R10's Sync() capability
+// requirement (WRITE:graph/entity/*): a context lacking it must return
+// PERMISSION_DENIED before the sync worker is consulted.
+func TestSync_MissingWriteCapability(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.remoteURL = "https://example.com/repo.git"
+	ctx := narrowCtx("READ:graph/entity/*", "READ:graph/tx") // no WRITE:graph/entity/*
+
+	_, err := srv.Sync(ctx, &flowv1.SyncRequest{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
 	}
 }
 
@@ -7843,14 +8042,20 @@ func TestCreateEntity_MissingWriteCapability(t *testing.T) {
 
 	applyTestSchema(ctx, t, srv.store)
 
-	// A well-formed transaction ID lets the request pass the empty-transaction
-	// guard so the missing-WRITE capability check is reached (SPEC check order:
-	// transaction → structural → capability). The transaction ID is never
-	// looked up because the capability gate precedes the tx lock.
-	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+	// The caller holds no WRITE capability. A registered (valid) transaction
+	// lets the request pass the active-transaction gate (SPEC RPC check order:
+	// active transaction → structural → capability) so the missing-WRITE
+	// capability check is reached and PERMISSION_DENIED surfaces. A
+	// nonexistent transaction ID would instead surface NOT_FOUND, which is why
+	// a real transaction is required to reach this branch.
+	state, err := srv.txManager.Create(testMutationEntityID, 30*time.Minute, "")
+	if err != nil {
+		t.Fatalf("register transaction: %v", err)
+	}
+	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType:    "Component",
 		Properties:    map[string]string{"name": "x"},
-		TransactionId: "11111111-1111-4111-8111-111111111111",
+		TransactionId: state.ID,
 	})
 	if err == nil {
 		t.Fatal("expected PermissionDenied for missing WRITE capability, got nil")
@@ -8595,6 +8800,147 @@ func TestMutationTransactionID_Rejected(t *testing.T) {
 				t.Fatalf("expected NotFound, got %v (%v)", status.Code(err), err)
 			}
 		})
+	}
+}
+
+// TestMutationTransactionID_EmptyRejected is the empty-transactionId sibling of
+// TestMutationTransactionID_Rejected: it pins the SPEC error-table row "Write
+// outside a transaction → FAILED_PRECONDITION" (SPEC:954) directly at the
+// service layer. Every write RPC (CreateEntity, UpdateEntity, DeleteEntity,
+// CreateEdge, DeleteEdge) begins with an active-transaction gate that rejects a
+// request carrying no transaction ID — the wire's empty transactionId — with
+// FAILED_PRECONDITION. The sibling test covers the malformed and unknown-ID
+// fault modes; the empty-ID gate is the first check in each handler and has no
+// other service-layer test reaching it with a real (non-fake) handler.
+func TestMutationTransactionID_EmptyRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(context.Context, *CartographerServer) error
+	}{
+		{"CreateEntity", func(ctx context.Context, srv *CartographerServer) error {
+			_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": "x"},
+			})
+			return err
+		}},
+		{"UpdateEntity", func(ctx context.Context, srv *CartographerServer) error {
+			_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+				Id: testMutationEntityID, Properties: map[string]string{"version": "2"},
+			})
+			return err
+		}},
+		{"DeleteEntity", func(ctx context.Context, srv *CartographerServer) error {
+			_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: testMutationEntityID})
+			return err
+		}},
+		{"CreateEdge", func(ctx context.Context, srv *CartographerServer) error {
+			_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+				EdgeType: "DEPENDS_ON", FromEntityId: testMutationEntityID, ToEntityId: testMutationEntityID,
+			})
+			return err
+		}},
+		{"DeleteEdge", func(ctx context.Context, srv *CartographerServer) error {
+			_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: testMutationEntityID})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"/empty transaction id", func(t *testing.T) {
+			srv, _ := newTestServer(t)
+			applyTestSchema(testCtx(), t, srv.store)
+			err := tt.call(testCtx(), srv)
+			if status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+			}
+		})
+	}
+}
+
+// TestWriteCheckOrder_TransactionValidationPrecedesStructural pins the SPEC RPC
+// check order for the five write RPCs (SPEC:984-988 — every write RPC begins
+// with "active transaction"): a request combining an active-transaction
+// validation fault (malformed, unknown, timed-out, or rollback-only transaction
+// ID) with a structural fault must surface the transaction error — never the
+// structural one. Before this fix the lockTransactionMutation gate ran after
+// the structural and capability checks, so a nonexistent transaction combined
+// with a structural fault surfaced INVALID_ARGUMENT instead of NOT_FOUND.
+func TestWriteCheckOrder_TransactionValidationPrecedesStructural(t *testing.T) {
+	// Each write RPC with the structural fault that would surface first if the
+	// active-transaction gate ran after structural validation.
+	writeCases := []struct {
+		name string
+		call func(context.Context, *CartographerServer, string) error
+	}{
+		{"CreateEntity", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "NoSuchType", Properties: map[string]string{"name": "x"}, TransactionId: txID,
+			})
+			return err
+		}},
+		{"UpdateEntity", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+				Properties: map[string]string{"version": "2"}, TransactionId: txID,
+			})
+			return err
+		}},
+		{"DeleteEntity", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{TransactionId: txID})
+			return err
+		}},
+		{"CreateEdge", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+				EdgeType: "", FromEntityId: testMutationEntityID, ToEntityId: testMutationEntityID, TransactionId: txID,
+			})
+			return err
+		}},
+		{"DeleteEdge", func(ctx context.Context, srv *CartographerServer, txID string) error {
+			_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{TransactionId: txID})
+			return err
+		}},
+	}
+	faultModes := []struct {
+		name        string
+		prepare     func(t *testing.T, srv *CartographerServer) string
+		want        codes.Code
+		msgContains string
+	}{
+		{"malformed transaction id", func(t *testing.T, srv *CartographerServer) string {
+			return "not-a-uuid"
+		}, codes.InvalidArgument, "transaction"},
+		{"unknown transaction id", func(t *testing.T, srv *CartographerServer) string {
+			return testMutationEntityID
+		}, codes.NotFound, ""},
+		{"timed-out transaction", func(t *testing.T, srv *CartographerServer) string {
+			fc := newFakeClock(time.Now())
+			srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+			txID := beginTestTx(t, srv, testCtx())
+			fc.Advance(2 * time.Hour)
+			return txID
+		}, codes.DeadlineExceeded, ""},
+		{"rollback-only transaction", func(t *testing.T, srv *CartographerServer) string {
+			txID := beginTestTx(t, srv, testCtx())
+			state, err := srv.txManager.Lookup(txID)
+			if err != nil {
+				t.Fatalf("Lookup: %v", err)
+			}
+			state.RollbackOnly = true
+			return txID
+		}, codes.FailedPrecondition, ""},
+	}
+	for _, wc := range writeCases {
+		for _, fm := range faultModes {
+			t.Run(wc.name+"/"+fm.name, func(t *testing.T) {
+				srv, _ := newTestServer(t)
+				txID := fm.prepare(t, srv)
+				err := wc.call(testCtx(), srv, txID)
+				if status.Code(err) != fm.want {
+					t.Fatalf("expected %v, got %v (%v)", fm.want, status.Code(err), err)
+				}
+				if fm.msgContains != "" && !strings.Contains(err.Error(), fm.msgContains) {
+					t.Fatalf("expected error mentioning %q, got %q", fm.msgContains, err.Error())
+				}
+			})
+		}
 	}
 }
 

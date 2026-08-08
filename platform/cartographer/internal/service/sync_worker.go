@@ -24,6 +24,13 @@ const (
 	syncNonRecoverable
 )
 
+// DefaultSyncInterval is the background sync worker's periodic cycle interval
+// (SPEC R10: the worker "wakes every minute (configurable)"). Single source of
+// truth for the default: cmd/main.go derives the SYNC_INTERVAL env fallback
+// from this constant, so the wiring default and the worker default cannot
+// silently diverge.
+const DefaultSyncInterval = time.Minute
+
 // SyncWorker manages background remote synchronisation.
 type SyncWorker struct {
 	pushNeeded atomic.Bool
@@ -40,6 +47,24 @@ type SyncWorker struct {
 	// operator-visible telemetry event fires on each permanent failure").
 	auditor TelemetryPublisher
 
+	// podNamespace is the Kubernetes namespace owning this flow, stamped onto
+	// sync-failure telemetry events (FlowEvent.flow_namespace: "Kubernetes
+	// namespace that owns this flow") so push-failure events can be attributed
+	// to the flow that owns the remote. Mirrors the server's publishTelemetry
+	// (FlowNamespace: s.podNamespace) so the two emitters in the binary stay
+	// consistent.
+	podNamespace string
+
+	// hydrateFailed records that the last cycle's post-fetch re-hydration of
+	// main.lbug failed. The git files are already merged (the fetch succeeded),
+	// so the next cycle re-runs the re-hydration even though HEAD no longer
+	// moves — without this, main.lbug stays inconsistent until the remote
+	// advances again or the pod restarts (GIT_PLAN.md:139: "The next sync cycle
+	// retries the re-hydration — the git files are already merged,
+	// re-hydration is a read from the working tree"). Touched only by the
+	// worker goroutine, which owns every sync cycle.
+	hydrateFailed bool
+
 	// cycleMu guards the per-waiter completion registry and the last cycle
 	// error. Each waiter owns its completion channel; a cycle snapshots and
 	// drains the registry at its start and feeds exactly that set at its end,
@@ -52,6 +77,11 @@ type SyncWorker struct {
 
 	clock     Clock                           // for test injection
 	backoffFn func(attempt int) time.Duration // for test injection; defaults to syncBackoff
+
+	// syncInterval is the periodic sync cycle interval (SPEC R10: "wakes every
+	// minute (configurable)"). Defaults to DefaultSyncInterval; overridable via
+	// SyncWorkerWithSyncInterval.
+	syncInterval time.Duration
 }
 
 // SyncWorkerOption configures a SyncWorker.
@@ -65,6 +95,25 @@ func SyncWorkerWithAuditPublisher(pub TelemetryPublisher) SyncWorkerOption {
 	return func(w *SyncWorker) { w.auditor = pub }
 }
 
+// SyncWorkerWithPodNamespace sets the Kubernetes namespace owning this flow,
+// stamped onto sync-failure telemetry events (FlowEvent.flow_namespace) so
+// push-failure events are attributable to the flow that owns the remote. The
+// server's publishTelemetry stamps the same field from its own podNamespace
+// (NewCartographerServer), keeping the two telemetry emitters in the binary
+// consistent in multi-namespace deployments.
+func SyncWorkerWithPodNamespace(ns string) SyncWorkerOption {
+	return func(w *SyncWorker) { w.podNamespace = ns }
+}
+
+// SyncWorkerWithSyncInterval sets the periodic sync cycle interval (SPEC R10:
+// the worker "wakes every minute (configurable)"). The default is
+// DefaultSyncInterval (one minute). The duration must be positive —
+// time.NewTicker panics on non-positive intervals — so the operator-facing
+// wiring (cmd/main.go SYNC_INTERVAL) validates it at startup.
+func SyncWorkerWithSyncInterval(d time.Duration) SyncWorkerOption {
+	return func(w *SyncWorker) { w.syncInterval = d }
+}
+
 // NewSyncWorker creates a new SyncWorker.
 func NewSyncWorker(
 	remoteURL string,
@@ -74,14 +123,15 @@ func NewSyncWorker(
 	opts ...SyncWorkerOption,
 ) *SyncWorker {
 	w := &SyncWorker{
-		wakeCh:    make(chan struct{}, 1),
-		stopCh:    make(chan struct{}),
-		doneCh:    make(chan struct{}),
-		remoteURL: remoteURL,
-		gitstore:  gs,
-		store:     s,
-		clock:     clock,
-		backoffFn: syncBackoff,
+		wakeCh:       make(chan struct{}, 1),
+		stopCh:       make(chan struct{}),
+		doneCh:       make(chan struct{}),
+		remoteURL:    remoteURL,
+		gitstore:     gs,
+		store:        s,
+		clock:        clock,
+		backoffFn:    syncBackoff,
+		syncInterval: DefaultSyncInterval,
 	}
 	for _, o := range opts {
 		o(w)
@@ -175,7 +225,7 @@ func (w *SyncWorker) run() {
 	// Run one initial cycle for startup catch-up push if remote is configured.
 	w.runSyncCycle()
 
-	ticker := w.clock.NewTicker(1 * time.Minute)
+	ticker := w.clock.NewTicker(w.syncInterval)
 	defer ticker.Stop()
 
 	for {
@@ -315,7 +365,8 @@ func (w *SyncWorker) fetchAndRehydrate() cycleResult {
 }
 
 // fetchAttempt performs one git-locked fetch attempt followed by the
-// re-hydration of main.lbug when the fetch advanced main.
+// re-hydration of main.lbug when the fetch advanced main or the previous
+// cycle's re-hydration failed (GIT_PLAN.md:139 retry contract).
 func (w *SyncWorker) fetchAttempt(ctx context.Context) cycleResult {
 	var hydrateErr error
 	lockErr := w.gitstore.WithGitLock(func() error {
@@ -327,11 +378,15 @@ func (w *SyncWorker) fetchAttempt(ctx context.Context) cycleResult {
 		if err != nil {
 			return err
 		}
-		// Re-hydrate only when the remote actually had new data (SPEC R10: "if
-		// new data was pulled re-hydrates"; GIT_PLAN.md:30,84). FetchAndMerge
-		// returns the unchanged local hash when the remote is up-to-date or
-		// strictly behind, so the HEAD comparison is the new-data signal.
-		if newHead.IsZero() || newHead.String() == preHead {
+		// Re-hydrate when the remote had new data, or when the previous
+		// cycle's re-hydration failed and main.lbug is still inconsistent
+		// (SPEC R10: "if new data was pulled re-hydrates"; GIT_PLAN.md:30,84).
+		// FetchAndMerge returns the unchanged local hash when the remote is
+		// up-to-date or strictly behind, so the HEAD comparison is the
+		// new-data signal. A failed re-hydration is retried by the next cycle
+		// (GIT_PLAN.md:139) — the git files are already merged, so re-hydration
+		// is a pure read from the working tree.
+		if newHead.IsZero() || (newHead.String() == preHead && !w.hydrateFailed) {
 			return nil
 		}
 		// The working tree must be on main before files are read: with a
@@ -340,10 +395,12 @@ func (w *SyncWorker) fetchAttempt(ctx context.Context) cycleResult {
 		// main.lbug. RestoreMain + CleanUntracked make the tree exactly main;
 		// both are no-ops when the tree already is main.
 		if err := w.gitstore.RestoreMain(ctx); err != nil {
+			w.hydrateFailed = true
 			hydrateErr = &hydrateError{err: fmt.Errorf("restore main before re-hydration: %w", err)}
 			return nil
 		}
 		if err := w.gitstore.CleanUntracked(ctx); err != nil {
+			w.hydrateFailed = true
 			hydrateErr = &hydrateError{err: fmt.Errorf("clean working tree before re-hydration: %w", err)}
 			return nil
 		}
@@ -351,7 +408,10 @@ func (w *SyncWorker) fetchAttempt(ctx context.Context) cycleResult {
 		// RehydrateMainFromFiles holds the LadybugDB write lock (db.mu) for its
 		// entire wipe-and-load cycle.
 		if err := w.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+			w.hydrateFailed = true
 			hydrateErr = &hydrateError{err: fmt.Errorf("sync re-hydration failed: %w", err)}
+		} else {
+			w.hydrateFailed = false
 		}
 		return nil
 	})
@@ -375,10 +435,11 @@ func (w *SyncWorker) publishFailure(operation string, err error) {
 	w.auditor.Submit(&flowv1.PublishRequest{
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
-			EventId:   uuid.NewString(),
-			EventType: "cartographer.push_failed",
-			NodeId:    "cartographer",
-			Timestamp: timestamppb.Now(),
+			EventId:       uuid.NewString(),
+			EventType:     "cartographer.push_failed",
+			FlowNamespace: w.podNamespace,
+			NodeId:        "cartographer",
+			Timestamp:     timestamppb.Now(),
 			Attributes: map[string]string{
 				"operation": operation,
 				"error":     err.Error(),

@@ -749,11 +749,35 @@ func TestValidate_CypherIdentifierBoundaryCasesEdgeType(t *testing.T) {
 	}
 }
 
-func TestValidate_CypherIdentifierBoundaryCasesEdgeProperty(t *testing.T) {
-	tests := []struct {
-		name         string
-		propertyName string
-		valid        bool
+// The Cypher-identifier regex requirement (SPEC R1, error-table row "Name
+// violates Cypher identifier regex" → INVALID_ARGUMENT, SPEC:932) applies to
+// property names on edge types and entity types alike (validate.go
+// validateEdgeType / validateEntityType). Pin both property-name regex
+// branches here with a full boundary table, mirroring the type-name boundary
+// tests above. The two containers share one table-driven test (rather than
+// sibling copies) so the boundary set is exercised identically on each.
+func TestValidate_CypherIdentifierBoundaryCasesProperty(t *testing.T) {
+	containers := []struct {
+		name string
+		s    func(propName string) *flowv1.Schema
+	}{
+		{"entity property", func(p string) *flowv1.Schema {
+			return &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+				Name:       "Component",
+				Properties: []*flowv1.Property{{Name: p, Type: "string"}},
+			}}}
+		}},
+		{"edge property", func(p string) *flowv1.Schema {
+			return &flowv1.Schema{EdgeTypes: []*flowv1.EdgeType{{
+				Name:       "DEPENDS_ON",
+				Properties: []*flowv1.Property{{Name: p, Type: "string"}},
+			}}}
+		}},
+	}
+	boundaries := []struct {
+		name  string
+		prop  string
+		valid bool
 	}{
 		{"single letter", "a", true},
 		{"underscore only", "_", true},
@@ -762,29 +786,21 @@ func TestValidate_CypherIdentifierBoundaryCasesEdgeProperty(t *testing.T) {
 		{"contains hyphen", "my-prop", false},
 		{"empty string", "", false},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			s := &flowv1.Schema{
-				EdgeTypes: []*flowv1.EdgeType{
-					{
-						Name: "DEPENDS_ON",
-						Properties: []*flowv1.Property{
-							{Name: tc.propertyName, Type: "string"},
-						},
-					},
-				},
-			}
-			err := Validate(s)
-			if tc.valid && err != nil {
-				t.Fatalf("expected nil error for %q, got: %v", tc.propertyName, err)
-			}
-			if !tc.valid && err == nil {
-				t.Fatalf("expected error for %q, got nil", tc.propertyName)
-			}
-			if !tc.valid && err != nil && !errors.Is(err, ErrInvalidName) {
-				t.Fatalf("expected ErrInvalidName for %q, got: %v", tc.propertyName, err)
-			}
-		})
+	for _, c := range containers {
+		for _, b := range boundaries {
+			t.Run(c.name+"/"+b.name, func(t *testing.T) {
+				err := Validate(c.s(b.prop))
+				if b.valid && err != nil {
+					t.Fatalf("expected nil error for %q, got: %v", b.prop, err)
+				}
+				if !b.valid && err == nil {
+					t.Fatalf("expected error for %q, got nil", b.prop)
+				}
+				if !b.valid && err != nil && !errors.Is(err, ErrInvalidName) {
+					t.Fatalf("expected ErrInvalidName for %q, got: %v", b.prop, err)
+				}
+			})
+		}
 	}
 }
 

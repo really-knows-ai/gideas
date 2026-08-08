@@ -1058,6 +1058,17 @@ func (s *CartographerServer) CreateEntity(
 	if req.TransactionId == "" {
 		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
 	}
+	// SPEC RPC check order (CreateEntity: active transaction → structural
+	// validation → data-integrity): the active-transaction gate (UUID format,
+	// existence, rollback-only, timeout, commit-in-progress) runs before the
+	// structural and capability checks, so a request combining a nonexistent
+	// transaction with a structural fault surfaces NOT_FOUND, not the
+	// structural error.
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
@@ -1072,11 +1083,6 @@ func (s *CartographerServer) CreateEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", req.EntityType); err != nil {
 		return nil, err
 	}
-	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
-	if err != nil {
-		return nil, err
-	}
-	defer unlockTx()
 	branch := req.TransactionId
 
 	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
@@ -1107,17 +1113,23 @@ func (s *CartographerServer) UpdateEntity(
 	if req.TransactionId == "" {
 		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
 	}
+	// SPEC RPC check order (UpdateEntity: active transaction → entity existence
+	// → type-specific capability → property/embedding validation): the
+	// active-transaction gate runs before the structural ID checks, so a
+	// request combining a nonexistent transaction with a missing or
+	// malformed ID surfaces NOT_FOUND (or the transaction error), not the
+	// structural INVALID_ARGUMENT.
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "entity ID is required")
 	}
 	if !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
 	}
-	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
-	if err != nil {
-		return nil, err
-	}
-	defer unlockTx()
 	// Resolve entity type for capability check.
 	branch := req.TransactionId
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
@@ -1155,17 +1167,22 @@ func (s *CartographerServer) DeleteEntity(
 	if req.TransactionId == "" {
 		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
 	}
+	// SPEC RPC check order (DeleteEntity: active transaction → entity existence
+	// → type-specific capability): the active-transaction gate runs before the
+	// structural ID checks, so a request combining a nonexistent transaction
+	// with a missing or malformed ID surfaces NOT_FOUND (or the transaction
+	// error), not the structural INVALID_ARGUMENT.
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "entity ID is required")
 	}
 	if !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
 	}
-	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
-	if err != nil {
-		return nil, err
-	}
-	defer unlockTx()
 	// Resolve entity type for capability check.
 	branch := req.TransactionId
 	entityType, resolveErr := s.store.ResolveEntityType(ctx, req.Id, branch)
@@ -1232,14 +1249,19 @@ func (s *CartographerServer) CreateEdge(
 	if req.TransactionId == "" {
 		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
 	}
-	if req.EdgeType == "" {
-		return nil, status.Error(codes.InvalidArgument, "edge type is required")
-	}
+	// SPEC RPC check order (CreateEdge: active transaction → structural →
+	// entity existence → type-specific capability → edge-rule auth): the
+	// active-transaction gate runs before the structural edge-type check, so a
+	// request combining a nonexistent transaction with an empty/unknown edge
+	// type surfaces NOT_FOUND, not INVALID_ARGUMENT.
 	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
 	if err != nil {
 		return nil, err
 	}
 	defer unlockTx()
+	if req.EdgeType == "" {
+		return nil, status.Error(codes.InvalidArgument, "edge type is required")
+	}
 	// SPEC order: structural (unknown edge type / rule) validation precedes
 	// entity-existence and capability checks, so an unknown edge type yields
 	// INVALID_ARGUMENT even when the caller lacks write capability.
@@ -1330,17 +1352,22 @@ func (s *CartographerServer) DeleteEdge(
 	if req.TransactionId == "" {
 		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
 	}
+	// SPEC RPC check order (DeleteEdge: active transaction → edge existence →
+	// type-specific capability): the active-transaction gate runs before the
+	// structural ID checks, so a request combining a nonexistent transaction
+	// with a missing or malformed ID surfaces NOT_FOUND (or the transaction
+	// error), not the structural INVALID_ARGUMENT.
+	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTx()
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "edge ID is required")
 	}
 	if !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid edge ID format")
 	}
-	unlockTx, err := s.lockTransactionMutation(req.TransactionId)
-	if err != nil {
-		return nil, err
-	}
-	defer unlockTx()
 	// Resolve source entity type for capability check.
 	branch := req.TransactionId
 	existingEdge, edgeErr := s.store.GetEdge(ctx, req.Id, branch)
@@ -1398,6 +1425,23 @@ func (s *CartographerServer) BeginTransaction(
 	txID := s.newIDFn()
 	// Implicit sync before branch creation: if a remote is configured, wake
 	// the sync worker so the branch starts from the latest remote state.
+	// ponytail: the wait is hard-capped at a fixed 30-second budget so a slow
+	// remote cannot tie up the request path unboundedly. The cap truncates any
+	// caller deadline longer than 30s (context.WithTimeout derives
+	// min(parent deadline, 30s)), so a slow cycle surfaces DEADLINE_EXCEEDED
+	// from WakeAndWait even when the caller was willing to wait longer. Here
+	// the failure is only logged and the transaction still begins from the
+	// current local main head: the consequence is a possibly-stale branch
+	// snapshot that later fails the commit-time divergence check
+	// (errCommitNotUpToDate) once the periodic cycle advances main —
+	// recoverable via RefreshTransaction, but the begin silently proceeded
+	// past a sync the caller asked to await. Deployment risk: the wait runs
+	// under txAdmission.RLock, so a slow or unreachable remote (recoverable
+	// network errors are retried inside the cycle with backoff) stalls every
+	// BeginTransaction by up to 30s and blocks WipeGraph (which needs the
+	// write lock) behind it. Upgrade path: derive the budget from the caller
+	// context when it is shorter than the ceiling, and/or make the ceiling a
+	// configurable server knob.
 	if s.syncWorker != nil && s.remoteURL != "" {
 		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -1746,6 +1790,21 @@ func (s *CartographerServer) CommitTransaction(
 		return nil, mapStoreError(err)
 	}
 	// Notify the sync worker that a commit needs pushing.
+	// ponytail: the WithAck wait is hard-capped at a fixed 30-second budget
+	// so a slow remote cannot tie up the request path unboundedly. The cap
+	// truncates any caller deadline longer than 30s (context.WithTimeout
+	// derives min(parent deadline, 30s)), so a slow cycle surfaces
+	// DEADLINE_EXCEEDED from WakeAndWait and CommitTransaction reports failure
+	// even though the caller was willing to wait longer. Deployment risk: the
+	// commit (git merge, main re-hydration, cleanup) and SetPushNeeded have
+	// already completed before the wait, so a timed-out ack returns an error
+	// for a commit that is actually durable — the push flag stays set and the
+	// periodic cycle delivers the push later, and a client retry is safe (the
+	// MergeCompleted path finishes cleanup and returns success), but the
+	// ambiguity is real. The wait also holds the transaction lifecycle lock,
+	// serializing other RPCs on the same transaction for up to 30s. Upgrade
+	// path: derive the budget from the caller context when it is shorter than
+	// the ceiling, and/or make the ceiling a configurable server knob.
 	if s.syncWorker != nil {
 		s.syncWorker.SetPushNeeded()
 		if req.GetAck() {

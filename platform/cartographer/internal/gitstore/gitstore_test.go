@@ -24,6 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v5/storage"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/google/uuid"
 )
@@ -161,6 +162,30 @@ func ctx() context.Context {
 	return bg
 }
 
+// committedTreeFile returns nil when path is present in HEAD's committed
+// tree, or object.ErrFileNotFound when the path is absent (also when an
+// intermediate directory is missing — tree.File wraps both). Asserting
+// against the committed tree rather than only the working tree pins the
+// durable-deletion contract: RemoveEntityFiles/RemoveEdgeFiles remove from
+// the working tree, and only AddAll + Commit record the deletion in
+// committed history.
+func committedTreeFile(gs *gitStore, path string) error {
+	head, err := gs.repo.Head()
+	if err != nil {
+		return err
+	}
+	commit, err := gs.repo.CommitObject(head.Hash())
+	if err != nil {
+		return err
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return err
+	}
+	_, err = tree.File(path)
+	return err
+}
+
 // ============================================================================
 // T1: Repository initialisation
 // ============================================================================
@@ -270,6 +295,20 @@ func TestInitBadPath(t *testing.T) {
 	_, err := New(badPath)
 	if err == nil {
 		t.Fatal("expected error for unwritable path, got nil")
+	}
+}
+
+// TestNewEmptyBasePath pins New's exported ErrEmptyBasePath guard
+// (gitstore.go New's "" check): a store must never be constructed with an
+// empty base path, and callers must be able to distinguish the guard via
+// errors.Is rather than a nil-interface or ad-hoc error string.
+func TestNewEmptyBasePath(t *testing.T) {
+	store, err := New("")
+	if !errors.Is(err, ErrEmptyBasePath) {
+		t.Fatalf("New(\"\") = %v, want ErrEmptyBasePath", err)
+	}
+	if store != nil {
+		t.Fatalf("New(\"\") returned non-nil store %T, want nil", store)
 	}
 }
 
@@ -424,13 +463,25 @@ func TestRemoveEntityFiles(t *testing.T) {
 		if err := gs.WriteEntityFiles(ctx(), "Component", entities); err != nil {
 			return err
 		}
+		// Commit the baseline so the committed tree pins both files before
+		// removal (the durable-deletion contract is asserted against the
+		// committed tree, not only the working tree).
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "pre-remove"); err != nil {
+			return err
+		}
+		if err := committedTreeFile(gs, "entities/Component/"+e1ID+".json"); err != nil {
+			return fmt.Errorf("baseline file %s missing from committed tree: %w", e1ID, err)
+		}
 
 		// Remove the first entity
 		if err := gs.RemoveEntityFiles(ctx(), "Component", []string{e1ID}); err != nil {
 			return err
 		}
 
-		// Verify e1 is gone, e2 remains
+		// Verify e1 is gone, e2 remains (working tree)
 		_, err1 := gs.fs.Stat("entities/Component/" + e1ID + ".json")
 		if err1 == nil {
 			return fmt.Errorf("removed file %s still exists", e1ID)
@@ -438,6 +489,23 @@ func TestRemoveEntityFiles(t *testing.T) {
 		_, err2 := gs.fs.Stat("entities/Component/" + e2ID + ".json")
 		if err2 != nil {
 			return fmt.Errorf("remaining file %s missing: %w", e2ID, err2)
+		}
+
+		// AddAll + Commit the staged deletion: the committed tree must no
+		// longer contain the removed file while the remaining file stays
+		// present (SPEC durable-deletion contract: fs.Remove -> AddAll ->
+		// Commit leaves the file gone from the committed tree).
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "post-remove"); err != nil {
+			return err
+		}
+		if err := committedTreeFile(gs, "entities/Component/"+e1ID+".json"); !errors.Is(err, object.ErrFileNotFound) {
+			return fmt.Errorf("removed file %s still present in committed tree after commit: %v", e1ID, err)
+		}
+		if err := committedTreeFile(gs, "entities/Component/"+e2ID+".json"); err != nil {
+			return fmt.Errorf("remaining file %s missing from committed tree: %w", e2ID, err)
 		}
 
 		return nil
@@ -842,6 +910,19 @@ func TestRemoveEdgeFiles(t *testing.T) {
 		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", edges); err != nil {
 			return err
 		}
+		// Commit the baseline so the committed tree pins both files before
+		// removal (the durable-deletion contract is asserted against the
+		// committed tree, not only the working tree).
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "pre-remove"); err != nil {
+			return err
+		}
+		if err := committedTreeFile(gs, "edges/DEPENDS_ON/"+e1ID+".json"); err != nil {
+			return fmt.Errorf("baseline file %s missing from committed tree: %w", e1ID, err)
+		}
+
 		if err := gs.RemoveEdgeFiles(ctx(), "DEPENDS_ON", []string{e1ID}); err != nil {
 			return err
 		}
@@ -851,6 +932,23 @@ func TestRemoveEdgeFiles(t *testing.T) {
 		}
 		if _, err := gs.fs.Stat("edges/DEPENDS_ON/" + e2ID + ".json"); err != nil {
 			return fmt.Errorf("remaining edge file missing")
+		}
+
+		// AddAll + Commit the staged deletion: the committed tree must no
+		// longer contain the removed file while the remaining file stays
+		// present (SPEC durable-deletion contract: fs.Remove -> AddAll ->
+		// Commit leaves the file gone from the committed tree).
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "post-remove"); err != nil {
+			return err
+		}
+		if err := committedTreeFile(gs, "edges/DEPENDS_ON/"+e1ID+".json"); !errors.Is(err, object.ErrFileNotFound) {
+			return fmt.Errorf("removed edge file %s still present in committed tree after commit: %v", e1ID, err)
+		}
+		if err := committedTreeFile(gs, "edges/DEPENDS_ON/"+e2ID+".json"); err != nil {
+			return fmt.Errorf("remaining edge file %s missing from committed tree: %w", e2ID, err)
 		}
 		return nil
 	})
@@ -2523,6 +2621,30 @@ func TestPushRemoteNoRemote(t *testing.T) {
 	}
 }
 
+// TestFetchAndMergeNoRemote pins FetchAndMerge's no-remote guard: with an
+// empty remoteURL, FetchAndMerge must fail with ErrNoRemote (and a zero hash)
+// before touching the network. This branch is a live production path — the
+// sync worker's fetchAndRehydrate special-cases the sentinel as a benign no-op
+// (sync_worker.go:325), feeding the SPEC error-table row "Remote not
+// configured" (SPEC:979). PushRemote's sibling guard is pinned by
+// TestPushRemoteNoRemote.
+func TestFetchAndMergeNoRemote(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		hash, err := gs.FetchAndMerge(ctx(), "origin", "main")
+		if !errors.Is(err, ErrNoRemote) {
+			return fmt.Errorf("expected ErrNoRemote, got %v", err)
+		}
+		if !hash.IsZero() {
+			return fmt.Errorf("expected zero hash on ErrNoRemote, got %v", hash)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("FetchAndMergeNoRemote: %v", err)
+	}
+}
+
 // TestPushRemoteWithAuth verifies PushRemote's auth contract: ErrAuthConfigMissing
 // is returned only when the operation cannot be attempted — a URL that demands
 // credentials (ssh:// or an https:// URL embedding a user) with no auth provider
@@ -3581,10 +3703,26 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 	}
 }
 
-// TestIsEmptyMainRefError verifies the error path in IsEmpty when
-// the main ref cannot be resolved for non-ErrReferenceNotFound reasons.
+// failRefStorer wraps a storage.Storer and fails every reference lookup with
+// the configured error, simulating a backend that cannot resolve refs for
+// reasons other than a missing ref (ErrReferenceNotFound).
+type failRefStorer struct {
+	storage.Storer
+	failErr error
+}
+
+func (f *failRefStorer) Reference(name plumbing.ReferenceName) (*plumbing.Reference, error) {
+	return nil, f.failErr
+}
+
+// TestIsEmptyMainRefError pins both main-ref resolution branches of IsEmpty:
+// a missing main ref (ErrReferenceNotFound) reports empty, while a backend
+// that fails ref resolution for any other reason surfaces the
+// "resolve main ref: %w" error branch of IsEmpty (remote.go) instead of being
+// swallowed as empty.
 func TestIsEmptyMainRefError(t *testing.T) {
-	// Create a gitStore with a broken backend to trigger errors
+	// Create a gitStore with in-memory storage; a failing backend is swapped
+	// in below to trigger the non-ErrReferenceNotFound resolution error.
 	fs := memfs.New()
 	storer := memory.NewStorage()
 	repo, err := git.InitWithOptions(storer, fs, git.InitOptions{
@@ -3599,7 +3737,6 @@ func TestIsEmptyMainRefError(t *testing.T) {
 		t.Fatalf("Worktree: %v", err)
 	}
 
-	// Create a broken storer that fails on SetReference
 	gs := &gitStore{
 		repo:     repo,
 		wt:       wt,
@@ -3609,7 +3746,8 @@ func TestIsEmptyMainRefError(t *testing.T) {
 	}
 
 	err = gs.WithGitLock(func() error {
-		// Delete the main ref to test ErrReferenceNotFound path in IsEmpty
+		// Delete the main ref to exercise the ErrReferenceNotFound path in
+		// IsEmpty: a repo with no main ref is reported empty.
 		if err := gs.backend.RemoveReference(plumbing.ReferenceName("refs/heads/main")); err != nil {
 			return err
 		}
@@ -3619,6 +3757,25 @@ func TestIsEmptyMainRefError(t *testing.T) {
 		}
 		if !empty {
 			return fmt.Errorf("expected empty when main ref is missing")
+		}
+
+		// Swap in a backend whose ref lookups fail for a non-ErrReferenceNotFound
+		// reason: IsEmpty must surface the "resolve main ref" error branch
+		// (remote.go) rather than treat the failure as empty.
+		refErr := errors.New("ref lookup failed")
+		broken := &failRefStorer{Storer: storer, failErr: refErr}
+		gs.backend = broken
+		gs.repo = &git.Repository{Storer: broken}
+
+		empty, err = gs.IsEmpty(ctx())
+		if err == nil {
+			return fmt.Errorf("expected resolve main ref error, got empty=%v", empty)
+		}
+		if !errors.Is(err, refErr) {
+			return fmt.Errorf("expected wrapped ref lookup error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "resolve main ref") {
+			return fmt.Errorf("expected 'resolve main ref' wrap, got %v", err)
 		}
 		return nil
 	})

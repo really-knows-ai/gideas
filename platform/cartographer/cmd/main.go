@@ -68,6 +68,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// SPEC R10 sync worker "wakes every minute (configurable)": the periodic
+	// interval is an env knob whose default is sourced from the worker's own
+	// DefaultSyncInterval constant, so the wiring default and the worker
+	// default share one source of truth. Fail-fast on unparseable or
+	// non-positive values: time.NewTicker panics on a non-positive interval,
+	// so a bad SYNC_INTERVAL must fail startup with a clear message rather
+	// than crash the worker goroutine mid-run.
+	syncInterval, err := parseDurationEnv("SYNC_INTERVAL", service.DefaultSyncInterval.String())
+	if err != nil {
+		slog.Error("invalid SYNC_INTERVAL", "error", err)
+		os.Exit(1)
+	}
+	if syncInterval <= 0 {
+		slog.Error("invalid SYNC_INTERVAL", "value", syncInterval.String(),
+			"error", "must be a positive duration")
+		os.Exit(1)
+	}
+
 	// Validate and load verification keys early (fail-fast on missing keys).
 	operatorKey := loadVerificationKey("OPERATOR_VERIFICATION_KEY")
 	sidecarKey := loadVerificationKey("SIDECAR_VERIFICATION_KEY")
@@ -274,11 +292,15 @@ func main() {
 	if remoteURL != "" {
 		// Permanent sync failures emit an operator-visible Event Bus telemetry
 		// event (SPEC R10 / GIT_PLAN "log loudly + telemetry"), so the worker
-		// shares the server's audit publisher when one is configured.
+		// shares the server's audit publisher when one is configured, and stamps
+		// the same flow namespace (FlowNamespace: podNamespace) the server's
+		// publishTelemetry uses, so the two emitters stay consistent.
 		var syncOpts []service.SyncWorkerOption
 		if auditPub != nil {
 			syncOpts = append(syncOpts, service.SyncWorkerWithAuditPublisher(auditPub))
 		}
+		syncOpts = append(syncOpts, service.SyncWorkerWithPodNamespace(podNamespace))
+		syncOpts = append(syncOpts, service.SyncWorkerWithSyncInterval(syncInterval))
 		syncW = service.NewSyncWorker(remoteURL, gs, dbStore, service.RealClock{}, syncOpts...)
 		opts = append(opts, service.WithSyncWorker(syncW))
 		go syncW.Run()
@@ -418,6 +440,51 @@ func tryRemotePullOnInit(
 	auditPub *eventbus.AsyncPublisher,
 	rehydrate func() error,
 ) error {
+	// SPEC fail-startup clause (R1 Secret data keys, SPEC.md:122): an empty
+	// Secret or one missing the expected key causes the Cartographer to fail
+	// startup when pullOnInit is true — "the git operation cannot be attempted
+	// at all". The clause is unconditional (its trigger is pullOnInit, not the
+	// repo state), so the pre-flight auth check runs before the repo-state
+	// branch and gates BOTH init paths: the clone path (empty repo) and the
+	// catch-up push path (non-empty repo). A credential that is present but
+	// expired/revoked still passes pre-flight and surfaces as a git-level auth
+	// failure at clone/push time, which is logged and deferred (non-blocking) —
+	// matching the SPEC's missing-vs-revoked distinction.
+	authFn := func() error {
+		if remoteAuthSecretRef == "" {
+			return nil
+		}
+		if readSecretFn == nil {
+			return gitstore.ErrAuthConfigMissing
+		}
+		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
+		if err != nil {
+			return fmt.Errorf("pre-flight auth: read secret: %w", err)
+		}
+		parsedURL, parseErr := url.Parse(remoteURL)
+		if parseErr != nil {
+			return fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
+		}
+		switch parsedURL.Scheme {
+		case "ssh":
+			// Spec missing-expected-key rule: a present-but-empty data key is
+			// equivalent to an absent one — fail closed on either.
+			if len(data["ssh-privatekey"]) == 0 {
+				return gitstore.ErrAuthConfigMissing
+			}
+		case "https":
+			if len(data["password"]) == 0 {
+				return gitstore.ErrAuthConfigMissing
+			}
+		default:
+			return gitstore.ErrUnsupportedURLScheme
+		}
+		return nil
+	}
+	if authErr := authFn(); authErr != nil {
+		return authErr
+	}
+
 	// IsEmpty must be called with the git lock held (GitStore interface
 	// contract); startup is single-threaded, but the check still goes through
 	// WithGitLock so no caller can observe an unlocked gitstore read.
@@ -432,46 +499,6 @@ func tryRemotePullOnInit(
 		return nil
 	}
 	if empty {
-		// SPEC R10 Init: pre-flight config failures (missing Secret) prevent
-		// clone and fail startup. The pre-flight check is scoped to the clone
-		// path only: on the catch-up-push path (non-empty repo) a missing or
-		// invalid Secret surfaces at push time as a runtime failure that is
-		// logged and deferred — it never aborts startup ("failures logged and
-		// deferred", R10 Init).
-		authFn := func() error {
-			if remoteAuthSecretRef == "" {
-				return nil
-			}
-			if readSecretFn == nil {
-				return gitstore.ErrAuthConfigMissing
-			}
-			data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
-			if err != nil {
-				return fmt.Errorf("pre-flight auth: read secret: %w", err)
-			}
-			parsedURL, parseErr := url.Parse(remoteURL)
-			if parseErr != nil {
-				return fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
-			}
-			switch parsedURL.Scheme {
-			case "ssh":
-				// Spec missing-expected-key rule: a present-but-empty data key is
-				// equivalent to an absent one — fail closed on either.
-				if len(data["ssh-privatekey"]) == 0 {
-					return gitstore.ErrAuthConfigMissing
-				}
-			case "https":
-				if len(data["password"]) == 0 {
-					return gitstore.ErrAuthConfigMissing
-				}
-			default:
-				return gitstore.ErrUnsupportedURLScheme
-			}
-			return nil
-		}
-		if authErr := authFn(); authErr != nil {
-			return authErr
-		}
 		slog.Info("Pulling from remote on init", "url", remoteURL)
 		if err := gs.WithGitLock(func() error {
 			return gs.CloneSingleBranch(context.Background(), remoteURL, "main")
@@ -526,8 +553,11 @@ func tryRemotePullOnInit(
 		}
 	} else {
 		// SPEC R10 Init: when the local repo already has commits, catch-up push
-		// so a local head ahead of the remote is propagated. Failures are logged
-		// and deferred — they do not block startup; the next commit's
+		// so a local head ahead of the remote is propagated. A missing or
+		// invalid Secret has already failed startup via the pre-flight check
+		// above (SPEC fail-startup clause, R1 Secret data keys); runtime push
+		// failures (auth rejected by the remote, network) are logged and
+		// deferred — they do not block startup; the next commit's
 		// pull-before-push (or a later startup) will retry.
 		slog.Info("Remote configured, performing catch-up push on init", "url", remoteURL)
 		// ponytail: Catch-up push fires unconditionally whenever the local repo is

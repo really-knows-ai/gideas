@@ -188,10 +188,11 @@ func quoteID(s string) string {
 
 // ApplySchema validates the schema, translates it to LadybugDB DDL, and
 // applies it to the database. Additive changes (new types, new properties on
-// existing types, rule modifications) are applied via ALTER DDL. Destructive
-// changes (removed types, removed/changed properties, vector disable, type
-// incompatibility) return ErrDestructiveSchemaChange — the caller must
-// WipeGraph first.
+// existing types, and rule modifications that preserve every edge type's
+// FROM/TO endpoint set) are applied via ALTER DDL. Destructive changes
+// (removed types, removed/changed properties, vector disable, edge-type
+// endpoint-set changes, type incompatibility) return ErrDestructiveSchemaChange
+// — the caller must WipeGraph first.
 func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -362,10 +363,11 @@ func (db *ladybugDB) diffSchemaAgainstCatalog(s *flowv1.Schema) error {
 // is incompatible when a type or property the transaction's data lives under
 // has been removed or changed, or a vector index has been disabled; those
 // conditions return ErrDestructiveSchemaChange. Additive changes (new types,
-// new properties) and entity-type rule modifications are non-destructive (SPEC
-// R2/R6) and never fail the check, so a transaction begun under an older schema
-// can still commit after a compatible schema push; a refreshed transaction is
-// re-hydrated onto the current schema and always passes.
+// new properties) and entity-type rule modifications that preserve every edge
+// type's FROM/TO endpoint set are non-destructive (SPEC R2/R6) and never fail
+// the check, so a transaction begun under an older schema can still commit
+// after a compatible schema push; a refreshed transaction is re-hydrated onto
+// the current schema and always passes.
 func (db *ladybugDB) CheckBranchSchemaCompatibility(_ context.Context, txID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -484,31 +486,15 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 }
 
 // alterRelTable applies additive ALTER DDL for new properties on an existing
-// rel table.
-// ponytail: SPEC R2/R6 treat a rule modification that changes an edge type's
-// FROM/TO membership as non-destructive ("modifying entity type rules"). Here
-// the rel table's FROM/TO endpoint clauses are fixed at CREATE time and cannot
-// be expressed through ALTER TABLE, so a rule that adds (or removes) a FROM/TO
-// pair on an existing edge type cannot be honoured additively. Consequences if
-// we proceeded anyway: silently updating the in-memory rule/edge cache would
-// let a CreateEdge on the new pair fail (or be stored) against a table that
-// does not permit those endpoints, and would leave the persisted schema
-// metadata — what validateMetadataAgainstCatalog re-checks on reopen —
-// diverging from the actual table structure, bricking the open. We therefore
-// classify single-pair endpoint changes as a destructive schema change
-// (ErrDestructiveSchemaChange) requiring WipeGraph, diverging from SPEC's
-// plain-rule wording: an added node type carrying a brand-new rel type is still
-// additive (that path uses createRelTable), only a change to an existing rel
-// type's endpoint set triggers the destructive classification. Operator-visible
-// behaviour of this divergence: ErrDestructiveSchemaChange maps to
-// FAILED_PRECONDITION at the gRPC boundary (mapStoreError) and ApplySchema
-// refuses the WipeGraph-until-applied request, so an operator applying a
-// non-destructive rules change (e.g. adding a canConnect to a new target type
-// on an existing edge type) sees FAILED_PRECONDITION and must issue WipeGraph
-// first — the failure mode is loud, never a silent partial apply. Upgrade path: if
-// LadybugDB gains endpoint ALTER support, or the rel model is rebuilt around
-// runtime FROM/TO enforcement instead of CREATE-time clauses, this check can be
-// lifted and rule modifications become non-destructive in the store as well.
+// rel table. The rel table's FROM/TO endpoint clauses are fixed at CREATE time
+// and cannot be expressed through ALTER TABLE, so a rule modification that
+// changes the edge type's endpoint set is destructive: the persisted schema
+// metadata — what validateMetadataAgainstCatalog re-checks on reopen — would
+// diverge from the actual table structure, bricking the open. SPEC R2/R6
+// acknowledge this LadybugDB limitation: endpoint-set changes require WipeGraph
+// first; only rule-attribute changes that preserve the endpoint set (and new
+// properties) are non-destructive. The failure mode is loud — the caller sees
+// ErrDestructiveSchemaChange, never a silent partial apply.
 func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType, existing *store.EdgeTypeDef, pairs []fromToPair) error {
 	// Reconcile the requested FROM/TO pair set against the endpoints the rel
 	// table actually persist. A change the table cannot express is destructive

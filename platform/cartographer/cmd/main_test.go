@@ -404,21 +404,44 @@ func TestTryRemotePullOnInitCatchUpPushFailureNonBlocking(t *testing.T) {
 	}
 }
 
-// TestTryRemotePullOnInitCatchUpPushSecretFailureDeferred verifies SPEC R10
-// Init: on the catch-up-push path (non-empty local repo) a missing or invalid
-// Secret must log and defer — it never aborts startup. Pre-flight auth
-// failures are scoped to the clone path only, so a non-empty repo booting with
-// pullOnInit: true and a failing readSecretFn still attempts the push.
-func TestTryRemotePullOnInitCatchUpPushSecretFailureDeferred(t *testing.T) {
+// TestTryRemotePullOnInitCatchUpPushSecretFailureFailsStartup verifies the SPEC
+// fail-startup clause (R1 Secret data keys, SPEC.md:122): an empty Secret or
+// one missing the expected key fails startup when pullOnInit is true — on the
+// catch-up-push path (non-empty local repo) as well as the clone path. The
+// pre-flight auth check is not scoped to the clone path, so a non-empty repo
+// booting with pullOnInit: true and a failing readSecretFn returns the
+// pre-flight error and never attempts the push.
+func TestTryRemotePullOnInitCatchUpPushSecretFailureFailsStartup(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: false}
 	secretErr := errors.New("secret unavailable")
 	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) { return nil, secretErr }, nil, nil)
+	if !errors.Is(err, secretErr) {
+		t.Fatalf("tryRemotePullOnInit error = %v, want wrapped secret error (fail startup)", err)
+	}
+	if gs.pushCalls != 0 {
+		t.Fatalf("push calls after secret failure on catch-up path = %d, want 0", gs.pushCalls)
+	}
+	if gs.cloneCalls != 0 {
+		t.Fatalf("clone calls on non-empty repo = %d, want 0", gs.cloneCalls)
+	}
+}
+
+// TestTryRemotePullOnInitCatchUpPushValidSecretPushes verifies the pre-flight
+// auth check passes for a valid Secret on the catch-up-push path, so a
+// non-empty repo booting with pullOnInit: true and a well-formed Secret still
+// performs the catch-up push.
+func TestTryRemotePullOnInitCatchUpPushValidSecretPushes(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: false}
+	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return map[string]string{"password": "valid-pass"}, nil
+		}, nil, nil)
 	if err != nil {
-		t.Fatalf("secret failure on catch-up-push path blocked startup: %v", err)
+		t.Fatalf("tryRemotePullOnInit with valid Secret: %v", err)
 	}
 	if gs.pushCalls != 1 {
-		t.Fatalf("catch-up push calls = %d, want 1 (push still attempted)", gs.pushCalls)
+		t.Fatalf("catch-up push calls = %d, want 1 (pre-flight passed)", gs.pushCalls)
 	}
 	if gs.cloneCalls != 0 {
 		t.Fatalf("clone calls on non-empty repo = %d, want 0", gs.cloneCalls)
