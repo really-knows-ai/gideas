@@ -75,12 +75,12 @@ Read `REVIEW_ITEMS.md` if it exists:
   inputs for fresh review).
 
 Read the companion `LEARNINGS.md` if it exists (same directory as
-REVIEW.md, named `LEARNINGS.md`).  LEARNINGS.md contains three kinds
-of section: permanent pattern learnings, known deviations, and candidate
-patterns.  Candidate patterns are unproven — they emerged from fresh
-findings in a prior cycle but have not yet had items fixed and verified.
-They do not cause pruning, but fresh reviewers should be aware of them
-to avoid re-discovering the same root causes.
+REVIEW.md, named `LEARNINGS.md`).  LEARNINGS.md contains permanent
+pattern learnings and candidate patterns. It does not document SPEC
+deviations — those are `[FIX]` items. Candidate patterns are unproven —
+they emerged from fresh findings in a prior cycle but have not yet had
+items fixed and verified. They do not cause pruning, but fresh reviewers
+should be aware of them to avoid re-discovering the same root causes.
 
 Parse the actual checklist entries in REVIEW_ITEMS.md (not the summary
 header counts, which may be stale):
@@ -205,55 +205,13 @@ fresh findings in step 5c as "covered by a learning," consider whether
 that learning needs tightening — a learning that matches many findings
 per pass is too broad and may need splitting into narrower sub-rules.
 
-### 2b-ii. Known-deviation learnings (from verified `[~]` items)
+### 2b-ii. No learnings from wont-fix items
 
-For **every** verified `[~]` (wont-fix) item, extract a learning that
-documents the divergence as intentional and instructs reviewers to skip it.
-There is **no minimum threshold** — every verified wont-fix decision is
-context that fresh reviewers need to avoid re-discovering and re-flagging
-the same divergence.
-
-These learnings serve a different purpose than pattern learnings.  They
-don't prescribe a fix — they document *what to skip* and *why*.
-
-**For each verified `[~]` item, append to LEARNINGS.md:**
-
-```markdown
-## Known Deviations
-
-- **<Deviation title>**: <What the divergence is.> <Why it is intentional —
-  the justification from the wont-fix item.> Do not flag <specific thing to
-  skip> as a finding.
-```
-
-Examples:
-
-```markdown
-## Known Deviations
-
-- **Cartographer store gRPC codes**: The store layer's `GRPCCode()` method
-  on sentinel errors intentionally deviates from the codebase pattern
-  (gRPC-agnostic store layers).  Justification: 30+ distinct error types;
-  typed sentinels improve testability and the Phase 4 handoff contract
-  explicitly requires `GRPCCode()`.  Do not flag gRPC import or
-  `codes.Code` usage in the Cartographer store as a finding.
-
-- **Sqlite store uses direct SQL instead of ORM**: The sqlite stores
-  are intentionally raw SQL.  Justification: the schema is simple and
-  the ORM layer adds indirection without benefit.  Do not flag raw SQL
-  queries in `internal/store/` as a finding.
-```
-
-**Do not** add a learning if the pattern is already documented in
-`LEARNINGS.md` (check both the prescriptive sections and the Known
-Deviations section).
-
-**Do not** add a learning from a `[~]` item whose justification was found
-invalid during verification (those were re-opened in step 2a).
-
-**Note:** `[~]` items are pruned in step 2c below.  Their wont-fix
-justification survives in LEARNINGS.md.  Fresh reviewers receive
-LEARNINGS.md in their prompt and will skip these documented deviations.
+`[~]` wont-fix items do not produce learnings. SPEC divergences are
+never `[~]` — they are `[FIX]` items (fix the code or update the SPEC).
+`[~]` items that survive verification are pruned in step 2c; their
+justification lives in git history. If a `[~]` item's justification is
+found invalid during verification, the item is re-opened to `[!]`.
 
 ### 2c. Delete verified items from the review checklist
 
@@ -355,7 +313,9 @@ across multiple fresh findings signals the pattern may be real.
     contradictions, broken commands, SPEC violations).
   - `[PONYTAIL]` — a deliberate simplification with a known ceiling that
     needs a `ponytail:` annotation documenting the trade-off and upgrade
-    path.
+    path. PONYTAIL is never for SPEC divergences — any divergence from
+    the criteria is `[FIX]`. The fix may be to update the code or to
+    update the criteria, but the divergence is never "acceptable."
   - `[IMPL-NOTE]` — the content is correct but incomplete; the implementer
     needs additional context or clarification at coding time.  Only use
     this when reviewing **plans or specs** — if reviewing implementation
@@ -481,8 +441,9 @@ fixing it worth the benefit?  This is a judgement about value, not validity.
   but the cost of fixing it outweighs the benefit. A "nice-to-have" that
   the repo does not need. Typical Tier 3 forms:
   - A doc/SPEC wording mismatch or layering note with no behaviour change.
-  - Re-flagging a trade-off that already carries a `ponytail:` (the finding
-    just restates the ponytail).
+  - Re-flagging a non-SPEC trade-off that already carries a `ponytail:` (the finding
+    just restates the ponytail). SPEC divergences with a `ponytail:` are still
+    divergences — those are Tier 1 or Tier 2, never Tier 3.
   - A speculative concern about a codepath that is provably unreachable.
   - A niche/edge-case test that nobody will run or that protects a branch
     with no plausible regression.
@@ -530,15 +491,15 @@ The subagent receives:
 
 ```
 You are the consolidation learning-pruning stage.  Remove items from the
-impact-pruned list that are covered by Known Deviations or observation-type
-learnings in LEARNINGS.md.  Defect-pattern learnings NEVER prune.
+impact-pruned list that are covered by observation-type learnings in
+LEARNINGS.md.  Defect-pattern learnings NEVER prune.
 
 **Pruning rules:**
 
-- **Known Deviations** (`## Known Deviations` section) — document an
-  *intentional* divergence that reviewers should skip.  A finding that
-  matches a Known Deviation IS pruned.  Example: "health uses the
-  empty-string wildcard" → a finding flagging the empty-string health key.
+- **Observation-type learnings** (e.g. "no existing codebase uses mTLS")
+  describe current state, not a rule.  A finding that contradicts an
+  observation-type learning is pruned — the learning documents that the
+  observed behavior is the expected norm.
 
 - **Defect-pattern learnings** (permanent learnings prescribing a fix,
   e.g. "I/O errors must not be silently discarded", "no production code
@@ -547,8 +508,11 @@ learnings in LEARNINGS.md.  Defect-pattern learnings NEVER prune.
   at a specific location — it is a live bug and MUST BE KEPT.  Pruning a
   defect-pattern instance drops a live bug.
 
-- **Observation-type learnings** (e.g. "no existing codebase uses mTLS")
-  describe current state, not a rule.  They never prune.
+- **Implementation Notes** — document engine constraints, library
+  limitations, or design decisions consistent with the criteria. They
+  explain *what to skip* when the behavior is correct per the criteria
+  despite appearing to diverge. A finding that matches an Implementation
+  Note IS pruned.
 
 - **Candidate patterns** do NOT trigger pruning.  `## Candidate Patterns`
   contains unproven patterns from fresh findings; findings matching a
@@ -558,13 +522,12 @@ Examples:
 
 | Learning | Finding | Covered? |
 |----------|---------|----------|
-| Known Deviation: "health uses empty-string wildcard" | "Line 68 probe requests `grpc.health.v1.Health`" | Yes — prune |
+| Observation: "no existing codebase uses mTLS" | "Plan introduces mTLS" | No — observation, not a rule |
 | Defect pattern: "I/O errors must not be silently discarded" | "`_ = CleanUntracked(ctx)` discards error in WipeGraph" | **No — live bug, KEEP** |
 | Defect pattern: "no production code duplication" | "`createNodeTable`/`createNodeTableOnConn` near-identical" | **No — live bug, KEEP** |
-| Observation: "no existing codebase uses mTLS" | "Plan introduces mTLS" | No — observation, not a rule |
-| Known Deviation: "ExtendTimeout strict `>` is correct" | "Line 90 uses `>` instead of `>=`" | Yes — prune |
+| Implementation Note: "Export edge enumeration is un-paginated" | "Edge export is un-paginated, entity export is paginated" | Yes — prune |
 
-**When in doubt whether a finding is covered by a Known Deviation, KEEP it**
+**When in doubt whether a finding is covered by an Implementation Note, KEEP it**
 — removing a live finding is worse than the downstream audit catching a
 false positive.
 
@@ -620,9 +583,11 @@ impact-tiering, and learning-pruning.  Check the remaining items for:
    may become learnings once fixed and verified in a future cycle, but
    fresh findings are unproven.  Report them as suggestions only.
 
-**Pruning rule — only Known Deviations and observation-type learnings
+**Pruning rule — only Implementation Notes and observation-type learnings
 prune findings.  Defect-pattern learnings NEVER prune.**
-- A finding that matches a **Known Deviation** is a false positive — report it.
+- A finding that matches an **Implementation Note** is a false positive — report it.
+  Implementation Notes document engine constraints, library limitations, or design
+  decisions that are correct per the criteria despite appearing to diverge.
 - A finding that matches a **defect-pattern learning** is a new instance of a
   known bug at a specific location — it is a live bug and must be KEPT, not
   reported as a false positive.
